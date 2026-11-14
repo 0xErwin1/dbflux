@@ -97,6 +97,10 @@ fn is_hello_authorized(client_token: Option<&str>, expected_auth_token: Option<&
 }
 
 /// Handles one client connection for its entire lifetime.
+#[expect(
+    clippy::expect_used,
+    reason = "the loop-top guard rejects every non-Hello request while `negotiated_version` is `None`, so these dispatch-time lookups cannot miss"
+)]
 fn handle_connection(
     mut stream: interprocess::local_socket::Stream,
     driver: &dyn DbDriver,
@@ -263,7 +267,11 @@ fn handle_connection(
             other => {
                 if let Some(sid) = session_id {
                     if let Some(conn) = sessions.get(&sid) {
-                        let body = session::dispatch(conn, other);
+                        let body = session::dispatch(
+                            conn,
+                            negotiated_version.expect("validated before dispatch"),
+                            other,
+                        );
                         DriverResponseEnvelope::ok(
                             negotiated_version.expect("validated before dispatch"),
                             request_id,

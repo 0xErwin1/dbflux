@@ -12,7 +12,9 @@ Popular open-source relational database.
 ## Features
 
 - MySQL and MariaDB relational driver implementations in one crate.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL statement line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Supports SQL execution, schema discovery, indexes, foreign keys, check constraints, and unique constraints.
+- Displays `DECIMAL` values as the exact decimal MySQL stores.
 - Supports authentication, SSH tunneling, and URI/manual connection modes.
 - TLS with the five native SSL modes (`DISABLED`, `PREFERRED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`): `VERIFY_CA` verifies the server chain while skipping hostname validation and `VERIFY_IDENTITY` verifies both. A custom root CA replaces the system trust store for the verifying modes, and a client certificate + key enables mutual TLS. Uses the `rustls`/`aws-lc-rs` backend.
 - Supports query cancellation through a dedicated cancel path (`KILL QUERY` flow).
@@ -23,6 +25,7 @@ Popular open-source relational database.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET FOREIGN_KEY_CHECKS`) for FK-safe migrations. Both MySQL and MariaDB share this support.
 - Sends the `program_name` connection attribute as `dbflux/<version>`, visible in `performance_schema.session_connect_attrs`.
 - Write-privilege probe: after connecting, checks `@@read_only`/`@@super_read_only` and `SHOW GRANTS` for the current user to detect a read-only replica or a role without `INSERT`/`UPDATE`/`DELETE` grants, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; falls back to `@@read_only` alone on MariaDB, which has no `@@super_read_only`).
+- Batched primary-key row lookup (`fetch_rows_by_pks`): one `WHERE pk IN (...)` statement per chunk of at most 100 values, with an optional column projection; used to resolve foreign-key labels in the data grid.
 
 ### Instance Metrics
 
@@ -51,7 +54,11 @@ Exposes tabular snapshots of running server state:
 ## Limitations
 
 - Explicit statement timeouts and bounded instance metric/inspector requests are refused before execution; unbounded requests retain compatibility. The retained-row cap does not bound bytes, server work, engine allocation, or elapsed time. Hosted MariaDB was not verified.
+- Batched primary-key row lookup sends at most 100 values per query; a larger request runs as several `IN (...)` statements.
 - SQL-only driver; it does not expose document or key-value APIs.
+- On MariaDB, which has no `information_schema.VIEW_TABLE_USAGE`, the drop-table confirmation finds dependent views by searching view definitions for the `` `database`.`table` `` name, so a view that reaches the table only through another view is not listed.
+- MySQL before 8.0.16 does not store `CHECK` constraints, so table details list none there. MariaDB before 10.2.22 (10.3.10 in the 10.3 series) stores them but has no `information_schema.CHECK_CONSTRAINTS`, so table details list its check constraints without their clause.
+- `DECIMAL` columns are reported as `ColumnKind::Float`, since there is no decimal column kind: charts and other users of the column kind treat them as floating-point numbers, while the values themselves stay exact.
 
 - Instance metrics return a single data point per call (current snapshot from `SHOW GLOBAL STATUS`), not a historical time series. Cumulative counters (e.g. `mysql.bytes_sent`) grow monotonically — interpret them as deltas between samples rather than absolute rates.
 
@@ -62,6 +69,7 @@ Exposes tabular snapshots of running server state:
 - Code generation is scoped to supported MySQL/MariaDB constructs; unsupported generator IDs return `NotSupported`.
 - Routine listing covers only FUNCTION and PROCEDURE types. MySQL aggregate functions (registered via `CREATE AGGREGATE FUNCTION` UDF plugin) and window functions are not surfaced in `information_schema.ROUTINES` and are therefore not listed.
 - `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` requires the `SHOW_ROUTINE` privilege (MySQL 8.0+) or ownership of the routine; without sufficient privileges the definition column returns `NULL` and the viewer displays a notice instead of the source.
+- Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) runs in `START TRANSACTION READ ONLY` and is rolled back. It may only contain `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `TABLE` and `VALUES` statements without executable comments (`/*! */`, `/*M! */`) or the word `INTO`, and it is refused unless the server proves that no transaction is open and the session may not hold `LOCK TABLES` locks. MySQL then rejects data modification in the session, except on `TEMPORARY` tables, which a read-only transaction may still change, and it does not stop functions with external effects such as `GET_LOCK` or user-defined functions; least-privilege database credentials remain the real boundary.
 
 ## DDL Capabilities
 

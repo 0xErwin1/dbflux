@@ -8,8 +8,7 @@ pub use add_panel_picker::{
 };
 pub use create_dashboard::{CreateDashboardOutcome, CreateDashboardRequest, ModalCreateDashboard};
 pub use delete_confirm::{
-    DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
-    DeleteSavedChartRequest, ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm,
+    DeleteConfirmOutcome, DeleteConfirmRequest, DeleteTarget, ModalDeleteConfirm,
 };
 pub use rename_item::{ModalRenameItem, RenameItemOutcome, RenameItemRequest, RenameTarget};
 
@@ -46,6 +45,7 @@ pub mod test_host {
     ) -> (Entity<M>, FocusHandle, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         cx.update(crate::keymap::init_keymap);
+        cx.update(dbflux_components::modals::modal::install_modal_seams);
 
         let (host, window) = cx.add_window_view(|window, cx| Host {
             outside: cx.focus_handle(),

@@ -16,10 +16,48 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use super::mcp_bindings;
-use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
+use super::{ConnectionManagerWindow, DeferredAction, DismissEvent, StoredPassword, TestStatus};
 
 const PRIMARY_PASSWORD_SAVE_ERROR: &str =
     "Unable to save the connection password to the system keyring. Unlock it and try again.";
+
+/// Whether the form may delete a keyring entry it no longer wants. The form
+/// has not seen the entry while the read is pending or after the keyring
+/// refused it, so the user cannot have meant to drop it, and a keyring
+/// unlocked since would otherwise lose a secret nobody chose to remove.
+fn may_delete_unseen(stored: StoredPassword, what: &str, profile: &ConnectionProfile) -> bool {
+    match stored {
+        StoredPassword::Known => true,
+        StoredPassword::Loading | StoredPassword::Unreadable => {
+            log::warn!(
+                "Keeping the saved {what} for profile {}: the keyring had not been read when \
+                 the form was saved, or could not be",
+                profile.id
+            );
+            false
+        }
+    }
+}
+
+fn delete_password_unless_unseen(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    profile: &ConnectionProfile,
+    stored_password: StoredPassword,
+) {
+    if may_delete_unseen(stored_password, "password", profile) {
+        state.delete_password(profile);
+    }
+}
+
+fn delete_ssh_password_unless_unseen(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    profile: &ConnectionProfile,
+    stored_ssh_secret: StoredPassword,
+) {
+    if may_delete_unseen(stored_ssh_secret, "SSH secret", profile) {
+        state.delete_ssh_password(profile);
+    }
+}
 
 #[allow(clippy::result_large_err)]
 fn finish_profile_save_after_primary_password(
@@ -116,14 +154,17 @@ impl ConnectionManagerWindow {
         }
 
         if self.access.ssh_enabled && form.supports_ssh() {
+            // While an SSH config alias is active the empty host and user
+            // are correct: the alias is the only source of the target (A7).
+            let ssh_alias_active = self.ssh_config_alias(cx).is_some();
             let ssh_host = self.access.input_ssh_host.read(cx).value().to_string();
-            if ssh_host.trim().is_empty() {
+            if !ssh_alias_active && ssh_host.trim().is_empty() {
                 self.validation_errors
                     .push(dbflux_i18n::t!("form.validation.ssh_host_required"));
             }
 
             let ssh_user = self.access.input_ssh_user.read(cx).value().to_string();
-            if ssh_user.trim().is_empty() {
+            if !ssh_alias_active && ssh_user.trim().is_empty() {
                 self.validation_errors
                     .push(dbflux_i18n::t!("form.validation.ssh_user_required"));
             }
@@ -261,6 +302,18 @@ impl ConnectionManagerWindow {
 
         self.validate_hook_bindings(cx);
 
+        // Drivers reject combinations the per-field checks cannot see (for
+        // example mutually exclusive credential sources); surface their
+        // message instead of failing the later config build silently.
+        if self.validation_errors.is_empty()
+            && let Some(driver) = self.form.selected_driver.clone()
+        {
+            let values = self.collect_form_values(driver.form_definition(), cx);
+            if let Err(error) = driver.build_config(&values) {
+                self.validation_errors.push(error.to_string());
+            }
+        }
+
         self.validation_errors.is_empty()
     }
 
@@ -273,13 +326,15 @@ impl ConnectionManagerWindow {
         let port_str = self.access.input_ssh_port.read(cx).value().to_string();
         let user = self.access.input_ssh_user.read(cx).value().to_string();
         let key_path_str = self.access.input_ssh_key_path.read(cx).value().to_string();
+        let ssh_config_host = self.ssh_config_alias(cx);
 
-        Some(ssh_shared::build_ssh_config(
+        Some(ssh_shared::build_ssh_config_with_alias(
             &host,
             &port_str,
             &user,
             self.access.ssh_auth_method,
             &key_path_str,
+            ssh_config_host.as_deref(),
         ))
     }
 
@@ -304,9 +359,21 @@ impl ConnectionManagerWindow {
                 | DbConfig::MySQL { ssl_mode, .. }
                 | DbConfig::MongoDB { ssl_mode, .. }
                 | DbConfig::Redis { ssl_mode, .. }
-                | DbConfig::SqlServer { ssl_mode, .. }
                 | DbConfig::Redshift { ssl_mode, .. } => {
                     *ssl_mode = Some(selected);
+                }
+                DbConfig::SqlServer {
+                    ssl_mode,
+                    trust_server_certificate,
+                    ..
+                } => {
+                    *ssl_mode = Some(selected.clone());
+                    // `collect_form_values` does not carry the selected mode, so
+                    // the driver's `build_config` fell back to its "on" default
+                    // and set `trust_server_certificate: true`. Derive trust from
+                    // the user's selection exactly as the driver does: only
+                    // `required` validates the chain.
+                    *trust_server_certificate = !matches!(selected.as_str(), "required");
                 }
                 _ => {}
             }
@@ -361,6 +428,11 @@ impl ConnectionManagerWindow {
                 *ssl_client_cert_path = ssl_client_cert;
                 *ssl_client_key_path = ssl_client_key;
             }
+            DbConfig::SqlServer {
+                ssl_root_cert_path, ..
+            } => {
+                *ssl_root_cert_path = ssl_root_cert;
+            }
             _ => {}
         }
 
@@ -392,6 +464,9 @@ impl ConnectionManagerWindow {
 
         profile.save_password = self.form.form_save_password;
         profile.environment = self.form.environment;
+        profile.navigator_view = self.form.navigator_view;
+        profile.show_all_databases = self.form.show_all_databases;
+        profile.read_only_flag = self.form.read_only;
         profile.proxy_profile_id = self.access.selected_proxy_id;
         profile.auth_profile_id = self.auth_profile.selected_auth_profile_id;
         profile.value_refs = self.collect_value_refs(cx);
@@ -448,6 +523,10 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn save_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.defer_until_secrets_read(DeferredAction::Save) {
+            return;
+        }
+
         self.apply_pending_auth_profile(window, cx);
         self.apply_pending_ssm_auth_profile();
 
@@ -515,18 +594,22 @@ impl ConnectionManagerWindow {
             }
         }
 
+        let stored_password = self.form.stored_password;
+        let stored_ssh_secret = self.form.stored_ssh_secret;
+
         #[allow(clippy::result_large_err)]
         let save_result: Result<(), dbflux_core::DbError> =
             self.app_state.update(cx, |state, cx| {
-                let password_save_result = if !password_source_is_literal {
-                    state.delete_password(&profile);
-                    Ok(())
-                } else if profile.save_password && !password.is_empty() {
+                let wants_password_deleted = !password_source_is_literal || !profile.save_password;
+                let password_save_result = if password_source_is_literal
+                    && profile.save_password
+                    && !password.is_empty()
+                {
                     info!("Saving password to keyring for profile {}", profile.id);
                     state.save_password(&profile, &SecretString::from(password.clone()))
                 } else {
-                    if !profile.save_password {
-                        state.delete_password(&profile);
+                    if wants_password_deleted {
+                        delete_password_unless_unseen(state, &profile, stored_password);
                     }
                     Ok(())
                 };
@@ -538,7 +621,7 @@ impl ConnectionManagerWindow {
                             state.save_ssh_password(&profile, &SecretString::from(secret.clone()));
                         }
                     } else {
-                        state.delete_ssh_password(&profile);
+                        delete_ssh_password_unless_unseen(state, &profile, stored_ssh_secret);
                     }
 
                     if is_edit {
@@ -636,6 +719,10 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn test_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.defer_until_secrets_read(DeferredAction::TestConnection) {
+            return;
+        }
+
         self.apply_pending_auth_profile(window, cx);
         self.apply_pending_ssm_auth_profile();
 
@@ -887,6 +974,12 @@ impl TestConnectionProbeResource {
 }
 
 impl Drop for TestConnectionProbeResource {
+    #[expect(
+        clippy::expect_used,
+        reason = "`Drop` cannot return an error, so the existing \
+                  panic-on-poisoned-mutex policy is retained here; the guard \
+                  is only locked for a single `push`"
+    )]
     fn drop(&mut self) {
         if let Some(drop_guard) = &self.drop_guard {
             drop_guard
@@ -1070,10 +1163,11 @@ fn normalize_aws_credentials_error(profile_name: &str, error: &str) -> String {
 mod tests {
     use super::*;
     use crate::connection_manager::{EditState, FormFocus};
+    use crate::connection_manager::{KEYRING_PASSWORD_READ_ERROR, KEYRING_SECRETS_READ_ERROR};
     use dbflux_core::LogErr;
     use dbflux_core::secrecy::{ExposeSecret, SecretString};
     use dbflux_core::{
-        ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, HookExecutionMode,
+        ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, DbDriver, HookExecutionMode,
         HookFailureMode, HookKind, SecretStore,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -1081,6 +1175,7 @@ mod tests {
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{Entity, TestAppContext, WindowHandle, WindowOptions};
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     const FORM_KEYS: &[&str] = &[
@@ -1169,6 +1264,7 @@ mod tests {
             port: None,
             database: None,
             phase: None,
+            dials_configured_endpoint: false,
         }
     }
 
@@ -1778,6 +1874,135 @@ mod tests {
         assert!(result.contains("~/.aws/credentials"));
     }
 
+    const DRIVER_BUILD_ERROR: &str = "Profile and Access Key ID cannot both be set";
+
+    /// Wraps a registered driver and rejects every form in `build_config`, so
+    /// the window's handling of a driver-side config error is exercised.
+    struct RejectingBuildDriver(Arc<dyn DbDriver>);
+
+    impl DbDriver for RejectingBuildDriver {
+        fn kind(&self) -> dbflux_core::DbKind {
+            self.0.kind()
+        }
+
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            self.0.metadata()
+        }
+
+        fn form_definition(&self) -> &dbflux_core::DriverFormDef {
+            self.0.form_definition()
+        }
+
+        fn driver_key(&self) -> dbflux_core::DriverKey {
+            self.0.driver_key()
+        }
+
+        fn build_config(
+            &self,
+            _values: &dbflux_core::FormValues,
+        ) -> Result<DbConfig, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::InvalidProfile(
+                DRIVER_BUILD_ERROR.to_string(),
+            ))
+        }
+
+        fn extract_values(&self, config: &DbConfig) -> dbflux_core::FormValues {
+            self.0.extract_values(config)
+        }
+
+        fn connect_with_secrets(
+            &self,
+            profile: &ConnectionProfile,
+            password: Option<&SecretString>,
+            ssh_secret: Option<&SecretString>,
+        ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
+            self.0.connect_with_secrets(profile, password, ssh_secret)
+        }
+
+        fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), dbflux_core::DbError> {
+            self.0.test_connection(profile)
+        }
+    }
+
+    fn open_rejecting_driver_window(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<AppStateEntity>,
+        WindowHandle<ConnectionManagerWindow>,
+    ) {
+        let app_state = test_app_state(cx, SecretStoreFixture::new(PasswordSaveOutcome::Success));
+        let window = open_new_profile_window(app_state.clone(), cx);
+        window
+            .update(cx, |manager, _window, _cx| {
+                let inner = manager
+                    .form
+                    .selected_driver
+                    .clone()
+                    .expect("SQLite driver selected");
+                manager.form.selected_driver = Some(Arc::new(RejectingBuildDriver(inner)));
+            })
+            .expect("swap in the rejecting driver");
+        (app_state, window)
+    }
+
+    fn shows_driver_build_error(manager: &ConnectionManagerWindow) -> bool {
+        manager
+            .validation_errors
+            .iter()
+            .chain(manager.test_error.iter())
+            .any(|message| message.contains(DRIVER_BUILD_ERROR))
+    }
+
+    #[::core::prelude::v1::test]
+    fn save_shows_the_driver_build_config_error() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let (app_state, window) = open_rejecting_driver_window(&mut cx);
+
+        let shown = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.save_profile(window, cx);
+                shows_driver_build_error(manager)
+            })
+            .expect("save leaves the form window available");
+
+        assert!(
+            shown,
+            "the driver's build_config error is visible after save"
+        );
+        assert!(
+            cx.update(|cx| app_state.read(cx).profiles().is_empty()),
+            "a rejected profile is not committed"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_shows_the_driver_build_config_error() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let (_app_state, window) = open_rejecting_driver_window(&mut cx);
+
+        let shown = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.test_connection(window, cx);
+                shows_driver_build_error(manager)
+            })
+            .expect("test connection leaves the form window available");
+
+        assert!(
+            shown,
+            "the driver's build_config error is visible after test connection"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
     #[derive(Clone, Copy)]
     enum PasswordSaveOutcome {
         Success,
@@ -1788,6 +2013,9 @@ mod tests {
     #[derive(Clone)]
     struct SecretStoreFixture {
         outcome: Arc<Mutex<PasswordSaveOutcome>>,
+        read_fails: Arc<AtomicBool>,
+        /// A secret ref whose reads fail while every other read succeeds.
+        failing_ref: Arc<Mutex<Option<String>>>,
         values: Arc<Mutex<HashMap<String, SecretString>>>,
     }
 
@@ -1795,17 +2023,81 @@ mod tests {
         fn new(outcome: PasswordSaveOutcome) -> Self {
             Self {
                 outcome: Arc::new(Mutex::new(outcome)),
+                read_fails: Arc::new(AtomicBool::new(false)),
+                failing_ref: Arc::new(Mutex::new(None)),
                 values: Arc::new(Mutex::new(HashMap::new())),
             }
         }
+
+        fn seed(&self, profile: &ConnectionProfile, password: &str) {
+            self.values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .insert(profile.secret_ref(), SecretString::from(password));
+        }
+
+        fn seed_ref(&self, secret_ref: &str, secret: &str) {
+            self.values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .insert(secret_ref.to_string(), SecretString::from(secret));
+        }
+
+        fn seed_ssh(&self, profile: &ConnectionProfile, secret: &str) {
+            self.values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .insert(profile.ssh_secret_ref(), SecretString::from(secret));
+        }
+
+        fn saved_ssh(&self, profile: &ConnectionProfile) -> Option<String> {
+            self.values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .get(&profile.ssh_secret_ref())
+                .map(|secret| secret.expose_secret().to_string())
+        }
+
+        fn fail_reads_of(&self, secret_ref: String) {
+            *self
+                .failing_ref
+                .lock()
+                .expect("test secret store failing ref lock poisoned") = Some(secret_ref);
+        }
+
+        fn saved(&self, profile: &ConnectionProfile) -> Option<String> {
+            self.values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .get(&profile.secret_ref())
+                .map(|secret| secret.expose_secret().to_string())
+        }
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: retains the existing panic-on-poisoned-mutex \
+                  policy in the `Result`-returning `SecretStore` methods; this \
+                  fixture does not convert poisoned locks into returned errors"
+    )]
     impl SecretStore for SecretStoreFixture {
         fn is_available(&self) -> bool {
             true
         }
 
         fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, dbflux_core::DbError> {
+            let failing_ref = self
+                .failing_ref
+                .lock()
+                .expect("test secret store failing ref lock poisoned")
+                .clone();
+            if self.read_fails.load(Ordering::SeqCst) || failing_ref.as_deref() == Some(secret_ref)
+            {
+                return Err(dbflux_core::DbError::IoError(std::io::Error::other(
+                    "Cannot get secret of a locked object",
+                )));
+            }
+
             Ok(self
                 .values
                 .lock()
@@ -1999,6 +2291,7 @@ mod tests {
             state.add_profile_in_folder(profile.clone(), None)
         });
         let window = open_edit_profile_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
 
         window
             .update(&mut cx, |manager, window, cx| {
@@ -2018,6 +2311,973 @@ mod tests {
             1,
             "one safe failure is reported"
         );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    /// Opens the edit window without typing into the form, so the password
+    /// input shows only what the keyring handed over.
+    fn open_untouched_edit_window(
+        app_state: Entity<AppStateEntity>,
+        profile: ConnectionProfile,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        cx.update(|cx| {
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                cx.new(|cx| ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx))
+            })
+        })
+        .expect("connection manager edit window opens")
+    }
+
+    #[::core::prelude::v1::test]
+    fn editing_with_an_unreadable_keyring_reports_once_and_marks_the_password_unreadable() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("locked keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        let (stored_password, password_value, placeholder) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                    manager.password_placeholder(true, cx),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Unreadable);
+        assert_eq!(password_value, "", "the password input stays empty");
+        assert_eq!(
+            placeholder,
+            dbflux_i18n::t!("connection_manager.placeholder.password_unreadable")
+        );
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 1);
+        assert_eq!(
+            cx.update(|cx| host.read(cx).last_toast_title()),
+            Some(KEYRING_PASSWORD_READ_ERROR.to_string())
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn editing_a_value_ref_profile_with_an_unreadable_keyring_reports_nothing() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let mut profile = sqlite_profile("value ref profile");
+        profile.value_refs.insert(
+            "password".to_string(),
+            ValueRef::Env {
+                key: "DBFLUX_TEST_PASSWORD".to_string(),
+            },
+        );
+        fixture.seed(&profile, "stale password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        let stored_password = window
+            .update(&mut cx, |manager, _window, _cx| {
+                manager.form.stored_password
+            })
+            .expect("edit window stays available");
+        assert_eq!(
+            stored_password,
+            StoredPassword::Unreadable,
+            "saving still must not delete the entry the form never saw"
+        );
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_with_a_value_ref_source_keeps_an_entry_the_keyring_would_not_read() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("locked keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+        fixture.read_fails.store(false, Ordering::SeqCst);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.stored_password, StoredPassword::Unreadable);
+                let env_ref = ValueRef::Env {
+                    key: "DBFLUX_TEST_PASSWORD".to_string(),
+                };
+                let env_key = manager
+                    .form
+                    .password_value_source_selector
+                    .update(cx, |selector, cx| {
+                        selector.set_value_ref(Some(&env_ref), window, cx)
+                    });
+                manager
+                    .form
+                    .input_password
+                    .update(cx, |input, cx| input.set_value(env_key, window, cx));
+                assert!(
+                    !manager
+                        .form
+                        .password_value_source_selector
+                        .read(cx)
+                        .is_literal(cx)
+                );
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(
+            fixture.saved(&profile).as_deref(),
+            Some("saved password"),
+            "the entry the form never saw is not deleted"
+        );
+        let persisted = cx.update(|cx| app_state.read(cx).profiles().to_vec());
+        assert_eq!(persisted.len(), 1, "the edit is committed");
+        assert!(
+            matches!(
+                persisted[0].value_refs.get("password"),
+                Some(ValueRef::Env { key }) if key == "DBFLUX_TEST_PASSWORD"
+            ),
+            "the new password source is saved: {:?}",
+            persisted[0].value_refs.get("password")
+        );
+        assert!(
+            window.root(&mut cx).is_err(),
+            "a successful save closes the window"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_with_save_password_unchecked_keeps_an_entry_the_keyring_would_not_read() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("locked keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+        fixture.read_fails.store(false, Ordering::SeqCst);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.stored_password, StoredPassword::Unreadable);
+                manager.form.form_save_password = false;
+                manager.form.input_name.update(cx, |input, cx| {
+                    input.set_value("renamed profile", window, cx)
+                });
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(
+            fixture.saved(&profile).as_deref(),
+            Some("saved password"),
+            "the entry the form never saw is not deleted"
+        );
+        let persisted = cx.update(|cx| app_state.read(cx).profiles().to_vec());
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(
+            persisted[0].name, "renamed profile",
+            "the edit is committed"
+        );
+        assert!(!persisted[0].save_password);
+
+        assert!(
+            window.root(&mut cx).is_err(),
+            "a successful save closes the window"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_with_save_password_unchecked_deletes_an_entry_the_keyring_read() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("readable keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        let (stored_password, password_value) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Known);
+        assert_eq!(password_value, "saved password");
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form.form_save_password = false;
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(fixture.saved(&profile), None, "the entry is deleted");
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
+
+        assert!(
+            window.root(&mut cx).is_err(),
+            "a successful save closes the window"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn editing_with_no_saved_entry_reports_nothing_and_knows_the_password() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("no entry profile");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        let (stored_password, password_value) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Known);
+        assert_eq!(password_value, "");
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_while_the_keyring_read_is_pending_keeps_the_saved_entry() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("pending read profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.stored_password, StoredPassword::Loading);
+                assert_eq!(manager.form.input_password.read(cx).value(), "");
+                manager.form.form_save_password = false;
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(
+            fixture.saved(&profile).as_deref(),
+            Some("saved password"),
+            "the entry the form had not read yet is not deleted"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_saved_password_fills_the_empty_input_when_the_keyring_read_completes() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("slow keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        let (stored_password, password_value) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Known);
+        assert_eq!(password_value, "saved password");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    fn ssh_profile(name: &str) -> ConnectionProfile {
+        let mut config = DbConfig::default_postgres();
+        if let DbConfig::Postgres { ssh_tunnel, .. } = &mut config {
+            *ssh_tunnel = Some(SshTunnelConfig {
+                host: "bastion.example".to_string(),
+                port: 22,
+                user: "tunnel".to_string(),
+                auth_method: dbflux_core::SshAuthMethod::Password,
+                ssh_config_host: None,
+            });
+        }
+        let mut profile = ConnectionProfile::new(name, config);
+        profile.save_password = true;
+        profile
+    }
+
+    fn ssh_password_input(
+        window: &WindowHandle<ConnectionManagerWindow>,
+        cx: &mut TestAppContext,
+    ) -> String {
+        window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .access
+                    .input_ssh_password
+                    .read(cx)
+                    .value()
+                    .to_string()
+            })
+            .expect("edit window stays available")
+    }
+
+    #[::core::prelude::v1::test]
+    fn an_unreadable_inline_ssh_secret_survives_saving_with_save_unchecked() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = ssh_profile("locked ssh profile");
+        fixture.seed(&profile, "saved password");
+        fixture.seed_ssh(&profile, "saved ssh secret");
+        fixture.fail_reads_of(profile.ssh_secret_ref());
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.stored_ssh_secret, StoredPassword::Unreadable);
+                assert_eq!(manager.form.stored_password, StoredPassword::Known);
+                manager.form.form_save_ssh_secret = false;
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(
+            fixture.saved_ssh(&profile).as_deref(),
+            Some("saved ssh secret"),
+            "the SSH entry the form never read is not deleted"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_while_the_inline_ssh_read_is_pending_keeps_the_saved_entry() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = ssh_profile("pending ssh profile");
+        fixture.seed_ssh(&profile, "saved ssh secret");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.stored_ssh_secret, StoredPassword::Loading);
+                manager.form.form_save_ssh_secret = false;
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(
+            fixture.saved_ssh(&profile).as_deref(),
+            Some("saved ssh secret")
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_readable_inline_ssh_secret_fills_the_empty_input_when_the_read_completes() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = ssh_profile("readable ssh profile");
+        fixture.seed_ssh(&profile, "saved ssh secret");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        assert_eq!(ssh_password_input(&window, &mut cx), "");
+        cx.run_until_parked();
+
+        assert_eq!(ssh_password_input(&window, &mut cx), "saved ssh secret");
+        window
+            .update(&mut cx, |manager, _window, _cx| {
+                assert_eq!(manager.form.stored_ssh_secret, StoredPassword::Known);
+                assert!(manager.form.form_save_ssh_secret);
+            })
+            .expect("edit window stays available");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn an_ssh_secret_typed_before_the_read_completes_is_kept() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = ssh_profile("typed ssh profile");
+        fixture.seed_ssh(&profile, "saved ssh secret");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.access.input_ssh_password.update(cx, |input, cx| {
+                    input.set_value("typed ssh secret", window, cx)
+                });
+            })
+            .expect("edit window stays available");
+        cx.run_until_parked();
+
+        assert_eq!(ssh_password_input(&window, &mut cx), "typed ssh secret");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    fn window_is_closed(
+        window: &WindowHandle<ConnectionManagerWindow>,
+        cx: &mut TestAppContext,
+    ) -> bool {
+        window.root(cx).is_err()
+    }
+
+    fn postgres_profile(name: &str) -> ConnectionProfile {
+        let mut profile = ConnectionProfile::new(name, DbConfig::default_postgres());
+        profile.save_password = true;
+        profile
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_while_the_read_is_pending_runs_after_it_and_deletes_a_readable_entry() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("deferred save profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form.form_save_password = false;
+                manager.save_profile(window, cx)
+            })
+            .expect("edit window stays available");
+
+        assert_eq!(fixture.saved(&profile).as_deref(), Some("saved password"));
+        assert!(!window_is_closed(&window, &mut cx), "nothing ran yet");
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            fixture.saved(&profile),
+            None,
+            "the read showed the entry, so the user's opt-out deletes it"
+        );
+        assert!(window_is_closed(&window, &mut cx), "the save completed");
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_while_the_read_is_pending_keeps_an_entry_the_locked_keyring_would_not_read() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("deferred locked save profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form.form_save_password = false;
+                manager.save_profile(window, cx)
+            })
+            .expect("edit window stays available");
+        cx.run_until_parked();
+
+        assert_eq!(fixture.saved(&profile).as_deref(), Some("saved password"));
+        assert!(window_is_closed(&window, &mut cx), "the save completed");
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_while_the_read_is_pending_starts_after_it() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("deferred test profile");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.test_connection(window, cx);
+                assert!(
+                    matches!(manager.test_status, TestStatus::None),
+                    "not started yet"
+                );
+                assert_eq!(
+                    manager.deferred_after_secrets_read,
+                    Some(DeferredAction::TestConnection)
+                );
+            })
+            .expect("edit window stays available");
+        cx.run_until_parked();
+
+        window
+            .update(&mut cx, |manager, _window, _cx| {
+                assert!(
+                    !matches!(manager.test_status, TestStatus::None),
+                    "the test ran"
+                );
+                assert_eq!(manager.deferred_after_secrets_read, None);
+            })
+            .expect("edit window stays available");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_save_request_outranks_a_test_request_while_the_read_is_pending() {
+        assert_eq!(
+            DeferredAction::merge(Some(DeferredAction::Save), DeferredAction::TestConnection),
+            DeferredAction::Save
+        );
+        assert_eq!(
+            DeferredAction::merge(Some(DeferredAction::TestConnection), DeferredAction::Save),
+            DeferredAction::Save
+        );
+        assert_eq!(
+            DeferredAction::merge(None, DeferredAction::TestConnection),
+            DeferredAction::TestConnection
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_password_source_switched_to_env_during_the_read_is_not_filled_or_saved() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("env switch profile");
+        fixture.seed(&profile, "keyring secret");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager
+                    .form
+                    .password_value_source_selector
+                    .update(cx, |selector, cx| {
+                        selector.set_value_ref(
+                            Some(&ValueRef::Env { key: String::new() }),
+                            window,
+                            cx,
+                        );
+                    });
+            })
+            .expect("edit window stays available");
+        cx.run_until_parked();
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.input_password.read(cx).value(), "");
+                manager.form.input_password.update(cx, |input, cx| {
+                    input.set_value("DBFLUX_TEST_PASSWORD", window, cx)
+                });
+                manager.save_profile(window, cx)
+            })
+            .expect("edit window stays available");
+
+        let saved = cx.update(|cx| app_state.read(cx).profiles().to_vec());
+        let value_ref = saved[0]
+            .value_refs
+            .get("password")
+            .expect("the password keeps a value ref");
+        assert!(
+            matches!(value_ref, ValueRef::Env { key } if key == "DBFLUX_TEST_PASSWORD"),
+            "got {value_ref:?}"
+        );
+        assert!(
+            !format!("{:?}", saved[0].value_refs).contains("keyring secret"),
+            "the keyring secret never reaches the profile"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_password_typed_then_cleared_during_the_read_stays_empty() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("cleared profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form.input_password.update(cx, |input, cx| {
+                    input.insert("x", window, cx);
+                    input.replace_all("", window, cx);
+                });
+                assert_eq!(manager.form.input_password.read(cx).value(), "");
+            })
+            .expect("edit window stays available");
+        cx.run_until_parked();
+
+        window
+            .update(&mut cx, |manager, _window, cx| {
+                assert_eq!(manager.form.stored_password, StoredPassword::Known);
+                assert_eq!(manager.form.input_password.read(cx).value(), "");
+            })
+            .expect("edit window stays available");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_uri_shows_the_password_once_the_read_fills_it() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = postgres_profile("uri profile");
+        fixture.seed(&profile, "hunter2");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        let uri = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _window, cx| {
+                    manager
+                        .form
+                        .driver_inputs
+                        .get("uri")
+                        .expect("URI input")
+                        .read(cx)
+                        .value()
+                        .to_string()
+                })
+                .expect("edit window stays available")
+        };
+        assert!(!uri(&mut cx).contains("hunter2"));
+        cx.run_until_parked();
+
+        assert!(uri(&mut cx).contains("hunter2"), "uri: {}", uri(&mut cx));
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn an_ssh_method_changed_during_the_read_leaves_both_ssh_inputs_empty() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = ssh_profile("method switch profile");
+        fixture.seed_ssh(&profile, "saved ssh secret");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, _window, _cx| {
+                manager.access.ssh_auth_method = crate::ssh_shared::SshAuthSelection::PrivateKey;
+            })
+            .expect("edit window stays available");
+        cx.run_until_parked();
+
+        window
+            .update(&mut cx, |manager, _window, cx| {
+                assert_eq!(manager.access.input_ssh_password.read(cx).value(), "");
+                assert_eq!(manager.access.input_ssh_key_passphrase.read(cx).value(), "");
+                assert_eq!(
+                    manager.form.stored_ssh_secret,
+                    StoredPassword::Unreadable,
+                    "the entry was never shown, so saving must not delete it"
+                );
+            })
+            .expect("edit window stays available");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_locked_keyring_reports_once_for_the_password_and_the_ssh_secret() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = ssh_profile("fully locked profile");
+        fixture.seed(&profile, "saved password");
+        fixture.seed_ssh(&profile, "saved ssh secret");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 1);
+        assert_eq!(
+            cx.update(|cx| host.read(cx).last_toast_title()),
+            Some(KEYRING_SECRETS_READ_ERROR.to_string())
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_locked_keyring_with_only_the_ssh_secret_failing_uses_the_secrets_summary() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = ssh_profile("ssh only locked profile");
+        fixture.seed_ssh(&profile, "saved ssh secret");
+        fixture.fail_reads_of(profile.ssh_secret_ref());
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 1);
+        assert_eq!(
+            cx.update(|cx| host.read(cx).last_toast_title()),
+            Some(KEYRING_SECRETS_READ_ERROR.to_string())
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    /// A Postgres profile bound to a saved tunnel profile that keeps its secret.
+    fn bound_tunnel_fixture(
+        cx: &mut TestAppContext,
+        fixture: &SecretStoreFixture,
+    ) -> (
+        Entity<AppStateEntity>,
+        ConnectionProfile,
+        dbflux_core::SshTunnelProfile,
+    ) {
+        let app_state = test_app_state(cx, fixture.clone());
+        let tunnel = dbflux_core::SshTunnelProfile::new(
+            "saved tunnel",
+            SshTunnelConfig {
+                host: "bastion.example".to_string(),
+                port: 22,
+                user: "tunnel".to_string(),
+                auth_method: dbflux_core::SshAuthMethod::Password,
+                ssh_config_host: None,
+            },
+        );
+        assert!(tunnel.save_secret);
+
+        let mut profile = ConnectionProfile::new("bound profile", DbConfig::default_postgres());
+        if let DbConfig::Postgres {
+            ssh_tunnel_profile_id,
+            ..
+        } = &mut profile.config
+        {
+            *ssh_tunnel_profile_id = Some(tunnel.id);
+        }
+        profile.access_kind = Some(AccessKind::Ssh {
+            ssh_tunnel_profile_id: tunnel.id,
+        });
+
+        app_state.update(cx, |state, _| {
+            state.add_ssh_tunnel(tunnel.clone());
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        (app_state, profile, tunnel)
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_bound_tunnel_secret_fills_the_empty_input_when_the_read_completes() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let (app_state, profile, tunnel) = bound_tunnel_fixture(&mut cx, &fixture);
+        fixture.seed_ref(&tunnel.secret_ref(), "tunnel secret");
+
+        let window = open_untouched_edit_window(app_state, profile, &mut cx);
+        assert_eq!(ssh_password_input(&window, &mut cx), "");
+        cx.run_until_parked();
+
+        assert_eq!(ssh_password_input(&window, &mut cx), "tunnel secret");
+        window
+            .update(&mut cx, |manager, _window, _cx| {
+                assert!(manager.form.form_save_ssh_secret);
+            })
+            .expect("edit window stays available");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn an_unreadable_bound_tunnel_secret_reports_once() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let (app_state, profile, tunnel) = bound_tunnel_fixture(&mut cx, &fixture);
+        fixture.seed_ref(&tunnel.secret_ref(), "tunnel secret");
+        fixture.fail_reads_of(tunnel.secret_ref());
+
+        let window = open_untouched_edit_window(app_state, profile, &mut cx);
+        cx.run_until_parked();
+
+        assert_eq!(ssh_password_input(&window, &mut cx), "");
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 1);
+        assert_eq!(
+            cx.update(|cx| host.read(cx).last_toast_title()),
+            Some(KEYRING_SECRETS_READ_ERROR.to_string())
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_password_typed_before_the_keyring_read_completes_is_kept() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("typed first profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form.input_password.update(cx, |input, cx| {
+                    input.set_value("typed password", window, cx)
+                });
+            })
+            .expect("edit window stays available");
+        cx.run_until_parked();
+
+        let (stored_password, password_value) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Known);
+        assert_eq!(password_value, "typed password");
 
         window
             .update(&mut cx, |_, window, _| window.remove_window())
@@ -2247,9 +3507,9 @@ mod tests {
     /// previous field, Ctrl+L and Ctrl+H for the next or previous tab.
     #[::core::prelude::v1::test]
     fn arrows_and_tab_chords_move_on_from_the_form_and_its_fields() {
+        let mut cx = TestAppContext::single();
         use super::super::ActiveTab;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         cx.simulate_keystrokes(window.into(), "down");
@@ -2314,9 +3574,9 @@ mod tests {
     /// mode is a stop whose choice Left and Right change.
     #[::core::prelude::v1::test]
     fn the_form_ring_reaches_the_ssl_mode() {
+        let mut cx = TestAppContext::single();
         use super::super::MainExtraStop;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         let ssl_stop = window
@@ -2368,15 +3628,85 @@ mod tests {
             .log_err();
     }
 
+    /// The read-only toggle is a ring stop: Enter flips it, the saved profile
+    /// carries it, and editing a read-only profile shows it switched on.
+    #[::core::prelude::v1::test]
+    fn the_form_ring_toggles_read_only_and_the_profile_keeps_it() {
+        let mut cx = TestAppContext::single();
+        use super::super::MainExtraStop;
+
+        let window = open_postgres_form(&mut cx);
+
+        let read_only_stop = window
+            .update(&mut cx, |manager, _, _| {
+                manager
+                    .main_extra_stops()
+                    .iter()
+                    .position(|stop| matches!(stop, MainExtraStop::ReadOnly))
+                    .map(|index| FormFocus::MainExtra(index as u8))
+            })
+            .expect("window is open")
+            .expect("every driver offers the read-only toggle");
+
+        window
+            .update(&mut cx, |manager, _, _| manager.form_focus = read_only_stop)
+            .expect("window is open");
+        cx.simulate_keystrokes(window.into(), "enter");
+
+        let profile = window
+            .update(&mut cx, |manager, _, cx| manager.build_profile(cx))
+            .expect("window is open")
+            .expect("the form builds a profile");
+        assert!(profile.read_only_flag, "Enter switches read-only on");
+
+        let app_state = window
+            .update(&mut cx, |manager, _, _| manager.app_state.clone())
+            .expect("window is open");
+        let edit_window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+        let restored = edit_window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .build_profile(cx)
+                    .map(|profile| profile.read_only_flag)
+            })
+            .expect("edit window is open");
+        assert_eq!(restored, Some(true), "editing keeps the profile read-only");
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        let toggled_back = window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .build_profile(cx)
+                    .map(|profile| profile.read_only_flag)
+            })
+            .expect("window is open");
+        assert_eq!(toggled_back, Some(false), "Enter switches read-only off");
+
+        edit_window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
     /// A driver field without a ring stop of its own, such as the auth
     /// profile picker of an AWS driver, is an extra stop: Enter opens it and
     /// the dropdown keys drive it.
     #[::core::prelude::v1::test]
     fn the_form_ring_reaches_the_auth_profile_picker() {
+        let mut cx = TestAppContext::single();
         use super::super::MainExtraStop;
         use dbflux_core::FormFieldKind;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         let picker_stop = window
@@ -2437,9 +3767,9 @@ mod tests {
     /// connection and Save: Right reaches it and Enter copies the error.
     #[::core::prelude::v1::test]
     fn the_failed_test_copy_button_is_on_the_test_row() {
+        let mut cx = TestAppContext::single();
         use super::super::TestStatus;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         window
@@ -2478,9 +3808,9 @@ mod tests {
     /// gives it back to the form.
     #[::core::prelude::v1::test]
     fn the_settings_ring_opens_the_hook_dropdowns() {
+        let mut cx = TestAppContext::single();
         use super::super::ActiveTab;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         window
@@ -2529,10 +3859,10 @@ mod tests {
     #[cfg(feature = "mcp")]
     #[::core::prelude::v1::test]
     fn the_mcp_tab_is_driven_by_the_form_ring() {
+        let mut cx = TestAppContext::single();
         use super::super::ActiveTab;
         use dbflux_mcp::TrustedClientDto;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form_with(&mut cx, |state| {
             state
                 .upsert_mcp_trusted_client(TrustedClientDto {
@@ -2613,9 +3943,9 @@ mod tests {
     /// Page Down moves an open dropdown's highlight a page at a time.
     #[::core::prelude::v1::test]
     fn page_down_moves_an_open_dropdown() {
+        let mut cx = TestAppContext::single();
         use super::super::ActiveTab;
 
-        let mut cx = TestAppContext::single();
         let window = open_postgres_form(&mut cx);
 
         window
@@ -2680,6 +4010,7 @@ mod tests {
                 app_state
                     .read(cx)
                     .get_password(&profile)
+                    .expect("keyring read succeeds")
                     .expect("primary password is persisted")
                     .expose_secret()
                     .to_string()
@@ -2755,9 +4086,9 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn form_inputs_expose_stable_ids_and_their_field_labels() {
+        let mut cx = TestAppContext::single();
         const PASSWORD: &str = "cm-automation-secret";
 
-        let mut cx = TestAppContext::single();
         let (window, frame) = render_postgres_form(PASSWORD, &mut cx);
 
         let text_inputs: HashMap<String, Option<String>> = frame
@@ -3020,6 +4351,7 @@ mod tests {
         });
 
         let window = open_edit_profile_window(app_state.clone(), profile, &mut cx);
+        cx.run_until_parked();
         window
             .update(&mut cx, |manager, window, cx| {
                 manager
@@ -3075,6 +4407,662 @@ mod tests {
         assert_eq!(
             bindings.post_disconnect,
             hook_ids(&ids, &["alpha", "gamma"])
+        );
+    }
+}
+
+/// SQL Server SSL mode tests. A separate module with explicit imports:
+/// combining `use super::*` with `#[gpui::test]` sends the gpui_macros
+/// expansion into unbounded recursion (see `ssh_config_host_tests`).
+#[cfg(test)]
+mod sqlserver_ssl_tests {
+    use crate::connection_manager::ConnectionManagerWindow;
+    use dbflux_core::{ConnectionProfile, DbConfig};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, WindowHandle, WindowOptions};
+
+    fn init_test_runtime(cx: &mut TestAppContext) -> Entity<ToastHost> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        })
+    }
+
+    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        })
+    }
+
+    fn open_sqlserver_form_window(
+        app_state: Entity<AppStateEntity>,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("mssql", window, cx);
+                for (field, value) in [("host", "db.corp"), ("port", "1433"), ("user", "sa")] {
+                    manager
+                        .form
+                        .driver_inputs
+                        .get(field)
+                        .unwrap_or_else(|| panic!("mssql form has a `{field}` input"))
+                        .update(cx, |input, cx| input.set_value(value, window, cx));
+                }
+            })
+            .expect("mssql form initializes");
+        window
+    }
+
+    fn build_sqlserver_config(
+        window: &WindowHandle<ConnectionManagerWindow>,
+        ssl_mode: &str,
+        ca_path: Option<&str>,
+        cx: &mut TestAppContext,
+    ) -> DbConfig {
+        window
+            .update(cx, |manager, window, cx| {
+                manager.form.selected_ssl_mode = ssl_mode.to_string();
+                if let Some(ca_path) = ca_path {
+                    manager.form.ssl_ca_cert_input.update(cx, |input, cx| {
+                        input.set_value(ca_path, window, cx);
+                    });
+                }
+                manager
+                    .build_config(cx)
+                    .expect("the SQL Server config builds")
+            })
+            .expect("read the built config")
+    }
+
+    /// Selecting `required` for SQL Server with a CA path must save a config
+    /// that validates the certificate chain (S2): the mode is carried and
+    /// `trust_server_certificate` is derived from it exactly as the driver
+    /// does, because `collect_form_values` does not carry the selected mode.
+    #[gpui::test]
+    fn sqlserver_required_mode_builds_a_chain_validating_config_with_the_ca_path(
+        cx: &mut TestAppContext,
+    ) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = open_sqlserver_form_window(app_state, cx);
+
+        let config = build_sqlserver_config(&window, "required", Some("/etc/ssl/corp-ca.pem"), cx);
+
+        match config {
+            DbConfig::SqlServer {
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ..
+            } => {
+                assert_eq!(ssl_mode.as_deref(), Some("required"));
+                assert!(
+                    !trust_server_certificate,
+                    "`required` must validate the chain, not call trust_cert()"
+                );
+                assert_eq!(ssl_root_cert_path.as_deref(), Some("/etc/ssl/corp-ca.pem"));
+            }
+            _ => panic!("expected SqlServer config"),
+        }
+    }
+
+    /// The reverse of the `required` case: `on` keeps the driver's
+    /// trust-cert behavior (encrypted, self-signed certs accepted).
+    #[gpui::test]
+    fn sqlserver_on_mode_builds_a_trusting_config(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = open_sqlserver_form_window(app_state, cx);
+
+        let config = build_sqlserver_config(&window, "on", None, cx);
+
+        match config {
+            DbConfig::SqlServer {
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ..
+            } => {
+                assert_eq!(ssl_mode.as_deref(), Some("on"));
+                assert!(
+                    trust_server_certificate,
+                    "`on` accepts self-signed certs via trust_cert()"
+                );
+                assert_eq!(ssl_root_cert_path, None);
+            }
+            _ => panic!("expected SqlServer config"),
+        }
+    }
+
+    /// Editing a saved SQL Server profile must restore its saved mode, not
+    /// silently reset it to the driver's first declared mode (`off`).
+    #[gpui::test]
+    fn editing_a_saved_sqlserver_profile_restores_its_ssl_mode(cx: &mut TestAppContext) {
+        let mut config = DbConfig::default_sqlserver();
+        if let DbConfig::SqlServer { ssl_mode, .. } = &mut config {
+            *ssl_mode = Some("required".to_string());
+        }
+        let profile = ConnectionProfile::new("mssql required", config);
+
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+
+        let selected_mode = window
+            .update(cx, |manager, _window, _cx| {
+                manager.form.selected_ssl_mode.clone()
+            })
+            .expect("read the rehydrated SSL mode");
+        assert_eq!(selected_mode, "required");
+
+        let rebuilt = window
+            .update(cx, |manager, _window, cx| {
+                manager.build_config(cx).map(|config| match config {
+                    DbConfig::SqlServer {
+                        ssl_mode,
+                        trust_server_certificate,
+                        ssl_root_cert_path,
+                        ..
+                    } => (ssl_mode, trust_server_certificate, ssl_root_cert_path),
+                    _ => panic!("expected SqlServer config"),
+                })
+            })
+            .expect("rebuild the edited config");
+        let (ssl_mode, trust_server_certificate, ssl_root_cert_path) =
+            rebuilt.expect("the edited profile rebuilds its config");
+        assert_eq!(ssl_mode.as_deref(), Some("required"));
+        assert!(!trust_server_certificate);
+        assert_eq!(ssl_root_cert_path, None);
+    }
+}
+/// Tests of the SSH config host picker on the Access tab (#837, T5). A
+/// separate module with explicit imports: combining `use super::*` with
+/// `#[gpui::test]` sends the gpui_macros expansion into unbounded recursion
+/// (see `keyboard_coverage_tests` in `connection_manager/mod.rs`).
+#[cfg(test)]
+mod ssh_config_host_tests {
+    use crate::connection_manager::{AccessTabMode, ConnectionManagerWindow};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, WindowHandle, WindowOptions};
+
+    fn init_test_runtime(cx: &mut TestAppContext) -> Entity<ToastHost> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        })
+    }
+
+    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        })
+    }
+
+    // --- SSH config host picker on the Access tab (#837, T5) ---
+
+    /// A throwaway fixture directory with a writable `config` file. Never
+    /// the real home directory (S7).
+    struct SshConfigFixture(std::path::PathBuf);
+
+    impl SshConfigFixture {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "dbflux-cm-ssh-config-{name}-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).expect("create fixture dir");
+            Self(dir)
+        }
+
+        fn write_config(&self, text: &str) {
+            std::fs::write(self.0.join("config"), text).expect("write fixture config");
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+
+        /// A home directory inside the fixture, so `~` expansion never
+        /// reaches the real home (S7).
+        fn home(&self) -> std::path::PathBuf {
+            self.0.join("home")
+        }
+    }
+
+    impl Drop for SshConfigFixture {
+        fn drop(&mut self) {
+            if let Err(error) = std::fs::remove_dir_all(&self.0) {
+                eprintln!("fixture cleanup failed: {error}");
+            }
+        }
+    }
+
+    fn ssh_config_fixture(name: &str) -> SshConfigFixture {
+        let fixture = SshConfigFixture::new(name);
+        fixture.write_config(
+            "Host alpha\n  HostName alpha.example.com\n  User deploy\n  Port 2222\n\nHost beta\n  HostName 10.0.0.5\n\nHost *\n  Compression yes\n",
+        );
+        fixture
+    }
+
+    fn open_ssh_form_window(
+        app_state: Entity<AppStateEntity>,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("postgres", window, cx);
+                manager.access.ssh_enabled = true;
+                manager.access.access_tab_mode = AccessTabMode::Ssh;
+            })
+            .expect("ssh inline form initializes");
+        window
+    }
+
+    fn inject_fixture_hosts(
+        window: &WindowHandle<ConnectionManagerWindow>,
+        fixture: &SshConfigFixture,
+        cx: &mut TestAppContext,
+    ) {
+        window
+            .update(cx, |manager, _window, cx| {
+                let snapshot =
+                    crate::ssh_host_picker::load_ssh_hosts(fixture.path(), &fixture.home());
+                manager
+                    .access
+                    .ssh_host_picker
+                    .update(cx, |picker, cx| picker.apply_snapshot(snapshot, cx));
+            })
+            .expect("fixture hosts load into the picker");
+    }
+
+    /// The Access tab picker lists the fixture hosts, and selecting one
+    /// makes the built SSH config reference the alias with empty host, empty
+    /// user and port 22 (A7).
+    #[gpui::test]
+    fn the_access_tab_picker_lists_fixture_hosts_and_the_alias_reaches_the_built_config(
+        cx: &mut TestAppContext,
+    ) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let fixture = ssh_config_fixture("lists-and-builds");
+        let window = open_ssh_form_window(app_state, cx);
+
+        inject_fixture_hosts(&window, &fixture, cx);
+
+        let aliases = window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .access
+                    .ssh_host_picker
+                    .read(cx)
+                    .snapshot()
+                    .hosts
+                    .iter()
+                    .map(|host| host.alias.clone())
+                    .collect::<Vec<_>>()
+            })
+            .expect("read the picker snapshot");
+        assert_eq!(
+            aliases,
+            vec!["alpha".to_string(), "beta".to_string()],
+            "the picker lists the fixture hosts in file order; `Host *` is not pickable (A5)"
+        );
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(1, window, cx)
+            })
+            .expect("select the first fixture host");
+
+        let config = window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .build_ssh_config(cx)
+                    .expect("the inline SSH config builds")
+            })
+            .expect("read the built config");
+        assert_eq!(config.ssh_config_host.as_deref(), Some("alpha"));
+        assert_eq!(config.host, "", "the alias is the only target (A7)");
+        assert_eq!(config.user, "");
+        assert_eq!(config.port, 22);
+    }
+
+    /// With an alias active the empty host and user are correct, so the
+    /// required-field validation must not fire; without the alias the same
+    /// empty form still reports both.
+    #[gpui::test]
+    fn with_an_alias_validation_does_not_demand_host_or_user(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let fixture = ssh_config_fixture("validation");
+        let window = open_ssh_form_window(app_state, cx);
+
+        let (ok, host_error, user_error) = window
+            .update(cx, |manager, _window, cx| {
+                let ok = manager.validate_form(false, cx);
+                let host_error = dbflux_i18n::t!("form.validation.ssh_host_required");
+                let user_error = dbflux_i18n::t!("form.validation.ssh_user_required");
+                (
+                    ok,
+                    manager.validation_errors.contains(&host_error),
+                    manager.validation_errors.contains(&user_error),
+                )
+            })
+            .expect("validate the manual form");
+        assert!(!ok, "an empty manual SSH form is invalid");
+        assert!(host_error, "the missing host is reported");
+        assert!(user_error, "the missing user is reported");
+
+        inject_fixture_hosts(&window, &fixture, cx);
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(1, window, cx)
+            })
+            .expect("select the first fixture host");
+
+        let (ok, host_error, user_error) = window
+            .update(cx, |manager, _window, cx| {
+                let ok = manager.validate_form(false, cx);
+                let host_error = dbflux_i18n::t!("form.validation.ssh_host_required");
+                let user_error = dbflux_i18n::t!("form.validation.ssh_user_required");
+                (
+                    ok,
+                    manager.validation_errors.contains(&host_error),
+                    manager.validation_errors.contains(&user_error),
+                )
+            })
+            .expect("validate the aliased form");
+        assert!(ok, "an aliased form needs no manual host or user");
+        assert!(!host_error, "the alias supplies the host");
+        assert!(!user_error, "the alias supplies the user");
+    }
+
+    /// Clearing the alias (back to the manual entry) restores exactly the
+    /// manual target that was typed before the alias was picked.
+    #[gpui::test]
+    fn clearing_the_alias_restores_the_manual_target_in_the_built_config(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let fixture = ssh_config_fixture("clearing");
+        let window = open_ssh_form_window(app_state, cx);
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.access.input_ssh_host.update(cx, |state, cx| {
+                    state.set_value("manual.example.com", window, cx)
+                });
+                manager
+                    .access
+                    .input_ssh_port
+                    .update(cx, |state, cx| state.set_value("2200", window, cx));
+                manager
+                    .access
+                    .input_ssh_user
+                    .update(cx, |state, cx| state.set_value("manualuser", window, cx));
+            })
+            .expect("type the manual target");
+
+        inject_fixture_hosts(&window, &fixture, cx);
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(1, window, cx)
+            })
+            .expect("select the alias");
+
+        let aliased = window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .build_ssh_config(cx)
+                    .expect("the aliased config builds")
+            })
+            .expect("read the built config");
+        assert_eq!(aliased.ssh_config_host.as_deref(), Some("alpha"));
+        assert_eq!(aliased.host, "");
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(0, window, cx)
+            })
+            .expect("clear back to the manual entry");
+
+        let manual = window
+            .update(cx, |manager, _window, cx| {
+                manager
+                    .build_ssh_config(cx)
+                    .expect("the manual config builds")
+            })
+            .expect("read the built config");
+        assert_eq!(manual.ssh_config_host, None);
+        assert_eq!(manual.host, "manual.example.com");
+        assert_eq!(manual.user, "manualuser");
+        assert_eq!(manual.port, 2200);
+    }
+
+    /// "Save as tunnel" from an aliased inline config promotes the alias —
+    /// not the resolved values — into the saved profile (S2).
+    #[gpui::test]
+    fn save_as_tunnel_from_an_aliased_inline_config_carries_the_alias(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let fixture = ssh_config_fixture("save-as-tunnel");
+        let window = open_ssh_form_window(app_state.clone(), cx);
+        inject_fixture_hosts(&window, &fixture, cx);
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_config_host_index(1, window, cx);
+                manager.save_current_ssh_as_tunnel(cx);
+            })
+            .expect("save the aliased inline config as a tunnel");
+
+        let saved = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .ssh_tunnels()
+                .last()
+                .cloned()
+                .expect("the tunnel profile is saved")
+        });
+        assert_eq!(saved.config.ssh_config_host.as_deref(), Some("alpha"));
+        assert_eq!(saved.config.host, "", "no resolved value is copied (S2)");
+        assert_eq!(saved.config.user, "");
+        assert_eq!(saved.config.port, 22);
+        assert_eq!(saved.name, "alpha", "the profile is named after the alias");
+    }
+
+    /// The saved-tunnel selector keeps its previous behaviour: applying a
+    /// manual tunnel fills the inline fields exactly and they validate, and
+    /// clearing the selection resets the form (PRESERVE).
+    #[gpui::test]
+    fn applying_a_saved_manual_tunnel_still_fills_the_inline_fields_and_validates(
+        cx: &mut TestAppContext,
+    ) {
+        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = open_ssh_form_window(app_state, cx);
+
+        let tunnel = SshTunnelProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "manual tunnel".to_string(),
+            config: SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 2222,
+                user: "deploy".to_string(),
+                auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: None,
+            },
+            save_secret: false,
+        };
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.apply_ssh_tunnel(&tunnel, None, window, cx);
+            })
+            .expect("apply the saved manual tunnel");
+
+        let (host, port, user, ok) = window
+            .update(cx, |manager, _window, cx| {
+                let host = manager.access.input_ssh_host.read(cx).value().to_string();
+                let port = manager.access.input_ssh_port.read(cx).value().to_string();
+                let user = manager.access.input_ssh_user.read(cx).value().to_string();
+                let ok = manager.validate_form(false, cx);
+                (host, port, user, ok)
+            })
+            .expect("read the applied tunnel");
+        assert_eq!(host, "bastion.example.com");
+        assert_eq!(port, "2222");
+        assert_eq!(user, "deploy");
+        assert!(ok, "the applied manual tunnel validates");
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.clear_ssh_tunnel_selection(window, cx);
+            })
+            .expect("clear the tunnel selection");
+
+        let (host, port, user, alias) = window
+            .update(cx, |manager, _window, cx| {
+                let host = manager.access.input_ssh_host.read(cx).value().to_string();
+                let port = manager.access.input_ssh_port.read(cx).value().to_string();
+                let user = manager.access.input_ssh_user.read(cx).value().to_string();
+                let alias = manager
+                    .access
+                    .ssh_host_picker
+                    .read(cx)
+                    .selected_alias()
+                    .map(str::to_string);
+                (host, port, user, alias)
+            })
+            .expect("read the cleared selection");
+        assert_eq!(host, "");
+        assert_eq!(port, "22");
+        assert_eq!(user, "");
+        assert_eq!(alias, None, "clearing leaves no stale alias");
+    }
+
+    /// Rehydration of a saved inline profile that references an alias: the
+    /// picker shows the alias, the manual inputs stay as stored — empty —
+    /// and building the config again reproduces the stored one exactly (A7,
+    /// S2). The connection manager keeps no dirty flag, so "not changed"
+    /// means the rebuilt config equals the stored one.
+    #[gpui::test]
+    fn a_freshly_opened_aliased_profile_rehydrates_to_the_stored_config(cx: &mut TestAppContext) {
+        use dbflux_core::{ConnectionProfile, DbConfig};
+
+        let mut stored_tunnel = crate::ssh_shared::build_ssh_config_with_alias(
+            "ignored",
+            "2200",
+            "ignored",
+            crate::ssh_shared::SshAuthSelection::PrivateKey,
+            "",
+            Some("alpha"),
+        );
+        stored_tunnel.auth_method = dbflux_core::SshAuthMethod::PrivateKey { key_path: None };
+
+        let profile = ConnectionProfile::new(
+            "aliased inline",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "db.internal".into(),
+                port: 5432,
+                user: "app".into(),
+                database: "appdb".into(),
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: Some(stored_tunnel.clone()),
+                ssh_tunnel_profile_id: None,
+            },
+        );
+
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+
+        let (alias, host, user, port, rebuilt) = window
+            .update(cx, |manager, _window, cx| {
+                let alias = manager.ssh_config_alias(cx);
+                let host = manager.access.input_ssh_host.read(cx).value().to_string();
+                let user = manager.access.input_ssh_user.read(cx).value().to_string();
+                let port = manager.access.input_ssh_port.read(cx).value().to_string();
+                let rebuilt = manager.build_ssh_config(cx);
+                (alias, host, user, port, rebuilt)
+            })
+            .expect("read the rehydrated form");
+
+        assert_eq!(
+            alias.as_deref(),
+            Some("alpha"),
+            "the picker shows the alias"
+        );
+        assert_eq!(host, "", "the manual inputs stay as stored (A7)");
+        assert_eq!(user, "");
+        assert_eq!(port, "22");
+        let rebuilt = rebuilt.expect("the rehydrated form rebuilds the config");
+        assert_eq!(rebuilt.ssh_config_host, stored_tunnel.ssh_config_host);
+        assert_eq!(rebuilt.host, stored_tunnel.host);
+        assert_eq!(rebuilt.user, stored_tunnel.user);
+        assert_eq!(rebuilt.port, stored_tunnel.port);
+        assert_eq!(
+            rebuilt.auth_method, stored_tunnel.auth_method,
+            "the rebuilt config equals the stored one: nothing reads as changed"
         );
     }
 }

@@ -33,6 +33,7 @@ pub enum CachedValue {
 struct CacheEntry {
     value: CachedValue,
     fetched_at: Instant,
+    ttl: Option<Duration>,
 }
 
 pub struct ValueCache {
@@ -52,20 +53,33 @@ impl ValueCache {
         let entries = self.entries.read().ok()?;
         let entry = entries.get(key)?;
 
-        if entry.fetched_at.elapsed() > self.ttl {
+        if entry.fetched_at.elapsed() > entry.ttl.unwrap_or(self.ttl) {
             return None;
         }
 
         Some(entry.value.clone())
     }
 
+    pub fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
     pub fn put(&self, key: CacheKey, value: CachedValue) {
+        self.insert(key, value, None);
+    }
+
+    pub fn put_with_ttl(&self, key: CacheKey, value: CachedValue, ttl: Duration) {
+        self.insert(key, value, Some(ttl));
+    }
+
+    fn insert(&self, key: CacheKey, value: CachedValue, ttl: Option<Duration>) {
         if let Ok(mut entries) = self.entries.write() {
             entries.insert(
                 key,
                 CacheEntry {
                     value,
                     fetched_at: Instant::now(),
+                    ttl,
                 },
             );
         }
@@ -103,6 +117,32 @@ mod tests {
         cache.put(key.clone(), CachedValue::Plain("val".to_string()));
         std::thread::sleep(Duration::from_millis(10));
         assert!(cache.get(&key).is_none());
+    }
+
+    #[test]
+    fn put_with_ttl_expires_before_cache_ttl() {
+        let cache = ValueCache::new(Duration::from_secs(60));
+        let key = CacheKey::new("rpc", "short-lived", None);
+        cache.put_with_ttl(
+            key.clone(),
+            CachedValue::Plain("val".to_string()),
+            Duration::from_millis(1),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(cache.get(&key).is_none());
+    }
+
+    #[test]
+    fn put_with_ttl_keeps_entry_within_its_ttl() {
+        let cache = ValueCache::new(Duration::from_millis(1));
+        let key = CacheKey::new("rpc", "long-lived", None);
+        cache.put_with_ttl(
+            key.clone(),
+            CachedValue::Plain("val".to_string()),
+            Duration::from_secs(60),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(cache.get(&key).is_some());
     }
 
     #[test]

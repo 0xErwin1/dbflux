@@ -20,6 +20,7 @@ Remote Turso / libSQL database over HTTP.
 
 - Hrana-over-HTTP transport through the `turso_serverless` SDK, driven by a
   per-connection Tokio runtime so the synchronous driver contract is preserved.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL line at a time with the editor's validation, dangerous-query confirmation, audit rows and query history. It runs in its own isolated session, so a transaction opened by one command stays open for the next. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Arbitrary SQL with bound parameters; multi-statement scripts run as one
   pipelined batch that stops at the first failing statement.
 - Schema discovery from `sqlite_master` and the `table_info`, `index_list`,
@@ -37,6 +38,10 @@ Remote Turso / libSQL database over HTTP.
   `WHERE`, plus CSV and JSON export.
 - SQLite-style code generation (`CREATE TABLE` with rowid semantics,
   `ADD COLUMN`, `DROP COLUMN`, indexes, `REINDEX`) and the visual query builder.
+- Batched primary-key row lookup (`fetch_rows_by_pks`): one
+  `WHERE pk IN (...)` statement per chunk of at most 100 values, with an
+  optional column projection; used to resolve foreign-key labels in the data
+  grid.
 - Dangerous-query detection uses the shared `SqlLanguageService`: `DELETE` and
   `UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, and `ALTER` are flagged as for
   any other SQL driver.
@@ -45,7 +50,9 @@ Remote Turso / libSQL database over HTTP.
 
 ## Limitations
 
-- `execute()` rejects any requested row limit (including zero) or statement timeout with `NotSupported` before running SQL. Unprotected queries remain available; the default editor cannot promise these protections.
+- `execute()` rejects a statement timeout with `NotSupported` before running SQL. The request row limit is one budget across all statements of a batch, and it bounds only the retained rows: the whole response is still transferred.
+- Batched primary-key row lookup sends at most 100 values per query; a larger
+  request runs as several `IN (...)` statements.
 
 - No query cancellation. A request runs until the server answers or the SDK's
   transport gives up.

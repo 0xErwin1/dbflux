@@ -15,6 +15,11 @@ Al arrancar, DBFlux restaura tu sesión anterior (pestañas abiertas). En una
 instalación nueva no hay nada que restaurar, así que el foco recae por defecto
 en el sidebar.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/first-launch-dark.webp">
+  <img src="../images/getting-started/first-launch-light.webp" alt="La ventana principal de DBFlux en una instalación nueva, con el sidebar vacío y sin conexiones">
+</picture>
+
 ## Crear una conexión
 
 Pulsa `Ctrl+Shift+N` (`Cmd+Shift+N` en macOS) para abrir el Connection Manager,
@@ -24,12 +29,22 @@ cubre las otras formas de abrir el Connection Manager, el selector de drivers,
 la pestaña Access (SSH, proxy, acceso gestionado) y qué ocurre cuando una
 conexión falla.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/connection-manager-dark.webp">
+  <img src="../images/getting-started/connection-manager-light.webp" alt="El Connection Manager con el formulario de PostgreSQL completado para una base de datos local">
+</picture>
+
 ## Ejecutar tu primera query
 
 Abre una nueva pestaña de query con `Ctrl+n` (`Cmd+n` en macOS), escribe una
 query en el lenguaje de la conexión activa y pulsa `Ctrl+Enter` (`Cmd+Enter`)
 para ejecutarla. El resultado se renderiza en una pestaña de resultado dentro
 del documento.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/first-query-dark.webp">
+  <img src="../images/getting-started/first-query-light.webp" alt="Una pestaña de query en una conexión PostgreSQL con una consulta SELECT y su resultado debajo">
+</picture>
 
 ## Siguientes pasos
 

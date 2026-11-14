@@ -101,7 +101,7 @@ lectura de la conexión y el contexto del actor:
 | Policy            | Efecto                                                                |
 | ----------------- | --------------------------------------------------------------------- |
 | Allowed           | La mutación puede ejecutarse.                                         |
-| Read-only         | La ejecución está bloqueada (por ejemplo, un perfil de solo lectura). |
+| Read-only         | La ejecución está bloqueada: el perfil tiene **Solo lectura** activado en el Connection Manager, o el servidor rechaza escrituras. |
 | Approval required | La mutación debe aprobarse antes de ejecutarse.                       |
 
 **Modo de ejecución.** La sección **Execution** ofrece tres modos, con uno por

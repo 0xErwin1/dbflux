@@ -11,7 +11,9 @@
 ## 기능
 
 - 하나의 크레이트에 MySQL과 MariaDB 관계형 드라이버 구현을 모두 포함합니다.
+- 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL 문 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 콘솔 명령에도 편집기의 행 제한이 적용됩니다.
 - SQL 실행, 스키마 탐색, 인덱스, 외래 키, CHECK 제약 조건, UNIQUE 제약 조건을 지원합니다.
+- `DECIMAL` 값을 MySQL이 저장한 정확한 십진수로 표시합니다.
 - 인증, SSH 터널링, URI/수동 연결 모드를 지원합니다.
 - 다섯 가지 고유 SSL 모드(`DISABLED`, `PREFERRED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`)를 갖춘 TLS: `VERIFY_CA`는 호스트 이름 검증을 건너뛰면서 서버 인증서 체인을 검증하고, `VERIFY_IDENTITY`는 둘 다 검증합니다. 검증 모드에서는 사용자 지정 루트 CA가 시스템 신뢰 저장소를 대체하며, 클라이언트 인증서 + 키로 상호 TLS를 활성화할 수 있습니다. `rustls`/`aws-lc-rs` 백엔드를 사용합니다.
 - 전용 취소 경로(`KILL QUERY` 흐름)를 통한 쿼리 취소를 지원합니다.
@@ -51,6 +53,9 @@
 
 - 명시적 문 실행 시간 제한과 행 수 제한이 있는 인스턴스 지표/검사기 요청은 실행 전에 거부됩니다. 제한 없는 요청은 기존 동작을 유지합니다. 보관 행 수 제한은 바이트 수, 서버 작업량, 엔진 메모리 할당 또는 경과 시간을 제한하지 않습니다. 호스팅된 MariaDB는 검증하지 않았습니다.
 - SQL 전용 드라이버입니다. 문서 또는 키-값 API를 노출하지 않습니다.
+- `information_schema.VIEW_TABLE_USAGE`가 없는 MariaDB에서는 테이블 삭제 확인 창이 뷰 정의에서 `` `database`.`table` `` 이름을 검색해 종속 뷰를 찾으므로, 다른 뷰를 통해서만 테이블을 읽는 뷰는 표시되지 않습니다.
+- MySQL 8.0.16 이전 버전은 `CHECK` 제약 조건을 저장하지 않으므로 테이블 세부 정보에 표시되지 않습니다. MariaDB 10.2.22 이전 버전(10.3 시리즈는 10.3.10 이전)은 제약 조건을 저장하지만 `information_schema.CHECK_CONSTRAINTS`가 없으므로, 테이블 세부 정보에 check 제약 조건이 조건식 없이 표시됩니다.
+- `DECIMAL` 열은 decimal 열 종류가 없으므로 `ColumnKind::Float`로 보고됩니다. 차트 등 열 종류를 사용하는 기능은 이 열을 부동소수점 숫자로 취급하지만, 값 자체는 정확하게 유지됩니다.
 
 - 인스턴스 지표는 호출당 하나의 데이터 포인트(`SHOW GLOBAL STATUS`의 현재 스냅샷)를 반환하며 과거 시계열이 아닙니다. 누적 카운터(예: `mysql.bytes_sent`)는 단조 증가하므로 절대적인 비율이 아니라 샘플 간 변화량으로 해석해야 합니다.
 
@@ -61,6 +66,7 @@
 - 코드 생성은 지원되는 MySQL/MariaDB 구문으로 한정됩니다. 지원되지 않는 생성기 ID는 `NotSupported`를 반환합니다.
 - 루틴 목록은 FUNCTION과 PROCEDURE 타입만 다룹니다. MySQL 집계 함수(`CREATE AGGREGATE FUNCTION` UDF 플러그인으로 등록)와 윈도우 함수는 `information_schema.ROUTINES`에 나타나지 않으므로 목록에 포함되지 않습니다.
 - `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE`는 `SHOW_ROUTINE` 권한(MySQL 8.0+) 또는 해당 루틴의 소유권이 필요합니다. 권한이 충분하지 않으면 정의 열이 `NULL`을 반환하고 뷰어는 소스 대신 알림을 표시합니다.
+- 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `START TRANSACTION READ ONLY` 안에서 실행된 뒤 롤백됩니다. 요청에는 실행 가능한 주석(`/*! */`, `/*M! */`)과 `INTO`라는 단어가 없는 `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `TABLE`, `VALUES` 문만 들어갈 수 있으며, 서버가 열린 트랜잭션이 없고 세션이 `LOCK TABLES` 잠금을 보유할 수 없음을 증명하지 못하면 거부됩니다. MySQL은 세션의 데이터 변경을 거부하지만, 읽기 전용 트랜잭션에서도 변경할 수 있는 `TEMPORARY` 테이블은 예외이며 `GET_LOCK`이나 사용자 정의 함수 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다.
 
 ## DDL 지원 범위
 

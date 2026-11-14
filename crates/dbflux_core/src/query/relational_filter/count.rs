@@ -10,6 +10,17 @@ use crate::sql::dialect::SqlDialect;
 /// All dialects supported by DBFlux accept `SELECT COUNT(*) FROM (<select>) AS x`
 /// syntax, so no dialect-specific branching is needed here.
 pub fn count_query_from_spec(spec: &VisualQuerySpec, dialect: &dyn SqlDialect) -> SelectQuery {
+    // The public signature returns `SelectQuery` with no error channel, and
+    // `build_select_query` is deterministic per `(spec, dialect)`: supported
+    // callers pass a `RelationalLowering.spec` whose SELECT already built
+    // successfully (or rebuild the identical spec), so the `Err` arm is not
+    // reachable for them. A hand-built invalid spec (e.g. `IN` without a list
+    // value) would still panic here; narrowing the return type to `Result`
+    // would be a public-API break for `dbflux_core::count_query_from_spec`.
+    #[expect(
+        clippy::expect_used,
+        reason = "public API returns SelectQuery by value; Err unreachable for lowering specs"
+    )]
     let inner =
         build_select_query(spec, dialect).expect("spec must be valid when entering count path");
 
@@ -19,9 +30,37 @@ pub fn count_query_from_spec(spec: &VisualQuerySpec, dialect: &dyn SqlDialect) -
     }
 }
 
+/// Wraps a single read statement typed by the user in a `COUNT(*)` outer
+/// query, so the total row count is known without fetching the rows.
+///
+/// Statement terminators are dropped wherever they sit, including before a
+/// trailing comment, and the statement sits on its own lines so a trailing
+/// `--` comment cannot swallow the closing parenthesis.
+pub fn count_query_from_sql(sql: &str) -> String {
+    let statement = crate::driver::capabilities::sql_statement_ranges(sql)
+        .into_iter()
+        .filter_map(|range| sql.get(range).map(str::trim))
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("SELECT COUNT(*) FROM (\n{statement}\n) AS dbflux_count_subq")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_query_from_sql_strips_semicolons_and_isolates_comments() {
+        assert_eq!(
+            count_query_from_sql("  SELECT * FROM users -- all ;\n ; \n"),
+            "SELECT COUNT(*) FROM (\nSELECT * FROM users -- all ;\n) AS dbflux_count_subq"
+        );
+        assert_eq!(
+            count_query_from_sql("SELECT * FROM users; -- note"),
+            "SELECT COUNT(*) FROM (\nSELECT * FROM users\n-- note\n) AS dbflux_count_subq"
+        );
+    }
     use crate::query::visual_query::{
         Comparator, FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue, Predicate,
         PredicateValue, Projection, SourceTable, VisualQuerySpec,

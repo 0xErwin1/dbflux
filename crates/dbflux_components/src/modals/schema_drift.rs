@@ -4,7 +4,6 @@ use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::modals::parts::{modal_frame, modal_lead};
 use crate::primitives::{Badge, BadgeTone};
 use crate::tokens::{ChromeColors, ModalMetrics};
-use crate::typography::AppFonts;
 use dbflux_core::{
     ColumnSnapshot, IndexSnapshot, LogErr, QueryTableRef, SchemaChange, SchemaDriftDetected,
 };
@@ -344,7 +343,7 @@ fn render_diff_table(changes: &[SchemaChange], cx: &App) -> Div {
             div()
                 .border_b_1()
                 .border_color(theme.table_row_border)
-                .font_family(AppFonts::MONO)
+                .font_family(crate::fonts::editor_family(cx))
                 .text_size(ModalMetrics::CODE_FONT),
             div().text_color(strong).child(name).into_any_element(),
             div().text_color(muted).child(cached).into_any_element(),

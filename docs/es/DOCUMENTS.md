@@ -7,10 +7,21 @@ que elijas se mantiene en la pestaña entre páginas y actualizaciones. La tabla
 muestra primero `_id` y después los campos en el orden en que los devuelve la
 página.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/collection-dark.webp">
+  <img src="../images/documents/collection-light.webp" alt="Una colección de MongoDB abierta en la vista Árbol, con un nodo plegado por documento">
+</picture>
+
 - Un objeto anidado muestra su número de campos y un arreglo su longitud. `e`
   sobre una columna de objeto la expande en su lugar en un grupo de columnas;
   `Enter` sobre un objeto o arreglo entra en él y lista su contenido como filas,
   con una ruta de navegación; `Backspace` sale.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/tree-view-dark.webp">
+  <img src="../images/documents/tree-view-light.webp" alt="La vista Árbol con un documento expandido, que muestra objetos anidados con su número de campos y un array con su longitud">
+</picture>
+
 - El pie cuenta documentos. Cuando el driver solo puede estimar cuántos
   documentos coinciden, el conteo se marca como estimado.
 - Los drivers que lo soportan (MongoDB) añaden una barra de consulta con cuatro
@@ -67,3 +78,23 @@ página.
   servidor después de cargar la página, una tarjeta indica si tu cambio puede
   aplicarse encima, muestra la actualización exacta y ofrece **Recargar
   documento** o **Aplicar mi cambio**.
+- Los drivers que ofrecen una consola nativa (MongoDB) la acoplan bajo la
+  colección: `` Ctrl+` `` la muestra u oculta. Ejecuta un comando de shell a la
+  vez, como `db.orders.find({"status": "paid"})`, contra la base de datos de la
+  colección e imprime los documentos como un objeto JSON por línea. Un comando
+  que escribe refresca los documentos en pantalla. Ver [Consola](CONSOLE.md).
+
+## Columnas JSON en una tabla
+
+Una tabla relacional también puede contener documentos. En PostgreSQL, una
+tabla con una columna `json` o `jsonb` se abre en la cuadrícula como siempre y
+agrega una vista de **Árbol** de las mismas filas: cambia con el botón Tabla /
+Árbol al final de la fila de filtro, o pulsa `t` en la cuadrícula. Cada fila se
+convierte en un documento, con los valores JSON expandidos en campos anidados.
+El árbol es de solo lectura; las ediciones se hacen en la cuadrícula. La vista
+que eliges se mantiene en la pestaña entre páginas y refrescos.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/documents/json-columns-dark.webp">
+  <img src="../images/documents/json-columns-light.webp" alt="La tabla products de PostgreSQL en la vista Árbol, con la primera fila expandida y su columna jsonb attributes mostrada como campos anidados">
+</picture>

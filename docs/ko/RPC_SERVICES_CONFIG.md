@@ -6,6 +6,7 @@ DBFlux는 이제 `RpcServiceKind`를 통해 일급 RPC 서비스 기반을 영�
 
 - `Driver` — 런타임 데이터베이스 드라이버로 변환됩니다
 - `AuthProvider` — 앱과 MCP 서버 양쪽의 런타임 인증 제공자 레지스트리로 변환됩니다
+- `SecretProvider` — 모든 연결의 값 리졸버에 등록되는 런타임 시크릿 제공자로 변환됩니다. [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)을 참고하세요
 
 ## 저장 방식
 
@@ -61,7 +62,7 @@ CREATE TABLE cfg_service_env (
 서비스를 추가하거나 편집하려면:
 1. 설정을 열고 RPC Services로 이동합니다
 2. 새 서비스를 추가하거나 기존 서비스를 선택합니다
-3. 서비스 종류(`Driver` 또는 `Auth Provider`)를 선택합니다
+3. 서비스 종류(`Driver`, `Auth provider` 또는 `Secret provider`)를 선택합니다
 4. 소켓 ID, command 경로, 인수, 환경 변수, 시간 초과를 구성합니다
 5. 변경 사항을 저장합니다
 
@@ -72,7 +73,9 @@ CREATE TABLE cfg_service_env (
 - DBFlux는 드라이버 등록 ID에 대해 `rpc:<socket_id>` 형태의 호환성을 유지합니다.
 - 기존 드라이버 행에 API 메타데이터가 없으면 DBFlux는 현재 `driver_rpc` 계약의 버전 `1.1`을 기본값으로 적용합니다.
 - 인증 제공자 행에 API 메타데이터가 없으면 DBFlux는 현재 `auth_provider_rpc` 계약의 버전 `1.2`를 기본값으로 적용합니다.
-- `api_family` / `api_major`는 DBFlux가 소켓을 프로브하기 전에 인증 제공자의 시작 프리플라이트로 사용됩니다.
+- 시크릿 제공자 행에 API 메타데이터가 없으면 DBFlux는 `secret_provider_rpc` 계약의 버전 `1.0`을 기본값으로 적용합니다.
+- `Secret provider` 서비스(저장 값 `secret_provider`)는 연결, 프록시, SSH 터널, 인증 프로필 필드의 값 소스로만 활성 상태이며 드라이버나 인증 제공자로는 표시되지 않습니다.
+- `api_family` / `api_major`는 DBFlux가 소켓을 프로브하기 전에 인증 제공자와 시크릿 제공자의 시작 프리플라이트로 사용됩니다.
 
 ## 동작 방식
 
@@ -84,6 +87,7 @@ CREATE TABLE cfg_service_env (
 - `service_kind='auth_provider'` 서비스는 호환성 검사를 통과하고 프로브에 성공하면 인증 제공자 레지스트리에 적재됩니다
 - 드라이버 경로의 협상은 `Hello` 동안 서로 지원하는 호환 마이너 버전 중 가장 높은 것을 선택하고, 이후 모든 엔벨로프가 그 협상된 버전을 정확히 사용하도록 요구합니다
 - 인증 제공자 협상은 `auth_provider_rpc` 아래에서 동일한 family/major/minor 방식을 따르며, 호환되지 않는 family 또는 major 버전은 등록 전에 건너뜁니다
+- `service_kind='secret_provider'` 서비스는 `secret_provider_rpc` 아래에서 협상하고 `Hello`에서 유효한 매니페스트를 알려야 하며, `provider_id`가 예약되어 있거나(`aws-secrets-manager`, `aws-ssm`) 이미 등록되어 있으면 건너뜁니다
 
 ## 필드
 
@@ -94,7 +98,7 @@ CREATE TABLE cfg_service_env (
 - `command` (선택): DBFlux가 서비스를 시작해야 할 때 실행하는 실행 파일입니다.
   - 생략되고 `args`도 비어 있으면 DBFlux는 서비스가 이미 실행 중인 것으로 간주하고 아무것도 생성하지 않습니다.
   - `driver`의 경우 생략되고 `args`가 비어 있지 않으면 DBFlux는 `dbflux-driver-host`를 실행합니다.
-  - `auth_provider`의 경우 DBFlux가 서비스를 실행해야 한다면 `command`를 명시적으로 설정해야 합니다.
+  - `auth_provider`와 `secret_provider`의 경우 DBFlux가 서비스를 실행해야 한다면 `command`를 명시적으로 설정해야 합니다.
 - `args` (선택): 프로세스 인수입니다.
 - `env` (선택): 생성된 프로세스의 환경 변수입니다.
 - `startup_timeout_ms` (선택): 생성 후 소켓이 준비되기를 기다리는 최대 시간입니다.

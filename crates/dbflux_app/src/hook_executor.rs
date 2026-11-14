@@ -84,6 +84,7 @@ mod tests {
             port: Some(5432),
             database: Some("dbflux".to_string()),
             phase: Some(HookPhase::PreConnect),
+            dials_configured_endpoint: false,
         }
     }
 

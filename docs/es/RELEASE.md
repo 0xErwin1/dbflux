@@ -165,18 +165,47 @@ agregando `-nightly+<short-sha>`.
 
 ## Identidad y Firma de Artefactos
 
-Tres cosas distintas llevan la señal de "quién construyó esto", y no se
-solapan:
+Distintas capas llevan la señal de "quién construyó esto":
 
 | Capa | Qué cubre | Secret | Si falta |
 |------|-----------|--------|----------|
 | Firma GPG separada (`.asc`) y `.sha256` | El archivo descargado | `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` | El build falla. Toda release va firmada. |
 | Attestation de procedencia del build | La ejecución del workflow y el commit que produjo el artefacto | ninguno (OIDC sin clave) | Siempre activa. |
 | Firma de código macOS en el `.app` | La identidad de la aplicación que miran el llavero y Gatekeeper | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` | El bundle se firma ad-hoc con un warning. |
+| Authenticode de Windows (estables y RC) | `dbflux.exe` dentro del ZIP portable y del instalador, más el ejecutable de instalación | `SIGNPATH_API_TOKEN` | Los builds estables y RC de Windows fallan; nightly no solicita firma Authenticode. |
 
-Ni el ejecutable de Windows ni el instalador llevan firma Authenticode, así
-que SmartScreen avisa en la primera ejecución. Eso necesita un certificado de
-una CA y se sigue por separado.
+### Firma de código en Windows
+
+Los builds estables y RC de Windows usan [SignPath](https://docs.signpath.io/trusted-build-systems/github)
+con la organización `963ebe33-9db3-4a84-9eea-f726ca65dd9c`, el proyecto `dbflux`
+y la política `release-signing`. Guarda un token con permiso de envío como secret
+de Actions del repositorio, con el nombre `SIGNPATH_API_TOKEN`. La configuración
+de artefactos predeterminada debe aceptar un único archivo PE
+(`<pe-file><authenticode-sign /></pe-file>`); configura en el portal de SignPath
+las restricciones de producto y versión exigidas por SignPath Foundation.
+
+Hasta que SignPath Foundation importe el certificado de producción en
+`release-signing`, el `SIGNPATH_SIGNING_POLICY` del job vale `test-signing`, que
+firma con el certificado de prueba autofirmado del proyecto. Windows no confía en
+ese certificado, así que esos builds siguen mostrando el aviso de editor
+desconocido; el paso de verificación acepta el resultado no confiable solo para
+esa política y ese certificado. Cambia la variable a `release-signing` cuando el
+certificado de producción sea válido.
+
+El workflow envía dos solicitudes: primero `dbflux.exe` y después el ejecutable
+de instalación construido con esa aplicación firmada. Cada solicitud espera hasta
+una hora por aprobación manual en SignPath. Un token ausente, una solicitud
+rechazada, un timeout, una firma inválida o un timestamp ausente hacen fallar el
+build; no se publica una alternativa estable ni RC sin firma. Las firmas GPG y los
+checksums SHA256 cubren los paquetes finales firmados. La publicación selecciona
+solo los artefactos de plataforma y excluye los uploads intermedios sin firma.
+
+Nightly mantiene sus firmas GPG y checksums existentes sin Authenticode, porque
+se construye sin supervisión y no hay nadie disponible para aprobarlo.
+Este flujo no firma con Authenticode el desinstalador de Inno Setup. Una firma
+válida identifica al publicador, pero no garantiza que SmartScreen suprima todos
+los avisos de reputación. La firma de releases requiere el repositorio canónico y
+runners alojados por GitHub; no está disponible con `act`.
 
 ### Firma de código en macOS
 
@@ -232,6 +261,33 @@ los PNG de hicolor bajo `packaging/icons/<size>/apps/`, los PNG de la app y el
 en `web/public/brand/`. Se vuelve a ejecutar dentro de una shell de Nix cuando
 faltan `rsvg-convert`, `icotool`, `png2icns` o Python con `fonttools` y
 `uharfbuzz`.
+
+### Información de actualización externa del AppImage
+
+Los AppImage stable y nightly embeben información de actualización externa y
+se publican con un sidecar `.zsync` generado, junto a la imagen final firmada.
+Stable resuelve a través del release `latest` de GitHub y nightly a través del
+tag rodante `nightly`; cada canal solo anuncia su propio tag, así que una
+actualización nunca mueve una instalación entre canales. Los releases RC no
+embeben información de actualización y siguen siendo manuales. El sidecar y la
+cadena embebida se generan con appimagetool (`-u`) durante el build y se
+verifican de forma fail-closed en `build.yml`; la actualización la realiza una
+herramienta externa como AppImageUpdate — DBFlux mismo no se autoactualiza.
+
+### Nombres de descarga estables
+
+Los paquetes `.deb` y `.rpm` llevan la versión en el nombre del archivo
+(`dbflux_0.8.5_linux_amd64.deb`, `dbflux-0.8.5-1.x86_64.rpm`), así que un
+enlace `releases/latest/download/` no puede apuntar a ellos. `build.yml`
+publica además copias idénticas byte a byte llamadas `dbflux-linux-<arch>.deb`
+y `dbflux-linux-<arch>.rpm`, cada una con su propio `.asc` y `.sha256`, y son
+los nombres a los que enlaza [Instalación](INSTALL.md).
+
+Antes de publicar, `release.yml` y `nightly.yml` ejecutan
+`scripts/check_release_links.py` sobre los artefactos descargados. Un enlace
+`releases/latest/download/` en la documentación, sus traducciones o la sección
+de instalación del sitio que nombre un archivo que el release no incluye hace
+fallar el job en lugar de publicar un 404.
 
 ## Procedimiento de Corte: `main` → `release/vX.Y`
 
@@ -390,6 +446,10 @@ corte, la promoción a stable y el EOL de un minor (ver [Sitio Web](#sitio-web))
 El `PKGBUILD` de AUR vive en un **repositorio AUR externo**, no en este repo.
 Solo se sube para tags stable.
 
+El cask de Homebrew vive en el tap externo `0xErwin1/homebrew-dbflux`. El job
+`homebrew-tap` lo actualiza automáticamente para los tags stable publicados;
+comprueba que el job haya terminado bien (ver [Tap de Homebrew](#tap-de-homebrew)).
+
 ## Cómo Funciona Nightly
 
 `.github/workflows/nightly.yml` corre diariamente a las 03:17 UTC:
@@ -423,7 +483,11 @@ compara el `main` HEAD actual contra el commit desde el que se construyó el
 último nightly (`git rev-parse nightly^`, el primer padre del commit de pin). Si
 coinciden, la corrida se salta por completo: sin rebuild, sin mover el tag, sin
 churn de release. Esto evita republicar un build idéntico bajo un hash fresco no
-reproducible que rompería innecesariamente los pins de Nix. Una corrida manual
+reproducible que rompería innecesariamente los pins de Nix. También se salta cuando todas las rutas
+cambiadas desde el último nightly (`git diff nightly^..HEAD`) son prosa o
+contenido del sitio (`web/`, `*.md`, `.github/workflows/web.yml`): el tag no se
+mueve, así que el changelog del siguiente nightly sigue cubriendo esos commits.
+Una corrida manual
 `workflow_dispatch` siempre construye, incluso sin commits nuevos.
 
 ### Paquete Nix de Nightly
@@ -475,11 +539,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Canales Downstream
 
-| Tipo de tag (GitHub Release) | AUR         | Nix flake (este repo)                                      | nixpkgs (futuro) |
-| ---------------------------- | ----------- | ---------------------------------------------------------- | ---------------- |
-| nightly (prerelease)         | se omite    | auto-fijado — `#dbflux-nightly` en la ref nightly          | se omite         |
-| `-rc.N` (prerelease)         | se omite    | actualiza el `release-info` de la release branch y de main | se omite         |
-| Stable `vX.Y.Z` (published)  | bump + push | actualiza el `release-info` de la release branch y de main | bump + PR        |
+| Tipo de tag (GitHub Release) | AUR         | Nix flake (este repo)                                      | nixpkgs (futuro) | Tap de Homebrew |
+| ---------------------------- | ----------- | ---------------------------------------------------------- | ---------------- | ------------------------------------ |
+| nightly (prerelease)         | se omite    | auto-fijado — `#dbflux-nightly` en la ref nightly          | se omite         | se omite |
+| `-rc.N` (prerelease)         | se omite    | actualiza el `release-info` de la release branch y de main | se omite         | se omite |
+| Stable `vX.Y.Z` (published)  | bump + push | actualiza el `release-info` de la release branch y de main | bump + PR        | automático — job `homebrew-tap` |
 
 ### AUR
 
@@ -528,6 +592,35 @@ vía:
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 ```
 
+### Tap de Homebrew
+
+El job `homebrew-tap` de `.github/workflows/release.yml` corre después del job
+de release, solo para tags stable publicados (nunca para RC, nightly ni
+drafts). Descarga los cuatro archivos `.sha256` del release (los dos DMG de
+macOS y los dos tarballs de Linux), genera `Casks/dbflux.rb` con
+`scripts/homebrew_cask.py` y lo sube a
+[`0xErwin1/homebrew-dbflux`](https://github.com/0xErwin1/homebrew-dbflux).
+
+| Caso | Comportamiento |
+|------|----------------|
+| Falta `HOMEBREW_TAP_TOKEN` | El job emite un warning y se omite; el tap conserva su versión anterior. |
+| Token vencido o revocado | El job falla. Renueva el token, actualiza el secret y vuelve a ejecutar el job o actualiza el cask manualmente. |
+| Tag más antiguo que la versión del tap (un patch de una línea anterior) | El cask no cambia y se emite un warning. El tap nunca retrocede. |
+
+`HOMEBREW_TAP_TOKEN` es un personal access token fine-grained con
+**Contents: read and write**, limitado a `0xErwin1/homebrew-dbflux`.
+
+Para actualizar el cask manualmente tras un job fallido, descarga los cuatro
+archivos `.sha256` del release en un directorio y ejecuta:
+
+```bash
+python3 scripts/homebrew_cask.py --version X.Y.Z \
+  --checksums <directorio con los cuatro .sha256> \
+  --output <checkout del tap>/Casks/dbflux.rb
+```
+
+Haz commit y push del cambio en el checkout del tap.
+
 ### nixpkgs (futuro)
 
 Aún no está en upstream. Cuando lo esté, solo los tags stable recibirán un PR a
@@ -561,7 +654,7 @@ cargo test --workspace
 
 `scripts/lint.py` solo cubre los crates propios bajo `crates/` y nunca analiza ni reformatea los crates de terceros bajo `vendor/`.
 
-Estas suites rápidas no cubren las pruebas de integración en vivo de los drivers: suites específicas por driver, respaldadas por contenedores, archivos locales o un clúster de Redshift con credenciales, documentadas en [tests/driver-live/README.md](../../tests/driver-live/README.md). Ejecútalas antes de etiquetar un rc o stable. CI condiciona la publicación a esas mismas suites — `release.yml` invoca `tests.yml`, y el job `Create Release` espera por él — pero las suites ejercitan código fuente, no los artefactos compilados, y los builds nightly no están condicionados por pruebas (`nightly.yml` llama a `build.yml` directamente).
+Estas suites rápidas no cubren las pruebas de integración en vivo de los drivers: suites específicas por driver, respaldadas por contenedores, archivos locales o un clúster de Redshift con credenciales, documentadas en [tests/driver-live/README.md](../../tests/driver-live/README.md). Ejecútalas antes de etiquetar un rc o stable. CI no ejecuta ninguna suite al publicar: `release.yml` compila y publica sin llamar a `tests.yml` ni a `style.yml`, y se apoya en los checks que ya corrieron en los pull requests. `main` no vuelve a ejecutar todos los checks: `tests.yml` y `style.yml` corren en un push a `main` solo cuando cambian el toolchain de Rust o los manifiestos de dependencias, además de una corrida programada semanal sobre `main`. Ningún canal de release está condicionado por pruebas, nightly incluido (`nightly.yml` llama a `build.yml` directamente).
 
 ## Relacionado
 

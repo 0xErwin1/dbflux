@@ -13,12 +13,13 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 ## 주요 기능
 
 - SQL 쿼리 실행과 스키마 검색을 지원하는 SQL Server / Azure SQL 관계형 드라이버입니다.
+- 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL 문 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 콘솔 명령에도 편집기의 행 제한이 적용됩니다.
 - SQL Server 로그인(사용자 이름 + 비밀번호)을 통한 인증을 지원합니다. URI 모드에서는 ADO, JDBC, `sqlserver://user:pass@host:port/db` 형식의 연결 문자열을 받습니다.
 - 연결 문자열이나 URI가 이미 `Application Name`을 설정하고 있지 않는 한 `Application Name`을 `dbflux/<version>`으로 보고하며, 이미 설정되어 있다면 사용자가 지정한 값이 항상 우선합니다. 이를 위해 `sqlserver://`/`mssql://` URL 스킴은 `applicationname` 쿼리 파라미터를 받습니다.
 - TLS 암호화 모드(`off`, `on`, `required`)는 tiberius `EncryptionLevel`을 통해 제공됩니다. 폼은 **SSL Mode** 드롭다운 하나만 노출하며, `TrustServerCertificate` 플래그는 자동으로 도출됩니다:
   - `off` — 암호화하지 않습니다(로그인 패킷은 TDS에 의해 여전히 암호화됩니다).
   - `on` — 암호화하며 자체 서명된 인증서를 허용합니다. 자동 생성 인증서를 쓰는 로컬/개발용 SQL Server에 가장 적합합니다.
-  - `required` — 암호화하며 인증서 체인을 검증합니다. 실제 CA 서명 인증서를 사용하는 서버(Azure SQL 등)에 사용하세요.
+  - `required` — 암호화하며 인증서 체인을 검증합니다. 실제 CA 서명 인증서를 사용하는 서버(Azure SQL 등)에 사용하세요. `required`를 선택하면 **CA certificate** 경로가 표시되며, 값을 지정하면 해당 CA로 체인을 검증하므로(tiberius `trust_cert_ca`) 사설 또는 기업 CA가 서명한 서버에 모든 인증서를 신뢰하지 않고도 연결할 수 있습니다. 비워 두면 시스템 신뢰 저장소를 사용합니다. `on` 모드는 이 경로를 무시합니다.
   URI 모드에서는 `?trust=true|false`로 도출된 값을 명시적으로 재정의할 수 있으므로, 특수한 조합이 필요할 때 사용합니다(예: `?encrypt=required&trust=true`).
 - 선택적인 SQL Server 명명된 인스턴스(`SQLEXPRESS`, `MSSQLSERVER2019` 등)는 연결 시점에 UDP 1434의 SQL Browser에 질의하여 확인됩니다(tiberius의 `sql-browser-tokio` 기능으로 활성화됩니다). 폼의 Instance 필드, URI 모드에서 SSMS 스타일의 `host\instance` 형식, `?instance=` URI 쿼리 파라미터는 모두 tiberius 설정의 동일한 `instance_name`을 설정합니다.
 - 배스천 호스트를 경유한 연결을 위한 SSH 터널 지원(TCP 전용 터널을 통해서는 명명된 인스턴스 조회를 사용할 수 없습니다).
@@ -62,6 +63,26 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - 죽은 세션에서 발생한 오류(코드 596 / 233 / 6005)는 `DbError::Cancelled`로 변환되어, UI가 전송 수준 실패 대신 "쿼리가 취소되었습니다"를 표시하도록 합니다.
 - 최신 SQL Server에서 세션 소유자는 `ALTER ANY CONNECTION` 권한 없이 자신의 SPID에 `KILL`을 실행할 수 있습니다. 오래되었거나 제한된 로그인에서는 KILL 자체가 권한 오류로 실패할 수 있으며, 드라이버는 이를 사용자에게 표시합니다.
 
+### 끊긴 세션
+
+- 각 세션의 소켓에는 TCP keepalive가 켜져 있습니다(60초 유휴 후 첫 probe).
+  유휴 연결을 끊는 NAT 게이트웨이, 방화벽, 로드 밸런서가 있어도 세션이 유지됩니다.
+- 그래도 서버나 네트워크가 세션을 끊으면 다음 호출이 I/O 오류(broken pipe,
+  connection reset, 예기치 않은 EOF)로 실패합니다. 드라이버는 죽은 클라이언트를
+  버리고, 취소 후와 같은 방식으로 연결을 재연결 대상으로 표시합니다.
+- 메타데이터 읽기(데이터베이스, 테이블, 뷰, 테이블과 뷰 상세, 스키마 타입,
+  인덱스, 외래 키, 루틴)는 새 세션을 열고 활성 데이터베이스를 복원한 뒤 한 번
+  재시도합니다. 따라서 한동안 유휴 상태였던 뒤에도 수동 재연결 없이 테이블을
+  열 수 있습니다.
+- 행 편집(insert, update, delete), 탐색, 카운트, 행 및 의존성 조회는 실행 전에
+  새 세션을 열기 때문에 이전 호출이 세션 끊김을 감지한 뒤에는 수동 재연결 없이
+  동작합니다. 아직 아무도 감지하지 못했다면 첫 번째 작업은 실패하며 다시
+  실행되지 않습니다. 실패한 쓰기는 절대 다시 실행되지 않습니다. 복구는 직렬화되므로 동시 호출자는 서로의
+  세션을 교체하지 않고 하나의 새 세션을 공유합니다. 종료된 세션을 알리는 서버
+  오류(596, 233, 6005)는 끊긴 소켓과 같은 방식으로 처리됩니다.
+- 쿼리 배치는 서버가 이미 실행했을 수 있으므로 절대 재시도하지 않습니다.
+  오류가 표시되고, 다음 쿼리나 ping이 새 세션을 엽니다.
+
 ### 스키마 검색
 
 - 데이터베이스(`sys.databases`, 시스템 DB는 숨김).
@@ -95,7 +116,7 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 
 - `]` 이스케이프가 있는 `[bracket]` 식별자 인용.
 - `N'…'` 유니코드 문자열 리터럴; `0x…`(대문자) 이진 리터럴; 부울(`BIT`) 값에는 `1`/`0`.
-- `OFFSET … ROWS FETCH NEXT … ROWS ONLY` 페이지 나누기(OFFSET 뒤에 ORDER BY가 없는 쿼리가 오류로 끝나지 않도록 대체 `ORDER BY 1` 포함).
+- `OFFSET … ROWS FETCH NEXT … ROWS ONLY` 페이지 나누기(OFFSET 뒤에 ORDER BY가 없는 쿼리가 오류로 끝나지 않고 어떤 열로도 정렬하지 않도록 대체 `ORDER BY (SELECT NULL)` 포함).
 - `SELECT TOP N`은 사용하지 않으며, OFFSET/FETCH가 표준 페이지 나누기 형식입니다.
 - `UPSERT`는 의도적으로 생성하지 않습니다. SQL Server의 `MERGE`에는 알려진 버그가 있어 수동으로 작성해야 합니다.
 
@@ -129,6 +150,8 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - **제약 조건.** `CHECK` / `UNIQUE` / `FOREIGN KEY` 제약 조건 추가는 기본적으로 기존의 모든 행을 검증합니다(짧게 Sch-M을 겁니다). 스캔 없이 제약 조건을 추가하려면 `WITH NOCHECK`를 사용하고, 나중에 여유가 될 때 `WITH CHECK CHECK CONSTRAINT`로 검증하세요 — Postgres의 `NOT VALID` + `VALIDATE CONSTRAINT`와 같은 패턴입니다.
 ## 제한 사항
 
+- `required` 모드의 CA 인증서는 시스템 신뢰 저장소를 확장하지 않고 대체하며, 정확히 하나의 인증서만 포함해야 하고 `.pem`, `.crt` 또는 `.der` 확장자를 사용해야 합니다(rustls를 사용하는 tiberius). `sqlserver://` URL에는 CA 인증서 파라미터가 없으며, ADO 및 JDBC 연결 문자열은 대신 tiberius의 `TrustServerCertificateCA=<경로>` 키를 허용합니다. 이 키를 `TrustServerCertificate=true`와 함께 사용하지 마십시오. 두 신뢰 설정이 모두 설정되면 tiberius가 패닉합니다.
+- SSH 터널을 경유하면 드라이버가 `127.0.0.1`에 연결하므로 `required` 모드에서 검증되는 서버 이름도 그 값입니다: 실제 호스트 이름으로 발급된 사설 CA 인증서는 호스트 이름 검증에 실패합니다.
 - 충실한 `CREATE TABLE` 생성(스키마 diff)은 재현할 수 없는 생성 의미론을 가진 테이블을 평탄화하는 대신 거부합니다: 계산 열, 사용자 정의/CLR(및 별칭) 열 타입, sparse 열, `FILESTREAM`, `ROWGUIDCOL`, 메모리 최적화 테이블, system-versioned temporal 테이블, nonclustered 기본 키, row/page 압축, 기본 파일 그룹이 아닌 테이블. 인덱스(기본 키 제외), 외래 키, CHECK/UNIQUE 제약 조건은 `CREATE TABLE`로 전달되지 않으므로 별도로 적용해야 합니다.
 - 생성된 기본 키 제약 조건 이름은 서버가 정합니다: 원래 제약 조건 이름은 캡처되지 않아 `PK_…`가 소스와 다릅니다.
 - 스키마 diff는 shallow 테이블 목록에서 테이블 전체 생성을 감지합니다. 참조 생성 메타데이터는 **모든 라이브 참조 테이블에 대해 수집**되고(그것을 가진 모든 스냅샷 행에서 읽힘), 전체 테이블 추가(`TableAdded`)—대상에 새 테이블이 생성되는 경우—에만 **소비**됩니다. 기존 테이블의 identity나 기본 키 변경은 diff로 수집·적용되지 않으며 수동으로 처리해야 합니다.
@@ -160,3 +183,4 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - 루틴에 대해 `parameter_types`가 채워지지 않습니다. 이 구현은 `sys.parameters`를 질의하지 않습니다.
 - SQL Server에는 `sys.objects.type` 분류에 `Window` 함수 종류가 없으므로, 이 드라이버는 `RoutineKind::Window`를 절대 내보내지 않습니다.
 - 데이터 전송 엔진의 마이그레이션 경로에 대한 참조 무결성 토글이 없습니다(`DriverCapabilities::DISABLE_FK_CHECKS`가 설정되지 않음; `Connection::set_referential_integrity`는 `NotSupported`를 반환합니다). SQL Server는 `ALTER TABLE ... NOCHECK CONSTRAINT`로 테이블별로 FK 검사를 비활성화하는데, 이는 엔진의 단일 전역 토글에 맞지 않습니다. 테이블별 변형은 향후 추가 가능성이 있습니다.
+- 데이터베이스가 강제하는 읽기 전용 모드가 없습니다. 이를 요구하는 요청은 거부되므로 MCP `execute_script`는 `Read` 또는 `Metadata`로 분류된 스크립트를 쓰기로 처리하며, SQL Server 연결에서는 편집기 자동 새로 고침을 사용할 수 없습니다.

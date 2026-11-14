@@ -12,6 +12,13 @@ Base de datos embebida basada en archivos.
 
 - Driver relacional SQLite embebido usando rutas de base de datos basadas en
   archivos.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
+  con la validación del editor, la confirmación de queries peligrosas, las
+  filas de auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Soporta ejecución de SQL, descubrimiento de schema, vistas, índices, foreign
   keys, constraints CHECK, y constraints UNIQUE.
 - Soporta cancelación de queries vía los handles de interrupt de SQLite,
@@ -78,6 +85,8 @@ Base de datos embebida basada en archivos.
 - No existe la sentencia `TRUNCATE TABLE`; la opción de carga Truncate del motor
   de transferencia de datos no está disponible para destinos SQLite
   (`DriverCapabilities::TRUNCATE_TABLE` no está fijado).
+- El descubrimiento del esquema lista solo las columnas con nombre de un índice: una columna de expresión, como `lower(name)` en `CREATE INDEX ... ON t (lower(name), id)`, queda fuera de la lista de columnas del índice.
+- Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se ejecuta bajo `PRAGMA query_only`, que se comprueba antes de cada sentencia y se restaura después, y se rechaza dentro de una transacción abierta. SQLite rechaza entonces las escrituras en la base de datos, pero no los efectos de extensiones cargadas ni de funciones definidas por la aplicación; los permisos de archivo siguen siendo el límite real.
 
 ## Capacidades de DDL
 

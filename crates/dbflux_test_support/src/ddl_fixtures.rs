@@ -593,6 +593,10 @@ pub fn seed_table<C: dbflux_core::Connection + ?Sized>(
 ) -> Result<(), DbError> {
     for row in rows {
         let columns: Vec<String> = row.keys().cloned().collect();
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "columns are cloned from the same row's key set, so the map index cannot panic"
+        )]
         let values: Vec<dbflux_core::Value> = columns.iter().map(|k| row[k].clone()).collect();
 
         let insert_sql = format!(

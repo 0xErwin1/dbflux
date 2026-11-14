@@ -8,8 +8,11 @@ description: >-
   on every control and surface. Two palettes (Dark, Light, plus Follow system)
   and two densities (Default, Compact). Tokens below record the Dark palette at
   Default density, which is what ships as the default. The Light palette is
-  tabulated in the Colors section. Source of truth is
-  crates/dbflux_components/src/{theme.rs,tokens.rs,density.rs,semantic.rs}.
+  tabulated in the Colors section. Source of truth is the shared `bolt` crate:
+  crates/bolt/src/{tokens.rs,theme.rs,density.rs,semantic.rs,brand.rs}. DBFlux
+  supplies the byzantine accent as a `Brand` value from
+  crates/dbflux_components/src/theme.rs; the palette itself belongs to the
+  design system, not to the product.
 colors:
   desk: "#050507"
   background: "#09090B"

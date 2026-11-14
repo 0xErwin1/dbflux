@@ -234,7 +234,8 @@ impl ObjectBrowserDocument {
 
         let position = Point {
             x: self.panel_origin.x + Spacing::LG,
-            y: self.panel_origin.y + ObjectStoreMetrics::OBJECT_ROW_HEIGHT * 3.0,
+            y: self.panel_origin.y
+                + dbflux_components::fonts::ui_px(cx, ObjectStoreMetrics::OBJECT_ROW_HEIGHT) * 3.0,
         };
         self.open_context_menu(target, position, cx);
         true
@@ -412,6 +413,13 @@ impl ObjectBrowserDocument {
                 true
             }
             Command::MenuSelect | Command::Execute => {
+                // selected_index starts at 0 when the menu opens and the
+                // MenuUp/MenuDown arms keep it modulo menu.items.len(), which
+                // this dispatch does not re-check.
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "selected_index starts at 0 on open and the MenuUp/MenuDown arms keep it modulo menu.items.len(), which this dispatch does not re-check"
+                )]
                 if let Some(menu) = self.context_menu.take() {
                     let action = menu.items[menu.selected_index].action;
                     self.execute_menu_action(action, menu.target, window, cx);

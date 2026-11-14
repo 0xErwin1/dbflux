@@ -28,7 +28,73 @@ pantalla contrae el sidebar.
 - `Enter` abre el elemento seleccionado (por ejemplo, una tabla abre un data
   grid).
 - `r` refresca el schema; `d` desconecta la conexión activa.
-- `m` abre el menú contextual del elemento seleccionado.
+- `m` abre el menú contextual del elemento seleccionado. En una columna o un
+  campo de colección, el menú copia su nombre.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/tree-dark.webp">
+  <img src="../images/schema-browser/tree-light.webp" alt="El árbol del schema en el sidebar para una conexión PostgreSQL, con una tabla expandida hasta sus columnas, índices y restricciones">
+</picture>
+
+## Disposición simple y avanzada
+
+Cada conexión a una base de datos con esquemas tiene una **Vista del
+navegador** en la pestaña Main del administrador de conexiones:
+
+- **Avanzada** (la predeterminada): cada esquema agrupa sus tablas y vistas en
+  las carpetas **Tables** y **Views**, junto a sus tipos, índices, claves
+  foráneas y, cuando el driver los admite, rutinas.
+- **Compacta**: el árbol oculta las carpetas intermedias: la conexión muestra
+  sus bases de datos, cada base de datos sus esquemas y cada esquema sus
+  tablas, vistas, rutinas y tipos de datos directamente. Las tablas siguen
+  desplegando sus columnas, índices, claves foráneas y restricciones, por lo
+  que se omiten las carpetas Indexes y Foreign Keys del esquema. Instance
+  Overview, Instance Metrics e Instance Inspectors se agrupan en una sola
+  carpeta **Instance**. Nada de lo que muestra la vista Avanzada queda
+  inaccesible.
+- **Simple**: solo las bases de datos, sus esquemas y las tablas y vistas de
+  cada esquema, como la vista simple de DBeaver. Se ocultan las rutinas, los
+  tipos de datos, los dashboards y las vistas de la instancia; cambia a
+  Compacta o Avanzada para acceder a ellos. Las tablas siguen desplegando sus
+  columnas, índices y restricciones.
+
+La disposición cambia en cuanto guardas la conexión, también mientras está abierta.
+
+Junto al campo **Database**, **Show all databases** decide qué bases de datos
+muestra el árbol para un servidor que tiene varias. Está activado por defecto y
+el árbol muestra todas las bases de datos. Desactívalo para mostrar solo la
+base de datos escrita en el campo. Si el campo está vacío, o nombra una base de
+datos que el servidor no lista, se siguen mostrando todas.
+
+## Carpetas externas de scripts
+
+La vista Scripts puede listar scripts que están fuera de la carpeta de scripts
+de DBFlux, como un repositorio de archivos SQL compartido entre proyectos, sin
+copiarlos. Elige **Agregar carpeta externa** en el menú `+` de la vista Scripts,
+o ejecuta **Agregar carpeta externa de scripts…** desde la paleta de comandos, y
+selecciona la carpeta.
+
+- La carpeta aparece debajo de tus propios scripts, con su nombre como etiqueta.
+  Solo se listan los archivos que abre el editor (`.sql`, `.js`, `.redis`,
+  `.lua`, `.py`, `.sh` y los demás tipos de script). Se ocultan las subcarpetas
+  que solo contienen otros archivos; las vacías se muestran, así que una carpeta
+  que acabas de crear sigue visible. Los enlaces simbólicos que salen de la
+  carpeta no se listan, y nada se escribe a través de ellos.
+- Los scripts se abren y se guardan en su lugar, así que los archivos quedan
+  sincronizados con la carpeta. Crear, renombrar y eliminar archivos y
+  subcarpetas dentro de ella funciona igual que en tu propia carpeta de scripts.
+  Mover un archivo entre dos carpetas distintas se rechaza.
+- DBFlux no vigila la carpeta. Pulsa `r` sobre la carpeta, o elige **Actualizar**
+  en su menú, para ver archivos agregados o modificados fuera de DBFlux. Las
+  carpetas también se escanean en segundo plano cada vez que DBFlux arranca.
+- Si la carpeta se mueve, se elimina, se desmonta o no se puede leer, sigue en
+  la lista marcada como **no disponible** hasta que vuelva o la quites. Su menú
+  indica por qué no se pudo leer.
+- **Quitar del panel lateral** (`x`) solo olvida la carpeta. Sus archivos nunca
+  se tocan, y la carpeta en sí no se puede renombrar, mover ni eliminar desde
+  DBFlux.
+- Las carpetas externas no se comparten con clientes de IA: las herramientas MCP
+  de scripts solo ven la carpeta de scripts de DBFlux.
 
 ## Carga diferida (lazy loading)
 
@@ -75,8 +141,14 @@ del sidebar:
 El diagrama se abre en su propia pestaña, y abrir el mismo diagrama otra vez
 cambia a esa pestaña. La carga se ejecuta como una tarea en segundo plano
 ("Diagrama de esquema: _base de datos_") que puedes cancelar desde el panel
-Tasks. Cada tabla lista sus columnas con las insignias `PK`, `FK` y `NN` (not
-null), y unas líneas conectan cada clave foránea con la tabla que referencia.
+Tasks. Cada tabla lista sus columnas, con un icono de llave en las columnas de
+clave primaria y un icono de enlace en las de clave foránea, y unas líneas
+conectan cada clave foránea con la tabla que referencia.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/diagram-dark.webp">
+  <img src="../images/schema-browser/diagram-light.webp" alt="El diagrama de esquema de una base de datos PostgreSQL, con cuatro tablas y líneas desde cada clave foránea hasta la tabla a la que referencia">
+</picture>
 
 | Control de la toolbar | Qué hace |
 |---|---|

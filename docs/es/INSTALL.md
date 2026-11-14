@@ -15,10 +15,10 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 ### AppImage (portable)
 
 ```bash
-# Descargar desde releases (reemplaza amd64 por arm64 para ARM)
-wget https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-linux-amd64.AppImage
-chmod +x dbflux-linux-amd64.AppImage
-./dbflux-linux-amd64.AppImage
+# Descargar desde releases (reemplaza x86_64 por aarch64 para ARM)
+wget https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-x86_64.AppImage
+chmod +x dbflux-x86_64.AppImage
+./dbflux-x86_64.AppImage
 ```
 
 ### Arch Linux
@@ -109,11 +109,46 @@ NixOS / nix-darwin vía overlay:
 }
 ```
 
+El overlay construye todos los paquetes con el nixpkgs de tu sistema, así que el binario precompilado usa la misma glibc que tus controladores gráficos. Las salidas propias del flake usan en cambio el nixpkgs fijado en el `flake.lock` de DBFlux. Cuando la glibc de tu sistema es más nueva que esa, los controladores gráficos no cargan y DBFlux puede detenerse al iniciar. En ese caso:
+
+- Si tu flake usa `dbflux.packages.<system>.*`, cambia al overlay o agrégale `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";`.
+- Con `nix run` o `nix profile install`, agrega `--override-input nixpkgs nixpkgs`. Así DBFlux se construye con el `nixpkgs` al que resuelve tu registro de flakes. En un sistema NixOS construido desde un flake, el registro del sistema lo apunta al nixpkgs del propio sistema, salvo que una entrada en tu registro de usuario, que tiene prioridad, lo apunte a otro.
+
+### Homebrew
+
+El tap de DBFlux instala el binario precompilado y enlaza `dbflux` en el `bin` de Homebrew:
+
+```bash
+brew install --cask 0xErwin1/dbflux/dbflux
+```
+
+Para actualizarlo:
+
+```bash
+brew update && brew upgrade --cask dbflux
+```
+
 ## macOS
 
 DBFlux para macOS no está firmado con un certificado de desarrollador de Apple.
 Al abrirlo por primera vez, verás una advertencia sobre un "desarrollador no
 identificado".
+
+### Homebrew
+
+La vía más sencilla es el tap de DBFlux, que instala `DBFlux.app` en `/Applications`:
+
+```bash
+brew install --cask 0xErwin1/dbflux/dbflux
+```
+
+Para actualizarlo:
+
+```bash
+brew update && brew upgrade --cask dbflux
+```
+
+DBFlux no está notarizado, así que el cask elimina el atributo `com.apple.quarantine` después de instalar y Gatekeeper no bloquea el primer inicio. Si prefieres aprobar la aplicación tú mismo, instala el DMG manualmente como se describe a continuación.
 
 ### Instalación
 

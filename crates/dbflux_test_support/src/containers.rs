@@ -31,6 +31,11 @@ fn hub_image(image: &str, tag: &str) -> GenericImage {
     GenericImage::new(name, tag.to_string())
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_postgres_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -60,6 +65,11 @@ where
 /// a deliberately different database name (`testdb`) makes a swallowed
 /// `dbname=` connection parameter observable instead of silently falling back
 /// to the user name.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_trust_postgres_port<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(u16) -> Result<T, E>,
@@ -81,6 +91,11 @@ where
     run(port)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_pgvector_postgres_16_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -109,7 +124,28 @@ pub fn with_mysql_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    let image = hub_image("mysql", "8.4")
+    with_mysql_image_url(hub_image("mysql", "8.4"), run)
+}
+
+/// MySQL 5.7 predates `information_schema` tables such as `CHECK_CONSTRAINTS`,
+/// so it covers the fallbacks the driver keeps for older servers.
+pub fn with_mysql_57_url<T, E, F>(run: F) -> Result<T, E>
+where
+    F: FnOnce(String) -> Result<T, E>,
+{
+    with_mysql_image_url(hub_image("mysql", "5.7"), run)
+}
+
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
+fn with_mysql_image_url<T, E, F>(image: GenericImage, run: F) -> Result<T, E>
+where
+    F: FnOnce(String) -> Result<T, E>,
+{
+    let image = image
         .with_exposed_port(ContainerPort::Tcp(3306))
         .with_wait_for(WaitFor::message_on_stderr("ready for connections"))
         .with_env_var("MYSQL_ROOT_PASSWORD", "root")
@@ -124,6 +160,11 @@ where
     run(url)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_mongodb_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -141,6 +182,11 @@ where
     run(url)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_redis_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -170,6 +216,11 @@ where
 /// to fail with a "potentially insufficient UIDs or GIDs" error. `docker
 /// exec`/`podman exec` runs as a process inside the container's own user
 /// namespace and has no such requirement.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_redis_container<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String, &Container<GenericImage>) -> Result<T, E>,
@@ -212,6 +263,11 @@ pub const REDIS_CLUSTER_PORTS: [u16; 6] = [7000, 7001, 7002, 7003, 7004, 7005];
 /// lands on the right node through the identical published mapping. This
 /// means ports 7000-7005 must be free on the host — acceptable on a CI
 /// runner, but it can collide with a Redis Cluster already running locally.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup is a hard test-infrastructure failure that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_redis_cluster_urls<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(Vec<String>) -> Result<T, E>,
@@ -251,6 +307,11 @@ pub struct ClickHouseConfig {
 }
 
 /// Spin up a ClickHouse 25.8 LTS container and wait for its HTTP API.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_clickhouse<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -312,6 +373,11 @@ where
 /// Set `TURSO_TEST_URL` (and optionally `TURSO_TEST_TOKEN`) to target an
 /// existing server instead of starting a container; the closure then receives
 /// that URL and no container is created.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_libsql_server<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -366,6 +432,11 @@ where
 /// The same constant is reused inside test URIs.
 pub const MSSQL_TEST_PASSWORD: &str = "Strong!Passw0rd";
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_mssql_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -397,6 +468,11 @@ where
     run(url)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_dynamodb_endpoint<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
@@ -430,6 +506,11 @@ pub struct InfluxV1Config {
 /// Spin up an InfluxDB 2.7 container and pass its endpoint + credentials to `run`.
 ///
 /// Waits until the `/health` endpoint returns a 2xx response before calling `run`.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_influxdb_v2<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -493,6 +574,11 @@ where
 }
 
 /// Spin up an InfluxDB 1.8 container and pass its endpoint to `run`.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_influxdb_v1<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -556,6 +642,11 @@ pub struct MinioConfig {
 /// MinIO has moved its startup banner between stdout and stderr across
 /// releases, so a log-line wait times out depending on the image version.
 /// The image tag is pinned for the same reason.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
 pub fn with_minio_endpoint<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -629,10 +720,36 @@ where
     E: From<dbflux_core::DbError>,
     F: FnOnce(String) -> Result<T, E>,
 {
+    with_localstack_services("logs,cloudwatch", run)
+}
+
+/// Spin up a LocalStack community container scoped to the Secrets Manager,
+/// Systems Manager (Parameter Store) and KMS APIs, and pass its endpoint to
+/// `run`. KMS is included so `SecureString` parameters and customer-managed
+/// keys can be exercised. Readiness works like
+/// [`with_localstack_cloudwatch_endpoint`].
+pub fn with_localstack_secrets_endpoint<T, E, F>(run: F) -> Result<T, E>
+where
+    E: From<dbflux_core::DbError>,
+    F: FnOnce(String) -> Result<T, E>,
+{
+    with_localstack_services("secretsmanager,ssm,kms", run)
+}
+
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
+)]
+fn with_localstack_services<T, E, F>(services: &str, run: F) -> Result<T, E>
+where
+    E: From<dbflux_core::DbError>,
+    F: FnOnce(String) -> Result<T, E>,
+{
     let image = hub_image("localstack/localstack", "3")
         .with_exposed_port(ContainerPort::Tcp(4566))
         .with_wait_for(WaitFor::message_on_stdout("Ready."))
-        .with_env_var("SERVICES", "logs,cloudwatch");
+        .with_env_var("SERVICES", services);
 
     let container = image.start().expect("failed to start localstack container");
     let port = container
@@ -755,14 +872,29 @@ mod tests {
         started.dedup();
         assert!(!started.is_empty(), "found no images in containers.rs");
 
-        let pre_pulled: Vec<String> = workflow
-            .lines()
-            .skip_while(|line| !line.contains("images=("))
-            .skip(1)
-            .take_while(|line| !line.trim_start().starts_with(')'))
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect();
+        // The pre-pull list is the union of the matrix's per-group `images:`
+        // blocks: every line indented deeper than an `images:` key is one
+        // image reference, and the block ends at the first line at or below
+        // that key's indentation.
+        let mut pre_pulled: Vec<String> = Vec::new();
+        let mut images_block_indent: Option<usize> = None;
+        for line in workflow.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let indent = line.len() - trimmed.len();
+            if let Some(block_indent) = images_block_indent {
+                if indent > block_indent {
+                    pre_pulled.push(trimmed.to_string());
+                    continue;
+                }
+                images_block_indent = None;
+            }
+            if trimmed.starts_with("images:") {
+                images_block_indent = Some(indent);
+            }
+        }
 
         let missing: Vec<&String> = started
             .iter()

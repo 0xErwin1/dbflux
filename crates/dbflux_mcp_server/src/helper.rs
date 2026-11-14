@@ -9,7 +9,7 @@ use serde::Serialize;
 /// across the tool handlers. Serializing the handlers' own response DTOs is
 /// effectively infallible, but this lives on the MCP request path, so a
 /// serialization failure is surfaced as an `ErrorData` instead of a panic.
-pub fn to_json_content<T: Serialize>(value: &T) -> Result<ContentBlock, ErrorData> {
+pub(crate) fn to_json_content<T: Serialize>(value: &T) -> Result<ContentBlock, ErrorData> {
     serde_json::to_string_pretty(value)
         .map(|serialized| {
             #[cfg(feature = "telemetry")]
@@ -24,7 +24,7 @@ pub fn to_json_content<T: Serialize>(value: &T) -> Result<ContentBlock, ErrorDat
 }
 
 #[allow(dead_code)]
-pub fn json_to_sql_literal(value: &serde_json::Value, _dialect: &dyn SqlDialect) -> String {
+pub(crate) fn json_to_sql_literal(value: &serde_json::Value, _dialect: &dyn SqlDialect) -> String {
     match value {
         serde_json::Value::Null => "NULL".to_string(),
         serde_json::Value::Bool(b) => {
@@ -48,7 +48,7 @@ pub fn json_to_sql_literal(value: &serde_json::Value, _dialect: &dyn SqlDialect)
 }
 
 #[allow(dead_code)]
-pub fn json_to_db_value(value: serde_json::Value) -> Value {
+pub(crate) fn json_to_db_value(value: serde_json::Value) -> Value {
     match value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(b),
@@ -82,7 +82,7 @@ pub fn json_to_db_value(value: serde_json::Value) -> Value {
 /// except the last, so when extras are present we emit a `result_sets`
 /// array containing every set in batch order.
 #[allow(dead_code)]
-pub fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
+pub(crate) fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
     #[cfg(feature = "telemetry")]
     observe_query_result(result);
     let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
@@ -113,6 +113,32 @@ pub(crate) fn observe_query_result(result: &QueryResult) {
     crate::telemetry_usage::observe_typed(result);
 }
 
+/// The failure that stopped a multi-statement script run, when the result
+/// records one under the `script_failure` metadata key (`{ "index", "message" }`).
+///
+/// A script engine reports a statement that failed or was refused mid-run in
+/// the result's metadata rather than as an error, so the statements that
+/// already ran keep their results. An MCP client must not read such a result
+/// as a success, so callers turn this message into a tool error.
+pub(crate) fn script_failure_message(result: &QueryResult) -> Option<String> {
+    let failure = result.metadata_extra.as_ref()?.get("script_failure")?;
+
+    let message = failure
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("the script failed");
+
+    let statement = failure
+        .get("index")
+        .and_then(serde_json::Value::as_u64)
+        .map(|index| format!(" at statement {index}"))
+        .unwrap_or_default();
+
+    Some(format!(
+        "Script stopped{statement}; statements before it may have run: {message}"
+    ))
+}
+
 fn serialize_single_result_set(result: &QueryResult) -> serde_json::Value {
     let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
     serde_json::json!({
@@ -122,7 +148,7 @@ fn serialize_single_result_set(result: &QueryResult) -> serde_json::Value {
     })
 }
 
-pub fn serialize_rows(result: &QueryResult) -> Vec<serde_json::Value> {
+pub(crate) fn serialize_rows(result: &QueryResult) -> Vec<serde_json::Value> {
     let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
 
     result
@@ -138,11 +164,11 @@ pub fn serialize_rows(result: &QueryResult) -> Vec<serde_json::Value> {
         .collect()
 }
 
-pub fn mutation_affected_rows(result: &QueryResult) -> u64 {
+pub(crate) fn mutation_affected_rows(result: &QueryResult) -> u64 {
     result.affected_rows.unwrap_or(result.rows.len() as u64)
 }
 
-pub fn serialize_mutation_result(
+pub(crate) fn serialize_mutation_result(
     result: &QueryResult,
     affected_key: &str,
     include_records: bool,
@@ -168,7 +194,7 @@ pub fn serialize_mutation_result(
 }
 
 #[allow(dead_code)]
-pub fn value_to_json(value: &Value) -> serde_json::Value {
+pub(crate) fn value_to_json(value: &Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
@@ -339,6 +365,24 @@ mod tests {
         // Primary first, then the earlier set in batch order.
         assert_eq!(sets[0]["columns"][0], serde_json::json!("b"));
         assert_eq!(sets[1]["columns"][0], serde_json::json!("a"));
+    }
+
+    #[test]
+    fn script_failure_message_reads_the_failure_a_script_run_recorded() {
+        let mut result = QueryResult::table(Vec::new(), Vec::new(), None, Duration::ZERO);
+        assert_eq!(script_failure_message(&result), None);
+
+        result.metadata_extra = Some(std::collections::HashMap::from([(
+            "script_failure".to_string(),
+            serde_json::json!({ "index": 1, "message": "exceeds the confirmed Read ceiling" }),
+        )]));
+
+        let message = script_failure_message(&result).expect("the failure must be reported");
+        assert!(message.contains("statement 1"), "{message}");
+        assert!(
+            message.contains("exceeds the confirmed Read ceiling"),
+            "{message}"
+        );
     }
 
     #[test]

@@ -31,6 +31,7 @@ impl SchemaNodeKind {
                 | Self::CustomType
                 | Self::ScriptsFolder
                 | Self::ScriptFile
+                | Self::ScriptsRoot
                 | Self::DependentsFolder
                 | Self::Routine
                 | Self::MetricsFolder
@@ -45,10 +46,14 @@ impl SchemaNodeKind {
                 | Self::InstanceMetricsFolder
                 | Self::InstanceMetricLeaf
                 | Self::InstanceInspectorsFolder
+                | Self::InstanceFolder
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
-                | Self::Bucket
-                | Self::BucketsFolder
+                | Self::RootSection
+                | Self::RootSectionItem
+                | Self::RootSectionLoadMore
+                | Self::SecretStore
+                | Self::SecretPath
         )
     }
 
@@ -75,6 +80,7 @@ impl SchemaNodeKind {
                 | Self::Database
                 | Self::CustomType
                 | Self::ScriptsFolder
+                | Self::ScriptsRoot
                 | Self::DependentsFolder
                 | Self::MetricsFolder
                 | Self::MetricNamespaceFolder
@@ -83,7 +89,10 @@ impl SchemaNodeKind {
                 | Self::SavedChartsFolder
                 | Self::InstanceMetricsFolder
                 | Self::InstanceInspectorsFolder
-                | Self::BucketsFolder
+                | Self::InstanceFolder
+                | Self::RootSection
+                | Self::SecretStore
+                | Self::SecretPath
         )
     }
 
@@ -104,8 +113,11 @@ impl SchemaNodeKind {
                 | Self::InstanceMetricLeaf
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
-                | Self::Bucket
-                | Self::BucketsFolder
+                | Self::RootSection
+                | Self::RootSectionItem
+                | Self::RootSectionLoadMore
+                | Self::SecretStore
+                | Self::SecretPath
         )
     }
 }

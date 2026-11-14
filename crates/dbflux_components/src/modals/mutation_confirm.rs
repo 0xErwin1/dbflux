@@ -4,7 +4,6 @@ use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::modals::parts::{modal_code, modal_field, modal_lead};
 use crate::primitives::{SurfaceRole, surface};
 use crate::tokens::{FontSizes, ModalMetrics, Spacing};
-use crate::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, Entity, EventEmitter, Focusable, SharedString, Subscription, Window, div, px};
@@ -143,7 +142,7 @@ impl Render for ModalMutationConfirm {
                             div()
                                 .flex_1()
                                 .text_size(FontSizes::XS)
-                                .font_family(AppFonts::MONO)
+                                .font_family(crate::fonts::editor_family(cx))
                                 .text_color(theme.foreground)
                                 .child(SharedString::from(val.clone())),
                         );
@@ -415,7 +414,7 @@ impl Render for ModalMutationConfirmHard {
                             div()
                                 .flex_1()
                                 .text_size(FontSizes::XS)
-                                .font_family(AppFonts::MONO)
+                                .font_family(crate::fonts::editor_family(cx))
                                 .text_color(theme.foreground)
                                 .child(SharedString::from(val.clone())),
                         );
@@ -446,7 +445,7 @@ impl Render for ModalMutationConfirmHard {
         body = body.child(modal_field(
             dbflux_i18n::t!("modals.mutation_confirm.type_to_confirm_label"),
             div()
-                .font_family(AppFonts::MONO)
+                .font_family(crate::fonts::editor_family(cx))
                 .child(crate::controls::Input::new(&self.confirm_input).w_full()),
             cx,
         ));

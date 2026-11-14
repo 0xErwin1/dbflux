@@ -3,18 +3,23 @@ import { getCollection } from 'astro:content';
 import { dirname, relative, resolve } from 'node:path';
 import { docRoutePolicy, markdownPathFor, splitId } from '../data/docs';
 import { routeForRepoPath } from '../data/nav';
-import { CURRENT, docsRoute } from '../data/versions';
+import { CURRENT, docsFileHref, docsRoute } from '../data/versions';
 import { DOCS_MODE } from '../data/site';
+import { rewriteMarkdownImages } from '../lib/doc-images';
 
 const markdown = (body: string, filePath: string) =>
-  body.replace(/\]\(([^)#]+\.md)(#[^)]+)?\)/g, (_, target, fragment = '') => {
-    if (/^[a-z]+:|^\/|^#/i.test(target)) return _;
-    const path = relative('.versions/' + CURRENT.id, resolve(dirname(filePath), target)).replaceAll(
-      '\\',
-      '/',
-    );
-    return `](${routeForRepoPath(path)}${fragment})`;
-  });
+  rewriteMarkdownImages(
+    body.replace(/\]\(([^)#]+\.md)(#[^)]+)?\)/g, (_, target, fragment = '') => {
+      if (/^[a-z]+:|^\/|^#/i.test(target)) return _;
+      const path = relative(
+        '.versions/' + CURRENT.id,
+        resolve(dirname(filePath), target),
+      ).replaceAll('\\', '/');
+      return `](${routeForRepoPath(path)}${fragment})`;
+    }),
+    filePath,
+    docsFileHref,
+  );
 
 export async function getStaticPaths() {
   if (DOCS_MODE !== 'docs') return [];

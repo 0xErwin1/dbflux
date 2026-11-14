@@ -163,6 +163,10 @@ fn orders_spec() -> VisualQuerySpec {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "Integration-test helper asserts successful generation for valid query fixtures"
+)]
 fn run_with_dialect(spec: &VisualQuerySpec, dialect: &dyn SqlDialect) -> SelectQuery {
     dbflux_core::select_query_from_spec(spec, dialect).expect("generation must succeed")
 }

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 use crate::error::StorageError;
+use crate::repositories::readable_row;
 
 /// Repository for managing saved audit filters.
 #[derive(Clone)]
@@ -55,7 +56,7 @@ impl SavedFiltersRepository {
                 path: "dbflux.db".into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(readable_row("aud_saved_filters"))
             .collect();
 
         Ok(filters)

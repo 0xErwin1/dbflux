@@ -35,6 +35,10 @@ impl SqlDialect for TursoDialect {
         PlaceholderStyle::QuestionMark
     }
 
+    fn mutation_target_alias(&self) -> dbflux_core::MutationTargetAlias {
+        dbflux_core::MutationTargetAlias::RequiresAs
+    }
+
     fn build_upsert_statement(
         &self,
         schema: Option<&str>,
@@ -90,7 +94,7 @@ impl SqlDialect for TursoDialect {
 
 pub(crate) fn quote_ident(ident: &str) -> String {
     debug_assert!(!ident.is_empty(), "identifier cannot be empty");
-    format!("\"{}\"", ident.replace('"', "\"\""))
+    dbflux_core::quote_double_quoted_identifier(ident)
 }
 
 pub(crate) fn escape_string(s: &str) -> String {
@@ -268,38 +272,6 @@ pub(crate) fn generate_create_table(table: &TableInfo) -> String {
     sql
 }
 
-/// Translates a document-shaped filter into a WHERE clause.
-pub(crate) fn translate_filter_to_sql(filter: &Value) -> String {
-    match filter {
-        Value::Document(doc) => {
-            let parts: Vec<String> = doc
-                .iter()
-                .map(|(key, value)| {
-                    let quoted_col = quote_ident(key);
-                    match value {
-                        Value::Null => format!("{quoted_col} IS NULL"),
-                        other => format!("{quoted_col} = {}", value_to_literal(other)),
-                    }
-                })
-                .collect();
-            parts.join(" AND ")
-        }
-        // A plain text filter is a raw SQL expression.
-        Value::Text(s) => s.clone(),
-        _ => String::new(),
-    }
-}
-
-pub(crate) fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    if let Value::Document(doc) = filter {
-        for value in doc.values() {
-            if !matches!(value, Value::Null) {
-                params.push(value.clone());
-            }
-        }
-    }
-}
-
 // =============================================================================
 // DDL code generation
 // =============================================================================
@@ -471,24 +443,6 @@ mod tests {
     }
 
     #[test]
-    fn filter_translation_handles_null_and_raw_text() {
-        let mut doc = BTreeMap::new();
-        doc.insert("a".to_string(), Value::Null);
-        doc.insert("b".to_string(), Value::Text("x".into()));
-        assert_eq!(
-            translate_filter_to_sql(&Value::Document(doc.clone())),
-            "\"a\" IS NULL AND \"b\" = 'x'"
-        );
-        let mut params = Vec::new();
-        collect_filter_values(&Value::Document(doc), &mut params);
-        assert_eq!(params, vec![Value::Text("x".into())]);
-        assert_eq!(
-            translate_filter_to_sql(&Value::Text("a > 1".into())),
-            "a > 1"
-        );
-    }
-
-    #[test]
     fn create_table_keeps_integer_primary_key_inline() {
         let table = TableInfo {
             name: "t".into(),
@@ -518,6 +472,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let sql = generate_create_table(&table);
         assert_eq!(

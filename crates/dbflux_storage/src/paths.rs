@@ -169,11 +169,16 @@ pub fn dbflux_db_path() -> Result<PathBuf, StorageError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
+
+    #[cfg(unix)]
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    #[cfg(unix)]
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
+    #[cfg(unix)]
     fn unique_tmp_path(prefix: &str) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(

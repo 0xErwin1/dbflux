@@ -7,10 +7,10 @@
 )]
 
 use dbflux_core::{
-    ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, DescribeRequest, ExplainRequest,
-    OrderByColumn, Pagination, QueryRequest, RecordIdentity, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, TransactionStateNote,
-    Value,
+    ConnectionProfile, ConstraintKind, DbConfig, DbDriver, DbError, DbKind, DescribeRequest,
+    ExplainRequest, OrderByColumn, Pagination, QueryRequest, ReadOnlyEnforcement, RecordIdentity,
+    RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest,
+    TableRef, TransactionStateNote, Value,
 };
 use dbflux_driver_mysql::MysqlDriver;
 use dbflux_test_support::containers;
@@ -79,6 +79,40 @@ fn mysql_live_connect_ping_query_and_schema() -> Result<(), DbError> {
 // ---------------------------------------------------------------------------
 // Schema introspection
 // ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_fetch_dependents_lists_views_and_foreign_key_children() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+
+        for statement in [
+            "CREATE TABLE dep_parent (id INT PRIMARY KEY)",
+            "CREATE TABLE dep_child (id INT, parent_id INT, FOREIGN KEY (parent_id) REFERENCES dep_parent(id))",
+            "CREATE VIEW dep_parent_view AS SELECT id FROM dep_parent",
+        ] {
+            connection.execute(&QueryRequest::new(statement))?;
+        }
+
+        let dependents = connection.fetch_dependents("testdb", None, "dep_parent")?;
+
+        assert_eq!(
+            dependents,
+            vec![
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::View,
+                    qualified_name: "testdb.dep_parent_view".to_string(),
+                },
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::ForeignKeyChild,
+                    qualified_name: "testdb.dep_child".to_string(),
+                },
+            ]
+        );
+        Ok(())
+    })
+}
 
 #[test]
 #[ignore = "requires Docker daemon"]
@@ -152,6 +186,95 @@ fn mysql_schema_introspection() -> Result<(), DbError> {
             .expect("foreign keys should be loaded");
         assert!(!fks.is_empty());
         assert_eq!(fks[0].referenced_table, "test_users");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_57_table_details_load_without_check_constraints_table() -> Result<(), DbError> {
+    containers::with_mysql_57_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE legacy_users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                age INT,
+                CONSTRAINT uq_legacy_users_email UNIQUE (email),
+                CONSTRAINT ck_legacy_users_age CHECK (age >= 0)
+            )",
+        ))?;
+
+        let table = connection.table_details("testdb", None, "legacy_users")?;
+
+        let columns = table.columns.as_ref().expect("columns should be loaded");
+        assert_eq!(columns.len(), 3);
+
+        let constraints = table
+            .constraints
+            .as_ref()
+            .expect("constraints should be loaded");
+        let unique = constraints
+            .iter()
+            .find(|constraint| constraint.name == "uq_legacy_users_email")
+            .expect("unique constraint");
+        assert_eq!(unique.kind, ConstraintKind::Unique);
+        assert_eq!(unique.columns, vec!["email".to_string()]);
+        assert_eq!(unique.check_clause, None);
+
+        // MySQL 5.7 parses CHECK constraints but never stores them.
+        assert!(
+            constraints
+                .iter()
+                .all(|constraint| constraint.kind != ConstraintKind::Check)
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_table_details_lists_functional_index_with_its_expression() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE functional_index_users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                INDEX idx_email_lower ((LOWER(email)))
+            )",
+        ))?;
+
+        let table = connection.table_details("testdb", None, "functional_index_users")?;
+
+        let indexes = table.indexes.as_ref().expect("indexes should be loaded");
+        let index_data = match indexes {
+            dbflux_core::IndexData::Relational(v) => v,
+            _ => panic!("expected relational index data"),
+        };
+
+        let functional_index = index_data
+            .iter()
+            .find(|index| index.name == "idx_email_lower")
+            .expect("functional index should be listed");
+
+        assert_eq!(functional_index.columns.len(), 1);
+        assert!(
+            functional_index.columns[0].starts_with('(')
+                && functional_index.columns[0].ends_with(')')
+                && functional_index.columns[0].to_lowercase().contains("lower")
+                && functional_index.columns[0].contains("email"),
+            "expected parenthesised LOWER(email) expression, got {:?}",
+            functional_index.columns[0]
+        );
 
         Ok(())
     })
@@ -991,6 +1114,231 @@ fn mysql_query_safety_statement_timeout_rejected_before_execution() -> Result<()
                 .len(),
             1
         );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Read-only enforcement
+// ---------------------------------------------------------------------------
+
+fn read_only_request(sql: &str) -> QueryRequest {
+    QueryRequest::new(sql).with_read_only(ReadOnlyEnforcement::Required)
+}
+
+fn read_only_fixture(connection: &dyn dbflux_core::Connection) -> Result<(), DbError> {
+    connection.execute(&QueryRequest::new(
+        "CREATE DATABASE IF NOT EXISTS read_only_db",
+    ))?;
+    connection.execute(&QueryRequest::new("USE read_only_db"))?;
+    connection.execute(&QueryRequest::new("DROP TABLE IF EXISTS read_only_items"))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE read_only_items (id INT PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new("INSERT INTO read_only_items VALUES (1)"))?;
+    Ok(())
+}
+
+fn read_only_item_count(connection: &dyn dbflux_core::Connection) -> Result<usize, DbError> {
+    let result = connection.execute(&QueryRequest::new("SELECT id FROM read_only_items"))?;
+    Ok(result.rows.len())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_read_only_requests_cannot_write() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        read_only_fixture(connection.as_ref())?;
+
+        for sql in [
+            "WITH doomed AS (SELECT id FROM read_only_items) \
+             DELETE FROM read_only_items WHERE id IN (SELECT id FROM doomed)",
+            "EXPLAIN ANALYZE DELETE FROM read_only_items",
+            "SELECT 1; DELETE FROM read_only_items",
+        ] {
+            let outcome = connection.execute(&read_only_request(sql));
+            assert!(outcome.is_err(), "{sql} must fail, got {outcome:?}");
+            assert_eq!(read_only_item_count(connection.as_ref())?, 1, "{sql}");
+        }
+
+        let error = connection
+            .execute(&read_only_request("DELETE FROM read_only_items"))
+            .expect_err("a plain DELETE is refused before it reaches the transaction");
+        assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+        let error = connection
+            .execute(&read_only_request(
+                "WITH doomed AS (SELECT id FROM read_only_items) \
+                 DELETE FROM read_only_items WHERE id IN (SELECT id FROM doomed)",
+            ))
+            .expect_err("a CTE DELETE fails inside the read-only transaction");
+        assert!(
+            error.to_string().contains("READ ONLY transaction"),
+            "expected the server's read-only error, got {error}"
+        );
+
+        let hidden = connection.execute(&read_only_request(
+            "/*!CREATE TABLE read_only_stolen AS*/ SELECT * FROM read_only_items",
+        ));
+        assert!(
+            matches!(hidden, Err(DbError::NotSupported(_))),
+            "{hidden:?}"
+        );
+        let stolen = connection.execute(&QueryRequest::new(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'read_only_stolen'",
+        ))?;
+        assert_eq!(
+            stolen.rows[0][0],
+            Value::Int(0),
+            "the hidden DDL must not run"
+        );
+
+        let refused = connection.execute(&read_only_request("COMMIT; DELETE FROM read_only_items"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+        assert_eq!(read_only_item_count(connection.as_ref())?, 1);
+
+        let read = connection.execute(&read_only_request(
+            "SELECT id FROM read_only_items; SELECT 2 AS two",
+        ))?;
+        assert_eq!(read.rows.len(), 1);
+        assert_eq!(read.additional_results.len(), 1);
+
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+        assert_eq!(read_only_item_count(connection.as_ref())?, 0);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_read_only_requests_are_refused_inside_an_open_transaction() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        read_only_fixture(connection.as_ref())?;
+
+        connection.execute(&QueryRequest::new("START TRANSACTION"))?;
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+
+        let refused = connection.execute(&read_only_request("SELECT 1"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(read_only_item_count(connection.as_ref())?, 1);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_read_only_requests_are_refused_when_transaction_instrumentation_is_off()
+-> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        read_only_fixture(connection.as_ref())?;
+        connection.execute(&QueryRequest::new(
+            "UPDATE performance_schema.setup_consumers SET ENABLED = 'NO' \
+             WHERE NAME = 'events_transactions_current'",
+        ))?;
+
+        connection.execute(&QueryRequest::new("START TRANSACTION"))?;
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+
+        let refused = connection.execute(&read_only_request("SELECT 1"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(
+            read_only_item_count(connection.as_ref())?,
+            1,
+            "the user's transaction must not have been committed"
+        );
+
+        connection.execute(&QueryRequest::new("SET autocommit = 0"))?;
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+        let refused = connection.execute(&read_only_request("SELECT 1"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        connection.execute(&QueryRequest::new("SET autocommit = 1"))?;
+        assert_eq!(
+            read_only_item_count(connection.as_ref())?,
+            1,
+            "an implicit autocommit = 0 transaction must not have been committed"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_read_only_requests_are_refused_while_table_locks_may_be_held() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        read_only_fixture(connection.as_ref())?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE read_only_other (id INT PRIMARY KEY)",
+        ))?;
+
+        connection.execute(&QueryRequest::new("LOCK TABLES read_only_items READ"))?;
+
+        let refused = connection.execute(&read_only_request("SELECT id FROM read_only_items"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+
+        let outside_lock = connection.execute(&QueryRequest::new("SELECT id FROM read_only_other"));
+        assert!(
+            outside_lock.is_err(),
+            "LOCK TABLES must still be in effect, got {outside_lock:?}"
+        );
+
+        connection.execute(&QueryRequest::new("UNLOCK TABLES"))?;
+        let read = connection.execute(&read_only_request("SELECT id FROM read_only_items"))?;
+        assert_eq!(read.rows.len(), 1);
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Exact numeric precision
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_decimal_values_keep_exact_precision() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT CAST('12345678901234567.89' AS DECIMAL(20,2)) AS money, \
+                    CAST('99999999999999999999' AS DECIMAL(20,0)) AS wide_integer, \
+                    CAST('1123.40' AS DECIMAL(10,2)) AS trailing_zero, \
+                    CAST('0.0001' AS DECIMAL(10,4)) AS small",
+        ))?;
+
+        let row = &result.rows[0];
+        assert_eq!(row[0], Value::Decimal("12345678901234567.89".to_string()));
+        assert_eq!(row[1], Value::Decimal("99999999999999999999".to_string()));
+        assert_eq!(row[2], Value::Decimal("1123.40".to_string()));
+        assert_eq!(row[3], Value::Decimal("0.0001".to_string()));
+
         Ok(())
     })
 }

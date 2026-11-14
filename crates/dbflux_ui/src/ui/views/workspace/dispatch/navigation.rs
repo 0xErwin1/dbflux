@@ -21,6 +21,10 @@ impl Workspace {
                 self.toggle_sidebar(cx);
                 Some(true)
             }
+            Command::ToggleFullScreen => {
+                window.toggle_fullscreen();
+                Some(true)
+            }
             Command::ToggleNotifications => {
                 self.toggle_notifications(window, cx);
                 Some(true)
@@ -45,7 +49,10 @@ impl Workspace {
             Command::FocusEditor => {
                 self.set_focus(FocusTarget::Document, window, cx);
                 self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::FocusUp, window, cx);
+                    // Documents that don't handle FocusEditor still get FocusUp.
+                    if !mgr.dispatch_active(Command::FocusEditor, window, cx) {
+                        mgr.dispatch_active(Command::FocusUp, window, cx);
+                    }
                 });
                 Some(true)
             }
@@ -325,16 +332,18 @@ impl Workspace {
 
             Command::CreateFolder => {
                 if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |s, cx| match s.active_tab() {
+                    // Dashboards have no folders, so the key is left for another handler.
+                    Some(self.sidebar.update(cx, |s, cx| match s.active_tab() {
                         dbflux_ui_sidebar::SidebarTab::Connections => {
                             s.create_root_folder(cx);
+                            true
                         }
                         dbflux_ui_sidebar::SidebarTab::Scripts => {
                             s.create_script_folder(cx);
+                            true
                         }
-                        dbflux_ui_sidebar::SidebarTab::Dashboards => {}
-                    });
-                    Some(true)
+                        dbflux_ui_sidebar::SidebarTab::Dashboards => false,
+                    }))
                 } else {
                     Some(false)
                 }
@@ -343,6 +352,15 @@ impl Workspace {
             Command::SidebarNextTab => {
                 if self.focus_target == FocusTarget::Sidebar {
                     self.sidebar.update(cx, |s, cx| s.cycle_tab(cx));
+                    Some(true)
+                } else {
+                    Some(false)
+                }
+            }
+
+            Command::SidebarPrevTab => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar.update(cx, |s, cx| s.cycle_tab_back(cx));
                     Some(true)
                 } else {
                     Some(false)

@@ -62,7 +62,7 @@ MCP 进程通过受信客户端身份、按连接启用的 MCP 开关、执行�
 安全属性是这个边界的一部分：
 
 - `preview_mutation` 受读取治理约束，只生成只读的执行计划，并不会真正执行该变更。实现会拒绝任何未被归类为元数据类或读取类的、由驱动程序生成的预览查询（[查询工具](../crates/dbflux_mcp_server/src/tools/query.rs)）。
-- `select_data` 目前会直接拒绝请求中的 join，而不是静默地忽略它们（[读取工具](../crates/dbflux_mcp_server/src/tools/read.rs)）。
+- `select_data` 只在声明支持 join 的驱动程序上执行请求中的 join；在其他驱动程序上（文档型、键值型以及任何未声明支持的驱动程序）会返回明确的错误，而不是静默地忽略它们。join 条件会被解析为列与列之间的比较，名称必须是普通标识符，因此客户端提供的文本不会作为 SQL 到达数据库，并且生成的查询只有在被归类为读取时才会执行（[join 转换](../crates/dbflux_mcp_server/src/tools/join_select.rs)）。
 - 变更预览并不是 DDL 预览面。DDL 操作由各自独立的受治理工具承担；当前的[工具目录](../crates/dbflux_mcp/src/tool_catalog.rs)中没有暴露任何 DDL 预览工具。
 
 分类、策略、审批与审计的决策都应留在治理边界上。某个处理函数不得因为底层驱动程序能执行该操作，就削弱这些决策。

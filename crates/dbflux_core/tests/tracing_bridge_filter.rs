@@ -53,6 +53,10 @@ mod filter_tests {
     /// `init_tracing` installs a global subscriber; subsequent calls from other
     /// tests in the same binary return `Err(AlreadyInitialized)`.  We return an
     /// `Arc` to the shared atomics that remain valid for the lifetime of the process.
+    #[expect(
+        clippy::expect_used,
+        reason = "The integration fixture must fail if its single tracing initialization fails"
+    )]
     fn get_or_init_bridge() -> std::sync::Arc<std::sync::atomic::AtomicU8> {
         use std::sync::OnceLock;
         static HANDLE_MIN_LEVEL: OnceLock<std::sync::Arc<std::sync::atomic::AtomicU8>> =

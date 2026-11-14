@@ -5,7 +5,6 @@ use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Spacing};
-use crate::typography::AppFonts;
 use crate::vim::{VimBinding, VimHost};
 use dbflux_core::LogErr;
 use dbflux_core::keymap_types::Command;
@@ -60,11 +59,11 @@ impl VimHost for ModalImportDashboard {
     fn vim_dialog_command(
         &mut self,
         _input: EntityId,
-        command: Command,
+        command_id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if command == Command::SaveQuery {
+        if command_id == Command::SaveQuery.action_id() {
             self.confirm(window, cx);
         }
     }
@@ -305,7 +304,7 @@ impl Render for ModalImportDashboard {
                             .editor(false)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::MONO)
+                            .font_family(crate::fonts::editor_family(cx))
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),
@@ -541,6 +540,7 @@ mod keyboard_tests {
     ) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             crate::actions::record_last_keystroke(cx);
             crate::vim::set_vim_enabled(cx, true);
             let leader = dbflux_core::keymap_types::ContextId::VimNormal.default_predicate();

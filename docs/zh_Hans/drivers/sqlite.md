@@ -11,6 +11,7 @@
 ## 功能
 
 - 嵌入式 SQLite 关系型驱动程序，使用基于文件的数据库路径。
+- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL 语句，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 支持 SQL 执行、Schema 发现、视图、索引、外键、CHECK 约束与唯一约束。
 - 通过 SQLite 的中断句柄支持查询取消，并由一个进度处理器在语句运行期间检查取消请求，因此在第一条语句开始之前到达的取消仍会结束查询。
 - 包含面向 CRUD、索引、重建索引（reindex）、创建表与删除表的 SQL/代码生成。
@@ -31,6 +32,8 @@
 - 仅支持 SQL 的驱动程序；不提供文档型或键值 API。
 - SQLite 的 Schema 模型没有服务端的多 schema 命名空间与之对应。
 - 没有 `TRUNCATE TABLE` 语句；数据传输引擎的 Truncate 装载选项对 SQLite 目标不可用（未设置 `DriverCapabilities::TRUNCATE_TABLE`）。
+- 架构发现只列出索引中有名称的列：表达式列（例如 `CREATE INDEX ... ON t (lower(name), id)` 中的 `lower(name)`）不会出现在索引的列列表中。
+- 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）在 `PRAGMA query_only` 下运行，该设置在每条语句前都会检查，结束后恢复；在已打开的事务中会被拒绝。SQLite 会拒绝对数据库的写入，但不会阻止已加载扩展或应用定义函数的副作用；真正的边界仍是文件权限。
 
 ## DDL 能力
 

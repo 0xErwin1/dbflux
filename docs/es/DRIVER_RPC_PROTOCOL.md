@@ -3,11 +3,14 @@
 Este documento define cómo DBFlux descubre, lanza y se comunica con servicios
 RPC a través de IPC local.
 
-DBFlux ahora activa dos familias de servicios en runtime:
+DBFlux ahora activa tres familias de servicios en runtime:
 
 - `RpcServiceKind::Driver` -> drivers de base de datos en runtime
 - `RpcServiceKind::AuthProvider` -> registros de auth-provider en runtime, en la
   app y en el servidor MCP
+- `RpcServiceKind::SecretProvider` -> secret providers en runtime en el value
+  resolver de cada conexión; ver
+  [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)
 
 ## Fuente de verdad
 
@@ -58,7 +61,7 @@ DBFlux usa sockets locales vía `interprocess`:
 Los mensajes se enmarcan como:
 
 - longitud little-endian de 4 bytes (`u32`)
-- payload en bincode
+- payload en postcard
 
 Tamaño máximo de mensaje: `16 MiB`.
 
@@ -97,8 +100,11 @@ La familia activa de la API driver RPC es `driver_rpc`. En el transporte driver
 RPC dedicado actual, esa familia es implícita en el propio protocolo en lugar de
 transmitirse por el cable durante `Hello`. La compatibilidad se hace cumplir
 mediante el endpoint driver RPC más la versión mayor de protocolo seleccionada;
-las versiones menores son aditivas y se negocian de forma determinista dentro de
-esa línea mayor.
+las versiones menores se negocian de forma determinista dentro de esa línea
+mayor. Hasta v1.7 las versiones menores son aditivas; v1.8 es una corrección
+del formato de wire que cambia cómo se codifican algunos payloads existentes, y
+toda forma que se decodificaba antes es idéntica byte a byte (ver **Corrección
+del formato de wire** más abajo). v1.9 vuelve a ser aditiva.
 
 Solicitud del cliente:
 
@@ -113,6 +119,10 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
+        ProtocolVersion::new(1, 6),
+        ProtocolVersion::new(1, 7),
+        ProtocolVersion::new(1, 8),
+        ProtocolVersion::new(1, 9),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -261,6 +271,114 @@ controla localmente de la misma forma: `IpcConnection::key_count` devuelve
 anterior a la 1.5. El explorador de claves trata ese error como "sin total" y
 muestra solo el conteo de la página.
 
+### Límite de filas de la solicitud (v1.6+)
+
+`Execute` y `ExecuteWithHandle` pueden llevar `QueryRequestDto::limit`, el
+límite de filas del editor. Un host las responde con
+`ExecuteResultWithTruncation { result, rows_truncated }` y
+`ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }`
+en lugar de `ExecuteResult` y `ExecuteWithHandleResult`, porque
+`QueryResultDto` no tiene lugar para la marca. `rows_truncated` es `true` solo
+cuando el driver descartó filas para respetar el límite.
+
+Ambas variantes de respuesta se agregan después de `KvKeyCountResult`, por la
+razón de índices en el wire descrita arriba. Un host las envía en las llamadas
+de ejecución solo en sesiones que negociaron exactamente v1.6; v1.7 las
+reemplaza por las respuestas de conjuntos de resultados descritas abajo, y las
+sesiones anteriores conservan las respuestas de v1.5. Consulta **Ejecución
+protegida** más abajo para saber qué solicitudes llevan un límite.
+
+### Conjuntos de resultados (v1.7+)
+
+Un lote de sentencias o un procedimiento almacenado puede devolver varios
+conjuntos de resultados, y cada uno puede omitir filas por su cuenta. Desde
+v1.7 un host responde con todos los conjuntos de resultados en lugar de solo el
+primero:
+
+| Solicitud | Respuesta de v1.7 |
+| --- | --- |
+| `Execute` | `ExecuteResultSets { results }` |
+| `ExecuteWithHandle` | `ExecuteWithHandleResultSets { handle_id, results }` |
+| `BrowseTable`, `BrowseCollection`, `Explain`, `DescribeTable` | `BrowseResultSets { results }` |
+
+`results` es un `QueryResultSetsDto { primary, additional }`. Cada entrada es
+un `ResultSetDto { result, rows_truncated }`: `primary` es el primer conjunto
+de resultados y `additional` contiene el resto en el orden en que el driver los
+devolvió. `rows_truncated` es `true` solo cuando el driver descartó filas de
+ese conjunto, así que un driver que nunca limita filas siempre envía `false`.
+
+Las tres variantes se agregan después de
+`ExecuteWithHandleResultWithTruncation`, por la razón de índices en el wire
+descrita arriba. Un host las envía solo en sesiones que negociaron v1.7 o
+posterior. Una sesión v1.6 conserva `ExecuteResultWithTruncation`,
+`ExecuteWithHandleResultWithTruncation` y `BrowseResult`, y una sesión
+anterior conserva las respuestas de v1.5; en esas sesiones solo el conjunto de
+resultados principal cruza el wire. El cliente acepta todas las variantes sea
+cual sea la versión negociada, así que un host nunca necesita saber con qué
+build del cliente habla.
+
+### Corrección del formato de wire (v1.8)
+
+v1.8 no agrega ninguna variante de solicitud ni de respuesta. Cambia cómo se
+codifican algunos payloads existentes, para que postcard pueda decodificar
+todos los payloads que define el protocolo:
+
+| Payload | Codificación de v1.8 |
+| --- | --- |
+| Documentos JSON: `filter`, `projection` y `sort` de `BrowseCollection` (`CollectionBrowseRequestDto`), `filter` de `CountCollection` (`CollectionCountRequestDto`), el filtro y la actualización de `UpdateDocument` (`DocumentUpdateDto`), los documentos de `InsertDocument` (`DocumentInsertDto`), el filtro de `DeleteDocument` (`DocumentDeleteDto`) y los valores de `metadata_extra` de `CrudResult` (`CrudResultDto`) | Texto JSON: un string de postcard con el JSON serializado, que se vuelve a parsear en el límite del protocolo |
+| Campos opcionales y de lista que antes llevaban `skip_serializing_if`, como `semantic_filter` y `columns` en las solicitudes de browse y count, `enum_values` en `ColumnInfo`, `metadata_extra` en `CrudResult`, `type_name` en `ColumnAssignment`, `source` en `ExecutionContext` e `icon` en `FormSection` | Siempre se codifican, como `None` o una lista vacía cuando no tienen valor |
+| `IndexData` | Etiquetado externo: el índice de la variante y después la lista de índices |
+
+Un `serde_json::Value` crudo se podía escribir pero nunca volver a leer, porque
+solo se deserializa mediante `deserialize_any`, que postcard no admite. Un
+campo omitido acortaba el frame mientras el decodificador lo seguía leyendo,
+así que todos los campos posteriores se desplazaban. Un `IndexData` con
+etiquetado interno no se podía codificar, así que `TableDetails` y
+`GenerateCode` fallaban para cualquier tabla con índices.
+
+La codificación no depende de la versión negociada. Una forma que se
+decodificaba antes de v1.8 es idéntica byte a byte en v1.8; solo cambian los
+bytes de las formas que ningún peer podía decodificar, así que los peers con
+versiones menores anteriores siguen funcionando.
+
+### Secciones raíz (v1.9+)
+
+Un driver puede declarar secciones que se muestran en la raíz de su conexión en
+la barra lateral, como los buckets de S3. Los payloads son los tipos de sección
+raíz de `dbflux_core`, transportados tal cual:
+
+| Solicitud | Respuesta |
+| --- | --- |
+| `RootSections` | `RootSections { sections }`, un `Vec<RootSectionDef>` en orden de visualización |
+| `RootSectionItems { section_id, page_token }` | `RootSectionPage { page }`; `page_token` es `None` para la primera página y el `next_page_token` de la página anterior después |
+| `ExecuteRootSectionAction { section_id, item_id, action_id }` | `RootSectionActionDone` |
+
+El host despacha las tres solicitudes a `Connection::root_section_source` de la
+conexión. Un driver sin fuente responde `UnsupportedMethod`
+(`Driver does not declare root sections`), y un error del driver responde como
+cualquier otro `Error`. En una sesión que negoció una versión menor anterior, el
+host rechaza las solicitudes con `VersionMismatch`
+(`root section requests require driver RPC protocol 1.9 or newer`) sin llamar al
+driver.
+
+Las seis variantes se agregan después de la última variante de v1.8 de su enum,
+por la razón de índices en el wire descrita arriba. El cliente expone las
+secciones raíz solo cuando la sesión negoció v1.9 o posterior y los metadatos
+del driver declaran `DriverCapabilities::ROOT_SECTIONS`; si no, `IpcConnection`
+quita esa capacidad y no envía nada. `IpcConnection` obtiene la declaración una
+vez por conexión y la guarda en caché; si la obtención falla, devuelve el error
+sin guardarlo, así que el host lo muestra con una fila para reintentar y vuelve a
+pedirla desde ahí. Un id de sección no puede contener `|`; el host rechaza e
+informa esa declaración. El host oculta una sección cuya presentación abre un
+documento de almacenamiento de objetos en una conexión sin `object_store_api`.
+`IpcConnection` no lo tiene, porque todavía no existe un RPC de almacenamiento
+de objetos, y las dos presentaciones disponibles hasta ahora
+(`ObjectContainerTable` y `ObjectBrowser`) son de ese tipo, así que las
+secciones de un driver externo quedan ocultas hasta que exista una presentación
+sin esa necesidad. Cada
+`RootSectionAction` lleva su `ExecutionClassification`, así que el host confirma
+y audita las acciones de los drivers externos igual que las de los integrados.
+
 ## Contrato RPC de auth-provider
 
 La familia activa de la API auth-provider RPC es `auth_provider_rpc` en `1.3`.
@@ -389,15 +507,16 @@ de nuevo los campos obligatorios del lado del servidor.
 | `OpenSession` → `SessionOpened`  | abrir conexión/sesión                           |
 | `CloseSession` → `SessionClosed` | cerrar sesión                                   |
 | `Ping` → `Pong`                  | liveness                                        |
-| `Execute` → `ExecuteResult`      | ejecución de query                              |
+| `Execute` → `ExecuteResult` (`ExecuteResultSets` desde v1.7) | ejecución de query |
 | `Schema` → `Schema`              | snapshot de schema                              |
 | `ListDatabases` → `Databases`    | listado de bases de datos                       |
+| `RootSections` → `RootSections`, `RootSectionItems` → `RootSectionPage`, `ExecuteRootSectionAction` → `RootSectionActionDone` (v1.9+) | secciones raíz de la barra lateral |
 
 El protocolo también soporta operaciones de browse, CRUD, key-value y generación
 de código. Ver `crates/dbflux_ipc/src/driver_protocol.rs` para el conjunto
 completo de enums.
 
-**Ejecución protegida:** ninguna capacidad negociada permite que un driver externo certifique que aplica un límite de filas o un timeout de sentencia, así que las consultas protegidas se rechazan. `IpcConnection` rechaza `Execute` y `ExecuteWithHandle` con `NotSupported` antes de enviar el RPC cuando `QueryRequest.limit` es `Some(n)` (incluido `Some(0)`) o `statement_timeout` es `Some(...)`. El despacho de sesión del host rechaza de forma independiente esas mismas solicitudes con `UnsupportedMethod` antes de invocar la conexión del plugin. Las solicitudes con ambas opciones en `None` siguen funcionando, y las operaciones de exploración y CRUD no se ven afectadas.
+**Ejecución protegida:** en una sesión que negoció v1.6 o posterior, un driver cuyos metadatos declaran `DriverCapabilities::REQUEST_ROW_LIMIT` recibe `QueryRequestDto::limit`. Debe aplicar el límite mientras recolecta filas, contándolo una sola vez entre todos los conjuntos de resultados, y marcar `rows_truncated` solo cuando descartó filas, o bien rechazar la solicitud antes de ejecutar nada. La sesión del host rechaza una solicitud con límite con `UnsupportedMethod` cuando el driver no declara la capacidad. Por debajo de v1.6 el cliente nunca envía un límite: `IpcConnection` no anuncia `REQUEST_ROW_LIMIT` y rechaza `Execute` y `ExecuteWithHandle` con `NotSupported` antes de enviar el RPC cuando `QueryRequest.limit` es `Some(n)` (incluido `Some(0)`). En todas las versiones el cliente rechaza del mismo modo un `statement_timeout` o la aplicación de solo lectura, y el host rechaza un `statement_timeout`. Por debajo de v1.7 solo el conjunto de resultados principal cruza el wire, así que los conjuntos adicionales y sus marcas se descartan; desde v1.7 cada conjunto de resultados cruza con su propia marca (ver **Conjuntos de resultados** arriba). El cliente confía en la declaración del driver: un driver que declara `REQUEST_ROW_LIMIT` e ignora el límite devuelve filas sin límite marcadas como no truncadas. Las operaciones de exploración y CRUD no se ven afectadas.
 
 ## Emisión de audit desde drivers (v1.2+)
 

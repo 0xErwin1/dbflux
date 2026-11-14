@@ -1,20 +1,26 @@
-use crate::tokens::SettingsMetrics;
+use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_app::keymap::{KeyChord, Modifiers};
 use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{Checkbox, Dropdown, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
-use dbflux_components::typography::AppFonts;
+use dbflux_components::tokens::{Fields, ui};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
-use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::settings_writer::persist_general_settings;
+use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::select::Select;
 
-use super::general_section::{GeneralFormRow, GeneralSection};
+use super::general_section::{FontFamilyField, FontFamilySelect, GeneralFormRow, GeneralSection};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
+
+/// Frames a reveal may take before it gives up, should the layout keep
+/// moving the field.
+const MAX_REVEAL_ATTEMPTS: u8 = 4;
 
 impl GeneralSection {
     pub(super) fn has_unsaved_general_changes(&self, cx: &App) -> bool {
@@ -29,7 +35,11 @@ impl GeneralSection {
         let setting_changes = [
             current.theme != saved.theme,
             current.style != saved.style,
+            current.scrollbar_visibility != saved.scrollbar_visibility,
             current.language != saved.language,
+            current.ui_font_family != saved.ui_font_family,
+            current.editor_font_family != saved.editor_font_family,
+            current.grid_font_family != saved.grid_font_family,
             current.restore_session_on_startup != saved.restore_session_on_startup,
             current.reopen_last_connections != saved.reopen_last_connections,
             current.default_focus_on_startup != saved.default_focus_on_startup,
@@ -41,9 +51,19 @@ impl GeneralSection {
             current.dangerous_requires_preview != saved.dangerous_requires_preview,
             current.vim_mode != saved.vim_mode,
             current.vim_leader != saved.vim_leader,
+            current.table_alias_completion != saved.table_alias_completion,
+            current.table_alias_use_as != saved.table_alias_use_as,
+            current.grid_fk_labels != saved.grid_fk_labels,
+            current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
 
         let input_changes = [
+            (&self.input_ui_font_size, saved.ui_font_size.to_string()),
+            (
+                &self.input_editor_font_size,
+                saved.editor_font_size.to_string(),
+            ),
+            (&self.input_grid_font_size, saved.grid_font_size.to_string()),
             (
                 &self.input_max_history,
                 saved.max_history_entries.to_string(),
@@ -96,9 +116,19 @@ impl GeneralSection {
         let mut rows = vec![
             GeneralFormRow::Theme,
             GeneralFormRow::Style,
+            GeneralFormRow::Scrollbars,
             GeneralFormRow::Language,
+            GeneralFormRow::UiFontFamily,
+            GeneralFormRow::UiFontSize,
+            GeneralFormRow::EditorFontFamily,
+            GeneralFormRow::EditorFontSize,
+            GeneralFormRow::GridFontFamily,
+            GeneralFormRow::GridFontSize,
             GeneralFormRow::VimMode,
             GeneralFormRow::VimLeader,
+            GeneralFormRow::TableAlias,
+            GeneralFormRow::TableAliasUseAs,
+            GeneralFormRow::GridFkLabels,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -115,6 +145,7 @@ impl GeneralSection {
             GeneralFormRow::EditorRowLimit,
             GeneralFormRow::ObjectPreviewLimit,
             GeneralFormRow::KeyValueSizeLimit,
+            GeneralFormRow::ToastTimeout,
         ];
 
         // The shared-database toggle only makes sense on nightly, which is the
@@ -176,7 +207,8 @@ impl GeneralSection {
         self.gen_form_cursor = self.gen_form_rows().len().saturating_sub(1);
     }
 
-    /// Left and Right on a segmented row (theme, style, startup focus) move
+    /// Left and Right on a segmented row (theme, style, scrollbars, startup
+    /// focus) move
     /// its choice, stopping at either end. Returns whether the cursor was on
     /// such a row.
     pub(super) fn gen_step_segmented(&mut self, step: isize) -> bool {
@@ -195,6 +227,14 @@ impl GeneralSection {
             Some(GeneralFormRow::Style) => {
                 let next = stepped(Self::style_index(self.gen_settings.style), 2);
                 self.gen_settings.style = Self::style_for_index(next);
+                true
+            }
+            Some(GeneralFormRow::Scrollbars) => {
+                let next = stepped(
+                    Self::scrollbar_visibility_index(self.gen_settings.scrollbar_visibility),
+                    3,
+                );
+                self.gen_settings.scrollbar_visibility = Self::scrollbar_visibility_for_index(next);
                 true
             }
             Some(GeneralFormRow::DefaultFocus) => {
@@ -225,6 +265,13 @@ impl GeneralSection {
                 self.gen_settings.style = Self::style_for_index(next);
                 cx.notify();
             }
+            Some(GeneralFormRow::Scrollbars) => {
+                let next =
+                    (Self::scrollbar_visibility_index(self.gen_settings.scrollbar_visibility) + 1)
+                        % 3;
+                self.gen_settings.scrollbar_visibility = Self::scrollbar_visibility_for_index(next);
+                cx.notify();
+            }
             Some(GeneralFormRow::Language) => {
                 self.dropdown_language
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
@@ -237,6 +284,19 @@ impl GeneralSection {
             Some(GeneralFormRow::VimLeader) => {
                 self.dropdown_vim_leader
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
+            Some(GeneralFormRow::TableAlias) => {
+                self.gen_settings.table_alias_completion =
+                    !self.gen_settings.table_alias_completion;
+                cx.notify();
+            }
+            Some(GeneralFormRow::TableAliasUseAs) => {
+                self.gen_settings.table_alias_use_as = !self.gen_settings.table_alias_use_as;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridFkLabels) => {
+                self.gen_settings.grid_fk_labels = !self.gen_settings.grid_fk_labels;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -257,6 +317,11 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::DefaultRefreshPolicy) => {
                 self.dropdown_refresh_policy
+                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
+            Some(GeneralFormRow::ToastTimeout) => {
+                self.dropdown_toast_timeout
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                 cx.notify();
             }
@@ -289,7 +354,13 @@ impl GeneralSection {
                 self.set_share_stable_db(!self.gen_share_stable_db, cx);
                 cx.notify();
             }
-            Some(GeneralFormRow::MaxHistory)
+            Some(GeneralFormRow::UiFontFamily)
+            | Some(GeneralFormRow::EditorFontFamily)
+            | Some(GeneralFormRow::GridFontFamily)
+            | Some(GeneralFormRow::UiFontSize)
+            | Some(GeneralFormRow::EditorFontSize)
+            | Some(GeneralFormRow::GridFontSize)
+            | Some(GeneralFormRow::MaxHistory)
             | Some(GeneralFormRow::AutoSaveInterval)
             | Some(GeneralFormRow::DefaultRefreshInterval)
             | Some(GeneralFormRow::MaxBackgroundTasks)
@@ -309,6 +380,30 @@ impl GeneralSection {
         self.gen_editing_field = true;
 
         match self.gen_current_row() {
+            Some(GeneralFormRow::UiFontFamily) => {
+                self.select_ui_font_family
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::EditorFontFamily) => {
+                self.select_editor_font_family
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::GridFontFamily) => {
+                self.select_grid_font_family
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::UiFontSize) => {
+                self.input_ui_font_size
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::EditorFontSize) => {
+                self.input_editor_font_size
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::GridFontSize) => {
+                self.input_grid_font_size
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
             Some(GeneralFormRow::MaxHistory) => {
                 self.input_max_history
                     .update(cx, |state, cx| state.focus(window, cx));
@@ -343,6 +438,30 @@ impl GeneralSection {
         }
     }
 
+    /// Whether a font family select, or its open search list, holds focus.
+    /// A select opened with the mouse takes typed keys without the row being
+    /// in edit mode, so the page must not treat them as navigation.
+    fn font_family_select_focused(&self, window: &Window, cx: &App) -> bool {
+        [
+            &self.select_ui_font_family,
+            &self.select_editor_font_family,
+            &self.select_grid_font_family,
+        ]
+        .into_iter()
+        .any(|select| select.focus_handle(cx).contains_focused(window, cx))
+    }
+
+    /// Whether the cursor is on a font family row, whose select opens and
+    /// confirms with Enter itself.
+    fn on_font_family_row(&self) -> bool {
+        matches!(
+            self.gen_current_row(),
+            Some(GeneralFormRow::UiFontFamily)
+                | Some(GeneralFormRow::EditorFontFamily)
+                | Some(GeneralFormRow::GridFontFamily)
+        )
+    }
+
     pub(super) fn close_open_dropdown(&mut self, cx: &mut Context<Self>) {
         if let Some(dropdown) = self.current_dropdown() {
             dropdown.update(cx, |dropdown, cx| {
@@ -358,6 +477,7 @@ impl GeneralSection {
             Some(GeneralFormRow::Language) => Some(&self.dropdown_language),
             Some(GeneralFormRow::DefaultRefreshPolicy) => Some(&self.dropdown_refresh_policy),
             Some(GeneralFormRow::VimLeader) => Some(&self.dropdown_vim_leader),
+            Some(GeneralFormRow::ToastTimeout) => Some(&self.dropdown_toast_timeout),
             _ => None,
         }
     }
@@ -414,14 +534,16 @@ impl GeneralSection {
     ) {
         let chord = key_chord_from_gpui(&event.keystroke);
 
-        if self.gen_editing_field {
+        if self.gen_editing_field || self.font_family_select_focused(window, cx) {
             match (chord.key.as_str(), chord.modifiers) {
                 ("escape", modifiers) if modifiers == Modifiers::none() => {
                     self.gen_editing_field = false;
                     cx.emit(SectionFocusEvent::RequestFocusReturn);
                     cx.notify();
                 }
-                ("enter", modifiers) if modifiers == Modifiers::none() => {
+                ("enter", modifiers)
+                    if modifiers == Modifiers::none() && !self.on_font_family_row() =>
+                {
                     self.gen_editing_field = false;
                     self.gen_move_down();
                     cx.notify();
@@ -492,16 +614,147 @@ impl GeneralSection {
         }
     }
 
+    /// Reports an invalid field under the field itself, moves the form
+    /// cursor and focus to it, and scrolls it into view on the next render.
+    /// Toasts show in the main window, away from the form the user is
+    /// editing.
+    fn reject_field(
+        &mut self,
+        row: GeneralFormRow,
+        message: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.gen_field_error = Some((row, message));
+        self.select_row(row);
+        self.gen_focus_current_input(window, cx);
+        self.pending_reveal = Some(row);
+        self.reveal_attempts = 0;
+        cx.notify();
+    }
+
+    /// Scrolls the form so the field of a rejected save is in view, just
+    /// below the page head, then checks the result on the next frame.
+    ///
+    /// The field's last drawn bounds are taken back to the scroll offset they
+    /// were drawn at. Rows above it can still change height between frames
+    /// (an error line appears or goes), so the reveal only ends once a frame
+    /// drawn at the current offset shows the field in view.
+    pub(super) fn reveal_pending_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.pending_reveal else {
+            return;
+        };
+
+        let Some((field, painted_offset)) = self.field_bounds.borrow().get(&row).copied() else {
+            Self::reveal_next_frame(window, cx);
+            return;
+        };
+
+        let offset = self.form_scroll.offset();
+        let content_top = field.top() - painted_offset;
+        let top = content_top + offset.y;
+        let bottom = top + field.size.height;
+
+        let viewport = self.form_viewport.get();
+        let margin = FormMetrics::ROW_GAP;
+        let in_view = top >= viewport.top() + margin && bottom <= viewport.bottom();
+
+        if in_view && painted_offset == offset.y {
+            self.pending_reveal = None;
+            self.reveal_attempts = 0;
+            return;
+        }
+
+        self.reveal_attempts += 1;
+        if self.reveal_attempts > MAX_REVEAL_ATTEMPTS {
+            self.pending_reveal = None;
+            self.reveal_attempts = 0;
+            return;
+        }
+
+        if !in_view {
+            let max_scroll = self.form_scroll.max_offset().y;
+            let target = viewport.top() + margin - content_top;
+
+            self.form_scroll
+                .set_offset(point(offset.x, target.clamp(-max_scroll, Pixels::ZERO)));
+        }
+
+        Self::reveal_next_frame(window, cx);
+    }
+
+    /// Renders the section again on the next frame, to check a reveal.
+    fn reveal_next_frame(window: &mut Window, cx: &mut Context<Self>) {
+        cx.on_next_frame(window, |_, _, cx| cx.notify());
+    }
+
+    /// Reads a font size input, or reports `error_key` on `row` and returns
+    /// `None`.
+    fn read_font_size(
+        &mut self,
+        input: &Entity<InputState>,
+        row: GeneralFormRow,
+        error_key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<f32> {
+        let value = input.read(cx).value().to_string();
+
+        if let Some(size) = Self::parse_font_size(&value) {
+            return Some(size);
+        }
+
+        let message = dbflux_i18n::t!(
+            error_key,
+            min = dbflux_core::GeneralSettings::MIN_FONT_SIZE,
+            max = dbflux_core::GeneralSettings::MAX_FONT_SIZE
+        );
+        self.reject_field(row, message, window, cx);
+
+        None
+    }
+
     pub(super) fn save_general_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.gen_field_error = None;
+
+        let Some(ui_font_size) = self.read_font_size(
+            &self.input_ui_font_size.clone(),
+            GeneralFormRow::UiFontSize,
+            "settings.general.ui_font_size.error",
+            window,
+            cx,
+        ) else {
+            return;
+        };
+        let Some(editor_font_size) = self.read_font_size(
+            &self.input_editor_font_size.clone(),
+            GeneralFormRow::EditorFontSize,
+            "settings.general.editor_font_size.error",
+            window,
+            cx,
+        ) else {
+            return;
+        };
+        let Some(grid_font_size) = self.read_font_size(
+            &self.input_grid_font_size.clone(),
+            GeneralFormRow::GridFontSize,
+            "settings.general.grid_font_size.error",
+            window,
+            cx,
+        ) else {
+            return;
+        };
+
         let max_history_str = self.input_max_history.read(cx).value().trim().to_string();
         let max_history = match max_history_str.parse::<usize>() {
             Ok(value) if value >= 10 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.max_history.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::MaxHistory,
+                    dbflux_i18n::t!("settings.general.max_history.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -510,11 +763,12 @@ impl GeneralSection {
         let auto_save_ms = match auto_save_str.parse::<u64>() {
             Ok(value) if value >= 500 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.auto_save_interval.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::AutoSaveInterval,
+                    dbflux_i18n::t!("settings.general.auto_save_interval.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -528,11 +782,12 @@ impl GeneralSection {
         let refresh_interval = match refresh_interval_str.parse::<u32>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.refresh_interval.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::DefaultRefreshInterval,
+                    dbflux_i18n::t!("settings.general.refresh_interval.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -541,22 +796,24 @@ impl GeneralSection {
         let max_bg_tasks = match max_bg_str.parse::<usize>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.max_background_tasks.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::MaxBackgroundTasks,
+                    dbflux_i18n::t!("settings.general.max_background_tasks.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
 
         let editor_row_limit_str = self.input_editor_row_limit.read(cx).value().to_string();
         let Some(editor_row_limit) = Self::parse_editor_row_limit(&editor_row_limit_str) else {
-            let message = dbflux_i18n::t!("settings.general.editor_row_limit.error");
-            Toast::error(message.clone())
-                .meta_right(now_hms())
-                .action(copy_action(message))
-                .push(cx);
+            self.reject_field(
+                GeneralFormRow::EditorRowLimit,
+                dbflux_i18n::t!("settings.general.editor_row_limit.error"),
+                window,
+                cx,
+            );
             return;
         };
 
@@ -569,11 +826,12 @@ impl GeneralSection {
         let object_preview_limit = match preview_limit_str.parse::<u64>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.object_preview_limit.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::ObjectPreviewLimit,
+                    dbflux_i18n::t!("settings.general.object_preview_limit.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -587,15 +845,19 @@ impl GeneralSection {
         let key_value_size_limit = match kv_size_limit_str.parse::<u64>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                let message = dbflux_i18n::t!("settings.general.key_value_size_limit.error");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                self.reject_field(
+                    GeneralFormRow::KeyValueSizeLimit,
+                    dbflux_i18n::t!("settings.general.key_value_size_limit.error"),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
 
+        self.gen_settings.ui_font_size = ui_font_size;
+        self.gen_settings.editor_font_size = editor_font_size;
+        self.gen_settings.grid_font_size = grid_font_size;
         self.gen_settings.max_history_entries = max_history;
         self.gen_settings.auto_save_interval_ms = auto_save_ms;
         self.gen_settings.default_refresh_interval_secs = refresh_interval;
@@ -604,19 +866,15 @@ impl GeneralSection {
         self.gen_settings.object_preview_size_limit_mib = object_preview_limit;
         self.gen_settings.key_value_size_limit_mib = key_value_size_limit;
 
-        let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) =
-            dbflux_app::config_loader::save_general_settings(runtime, &self.gen_settings)
-        {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::Storage,
-                    dbflux_i18n::t!("settings.general.save.error", error = e),
-                ),
-                cx,
-            );
-            return;
-        }
+        // The inspector width is set by dragging, not by this form, so take the
+        // live value: saving another setting must not write back the width this
+        // window captured when it opened.
+        let inspector_width = self
+            .app_state
+            .read(cx)
+            .general_settings()
+            .workspace_inspector_width_px;
+        self.gen_settings.workspace_inspector_width_px = inspector_width;
 
         // Open code editors pick up settings such as Vim mode from this event.
         self.app_state.update(cx, |state, cx| {
@@ -634,14 +892,26 @@ impl GeneralSection {
             cx,
         );
 
-        Toast::success(dbflux_i18n::t!("settings.general.save.success"))
-            .meta_right(now_hms())
-            .push(cx);
+        // The writer reports a failed write itself.
+        persist_general_settings(
+            &self.app_state,
+            self.gen_settings.clone(),
+            |saved, cx| {
+                if saved {
+                    Toast::success(dbflux_i18n::t!("settings.general.save.success"))
+                        .meta_right(now_hms())
+                        .push(cx);
+                }
+            },
+            cx,
+        );
     }
 
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme_index = Self::theme_index(self.gen_settings.theme);
         let style_index = Self::style_index(self.gen_settings.style);
+        let scrollbars_index =
+            Self::scrollbar_visibility_index(self.gen_settings.scrollbar_visibility);
         let focus_index = Self::startup_focus_index(self.gen_settings.default_focus_on_startup);
 
         let appearance = div()
@@ -672,11 +942,63 @@ impl GeneralSection {
                 |this, index| this.gen_settings.style = Self::style_for_index(index),
                 cx,
             ))
+            .child(self.render_gen_segmented(
+                dbflux_i18n::t!("settings.general.scrollbars.label"),
+                Some(dbflux_i18n::t!("settings.general.scrollbars.help")),
+                Self::scrollbar_visibility_items(),
+                scrollbars_index,
+                GeneralFormRow::Scrollbars,
+                "scrollbars",
+                |this, index| {
+                    this.gen_settings.scrollbar_visibility =
+                        Self::scrollbar_visibility_for_index(index)
+                },
+                cx,
+            ))
             .child(self.render_gen_dropdown(
                 dbflux_i18n::t!("settings.general.language.label"),
                 Some(dbflux_i18n::t!("settings.general.language.notice")),
-                &self.dropdown_language,
+                self.dropdown_language.clone(),
                 GeneralFormRow::Language,
+                cx,
+            ))
+            .child(self.render_gen_font_family(
+                FontFamilyField::Ui,
+                &self.select_ui_font_family,
+                GeneralFormRow::UiFontFamily,
+                cx,
+            ))
+            .child(self.render_gen_font_size(
+                dbflux_i18n::t!("settings.general.ui_font_size.label"),
+                dbflux_i18n::t!("settings.general.ui_font_size.help"),
+                &self.input_ui_font_size,
+                GeneralFormRow::UiFontSize,
+                cx,
+            ))
+            .child(self.render_gen_font_family(
+                FontFamilyField::Editor,
+                &self.select_editor_font_family,
+                GeneralFormRow::EditorFontFamily,
+                cx,
+            ))
+            .child(self.render_gen_font_size(
+                dbflux_i18n::t!("settings.general.editor_font_size.label"),
+                dbflux_i18n::t!("settings.general.editor_font_size.help"),
+                &self.input_editor_font_size,
+                GeneralFormRow::EditorFontSize,
+                cx,
+            ))
+            .child(self.render_gen_font_family(
+                FontFamilyField::Grid,
+                &self.select_grid_font_family,
+                GeneralFormRow::GridFontFamily,
+                cx,
+            ))
+            .child(self.render_gen_font_size(
+                dbflux_i18n::t!("settings.general.grid_font_size.label"),
+                dbflux_i18n::t!("settings.general.grid_font_size.help"),
+                &self.input_grid_font_size,
+                GeneralFormRow::GridFontSize,
                 cx,
             ));
 
@@ -700,8 +1022,46 @@ impl GeneralSection {
             .child(self.render_gen_dropdown(
                 dbflux_i18n::t!("settings.general.vim_leader.label"),
                 Some(dbflux_i18n::t!("settings.general.vim_leader.hint")),
-                &self.dropdown_vim_leader,
+                self.dropdown_vim_leader.clone(),
                 GeneralFormRow::VimLeader,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "table-alias",
+                dbflux_i18n::t!("settings.general.table_alias_completion.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.table_alias_completion.hint"
+                )),
+                self.gen_settings.table_alias_completion,
+                GeneralFormRow::TableAlias,
+                |this, value, _cx| this.gen_settings.table_alias_completion = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "table-alias-as",
+                dbflux_i18n::t!("settings.general.table_alias_use_as.label"),
+                Some(dbflux_i18n::t!("settings.general.table_alias_use_as.hint")),
+                self.gen_settings.table_alias_use_as,
+                GeneralFormRow::TableAliasUseAs,
+                |this, value, _cx| this.gen_settings.table_alias_use_as = value,
+                cx,
+            ));
+
+        let data_grid = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.data_grid.group"),
+                Some(AppIcon::Table.into()),
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-fk-labels",
+                dbflux_i18n::t!("settings.general.grid_fk_labels.label"),
+                Some(dbflux_i18n::t!("settings.general.grid_fk_labels.hint")),
+                self.gen_settings.grid_fk_labels,
+                GeneralFormRow::GridFkLabels,
+                |this, value, _cx| this.gen_settings.grid_fk_labels = value,
                 cx,
             ));
 
@@ -748,6 +1108,7 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.max_history.label"),
                 &self.input_max_history,
                 None,
+                None,
                 GeneralFormRow::MaxHistory,
                 cx,
             ))
@@ -755,6 +1116,7 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.auto_save_interval.label"),
                 &self.input_auto_save,
                 Some(dbflux_i18n::t!("settings.general.unit.milliseconds")),
+                None,
                 GeneralFormRow::AutoSaveInterval,
                 cx,
             ));
@@ -770,7 +1132,7 @@ impl GeneralSection {
             .child(self.render_gen_dropdown(
                 dbflux_i18n::t!("settings.general.refresh_policy.label"),
                 None,
-                &self.dropdown_refresh_policy,
+                self.dropdown_refresh_policy.clone(),
                 GeneralFormRow::DefaultRefreshPolicy,
                 cx,
             ))
@@ -778,6 +1140,7 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.refresh_interval.label"),
                 &self.input_refresh_interval,
                 Some(dbflux_i18n::t!("settings.general.unit.seconds")),
+                None,
                 GeneralFormRow::DefaultRefreshInterval,
                 cx,
             ))
@@ -785,6 +1148,9 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.max_background_tasks.label"),
                 &self.input_max_bg_tasks,
                 None,
+                Some(dbflux_i18n::t!(
+                    "settings.general.max_background_tasks.help"
+                )),
                 GeneralFormRow::MaxBackgroundTasks,
                 cx,
             ))
@@ -846,6 +1212,7 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.editor_row_limit.label"),
                 &self.input_editor_row_limit,
                 None,
+                None,
                 GeneralFormRow::EditorRowLimit,
                 cx,
             ));
@@ -858,18 +1225,16 @@ impl GeneralSection {
                 Some(AppIcon::Boxes.into()),
                 cx,
             ))
-            .child(
-                self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.object_preview_limit.label"),
-                    &self.input_object_preview_limit,
-                    Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
-                    GeneralFormRow::ObjectPreviewLimit,
-                    cx,
-                )
-                .child(layout::help_text(dbflux_i18n::t!(
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.object_preview_limit.label"),
+                &self.input_object_preview_limit,
+                Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
+                Some(dbflux_i18n::t!(
                     "settings.general.object_preview_hint.label"
-                ))),
-            );
+                )),
+                GeneralFormRow::ObjectPreviewLimit,
+                cx,
+            ));
 
         let key_value = div()
             .flex()
@@ -879,18 +1244,32 @@ impl GeneralSection {
                 Some(AppIcon::KeyRound.into()),
                 cx,
             ))
-            .child(
-                self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
-                    &self.input_key_value_size_limit,
-                    Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
-                    GeneralFormRow::KeyValueSizeLimit,
-                    cx,
-                )
-                .child(layout::help_text(dbflux_i18n::t!(
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
+                &self.input_key_value_size_limit,
+                Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
+                Some(dbflux_i18n::t!(
                     "settings.general.key_value_size_limit_hint.label"
-                ))),
-            );
+                )),
+                GeneralFormRow::KeyValueSizeLimit,
+                cx,
+            ));
+
+        let notifications = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.notifications.group"),
+                Some(AppIcon::Bell.into()),
+                cx,
+            ))
+            .child(self.render_gen_dropdown(
+                dbflux_i18n::t!("settings.general.toast_timeout.label"),
+                Some(dbflux_i18n::t!("settings.general.toast_timeout.hint")),
+                self.dropdown_toast_timeout.clone(),
+                GeneralFormRow::ToastTimeout,
+                cx,
+            ));
 
         let nightly_storage = Self::is_nightly().then(|| {
             div()
@@ -912,7 +1291,7 @@ impl GeneralSection {
                 ))
         });
 
-        layout::single_form_section_shell(
+        layout::scrolled_form_section_shell(
             dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.general.header.title"),
                 dbflux_i18n::t!("settings.general.header.subtitle"),
@@ -923,12 +1302,16 @@ impl GeneralSection {
                 .flex_col()
                 .child(appearance)
                 .child(editor)
+                .child(data_grid)
                 .child(startup)
                 .child(refresh)
                 .child(safety)
                 .child(object_storage)
                 .child(key_value)
+                .child(notifications)
                 .children(nightly_storage),
+            &self.form_scroll,
+            self.form_viewport.clone(),
         )
     }
 
@@ -1045,11 +1428,12 @@ impl GeneralSection {
         )
     }
 
+    /// Select-width form row around `control`, a dropdown or select.
     fn render_gen_dropdown(
         &self,
         label: String,
         help: Option<String>,
-        dropdown: &Entity<Dropdown>,
+        control: impl IntoElement,
         row: GeneralFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -1057,9 +1441,7 @@ impl GeneralSection {
             label,
             layout::cursor_ring(
                 self.is_at(row),
-                div()
-                    .w(SettingsMetrics::SELECT_WIDTH)
-                    .child(dropdown.clone()),
+                div().w(SettingsMetrics::SELECT_WIDTH).child(control),
                 cx,
             )
             .w(SettingsMetrics::SELECT_WIDTH)
@@ -1074,9 +1456,84 @@ impl GeneralSection {
         )
     }
 
+    /// Font family row: a searchable select of the installed families.
+    fn render_gen_font_family(
+        &self,
+        field: FontFamilyField,
+        select: &FontFamilySelect,
+        row: GeneralFormRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let (id, label, help) = match field {
+            FontFamilyField::Ui => (
+                "general-ui-font-family",
+                dbflux_i18n::t!("settings.general.ui_font_family.label"),
+                dbflux_i18n::t!("settings.general.ui_font_family.help"),
+            ),
+            FontFamilyField::Editor => (
+                "general-editor-font-family",
+                dbflux_i18n::t!("settings.general.editor_font_family.label"),
+                dbflux_i18n::t!("settings.general.editor_font_family.help"),
+            ),
+            FontFamilyField::Grid => (
+                "general-grid-font-family",
+                dbflux_i18n::t!("settings.general.grid_font_family.label"),
+                dbflux_i18n::t!("settings.general.grid_font_family.help"),
+            ),
+        };
+
+        let select = Select::new(select)
+            .id(id)
+            .appearance(false)
+            .h_full()
+            .px(Fields::PADDING_X)
+            .py(ui(4.0))
+            .font_family(dbflux_components::fonts::ui_family(cx))
+            .text_size(Fields::TEXT)
+            .icon(AppIcon::ChevronDown)
+            .accessibility_label(label.clone())
+            .search_placeholder(dbflux_i18n::t!(
+                "settings.general.font_family.search_placeholder"
+            ))
+            .empty(|_, _| {
+                div()
+                    .p(Fields::PADDING_X)
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "settings.general.font_family.no_matches"
+                    )))
+            });
+        // The select carries the field padding itself instead of the shell, so
+        // its bounds, which place the popup, span the whole field.
+        let control = dbflux_components::composites::control_shell(select, cx).px_0();
+
+        self.render_gen_dropdown(label, Some(help), control, row, cx)
+    }
+
+    /// Font size row: a numeric field with the pixel unit and a help line.
+    fn render_gen_font_size(
+        &self,
+        label: String,
+        help: String,
+        input: &Entity<InputState>,
+        row: GeneralFormRow,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        self.render_gen_input_field(
+            label,
+            input,
+            Some(dbflux_i18n::t!("settings.general.unit.pixels")),
+            Some(help),
+            row,
+            cx,
+        )
+    }
+
     /// Stable element id for inputs that UI automation addresses by name.
     fn input_element_id(row: GeneralFormRow) -> &'static str {
         match row {
+            GeneralFormRow::UiFontSize => "general-ui-font-size",
+            GeneralFormRow::EditorFontSize => "general-editor-font-size",
+            GeneralFormRow::GridFontSize => "general-grid-font-size",
             GeneralFormRow::MaxHistory => "general-max-history",
             GeneralFormRow::AutoSaveInterval => "general-auto-save",
             GeneralFormRow::DefaultRefreshInterval => "general-refresh-interval",
@@ -1087,43 +1544,93 @@ impl GeneralSection {
         }
     }
 
-    /// Numeric form row: a short mono field with an optional unit inside it.
+    /// Element id of the validation error shown under the input of `row`.
+    fn input_error_id(row: GeneralFormRow) -> SharedString {
+        SharedString::from(format!("{}-error", Self::input_element_id(row)))
+    }
+
+    /// Numeric form row: a short mono field with an optional unit inside it,
+    /// its validation error when the last save rejected it, and an optional
+    /// helper line under it.
     fn render_gen_input_field(
         &self,
         label: String,
         input: &Entity<InputState>,
         unit: Option<String>,
+        help: Option<String>,
         row: GeneralFormRow,
         cx: &mut Context<Self>,
     ) -> Div {
+        let element_id = Self::input_element_id(row);
+        let error = self
+            .gen_field_error
+            .as_ref()
+            .filter(|(error_row, _)| *error_row == row)
+            .map(|(_, message)| message.clone());
+
         let field = Input::new(input)
-            .id(Self::input_element_id(row))
+            .id(element_id)
             .aria_label(label.clone())
             .when_some(unit, |field, unit| {
                 field.suffix(Text::code(unit).muted_foreground())
             });
 
+        let field_bounds = self.field_bounds.clone();
+        let form_scroll = self.form_scroll.clone();
+        let bounds_recorder = canvas(
+            move |bounds, _, _| {
+                field_bounds
+                    .borrow_mut()
+                    .insert(row, (bounds, form_scroll.offset().y));
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
+        let control = layout::cursor_ring(
+            self.is_at(row) && !self.gen_editing_field,
+            div()
+                .relative()
+                .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
+                .font_family(dbflux_components::fonts::editor_family(cx))
+                .child(field)
+                .child(bounds_recorder),
+            cx,
+        )
+        .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
+        .debug_selector(move || format!("{element_id}-control"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                this.switching_input = true;
+                this.select_row(row);
+                this.gen_focus_current_input(window, cx);
+                cx.notify();
+            }),
+        );
+
         layout::form_row(
             label,
-            layout::cursor_ring(
-                self.is_at(row) && !self.gen_editing_field,
-                div()
-                    .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
-                    .font_family(AppFonts::MONO)
-                    .child(field),
-                cx,
-            )
-            .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    this.switching_input = true;
-                    this.select_row(row);
-                    this.gen_focus_current_input(window, cx);
-                    cx.notify();
+            div()
+                .flex()
+                .flex_col()
+                .gap(FormMetrics::HELP_GAP)
+                .child(control)
+                .when_some(error, |column, error| {
+                    let error_id = Self::input_error_id(row);
+
+                    column.child(
+                        div()
+                            .id(error_id.clone())
+                            .debug_selector(move || error_id.to_string())
+                            .child(layout::help_text(error).danger()),
+                    )
                 }),
-            ),
-            None,
+            help.map(SharedString::from),
         )
+        .debug_selector(move || format!("{element_id}-row"))
     }
 }

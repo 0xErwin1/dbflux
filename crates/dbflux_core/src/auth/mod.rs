@@ -354,6 +354,10 @@ impl DynAuthProvider for SharedDynAuthProvider {
         self.provider.detect_importable_profiles()
     }
 
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        self.provider.reflect_profiles()
+    }
+
     fn after_profile_saved(&self, profile: &AuthProfile) {
         self.provider.after_profile_saved(profile);
     }
@@ -437,6 +441,10 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
 
     fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
         self.as_ref().detect_importable_profiles()
+    }
+
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        self.as_ref().reflect_profiles()
     }
 
     fn after_profile_saved(&self, profile: &AuthProfile) {

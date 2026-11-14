@@ -1,15 +1,15 @@
 use dbflux_core::{
-    Connection, DbError, ExecutionSession, QueryRequest, QueryResult, TransactionControl,
-    classify_sql_transaction_control,
+    CancelToken, Connection, DbError, ExecutionSession, QueryRequest, QueryResult,
+    TransactionControl, classify_sql_transaction_control,
 };
 use std::sync::{
     Arc, Mutex, Weak,
     atomic::{AtomicU64, Ordering},
 };
 
-pub(super) struct SessionExecution {
-    pub(super) result: Result<QueryResult, DbError>,
-    pub(super) isolated: bool,
+pub(crate) struct SessionExecution {
+    pub(crate) result: Result<QueryResult, DbError>,
+    pub(crate) isolated: bool,
 }
 
 enum SessionSlot {
@@ -32,13 +32,13 @@ enum SessionSlot {
 ///
 /// The slot mutex is intentionally held throughout open and execute. It serializes
 /// interactive statements and is never acquired from the foreground thread.
-pub(super) struct ExecutionSessionBinding {
+pub(crate) struct ExecutionSessionBinding {
     generation: AtomicU64,
     slot: Mutex<SessionSlot>,
 }
 
 impl ExecutionSessionBinding {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             generation: AtomicU64::new(0),
             slot: Mutex::new(SessionSlot::Empty),
@@ -46,7 +46,7 @@ impl ExecutionSessionBinding {
     }
 
     /// Advances the context generation before a background caller schedules cleanup.
-    pub(super) fn invalidate(&self) -> u64 {
+    pub(crate) fn invalidate(&self) -> u64 {
         self.generation.fetch_add(1, Ordering::AcqRel) + 1
     }
 
@@ -58,33 +58,56 @@ impl ExecutionSessionBinding {
         self.current_generation() == generation
     }
 
-    pub(super) fn execute(
+    pub(crate) fn execute(
         &self,
         root: Arc<dyn Connection>,
         database: Option<String>,
         request: &QueryRequest,
     ) -> SessionExecution {
+        self.execute_unless_cancelled(root, database, request, &CancelToken::new())
+            .unwrap_or_else(|| failure("editor statement was cancelled", false))
+    }
+
+    /// Runs `request` unless `cancel_token` is cancelled before it reaches the
+    /// driver, in which case it returns `None` without running it.
+    ///
+    /// The statement can wait here for the slot (another statement of the same
+    /// document is still running) or for the session to open. The editor is
+    /// released as soon as its task is cancelled, so the token is checked
+    /// after each wait and right before the driver call. A session opened
+    /// during the wait stays installed for the next statement.
+    pub(crate) fn execute_unless_cancelled(
+        &self,
+        root: Arc<dyn Connection>,
+        database: Option<String>,
+        request: &QueryRequest,
+        cancel_token: &CancelToken,
+    ) -> Option<SessionExecution> {
         let generation = self.generation.load(Ordering::Acquire);
         let mut slot = match self.slot.lock() {
             Ok(slot) => slot,
-            Err(_) => return failure("editor session state is unavailable", false),
+            Err(_) => return Some(failure("editor session state is unavailable", false)),
         };
 
+        if cancel_token.is_cancelled() {
+            return None;
+        }
+
         let Some(factory) = root.execution_session_factory() else {
-            return SessionExecution {
+            return Some(SessionExecution {
                 result: root.execute(request),
                 isolated: false,
-            };
+            });
         };
 
         if matches!(
             classify_sql_transaction_control(&request.sql),
             TransactionControl::Unsupported
         ) {
-            return failure(
+            return Some(failure(
                 "unsupported or multiple transaction-control statements in the editor",
                 true,
-            );
+            ));
         }
 
         let matches_context = matches!(
@@ -108,7 +131,10 @@ impl ExecutionSessionBinding {
                 generation: failed_generation
             } if *failed_generation == generation
         ) {
-            return failure("editor session is closed or previously failed", true);
+            return Some(failure(
+                "editor session is closed or previously failed",
+                true,
+            ));
         }
 
         if !matches_context {
@@ -116,26 +142,26 @@ impl ExecutionSessionBinding {
                 std::mem::replace(&mut *slot, SessionSlot::Empty)
                 && let Err(error) = session.close()
             {
-                return SessionExecution {
+                return Some(SessionExecution {
                     result: Err(error),
                     isolated: true,
-                };
+                });
             }
 
             let session = match factory.open() {
                 Ok(session) => session,
                 Err(error) => {
                     *slot = SessionSlot::Failed { generation };
-                    return SessionExecution {
+                    return Some(SessionExecution {
                         result: Err(error),
                         isolated: true,
-                    };
+                    });
                 }
             };
             if generation != self.generation.load(Ordering::Acquire) {
                 let cleanup = session.close();
                 *slot = SessionSlot::Closed { generation };
-                return SessionExecution {
+                return Some(SessionExecution {
                     result: combine_cleanup(
                         Err(DbError::query_failed(
                             "editor session became stale while opening",
@@ -144,7 +170,7 @@ impl ExecutionSessionBinding {
                         "editor session became stale while opening",
                     ),
                     isolated: true,
-                };
+                });
             }
             *slot = SessionSlot::Ready {
                 generation,
@@ -155,31 +181,37 @@ impl ExecutionSessionBinding {
         }
 
         let SessionSlot::Ready { session, .. } = &*slot else {
-            return failure("editor session was not installed", true);
+            return Some(failure("editor session was not installed", true));
         };
+        if cancel_token.is_cancelled() {
+            return None;
+        }
+
         let result = session.connection().execute(request);
 
         if generation != self.generation.load(Ordering::Acquire) || session.is_closed() {
             let stale = match std::mem::replace(&mut *slot, SessionSlot::Closed { generation }) {
                 SessionSlot::Ready { session, .. } => session,
-                _ => return failure("editor session state changed unexpectedly", true),
+                _ => {
+                    return Some(failure("editor session state changed unexpectedly", true));
+                }
             };
             let cleanup = stale.close();
-            return SessionExecution {
+            return Some(SessionExecution {
                 result: combine_cleanup(result, cleanup, "editor session became stale"),
                 isolated: true,
-            };
+            });
         }
 
-        SessionExecution {
+        Some(SessionExecution {
             result,
             isolated: true,
-        }
+        })
     }
 
     /// Closes the session only after prior serialized execution has completed.
     #[allow(clippy::result_large_err)]
-    pub(super) fn close_invalidated(&self, generation: u64) -> Result<(), DbError> {
+    pub(crate) fn close_invalidated(&self, generation: u64) -> Result<(), DbError> {
         let mut slot = self
             .slot
             .lock()
@@ -264,11 +296,16 @@ mod tests {
         factory: Option<Arc<FakeFactory>>,
         queries: AtomicUsize,
         cancels: AtomicUsize,
+        cleanups: AtomicUsize,
         databases: Mutex<Vec<Option<String>>>,
         request_limits: Mutex<Vec<(Option<u32>, Option<std::time::Duration>)>>,
         execute_gate: Option<Arc<ExecuteGate>>,
         truncate_rows: AtomicBool,
-        show_time_window: AtomicBool,
+        /// Whether the connection advertises
+        /// `DriverCapabilities::REQUEST_ROW_LIMIT`, meaning its `execute`
+        /// enforces `QueryRequest::limit` instead of refusing a request that
+        /// carries one.
+        enforces_row_limit: bool,
     }
 
     impl FakeConnection {
@@ -277,11 +314,12 @@ mod tests {
                 factory: Some(factory),
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate: None,
                 truncate_rows: AtomicBool::new(false),
-                show_time_window: AtomicBool::new(false),
+                enforces_row_limit: true,
             })
         }
 
@@ -289,31 +327,64 @@ mod tests {
             Self::isolated_with_gate(None)
         }
 
+        /// The external RPC driver case: this connection refuses a request that
+        /// carries a row limit, so it must not claim to enforce one.
+        fn isolated_without_row_limit() -> Arc<Self> {
+            Arc::new(Self {
+                factory: None,
+                queries: AtomicUsize::new(0),
+                cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
+                databases: Mutex::new(Vec::new()),
+                request_limits: Mutex::new(Vec::new()),
+                execute_gate: None,
+                truncate_rows: AtomicBool::new(false),
+                enforces_row_limit: false,
+            })
+        }
+
         fn isolated_with_gate(execute_gate: Option<Arc<ExecuteGate>>) -> Arc<Self> {
             Arc::new(Self {
                 factory: None,
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate,
                 truncate_rows: AtomicBool::new(false),
-                show_time_window: AtomicBool::new(false),
+                enforces_row_limit: true,
             })
         }
     }
 
     impl Connection for FakeConnection {
         fn metadata(&self) -> &dbflux_core::DriverMetadata {
-            static METADATA: std::sync::OnceLock<dbflux_core::DriverMetadata> =
+            static ENFORCING_ROW_LIMIT: std::sync::OnceLock<dbflux_core::DriverMetadata> =
                 std::sync::OnceLock::new();
-            METADATA.get_or_init(|| {
+            static WITHOUT_ROW_LIMIT: std::sync::OnceLock<dbflux_core::DriverMetadata> =
+                std::sync::OnceLock::new();
+
+            let enforces_row_limit = self.enforces_row_limit;
+            let metadata = if enforces_row_limit {
+                &ENFORCING_ROW_LIMIT
+            } else {
+                &WITHOUT_ROW_LIMIT
+            };
+            metadata.get_or_init(|| {
+                let capabilities = if enforces_row_limit {
+                    dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT
+                } else {
+                    dbflux_core::DriverCapabilities::empty()
+                };
+
                 DriverMetadataBuilder::new(
                     "execution-session-test",
                     "Execution Session Test",
                     DatabaseCategory::Relational,
                     dbflux_core::QueryLanguage::Sql,
                 )
+                .capabilities(capabilities)
                 .build()
             })
         }
@@ -341,6 +412,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn execute(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
             if let Some(gate) = &self.execute_gate {
                 gate.entered.store(true, Ordering::SeqCst);
@@ -366,6 +441,11 @@ mod tests {
 
         fn cancel_active(&self) -> Result<(), DbError> {
             self.cancels.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+            self.cleanups.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -437,6 +517,10 @@ mod tests {
     }
 
     impl ExecutionSessionFactory for FakeFactory {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn open(&self) -> Result<Arc<dyn ExecutionSession>, DbError> {
             let open_number = self.opens.fetch_add(1, Ordering::SeqCst);
             if let Some(gate) = &self.open_gate {
@@ -614,6 +698,88 @@ mod tests {
     }
 
     #[test]
+    fn cancel_during_session_open_skips_the_statement_and_keeps_the_session() {
+        let gate = Arc::new(OpenGate {
+            opened: AtomicBool::new(false),
+            release: AtomicBool::new(false),
+        });
+        let (root, factory, isolated) = factory_backed_root_with_open_gate(Some(gate.clone()));
+        let binding = ExecutionSessionBinding::new();
+        let cancel_token = dbflux_core::CancelToken::new();
+        let task = std::thread::spawn({
+            let binding = binding.clone();
+            let root = root.clone();
+            let cancel_token = cancel_token.clone();
+            move || {
+                binding.execute_unless_cancelled(
+                    root,
+                    None,
+                    &QueryRequest::new("SELECT 1"),
+                    &cancel_token,
+                )
+            }
+        });
+
+        while !gate.opened.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        cancel_token.cancel();
+        gate.release.store(true, Ordering::SeqCst);
+
+        assert!(task.join().expect("background execution").is_none());
+        assert_eq!(isolated.queries.load(Ordering::SeqCst), 0);
+        assert_eq!(factory.session.closes.load(Ordering::SeqCst), 0);
+
+        assert!(
+            binding
+                .execute(root, None, &QueryRequest::new("SELECT 1"))
+                .result
+                .is_ok()
+        );
+        assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(isolated.queries.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cancel_while_waiting_for_the_session_skips_the_statement() {
+        let gate = Arc::new(OpenGate {
+            opened: AtomicBool::new(false),
+            release: AtomicBool::new(false),
+        });
+        let (root, factory, isolated) = factory_backed_root_with_open_gate(Some(gate.clone()));
+        let binding = ExecutionSessionBinding::new();
+        let running = std::thread::spawn({
+            let binding = binding.clone();
+            let root = root.clone();
+            move || binding.execute(root, None, &QueryRequest::new("SELECT 1"))
+        });
+        while !gate.opened.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+
+        let cancel_token = dbflux_core::CancelToken::new();
+        let waiting = std::thread::spawn({
+            let binding = binding.clone();
+            let cancel_token = cancel_token.clone();
+            move || {
+                binding.execute_unless_cancelled(
+                    root,
+                    None,
+                    &QueryRequest::new("SELECT 2"),
+                    &cancel_token,
+                )
+            }
+        });
+        cancel_token.cancel();
+        gate.release.store(true, Ordering::SeqCst);
+
+        assert!(running.join().expect("running execution").result.is_ok());
+        assert!(waiting.join().expect("waiting execution").is_none());
+        assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(isolated.queries.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn concurrent_first_open_shares_one_child_session() {
         let (root, factory, child) = factory_backed_root();
         let binding = ExecutionSessionBinding::new();
@@ -629,7 +795,7 @@ mod tests {
                     let barrier = barrier.clone();
                     scope.spawn(move || {
                         barrier.wait();
-                        binding.execute(root, None, &request)
+                        binding.execute(root, None, request)
                     })
                 })
                 .collect::<Vec<_>>();
@@ -964,22 +1130,27 @@ mod tests {
         });
         window.run_until_parked();
 
-        let (toast_count, toast_title) = window.update(|_, cx| {
-            let host = cx.global::<ToastGlobal>().host.read(cx);
-            (host.toast_count(), host.last_toast_title())
+        // A row limit that cut the result short shows in the grid's footer,
+        // so a preserved result reaches the grid with its truncation flag and
+        // a discarded one reaches no grid at all.
+        let published_truncated = window.update(|_, cx| {
+            document
+                .read(cx)
+                .active_result_grid()
+                .map(|grid| grid.read(cx).result().rows_truncated())
         });
-        let omission_title =
-            dbflux_i18n::t!("document.shared.result_warnings.rows_omitted.summary");
         match interruption {
             CompletionInterruption::Cancel => {
-                assert_eq!(toast_count, 1, "preserved result must warn exactly once");
-                assert_eq!(toast_title.as_deref(), Some(omission_title.as_ref()));
+                assert_eq!(
+                    published_truncated,
+                    Some(true),
+                    "preserved result must be shown"
+                );
             }
             CompletionInterruption::ChangeDatabaseContext => {
-                assert_ne!(
-                    toast_title.as_deref(),
-                    Some(omission_title.as_ref()),
-                    "discarded result must not display an omission warning (visible toasts: {toast_count})"
+                assert_eq!(
+                    published_truncated, None,
+                    "discarded result must not be shown"
                 );
             }
         }
@@ -1017,183 +1188,101 @@ mod tests {
         }));
     }
 
-    #[cfg(feature = "telemetry")]
+    /// A query cancelled from the Background tasks panel releases the editor
+    /// at once, even while the driver call has not returned yet.
     #[gpui::test]
-    fn terminal_usage_is_credited_only_after_current_owner_adoption(cx: &mut gpui::TestAppContext) {
-        use crate::code::{ExecutionRecord, PendingQueryResult};
+    fn cancelling_the_query_task_outside_the_editor_releases_the_editor(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let app_state = initialized_app_state(cx);
-        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
-        let document_ref = Rc::new(RefCell::new(None));
-        let capture = document_ref.clone();
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
         let (_, window) = cx.add_window_view(|window, cx| {
             let document = cx.new(|cx| {
-                CodeDocument::new_with_language(
+                let mut document = CodeDocument::new_with_language(
                     app_state.clone(),
-                    None,
+                    Some(profile_id),
                     dbflux_core::QueryLanguage::Sql,
                     window,
                     cx,
-                )
+                );
+                document.set_content("SELECT 1", window, cx);
+                document
             });
-            capture.replace(Some(document.clone()));
+            document_ref.replace(Some(document.clone()));
             Root::new(document, window, cx)
         });
-        let document = document_ref.borrow().clone().expect("document");
+        let document = document.borrow().clone().expect("document created");
         window.run_until_parked();
 
-        for case in [
-            "query",
-            "script",
-            "partial",
-            "timeout",
-            "nonzero",
-            "unknown",
-            "error",
-            "cancel",
-            "stale",
-            "missing",
-            "new_run",
-            "off",
-            "late_basic",
-            "duplicate",
-            "closed",
-        ] {
-            window.update(|window, cx| {
-                app_state.update(cx, |app, _| {
-                    app.telemetry_mut()
-                        .expect("scheduler")
-                        .set_basic(case != "late_basic", chrono::Utc::now())
-                        .expect("level");
-                });
-                let ticket = app_state.update(cx, |app, _| {
-                    app.telemetry_usage_source(chrono::Utc::now())
-                        .and_then(|source| source.ticket().expect("capture"))
-                });
-                if matches!(case, "off" | "late_basic") {
-                    app_state.update(cx, |app, _| {
-                        app.telemetry_mut()
-                            .expect("scheduler")
-                            .set_basic(case == "late_basic", chrono::Utc::now())
-                            .expect("toggle");
-                    });
-                }
-                let before = app_state.update(cx, |app, _| usage_counts(app));
-                document.update(cx, |doc, cx| {
-                    let exec_id = uuid::Uuid::new_v4();
-                    let (task_id, cancel) =
-                        doc.runner
-                            .start_primary(dbflux_core::TaskKind::Query, "fixture", cx);
-                    if case == "cancel" {
-                        cancel.cancel();
-                    }
-                    let generation = doc.execution_session.current_generation();
-                    if case == "stale" {
-                        doc.execution_session.invalidate();
-                    }
-                    let is_script = matches!(case, "script" | "timeout" | "nonzero" | "unknown");
-                    let hook_result = dbflux_core::HookResult {
-                        exit_code: if case == "unknown" {
-                            None
-                        } else if case == "nonzero" {
-                            Some(1)
-                        } else {
-                            Some(0)
-                        },
-                        timed_out: case == "timeout",
-                        detached: false,
-                        stdout: String::new(),
-                        stderr: String::new(),
-                        warnings: Vec::new(),
-                    };
-                    doc.execution.execution_history.push(ExecutionRecord {
-                        id: exec_id,
-                        started_at: std::time::Instant::now(),
-                        finished_at: None,
-                        result: None,
-                        error: None,
-                        rows_affected: None,
-                        is_script,
-                    });
-                    doc.execution.active_execution_index =
-                        Some(doc.execution.execution_history.len() - 1);
-                    if case == "new_run" {
-                        doc.execution.execution_history.push(ExecutionRecord {
-                            id: uuid::Uuid::new_v4(),
-                            started_at: std::time::Instant::now(),
-                            finished_at: None,
-                            result: None,
-                            error: None,
-                            rows_affected: None,
-                            is_script: false,
-                        });
-                        doc.execution.active_execution_index =
-                            Some(doc.execution.execution_history.len() - 1);
-                    }
-                    let mut result = QueryResult::empty();
-                    if is_script {
-                        result.shape = dbflux_core::QueryResultShape::Text;
-                        result.text_body = Some("fixture".into());
-                    }
-                    if case == "partial" {
-                        result.metadata_extra = Some(std::collections::HashMap::from([(
-                            "script_failure".into(),
-                            serde_json::json!({}),
-                        )]));
-                    }
-                    let make_pending = |ticket| PendingQueryResult {
-                        task_id,
-                        exec_id: if case == "missing" {
-                            uuid::Uuid::nil()
-                        } else {
-                            exec_id
-                        },
-                        query: String::new(),
-                        result: if case == "error" {
-                            Err(DbError::query_failed("fixture"))
-                        } else {
-                            Ok(result.clone())
-                        },
-                        is_script,
-                        usage_ticket: ticket,
-                        usage_success: !is_script || hook_result.is_success(),
-                        usage_cancel: cancel.clone(),
-                        usage_session_generation: Some(generation),
-                    };
-                    if case == "closed" {
-                        drop(make_pending(ticket));
-                        return;
-                    }
-                    doc.pending.result = Some(make_pending(ticket.clone()));
-                    doc.process_pending_result(window, cx);
-                    // A replay carries the same operation ticket, never a fresh one.
-                    doc.pending.result = Some(make_pending(ticket));
-                    doc.process_pending_result(window, cx);
-                });
-                let after = app_state.update(cx, |app, _| usage_counts(app));
-                for feature in ["query_run", "script_run"] {
-                    let increment = u64::from(
-                        (feature == "query_run" && matches!(case, "query" | "duplicate"))
-                            || (feature == "script_run" && case == "script"),
-                    );
-                    assert_eq!(
-                        after[feature].as_u64().unwrap_or(0),
-                        before[feature].as_u64().unwrap_or(0) + increment,
-                        "{case}: {feature}"
-                    );
-                }
-            });
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        for _ in 0..128 {
+            if window.update(|_, cx| document.read(cx).execution.active_query_task.is_some()) {
+                break;
+            }
+            window.dispatcher.tick(false);
         }
+        let task_id = window
+            .update(|_, cx| {
+                document
+                    .read(cx)
+                    .execution
+                    .active_query_task
+                    .as_ref()
+                    .map(|task| task.task_id)
+            })
+            .expect("query task started");
+        assert_eq!(root.queries.load(Ordering::SeqCst), 0);
+        assert!(
+            window
+                .update(|_, cx| document.read(cx).state == crate::types::DocumentState::Executing)
+        );
+
         window.update(|_, cx| {
-            app_state.update(cx, |app, _| {
-                // Off deliberately erased the earlier successful operations.
-                let counts = usage_counts(app);
-                assert_eq!(
-                    counts["query_run"], 1,
-                    "only fresh duplicate case credits once"
-                );
-                assert!(counts.get("script_run").is_none());
+            app_state.update(cx, |state, cx| {
+                state.tasks_mut().cancel(task_id);
+                cx.emit(dbflux_ui_base::AppStateChanged);
             });
         });
+
+        assert_eq!(
+            root.queries.load(Ordering::SeqCst),
+            0,
+            "the driver call has not returned yet"
+        );
+        assert!(window.update(|_, cx| {
+            let document = document.read(cx);
+            document.state == crate::types::DocumentState::Clean
+                && !document.runner.is_primary_active()
+                && document
+                    .execution
+                    .execution_history
+                    .last()
+                    .is_some_and(|record| record.finished_at.is_some())
+        }));
+
+        window.run_until_parked();
+
+        assert_eq!(
+            root.queries.load(Ordering::SeqCst),
+            0,
+            "a query cancelled before dispatch never reaches the driver"
+        );
+        assert_eq!(
+            root.cleanups.load(Ordering::SeqCst),
+            0,
+            "a query that never reached the driver must not trigger its cancel cleanup"
+        );
+        assert!(window.update(|_, cx| {
+            let document = document.read(cx);
+            document.state == crate::types::DocumentState::Clean
+                && document.execution.active_query_task.is_none()
+        }));
     }
 
     #[gpui::test]
@@ -1395,17 +1484,20 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "telemetry")]
+    /// An external RPC driver cannot enforce `QueryRequest::limit`: its adapter
+    /// refuses any request that carries one before anything is sent. The editor
+    /// must therefore run the query with no limit at all, instead of building a
+    /// request the connection turns away.
     #[gpui::test]
-    fn programmatic_time_panel_seed_and_recreation_do_not_credit_query(
+    fn real_run_query_omits_the_row_limit_for_a_driver_that_cannot_enforce_it(
         cx: &mut gpui::TestAppContext,
     ) {
         let app_state = initialized_app_state(cx);
-        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
-        let root = FakeConnection::isolated();
+        let root = FakeConnection::isolated_without_row_limit();
         let profile_id = add_test_profile(cx, &app_state, root.clone());
-        let capture = Rc::new(RefCell::new(None));
-        let capture_ref = capture.clone();
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
         let (_, window) = cx.add_window_view(|window, cx| {
             let document = cx.new(|cx| {
                 let mut document = CodeDocument::new_with_language(
@@ -1418,404 +1510,119 @@ mod tests {
                 document.set_content("SELECT 1", window, cx);
                 document
             });
-            capture_ref.replace(Some(document.clone()));
+            document_ref.replace(Some(document.clone()));
             Root::new(document, window, cx)
         });
-        let document = capture.borrow().clone().expect("document");
+        let document = document.borrow().clone().expect("document created");
         window.run_until_parked();
-        window.update(|window, cx| document.update(cx, |doc, cx| doc.run_query(window, cx)));
-        window.run_until_parked();
-        window.run_until_parked();
-        assert_eq!(root.queries.load(Ordering::SeqCst), 1);
-        for expected_queries in [2, 3] {
-            root.show_time_window.store(true, Ordering::SeqCst);
-            window.update(|_, cx| {
-                document.update(cx, |doc, cx| {
-                    assert!(
-                        !doc.result_tabs.result_tabs.is_empty(),
-                        "existing result required"
-                    );
-                    doc.source.source_time_range_panel = None;
-                    doc.source._source_time_range_sub = None;
-                    doc.source.exec_ctx.source = None;
-                    cx.notify();
-                })
-            });
-            window.run_until_parked();
-            window.run_until_parked();
-            window.update(|_, cx| {
-                let doc = document.read(cx);
-                assert!(
-                    doc.source.source_time_range_panel.is_some(),
-                    "render created panel"
-                );
-                assert!(
-                    doc.source.exec_ctx.source.is_some(),
-                    "emit_initial reached subscriber"
-                );
-                assert!(!doc.pending.chart_reexecute, "render dispatched rerun");
-                assert_eq!(
-                    root.queries.load(Ordering::SeqCst),
-                    expected_queries,
-                    "actual rerun completed"
-                );
-                app_state.update(cx, |app, _| {
-                    assert_eq!(
-                        usage_counts(app)["query_run"],
-                        1,
-                        "programmatic seed must not credit"
-                    );
-                });
-            });
-        }
-        root.show_time_window.store(false, Ordering::SeqCst);
-        window.update(|window, cx| document.update(cx, |doc, cx| doc.run_query(window, cx)));
-        window.run_until_parked();
-        window.run_until_parked();
-        window.update(|_, cx| {
-            app_state.update(cx, |app, _| {
-                assert_eq!(
-                    usage_counts(app)["query_run"],
-                    2,
-                    "explicit Run still credits"
-                );
-            })
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
         });
-        window.update(|window, cx| document.update(cx, |doc, cx| doc.run_explain(window, cx)));
         window.run_until_parked();
         window.run_until_parked();
-        window.update(|_, cx| {
-            app_state.update(cx, |app, _| {
-                assert_eq!(
-                    usage_counts(app)["query_run"],
-                    2,
-                    "derived Explain probe is not Run"
-                );
-            })
-        });
+
+        assert_eq!(
+            *root
+                .request_limits
+                .lock()
+                .expect("test request limit collection"),
+            vec![(None, None)],
+            "a driver that cannot enforce a row limit must be sent no limit"
+        );
     }
 
-    #[cfg(feature = "telemetry")]
-    struct ScriptExecutorFixture {
-        outcome: &'static str,
-        calls: Arc<AtomicUsize>,
-    }
-
-    #[cfg(feature = "telemetry")]
-    impl dbflux_core::HookExecutor for ScriptExecutorFixture {
-        fn execute_hook(
-            &self,
-            _: &dbflux_core::ConnectionHook,
-            _: &dbflux_core::HookContext,
-            cancel: &dbflux_core::CancelToken,
-            _: Option<&dbflux_core::CancelToken>,
-            _: Option<&dbflux_core::OutputSender>,
-            _: Option<&dbflux_core::DetachedProcessSender>,
-        ) -> Result<dbflux_core::HookResult, String> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            if self.outcome == "cancel" {
-                cancel.cancel();
-            }
-            if self.outcome == "error" {
-                return Err("fixture failure".into());
-            }
-            Ok(dbflux_core::HookResult {
-                exit_code: match self.outcome {
-                    "nonzero" => Some(1),
-                    "unknown" => None,
-                    _ => Some(0),
-                },
-                stdout: "fixture output".into(),
-                stderr: String::new(),
-                timed_out: self.outcome == "timeout",
-                detached: self.outcome == "detached",
-                warnings: Vec::new(),
-            })
-        }
-    }
-
-    #[cfg(feature = "telemetry")]
+    /// Load all rows reruns a result's query on the database it came from and
+    /// replaces that result's tab, even after the document moved to another
+    /// database and another tab became active.
     #[gpui::test]
-    fn real_script_pipeline_credits_only_canonical_success(cx: &mut gpui::TestAppContext) {
+    fn load_all_rows_reruns_on_the_results_own_database(cx: &mut gpui::TestAppContext) {
         let app_state = initialized_app_state(cx);
-        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
-        for outcome in [
-            "late_basic",
-            "success",
-            "nonzero",
-            "timeout",
-            "unknown",
-            "detached",
-            "error",
-            "cancel",
-        ] {
-            if outcome == "late_basic" {
-                cx.update(|cx| {
-                    app_state.update(cx, |app, _| {
-                        app.telemetry_mut()
-                            .expect("scheduler")
-                            .set_basic(false, chrono::Utc::now())
-                            .expect("off");
-                    })
-                });
-            }
-            let calls = Arc::new(AtomicUsize::new(0));
-            let capture = Rc::new(RefCell::new(None));
-            let capture_ref = capture.clone();
-            let (_, window) = cx.add_window_view(|window, cx| {
-                let document = cx.new(|cx| {
-                    let mut document = CodeDocument::new_with_language(
-                        app_state.clone(),
-                        None,
-                        dbflux_core::QueryLanguage::Bash,
-                        window,
-                        cx,
-                    );
-                    document.script_executor = Some(Arc::new(ScriptExecutorFixture {
-                        outcome,
-                        calls: calls.clone(),
-                    }));
-                    document.set_content("fixture", window, cx);
-                    document
-                });
-                capture_ref.replace(Some(document.clone()));
-                Root::new(document, window, cx)
-            });
-            let document = capture.borrow().clone().expect("document");
-            window.run_until_parked();
-            window.update(|window, cx| {
-                document.update(cx, |doc, cx| doc.run_query(window, cx));
-                if outcome == "late_basic" {
-                    app_state.update(cx, |app, _| {
-                        app.telemetry_mut()
-                            .expect("scheduler")
-                            .set_basic(true, chrono::Utc::now())
-                            .expect("basic after capture");
-                    });
-                }
-            });
-            window.run_until_parked();
-            window.run_until_parked();
-            assert_eq!(
-                calls.load(Ordering::SeqCst),
-                1,
-                "{outcome}: actual executor invocation"
-            );
-            window.update(|_, cx| {
-                let record = document
-                    .read(cx)
-                    .execution
-                    .execution_history
-                    .last()
-                    .expect("run");
-                assert!(
-                    record.finished_at.is_some(),
-                    "{outcome}: terminal owner adoption"
-                );
-                app_state.update(cx, |app, _| {
-                    let counts = usage_counts(app);
-                    assert_eq!(
-                        counts["script_run"].as_u64().unwrap_or(0),
-                        u64::from(outcome != "late_basic"),
-                        "{outcome}"
-                    );
-                    assert!(counts.get("query_run").is_none());
-                });
-            });
-        }
-    }
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
 
-    #[cfg(all(feature = "telemetry", feature = "lua"))]
-    fn assert_real_interpreter_script_pipeline(
-        cx: &mut gpui::TestAppContext,
-        language: dbflux_core::QueryLanguage,
-        failure_body: &str,
-        failure_output: &str,
-        success_body: &str,
-        success_output: &str,
-    ) {
-        let app_state = initialized_app_state(cx);
-        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
-        let capture = Rc::new(RefCell::new(None));
-        let capture_ref = capture.clone();
         let (_, window) = cx.add_window_view(|window, cx| {
-            let document = cx.new(|cx| {
-                CodeDocument::new_with_language(app_state.clone(), None, language, window, cx)
-            });
-            capture_ref.replace(Some(document.clone()));
-            Root::new(document, window, cx)
-        });
-        let document = capture.borrow().clone().expect("document");
-        window.run_until_parked();
-
-        for (body, expected_output, successful) in [
-            (failure_body, failure_output, false),
-            (success_body, success_output, true),
-        ] {
-            window.update(|window, cx| {
-                document.update(cx, |doc, cx| {
-                    assert!(
-                        doc.script_executor.is_none(),
-                        "use the default CompositeExecutor"
-                    );
-                    doc.set_content(body, window, cx);
-                    doc.run_query(window, cx);
-                    assert!(
-                        doc.execution
-                            .execution_history
-                            .last()
-                            .expect("started")
-                            .finished_at
-                            .is_none()
-                    );
-                });
-                app_state.update(cx, |app, _| {
-                    let counts = usage_counts(app);
-                    assert!(counts.get("script_run").is_none(), "capture is not credit");
-                    assert!(counts.get("query_run").is_none());
-                });
-            });
-            window.run_until_parked();
-            window.run_until_parked();
-            window.update(|_, cx| {
-                let doc = document.read(cx);
-                let record = doc.execution.execution_history.last().expect("execution");
-                assert!(record.is_script);
-                assert!(
-                    record.finished_at.is_some(),
-                    "foreground owner adopted completion"
-                );
-                let output = record
-                    .result
-                    .as_ref()
-                    .and_then(|result| result.text_body.as_deref());
-                let error = record.error.as_ref().map(ToString::to_string);
-                let terminal_output = output
-                    .or(error.as_deref())
-                    .expect("terminal output or error");
-                assert!(
-                    terminal_output.contains(expected_output),
-                    "actual interpreter output: {terminal_output}"
-                );
-                if successful {
-                    assert!(record.error.is_none(), "canonical success");
-                    assert_eq!(output, Some(success_output));
-                    assert!(!terminal_output.contains("Process exited"));
-                    assert!(!terminal_output.contains("timed out"));
-                }
-                eprintln!("real interpreter: success={successful}, terminal={terminal_output:?}");
-                app_state.update(cx, |app, _| {
-                    let counts = usage_counts(app);
-                    assert_eq!(
-                        counts["script_run"].as_u64().unwrap_or(0),
-                        u64::from(successful)
-                    );
-                    assert!(counts.get("query_run").is_none());
-                });
-            });
-            window.run_until_parked();
-            window.update(|_, cx| {
-                app_state.update(cx, |app, _| {
-                    assert_eq!(
-                        usage_counts(app)["script_run"].as_u64().unwrap_or(0),
-                        u64::from(successful),
-                        "repeated foreground processing must not duplicate credit"
-                    );
-                });
-            });
-        }
-        window.update(|_, cx| {
-            assert_eq!(document.read(cx).execution.execution_history.len(), 2);
-        });
-    }
-
-    #[cfg(all(feature = "telemetry", feature = "lua"))]
-    #[gpui::test]
-    fn real_interpreter_script_pipeline_bash(cx: &mut gpui::TestAppContext) {
-        assert_real_interpreter_script_pipeline(
-            cx,
-            dbflux_core::QueryLanguage::Bash,
-            "printf 'bash failure\\n'; exit 1",
-            "Process exited with code 1",
-            "printf 'bash success\\n'",
-            "bash success\n",
-        );
-    }
-
-    #[cfg(all(feature = "telemetry", feature = "lua"))]
-    #[gpui::test]
-    fn real_interpreter_script_pipeline_python(cx: &mut gpui::TestAppContext) {
-        assert_real_interpreter_script_pipeline(
-            cx,
-            dbflux_core::QueryLanguage::Python,
-            "raise RuntimeError('python failure')",
-            "RuntimeError: python failure",
-            "print('python success')",
-            "python success\n",
-        );
-    }
-
-    #[cfg(all(feature = "telemetry", feature = "lua"))]
-    #[gpui::test]
-    fn real_interpreter_script_pipeline_lua(cx: &mut gpui::TestAppContext) {
-        assert_real_interpreter_script_pipeline(
-            cx,
-            dbflux_core::QueryLanguage::Lua,
-            "error('lua failure')",
-            "lua failure",
-            "dbflux.log.info('lua success')",
-            "[INFO] lua success",
-        );
-    }
-
-    #[cfg(feature = "telemetry")]
-    #[gpui::test]
-    fn destroyed_document_does_not_credit_completed_script(cx: &mut gpui::TestAppContext) {
-        let app_state = initialized_app_state(cx);
-        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
-        let calls = Arc::new(AtomicUsize::new(0));
-        let capture = Rc::new(RefCell::new(None));
-        let capture_ref = capture.clone();
-        let (host, window) = cx.add_window_view(|window, cx| {
             let document = cx.new(|cx| {
                 let mut document = CodeDocument::new_with_language(
                     app_state.clone(),
-                    None,
-                    dbflux_core::QueryLanguage::Bash,
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
                     window,
                     cx,
                 );
-                document.script_executor = Some(Arc::new(ScriptExecutorFixture {
-                    outcome: "success",
-                    calls: calls.clone(),
-                }));
-                document.set_content("fixture", window, cx);
+                document.set_content("SELECT 1", window, cx);
                 document
             });
-            capture_ref.replace(Some(document.clone()));
-            MountedDocuments(vec![document])
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
         });
-        let document = capture.borrow_mut().take().expect("document");
-        let weak = document.downgrade();
+        let document = document.borrow().clone().expect("document created");
         window.run_until_parked();
+
         window.update(|window, cx| {
-            document.update(cx, |doc, cx| doc.run_query(window, cx));
-            host.update(cx, |host, cx| {
-                host.0.clear();
+            document.update(cx, |document, cx| {
+                document
+                    .on_database_changed(&DropdownItem::with_value("databaseA", "databaseA"), cx);
+                document.run_query(window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document
+                    .on_database_changed(&DropdownItem::with_value("databaseB", "databaseB"), cx);
+                document.run_query_in_new_tab(window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        let first_grid = window.update(|_, cx| {
+            let document = document.read(cx);
+            assert_eq!(document.result_tabs.result_tabs.len(), 2);
+            assert_eq!(document.result_tabs.active_result_index, Some(1));
+            document.result_tabs.result_tabs[0].grid.clone()
+        });
+        let first_generation = window.update(|_, cx| first_grid.read(cx).result_generation());
+
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| {
+                document.pending.load_all_rows = Some(first_grid.entity_id());
                 cx.notify();
             });
         });
-        drop(document);
         window.run_until_parked();
         window.run_until_parked();
-        assert!(weak.upgrade().is_none(), "actual entity destroyed");
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "worker actually completed");
+
+        assert_eq!(
+            root.databases
+                .lock()
+                .expect("test database collection")
+                .as_slice(),
+            &[
+                Some("databaseA".to_string()),
+                Some("databaseB".to_string()),
+                Some("databaseA".to_string())
+            ]
+        );
+        assert_eq!(
+            root.request_limits
+                .lock()
+                .expect("test request limit collection")
+                .last()
+                .map(|(limit, _)| *limit),
+            Some(Some(u32::MAX)),
+            "load all rows drops the editor row limit"
+        );
         window.update(|_, cx| {
-            app_state.update(cx, |app, _| {
-                let counts = usage_counts(app);
-                assert!(counts.get("script_run").is_none());
-                assert!(counts.get("query_run").is_none());
-            })
+            let document = document.read(cx);
+            assert_eq!(document.result_tabs.result_tabs.len(), 2);
+            assert_eq!(document.result_tabs.active_result_index, Some(0));
+            assert_ne!(first_grid.read(cx).result_generation(), first_generation);
         });
     }
 
@@ -1862,6 +1669,129 @@ mod tests {
                 .expect("test request limit collection")
                 .is_empty()
         );
+    }
+
+    // The Lua editor pipeline routes the whole buffer through the default
+    // CompositeExecutor/LuaExecutor, so the log buffer becomes the adopted
+    // result text without ever touching the bound connection.
+    #[cfg(feature = "lua")]
+    #[gpui::test]
+    fn lua_script_output_pipeline_success_adopts_buffered_info_output(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Lua,
+                    window,
+                    cx,
+                );
+                document.set_content("dbflux.log.info('lua success')", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| {
+            let record = &document.read(cx).execution.execution_history[0];
+            record.is_script
+                && record.finished_at.is_some()
+                && record.error.is_none()
+                && record
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.text_body.as_deref())
+                    == Some("[INFO] lua success")
+        }));
+        assert_eq!(root.queries.load(Ordering::SeqCst), 0);
+        assert!(window.update(|_, cx| {
+            document.read(cx).execution.active_query_task.is_none()
+                && document.read(cx).state() == crate::types::DocumentState::Clean
+        }));
+    }
+
+    // A Lua runtime error maps to the generic script failure contract: the
+    // executor returns an exit-code-1 result carrying the error text, so the
+    // record adopts the canonical failure marker while the task stays terminal
+    // through the normal completion path.
+    #[cfg(feature = "lua")]
+    #[gpui::test]
+    fn lua_script_output_pipeline_error_surfaces_canonical_failure_output(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Lua,
+                    window,
+                    cx,
+                );
+                document.set_content("error('lua failure')", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| {
+            let record = &document.read(cx).execution.execution_history[0];
+            record.is_script
+                && record.finished_at.is_some()
+                && record.error.is_none()
+                && record
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.text_body.as_deref())
+                    .is_some_and(|output| {
+                        output.contains("lua failure")
+                            && output.contains("Process exited with code 1")
+                    })
+        }));
+        assert_eq!(root.queries.load(Ordering::SeqCst), 0);
+        assert!(window.update(|_, cx| {
+            document.read(cx).execution.active_query_task.is_none()
+                && document.read(cx).state() == crate::types::DocumentState::Clean
+                && app_state
+                    .read(cx)
+                    .tasks()
+                    .recent_tasks(10)
+                    .into_iter()
+                    .filter(|task| task.kind == dbflux_core::TaskKind::Query)
+                    .all(|task| task.status == dbflux_core::TaskStatus::Completed)
+        }));
     }
 
     /// The sequence the workspace funnel runs for one tab: ask the document what

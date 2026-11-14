@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: promo images",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: social and GitHub promo images.",
+  "artboards": [
+    {
+      "file": "01-promo-split.html",
+      "title": "Promo: table view, dark and light",
+      "tradeoff": "Split promo: pairs the message with the app screenshot; busier than a single image.",
+      "width": 1923,
+      "height": 1082
+    },
+    {
+      "file": "02-promo-og.html",
+      "title": "Link preview card (OG), 1200 x 630",
+      "tradeoff": "Open Graph image: reads well in link unfurls; small text gets lost at thumbnail size.",
+      "width": 1200,
+      "height": 630
+    },
+    {
+      "file": "03-promo-github.html",
+      "title": "GitHub social preview, 1280 x 640",
+      "tradeoff": "GitHub social preview: fits the repository card crop; little room for copy.",
+      "width": 1280,
+      "height": 640
+    }
+  ]
+}

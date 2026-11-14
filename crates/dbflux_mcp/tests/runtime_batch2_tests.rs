@@ -38,6 +38,11 @@ fn allow_engine(tool: &str, class: ExecutionClassification) -> PolicyEngine {
 fn fresh_audit_service(file_name: &str) -> AuditService {
     let path = dbflux_audit::temp_sqlite_path(file_name);
     let _ = std::fs::remove_file(&path);
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: failing to initialize the audit service must abort the test \
+            loudly"
+    )]
     AuditService::new_sqlite(&path).expect("audit service must initialize")
 }
 
@@ -88,6 +93,7 @@ fn authorization_denies_untrusted_and_audits_reason() {
             tool_id: "read_query".to_string(),
             classification: ExecutionClassification::Read,
             mcp_enabled_for_connection: true,
+            read_only_connection: false,
             correlation_id: None,
         },
         10,

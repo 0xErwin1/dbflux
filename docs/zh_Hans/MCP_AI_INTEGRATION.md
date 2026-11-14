@@ -70,6 +70,8 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 
 **注意**：如果你在构建 DBFlux 时未启用 `mcp` feature（`--no-default-features`），MCP 服务器将不可用。
 
+服务器会从共享数据库加载内联连接钩子和可复用钩子绑定。建立连接时会运行 PreConnect 和 PostConnect，断开已打开的连接时会运行 PreDisconnect 和 PostDisconnect。钩子执行结果会记录到审计日志。分离式 PreConnect 钩子必须发出其配置的就绪信号；收到该信号后，服务器只会为直接连接配置等待 endpoint。pipeline 或 SSH 隧道连接会跳过 endpoint 等待，因为 endpoint 由 pipeline 或隧道解析。独立 MCP 服务器不包含 Lua 钩子执行器；启用的 Lua 钩子会返回标明阶段和钩子的错误，不会被跳过。
+
 ## 3. 治理模型（核心概念）
 
 每一个 AI 请求都会按顺序经过以下全部层面：
@@ -88,15 +90,15 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 分组 | 工具 ID | 执行类别 | 作用 |
 |---|---|---|---|
 | 连接 | `list_connections` | metadata | 枚举所有已配置的数据库连接 |
-| 连接 | `connect` | metadata | 针对某个已配置连接打开一个会话 |
+| 连接 | `connect` | metadata | 针对某个已配置连接打开一个会话。当驱动有数据库概念时，响应会给出 `current_database` 和服务器上可用的 `databases`；其他工具通过 `database` 参数指向另一个数据库 |
 | 连接 | `disconnect` | metadata | 关闭一个已打开的会话 |
 | 连接 | `get_connection_info` | metadata | 获取驱动程序能力与连接元数据 |
 | Schema | `list_databases` | metadata | 列出某个连接上可访问的所有数据库 |
 | Schema | `list_schemas` | metadata | 列出数据库内的 Schema |
-| Schema | `list_tables` | metadata | 列出 Schema 内的表与视图 |
-| Schema | `list_collections` | metadata | 列出 MongoDB 的集合 |
+| Schema | `list_tables` | metadata | 列出 Schema 内的表与视图。传入 `names_only: true` 时，以字符串形式返回名称，而不是每项一个对象 |
+| Schema | `list_collections` | metadata | 列出 MongoDB 的集合。与 `list_tables` 一样接受 `names_only` |
 | Schema | `describe_object` | metadata | 获取某个表的列/字段定义与索引 |
-| 读取 | `select_data` | read | 对表或集合执行结构化的 SELECT。不支持的 `joins` 会被明确拒绝 |
+| 读取 | `select_data` | read | 对表或集合执行结构化的 SELECT。与其他表的 `joins` 在声明支持 join 的驱动程序上执行；文档型、键值型以及其他未声明支持的驱动程序会返回明确的错误。`on` 条件只接受用 `AND` 连接的列比较。使用 join 时，在会从生成的查询中去掉 schema 的连接（SQLite、Turso）上使用带 schema 限定的表、在未声明支持 `$ilike` 的驱动上使用 `$ilike`，以及 `order_by` 方向不是 `asc` 或 `desc`，都会被拒绝。SQL Server 也能执行 join，其行数限制会生成为 `OFFSET … FETCH`；join 测试在 SQLite 上运行 |
 | 读取 | `count_records` | read | 返回目标的行数/文档数 |
 | 读取 | `aggregate_data` | read | 运行只读的聚合管道 |
 | 读取 | `explain_query` | read | 显示查询执行计划，而不执行目标变更 |
@@ -113,12 +115,12 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | DDL | `create_type` | admin | 创建用户自定义类型 |
 | 破坏性 DDL | `drop_table` | admin_destructive | 删除表 |
 | 破坏性 DDL | `drop_database` | admin_destructive | 删除数据库 |
-| 脚本 | `list_scripts` | metadata | 列出脚本目录中的已保存脚本 |
+| 脚本 | `list_scripts` | metadata | 列出脚本目录中的已保存脚本（不包含外部脚本文件夹） |
 | 脚本 | `get_script` | read | 获取某个已保存脚本的源码 |
 | 脚本 | `create_script` | write | 将新脚本保存到脚本目录 |
 | 脚本 | `update_script` | write | 覆盖已有的已保存脚本 |
 | 脚本 | `delete_script` | admin | 永久删除脚本 |
-| 脚本 | `execute_script` | computed | 对某个连接执行已保存的脚本。执行类别由脚本内容推导 |
+| 脚本 | `execute_script` | computed | 对某个连接执行已保存的数据库查询脚本。执行类别由脚本内容推导。Lua、Python 和 Bash 脚本会被拒绝（见下文） |
 | 审批 | `request_execution` | admin | 把一次调用排队等待人工审批。批准后，以相同参数调用该工具本身即可执行一次 |
 | 审批 | `list_pending_executions` | read | 查看所有等待审批的执行 |
 | 审批 | `get_pending_execution` | read | 获取某个待审批执行的详情。被驳回的执行返回 `status: "rejected"` 以及审批人给出的原因 |
@@ -127,6 +129,12 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 审计 | `query_audit_logs` | read | 搜索并筛选审计追踪 |
 | 审计 | `get_audit_entry` | read | 按 ID 获取单条审计日志 |
 | 审计 | `export_audit_logs` | read | 以 CSV 或 JSON 下载审计日志条目 |
+
+当驱动使 `select_data`、`count_records`、`aggregate_data` 或 `describe_object` 调用失败，且所查询的数据库或 schema 的元数据中没有列出该表或集合时，错误信息会说明在哪里查找了这个名称，并列出最接近的已列出名称。错误信息的措辞是 "is not listed"（未列出），因为该表可能不存在，也可能是该连接无权访问它。如果调用没有传入 `database`，而服务器列出了多个数据库，错误信息还会提示该表可能位于另一个数据库中。对于表（不包括集合），`count_records`、`aggregate_data`，以及在执行前不做检查的引擎上的 `select_data`（见下文），对 `where` 或 `order_by` 中引用的列做同样的处理。提示只包含客户端有权列出的名称：表名需要 `list_tables`，列名需要 `describe_object`，数据库信息需要 `list_databases`。驱动自身的错误文本保留在末尾。只有在驱动使调用失败之后才会执行这项查找，不提供这些元数据的驱动会返回原始错误。
+
+`select_data` 则在会把未知的带引号标识符读成字符串的引擎上，在执行之前检查列：SQLite 和 Turso 就是这样的引擎，拼错的列不会报错，而是返回零行。对于关系型表，以及所有带 `joins` 的调用，`columns`、`where` 或 `order_by` 中未加限定或以所属表限定的每个名称，无论包含什么字符，都会与该表的列元数据进行比较，并且像 SQLite 一样只对 ASCII 字母不区分大小写。未列出的列会被拒绝，错误信息包含同样的提示，并附上 "The query was not run."，查询不会执行。表名和视图名按 ASCII 不区分大小写解析，生成列、虚拟表的隐藏列，以及引擎接受的 `rowid`、`oid` 和 `_rowid_` 都视为已列出。没有 `describe_object` 权限时，拒绝信息不会列出任何其他列名。当驱动没有该表的列元数据时，会跳过检查，调用照常执行；嵌套路径和以其他表限定的名称不做检查，因为引擎会拒绝它们。调用中每个被引用了列的表需要一次列元数据查询。PostgreSQL、MySQL、MariaDB、SQL Server、ClickHouse 和 Redshift 遇到未知列会报错，因此它们的调用不做检查直接执行，失败时附上上文所述的提示。
+
+驱动为该表声明的伪列（例如 SQLite 的 `rowid`、MySQL 的 `_rowid`，或 PostgreSQL 的 `ctid` 和 `xmin`）视为已列出，且不会出现在建议中。不带 `joins` 的调用若在 `columns` 中引用伪列，会像 join 一样以生成的 SELECT 执行，从而返回该值：PostgreSQL 将 `ctid` 返回为 `(0,1)` 这样的文本，其他系统列返回为整数。这个 SELECT 接受的输入比普通调用少：`where` 只接受 join 所接受的运算符，名称只能是简单的 ASCII 标识符，每列只能出现一次，排序方向只能是 `asc` 或 `desc`。在执行前不做检查的引擎上，只有当 `columns` 中的某项不在调用读取的行中时，才会用一次列元数据查询来确认它是否为伪列。
 
 暂缓提供的工具（在 v1 中会在请求时明确拒绝）：
 
@@ -172,6 +180,41 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 `request_execution` 显式地把调用排队，效果与在 Ask 下直接调用该工具相同。`request_execution`、`list_pending_executions` 与 `get_pending_execution` 只创建或读取队列条目，因此在 Ask 下它们直接执行，自身不会被排队。
 
 MCP 客户端永远不能批准或驳回：无论策略如何设置，`approve_execution` 与 `reject_execution` 通过 MCP 调用时都会被拒绝，错误代码为 `self_approval_forbidden`，且每次尝试都会被审计。只有人在 DBFlux 界面中处理待审批执行。
+
+### 读取类脚本以只读方式运行
+
+`execute_script` 根据脚本内容推导执行类别。被归类为 `read` 或 `metadata` 的脚本会以只读强制方式运行：驱动程序在一个由数据库自身拒绝数据修改的会话中运行它（在 MongoDB 和 Redis 上由 DBFlux 拒绝，见下表），该调用按 `read` 或 `metadata` 进行治理和审计。
+
+| 驱动程序 | 会话如何变为只读 |
+|----------|------------------|
+| PostgreSQL、Redshift | `BEGIN READ ONLY`，结束后回滚 |
+| MySQL、MariaDB | `START TRANSACTION READ ONLY`，结束后回滚。包含可执行注释（`/*! */`、`/*M! */`）或 `INTO` 的脚本，或在可能存在未结束的事务或 `LOCK TABLES` 锁时运行的脚本，不会以只读方式运行，而是按 `write` 进行治理 |
+| SQLite | `PRAGMA query_only` |
+| ClickHouse | 按请求设置 `readonly = 2` |
+| MongoDB | MongoDB 没有只读会话，因此由 DBFlux 按操作强制：每个操作在发送前分类，高于脚本类别（`read` 或 `metadata`）的会被拒绝，包括 `runCommand`、`adminCommand` 以及包含 `$out` 或 `$merge` 阶段的 `aggregate`。变更流和 DBFlux 无法识别的操作也会被拒绝 |
+| Redis | Redis 没有只读会话，因此 DBFlux 在发送脚本的那一条命令之前，用服务器在 `COMMAND INFO` 中为它报告的标志进行检查。只有当服务器将其标记为 `readonly`（或命令为 `PING`、`ECHO`、`TIME`、`INFO`），且没有报告任何表示副作用的标志（如 `write`、`admin`、`blocking`、`pubsub` 或 `may_replicate`）时，命令才会运行。带子命令的命令（如 `CONFIG` 或 `OBJECT`）按子命令判断，这需要 Redis 7 或更高版本。事务、`SELECT`、订阅、所有脚本命令（`EVAL`、`EVALSHA`、`FCALL` 及其 `_RO` 形式）、`PFCOUNT`、模块命令、服务器无法描述的命令，以及计数为负的 `SRANDMEMBER`、`HRANDFIELD` 或 `ZRANDMEMBER` 都会被拒绝。这保护的是数据，而不是可用性：`KEYS *` 等开销较大的读取仍会运行，并且 DBFlux 不设置 Redis 读取超时 |
+
+SQL Server、Turso、外部 IPC 驱动程序、DynamoDB、CloudWatch 和 InfluxDB 无法强制只读，Redis Cluster 连接以及无法响应 `COMMAND INFO` 的 Redis 服务器也不能。在这些连接上，以及在会话中已有未结束事务的任何连接上，脚本按 `write` 进行治理：适用策略对 `write` 的决定（Allow、Ask 或 Deny），审计记录为 `write`。
+
+数据库阻止的是会话中的数据修改，但临时表除外，PostgreSQL 和 MySQL 的只读事务仍可修改它们；数据库也不会阻止具有外部影响的函数，例如 PostgreSQL 的 `dblink_exec`、`COPY ... TO PROGRAM`、`lo_export`、`pg_terminate_backend` 和咨询锁（advisory lock），或 MySQL 的 `GET_LOCK` 和用户定义函数。对于只读的 MCP 客户端，最小权限的数据库凭据仍然是真正的边界。
+
+编辑器的自动刷新使用相同的强制机制。在驱动程序无法强制只读的连接上，自动刷新会切换回 Manual。
+
+### `execute_script` 无法运行的脚本
+
+`execute_script` 只运行以数据库查询语言编写的脚本。已保存的 Lua、Python 或 Bash 脚本会出现在 `list_scripts` 中，也可以通过 `get_script` 读取，但 `execute_script` 会以 "Script language not supported for execution (only database queries)" 拒绝它，不会执行任何内容。请在 DBFlux 编辑器中运行这些脚本。
+
+### 编辑器安全设置不适用
+
+危险查询设置（**Confirm dangerous queries**、**Require WHERE for DELETE/UPDATE** 和 **Always require preview**）属于 DBFlux 编辑器。MCP 服务器不会读取它们，无论是 General 级别、按驱动程序的覆盖还是按连接的覆盖。MCP 调用只受上文所述的策略和审批流程控制：若要让破坏性语句等待人工审批，请将策略中 `destructive`（或 `admin_destructive`）的决定设为 Ask 或 Deny。
+
+### 只读连接
+
+当连接的配置文件在连接管理器中开启了 **只读** 时，该连接上所有高于 `read` 类别的调用都会以错误码 `connection_read_only` 被拒绝。这项检查在策略之前进行，因此任何策略、角色或审批都无法放行该调用：`request_execution` 会被拒绝，在开启该设置之前已批准的调用再次发起时也会被拒绝。每次拒绝都会记录为结果为 `failure` 的 `mcp_authorize` 审计事件。
+
+如上文所述，在无法强制只读的驱动上，`execute_script` 会把读取脚本按 `write` 处理，因此在使用这类驱动的只读连接上它也会被拒绝。`select_data`、`count_records` 和其他读取工具仍会执行。
+
+MCP 服务器在每次调用时都会从 `dbflux.db` 读取该设置，因此在 GUI 中所做的更改无需重启服务器即可在下一次调用时生效。如果服务器无法读取该文件，则会将该连接视为只读。
 
 ## 6. 内置策略与角色
 
@@ -303,6 +346,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     },
     now_epoch_ms(),
@@ -353,6 +397,11 @@ if !outcome.allowed {
 
 - 在目标连接的治理设置中启用 MCP（连接管理器 → MCP 标签页）。
 - 或者，如果希望所有连接都启用，可在配置中设置 `mcp_enabled_by_default: true`。
+
+### 请求因连接为只读被拒绝
+
+- 该连接的配置文件开启了 **只读**（连接管理器 → 主选项卡 → 安全）。无论策略如何，该连接上只执行 `metadata` 和 `read` 调用。
+- 关闭该设置即可重新允许写入。下一次调用就会看到该更改。
 
 ### 被策略拒绝
 

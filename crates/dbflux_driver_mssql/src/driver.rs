@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::QueryGenerator;
@@ -17,9 +17,9 @@ use dbflux_core::{
     ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
     FormSection, FormTab, FormValues, FormattedError, Icon, IdentitySpec, IndexData, IndexInfo,
     InstanceCatalog, IsolationLevel, KeyValueConnection, MetadataCompleteness,
-    MissingCreationMetadata, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    MissingCreationMetadata, MutationCapabilities, PaginationStyle, PlaceholderStyle,
+    PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
     RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
     SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection, SqlDialect,
@@ -30,7 +30,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
 use tokio::net::TcpStream;
 use tokio::runtime::{Builder, Runtime};
@@ -123,6 +123,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::SCHEMAS.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits()
@@ -157,6 +159,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: true,
         default_schema: Some("dbo".to_string()),
         case_sensitive_identifiers: false,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -339,6 +342,34 @@ impl SqlDialect for MssqlDialect {
 
     fn limit_offset_clause(&self, n: u32, offset: u64) -> String {
         format!("OFFSET {} ROWS FETCH NEXT {} ROWS ONLY", offset, n)
+    }
+
+    fn select_limit_offset_clause(
+        &self,
+        limit: Option<u64>,
+        offset: u64,
+        has_order_by: bool,
+    ) -> Option<String> {
+        if limit.is_none() && offset == 0 {
+            return None;
+        }
+
+        let mut clause = String::new();
+
+        // OFFSET ... FETCH is only valid after ORDER BY in T-SQL. A constant
+        // subquery satisfies it without sorting by any column, which a
+        // positional `ORDER BY 1` cannot do for text, image or xml columns.
+        if !has_order_by {
+            clause.push_str("ORDER BY (SELECT NULL)\n");
+        }
+
+        clause.push_str(&format!("OFFSET {} ROWS", offset));
+
+        if let Some(n) = limit {
+            clause.push_str(&format!(" FETCH NEXT {} ROWS ONLY", n));
+        }
+
+        Some(clause)
     }
 
     fn having_repeats_aggregate_expressions(&self) -> bool {
@@ -675,6 +706,10 @@ impl DbDriver for MssqlDriver {
             .cloned()
             .unwrap_or_else(|| "on".to_string());
         let trust_server_certificate = !matches!(ssl_mode_value.as_str(), "required");
+        let ssl_root_cert_path = values
+            .get("ssl_root_cert_path")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
 
         Ok(DbConfig::SqlServer {
             use_uri: false,
@@ -686,7 +721,7 @@ impl DbDriver for MssqlDriver {
             instance,
             ssl_mode: Some(ssl_mode_value),
             trust_server_certificate,
-            ssl_root_cert_path: None,
+            ssl_root_cert_path,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -883,6 +918,7 @@ struct ExtractedMssqlConfig {
     instance: Option<String>,
     ssl_mode: String,
     trust_server_certificate: bool,
+    ssl_root_cert_path: Option<String>,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -898,6 +934,7 @@ fn extract_mssql_config(config: &DbConfig) -> Result<ExtractedMssqlConfig, DbErr
             instance,
             ssl_mode,
             trust_server_certificate,
+            ssl_root_cert_path,
             ssh_tunnel,
             ..
         } => Ok(ExtractedMssqlConfig {
@@ -910,6 +947,7 @@ fn extract_mssql_config(config: &DbConfig) -> Result<ExtractedMssqlConfig, DbErr
             instance: instance.clone(),
             ssl_mode: ssl_mode.clone().unwrap_or_else(|| "on".to_string()),
             trust_server_certificate: *trust_server_certificate,
+            ssl_root_cert_path: ssl_root_cert_path.clone(),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -950,8 +988,12 @@ fn build_tiberius_config(params: &MssqlConnectParams) -> Config {
     config.authentication(AuthMethod::sql_server(params.user, params.password));
     config.encryption(encryption_for(params.ssl_mode));
 
+    // tiberius panics when both trust_cert and trust_cert_ca are set, so the
+    // CA only applies when the mode validates the chain.
     if params.trust_server_certificate {
         config.trust_cert();
+    } else if let Some(path) = params.ssl_root_cert_path {
+        config.trust_cert_ca(path);
     }
 
     // The manual-field connection form has no field for it, so our identity
@@ -978,6 +1020,7 @@ struct MssqlConnectParams<'a> {
     instance: Option<&'a str>,
     ssl_mode: &'a str,
     trust_server_certificate: bool,
+    ssl_root_cert_path: Option<&'a str>,
 }
 
 fn build_runtime() -> Result<Runtime, DbError> {
@@ -1013,7 +1056,71 @@ async fn establish_tiberius(config: Config) -> Result<TiberiusClient, tiberius::
     // one is. Using it unconditionally keeps the two paths in one place.
     let tcp = TcpStream::connect_named(&config).await?;
     tcp.set_nodelay(true)?;
+    enable_tcp_keepalive(&tcp)?;
     Client::connect(config, tcp.compat_write()).await
+}
+
+/// How long a session may sit idle before the OS starts probing the peer.
+///
+/// NAT gateways, firewalls and load balancers commonly drop TCP flows that
+/// stay silent for a few minutes. A dropped flow is only noticed on the next
+/// write, which then fails with a broken pipe. Probing well inside that window
+/// keeps the flow alive.
+const TCP_KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
+
+fn enable_tcp_keepalive(tcp: &TcpStream) -> std::io::Result<()> {
+    let keepalive = socket2::TcpKeepalive::new().with_time(TCP_KEEPALIVE_IDLE);
+    socket2::SockRef::from(tcp).set_tcp_keepalive(&keepalive)
+}
+
+/// Whether an error means the session's socket is gone, so the client can
+/// never be used again and the session has to be re-established.
+fn is_transport_lost(error: &tiberius::error::Error) -> bool {
+    use std::io::ErrorKind;
+
+    match error {
+        tiberius::error::Error::Io { kind, .. } => matches!(
+            kind,
+            ErrorKind::BrokenPipe
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::NotConnected
+                | ErrorKind::UnexpectedEof
+                | ErrorKind::TimedOut
+        ),
+        tiberius::error::Error::Server(token) => is_kill_code(token.code()),
+        _ => false,
+    }
+}
+
+/// Failure raised inside a [`MssqlConnection::with_client`] closure.
+///
+/// Tiberius errors stay unconverted until `with_client` has checked whether
+/// they mean the transport is gone.
+enum ClientError {
+    Tiberius(tiberius::error::Error),
+    Db(DbError),
+}
+
+impl From<tiberius::error::Error> for ClientError {
+    fn from(error: tiberius::error::Error) -> Self {
+        Self::Tiberius(error)
+    }
+}
+
+impl From<DbError> for ClientError {
+    fn from(error: DbError) -> Self {
+        Self::Db(error)
+    }
+}
+
+impl From<ClientError> for DbError {
+    fn from(error: ClientError) -> Self {
+        match error {
+            ClientError::Tiberius(error) => format_mssql_query_error(&error),
+            ClientError::Db(error) => error,
+        }
+    }
 }
 
 /// Fetch the server-side session id (`@@SPID`) and the actual session
@@ -1114,6 +1221,7 @@ impl MssqlDriver {
             spid: Arc::new(AtomicI32::new(spid)),
             reconnect_config: Arc::new(reconnect_config),
             poisoned: Arc::new(AtomicBool::new(false)),
+            recovery: Mutex::new(()),
         }))
     }
 
@@ -1150,6 +1258,7 @@ impl MssqlDriver {
             instance: config.instance.as_deref(),
             ssl_mode: &config.ssl_mode,
             trust_server_certificate: config.trust_server_certificate,
+            ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
         });
 
         let established = establish_mssql_session(tiberius_config, &config.host, config.port)?;
@@ -1181,24 +1290,9 @@ impl MssqlDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        log::info!(
-            "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port,
-            config.host,
-            config.port
-        );
-
-        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        let tunnel = SshTunnel::start(ssh_session, config.host.clone(), config.port)?;
+        let OpenedSshTunnel { tunnel, ssh_host } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, &config.host, config.port)?;
         let local_port = tunnel.local_port();
-
-        log::info!(
-            "[SSH] Tunnel ready on 127.0.0.1:{} in {:.2}ms",
-            local_port,
-            total_start.elapsed().as_secs_f64() * 1000.0
-        );
 
         let tiberius_config = build_tiberius_config(&MssqlConnectParams {
             host: "127.0.0.1",
@@ -1211,6 +1305,7 @@ impl MssqlDriver {
             instance: None,
             ssl_mode: &config.ssl_mode,
             trust_server_certificate: config.trust_server_certificate,
+            ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
         });
 
         // The reconnect config points at the same 127.0.0.1:<local_port> that
@@ -1224,7 +1319,7 @@ impl MssqlDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             config.host,
             config.port,
-            tunnel_config.host,
+            ssh_host,
             established.spid
         );
 
@@ -1302,6 +1397,7 @@ fn build_mssql_connection(
         spid: Arc::new(AtomicI32::new(session.spid)),
         reconnect_config: Arc::new(session.reconnect_config),
         poisoned: Arc::new(AtomicBool::new(false)),
+        recovery: Mutex::new(()),
     }
 }
 
@@ -1330,6 +1426,12 @@ pub struct MssqlConnection {
     spid: Arc<AtomicI32>,
     reconnect_config: Arc<tiberius::Config>,
     poisoned: Arc<AtomicBool>,
+
+    // Serializes session recovery so two callers that both observed
+    // `poisoned` cannot each reconnect and drop the session the other just
+    // restored. Lock order: `recovery`, then `current_database` (briefly),
+    // then `inner`.
+    recovery: Mutex<()>,
 }
 
 struct MssqlCancelHandle {
@@ -1410,9 +1512,15 @@ impl QueryCancelHandle for MssqlCancelHandle {
 }
 
 impl MssqlConnection {
+    /// Run `f` against the session's client.
+    ///
+    /// When `f` fails because the socket is gone, the dead client is dropped
+    /// and the connection is marked `poisoned`, so the next call that goes
+    /// through `cleanup_after_cancel` opens a new session. Nothing is retried
+    /// here: `f` may have been a write the server already received.
     fn with_client<F, R>(&self, f: F) -> Result<R, DbError>
     where
-        F: FnOnce(&Runtime, &mut TiberiusClient) -> Result<R, DbError>,
+        F: FnOnce(&Runtime, &mut TiberiusClient) -> Result<R, ClientError>,
     {
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
@@ -1424,7 +1532,57 @@ impl MssqlConnection {
             DbError::ConnectionFailed("SQL Server connection has been closed".to_string().into())
         })?;
 
-        f(&inner.runtime, client)
+        match f(&inner.runtime, client) {
+            Ok(value) => Ok(value),
+            Err(ClientError::Db(error)) => Err(error),
+            Err(ClientError::Tiberius(error)) => {
+                if is_transport_lost(&error) {
+                    log::warn!(
+                        "[QUERY] SQL Server session transport lost; the next use opens a new session and any open transaction, temp table or SET option is gone: {}",
+                        error
+                    );
+                    inner.client = None;
+                    self.poisoned.store(true, Ordering::SeqCst);
+                }
+                Err(format_mssql_query_error(&error))
+            }
+        }
+    }
+
+    /// Re-establish the session if a cancel or a lost transport left it dead.
+    fn recover_session(&self) -> Result<(), DbError> {
+        if self.poisoned.load(Ordering::SeqCst) {
+            self.cleanup_after_cancel()?;
+        }
+        Ok(())
+    }
+
+    /// Run a read-only metadata lookup, re-establishing a dropped session
+    /// and retrying the lookup once when the transport was lost under it.
+    ///
+    /// Only side-effect-free reads go through here; a user batch is never
+    /// replayed (see `with_client`).
+    fn read_metadata<R>(&self, read: impl Fn() -> Result<R, DbError>) -> Result<R, DbError> {
+        self.recover_session()?;
+
+        match read() {
+            Err(error)
+                if self.poisoned.load(Ordering::SeqCst)
+                    && !self.cancelled.load(Ordering::SeqCst) =>
+            {
+                log::info!(
+                    "[SCHEMA] Retrying metadata read on a new session after: {}",
+                    error
+                );
+                self.cleanup_after_cancel()?;
+                read()
+            }
+            result => result,
+        }
+    }
+
+    fn execute_metadata(&self, sql: &str) -> Result<QueryResult, DbError> {
+        self.read_metadata(|| self.execute_simple(sql))
     }
 
     fn execute_simple(&self, sql: &str) -> Result<QueryResult, DbError> {
@@ -1457,10 +1615,7 @@ impl MssqlConnection {
         // still surface.
         let collected = self.with_client(|runtime, client| {
             runtime.block_on(async move {
-                let mut stream = client
-                    .simple_query(sql_owned)
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                let mut stream = client.simple_query(sql_owned).await?;
 
                 let mut remaining = limit.map(|limit| limit as usize);
                 collect_result_sets(&mut stream, &mut remaining).await
@@ -1491,18 +1646,18 @@ impl MssqlConnection {
             runtime.block_on(async move {
                 let row = client
                     .simple_query("SELECT @@TRANCOUNT")
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?
+                    .await?
                     .into_row()
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                    .await?;
 
-                row.as_ref()
+                let count = row
+                    .as_ref()
                     .map(|row| row.try_get::<i32, _>(0))
-                    .transpose()
-                    .map_err(|e| format_mssql_query_error(&e))?
+                    .transpose()?
                     .flatten()
-                    .ok_or_else(|| DbError::query_failed("SELECT @@TRANCOUNT returned no value"))
+                    .ok_or_else(|| DbError::query_failed("SELECT @@TRANCOUNT returned no value"))?;
+
+                Ok(count)
             })
         })
     }
@@ -1531,11 +1686,9 @@ impl MssqlConnection {
             runtime.block_on(async move {
                 client
                     .simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?
+                    .await?
                     .into_results()
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                    .await?;
 
                 Ok(())
             })
@@ -1613,16 +1766,12 @@ struct CollectedSet {
 async fn collect_result_sets(
     stream: &mut tiberius::QueryStream<'_>,
     remaining: &mut Option<usize>,
-) -> Result<Vec<CollectedSet>, DbError> {
+) -> Result<Vec<CollectedSet>, ClientError> {
     use futures_util::TryStreamExt;
 
     let mut sets: Vec<CollectedSet> = Vec::new();
 
-    while let Some(item) = stream
-        .try_next()
-        .await
-        .map_err(|e| format_mssql_query_error(&e))?
-    {
+    while let Some(item) = stream.try_next().await? {
         if let Some(metadata) = item.as_metadata() {
             let columns = metadata
                 .columns()
@@ -1711,10 +1860,7 @@ fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
 ///
 /// Factored out of `execute_simple` so it can be unit-tested without a live
 /// SQL Server.
-fn build_multi_result(
-    mut collected: Vec<CollectedSet>,
-    total_time: std::time::Duration,
-) -> QueryResult {
+fn build_multi_result(mut collected: Vec<CollectedSet>, total_time: Duration) -> QueryResult {
     let Some(primary) = collected.pop() else {
         return QueryResult::table(Vec::new(), Vec::new(), None, total_time);
     };
@@ -1897,6 +2043,7 @@ impl Connection for MssqlConnection {
     }
 
     fn ping(&self) -> Result<(), DbError> {
+        self.recover_session()?;
         self.execute_simple("SELECT 1").map(|_| ())
     }
 
@@ -1919,6 +2066,8 @@ impl Connection for MssqlConnection {
                 "SQL Server: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
             ));
         }
+        // SQL Server has no read-only transaction mode to apply per request.
+        req.refuse_read_only_enforcement("SQL Server")?;
 
         if req.limit.is_some()
             && let Some(source) = req
@@ -2031,15 +2180,22 @@ impl Connection for MssqlConnection {
     }
 
     fn cleanup_after_cancel(&self) -> Result<(), DbError> {
-        // Only reconnect if a previous `cancel()` poisoned the connection.
-        // For ordinary errors (no KILL involved) the existing client is still
-        // usable and this is a no-op.
+        let _recovery = self
+            .recovery
+            .lock()
+            .unwrap_or_else(|poison_err| poison_err.into_inner());
+
+        // Only reconnect if a previous `cancel()` or a lost transport (see
+        // `with_client`) poisoned the connection. For ordinary errors the
+        // existing client is still usable and this is a no-op. Checked under
+        // the recovery lock, so a caller that waited on another recovery
+        // finds the session already restored and does not reconnect again.
         if !self.poisoned.load(Ordering::SeqCst) {
             self.cancelled.store(false, Ordering::SeqCst);
             return Ok(());
         }
 
-        log::info!("[CLEANUP] Reconnecting SQL Server connection after KILL");
+        log::info!("[CLEANUP] Reconnecting SQL Server connection after KILL or lost transport");
 
         let config = (*self.reconnect_config).clone();
         let active_database = self
@@ -2048,7 +2204,17 @@ impl Connection for MssqlConnection {
             .ok()
             .and_then(|guard| guard.clone());
 
-        let new_session: Result<(TiberiusClient, i32, Option<String>), tiberius::error::Error> = {
+        // The new session starts in whatever the login defaults to. The
+        // previously active database is restored on the new client before it
+        // is published, so no other caller can take the client and run an
+        // unqualified statement on the wrong database. If `USE [db]` fails
+        // the client is dropped, `poisoned` stays true and the next call
+        // retries recovery.
+        let restore_statement = active_database
+            .as_ref()
+            .map(|db| format!("USE [{}]", db.replace(']', "]]")));
+
+        let new_session: Result<(i32, Option<String>), DbError> = {
             let mut guard = match self.inner.lock() {
                 Ok(g) => g,
                 Err(poison_err) => poison_err.into_inner(),
@@ -2058,42 +2224,44 @@ impl Connection for MssqlConnection {
             // promptly; tiberius does not always tear down on KILL alone.
             guard.client = None;
 
-            guard.runtime.block_on(async move {
-                let mut client = establish_tiberius(config).await?;
-                let (spid, database) = capture_session_info(&mut client).await?;
-                Ok((client, spid, database))
+            let session = guard.runtime.block_on(async move {
+                let mut client = establish_tiberius(config).await.map_err(|e| {
+                    log::error!("[CLEANUP] Reconnect failed: {}", e);
+                    // Address fields aren't worth reconstructing here — the
+                    // message from tiberius is already host-aware via
+                    // Config::get_addr().
+                    format_mssql_connect_error(&e, "?", 0)
+                })?;
+                let (spid, database) = capture_session_info(&mut client)
+                    .await
+                    .map_err(|e| format_mssql_connect_error(&e, "?", 0))?;
+
+                if let Some(statement) = restore_statement {
+                    client
+                        .simple_query(statement)
+                        .await
+                        .map_err(|e| format_mssql_query_error(&e))?
+                        .into_results()
+                        .await
+                        .map_err(|e| format_mssql_query_error(&e))?;
+                }
+
+                Ok::<_, DbError>((client, spid, database))
+            });
+
+            session.map(|(client, spid, database)| {
+                guard.client = Some(client);
+                (spid, database)
             })
         };
 
-        let (new_client, new_spid, new_database) = new_session.map_err(|e| {
-            log::error!("[CLEANUP] Reconnect failed: {}", e);
-            // Address fields aren't worth reconstructing here — the message
-            // from tiberius is already host-aware via Config::get_addr().
-            format_mssql_connect_error(&e, "?", 0)
-        })?;
-
-        {
-            let mut guard = match self.inner.lock() {
-                Ok(g) => g,
-                Err(poison_err) => poison_err.into_inner(),
-            };
-            guard.client = Some(new_client);
-        }
+        let (new_spid, new_database) = new_session?;
 
         self.spid.store(new_spid, Ordering::SeqCst);
 
-        // The new session starts in whatever the login defaults to. If the
-        // user was previously on a specific database, restore that selection
-        // before clearing the poisoned flag — otherwise a failing `USE [db]`
-        // would leave the connection alive on the login's default database
-        // while callers (with `poisoned == false`) assume recovery succeeded
-        // on the requested one. With the clear deferred, a USE failure leaves
-        // `poisoned == true`, so the next `execute()` triggers another
-        // recovery attempt instead of silently running on the wrong DB.
-        if let Some(db) = active_database {
-            let escaped = db.replace(']', "]]");
-            self.execute_simple(&format!("USE [{}]", escaped))?;
-        } else if let Some(db) = new_database {
+        if active_database.is_none()
+            && let Some(db) = new_database
+        {
             // No previous selection to restore: the reconnect landed in the
             // login's default database, so track that actual database rather
             // than leaving the selection unknown.
@@ -2145,7 +2313,7 @@ impl Connection for MssqlConnection {
                    WHERE name NOT IN ('master','tempdb','model','msdb') \
                    ORDER BY name";
 
-        let result = self.execute_simple(sql)?;
+        let result = self.execute_metadata(sql)?;
         let current = self
             .current_database
             .lock()
@@ -2184,7 +2352,7 @@ impl Connection for MssqlConnection {
             qualified = qualified
         );
 
-        let table_rows = self.execute_simple(&tables_sql)?;
+        let table_rows = self.execute_metadata(&tables_sql)?;
         let mut tables = Vec::new();
 
         for row in table_rows.rows {
@@ -2209,6 +2377,7 @@ impl Connection for MssqlConnection {
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             });
         }
 
@@ -2221,7 +2390,7 @@ impl Connection for MssqlConnection {
             qualified = qualified
         );
 
-        let view_rows = self.execute_simple(&views_sql)?;
+        let view_rows = self.execute_metadata(&views_sql)?;
         let mut views = Vec::new();
 
         for row in view_rows.rows {
@@ -2264,10 +2433,14 @@ impl Connection for MssqlConnection {
             table
         );
 
-        let columns = self.fetch_columns(database, schema_name, table)?;
-        let indexes = self.fetch_indexes(database, schema_name, table)?;
-        let foreign_keys = self.fetch_foreign_keys(database, schema_name, table)?;
-        let constraints = self.fetch_constraints(database, schema_name, table)?;
+        let (columns, indexes, foreign_keys, constraints) = self.read_metadata(|| {
+            Ok((
+                self.fetch_columns(database, schema_name, table)?,
+                self.fetch_indexes(database, schema_name, table)?,
+                self.fetch_foreign_keys(database, schema_name, table)?,
+                self.fetch_constraints(database, schema_name, table)?,
+            ))
+        })?;
 
         Ok(TableInfo {
             name: table.to_string(),
@@ -2280,6 +2453,7 @@ impl Connection for MssqlConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         })
     }
 
@@ -2289,6 +2463,8 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
         table: &str,
     ) -> Result<Option<TableCreationMetadata>, DbError> {
+        self.recover_session()?;
+
         let schema_name = schema.unwrap_or("dbo");
         let escaped_db = database.replace(']', "]]");
         let qualified_db = format!("[{escaped_db}]");
@@ -2659,7 +2835,7 @@ impl Connection for MssqlConnection {
              JOIN {qualified_db}.sys.schemas s ON s.schema_id = v.schema_id \
              WHERE s.name = '{escaped_schema}' AND v.name = '{escaped_view}'",
         );
-        self.execute_simple(&sql)?;
+        self.execute_metadata(&sql)?;
 
         Ok(ViewInfo {
             name: view.to_string(),
@@ -2681,7 +2857,7 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<CustomTypeInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        self.fetch_custom_types(database, schema_name)
+        self.read_metadata(|| self.fetch_custom_types(database, schema_name))
     }
 
     fn schema_indexes(
@@ -2690,7 +2866,7 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<SchemaIndexInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        self.fetch_schema_indexes(database, schema_name)
+        self.read_metadata(|| self.fetch_schema_indexes(database, schema_name))
     }
 
     fn schema_foreign_keys(
@@ -2699,7 +2875,7 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        self.fetch_schema_foreign_keys(database, schema_name)
+        self.read_metadata(|| self.fetch_schema_foreign_keys(database, schema_name))
     }
 
     fn schema_routines(
@@ -2708,7 +2884,7 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<RoutineInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        get_schema_routines(self, database, schema_name)
+        self.read_metadata(|| get_schema_routines(self, database, schema_name))
     }
 
     fn routine_definition(
@@ -2728,7 +2904,7 @@ impl Connection for MssqlConnection {
         })?;
 
         let sql = format!("SELECT OBJECT_DEFINITION({}) AS definition", object_id);
-        let rows = self.execute_simple(&sql)?;
+        let rows = self.execute_metadata(&sql)?;
 
         let definition = rows.rows.into_iter().next().and_then(|row| {
             row.into_iter().next().and_then(|v| match v {
@@ -2748,6 +2924,8 @@ impl Connection for MssqlConnection {
     }
 
     fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
+        self.recover_session()?;
+
         let mut current = self
             .current_database
             .lock()
@@ -2789,74 +2967,22 @@ impl Connection for MssqlConnection {
     /// and (b) forwards the table's schema (e.g. `dbo`) as the *database* via
     /// `with_database`, which would make the driver issue `USE [dbo]` — a 911
     /// "database does not exist" error, since `dbo` is a schema. We embed the
-    /// schema in the `FROM` clause and leave the active database alone.
+    /// schema in the `FROM` clause and leave the active database alone. The
+    /// request's database, when the caller knows it, is embedded the same way,
+    /// which is what lets a table in another database be read without a `USE`
+    /// and without depending on where the session happens to be.
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
-        let table = request.table.quoted_with(&MSSQL_DIALECT);
-        let mut sql = format!("SELECT * FROM {}", table);
-
-        if let Some(filter) = request.semantic_filter.as_ref() {
-            let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clause);
-        } else if let Some(filter) = request.filter.as_ref() {
-            let trimmed = filter.trim();
-            if !trimmed.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(trimmed);
-            }
-        }
-
-        // `OFFSET ... FETCH NEXT` requires `ORDER BY`; fall back to `ORDER BY 1`
-        // when the caller didn't supply one so paginated browsing keeps working.
-        if request.order_by.is_empty() {
-            sql.push_str(" ORDER BY 1");
-        } else {
-            sql.push_str(" ORDER BY ");
-            let parts: Vec<String> = request
-                .order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
-                })
-                .collect();
-            sql.push_str(&parts.join(", "));
-        }
-
-        sql.push_str(&format!(
-            " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
-            request.pagination.offset(),
-            request.pagination.limit()
-        ));
-
-        self.execute(&QueryRequest::new(sql))
+        self.execute(&QueryRequest::new(browse_sql(request)?))
     }
 
     /// SQL Server-specific count implementation.
     ///
     /// The default impl is mostly correct, but we override it for symmetry with
-    /// `browse_table` and to make explicit that the schema is part of the
-    /// `FROM` clause — never the active database.
+    /// `browse_table` and to make explicit that the schema, and the request's
+    /// database when it has one, are part of the `FROM` clause — never the
+    /// active database.
     fn count_table(&self, request: &TableCountRequest) -> Result<u64, DbError> {
-        let table = request.table.quoted_with(&MSSQL_DIALECT);
-        let mut sql = format!("SELECT COUNT(*) FROM {}", table);
-
-        if let Some(filter) = request.semantic_filter.as_ref() {
-            let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clause);
-        } else if let Some(filter) = request.filter.as_ref() {
-            let trimmed = filter.trim();
-            if !trimmed.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(trimmed);
-            }
-        }
-
-        let result = self.execute(&QueryRequest::new(sql))?;
+        let result = self.execute(&QueryRequest::new(count_sql(request)?))?;
         Ok(result
             .rows
             .first()
@@ -2870,21 +2996,13 @@ impl Connection for MssqlConnection {
 
     fn fetch_row_by_pk(
         &self,
-        _database: &str,
+        database: &str,
         schema: &str,
         table: &str,
         pk_column: &str,
         pk_value: &Value,
     ) -> Result<Option<std::collections::HashMap<String, Value>>, DbError> {
-        let pk_literal = MSSQL_DIALECT.value_to_literal(pk_value);
-        let sql = format!(
-            "SELECT TOP 1 * FROM {}.{} WHERE {} = {}",
-            MSSQL_DIALECT.quote_identifier(schema),
-            MSSQL_DIALECT.quote_identifier(table),
-            MSSQL_DIALECT.quote_identifier(pk_column),
-            pk_literal,
-        );
-
+        let sql = row_by_pk_sql(Some(database), schema, table, pk_column, pk_value);
         let result = self.execute(&QueryRequest::new(sql))?;
         let columns = result.columns;
         let Some(row) = result.rows.into_iter().next() else {
@@ -2898,6 +3016,78 @@ impl Connection for MssqlConnection {
             .collect();
 
         Ok(Some(map))
+    }
+
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values. Honors `projection`; an empty projection list
+    /// falls back to `*` rather than emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        database: &str,
+        schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, Value>>, DbError> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let sql = rows_by_pks_sql(Some(database), schema, table, pk_column, chunk, projection);
+            let result = self.execute(&QueryRequest::new(sql))?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(col, val)| (col.name.clone(), val))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
+    }
+
+    fn fetch_dependents(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        self.recover_session()?;
+
+        let sql = dependents_sql(database);
+        let schema = schema.unwrap_or("dbo").to_string();
+        let table = table.to_string();
+
+        let rows = self.with_client(|runtime, client| {
+            runtime.block_on(async move {
+                let rows = client
+                    .query(sql, &[&schema, &table])
+                    .await?
+                    .into_first_result()
+                    .await?;
+
+                rows.iter()
+                    .map(|row| {
+                        let column = |index: usize| {
+                            row.try_get::<&str, _>(index)
+                                .map_err(|e| format_mssql_query_error(&e))
+                                .map(|value| value.unwrap_or_default().to_string())
+                        };
+                        Ok((column(0)?, column(1)?, column(2)?))
+                    })
+                    .collect::<Result<Vec<_>, DbError>>()
+                    .map_err(ClientError::from)
+            })
+        })?;
+
+        Ok(dependents_from_rows(rows))
     }
 
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
@@ -2961,6 +3151,8 @@ impl Connection for MssqlConnection {
             ));
         }
 
+        self.recover_session()?;
+
         let sql = build_update_with_output(patch)?;
         log::debug!("[UPDATE] Executing: {}", sql);
 
@@ -2974,6 +3166,8 @@ impl Connection for MssqlConnection {
                 "Cannot insert row: no columns specified".to_string().into(),
             ));
         }
+
+        self.recover_session()?;
 
         let sql = build_insert_with_output(insert)?;
         log::debug!("[INSERT] Executing: {}", sql);
@@ -2990,6 +3184,8 @@ impl Connection for MssqlConnection {
                     .into(),
             ));
         }
+
+        self.recover_session()?;
 
         let sql = build_delete_with_output(delete)?;
         log::debug!("[DELETE] Executing: {}", sql);
@@ -3061,7 +3257,7 @@ impl Connection for MssqlConnection {
         let query = match &request.query {
             Some(q) => q.clone(),
             None => format!(
-                "SELECT * FROM {} ORDER BY 1 OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY",
+                "SELECT * FROM {} ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY",
                 request.table.quoted_with(self.dialect())
             ),
         };
@@ -3096,63 +3292,9 @@ impl Connection for MssqlConnection {
         Some(&GENERATOR)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        _filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| MSSQL_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        let order_by_clause = if order_by.is_empty() {
-            // OFFSET requires ORDER BY in SQL Server; default to ordering by 1 to keep paginated
-            // browses functional when the caller hasn't supplied an explicit order.
-            "ORDER BY 1".to_string()
-        } else {
-            let parts: Vec<String> = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
-                })
-                .collect();
-            format!("ORDER BY {}", parts.join(", "))
-        };
-
-        sql.push(' ');
-        sql.push_str(&order_by_clause);
-        sql.push_str(&format!(
-            " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
-            offset, limit
-        ));
-        sql
-    }
-
-    fn build_count_sql(&self, table: &str, _filter: Option<&Value>) -> String {
-        let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        format!("SELECT COUNT(*) FROM {}", quoted_table)
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = MSSQL_DIALECT.quote_identifier(table);
-        format!("TRUNCATE TABLE {}", quoted_table)
+        Ok(format!("TRUNCATE TABLE {}", quoted_table))
     }
 
     fn build_drop_index_sql(
@@ -3160,21 +3302,24 @@ impl Connection for MssqlConnection {
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let quoted_index = MSSQL_DIALECT.quote_identifier(index_name);
         let table = table_name
             .map(|t| MSSQL_DIALECT.quote_identifier(t))
             .unwrap_or_else(|| "[table_name]".to_string());
 
         if if_exists {
-            format!("DROP INDEX IF EXISTS {} ON {}", quoted_index, table)
+            Ok(format!(
+                "DROP INDEX IF EXISTS {} ON {}",
+                quoted_index, table
+            ))
         } else {
-            format!("DROP INDEX {} ON {}", quoted_index, table)
+            Ok(format!("DROP INDEX {} ON {}", quoted_index, table))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT @@VERSION"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT @@VERSION")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
@@ -3874,8 +4019,16 @@ fn is_kill_error(err: &DbError) -> bool {
         | DbError::PermissionDenied(fe)
         | DbError::ObjectNotFound(fe)
         | DbError::ConnectionFailed(fe)
-        if matches!(fe.code.as_deref(), Some("596") | Some("233") | Some("6005"))
+        if fe
+            .code
+            .as_deref()
+            .and_then(|code| code.parse::<u32>().ok())
+            .is_some_and(is_kill_code)
     )
+}
+
+fn is_kill_code(code: u32) -> bool {
+    matches!(code, 596 | 233 | 6005)
 }
 
 // ---------------------------------------------------------------------------
@@ -5086,10 +5239,329 @@ fn mssql_bracket_identifier(identifier: &str) -> String {
     format!("[{}]", identifier.replace(']', "]]"))
 }
 
+/// The `FROM` target for a table. SQL Server keeps the database separate from
+/// the schema, so a table outside the session's current database has to be
+/// named with it. With no database in the request the two-part form is what the
+/// session database resolves against, which is the behaviour callers had before
+/// the request carried one.
+fn qualified_table_in(database: Option<&str>, schema: Option<&str>, table: &str) -> String {
+    let Some(database) = database else {
+        return MSSQL_DIALECT.qualified_table(schema, table);
+    };
+
+    match schema {
+        Some(schema) => format!(
+            "{}.{}.{}",
+            MSSQL_DIALECT.quote_identifier(database),
+            MSSQL_DIALECT.quote_identifier(schema),
+            MSSQL_DIALECT.quote_identifier(table)
+        ),
+        // `[db]..[table]` leaves the schema to the database's own default.
+        None => format!(
+            "{}..{}",
+            MSSQL_DIALECT.quote_identifier(database),
+            MSSQL_DIALECT.quote_identifier(table)
+        ),
+    }
+}
+
+/// The statement a table browse runs. Built outside the connection so a unit
+/// test can pin the SQL without a live server.
+fn browse_sql(request: &TableBrowseRequest) -> Result<String, DbError> {
+    let table = qualified_table_in(
+        request.database.as_deref(),
+        request.table.schema.as_deref(),
+        &request.table.name,
+    );
+    let mut sql = format!(
+        "SELECT {} FROM {}",
+        request.select_list_with(&MSSQL_DIALECT),
+        table
+    );
+
+    if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+    } else if let Some(filter) = request.filter.as_ref() {
+        let trimmed = filter.trim();
+        if !trimmed.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(trimmed);
+        }
+    }
+
+    // `OFFSET ... FETCH NEXT` requires `ORDER BY`; fall back to an order-neutral
+    // `ORDER BY (SELECT NULL)` when the caller didn't supply one, which is valid
+    // for every column type.
+    if request.order_by.is_empty() {
+        sql.push_str(" ORDER BY (SELECT NULL)");
+    } else {
+        sql.push_str(" ORDER BY ");
+        let parts: Vec<String> = request
+            .order_by
+            .iter()
+            .map(|col| {
+                let dir = match col.direction {
+                    SortDirection::Ascending => "ASC",
+                    SortDirection::Descending => "DESC",
+                };
+                format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
+            })
+            .collect();
+        sql.push_str(&parts.join(", "));
+    }
+
+    sql.push_str(&format!(
+        " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
+        request.pagination.offset(),
+        request.pagination.limit()
+    ));
+
+    Ok(sql)
+}
+
+/// The statement a row count runs.
+fn count_sql(request: &TableCountRequest) -> Result<String, DbError> {
+    let table = qualified_table_in(
+        request.database.as_deref(),
+        request.table.schema.as_deref(),
+        &request.table.name,
+    );
+    let mut sql = format!("SELECT COUNT(*) FROM {}", table);
+
+    if let Some(filter) = request.semantic_filter.as_ref() {
+        let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clause);
+    } else if let Some(filter) = request.filter.as_ref() {
+        let trimmed = filter.trim();
+        if !trimmed.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(trimmed);
+        }
+    }
+
+    Ok(sql)
+}
+
+/// The statement that reads one row back by primary key after an edit.
+fn row_by_pk_sql(
+    database: Option<&str>,
+    schema: &str,
+    table: &str,
+    pk_column: &str,
+    pk_value: &Value,
+) -> String {
+    let table = qualified_table_in(database, Some(schema), table);
+    format!(
+        "SELECT TOP 1 * FROM {table} WHERE {} = {}",
+        MSSQL_DIALECT.quote_identifier(pk_column),
+        MSSQL_DIALECT.value_to_literal(pk_value),
+    )
+}
+
+/// The statement that reads a batch of rows back by primary key.
+fn rows_by_pks_sql(
+    database: Option<&str>,
+    schema: &str,
+    table: &str,
+    pk_column: &str,
+    values: &[Value],
+    projection: Option<&[String]>,
+) -> String {
+    let select_list = match projection {
+        Some(columns) if !columns.is_empty() => columns
+            .iter()
+            .map(|column| MSSQL_DIALECT.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => "*".to_string(),
+    };
+    let literals = values
+        .iter()
+        .map(|value| MSSQL_DIALECT.value_to_literal(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let table = qualified_table_in(database, Some(schema), table);
+    format!(
+        "SELECT {select_list} FROM {table} WHERE {} IN ({literals})",
+        MSSQL_DIALECT.quote_identifier(pk_column),
+    )
+}
+
+/// Query listing the views and foreign-key child tables that depend on the
+/// table bound as `@P1` (schema) and `@P2` (name) in `database`.
+///
+/// Each row is `(kind, schema, name)` with `kind` either `V` or `F`. Only the
+/// database name is part of the text, as a bracket-quoted identifier.
+fn dependents_sql(database: &str) -> String {
+    let db = format!("[{}]", database.replace(']', "]]"));
+    format!(
+        "SELECT DISTINCT 'V', vs.name, v.name \
+         FROM {db}.sys.sql_expression_dependencies d \
+         JOIN {db}.sys.views v ON v.object_id = d.referencing_id \
+         JOIN {db}.sys.schemas vs ON vs.schema_id = v.schema_id \
+         JOIN {db}.sys.tables t ON t.object_id = d.referenced_id \
+         JOIN {db}.sys.schemas ts ON ts.schema_id = t.schema_id \
+         WHERE ts.name = @P1 AND t.name = @P2 \
+         UNION \
+         SELECT DISTINCT 'F', cs.name, ct.name \
+         FROM {db}.sys.foreign_keys fk \
+         JOIN {db}.sys.tables ct ON ct.object_id = fk.parent_object_id \
+         JOIN {db}.sys.schemas cs ON cs.schema_id = ct.schema_id \
+         JOIN {db}.sys.tables rt ON rt.object_id = fk.referenced_object_id \
+         JOIN {db}.sys.schemas rs ON rs.schema_id = rt.schema_id \
+         WHERE rs.name = @P1 AND rt.name = @P2 \
+         ORDER BY 1 DESC, 2, 3"
+    )
+}
+
+/// Map `(kind, schema, name)` rows from [`dependents_sql`] to relation
+/// references, skipping unknown kinds and duplicates.
+fn dependents_from_rows(rows: Vec<(String, String, String)>) -> Vec<dbflux_core::RelationRef> {
+    use dbflux_core::{RelationKind, RelationRef};
+
+    let mut dependents: Vec<RelationRef> = Vec::new();
+    for (kind, schema, name) in rows {
+        let kind = match kind.as_str() {
+            "V" => RelationKind::View,
+            "F" => RelationKind::ForeignKeyChild,
+            _ => continue,
+        };
+        let dependent = RelationRef {
+            kind,
+            qualified_name: format!("{schema}.{name}"),
+        };
+        if !dependents.contains(&dependent) {
+            dependents.push(dependent);
+        }
+    }
+    dependents
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::DefaultSpec;
+    use dbflux_core::{DefaultSpec, OrderByColumn};
+
+    #[test]
+    fn dependents_from_rows_maps_views_and_foreign_key_children() {
+        let rows = vec![
+            (
+                "V".to_string(),
+                "dbo".to_string(),
+                "orders_view".to_string(),
+            ),
+            (
+                "F".to_string(),
+                "sales".to_string(),
+                "order_items".to_string(),
+            ),
+            (
+                "F".to_string(),
+                "sales".to_string(),
+                "order_items".to_string(),
+            ),
+            ("X".to_string(), "dbo".to_string(), "ignored".to_string()),
+        ];
+
+        assert_eq!(
+            dependents_from_rows(rows),
+            vec![
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::View,
+                    qualified_name: "dbo.orders_view".to_string(),
+                },
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::ForeignKeyChild,
+                    qualified_name: "sales.order_items".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn dependents_sql_binds_schema_and_table_and_quotes_the_database() {
+        let sql = dependents_sql("odd]db");
+        assert!(sql.contains("[odd]]db].sys.foreign_keys"), "got: {sql}");
+        assert!(sql.contains("ts.name = @P1 AND t.name = @P2"), "got: {sql}");
+        assert!(
+            sql.contains("rs.name = @P1 AND rt.name = @P2"),
+            "got: {sql}"
+        );
+    }
+
+    #[test]
+    fn browse_sql_qualifies_the_source_database() {
+        let scoped = TableBrowseRequest::new(dbflux_core::TableRef::with_schema("dbo", "events"))
+            .with_database(Some("reporting".to_string()))
+            .with_order_by(vec![OrderByColumn::asc("id")]);
+        let sql = browse_sql(&scoped).unwrap();
+        assert!(
+            sql.starts_with("SELECT * FROM [reporting].[dbo].[events] "),
+            "browse must name the source database; got: {sql}"
+        );
+
+        let session_local =
+            TableBrowseRequest::new(dbflux_core::TableRef::with_schema("dbo", "events"));
+        let sql = browse_sql(&session_local).unwrap();
+        assert!(
+            sql.starts_with("SELECT * FROM [dbo].[events] "),
+            "a request without a database must keep the two-part name; got: {sql}"
+        );
+    }
+
+    #[test]
+    fn count_sql_qualifies_the_source_database() {
+        let scoped = TableCountRequest::new(dbflux_core::TableRef::with_schema("dbo", "events"))
+            .with_database(Some("reporting".to_string()));
+        assert_eq!(
+            count_sql(&scoped).unwrap(),
+            "SELECT COUNT(*) FROM [reporting].[dbo].[events]"
+        );
+
+        let session_local =
+            TableCountRequest::new(dbflux_core::TableRef::with_schema("dbo", "events"));
+        assert_eq!(
+            count_sql(&session_local).unwrap(),
+            "SELECT COUNT(*) FROM [dbo].[events]"
+        );
+    }
+
+    #[test]
+    fn row_by_pk_sql_qualifies_the_source_database() {
+        assert_eq!(
+            row_by_pk_sql(Some("reporting"), "dbo", "events", "id", &Value::Int(7)),
+            "SELECT TOP 1 * FROM [reporting].[dbo].[events] WHERE [id] = 7"
+        );
+
+        assert_eq!(
+            row_by_pk_sql(None, "dbo", "events", "id", &Value::Int(7)),
+            "SELECT TOP 1 * FROM [dbo].[events] WHERE [id] = 7"
+        );
+    }
+
+    #[test]
+    fn rows_by_pks_sql_qualifies_projects_and_lists_keys() {
+        let values = vec![Value::Int(7), Value::Int(9)];
+        assert_eq!(
+            rows_by_pks_sql(
+                Some("reporting"),
+                "dbo",
+                "events",
+                "id",
+                &values,
+                Some(&["name".to_string(), "id".to_string()]),
+            ),
+            "SELECT [name], [id] FROM [reporting].[dbo].[events] WHERE [id] IN (7, 9)"
+        );
+
+        assert_eq!(
+            rows_by_pks_sql(None, "dbo", "events", "id", &values, None),
+            "SELECT * FROM [dbo].[events] WHERE [id] IN (7, 9)"
+        );
+    }
 
     #[test]
     fn time_type_is_not_classified_as_timestamp() {
@@ -5264,6 +5736,57 @@ mod tests {
         assert_eq!(loc.schema.as_deref(), Some("dbo"));
         assert_eq!(loc.table.as_deref(), Some("users"));
         assert_eq!(loc.column.as_deref(), Some("id"));
+    }
+
+    #[test]
+    fn transport_loss_is_recognized_only_for_dead_socket_errors() {
+        use std::io::ErrorKind;
+
+        let io = |kind: ErrorKind| tiberius::error::Error::Io {
+            kind,
+            message: kind.to_string(),
+        };
+
+        for kind in [
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::NotConnected,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::TimedOut,
+        ] {
+            assert!(
+                is_transport_lost(&io(kind)),
+                "{kind:?} should mean a lost transport"
+            );
+        }
+
+        for error in [
+            io(ErrorKind::PermissionDenied),
+            io(ErrorKind::InvalidData),
+            tiberius::error::Error::Protocol("unexpected token".into()),
+            tiberius::error::Error::Conversion("bad value".into()),
+        ] {
+            assert!(
+                !is_transport_lost(&error),
+                "{error:?} should not mean a lost transport"
+            );
+        }
+    }
+
+    #[test]
+    fn kill_state_server_codes_mean_a_lost_session() {
+        // `TokenError` cannot be built outside tiberius, so the server-error
+        // arm of `is_transport_lost` is exercised through the shared code list.
+        for code in [596, 233, 6005] {
+            assert!(is_kill_code(code), "{code} should be a kill-state code");
+        }
+        for code in [547, 2627, 18456, 0] {
+            assert!(
+                !is_kill_code(code),
+                "{code} should not be a kill-state code"
+            );
+        }
     }
 
     #[test]
@@ -5496,6 +6019,108 @@ mod tests {
         let (mode, trust) = extract_ssl(build_form_values_for_ssl(None));
         assert_eq!(mode, "on");
         assert!(trust);
+    }
+
+    fn extract_root_cert(values: FormValues) -> Option<String> {
+        match MssqlDriver.build_config(&values).expect("config") {
+            DbConfig::SqlServer {
+                ssl_root_cert_path, ..
+            } => ssl_root_cert_path,
+            _ => panic!("expected SqlServer config"),
+        }
+    }
+
+    #[test]
+    fn form_ssl_root_cert_path_is_carried_into_config() {
+        let mut values = build_form_values_for_ssl(Some("required"));
+        values.insert(
+            "ssl_root_cert_path".to_string(),
+            "/etc/ssl/corp-ca.pem".to_string(),
+        );
+        assert_eq!(
+            extract_root_cert(values).as_deref(),
+            Some("/etc/ssl/corp-ca.pem")
+        );
+    }
+
+    #[test]
+    fn form_ssl_root_cert_path_blank_is_none() {
+        let mut values = build_form_values_for_ssl(Some("required"));
+        values.insert("ssl_root_cert_path".to_string(), "  ".to_string());
+        assert_eq!(extract_root_cert(values), None);
+    }
+
+    fn tiberius_debug(
+        ssl_mode: &str,
+        trust_server_certificate: bool,
+        ssl_root_cert_path: Option<&str>,
+    ) -> String {
+        format!(
+            "{:?}",
+            build_tiberius_config(&MssqlConnectParams {
+                host: "localhost",
+                port: 1433,
+                user: "sa",
+                password: "",
+                database: None,
+                instance: None,
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+            })
+        )
+    }
+
+    #[test]
+    fn tiberius_off_mode_never_uses_ca() {
+        let debug = tiberius_debug("off", true, Some("/etc/ssl/corp-ca.pem"));
+        assert!(debug.contains("trust: TrustAll"), "{debug}");
+    }
+
+    #[test]
+    fn uri_mode_config_drops_root_cert_path() {
+        let mut values = FormValues::new();
+        values.insert("use_uri".into(), "true".into());
+        values.insert(
+            "uri".into(),
+            "sqlserver://sa@h:1433/db?encrypt=required".into(),
+        );
+        values.insert("ssl_root_cert_path".into(), "/etc/ssl/corp-ca.pem".into());
+        assert_eq!(extract_root_cert(values), None);
+    }
+
+    #[test]
+    fn extracted_config_carries_root_cert_path() {
+        let mut values = build_form_values_for_ssl(Some("required"));
+        values.insert("ssl_root_cert_path".into(), "/etc/ssl/corp-ca.pem".into());
+        let config = MssqlDriver.build_config(&values).expect("config");
+        let extracted = extract_mssql_config(&config).expect("extract");
+        assert_eq!(
+            extracted.ssl_root_cert_path.as_deref(),
+            Some("/etc/ssl/corp-ca.pem")
+        );
+        assert!(!extracted.trust_server_certificate);
+    }
+
+    #[test]
+    fn tiberius_on_mode_trusts_any_cert_even_with_ca() {
+        let debug = tiberius_debug("on", true, Some("/etc/ssl/corp-ca.pem"));
+        assert!(debug.contains("trust: TrustAll"), "{debug}");
+    }
+
+    #[test]
+    fn tiberius_required_without_ca_validates_against_system_roots() {
+        let debug = tiberius_debug("required", false, None);
+        assert!(debug.contains("trust: Default"), "{debug}");
+    }
+
+    #[test]
+    fn tiberius_required_with_ca_trusts_the_given_ca() {
+        let debug = tiberius_debug("required", false, Some("/etc/ssl/corp-ca.pem"));
+        assert!(
+            debug.contains("trust: CaCertificateLocation(\"/etc/ssl/corp-ca.pem\")"),
+            "{debug}"
+        );
     }
 
     #[test]
@@ -6026,6 +6651,136 @@ mod tests {
         );
     }
 
+    fn visual_select_spec(limit: Option<u64>, offset: u64) -> dbflux_core::VisualQuerySpec {
+        dbflux_core::VisualQuerySpec {
+            source: dbflux_core::SourceTable {
+                schema: None,
+                table: "users".to_string(),
+                alias: "users".to_string(),
+            },
+            projection: dbflux_core::Projection::All,
+            joins: vec![],
+            filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
+            sort: vec![],
+            limit,
+            offset,
+        }
+    }
+
+    fn visual_select_sql(spec: &dbflux_core::VisualQuerySpec) -> String {
+        SqlMutationGenerator::new(&MSSQL_DIALECT)
+            .generate_select(spec)
+            .expect("spec must be valid")
+            .expect("mssql generator must render a SELECT")
+            .sql
+    }
+
+    fn sorted_visual_select_spec(limit: Option<u64>, offset: u64) -> dbflux_core::VisualQuerySpec {
+        let mut spec = visual_select_spec(limit, offset);
+
+        spec.sort = vec![dbflux_core::SortEntry {
+            source_alias: "users".to_string(),
+            column: "id".to_string(),
+            direction: dbflux_core::VisualSortDirection::Desc,
+        }];
+
+        spec
+    }
+
+    #[test]
+    fn mssql_visual_select_without_sort_uses_order_neutral_order_by() {
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(None, 0)),
+            "SELECT *\nFROM [users]"
+        );
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(Some(100), 0)),
+            "SELECT *\nFROM [users]\nORDER BY (SELECT NULL)\nOFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"
+        );
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(None, 20)),
+            "SELECT *\nFROM [users]\nORDER BY (SELECT NULL)\nOFFSET 20 ROWS"
+        );
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(Some(100), 20)),
+            "SELECT *\nFROM [users]\nORDER BY (SELECT NULL)\nOFFSET 20 ROWS FETCH NEXT 100 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn mssql_visual_select_with_sort_appends_offset_fetch_after_order_by() {
+        let order_by = "SELECT *\nFROM [users]\nORDER BY [users].[id] DESC";
+
+        assert_eq!(
+            visual_select_sql(&sorted_visual_select_spec(None, 0)),
+            order_by
+        );
+        assert_eq!(
+            visual_select_sql(&sorted_visual_select_spec(Some(100), 0)),
+            format!("{order_by}\nOFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY")
+        );
+        assert_eq!(
+            visual_select_sql(&sorted_visual_select_spec(None, 20)),
+            format!("{order_by}\nOFFSET 20 ROWS")
+        );
+        assert_eq!(
+            visual_select_sql(&sorted_visual_select_spec(Some(100), 20)),
+            format!("{order_by}\nOFFSET 20 ROWS FETCH NEXT 100 ROWS ONLY")
+        );
+    }
+
+    #[test]
+    fn mssql_grouped_visual_select_places_order_neutral_order_by_after_group_by() {
+        let mut spec = visual_select_spec(Some(100), 0);
+
+        spec.group_by = vec![dbflux_core::GroupByEntry {
+            source_alias: "users".to_string(),
+            column: "country".to_string(),
+        }];
+
+        assert_eq!(
+            visual_select_sql(&spec),
+            "SELECT [users].[country]\nFROM [users]\nGROUP BY [users].[country]\nORDER BY (SELECT NULL)\nOFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn mssql_visual_select_limit_zero_is_unbounded() {
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(Some(0), 0)),
+            "SELECT *\nFROM [users]"
+        );
+    }
+
+    #[test]
+    fn mssql_visual_select_keeps_limits_beyond_u32() {
+        let limit = u64::from(u32::MAX) + 1;
+
+        assert_eq!(
+            visual_select_sql(&visual_select_spec(Some(limit), 0)),
+            "SELECT *\nFROM [users]\nORDER BY (SELECT NULL)\nOFFSET 0 ROWS FETCH NEXT 4294967296 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn mssql_visual_select_limit_uses_offset_fetch() {
+        let sql = visual_select_sql(&visual_select_spec(Some(100), 0));
+
+        assert!(
+            !sql.to_ascii_uppercase().contains("LIMIT"),
+            "builder SELECT for MSSQL must not use LIMIT; got: {}",
+            sql
+        );
+        assert!(
+            sql.contains("OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"),
+            "builder SELECT for MSSQL must use OFFSET/FETCH; got: {}",
+            sql
+        );
+    }
+
     // ===== Column ALTER seam (DBF-24) =====
 
     #[test]
@@ -6219,6 +6974,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -6701,6 +7457,67 @@ mod query_safety_tests {
     // The connection is built with no client: only the preflight paths can
     // succeed against it, which is exactly the observable seam this proof
     // needs — no container required.
+    #[test]
+    fn mssql_refuses_read_only_enforcement_before_the_client_lock() {
+        let connection = lockless_connection();
+        connection
+            .poisoned
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        assert!(!connection.metadata().enforces_read_only());
+
+        let request = QueryRequest::new("SELECT 1")
+            .with_read_only(dbflux_core::ReadOnlyEnforcement::Required);
+        let outcome = connection.execute(&request);
+
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "expected NotSupported, got {outcome:?}"
+        );
+    }
+
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    /// The lockless connection never opens a client, and these builders only
+    /// format text.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        use dbflux_core::Connection;
+
+        let connection = lockless_connection();
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("dbo.users")
+                .expect("MSSQL supports truncate"),
+            "TRUNCATE TABLE [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("dbo.users"), false)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX [idx_users_email] ON [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("dbo.users"), true)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX IF EXISTS [idx_users_email] ON [dbo.users]"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", None, false)
+                .expect("MSSQL supports drop index"),
+            "DROP INDEX [idx_users_email] ON [table_name]"
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("MSSQL has a version query"),
+            "SELECT @@VERSION"
+        );
+    }
+
     fn lockless_connection() -> MssqlConnection {
         MssqlConnection {
             inner: Arc::new(Mutex::new(MssqlConnectionInner {
@@ -6713,6 +7530,7 @@ mod query_safety_tests {
             spid: Arc::new(AtomicI32::new(0)),
             reconnect_config: Arc::new(tiberius::Config::new()),
             poisoned: Arc::new(AtomicBool::new(false)),
+            recovery: Mutex::new(()),
         }
     }
 
@@ -6901,7 +7719,9 @@ mod query_safety_tests {
                 let mut stream = runtime
                     .block_on(client.simple_query(sql))
                     .map_err(|e| DbError::query_failed(format!("batch dispatch failed: {e}")))?;
-                let outcome = runtime.block_on(collect_result_sets(&mut stream, &mut remaining));
+                let outcome = runtime
+                    .block_on(collect_result_sets(&mut stream, &mut remaining))
+                    .map_err(DbError::from);
 
                 match outcome {
                     Err(err) => {

@@ -9,7 +9,7 @@ use dbflux_components::composites::{
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, Icon, Kbd, SegmentedControl, SegmentedItem};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, CollectionMetrics, Spacing};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, CollectionMetrics, Spacing, ui};
 use dbflux_components::typography::AppFonts;
 use dbflux_components::vim::VimBinding;
 use dbflux_core::{FieldSchemaStats, FieldValueSummary, NULL_TYPE_NAME, Value};
@@ -77,7 +77,7 @@ impl DataGridPanel {
         keyword: &'static str,
         tooltip: String,
         content: AnyElement,
-        width: Option<Pixels>,
+        width: Option<Rems>,
         cx: &App,
     ) -> Stateful<Div> {
         let theme = cx.theme();
@@ -92,7 +92,7 @@ impl DataGridPanel {
             .gap(CollectionMetrics::SLOT_GAP)
             .h(CollectionMetrics::SLOT_HEIGHT)
             .px(CollectionMetrics::SLOT_PADDING_X)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(CollectionMetrics::SLOT_FONT)
             .map(|slot| match width {
                 Some(width) => slot.w(width).flex_shrink_0(),
@@ -130,8 +130,8 @@ impl DataGridPanel {
         let theme = cx.theme().clone();
         let slots = self.has_document_query_slots(cx);
 
-        let editor = |state: &Entity<EditorState>| {
-            crate::completion_support::frameless_single_line_completion_editor(state)
+        let editor = |state: &Entity<EditorState>, cx: &App| {
+            crate::completion_support::frameless_single_line_completion_editor(state, cx)
                 .text_color(ChromeColors::strong(&theme))
                 .into_any_element()
         };
@@ -140,7 +140,7 @@ impl DataGridPanel {
             "collection-slot-filter",
             "filter",
             dbflux_i18n::t!("document.collection.slot.tooltip.filter"),
-            editor(&self.filter_bar.filter_input),
+            editor(&self.filter_bar.filter_input, cx),
             None,
             cx,
         );
@@ -182,7 +182,7 @@ impl DataGridPanel {
                     "collection-slot-project",
                     "project",
                     dbflux_i18n::t!("document.collection.slot.tooltip.project"),
-                    editor(&self.collection.projection_input),
+                    editor(&self.collection.projection_input, cx),
                     Some(CollectionMetrics::PROJECT_SLOT_WIDTH),
                     cx,
                 ))
@@ -190,7 +190,7 @@ impl DataGridPanel {
                     "collection-slot-sort",
                     "sort",
                     dbflux_i18n::t!("document.collection.slot.tooltip.sort"),
-                    editor(&self.collection.sort_input),
+                    editor(&self.collection.sort_input, cx),
                     Some(CollectionMetrics::SORT_SLOT_WIDTH),
                     cx,
                 ))
@@ -632,7 +632,7 @@ impl DataGridPanel {
             .flex()
             .flex_col()
             .bg(theme.background)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .child(
                 div().flex_1().min_h_0().child(
                     vim.editor(!editable)
@@ -672,7 +672,7 @@ impl DataGridPanel {
             .border_color(theme.border)
             .child(
                 Icon::new(AppIcon::Activity)
-                    .size(CollectionMetrics::NESTED_ICON)
+                    .size(ui(f32::from(CollectionMetrics::NESTED_ICON)))
                     .color(muted),
             )
             .child(
@@ -707,7 +707,7 @@ impl DataGridPanel {
                     .child(dbflux_i18n::t!("document.collection.schema.click_hint")),
             );
 
-        let header_cell = |label: String, width: Option<Pixels>| {
+        let header_cell = |label: String, width: Option<Rems>| {
             div()
                 .when_some(width, |cell, width| cell.w(width).flex_shrink_0())
                 .when(width.is_none(), |cell| cell.flex_1())
@@ -806,8 +806,10 @@ impl DataGridPanel {
             theme.warning
         };
 
-        let bar_width = f32::from(CollectionMetrics::SCHEMA_TYPES_WIDTH)
-            - f32::from(CollectionMetrics::TYPE_BAR_CLEARANCE);
+        let bar_width = f32::from(dbflux_components::fonts::ui_px(
+            cx,
+            CollectionMetrics::SCHEMA_TYPES_WIDTH,
+        )) - f32::from(CollectionMetrics::TYPE_BAR_CLEARANCE);
         let presence_ratio = field.presence_ratio(sampled).clamp(0.0, 1.0);
 
         let segments: Vec<AnyElement> = field
@@ -861,7 +863,7 @@ impl DataGridPanel {
                 .gap(Spacing::SM)
                 .child(
                     Icon::new(AppIcon::TriangleAlert)
-                        .size(CollectionMetrics::NESTED_ICON)
+                        .size(ui(f32::from(CollectionMetrics::NESTED_ICON)))
                         .color(theme.warning),
                 )
                 .child(match secondary {
@@ -948,7 +950,7 @@ impl DataGridPanel {
                     .w(CollectionMetrics::SCHEMA_FIELD_WIDTH)
                     .flex_shrink_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(CollectionMetrics::FIELD_FONT)
                     .text_color(ChromeColors::strong(theme))
                     .child(field.path.clone()),
@@ -975,7 +977,7 @@ impl DataGridPanel {
                 div()
                     .w(CollectionMetrics::SCHEMA_PRESENCE_WIDTH)
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(CollectionMetrics::VALUE_FONT)
                     .text_color(presence_color)
                     .child(format!("{presence}%")),
@@ -1049,7 +1051,7 @@ impl DataGridPanel {
                                 .gap(Spacing::SM)
                                 .child(
                                     Icon::new(AppIcon::TriangleAlert)
-                                        .size(CollectionMetrics::NESTED_ICON)
+                                        .size(ui(f32::from(CollectionMetrics::NESTED_ICON)))
                                         .color(theme.warning),
                                 )
                                 .child(
@@ -1073,7 +1075,7 @@ impl DataGridPanel {
                                     .relative()
                                     .px(CollectionMetrics::CONFLICT_CODE_PADDING_X)
                                     .py(CollectionMetrics::CONFLICT_CODE_PADDING_Y)
-                                    .font_family(AppFonts::MONO)
+                                    .font_family(dbflux_components::fonts::editor_family(cx))
                                     .text_size(CollectionMetrics::CONFLICT_CODE_FONT)
                                     .text_color(theme.foreground)
                                     .child(Chamfer::new(ChamferCut::CONTROL).fill(theme.background))

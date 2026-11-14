@@ -23,7 +23,7 @@ let diagram_transform = ElementTransform::default()
 
 `ElementTransform` is a visual parent transform whose hit testing, culling and glyph
 rasterization stay coherent with the transformed subtree. Upstream gpui does not have it:
-`gpui-pre` 0.3.5 only wires `TransformationMatrix` into sprite primitives, so `div` cannot
+`gpui-pre` 0.3.9 only wires `TransformationMatrix` into sprite primitives, so `div` cannot
 be transformed and zooming text would either not render or scale a low-resolution glyph
 atlas. The feature is proposed upstream in
 [zed-industries/zed#53306](https://github.com/zed-industries/zed/discussions/53306) and
@@ -52,7 +52,28 @@ which needs hooks upstream gpui does not have:
   no other role reports `Role::Group`;
 - pointer ownership, so a stale native mouse position does not cancel a programmatic hover
   before the physical mouse moves. `Window::dispatch_event` is treated as programmatic
-  input; events from the platform go through a separate internal path.
+  input; events from the platform go through a separate internal path;
+- frame cost and view-cache observation: `FrameObserver::frame_drawn` receives a
+  `DrawnFrame` when `Window::draw` returns, with the draw's wall time, the part of it spent
+  only because the frame was observed, and a `ViewDraw` per view (rendered or replayed, and
+  the `ViewRenderCause` of a render). `FrameObserver::accessibility_frame` hands observers a
+  shared `Arc<AccessibilityFrame>` instead of a borrowed frame;
+- `Window::request_frame`, which schedules a frame without the view-cache invalidation of
+  `Window::refresh`, and `Window::frame_pending`, which reports whether the window is
+  invalidated;
+- `Window::focus_observed_element` runs a node's AccessKit `Focus` listener when it has one,
+  so a composite control can move focus to its inner editor, and falls back to the node's
+  own focus handle otherwise. A wrapped `div` contributes its interaction provenance
+  (actions, metadata, redaction) during prepaint, and text inside a redacted element no
+  longer reaches ancestor labels.
+
+  The `Focus` redirect changed one observable result with the refresh to `eb248ccf`: focusing
+  gpui-component's `Input` frame by its element id now runs the frame's `Focus` listener,
+  which focuses the inner editor, so `Window::has_input_handler` is true afterwards and
+  `Window::replace_input_text` succeeds. Before, the frame's own focus handle took focus and
+  no input handler was installed. Only the automation bridge calls
+  `focus_observed_element`, so the app itself behaves as before. `bolt`'s
+  `controls::input::tests` pins the new result.
 
 These come from [themixednuts/gpui-mcp](https://github.com/themixednuts/gpui-mcp), which
 carries them as a patched copy of Zed's `crates/gpui` and lists them for removal as soon as
@@ -179,20 +200,25 @@ delta to this directory.
 
 ## Provenance
 
-- Base: the `gpui-pre` 0.3.5 crate published on crates.io (a snapshot of Zed's
-  `crates/gpui` at `zed@d89e9c2`), trimmed of `examples/`, `docs/`, `tests/` and their
+- Base: the `gpui-pre` 0.3.9 crate published on crates.io (a snapshot of Zed's
+  `crates/gpui` at `zed@93d7456`), trimmed of `examples/`, `docs/`, `tests/` and their
   target tables.
 - Patch 1: `element-transform.patch`, the diff of
   `0xErwin1/zed@978c6b45cb966f2d02bfc11cd8c1c4696b7c3fd8` (branch
   `feature/53306-gpui-transforms`) against Zed's `main` at its merge base — 14 commits over
-  seven files, 2533 diff lines.
+  seven files, rebased onto gpui-pre 0.3.9, 2532 diff lines.
 - Patch 2: `frame-observer.patch`, the GPUI delta of
-  `themixednuts/gpui-mcp@7b834c1705cb3353650dfc681f29eaa29e4cf308` (`vendor/gpui`, licensed
-  Apache-2.0 like the rest of this crate) against the Zed commit it snapshots,
+  `themixednuts/gpui-mcp@eb248ccf43847797b9067c47eeef1dd188dc03a6` (2026-10-09; `vendor/gpui`,
+  licensed Apache-2.0 like the rest of this crate) against the Zed commit it snapshots,
   `zed@16c9aa7ea6d897a8044d9501cde1b295256722f2`, rebased onto this directory with patch 1
-  already applied — eight files, 1585 diff lines.
+  already applied — nine files, 2152 diff lines. Refreshed on 2026-10-31 from `7b834c17`
+  (2026-09-22, eight files, 1596 diff lines) together with `vendor/gpui-mcp`; the refresh
+  added frame cost and view-cache observation, `request_frame` / `frame_pending`, the
+  AccessKit `Focus` redirect in `focus_observed_element`, wrapper interaction provenance and
+  redaction of text inside redacted elements, and touched `src/view.rs` for the first time.
+  Patches 3 to 7 apply on top of it unchanged.
 - Patch 3: `subscription-drop-log.patch`, written for DBFlux against this directory with
-  patches 1 and 2 applied — three files, 166 diff lines. It has no upstream counterpart.
+  patches 1 and 2 applied — three files, 168 diff lines. It has no upstream counterpart.
 - Patch 4: `text-input-automation.patch`, written for DBFlux against this directory with
   patches 1 to 3 applied — one file, 105 diff lines. It has no upstream counterpart.
 - Patch 5: `read-only-accessibility.patch`, written for DBFlux against this directory with
@@ -200,18 +226,20 @@ delta to this directory.
 - Patch 6: `letter-spacing.patch`, written for DBFlux against this directory with
   patches 1 to 5 applied — five files, 279 diff lines. It has no upstream counterpart.
 - Patch 7: `keyboard-dispatch.patch`, written for DBFlux against this directory with
-  patches 1 to 6 applied — three files, 164 diff lines. It has no upstream counterpart.
+  patches 1 to 6 applied — three files, 171 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
 The patches are applied in that order, and each one is written against the tree the
-previous ones produce. All use the same path layout (`a/crates/gpui/src/...`, applied with
+previous ones produce. They were regenerated against 0.3.9 when the base moved from 0.3.5, so
+`refresh.sh 0.3.9` applies all seven without a reject and reproduces `src/` exactly. All use the same path layout (`a/crates/gpui/src/...`, applied with
 `-p3`).
 
 ### Manual merges
 
-A refresh needs a human edit in two places, both in `src/window.rs`. **Re-check them after
-every refresh.**
+A refresh to a newer base usually needs a human edit in these places, all in `src/window.rs`.
+**Re-check them after every refresh**, then regenerate each patch from the merged tree so the
+next refresh starts clean again.
 
 1. The `use crate::{...}` import list. Upstream reorders it by rustfmt, so both patches
    reject their hunk there. Add `ElementTransform` (patch 1) and `FrameBuilder`,
@@ -222,6 +250,19 @@ every refresh.**
    hand when patch 2 was rebased. Patch 2 now carries the merged form and applies cleanly
    on top of patch 1, but if patch 1 changes that loop, patch 2 rejects there and needs the
    same merge again.
+3. `Window::draw`, where patch 2 moves the AccessKit `end_frame` before painting so frame
+   observers receive the tree, sends the platform update only when the platform
+   accessibility flag was active for the whole frame, and times the draw for
+   `FrameObserver::frame_drawn`. Upstream edits that block often (0.3.9 added draw-phase
+   profiling around it, and `draw_duration` is computed outside the `profiler` block), so
+   its hunks are ported by hand.
+4. `prepaint_view` in `src/view.rs`, whose cache check patch 1 extends with the transform.
+   Patch 2 replaces that check with `view_cache_miss`, so the transform comparison is merged
+   into it by hand.
+5. The activation-key branch of `Window::dispatch_key_event` (patch 7). It calls
+   `finish_dispatch_key_event`, whose signature follows upstream: 0.3.9 added
+   `recognized_keystroke` and `input_preference`, which the branch passes as the other
+   early returns there do.
 
 ### Deliberate deviations
 
@@ -231,13 +272,23 @@ dropping the `ShapedGlyph` and `ShapedRun` that upstream's current code no longe
 Without that trim the crate builds with an `unused_imports` warning, and a path dependency
 is linted as first-party code, so `cargo clippy --workspace -- -D warnings` would fail.
 
-Patch 2 leaves out two parts of gpui-mcp's GPUI delta:
+Patch 2 leaves out three parts of gpui-mcp's GPUI delta:
 
 - Its font-family fallback change in `src/text_system.rs`, which makes a fallback family
   keep the requested weight, style and OpenType features. It has nothing to do with
   automation and would change how text renders in every window of the app, so it does not
   ride along with a feature that is off by default. Nothing in the patch depends on it.
 - Its whitespace-only cleanup of two doc comments in `src/_accessibility.rs`.
+- Its view-scoped redraws in `src/elements/div.rs`: pressing and releasing an element with
+  click or drag handlers, its active state, and showing a tooltip notify the view that
+  painted the element instead of refreshing the window, and hiding a tooltip calls
+  `request_frame`. Upstream calls it the one change that alters GPUI's behavior rather than
+  adding to it. The bridge does not depend on it, and DBFlux keeps upstream gpui's redraws,
+  so it stays out of a patch that only ships with the automation feature in mind.
+
+The ported `view_cache_miss` also compares the view's `transform`, which patch 1 added to
+the view cache key: a view drawn under a new element transform renders again, as it did
+before the refresh, and reports `ViewRenderCause::LayoutChanged`.
 
 The manifest also carries a `[package.metadata.cargo-machete]` exemption for `tracing`,
 which the published crate does not declare: CI runs `cargo machete` over the whole

@@ -23,7 +23,6 @@ use crate::chart::stats::{
 };
 use crate::semantic::ChartColors;
 use crate::tokens::ChromeColors;
-use crate::typography::AppFonts;
 use dbflux_core::{ColumnKind, LogErr, QueryResult, Value};
 
 // ---------------------------------------------------------------------------
@@ -113,6 +112,16 @@ pub(crate) struct RenderModel {
     pub source_indices: Option<Vec<Vec<usize>>>,
 }
 
+/// The data point under the pointer or the keyboard highlight, as returned by
+/// [`ChartView::hovered_point`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HoveredPoint {
+    pub series_idx: usize,
+    pub point_idx_in_series: usize,
+    pub x: f64,
+    pub y: f64,
+}
+
 // ---------------------------------------------------------------------------
 // ChartView
 // ---------------------------------------------------------------------------
@@ -124,6 +133,9 @@ pub(crate) struct RenderModel {
 pub struct ChartView {
     spec: ChartSpec,
     render_model: RenderModel,
+    /// Data-derived X bounds captured at build time. `set_x_time_domain`
+    /// restores these when the runtime domain override is cleared.
+    data_x_bounds: (f64, f64),
     /// Window-space X coordinate of the current crosshair, captured from the
     /// last `MouseMoveEvent`. `None` when the cursor has not yet entered the
     /// chart or after a rebuild.
@@ -199,6 +211,10 @@ impl ChartView {
         // selected window) coexist with populated siblings instead of forcing
         // the whole chart to fail with `NoUsableData`.
         for (row_idx, row) in result.rows.iter().enumerate() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "x_col is validated against the column list; row indexing retains the existing assumption that callers supply one cell per column (not checked here)"
+            )]
             let x_val = extract_f64(&row[x_col], x_is_time);
             let Some(x) = x_val else { continue };
 
@@ -214,8 +230,16 @@ impl ChartView {
                     _ => true,
                 };
 
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "s.column_index was validated against result.columns.len() in the loop above"
+                )]
                 let col_kind = result.columns[s.column_index].kind;
                 let y_val = if in_group {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "s.column_index is validated against the column list; indexing the row retains the existing caller assumption that it contains a cell for each column (not checked here)"
+                    )]
                     extract_f64(&row[s.column_index], col_kind == ColumnKind::Timestamp)
                 } else {
                     None
@@ -233,6 +257,10 @@ impl ChartView {
                 raw_x.push(x);
                 raw_rows.push(row_idx);
                 for (i, y) in y_vals.into_iter().enumerate() {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "raw_series has one Vec per spec.series entry and i enumerates that same series list, so i < raw_series.len()"
+                    )]
                     raw_series[i].push(y);
                 }
             }
@@ -246,6 +274,10 @@ impl ChartView {
 
         let mut indices: Vec<usize> = (0..raw_x.len()).collect();
         let mut swapped = false;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "a and b come from indices collected over 0..raw_x.len(), so both are in bounds"
+        )]
         indices.sort_by(|&a, &b| {
             raw_x[a]
                 .partial_cmp(&raw_x[b])
@@ -261,6 +293,10 @@ impl ChartView {
         let raw_x_sorted: Vec<f64>;
         let raw_series_sorted: Vec<Vec<f64>>;
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "indices is a permutation of 0..raw_x.len() (collected above), so every i it yields is in bounds; every series vec in raw_series holds one value per retained row, the same length as raw_x"
+        )]
         if swapped {
             tracing_debug_non_monotonic();
             raw_x_sorted = indices.iter().map(|&i| raw_x[i]).collect();
@@ -282,6 +318,10 @@ impl ChartView {
         // sort reorders through `indices` (sorted_pos -> raw_pos), and
         // `raw_rows` maps raw_pos past the rows the extraction skipped.
         let sorted_source_indices: Vec<usize> = if swapped {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "indices only holds positions below raw_x.len() and raw_rows grows by one for every pushed raw_x, so the lengths match"
+            )]
             indices.iter().map(|&raw_pos| raw_rows[raw_pos]).collect()
         } else {
             raw_rows
@@ -401,6 +441,7 @@ impl ChartView {
         };
 
         Ok(ChartView {
+            data_x_bounds: (x_min, x_max),
             spec,
             render_model,
             hover_x_screen: None,
@@ -474,6 +515,34 @@ impl ChartView {
         self.spec.x_axis.kind == AxisKind::Time
     }
 
+    /// Apply a runtime X time-domain override in epoch milliseconds.
+    ///
+    /// Hosts set this for accumulating sources so sparse session samples are
+    /// projected against the full requested window: the axis, its ticks, and
+    /// the hover mapping cover `[start_ms, end_ms]` while the data points keep
+    /// their true positions inside it. No boundary samples, padding points, or
+    /// history are invented — the series simply occupies its real span within
+    /// the wider domain.
+    ///
+    /// A no-op on non-time X axes. `None` (or a degenerate `end <= start`)
+    /// restores the data-derived bounds. Single-point series are handled
+    /// naturally: the point stays at its timestamp inside the spread domain.
+    pub fn set_x_time_domain(&mut self, domain_ms: Option<(i64, i64)>, cx: &mut Context<Self>) {
+        if self.spec.x_axis.kind != AxisKind::Time {
+            return;
+        }
+
+        let bounds = match domain_ms {
+            Some((start_ms, end_ms)) if end_ms > start_ms => (start_ms as f64, end_ms as f64),
+            _ => self.data_x_bounds,
+        };
+
+        self.render_model.x_min = bounds.0;
+        self.render_model.x_max = bounds.1;
+        self.render_model.x_ticks = ticks_time(bounds.0, bounds.1, 6);
+        cx.notify();
+    }
+
     /// Resolved palette colour for the series at `idx`, derived from the active theme.
     ///
     /// Returns a neutral grey when `idx` is out of range.
@@ -542,7 +611,15 @@ impl ChartView {
         } else if pos >= pts.len() {
             Some(pts.len() - 1)
         } else {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the arms above return early for pos == 0 and pos >= pts.len(), so pos < pts.len() here"
+            )]
             let lo = pts[pos - 1].0;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the arms above return early for pos == 0 and pos >= pts.len(), so pos < pts.len() here"
+            )]
             let hi = pts[pos].0;
             if (cursor_data_x - lo).abs() <= (hi - cursor_data_x).abs() {
                 Some(pos - 1)
@@ -584,6 +661,32 @@ impl ChartView {
         }
         let x_range = (self.render_model.x_max - self.render_model.x_min).max(1.0);
         Some(self.render_model.x_min + (rel_x as f64 / plot_w as f64) * x_range)
+    }
+
+    /// The decimated point the pointer or the keyboard highlights: the
+    /// keyboard point when there is one, otherwise the point of the focused
+    /// series nearest to the pointer's X. Unlike `hover_data_x`, which is the
+    /// pointer's own position, its X and Y belong to a real point.
+    pub fn hovered_point(&self) -> Option<HoveredPoint> {
+        let series_idx = self.focused_series_idx;
+
+        let point_idx_in_series = match self.keyboard_point_value() {
+            Some(_) => self.keyboard_point?,
+            None => self.nearest_point_idx(series_idx, self.hover_data_x()?)?,
+        };
+
+        let (x, y) = *self
+            .render_model
+            .decimated
+            .get(series_idx)?
+            .get(point_idx_in_series)?;
+
+        Some(HoveredPoint {
+            series_idx,
+            point_idx_in_series,
+            x,
+            y,
+        })
     }
 
     /// The point highlighted from the keyboard, if any.
@@ -657,6 +760,10 @@ impl ChartView {
             .iter()
             .position(|index| *index == self.focused_series_idx)
             .unwrap_or(0);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "rem_euclid by visible.len() always yields a value in 0..visible.len()"
+        )]
         let next = visible[(current as isize + delta).rem_euclid(visible.len() as isize) as usize];
 
         let anchor_x = self.keyboard_point_value().map(|(x, _)| x);
@@ -879,6 +986,10 @@ impl ChartView {
 
             for (group_pos, &s_idx) in visible.iter().enumerate() {
                 let offset = group_pos as f32 * bar_w - group_w / 2.0;
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "visible is built from 0..self.render_model.decimated.len(), so s_idx is in bounds"
+                )]
                 for &(x, _) in &self.render_model.decimated[s_idx] {
                     let bar_left = data_to_screen_x(x) + offset;
                     let bar_right = bar_left + bar_w * 0.92;
@@ -1010,6 +1121,10 @@ impl ChartView {
             let totals: Vec<(usize, f64)> = visible
                 .iter()
                 .filter_map(|&s_idx| {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "visible is built from 0..self.render_model.decimated.len(), so s_idx is in bounds"
+                    )]
                     let total: f64 = self.render_model.decimated[s_idx]
                         .iter()
                         .map(|(_, y)| *y)
@@ -1107,6 +1222,10 @@ impl ChartView {
 
         // Dead-band: only switch when the new series is strictly closer than the
         // current focused series by >= 2 px, mitigating jitter between near lines.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "hit_test_focused_series only returns indices from decimated.iter().enumerate(), so new_idx < decimated.len()"
+        )]
         let dist_new = interpolate_y_at_x(&self.render_model.decimated[new_idx], cursor_data_x)
             .map(|y| (data_to_screen_y(y) - cursor_screen_y).abs())
             .unwrap_or(f32::INFINITY);
@@ -1338,6 +1457,7 @@ impl Render for ChartView {
 
         // Resolve per-theme chrome colors for the readout overlay.
         let readout_colors = ChartColors::for_current(cx);
+        let readout_family = crate::fonts::editor_family(cx);
 
         let plot_bounds_for_hover = plot_bounds_rc.clone();
 
@@ -1404,7 +1524,7 @@ impl Render for ChartView {
 
                                 let theme = cx.theme();
                                 let tick_color = theme.muted_foreground;
-                                let tick_font = font(AppFonts::MONO);
+                                let tick_font = font(crate::fonts::editor_family(cx));
                                 let tick_size = gpui::px(10.5);
                                 let line_height = gpui::px(13.0);
                                 let gridline_color = theme.border;
@@ -1540,7 +1660,7 @@ impl Render for ChartView {
                         .size_full()
                     })
                     .when_some(readout, |container, r| {
-                        container.child(readout_overlay(r, readout_colors))
+                        container.child(readout_overlay(r, readout_colors, readout_family))
                     }),
             )
             // Legend row (below canvas)
@@ -1747,7 +1867,15 @@ fn paint_line_series(
         }
         if pts.len() == 1 {
             let half = stroke_w * 1.5;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+            )]
             let sx = data_to_screen_x(pts[0].0);
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+            )]
             let sy = data_to_screen_y(pts[0].1);
             window.paint_quad(fill(
                 gpui::Bounds {
@@ -1761,6 +1889,10 @@ fn paint_line_series(
             ));
         } else {
             let mut builder = PathBuilder::stroke(gpui::px(stroke_w));
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the closure returns early when pts.is_empty(), so pts[0] exists in the else branch"
+            )]
             let (x0, y0) = pts[0];
             builder.move_to(point(
                 gpui::px(data_to_screen_x(x0)),
@@ -2144,7 +2276,7 @@ fn render_number_chart(view: &ChartView, cx: &mut Context<ChartView>) -> impl In
                 .h_full()
                 .child(
                     div()
-                        .font_family(crate::typography::AppFonts::DISPLAY)
+                        .font_family(crate::fonts::display_family(cx))
                         .font_weight(gpui::FontWeight::BLACK)
                         .text_size(gpui::px(44.0))
                         .line_height(gpui::relative(1.0))
@@ -2260,6 +2392,10 @@ fn paint_bars<FX, FY>(
 
         let offset = group_pos as f32 * bar_w - group_w / 2.0;
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "visible is built from 0..decimated.len(), so s_idx is in bounds"
+        )]
         for &(x, y) in &decimated[s_idx] {
             let bar_left = data_to_screen_x(x) + offset;
             let value_sy = data_to_screen_y(y);
@@ -2480,6 +2616,10 @@ fn paint_pie(
     let totals: Vec<(usize, f64)> = visible
         .iter()
         .filter_map(|&s_idx| {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "visible is built from 0..decimated.len(), so s_idx is in bounds"
+            )]
             let total: f64 = decimated[s_idx]
                 .iter()
                 .map(|(_, y)| *y)
@@ -2615,6 +2755,10 @@ fn paint_scatter<FX, FY>(
             (base_color, 3.5_f32)
         };
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "visible is built from 0..decimated.len(), so s_idx is in bounds"
+        )]
         for &(x, y) in &decimated[s_idx] {
             let sx = data_to_screen_x(x);
             let sy = data_to_screen_y(y);
@@ -2681,6 +2825,10 @@ fn paint_area<FX, FY>(
                 continue;
             }
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "visible is built from 0..decimated.len(), so s_idx is in bounds"
+            )]
             let pts = &decimated[s_idx];
             if pts.is_empty() {
                 continue;
@@ -2698,7 +2846,15 @@ fn paint_area<FX, FY>(
 
             if pts.len() == 1 {
                 // Single-point: fill a thin vertical rect from the data point to the baseline.
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+                )]
                 let sx = data_to_screen_x(pts[0].0);
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+                )]
                 let sy = data_to_screen_y(pts[0].1);
                 let (rect_top, rect_h) = if sy <= baseline_sy {
                     (sy, baseline_sy - sy)
@@ -2717,7 +2873,15 @@ fn paint_area<FX, FY>(
                 ));
             } else {
                 // Build a closed filled path: baseline→first, data points, last→baseline.
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the pts.is_empty() continue above leaves only non-empty slices in the else branch"
+                )]
                 let (x0, _) = pts[0];
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "pts is non-empty here, so pts.len() - 1 is the last index"
+                )]
                 let (xn, _) = pts[pts.len() - 1];
 
                 let mut builder = PathBuilder::fill();
@@ -2751,7 +2915,15 @@ fn paint_area<FX, FY>(
             if pts.len() == 1 {
                 // Single-point fallback: a square marker, same as the Line arm.
                 let half = stroke_w * 1.5;
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+                )]
                 let sx = data_to_screen_x(pts[0].0);
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the branch is guarded by pts.len() == 1, so index 0 is in bounds"
+                )]
                 let sy = data_to_screen_y(pts[0].1);
                 window.paint_quad(fill(
                     gpui::Bounds {
@@ -2765,6 +2937,10 @@ fn paint_area<FX, FY>(
                 ));
             } else {
                 let mut builder = PathBuilder::stroke(gpui::px(stroke_w));
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the pts.is_empty() continue above leaves only non-empty slices in the else branch"
+                )]
                 let (x0, y0) = pts[0];
                 builder.move_to(point(
                     gpui::px(data_to_screen_x(x0)),
@@ -2814,6 +2990,18 @@ fn paint_dashed_vline(
 }
 
 /// Extract an f64 value from a `Value`, treating timestamps as ms-since-epoch.
+/// Epoch-milliseconds for a value placed on a time axis, using exactly the
+/// same acceptance semantics as `extract_f64(.., is_time = true)`.
+///
+/// Shared with the chart document's session-sample window filter so the
+/// window filter and the chart's own X extraction accept exactly the same
+/// timestamp representations (Int/Float epoch-ms, Decimal strings, Bool,
+/// RFC 3339 text, DateTime, Date).
+pub fn time_axis_epoch_ms(value: &Value) -> Option<i64> {
+    let x = extract_f64(value, true)?;
+    x.is_finite().then_some(x as i64)
+}
+
 fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
     match value {
         Value::Int(i) => Some(*i as f64),
@@ -2879,10 +3067,8 @@ struct SeriesReadoutEntry {
 
 /// Pre-computed content for the crosshair readout panel.
 struct HoverReadout {
-    /// Header: e.g. "11:34 UTC"
+    /// Header: the hovered point's X, e.g. "2025-03-01" or "11:34 UTC"
     header_time: SharedString,
-    /// Optional time-offset suffix: e.g. " · t+13m" (None when x_min is unavailable)
-    header_offset: Option<SharedString>,
     series: Vec<SeriesReadoutEntry>,
     focused_idx: usize,
     /// Cursor X relative to the plot origin (used to position the overlay).
@@ -2927,30 +3113,19 @@ fn build_readout(
 
     let cursor_data_x = x_min + (rel_x_f as f64 / plot_w_px as f64) * x_range;
 
-    // Build the time header: "HH:MM UTC" or raw value for non-time axes.
-    let header_time = if x_is_time {
-        let secs = (cursor_data_x / 1000.0).trunc() as i64;
-        let nsecs = ((cursor_data_x.rem_euclid(1000.0)) * 1_000_000.0) as u32;
-        match dbflux_core::chrono::DateTime::from_timestamp(secs, nsecs) {
-            Some(dt) => SharedString::from(dt.format("%H:%M UTC").to_string()),
-            None => SharedString::from(format!("{:.3}", cursor_data_x)),
-        }
-    } else {
-        SharedString::from(format!("{:.3}", cursor_data_x))
-    };
+    // The header names the point the focused series snaps to, falling back to
+    // the first visible series when the focused one is hidden or empty.
+    let header_x = std::iter::once(focused_idx)
+        .chain(0..decimated.len())
+        .filter(|s_idx| !hidden.contains(s_idx))
+        .find_map(|s_idx| decimated.get(s_idx).filter(|pts| !pts.is_empty()))
+        .map_or(cursor_data_x, |pts| nearest_sample(pts, cursor_data_x).0);
 
-    // Optional t+N suffix (whole minutes since x_min).
-    let header_offset = if x_is_time {
-        let offset_ms = cursor_data_x - x_min;
-        let minutes = (offset_ms / 60_000.0).floor() as i64;
-        if minutes >= 0 {
-            Some(SharedString::from(format!(" · t+{}m", minutes)))
-        } else {
-            None
-        }
+    let header_time = SharedString::from(if x_is_time {
+        format_readout_time(header_x, x_range)
     } else {
-        None
-    };
+        format!("{:.3}", header_x)
+    });
 
     // Collect one entry per series.
     let mut entries: Vec<SeriesReadoutEntry> = Vec::with_capacity(decimated.len());
@@ -2986,7 +3161,6 @@ fn build_readout(
 
     Some(HoverReadout {
         header_time,
-        header_offset,
         series: entries,
         focused_idx,
         screen_x_relative: relative_x,
@@ -2995,8 +3169,43 @@ fn build_readout(
     })
 }
 
+/// Format a hovered point's timestamp for the readout header.
+///
+/// Spans of a day or more lead with the date and add the time of day only when
+/// the point is not at midnight, so daily and monthly data read `2025-03-01`
+/// while hourly data over several days keeps its hour. Shorter spans show the
+/// time of day alone. Seconds appear only when the point has them.
+fn format_readout_time(x_ms: f64, x_range_ms: f64) -> String {
+    use dbflux_core::chrono::Timelike;
+
+    let Some(datetime) = dbflux_core::chrono::DateTime::from_timestamp_millis(x_ms.round() as i64)
+    else {
+        return format!("{:.3}", x_ms);
+    };
+
+    let time_format = if datetime.second() == 0 {
+        "%H:%M UTC"
+    } else {
+        "%H:%M:%S UTC"
+    };
+
+    let format = if x_range_ms < 86_400_000.0 {
+        time_format.to_string()
+    } else if datetime.num_seconds_from_midnight() == 0 {
+        "%Y-%m-%d".to_string()
+    } else {
+        format!("%Y-%m-%d {time_format}")
+    };
+
+    datetime.format(&format).to_string()
+}
+
 /// Locate the sample in `points` whose X coordinate is closest to `target_x`.
 /// Assumes `points` is sorted by X (the engine sorts during `build`).
+#[expect(
+    clippy::indexing_slicing,
+    reason = "both callers pass a non-empty, X-sorted slice (they filter out empty series first); binary_search_by yields an index below len on Ok and an insertion point in 0..=len on Err, and the arms below handle 0 and len explicitly"
+)]
 fn nearest_sample(points: &[(f64, f64)], target_x: f64) -> (f64, f64) {
     match points.binary_search_by(|p| {
         p.0.partial_cmp(&target_x)
@@ -3021,70 +3230,16 @@ fn nearest_sample(points: &[(f64, f64)], target_x: f64) -> (f64, f64) {
     }
 }
 
-pub fn format_x_value(x: f64, is_time: bool) -> String {
-    if is_time {
-        let secs = (x / 1000.0).trunc() as i64;
-        let nsecs = ((x.rem_euclid(1000.0)) * 1_000_000.0) as u32;
-        match dbflux_core::chrono::DateTime::from_timestamp(secs, nsecs) {
-            Some(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-            None => format!("{:.3}", x),
-        }
-    } else {
-        format!("{:.3}", x)
-    }
-}
-
-/// Format a Y readout value for tooltips and hover overlays.
-///
-/// Magnitudes `>= 1e3` collapse to SI suffixes (`K`, `M`, `G`, `T`, `P`) so
-/// the readout matches the axis-tick formatter and dashboards like CloudWatch
-/// (`2.5G`, not `2.500e9`). Very small non-zero magnitudes (`< 1e-3`) keep
-/// scientific notation — SI sub-unit suffixes would clash with axis glyphs.
-pub fn format_y_value(y: f64) -> String {
-    if y == 0.0 {
-        return "0.000".to_string();
-    }
-    let abs = y.abs();
-
-    if abs < 1e-3 {
-        return format!("{:.3e}", y);
-    }
-
-    if abs >= 1e3 {
-        const SUFFIXES: &[(f64, &str)] =
-            &[(1e15, "P"), (1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "K")];
-
-        for &(threshold, suffix) in SUFFIXES {
-            if abs >= threshold {
-                let scaled = y / threshold;
-                let abs_scaled = scaled.abs();
-                let formatted = if abs_scaled >= 100.0 {
-                    format!("{:.0}", scaled)
-                } else if abs_scaled >= 10.0 {
-                    format!("{:.1}", scaled)
-                } else {
-                    format!("{:.2}", scaled)
-                };
-                let trimmed = formatted
-                    .trim_end_matches('0')
-                    .trim_end_matches('.')
-                    .to_string();
-                return format!("{trimmed}{suffix}");
-            }
-        }
-    }
-
-    format!("{:.3}", y)
-}
+// The readout formatters moved to `bolt::chart::format` (product-neutral);
+// re-exported so `chart::engine::format_*` and the flat chart re-exports keep
+// resolving.
+pub use bolt::chart::format::{format_x_value, format_y_value};
 
 /// Build the absolute-positioned overlay div that shows the multi-series readout.
 ///
-/// Layout: top 18px fixed; left clamped so the panel stays inside the plot area.
-/// Min-width 200px; one header row (time + optional offset) then one row per series.
-///
 /// `colors` is derived from `ChartColors::for_current(cx)` at the render call site
 /// so the overlay matches the active theme.
-fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
+fn readout_overlay(r: HoverReadout, colors: ChartColors, family: SharedString) -> impl IntoElement {
     const PANEL_MIN_WIDTH: f32 = 200.0;
     const PANEL_GAP: f32 = 12.0;
 
@@ -3110,7 +3265,7 @@ fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
         .gap(gpui::px(5.0))
         .px(gpui::px(12.0))
         .py(gpui::px(10.0))
-        .font_family(crate::typography::AppFonts::MONO)
+        .font_family(family)
         .text_size(gpui::px(12.0))
         .overflow_hidden()
         // P1Chart tooltip: the input cut on the raised fill with the strong
@@ -3120,7 +3275,6 @@ fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
                 .fill(colors.pill_bg)
                 .border(colors.pill_border),
         )
-        // Header: time + optional offset, muted
         .child(
             div()
                 .flex()
@@ -3128,8 +3282,7 @@ fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
                 .gap(gpui::px(6.0))
                 .pb(gpui::px(1.0))
                 .text_color(colors.label_fg)
-                .child(r.header_time)
-                .when_some(r.header_offset, |d, offset| d.child(offset)),
+                .child(r.header_time),
         )
         // One row per series; the focused row is bold.
         .children(r.series.into_iter().enumerate().map(move |(idx, entry)| {
@@ -3203,10 +3356,120 @@ mod tests {
         assert_eq!(nearest_sample(&pts, 5.0), (0.0, 1.0));
     }
 
+    const DAY_MS: f64 = 86_400_000.0;
+
+    fn utc_ms(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> f64 {
+        use dbflux_core::chrono::TimeZone;
+
+        dbflux_core::chrono::Utc
+            .with_ymd_and_hms(year, month, day, hour, minute, 0)
+            .single()
+            .expect("valid test date")
+            .timestamp_millis() as f64
+    }
+
+    fn readout_header(points: Vec<(f64, f64)>, hover_fraction: f32) -> String {
+        readout_header_for(vec![points], 0, &[], hover_fraction)
+    }
+
+    fn readout_header_for(
+        series: Vec<Vec<(f64, f64)>>,
+        focused_idx: usize,
+        hidden: &[usize],
+        hover_fraction: f32,
+    ) -> String {
+        let all_x = series.iter().flatten().map(|point| point.0);
+        let x_min = all_x.clone().fold(f64::INFINITY, f64::min);
+        let x_max = all_x.fold(f64::NEG_INFINITY, f64::max);
+        let bounds = Bounds {
+            origin: point(gpui::px(0.0), gpui::px(0.0)),
+            size: gpui::size(gpui::px(1000.0 + MARGIN_RIGHT), gpui::px(300.0)),
+        };
+        let y_columns: Vec<usize> = (1..=series.len()).collect();
+        let hidden: HashSet<usize> = hidden.iter().copied().collect();
+
+        build_readout(
+            Some(gpui::px(1000.0 * hover_fraction)),
+            Some(&bounds),
+            &series,
+            &[],
+            focused_idx,
+            &hidden,
+            &simple_spec(0, &y_columns),
+            x_min,
+            x_max - x_min,
+            true,
+        )
+        .expect("pointer inside the plot yields a readout")
+        .header_time
+        .to_string()
+    }
+
+    fn daily_series(hour: u32) -> Vec<(f64, f64)> {
+        let start = utc_ms(2025, 1, 1, hour, 0);
+
+        (0..10)
+            .map(|day| (start + day as f64 * DAY_MS, day as f64))
+            .collect()
+    }
+
     #[test]
-    fn format_x_value_time_formats_unix_ms() {
-        let s = format_x_value(0.0, true);
-        assert!(s.starts_with("1970-01-01"), "got: {s}");
+    fn readout_header_skips_a_hidden_focused_series() {
+        let series = vec![daily_series(0), daily_series(12), daily_series(0)];
+
+        assert_eq!(
+            readout_header_for(series, 0, &[0], 0.3),
+            "2025-01-03 12:00 UTC"
+        );
+    }
+
+    #[test]
+    fn readout_header_skips_an_empty_focused_series() {
+        let series = vec![Vec::new(), daily_series(12), daily_series(0)];
+
+        assert_eq!(
+            readout_header_for(series, 0, &[], 0.3),
+            "2025-01-03 12:00 UTC"
+        );
+    }
+
+    #[test]
+    fn readout_header_shows_the_hovered_day_for_daily_data() {
+        let start = utc_ms(2025, 1, 1, 0, 0);
+        let points = (0..10)
+            .map(|day| (start + day as f64 * DAY_MS, day as f64))
+            .collect();
+
+        assert_eq!(readout_header(points, 0.42), "2025-01-05");
+    }
+
+    #[test]
+    fn readout_header_shows_the_hovered_month_start_for_monthly_data() {
+        let points = (1..=12)
+            .map(|month| (utc_ms(2025, month, 1, 0, 0), month as f64))
+            .collect();
+
+        assert_eq!(readout_header(points, 0.17), "2025-03-01");
+    }
+
+    #[test]
+    fn readout_header_keeps_the_time_of_day_on_multi_day_hourly_data() {
+        let start = utc_ms(2025, 1, 1, 0, 0);
+        let points = (0..72)
+            .map(|hour| (start + hour as f64 * 3_600_000.0, hour as f64))
+            .collect();
+
+        assert_eq!(readout_header(points, 29.0 / 71.0), "2025-01-02 05:00 UTC");
+    }
+
+    #[test]
+    fn readout_header_shows_the_hovered_time_for_sub_day_data() {
+        let start = utc_ms(2025, 1, 1, 10, 0);
+        let points = (0..13)
+            .map(|step| (start + step as f64 * 600_000.0, step as f64))
+            .collect();
+
+        assert_eq!(readout_header(points, 0.34), "10:40 UTC");
     }
 
     #[test]
@@ -3271,19 +3534,12 @@ mod tests {
     }
 
     #[test]
-    fn format_y_value_uses_si_suffix_for_large_magnitudes() {
-        // SI suffixes for values >= 1e3
-        assert_eq!(format_y_value(1234.0), "1.23K");
-        assert_eq!(format_y_value(2_500_000_000.0), "2.5G");
-        assert_eq!(format_y_value(98_790_000_000.0), "98.8G");
-        assert_eq!(format_y_value(4.936e10), "49.4G");
-
-        // Scientific notation kept only for very small magnitudes.
-        assert!(format_y_value(0.0001).contains('e'));
-
-        // Pass-through formatting for the readable range.
-        assert_eq!(format_y_value(0.0), "0.000");
-        assert_eq!(format_y_value(1.5), "1.500");
+    fn format_y_value_drops_trailing_zeros_below_one_thousand() {
+        assert_eq!(format_y_value(21.0), "21");
+        assert_eq!(format_y_value(-7.0), "-7");
+        assert_eq!(format_y_value(0.125), "0.125");
+        assert_eq!(format_y_value(12.25), "12.25");
+        assert_eq!(format_y_value(999.0), "999");
     }
 
     fn make_col(name: &str, kind: ColumnKind) -> ColumnMeta {
@@ -3483,6 +3739,66 @@ mod tests {
             assert!(
                 !view.step_keyboard_series(1, cx),
                 "one visible series has nowhere to move"
+            );
+        });
+    }
+
+    /// While the pointer hovers, the hovered point is the point of the focused
+    /// series nearest to the pointer, not the pointer's own X; a keyboard
+    /// point takes its place when one is highlighted.
+    #[gpui::test]
+    fn hovered_point_is_the_nearest_point_of_the_focused_series(cx: &mut gpui::TestAppContext) {
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+
+        let view = cx.new(|_| {
+            ChartView::build(&partially_overlapping_hosts(), spec).expect("build should succeed")
+        });
+
+        view.update(cx, |view, _| {
+            assert_eq!(view.hovered_point(), None, "nothing hovered yet");
+
+            let plot_width = 300.0;
+            *view.plot_bounds.borrow_mut() = Some(Bounds {
+                origin: point(gpui::px(0.0), gpui::px(0.0)),
+                size: gpui::size(gpui::px(plot_width + MARGIN_RIGHT), gpui::px(200.0)),
+            });
+
+            let x_min = view.render_model.x_min;
+            let x_range = view.render_model.x_max - x_min;
+            let pointer_x = 2_400.0;
+            let pointer_px = ((pointer_x - x_min) / x_range) as f32 * plot_width;
+            view.hover_x_screen = Some(gpui::px(pointer_px));
+            view.focused_series_idx = 1;
+
+            let hover_x = view.hover_data_x().expect("pointer inside the plot");
+            assert!(
+                (hover_x - pointer_x).abs() < 1.0,
+                "hover_data_x is the pointer, got {hover_x}"
+            );
+            assert_eq!(
+                view.hovered_point(),
+                Some(HoveredPoint {
+                    series_idx: 1,
+                    point_idx_in_series: 0,
+                    x: 2_000.0,
+                    y: 10.0,
+                }),
+                "series b's point nearest to the pointer"
+            );
+        });
+
+        view.update(cx, |view, cx| {
+            view.jump_keyboard_point(true, cx);
+            assert_eq!(
+                view.hovered_point(),
+                Some(HoveredPoint {
+                    series_idx: 1,
+                    point_idx_in_series: 2,
+                    x: 4_000.0,
+                    y: 10.0,
+                }),
+                "the keyboard point stands in for the pointer"
             );
         });
     }

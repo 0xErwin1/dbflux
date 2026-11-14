@@ -57,9 +57,18 @@ patches=(
 )
 
 cd "$repo_root"
+tagged_rejects=()
 for patch in "${patches[@]}"; do
     echo "Applying $patch"
     git apply -p1 --directory=vendor/gpui-mcp --reject "vendor/gpui-mcp/$patch" || true
+
+    # git apply names every reject <file>.rej, so a later patch rejecting a hunk in the
+    # same file would overwrite this one. Tag each new reject with the patch it came from.
+    stem="${patch%.patch}"
+    tagged_rejects+=(! -name "*.$stem.rej")
+    while IFS= read -r -d '' reject; do
+        mv "$reject" "${reject%.rej}.$stem.rej"
+    done < <(find "$here/crates" -name '*.rej' "${tagged_rejects[@]}" -print0)
 done
 
 rejects="$(find "$here" -name '*.rej' || true)"

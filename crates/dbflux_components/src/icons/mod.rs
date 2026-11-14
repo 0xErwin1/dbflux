@@ -68,6 +68,10 @@ pub enum AppIcon {
     Minimize2,
     PanelBottomClose,
     PanelBottomOpen,
+    PanelBottom,
+    PanelRight,
+    PanelRightClose,
+    PanelRightOpen,
     FileSpreadsheet,
     KeyRound,
     Cable,
@@ -78,6 +82,7 @@ pub enum AppIcon {
     Tag,
     Activity,
     FileDown,
+    FileScan,
     SquareFunction,
     ArrowUpDown,
     Bot,
@@ -129,6 +134,8 @@ pub enum AppIcon {
     ChartNoAxesColumn,
     ChartBar,
     ChartPie,
+    ChartScatter,
+    Crosshair,
     ChartNetwork,
 
     // Database brands (SimpleIcons)
@@ -140,6 +147,7 @@ pub enum AppIcon {
     BrandRedis,
     BrandClickhouse,
     BrandTurso,
+    BrandDuckdb,
 
     // Language brands (for script file icons)
     BrandLua,
@@ -206,6 +214,10 @@ impl AppIcon {
             Self::Minimize2 => "icons/ui/minimize-2.svg",
             Self::PanelBottomClose => "icons/ui/panel-bottom-close.svg",
             Self::PanelBottomOpen => "icons/ui/panel-bottom-open.svg",
+            Self::PanelBottom => "icons/ui/panel-bottom.svg",
+            Self::PanelRight => "icons/ui/panel-right.svg",
+            Self::PanelRightClose => "icons/ui/panel-right-close.svg",
+            Self::PanelRightOpen => "icons/ui/panel-right-open.svg",
             Self::FileSpreadsheet => "icons/ui/file-spreadsheet.svg",
             Self::KeyRound => "icons/ui/key-round.svg",
             Self::Cable => "icons/ui/cable.svg",
@@ -216,6 +228,7 @@ impl AppIcon {
             Self::Tag => "icons/ui/tag.svg",
             Self::Activity => "icons/ui/activity.svg",
             Self::FileDown => "icons/ui/file-down.svg",
+            Self::FileScan => "icons/ui/file-scan.svg",
             Self::SquareFunction => "icons/ui/square-function.svg",
             Self::ArrowUpDown => "icons/ui/arrow-up-down.svg",
             Self::Plug => "icons/ui/plug.svg",
@@ -250,6 +263,8 @@ impl AppIcon {
             Self::ChartNoAxesColumn => "icons/ui/chart-no-axes-column.svg",
             Self::ChartBar => "icons/ui/chart-bar.svg",
             Self::ChartPie => "icons/ui/chart-pie.svg",
+            Self::ChartScatter => "icons/ui/chart-scatter.svg",
+            Self::Crosshair => "icons/ui/crosshair.svg",
             Self::ChartNetwork => "icons/ui/chart-network.svg",
             Self::BrandPostgres => "icons/brand/postgresql.svg",
             Self::BrandMysql => "icons/brand/mysql.svg",
@@ -259,6 +274,7 @@ impl AppIcon {
             Self::BrandRedis => "icons/brand/redis.svg",
             Self::BrandClickhouse => "icons/brand/clickhouse.svg",
             Self::BrandTurso => "icons/brand/turso.svg",
+            Self::BrandDuckdb => "icons/brand/duckdb.svg",
             Self::BrandLua => "icons/brand/lua.svg",
             Self::BrandPython => "icons/brand/python.svg",
             Self::BrandBash => "icons/brand/gnubash.svg",
@@ -327,18 +343,10 @@ impl AppIcon {
             Icon::S3 => Self::Boxes,
             Icon::Clickhouse => Self::BrandClickhouse,
             Icon::Turso => Self::BrandTurso,
+            Icon::Duckdb => Self::BrandDuckdb,
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
-            Icon::Database => match category {
-                DatabaseCategory::Document => Self::Braces,
-                DatabaseCategory::KeyValue => Self::KeyRound,
-                DatabaseCategory::ObjectStorage => Self::Boxes,
-                DatabaseCategory::Relational
-                | DatabaseCategory::Graph
-                | DatabaseCategory::TimeSeries
-                | DatabaseCategory::WideColumn
-                | DatabaseCategory::LogStream => Self::Database,
-            },
+            Icon::Database => crate::category::category_presentation(category).fallback_icon,
         }
     }
 }
@@ -366,20 +374,28 @@ impl DriverIconTone {
             | Icon::Sqlite
             | Icon::Redshift
             | Icon::Clickhouse
-            | Icon::Turso => Self::Info,
+            | Icon::Turso
+            | Icon::Duckdb => Self::Info,
             Icon::Mongodb | Icon::Dynamodb => Self::Success,
             Icon::Redis => Self::Danger,
             Icon::Influxdb => Self::Violet,
             Icon::S3 | Icon::Logs => Self::Warning,
-            Icon::Database => match category {
-                DatabaseCategory::Relational
-                | DatabaseCategory::Graph
-                | DatabaseCategory::WideColumn => Self::Info,
-                DatabaseCategory::Document => Self::Success,
-                DatabaseCategory::KeyValue => Self::Danger,
-                DatabaseCategory::TimeSeries => Self::Violet,
-                DatabaseCategory::ObjectStorage | DatabaseCategory::LogStream => Self::Warning,
-            },
+            Icon::Database => crate::category::category_presentation(category).fallback_tone,
+        }
+    }
+
+    /// The same tone as a row or badge tone, which resolves its own color
+    /// against the theme when it draws. Use it where a color is stored and
+    /// drawn later, so a light and dark switch does not leave a stale hue.
+    pub const fn badge_tone(self) -> crate::primitives::BadgeTone {
+        use crate::primitives::BadgeTone;
+
+        match self {
+            Self::Info => BadgeTone::Info,
+            Self::Success => BadgeTone::Success,
+            Self::Danger => BadgeTone::Danger,
+            Self::Violet => BadgeTone::Violet,
+            Self::Warning => BadgeTone::Warning,
         }
     }
 
@@ -475,10 +491,9 @@ mod tests {
             (DatabaseCategory::Document, AppIcon::Braces),
             (DatabaseCategory::KeyValue, AppIcon::KeyRound),
             (DatabaseCategory::ObjectStorage, AppIcon::Boxes),
-            (DatabaseCategory::Graph, AppIcon::Database),
             (DatabaseCategory::TimeSeries, AppIcon::Database),
-            (DatabaseCategory::WideColumn, AppIcon::Database),
             (DatabaseCategory::LogStream, AppIcon::Database),
+            (DatabaseCategory::SecretStore, AppIcon::Lock),
         ];
 
         for (category, expected) in cases {

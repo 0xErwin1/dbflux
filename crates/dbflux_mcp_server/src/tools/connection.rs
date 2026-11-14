@@ -7,6 +7,7 @@ use serde::Deserialize;
 use crate::{
     helper::{IntoErrorData, to_json_content},
     server::DbFluxServer,
+    state::ServerState,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -88,7 +89,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Connect to a database using a configured connection")]
+    #[tool(
+        description = "Connect to a database using a configured connection. The response reports `current_database` and the `databases` available on the server when the driver has databases; pass the `database` parameter of other tools to target a different one."
+    )]
     async fn connect(
         &self,
         Parameters(params): Parameters<ConnectParams>,
@@ -104,19 +107,48 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Metadata,
                 move || async move {
-                    Self::connect_cached(state, &connection_id)
+                    let response = Self::connect_impl(state, &connection_id)
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![to_json_content(
-                        &serde_json::json!({
-                            "success": true,
-                            "message": format!("Connected to {}", connection_id)
-                        }),
-                    )?]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
+    }
+
+    pub(crate) async fn connect_impl(
+        state: ServerState,
+        connection_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        let connection = Self::connect_cached(state.clone(), connection_id).await?;
+
+        let context = Self::database_context(&state, connection_id, connection).await;
+
+        let mut response = serde_json::json!({
+            "success": true,
+            "message": format!("Connected to {}", connection_id)
+        });
+
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "response is an object literal from serde_json::json!; indexing a Value \
+                object with a str key cannot panic (missing keys yield Null)"
+        )]
+        if let Some(current_database) = context.current_database {
+            response["current_database"] = serde_json::Value::String(current_database);
+        }
+
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "response is an object literal from serde_json::json!; indexing a Value \
+                object with a str key cannot panic (missing keys yield Null)"
+        )]
+        if !context.databases.is_empty() {
+            response["databases"] = serde_json::json!(context.databases);
+        }
+
+        Ok(response)
     }
 
     #[tool(description = "Disconnect from a database connection")]
@@ -135,25 +167,9 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Metadata,
                 move || async move {
-                    let retired_connections = {
-                        let mut cache = state.connection_cache.write().await;
-                        cache.drain_connection_variants(&connection_id)
-                    };
-
-                    // Factory shutdown may synchronously acquire cache-owned state. Ownership
-                    // was drained above, so this blocking cleanup never runs under the write lock.
-                    tokio::task::spawn_blocking(move || {
-                        for cached in retired_connections {
-                            let connection = cached.connection();
-                            if let Some(factory) = connection.execution_session_factory() {
-                                factory.shutdown().map_err(|error| error.to_string())?;
-                            }
-                        }
-                        Ok::<(), String>(())
-                    })
-                    .await
-                    .map_err(|error| ErrorData::internal_error(error.to_string(), None))?
-                    .map_err(|error| ErrorData::internal_error(error, None))?;
+                    Self::disconnect_impl(state, &connection_id)
+                        .await
+                        .map_err(|error| ErrorData::internal_error(error, None))?;
 
                     Ok(CallToolResult::success(vec![to_json_content(
                         &serde_json::json!({
@@ -201,7 +217,13 @@ impl DbFluxServer {
 
                     let blocking_result: Result<Option<String>, tokio::task::JoinError> =
                         tokio::task::spawn_blocking(move || {
-                            let version_query = conn_for_blocking.version_query();
+                            // A driver without a version query reports
+                            // not-supported instead of panicking: skip the
+                            // probe and leave the version out of the
+                            // response rather than failing the call.
+                            let Ok(version_query) = conn_for_blocking.version_query() else {
+                                return None;
+                            };
 
                             // `confirmed_ceiling` mirrors the classification
                             // this call site was already authorised at
@@ -217,9 +239,16 @@ impl DbFluxServer {
                                 database: None,
                                 execution_context: None,
                                 confirmed_ceiling: Some(ExecutionClassification::Metadata),
+                                read_only: dbflux_core::ReadOnlyEnforcement::None,
                             });
 
                             result.ok().and_then(|r| {
+                                #[expect(
+                                    clippy::indexing_slicing,
+                                    reason = "the condition guards rows with !is_empty() and \
+                                        rows[0] with !is_empty(), so both row[0] accesses are \
+                                        within bounds"
+                                )]
                                 if !r.rows.is_empty() && !r.rows[0].is_empty() {
                                     Some(format!("{:?}", r.rows[0][0]))
                                 } else {
@@ -241,10 +270,22 @@ impl DbFluxServer {
                         "status": "connected",
                     });
 
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "info is an object literal from serde_json::json!; indexing \
+                            a Value object with a str key cannot panic (missing keys yield \
+                            Null)"
+                    )]
                     if let Some(version) = version_info {
                         info["version"] = serde_json::Value::String(version);
                     }
 
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "info is an object literal from serde_json::json!; indexing \
+                            a Value object with a str key cannot panic (missing keys yield \
+                            Null)"
+                    )]
                     if let Some(db) = current_database {
                         info["current_database"] = serde_json::Value::String(db);
                     }

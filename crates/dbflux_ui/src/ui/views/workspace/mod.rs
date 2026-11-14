@@ -19,12 +19,13 @@ pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
-use dbflux_ui_base::app_state_entity::drain_scripts_directory_diagnostics;
+use dbflux_ui_base::app_state_entity::{
+    drain_scripts_directory_diagnostics, rescan_scripts_in_background,
+};
 use dbflux_ui_base::modals::{
     AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
-    DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
-    DeleteSavedChartRequest, ModalAddPanelPicker, ModalCreateDashboard,
-    ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
+    DeleteConfirmOutcome, DeleteConfirmRequest, DeleteTarget, ModalAddPanelPicker,
+    ModalCreateDashboard, ModalDeleteConfirm, ModalRenameItem, RenameItemOutcome,
     RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
 };
 use dbflux_ui_base::{
@@ -357,6 +358,10 @@ pub struct Workspace {
     /// chooses an outcome.
     pending_active_query: Option<ActiveQueryScope>,
     modal_unsaved_changes: Entity<crate::ui::overlays::modals::ModalUnsavedChanges>,
+    /// The quit the unsaved-changes prompt holds, from the moment it asks
+    /// until the saves it started have reported. `None` while the prompt is
+    /// closed or guards a tab close.
+    pending_quit: Option<PendingQuit>,
     modal_drop_table: Entity<crate::ui::overlays::modals::ModalDropTable>,
     /// Item ID of the drop-table pending delete, consumed when modal confirms.
     pending_drop_table_item_id: Option<String>,
@@ -368,8 +373,8 @@ pub struct Workspace {
     /// Dashboard / saved-chart management modals.
     modal_create_dashboard: Entity<ModalCreateDashboard>,
     modal_rename_item: Entity<ModalRenameItem>,
-    modal_delete_dashboard: Entity<ModalDeleteDashboardConfirm>,
-    modal_delete_saved_chart: Entity<ModalDeleteSavedChartConfirm>,
+    modal_delete_dashboard: Entity<ModalDeleteConfirm>,
+    modal_delete_saved_chart: Entity<ModalDeleteConfirm>,
     modal_add_panel: Entity<ModalAddPanelPicker>,
 
     /// In-app single-connection export modal (overlay, not an OS window).
@@ -388,6 +393,10 @@ pub struct Workspace {
     pending_open_script: Option<PendingOpenScript>,
     pending_open_routine: Option<PendingOpenRoutine>,
     needs_focus_restore: bool,
+    /// Set when the last tab closed under an open overlay: once every overlay
+    /// is gone, the sidebar takes keyboard focus, since an overlay may hand it
+    /// back to the closed document or to nothing at all.
+    focus_sidebar_after_overlays: bool,
 
     /// Active pipeline progress watcher for pipeline-enabled connects.
     pipeline_progress: Option<Entity<pipeline::PipelineProgress>>,
@@ -429,10 +438,30 @@ enum ActiveQueryScope {
     Quit,
 }
 
-/// Emitted when a quit started inside the workspace may proceed: the user
-/// chose "Quit anyway" in the active-query prompt, or closed the window from
-/// the in-app title bar with no query running. The application shell owns
-/// shutdown and starts it on this event.
+/// A quit the unsaved-changes prompt holds. `discard` lists the documents
+/// whose changes the user chose to drop in this quit so far; they are dropped
+/// when the quit goes on, and not asked about again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PendingQuit {
+    /// The prompt is open.
+    Asking {
+        discard: Vec<crate::ui::document::DocumentId>,
+    },
+    /// The user chose to save `waiting`. Once each of them reported, or its
+    /// tab closed, the quit checks every document again and goes on when
+    /// nothing needs asking. `failed` is set by the first save that did not
+    /// succeed, which drops the quit.
+    Saving {
+        waiting: Vec<crate::ui::document::DocumentId>,
+        failed: bool,
+        discard: Vec<crate::ui::document::DocumentId>,
+    },
+}
+
+/// Emitted when a quit started inside the workspace may proceed: nothing
+/// needed asking, or the user answered every prompt the quit opened (the
+/// active-query prompt, then the unsaved-changes prompt) with a choice that
+/// quits. The application shell owns shutdown and starts it on this event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuitConfirmed;
 
@@ -452,6 +481,9 @@ impl Workspace {
             entity: app_state.clone(),
         });
         dbflux_ui_base::app_state_entity::publish_vim_setting(&app_state, cx);
+        dbflux_ui_base::app_state_entity::publish_font_settings(&app_state, cx);
+        dbflux_ui_base::app_state_entity::publish_scrollbar_setting(&app_state, cx);
+        dbflux_ui_base::toast::publish_auto_dismiss_setting(&app_state, &toast_host, cx);
 
         // Subscribed before the startup diagnostics below are reported, so
         // Open Last Error in Audit also reaches those.
@@ -473,6 +505,10 @@ impl Workspace {
         for error in scripts_directory_errors {
             report_error(error, cx);
         }
+
+        // External scripts folders are registered unscanned at startup so a
+        // slow or unmounted folder never delays the window.
+        rescan_scripts_in_background(&app_state, cx);
 
         let sidebar = cx.new(|cx| Sidebar::new(app_state.clone(), window, cx));
         let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));
@@ -528,8 +564,8 @@ impl Workspace {
 
         let modal_create_dashboard = cx.new(|cx| ModalCreateDashboard::new(window, cx));
         let modal_rename_item = cx.new(|cx| ModalRenameItem::new(window, cx));
-        let modal_delete_dashboard = cx.new(ModalDeleteDashboardConfirm::new);
-        let modal_delete_saved_chart = cx.new(ModalDeleteSavedChartConfirm::new);
+        let modal_delete_dashboard = cx.new(ModalDeleteConfirm::new);
+        let modal_delete_saved_chart = cx.new(ModalDeleteConfirm::new);
         let modal_add_panel = cx.new(|cx| ModalAddPanelPicker::new(window, cx));
 
         let export_modal = cx.new(|cx| {
@@ -594,7 +630,8 @@ impl Workspace {
         )
         .detach();
 
-        // Subscribe: ModalTunnelAuth — handle passphrase provided or cancelled.
+        // Subscribe: ModalTunnelAuth — handle passphrase or connection password
+        // provided, or cancelled.
         cx.subscribe_in(
             &modal_tunnel_auth,
             window,
@@ -628,9 +665,22 @@ impl Workspace {
                             });
                         }
                     }
+                    TunnelAuthOutcome::PasswordProvided {
+                        profile_id,
+                        password,
+                        remember,
+                    } => {
+                        this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.connect_to_profile_with_password(
+                                profile_id, password, remember, cx,
+                            );
+                        });
+                    }
+                    // Cancelling either prompt abandons the connect without an
+                    // error: the profile simply stays disconnected.
                     TunnelAuthOutcome::Cancelled => {
                         this.sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_tunnel_auth_profile_id = None;
+                            sidebar.clear_pending_tunnel_auth();
                             cx.notify();
                         });
                         this.app_state.update(cx, |_state, cx| {
@@ -648,6 +698,14 @@ impl Workspace {
             window,
             |this, _, outcome: &crate::ui::overlays::modals::UnsavedChangesOutcome, window, cx| {
                 use crate::ui::overlays::modals::UnsavedChangesOutcome;
+
+                // A prompt opened for a quit is answered for the quit: its
+                // tabs stay open, whatever the answer.
+                if matches!(this.pending_quit, Some(PendingQuit::Asking { .. })) {
+                    this.resolve_quit_prompt(outcome, window, cx);
+                    return;
+                }
+
                 match outcome {
                     UnsavedChangesOutcome::DiscardAll(ids) => {
                         // Close the documents the dialog listed, nothing else:
@@ -873,24 +931,28 @@ impl Workspace {
         )
         .detach();
 
-        // Subscribe: ModalDeleteDashboardConfirm — on Confirmed, delete the dashboard.
+        // Subscribe: dashboard delete confirm — on Confirmed, delete the dashboard.
         cx.subscribe_in(
             &modal_delete_dashboard,
             window,
-            |this, _, outcome: &DeleteDashboardOutcome, window, cx| {
-                if let DeleteDashboardOutcome::Confirmed { dashboard_id } = *outcome {
+            |this, _, outcome: &DeleteConfirmOutcome, window, cx| {
+                if let DeleteConfirmOutcome::Confirmed(DeleteTarget::Dashboard { dashboard_id }) =
+                    *outcome
+                {
                     this.on_delete_dashboard_confirmed(dashboard_id, window, cx);
                 }
             },
         )
         .detach();
 
-        // Subscribe: ModalDeleteSavedChartConfirm — on Confirmed, delete the saved chart.
+        // Subscribe: saved chart delete confirm — on Confirmed, delete the saved chart.
         cx.subscribe_in(
             &modal_delete_saved_chart,
             window,
-            |this, _, outcome: &DeleteSavedChartOutcome, window, cx| {
-                if let DeleteSavedChartOutcome::Confirmed { chart_id } = *outcome {
+            |this, _, outcome: &DeleteConfirmOutcome, window, cx| {
+                if let DeleteConfirmOutcome::Confirmed(DeleteTarget::SavedChart { chart_id }) =
+                    *outcome
+                {
                     this.on_delete_saved_chart_confirmed(chart_id, window, cx);
                 }
             },
@@ -1085,11 +1147,52 @@ impl Workspace {
                 } => {
                     this.open_global_schema_viz_document(*profile_id, database.clone(), window, cx);
                 }
-                SidebarEvent::OpenObjectStoreBuckets { profile_id } => {
-                    this.open_object_store_buckets_document(*profile_id, window, cx);
+                SidebarEvent::OpenConsole {
+                    profile_id,
+                    database,
+                } => {
+                    this.open_console_document(*profile_id, Some(database.clone()), window, cx);
                 }
-                SidebarEvent::OpenObjectStoreBucket { profile_id, bucket } => {
-                    this.open_object_browser(*profile_id, bucket.clone(), window, cx);
+                SidebarEvent::OpenRootSection {
+                    profile_id,
+                    section_id,
+                    presentation,
+                } => {
+                    this.open_root_section(*profile_id, section_id, *presentation, window, cx);
+                }
+                SidebarEvent::OpenRootSectionItem {
+                    profile_id,
+                    item_id,
+                    presentation,
+                    ..
+                } => {
+                    this.open_root_section_item(
+                        *profile_id,
+                        item_id.clone(),
+                        *presentation,
+                        window,
+                        cx,
+                    );
+                }
+                SidebarEvent::RootSectionChanged {
+                    profile_id,
+                    presentation,
+                    ..
+                } => {
+                    this.refresh_root_section_document(*profile_id, *presentation, window, cx);
+                }
+                SidebarEvent::OpenSecretStore {
+                    profile_id,
+                    store_id,
+                    path,
+                } => {
+                    this.open_secret_store_document(
+                        *profile_id,
+                        store_id.clone(),
+                        path.clone(),
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,
@@ -1134,7 +1237,9 @@ impl Workspace {
                     this.new_query_tab_with_content(query.clone(), window, cx);
                 }
                 SidebarEvent::OpenScript { path } => {
-                    if dbflux_core::is_openable_script(path) {
+                    if dbflux_core::is_openable_script(path)
+                        || crate::ui::document::file_format::file_document_format(path).is_some()
+                    {
                         this.open_script_from_path(path.clone(), cx);
                     } else {
                         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
@@ -1327,6 +1432,17 @@ impl Workspace {
                         modal.open(req, window, cx);
                     });
                 }
+                SidebarEvent::RequestConnectionPassword { prompt } => {
+                    use crate::ui::overlays::modals::ConnectionPasswordRequest;
+                    let request = ConnectionPasswordRequest {
+                        profile_id: prompt.profile_id,
+                        profile_name: prompt.profile_name.clone(),
+                        field_label: prompt.field_label.clone(),
+                    };
+                    this.modal_tunnel_auth.update(cx, |modal, cx| {
+                        modal.open_connection_password(request, window, cx);
+                    });
+                }
                 SidebarEvent::RequestExportConnection { profile_id } => {
                     this.open_export_connection_modal(*profile_id, window, cx);
                 }
@@ -1488,6 +1604,10 @@ impl Workspace {
                 match event {
                     TabManagerEvent::DocumentRequestedFocus => {
                         this.set_focus(FocusTarget::Document, window, cx);
+                        // The raiser may have queued a secret to open in a tab
+                        // of its own: that is done now, not on a later render,
+                        // so a tab switch in between cannot strand it.
+                        this.open_pending_secret(window, cx);
                     }
                     TabManagerEvent::RequestSqlPreview {
                         context,
@@ -1566,6 +1686,9 @@ impl Workspace {
                     } => {
                         this.open_chart_from_query(query.clone(), *connection_id, window, cx);
                     }
+                    TabManagerEvent::OpenReferencedRow { target } => {
+                        this.open_table_at_referenced_row(target.clone(), window, cx);
+                    }
                     TabManagerEvent::RequestAddPanel { dashboard_id } => {
                         this.open_add_panel_picker(*dashboard_id, window, cx);
                     }
@@ -1588,6 +1711,8 @@ impl Workspace {
                         this.new_query_tab_with_content(sql.clone(), window, cx);
                     }
                     TabManagerEvent::SaveFinished { id, succeeded } => {
+                        this.leave_quit_wait(*id, *succeeded, window, cx);
+
                         if !succeeded && this.tab_manager.read(cx).active_id() == Some(*id) {
                             // Save As was dismissed or the write failed: the tab
                             // keeps its changes and gets the keyboard back.
@@ -1601,13 +1726,31 @@ impl Workspace {
                         this.tab_manager
                             .update(cx, |mgr, cx| mgr.focus_active(window, cx));
                     }
-                    TabManagerEvent::Closed(_) => {
+                    TabManagerEvent::Closed(id) => {
+                        // A closed tab never reports its save.
+                        this.leave_quit_wait(*id, true, window, cx);
+
                         // With a tab left, the `Activated` that follows hands
                         // the rail over. With none, nothing owns it any more.
                         if this.tab_manager.read(cx).active_id().is_none() {
                             this.workspace_inspector.update(cx, |insp, cx| {
                                 insp.hide(cx);
                             });
+
+                            // The focused document is gone and no tab is left
+                            // to take it, so keyboard focus would land nowhere.
+                            // Focus elsewhere is left alone: a deferred close
+                            // can land while the user works in another area.
+                            // An open overlay keeps the keyboard until it
+                            // closes; render then hands it to the sidebar.
+                            if this.focus_target == FocusTarget::Document {
+                                if this.overlay_context(cx).is_some() {
+                                    this.mark_focus_target(FocusTarget::Sidebar, cx);
+                                    this.focus_sidebar_after_overlays = true;
+                                } else {
+                                    this.set_focus(FocusTarget::Sidebar, window, cx);
+                                }
+                            }
                         }
 
                         this.write_session_manifest(cx);
@@ -1647,6 +1790,7 @@ impl Workspace {
             modal_active_query,
             pending_active_query: None,
             modal_unsaved_changes,
+            pending_quit: None,
             modal_drop_table,
             pending_drop_table_item_id: None,
             modal_tunnel_auth,
@@ -1666,6 +1810,7 @@ impl Workspace {
             pending_open_script: None,
             pending_open_routine: None,
             needs_focus_restore: false,
+            focus_sidebar_after_overlays: false,
             pipeline_progress: None,
             _pipeline_subscription: None,
             focus_target: FocusTarget::default(),
@@ -1687,10 +1832,10 @@ impl Workspace {
 
             if settings.restore_session_on_startup {
                 workspace.restore_session(window, cx);
+            }
 
-                if settings.reopen_last_connections {
-                    workspace.reopen_last_connections(cx);
-                }
+            if settings.reopen_last_connections {
+                workspace.reopen_last_connections(cx);
             }
 
             let has_tabs = !workspace.tab_manager.read(cx).is_empty();
@@ -1847,6 +1992,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.editor"),
             ),
             PaletteCommand::new(
+                "add_external_scripts_folder",
+                dbflux_i18n::t!("palette.command.add_external_scripts_folder.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
                 "toggle_comment",
                 dbflux_i18n::t!("palette.command.toggle_comment.name"),
                 dbflux_i18n::t!("palette.category.editor"),
@@ -1943,6 +2093,26 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "toggle_full_screen",
+                dbflux_i18n::t!("palette.command.toggle_full_screen.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "increase_interface_size",
+                dbflux_i18n::t!("palette.command.increase_interface_size.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "decrease_interface_size",
+                dbflux_i18n::t!("palette.command.decrease_interface_size.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "reset_interface_size",
+                dbflux_i18n::t!("palette.command.reset_interface_size.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "toggle_editor",
                 dbflux_i18n::t!("palette.command.toggle_editor.name"),
                 dbflux_i18n::t!("palette.category.view"),
@@ -1950,6 +2120,11 @@ impl Workspace {
             PaletteCommand::new(
                 "toggle_results",
                 dbflux_i18n::t!("palette.command.toggle_results.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "toggle_results_position",
+                dbflux_i18n::t!("palette.command.toggle_results_position.name"),
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
@@ -2238,6 +2413,10 @@ impl Workspace {
             // remaining ones from persisting their edits.
             let mut outstanding = false;
             for tab in manager.documents() {
+                // A value still in an open editor is committed first, so the
+                // flush persists it. Input that cannot be committed does not
+                // hold the shutdown up.
+                tab.as_pane().commit_pending_input(cx);
                 outstanding |= tab.as_pane().flush_for_shutdown(cx);
             }
             outstanding
@@ -2302,8 +2481,16 @@ impl Workspace {
         }
 
         if let Some(dir) = app_state.scripts_directory() {
-            let root = dir.root_path().to_path_buf();
-            Self::flatten_script_entries(dir.entries(), &root, &mut items);
+            Self::flatten_script_entries(dir.entries(), dir.root_path(), None, &mut items);
+
+            for external in dir.external_roots() {
+                Self::flatten_script_entries(
+                    external.entries(),
+                    external.path(),
+                    Some(external.label()),
+                    &mut items,
+                );
+            }
         }
 
         // Add the "Import Dashboard from JSON" entry only when the active
@@ -2337,9 +2524,13 @@ impl Workspace {
     }
 
     /// Recursively flatten script directory entries into palette items.
+    /// Lists the openable scripts under `scripts_root` as palette items. An
+    /// external folder passes its label as `root_label`, so its scripts read
+    /// `label/relative/path` and stay apart from same-named managed scripts.
     fn flatten_script_entries(
         entries: &[dbflux_core::ScriptEntry],
         scripts_root: &std::path::Path,
+        root_label: Option<&str>,
         items: &mut Vec<PaletteItem>,
     ) {
         use dbflux_core::ScriptEntry;
@@ -2355,6 +2546,12 @@ impl Workspace {
                         .unwrap_or(path)
                         .to_string_lossy()
                         .to_string();
+
+                    let relative_path = match root_label {
+                        Some(label) => format!("{label}/{relative_path}"),
+                        None => relative_path,
+                    };
+
                     items.push(PaletteItem::Script {
                         path: path.clone(),
                         name: name.clone(),
@@ -2362,7 +2559,7 @@ impl Workspace {
                     });
                 }
                 ScriptEntry::Folder { children, .. } => {
-                    Self::flatten_script_entries(children, scripts_root, items);
+                    Self::flatten_script_entries(children, scripts_root, root_label, items);
                 }
             }
         }
@@ -2468,17 +2665,19 @@ impl Workspace {
 
     /// Persist the inspector width to `GeneralSettings` and save to disk.
     fn persist_inspector_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        let runtime = self.app_state.read(cx).storage_runtime();
         let mut settings = self.app_state.read(cx).general_settings().clone();
         settings.workspace_inspector_width_px = Some(f32::from(width));
 
-        if let Err(e) = dbflux_app::config_loader::save_general_settings(runtime, &settings) {
-            log::warn!("Failed to persist inspector width: {}", e);
-        }
-
         self.app_state.update(cx, |state, _cx| {
-            state.update_general_settings(settings);
+            state.update_general_settings(settings.clone());
         });
+
+        dbflux_ui_base::settings_writer::persist_general_settings(
+            &self.app_state,
+            settings,
+            |_saved, _cx| {},
+            cx,
+        );
     }
 
     /// The next area in the Tab cycle, skipping the background tasks while
@@ -2507,2346 +2706,4 @@ impl Workspace {
 }
 
 #[cfg(test)]
-mod tab_close_request_tests {
-    // Explicit imports, not `use super::*`: the parent glob together with
-    // `#[gpui::test]` sends the macro expansion into unbounded recursion.
-    use crate::keymap::{Command, CommandDispatcher};
-    use crate::ui::document::pane::CloseDisposition;
-    use crate::ui::document::{CodeDocument, InspectorPanel, Tab, TabBarEvent, TabManagerEvent};
-    use crate::ui::overlays::command_palette::PaletteSelection;
-    use crate::ui::overlays::modals::{
-        CloseAction, DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
-    };
-    use crate::ui::views::workspace::{
-        DocumentFlushOutcome, FocusTarget, Workspace, WorkspaceInspectorEvent, await_document_flush,
-    };
-    use dbflux_core::QueryLanguage;
-    use dbflux_core::document_id::DocumentId;
-    use dbflux_ui_base::AppStateEntity;
-    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
-    use std::cell::{Cell, RefCell};
-    use std::rc::Rc;
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use dbflux_ui_base::{SaveTargetOutcome, SaveTargetProvider};
-
-    fn new_workspace(
-        cx: &mut TestAppContext,
-    ) -> (
-        Entity<Workspace>,
-        Entity<AppStateEntity>,
-        &mut VisualTestContext,
-    ) {
-        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
-            cx.new(|_| {
-                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
-                    .expect("in-memory storage");
-                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
-            })
-        });
-        new_workspace_with(cx, app_state)
-    }
-
-    /// Like [`new_workspace`], but with a caller-built app state — used by tests
-    /// that need a Save As override or other per-entity test seam installed
-    /// before any document is opened.
-    fn new_workspace_with(
-        cx: &mut TestAppContext,
-        app_state: Entity<AppStateEntity>,
-    ) -> (
-        Entity<Workspace>,
-        Entity<AppStateEntity>,
-        &mut VisualTestContext,
-    ) {
-        cx.update(gpui_component::init);
-        cx.update(dbflux_components::theme::init);
-        cx.update(dbflux_ui_base::keymap::init_keymap);
-
-        let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
-        let workspace_ref = holder.clone();
-
-        let (_, window) = cx.add_window_view(|window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
-            workspace_ref.replace(Some(workspace.clone()));
-            gpui_component::Root::new(workspace, window, cx)
-        });
-
-        let workspace = holder
-            .borrow()
-            .clone()
-            .expect("workspace should be created");
-        (workspace, app_state, window)
-    }
-
-    #[cfg(feature = "telemetry")]
-    #[gpui::test]
-    fn dashboard_sidebar_usage_counts_only_valid_explicit_opens(cx: &mut TestAppContext) {
-        let profile_id = uuid::Uuid::new_v4();
-        let app_state = cx.update(|cx| {
-            cx.new(|_| {
-                let runtime =
-                    dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("storage");
-                runtime
-                    .viz_connection()
-                    .expect("connection")
-                    .lock()
-                    .expect("lock")
-                    .execute(
-                        "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, 'test')",
-                        [profile_id.to_string()],
-                    )
-                    .expect("profile");
-                AppStateEntity::new_with_storage_runtime(runtime).expect("app")
-            })
-        });
-        let (workspace, app_state, window) = new_workspace_with(cx, app_state);
-        let dashboard_ids = window.update(|_, cx| {
-            app_state.update(cx, |state, _| {
-                state
-                    .initialize_telemetry(
-                        dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
-                            .expect("no transport"),
-                        chrono::Utc::now(),
-                    )
-                    .expect("scheduler");
-                ["Undisclosed", "Explicit", "Automatic"].map(|name| {
-                    state
-                        .dashboards
-                        .create_dashboard(
-                            name.into(),
-                            None,
-                            profile_id,
-                            None,
-                            dbflux_components::SavedChartRefreshPolicy::Off,
-                        )
-                        .expect("persist dashboard")
-                })
-            })
-        });
-        for (case, dashboard_id, expected) in [
-            ("undisclosed", dashboard_ids[0], 0),
-            ("off", dashboard_ids[0], 0),
-            ("new", dashboard_ids[1], 1),
-            ("existing", dashboard_ids[1], 2),
-            ("automatic new", dashboard_ids[2], 2),
-            ("automatic existing", dashboard_ids[2], 2),
-            ("refocus", dashboard_ids[1], 3),
-            ("automatic switch", dashboard_ids[2], 3),
-            ("orphan refocus", dashboard_ids[1], 3),
-            ("invalid", uuid::Uuid::new_v4(), 3),
-            ("off after basic", dashboard_ids[1], 0),
-        ] {
-            window.update(|_, cx| {
-                app_state.update(cx, |state, _| {
-                    let scheduler = state.telemetry_mut().expect("scheduler");
-                    match case {
-                        "undisclosed" | "new" => scheduler
-                            .set_basic(true, chrono::Utc::now())
-                            .expect("basic"),
-                        "off" | "off after basic" => {
-                            scheduler.set_basic(false, chrono::Utc::now()).expect("off");
-                            scheduler
-                                .disclosure_dismissed(chrono::Utc::now())
-                                .expect("disclosure");
-                        }
-                        _ => {}
-                    }
-                });
-            });
-            if case == "orphan refocus" {
-                window.update(|_, cx| {
-                    app_state.update(cx, |state, _| {
-                        state
-                            .dashboards
-                            .delete_dashboard(dashboard_id)
-                            .expect("delete metadata without workspace delete flow");
-                        assert!(state.dashboards.dashboard_by_id(dashboard_id).is_none());
-                    });
-                });
-            }
-            if case.starts_with("automatic") {
-                window.update(|window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.open_dashboard(dashboard_id, None, window, cx);
-                    });
-                });
-            } else {
-                window.update(|_, cx| {
-                    let sidebar = workspace.read(cx).sidebar.clone();
-                    sidebar.update(cx, |_, cx| {
-                        cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenDashboard { dashboard_id });
-                    });
-                });
-            }
-            window.update(|_, cx| {
-                let workspace = workspace.read(cx);
-                let tab = workspace.tab_manager.read(cx).find_by_key(
-                    &crate::ui::document::DocumentKey::Dashboard { dashboard_id },
-                    cx,
-                );
-                assert_eq!(tab.is_some(), case != "invalid", "{case}");
-                if case != "invalid" {
-                    assert_eq!(workspace.tab_manager.read(cx).active_id(), tab, "{case}");
-                }
-                app_state.update(cx, |state, _| {
-                    let scheduler = state.telemetry_mut().expect("scheduler");
-                    let _preparation = scheduler
-                        .prepare(chrono::Utc::now(), "en")
-                        .expect("flush without I/O");
-                    let counters = serde_json::to_value(scheduler.state()).expect("state");
-                    assert_eq!(
-                        counters["counters"]["dashboard_open"].as_u64().unwrap_or(0),
-                        expected,
-                        "{case}"
-                    );
-                });
-            });
-        }
-    }
-
-    /// Opens an empty query tab and returns its document id.
-    fn open_code_tab(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-        app_state: &Entity<AppStateEntity>,
-    ) -> DocumentId {
-        let document = window.update(|window, cx| {
-            cx.new(|cx| {
-                CodeDocument::new_with_language(
-                    app_state.clone(),
-                    None,
-                    QueryLanguage::Sql,
-                    window,
-                    cx,
-                )
-            })
-        });
-        let document_id = window.update(|_, cx| document.read(cx).id());
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                let pane = CodeDocument::into_pane(document.clone(), cx);
-                workspace.tab_manager.update(cx, |manager, cx| {
-                    manager.open(Tab::Pane(Box::new(pane)), cx);
-                });
-            });
-        });
-
-        document_id
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_hover_waits_cancels_and_preserves_focus(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                workspace
-                    .sidebar_dock
-                    .update(cx, |dock, cx| dock.toggle(cx));
-                let start = std::time::Instant::now();
-                workspace.sidebar_dock.update(cx, |dock, cx| {
-                    dock.pointer_enter(start, cx);
-                    dock.process_hover_deadline(start + std::time::Duration::from_millis(249), cx);
-                    assert!(dock.is_collapsed());
-                    dock.pointer_leave(cx);
-                    dock.process_hover_deadline(start + std::time::Duration::from_secs(1), cx);
-                    assert!(dock.is_collapsed());
-                    dock.pointer_enter(start, cx);
-                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
-                    assert!(!dock.is_collapsed());
-                });
-                assert_eq!(workspace.focus_target, FocusTarget::Document);
-                workspace.set_focus(FocusTarget::Sidebar, window, cx);
-                workspace
-                    .sidebar_dock
-                    .update(cx, |dock, cx| dock.pointer_leave(cx));
-                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_menu_closure_dismisses_after_pointer_and_focus_leave(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                workspace.sidebar_dock.update(cx, |dock, cx| {
-                    dock.toggle(cx);
-                    let start = std::time::Instant::now();
-                    dock.pointer_enter(start, cx);
-                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
-                });
-                let id = dbflux_core::SchemaNodeId::Profile {
-                    profile_id: uuid::Uuid::new_v4(),
-                }
-                .to_string();
-                workspace.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.open_menu_for_item(&id, gpui::point(gpui::px(5.0), gpui::px(5.0)), cx);
-                    assert!(sidebar.has_transient_interaction());
-                });
-                workspace
-                    .sidebar_dock
-                    .update(cx, |dock, cx| dock.pointer_leave(cx));
-                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace
-                    .sidebar
-                    .update(cx, |sidebar, cx| sidebar.close_context_menu(cx));
-            });
-        });
-        window.run_until_parked();
-        window.update(|_, cx| {
-            assert!(workspace.read(cx).sidebar_dock.read(cx).is_collapsed());
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_toggle_on_transient_reveal_collapses_instead_of_expanding(
-        cx: &mut TestAppContext,
-    ) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                workspace.sidebar_dock.update(cx, |dock, cx| {
-                    dock.toggle(cx);
-                    dock.reveal_transiently(cx);
-                    assert!(!dock.is_collapsed());
-                    dock.toggle(cx);
-                    assert!(
-                        dock.is_collapsed(),
-                        "visible left-chevron must close the transient reveal"
-                    );
-                });
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_dispatched_focus_preserves_collapsed_preference(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                workspace
-                    .sidebar_dock
-                    .update(cx, |dock, cx| dock.toggle(cx));
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-                assert!(workspace.dispatch(Command::FocusSidebar, window, cx));
-                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
-                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_palette_focus_preserves_collapsed_preference(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                workspace
-                    .sidebar_dock
-                    .update(cx, |dock, cx| dock.toggle(cx));
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace.command_palette.update(cx, |_, cx| {
-                    cx.emit(PaletteSelection::FocusConnection {
-                        profile_id: uuid::Uuid::new_v4(),
-                    });
-                });
-            });
-        });
-        window.run_until_parked();
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
-                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_focus_left_enters_explicitly_collapsed_sidebar(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                workspace
-                    .sidebar_dock
-                    .update(cx, |dock, cx| dock.toggle(cx));
-                assert!(workspace.dispatch(Command::FocusLeft, window, cx));
-                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
-                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_focus_cycle_enters_explicitly_collapsed_sidebar(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                workspace
-                    .sidebar_dock
-                    .update(cx, |dock, cx| dock.toggle(cx));
-                assert!(workspace.dispatch(Command::CycleFocusForward, window, cx));
-                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
-                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace.set_focus(FocusTarget::BackgroundTasks, window, cx);
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
-                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
-                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_transient_resize_survives_dismiss_and_reveal(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.sidebar_dock.update(cx, |dock, cx| {
-                    dock.toggle(cx);
-                    dock.reveal_transiently(cx);
-                    let resized = dock.current_width() + gpui::px(70.0);
-                    dock.begin_resize(gpui::px(270.0), cx);
-                    dock.handle_resize_move(gpui::px(340.0), cx);
-                    assert_eq!(dock.current_width(), resized);
-                    dock.finish_resize(cx);
-                    dock.dismiss_transient(cx);
-                    assert!(dock.is_collapsed());
-                    dock.reveal_transiently(cx);
-                    assert_eq!(dock.current_width(), resized);
-                });
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_window_exit_clears_transient_reveal(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                workspace.sidebar_dock.update(cx, |dock, cx| {
-                    dock.toggle(cx);
-                    let start = std::time::Instant::now();
-                    dock.pointer_enter(start, cx);
-                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
-                    assert!(!dock.is_collapsed());
-                });
-            });
-        });
-        window.run_until_parked();
-        window.update(|window, cx| {
-            window.dispatch_event(
-                gpui::PlatformInput::MouseExited(gpui::MouseExitEvent::default()),
-                cx,
-            );
-            assert!(workspace.read(cx).sidebar_dock.read(cx).is_collapsed());
-        });
-    }
-
-    #[gpui::test]
-    fn sidebar_dock_keyboard_reveal_preserves_explicit_collapse(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace
-                    .sidebar_dock
-                    .update(cx, |dock, cx| dock.toggle(cx));
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace.set_focus(FocusTarget::Sidebar, window, cx);
-                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
-                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
-                workspace.set_focus(FocusTarget::Document, window, cx);
-                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
-            });
-        });
-    }
-
-    /// Regression: the document's close request only ends the tab because the
-    /// workspace subscribes to the tab manager. Removing that link would leave
-    /// every save-and-close tab open with no test failing.
-    #[gpui::test]
-    fn a_close_request_closes_the_tab_that_asked(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let document_id = open_code_tab(window, &workspace, &app_state);
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.tab_manager.update(cx, |_manager, cx| {
-                    cx.emit(TabManagerEvent::RequestClose { id: document_id });
-                });
-            });
-        });
-        window.run_until_parked();
-
-        window.update(|_, cx| {
-            let workspace = workspace.read(cx);
-            assert!(
-                workspace
-                    .tab_manager
-                    .read(cx)
-                    .document(document_id)
-                    .is_none(),
-                "the workspace must close the tab whose document asked"
-            );
-        });
-    }
-
-    /// Regression: "Don't save" used to close every open tab, not just the
-    /// document the dialog was asking about.
-    #[gpui::test]
-    fn discarding_closes_only_the_listed_documents(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let discarded = open_code_tab(window, &workspace, &app_state);
-        let kept = open_code_tab(window, &workspace, &app_state);
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.modal_unsaved_changes.update(cx, |_modal, cx| {
-                    cx.emit(UnsavedChangesOutcome::DiscardAll(vec![discarded]));
-                });
-            });
-        });
-        window.run_until_parked();
-
-        window.update(|_, cx| {
-            let manager = workspace.read(cx).tab_manager.read(cx);
-            assert!(
-                manager.document(discarded).is_none(),
-                "the listed document must close"
-            );
-            assert!(
-                manager.document(kept).is_some(),
-                "every other tab keeps its changes"
-            );
-        });
-    }
-
-    /// Regression: the workspace confirmation owns the keyboard, so its
-    /// routing must run before the sidebar guards in `dispatch`. Resolving the
-    /// modal through `dispatch` is what proves the call site is wired, which
-    /// calling the router directly would not.
-    #[gpui::test]
-    fn dispatch_resolves_a_visible_unsaved_changes_modal(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let document_id = open_code_tab(window, &workspace, &app_state);
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.modal_unsaved_changes.update(cx, |modal, cx| {
-                    modal.open(
-                        UnsavedChangesRequest {
-                            entries: vec![DirtySummaryEntry {
-                                id: document_id,
-                                name: "query.sql".to_string(),
-                                summary: "1 pending change".to_string(),
-                                action: CloseAction::Save,
-                            }],
-                        },
-                        cx,
-                    );
-                    assert!(modal.is_visible(), "the modal starts visible");
-                });
-            });
-        });
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.dispatch(Command::Cancel, window, cx);
-            });
-        });
-        window.run_until_parked();
-
-        window.update(|_, cx| {
-            assert!(
-                !workspace
-                    .read(cx)
-                    .modal_unsaved_changes
-                    .read(cx)
-                    .is_visible(),
-                "Escape must resolve the visible confirmation"
-            );
-            assert!(
-                workspace
-                    .read(cx)
-                    .tab_manager
-                    .read(cx)
-                    .document(document_id)
-                    .is_some(),
-                "cancelling keeps the tab open"
-            );
-        });
-    }
-
-    // === Close-route unification and close flush (T2a) ===
-
-    fn temp_close_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("dbflux-close-{name}-{}.sql", uuid::Uuid::new_v4()))
-    }
-
-    /// Opens a real file-backed code tab whose buffer holds `buffer` while the
-    /// file on disk holds `on_disk`, with a real loaded baseline.
-    ///
-    /// When `dirty` is set the tab reports pending edits (through the same
-    /// `restore_dirty` session restore uses), so closing it must persist them.
-    fn open_file_backed_code_tab(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-        app_state: &Entity<AppStateEntity>,
-        path: &std::path::Path,
-        buffer: &str,
-        on_disk: &str,
-        dirty: bool,
-    ) -> DocumentId {
-        std::fs::write(path, on_disk).expect("seed the backing file");
-        let path = path.to_path_buf();
-        let buffer = buffer.to_string();
-        let on_disk = on_disk.to_string();
-
-        let document = window.update(|window, cx| {
-            cx.new(|cx| {
-                let mut document = CodeDocument::new_with_language(
-                    app_state.clone(),
-                    None,
-                    QueryLanguage::Sql,
-                    window,
-                    cx,
-                )
-                .with_path(path.clone());
-                document.set_content(&buffer, window, cx);
-                document.seed_file_baseline(path.clone(), on_disk);
-                if dirty {
-                    document.restore_dirty(cx);
-                }
-                document
-            })
-        });
-        let document_id = window.update(|_, cx| document.read(cx).id());
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                let pane = CodeDocument::into_pane(document.clone(), cx);
-                workspace.tab_manager.update(cx, |manager, cx| {
-                    manager.open(Tab::Pane(Box::new(pane)), cx);
-                });
-            });
-        });
-
-        document_id
-    }
-
-    /// The single close funnel persists a dirty code tab's newest content to the
-    /// real file before the tab is removed.
-    #[gpui::test]
-    fn closing_a_dirty_code_tab_persists_before_removing_it(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_close_path("persist");
-        let id = open_file_backed_code_tab(
-            window, &workspace, &app_state, &path, "NEWEST;", "OLD;", true,
-        );
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.close_tab(id, window, cx);
-                assert!(
-                    workspace.tab_manager.read(cx).document(id).is_some(),
-                    "a deferred close must not remove the tab before its flush lands"
-                );
-            });
-        });
-
-        window.run_until_parked();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the flush must land on the real file"),
-            "NEWEST;",
-            "closing a dirty tab must persist its newest content"
-        );
-        window.update(|_, cx| {
-            assert!(
-                workspace
-                    .read(cx)
-                    .tab_manager
-                    .read(cx)
-                    .document(id)
-                    .is_none(),
-                "the tab closes only once its flush lands"
-            );
-        });
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    /// A close whose flush is refused leaves the tab open with its buffer, and
-    /// the foreign bytes on disk stay untouched.
-    #[gpui::test]
-    fn a_close_flush_refused_over_a_foreign_change_keeps_the_tab_open(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_close_path("conflict");
-        let id =
-            open_file_backed_code_tab(window, &workspace, &app_state, &path, "MINE;", "OLD;", true);
-
-        std::fs::write(&path, "THEIRS;").expect("the external rewrite must succeed");
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.close_tab(id, window, cx);
-            });
-        });
-        window.run_until_parked();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the foreign content must survive"),
-            "THEIRS;",
-            "a refused flush must never overwrite the foreign change"
-        );
-        window.update(|_, cx| {
-            assert!(
-                workspace
-                    .read(cx)
-                    .tab_manager
-                    .read(cx)
-                    .document(id)
-                    .is_some(),
-                "a refused flush leaves the tab open with its buffer"
-            );
-        });
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    /// A clean, idle tab closes immediately: no flush, no pointless write.
-    #[gpui::test]
-    fn a_clean_idle_code_tab_closes_without_a_flush(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_close_path("clean");
-        let id = open_file_backed_code_tab(
-            window, &workspace, &app_state, &path, "SEEDED;", "SEEDED;", false,
-        );
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(workspace.close_tab(id, window, cx));
-                assert!(
-                    workspace.tab_manager.read(cx).document(id).is_none(),
-                    "a clean, idle tab closes immediately"
-                );
-            });
-        });
-        window.run_until_parked();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the file must be intact"),
-            "SEEDED;",
-            "a clean close must not rewrite the file"
-        );
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    /// A dirty code tab closes by persisting, not by asking: the unsaved-changes
-    /// dialog is only for documents that need an explicit user save.
-    #[gpui::test]
-    fn closing_a_dirty_code_tab_persists_instead_of_asking(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_close_path("no-dialog");
-        let id = open_file_backed_code_tab(
-            window, &workspace, &app_state, &path, "NEWEST;", "OLD;", true,
-        );
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(
-                    workspace.close_active_tab(window, cx),
-                    "a code document's close is accepted and deferred"
-                );
-                assert!(
-                    !workspace.modal_unsaved_changes.read(cx).is_visible(),
-                    "a code document persists its edits instead of asking"
-                );
-                assert!(
-                    workspace.tab_manager.read(cx).document(id).is_some(),
-                    "the tab stays open until the flush lands"
-                );
-            });
-        });
-        window.run_until_parked();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the flush must land"),
-            "NEWEST;"
-        );
-        window.update(|_, cx| {
-            assert!(
-                workspace
-                    .read(cx)
-                    .tab_manager
-                    .read(cx)
-                    .document(id)
-                    .is_none()
-            );
-        });
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    /// Batch close applies the same per-document policy: clean tabs close, a
-    /// tab whose flush is refused stays open.
-    #[gpui::test]
-    fn close_others_closes_the_clean_tabs_and_keeps_a_blocked_one(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let kept_path = temp_close_path("kept");
-        let clean_path = temp_close_path("other-clean");
-        let blocked_path = temp_close_path("other-blocked");
-
-        let kept = open_file_backed_code_tab(
-            window, &workspace, &app_state, &kept_path, "KEEP;", "KEEP;", false,
-        );
-        let clean = open_file_backed_code_tab(
-            window,
-            &workspace,
-            &app_state,
-            &clean_path,
-            "CLEAN;",
-            "CLEAN;",
-            false,
-        );
-        let blocked = open_file_backed_code_tab(
-            window,
-            &workspace,
-            &app_state,
-            &blocked_path,
-            "MINE;",
-            "OLD;",
-            true,
-        );
-
-        // A foreign change makes the blocked tab's flush refuse.
-        std::fs::write(&blocked_path, "THEIRS;").expect("the external rewrite must succeed");
-
-        // Route through the tab bar exactly as the context menu does.
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.tab_bar.update(cx, |_bar, cx| {
-                    cx.emit(TabBarEvent::CloseOtherTabs(kept));
-                });
-            });
-        });
-        window.run_until_parked();
-
-        window.update(|_, cx| {
-            let manager = workspace.read(cx).tab_manager.read(cx);
-            assert!(manager.document(kept).is_some(), "the reference tab stays");
-            assert!(manager.document(clean).is_none(), "a clean tab closes");
-            assert!(
-                manager.document(blocked).is_some(),
-                "a blocked tab stays open"
-            );
-        });
-        assert_eq!(
-            std::fs::read_to_string(&blocked_path).expect("the foreign content must survive"),
-            "THEIRS;"
-        );
-
-        std::fs::remove_file(&kept_path).ok();
-        std::fs::remove_file(&clean_path).ok();
-        std::fs::remove_file(&blocked_path).ok();
-    }
-
-    /// A Save As picker that records that it was invoked, then reports the
-    /// user dismissing the dialog. Used to prove a close route never started
-    /// a Save As flow: no picker call, no file created anywhere.
-    fn cancelled_recording_picker() -> (SaveTargetProvider, Arc<std::sync::atomic::AtomicBool>) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let invoked = Arc::new(AtomicBool::new(false));
-        let flag = invoked.clone();
-        let provider: SaveTargetProvider = Arc::new(move |_request| {
-            flag.store(true, Ordering::SeqCst);
-            gpui::Task::ready(SaveTargetOutcome::Cancelled)
-        });
-        (provider, invoked)
-    }
-
-    /// Opens an untitled code tab holding edits the user typed: no backing file,
-    /// a buffer that differs from the content it loaded, and no baseline.
-    ///
-    /// The text enters through the editor's own input path rather than a
-    /// fixture-only setter, so the document is dirty by the same predicate the
-    /// close flow consults. The assertion is what keeps this fixture from
-    /// looking dirty to a test while looking clean to the code.
-    fn open_dirty_untitled_code_tab(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-        app_state: &Entity<AppStateEntity>,
-    ) -> DocumentId {
-        let document = window.update(|window, cx| {
-            cx.new(|cx| {
-                CodeDocument::new_with_language(
-                    app_state.clone(),
-                    None,
-                    QueryLanguage::Sql,
-                    window,
-                    cx,
-                )
-            })
-        });
-        let document_id = window.update(|_, cx| document.read(cx).id());
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                let pane = CodeDocument::into_pane(document.clone(), cx);
-                workspace.tab_manager.update(cx, |manager, cx| {
-                    manager.open(Tab::Pane(Box::new(pane)), cx);
-                });
-                workspace.set_focus(crate::keymap::FocusTarget::Document, window, cx);
-            });
-        });
-        window.run_until_parked();
-
-        window.simulate_input("SELECT 1;");
-        window.run_until_parked();
-
-        window.update(|_, cx| {
-            assert!(
-                document.read(cx).change_summary(cx).is_some(),
-                "the fixture must look dirty to the close flow's own predicate"
-            );
-        });
-
-        document_id
-    }
-
-    /// Only code documents decide their own close; every other document keeps
-    /// the unsaved-changes dialog and reports `CloseNow` to the funnel. A code
-    /// document decides its own close only while it has a file to persist to:
-    /// an untitled buffer has no save target short of Save As, so the dialog
-    /// guards it.
-    #[gpui::test]
-    fn only_code_documents_decide_their_own_close(cx: &mut TestAppContext) {
-        let (_workspace, app_state, window) = new_workspace(cx);
-
-        let untitled = window.update(|window, cx| {
-            cx.new(|cx| {
-                CodeDocument::new_with_language(
-                    app_state.clone(),
-                    None,
-                    QueryLanguage::Sql,
-                    window,
-                    cx,
-                )
-            })
-        });
-        let untitled_pane = window.update(|_, cx| CodeDocument::into_pane(untitled, cx));
-        let untitled_keeps_dialog = window.update(|_, cx| !untitled_pane.has_close_policy(cx));
-        assert!(
-            untitled_keeps_dialog,
-            "an untitled code document has no file to persist to, so the dialog guards it"
-        );
-
-        let backing_path =
-            std::env::temp_dir().join(format!("dbflux-policy-{}.sql", uuid::Uuid::new_v4()));
-        let file_backed = window.update(|window, cx| {
-            cx.new(|cx| {
-                CodeDocument::new_with_language(
-                    app_state.clone(),
-                    None,
-                    QueryLanguage::Sql,
-                    window,
-                    cx,
-                )
-                .with_path(backing_path.clone())
-            })
-        });
-        let file_backed_pane = window.update(|_, cx| CodeDocument::into_pane(file_backed, cx));
-        let file_backed_decides = window.update(|_, cx| file_backed_pane.has_close_policy(cx));
-        assert!(
-            file_backed_decides,
-            "a file-backed code document persists its own edits on close"
-        );
-
-        let inspector = window.update(|_, cx| {
-            cx.new(|cx| {
-                InspectorPanel::new(
-                    uuid::Uuid::new_v4(),
-                    "metric".to_string(),
-                    app_state.clone(),
-                    cx,
-                )
-            })
-        });
-        let inspector_pane = window.update(|_, cx| InspectorPanel::into_pane(inspector, cx));
-        let inspector_keeps_dialog = window.update(|_, cx| !inspector_pane.has_close_policy(cx));
-        assert!(
-            inspector_keeps_dialog,
-            "documents without a close policy keep the unsaved-changes dialog"
-        );
-        assert_eq!(
-            window.update(|window, cx| inspector_pane.resolve_close(window, cx)),
-            CloseDisposition::CloseNow,
-            "a document without a policy is always closable by the funnel"
-        );
-    }
-
-    /// Closing a dirty untitled tab through the funnel must ask before
-    /// discarding: the confirmation opens, the tab stays open, and no Save As
-    /// flow starts, so no file is ever created.
-    #[gpui::test]
-    fn a_dirty_untitled_tab_closed_through_the_funnel_asks_first(cx: &mut TestAppContext) {
-        let (picker, picker_invoked) = cancelled_recording_picker();
-        let app_state = cx.update(|cx| {
-            cx.new(|_| {
-                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
-                    .expect("in-memory storage");
-                AppStateEntity::new_with_storage_runtime(runtime)
-                    .expect("test storage setup")
-                    .with_save_target_override(picker)
-            })
-        });
-        let (workspace, app_state, window) = new_workspace_with(cx, app_state);
-        let id = open_dirty_untitled_code_tab(window, &workspace, &app_state);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                let accepted = workspace.close_tab(id, window, cx);
-                assert!(!accepted, "the close must wait for the user's decision");
-                assert!(
-                    workspace.modal_unsaved_changes.read(cx).is_visible(),
-                    "a dirty untitled tab must raise the unsaved-changes confirmation"
-                );
-                assert!(
-                    workspace.tab_manager.read(cx).document(id).is_some(),
-                    "the tab stays open until the user chooses"
-                );
-            });
-        });
-
-        assert!(
-            !picker_invoked.load(std::sync::atomic::Ordering::SeqCst),
-            "the funnel must ask, not start a Save As behind the dialog"
-        );
-    }
-
-    /// "Don't save" must remove the tab directly: routing the discard back
-    /// through the funnel would re-open the same confirmation forever, and a
-    /// funnel flush would save the very changes the user chose to drop.
-    #[gpui::test]
-    fn discarding_a_dirty_untitled_tab_removes_it_without_re_asking(cx: &mut TestAppContext) {
-        let (picker, picker_invoked) = cancelled_recording_picker();
-        let app_state = cx.update(|cx| {
-            cx.new(|_| {
-                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
-                    .expect("in-memory storage");
-                AppStateEntity::new_with_storage_runtime(runtime)
-                    .expect("test storage setup")
-                    .with_save_target_override(picker)
-            })
-        });
-        let (workspace, app_state, window) = new_workspace_with(cx, app_state);
-        let id = open_dirty_untitled_code_tab(window, &workspace, &app_state);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.close_tab(id, window, cx);
-            });
-        });
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.modal_unsaved_changes.update(cx, |modal, cx| {
-                    // The buttons emit and then close, so the confirmation is
-                    // already gone by the time the workspace handles the choice.
-                    cx.emit(UnsavedChangesOutcome::DiscardAll(vec![id]));
-                    modal.close(cx);
-                });
-            });
-        });
-        window.run_until_parked();
-
-        window.update(|_, cx| {
-            assert!(
-                workspace
-                    .read(cx)
-                    .tab_manager
-                    .read(cx)
-                    .document(id)
-                    .is_none(),
-                "discard removes the listed tab"
-            );
-            assert!(
-                !workspace
-                    .read(cx)
-                    .modal_unsaved_changes
-                    .read(cx)
-                    .is_visible(),
-                "discard must not re-open the confirmation"
-            );
-        });
-        assert!(
-            !picker_invoked.load(std::sync::atomic::Ordering::SeqCst),
-            "discard must not save the edits the user chose to drop"
-        );
-    }
-
-    /// A batch close asks once about every document that needs it: one modal
-    /// carrying all their entries, none of them closed by the batch, while the
-    /// documents that need no decision still close.
-    #[gpui::test]
-    fn a_batch_close_asks_once_about_all_documents_that_need_it(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let first = open_dirty_untitled_code_tab(window, &workspace, &app_state);
-        let second = open_dirty_untitled_code_tab(window, &workspace, &app_state);
-        let clean = open_code_tab(window, &workspace, &app_state);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                let all = [first, second, clean];
-                workspace.close_tabs_by(window, cx, move |ids| {
-                    ids.iter().copied().filter(|id| all.contains(id)).collect()
-                });
-            });
-        });
-        window.run_until_parked();
-
-        window.update(|_, cx| {
-            let manager = workspace.read(cx).tab_manager.read(cx);
-            assert!(
-                workspace
-                    .read(cx)
-                    .modal_unsaved_changes
-                    .read(cx)
-                    .is_visible(),
-                "a batch with documents that must be asked about opens the confirmation"
-            );
-            assert!(manager.document(first).is_some(), "asked tabs stay open");
-            assert!(manager.document(second).is_some(), "asked tabs stay open");
-            assert!(
-                manager.document(clean).is_none(),
-                "a clean tab still closes"
-            );
-        });
-    }
-
-    // === Graceful-shutdown flush (T2b) ===
-
-    fn temp_shutdown_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "dbflux-shutdown-{name}-{}.sql",
-            uuid::Uuid::new_v4()
-        ))
-    }
-
-    /// Opens a code tab backed by `path` with its session shadow at `shadow` —
-    /// the shape a graceful shutdown flushes. `dirty` marks pending edits the way
-    /// the session restore does, and `seed_baseline` controls whether the document
-    /// owns a trustworthy on-disk baseline.
-    #[allow(clippy::too_many_arguments)]
-    fn open_shutdown_code_tab(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-        app_state: &Entity<AppStateEntity>,
-        path: &std::path::Path,
-        shadow: &std::path::Path,
-        buffer: &str,
-        on_disk: &str,
-        dirty: bool,
-        seed_baseline: bool,
-    ) -> DocumentId {
-        std::fs::write(path, on_disk).expect("seed the backing file");
-        let path = path.to_path_buf();
-        let shadow = shadow.to_path_buf();
-        let buffer = buffer.to_string();
-        let on_disk = on_disk.to_string();
-
-        let document = window.update(|window, cx| {
-            cx.new(|cx| {
-                let mut document = CodeDocument::new_with_language(
-                    app_state.clone(),
-                    None,
-                    QueryLanguage::Sql,
-                    window,
-                    cx,
-                )
-                .with_path(path.clone());
-                document.set_content(&buffer, window, cx);
-                document.set_session_paths(None, Some(shadow.clone()));
-                if seed_baseline {
-                    document.seed_file_baseline(path.clone(), on_disk);
-                }
-                if dirty {
-                    document.restore_dirty(cx);
-                }
-                document
-            })
-        });
-        let document_id = window.update(|_, cx| document.read(cx).id());
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                let pane = CodeDocument::into_pane(document.clone(), cx);
-                workspace.tab_manager.update(cx, |manager, cx| {
-                    manager.open(Tab::Pane(Box::new(pane)), cx);
-                });
-            });
-        });
-
-        document_id
-    }
-
-    /// Counts the tabs persisted in the workspace session manifest.
-    fn manifest_tab_count(
-        window: &mut VisualTestContext,
-        app_state: &Entity<AppStateEntity>,
-    ) -> usize {
-        window.update(|_, cx| {
-            let runtime = app_state.read(cx).storage_runtime();
-            let repo = runtime.sessions();
-            let artifacts = runtime.artifacts();
-            repo.restore_session(artifacts)
-                .ok()
-                .flatten()
-                .map(|session| session.tabs.len())
-                .unwrap_or(0)
-        })
-    }
-
-    /// A dirty file-backed document flushed at exit lands its newest content in
-    /// the real file, without closing its tab or emptying the session manifest.
-    #[gpui::test]
-    fn a_shutdown_flush_lands_pending_edits_and_keeps_the_tab(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_shutdown_path("land");
-        let shadow = temp_shutdown_path("land-shadow");
-        let id = open_shutdown_code_tab(
-            window, &workspace, &app_state, &path, &shadow, "NEWEST;", "OLD;", true, true,
-        );
-
-        assert_eq!(
-            manifest_tab_count(window, &app_state),
-            1,
-            "opening a file-backed tab records it in the session manifest"
-        );
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(
-                    workspace.flush_pending_document_edits(cx),
-                    "a dirty document reports its flush as outstanding"
-                );
-                assert!(
-                    workspace.tab_manager.read(cx).document(id).is_some(),
-                    "the shutdown flush must not close the tab"
-                );
-            });
-        });
-
-        window.run_until_parked();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the flush must land on the real file"),
-            "NEWEST;",
-            "a shutdown flush persists the newest content"
-        );
-        window.update(|_, cx| {
-            assert!(
-                workspace
-                    .read(cx)
-                    .tab_manager
-                    .read(cx)
-                    .document(id)
-                    .is_some(),
-                "the tab survives a shutdown flush"
-            );
-        });
-        assert_eq!(
-            manifest_tab_count(window, &app_state),
-            1,
-            "the session manifest still holds the tab after a shutdown flush"
-        );
-
-        std::fs::remove_file(&path).ok();
-        std::fs::remove_file(&shadow).ok();
-    }
-
-    /// The workspace reports a flush as outstanding until its write lands, then
-    /// reports nothing outstanding.
-    #[gpui::test]
-    fn a_shutdown_flush_reports_nothing_outstanding_once_it_lands(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_shutdown_path("outstanding");
-        let shadow = temp_shutdown_path("outstanding-shadow");
-        open_shutdown_code_tab(
-            window, &workspace, &app_state, &path, &shadow, "NEWEST;", "OLD;", true, true,
-        );
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(
-                    workspace.flush_pending_document_edits(cx),
-                    "the write is outstanding before it runs"
-                );
-                // Polling again before the executor runs must neither block nor
-                // drop the queued write.
-                assert!(
-                    workspace.flush_pending_document_edits(cx),
-                    "a queued write keeps reporting outstanding"
-                );
-            });
-        });
-
-        window.run_until_parked();
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(
-                    !workspace.flush_pending_document_edits(cx),
-                    "nothing is outstanding once the flush lands"
-                );
-            });
-        });
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the flush must land"),
-            "NEWEST;"
-        );
-
-        std::fs::remove_file(&path).ok();
-        std::fs::remove_file(&shadow).ok();
-    }
-
-    /// A shutdown flush refused over an external change overwrites nothing, still
-    /// writes the session shadow, and never closes the tab.
-    #[gpui::test]
-    fn a_shutdown_flush_refused_over_a_foreign_change_writes_only_the_shadow(
-        cx: &mut TestAppContext,
-    ) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_shutdown_path("conflict");
-        let shadow = temp_shutdown_path("conflict-shadow");
-        let id = open_shutdown_code_tab(
-            window, &workspace, &app_state, &path, &shadow, "MINE;", "OLD;", true, true,
-        );
-
-        std::fs::write(&path, "THEIRS;").expect("the external rewrite must succeed");
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(workspace.flush_pending_document_edits(cx));
-            });
-        });
-        window.run_until_parked();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the foreign content must survive"),
-            "THEIRS;",
-            "a refused shutdown flush must never overwrite the foreign change"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&shadow).expect("the shadow is the safety net"),
-            "MINE;",
-            "the session shadow still carries the pending edits"
-        );
-
-        let entity = workspace.clone();
-        window.update(|_, cx| {
-            assert!(
-                entity.read(cx).tab_manager.read(cx).document(id).is_some(),
-                "a refused flush never closes the tab"
-            );
-            assert!(
-                !entity.update(cx, |workspace, cx| workspace
-                    .flush_pending_document_edits(cx)),
-                "a refusal is reported and not retried forever"
-            );
-        });
-
-        std::fs::remove_file(&path).ok();
-        std::fs::remove_file(&shadow).ok();
-    }
-
-    /// A shutdown flush refused because the file was deleted keeps it deleted and
-    /// writes the shadow instead.
-    #[gpui::test]
-    fn a_shutdown_flush_refused_over_a_deleted_file_keeps_it_deleted(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_shutdown_path("deleted");
-        let shadow = temp_shutdown_path("deleted-shadow");
-        open_shutdown_code_tab(
-            window, &workspace, &app_state, &path, &shadow, "MINE;", "OLD;", true, true,
-        );
-
-        std::fs::remove_file(&path).expect("the backing file must be removable");
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(workspace.flush_pending_document_edits(cx));
-            });
-        });
-        window.run_until_parked();
-
-        assert!(
-            !path.exists(),
-            "a refused shutdown flush must not recreate the deleted file"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&shadow).expect("the shadow is the safety net"),
-            "MINE;"
-        );
-
-        std::fs::remove_file(&shadow).ok();
-    }
-
-    /// A shutdown flush with no trustworthy baseline refuses rather than creating
-    /// or overwriting the file, and still writes the shadow.
-    #[gpui::test]
-    fn a_shutdown_flush_without_a_baseline_refuses_and_writes_the_shadow(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_shutdown_path("no-baseline");
-        let shadow = temp_shutdown_path("no-baseline-shadow");
-        // No baseline is seeded, so the shutdown flush has nothing to compare the
-        // on-disk bytes against and must refuse.
-        open_shutdown_code_tab(
-            window, &workspace, &app_state, &path, &shadow, "MINE;", "OLD;", true, false,
-        );
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(workspace.flush_pending_document_edits(cx));
-            });
-        });
-        window.run_until_parked();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the file must survive untouched"),
-            "OLD;",
-            "a shutdown flush with no baseline must not overwrite the file"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&shadow).expect("the shadow is the safety net"),
-            "MINE;"
-        );
-
-        std::fs::remove_file(&path).ok();
-        std::fs::remove_file(&shadow).ok();
-    }
-
-    /// A clean, idle document is skipped by the shutdown flush: no physical write
-    /// and no session shadow.
-    #[gpui::test]
-    fn a_clean_idle_document_is_skipped_by_the_shutdown_flush(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let path = temp_shutdown_path("clean");
-        let shadow = temp_shutdown_path("clean-shadow");
-        open_shutdown_code_tab(
-            window, &workspace, &app_state, &path, &shadow, "SEEDED;", "SEEDED;", false, true,
-        );
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(
-                    !workspace.flush_pending_document_edits(cx),
-                    "a clean, idle document has nothing outstanding"
-                );
-            });
-        });
-        window.run_until_parked();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("the file must be intact"),
-            "SEEDED;",
-            "a clean, idle document must not be rewritten"
-        );
-        assert!(
-            !shadow.exists(),
-            "a clean, idle document must not write a session shadow"
-        );
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    /// A flush that never finishes is bounded by the deadline rather than hanging
-    /// the shutdown sequence.
-    #[gpui::test]
-    fn the_shutdown_flush_deadline_bounds_a_write_that_never_completes(cx: &mut TestAppContext) {
-        let timeout = Duration::from_millis(100);
-        let poll_interval = Duration::from_millis(50);
-
-        let result = Rc::new(Cell::new(None));
-        let result_out = result.clone();
-
-        let task = cx.spawn(move |mut app_cx| async move {
-            let outcome = await_document_flush(
-                &mut app_cx,
-                timeout,
-                poll_interval,
-                |_app_cx| true, // the write never finishes
-            )
-            .await;
-            result_out.set(Some(outcome));
-        });
-
-        cx.executor().advance_clock(Duration::from_millis(300));
-        cx.run_until_parked();
-
-        assert_eq!(
-            result.get(),
-            Some(DocumentFlushOutcome::TimedOut),
-            "the deadline must stop a flush that never finishes"
-        );
-
-        drop(task);
-    }
-
-    // === Inspector rail follows the active tab ===
-
-    /// Mounts content into the workspace rail exactly as a document does: an
-    /// `OpenInspector` relayed by the tab manager.
-    fn open_rail(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
-        window.update(|_, cx| {
-            let content: gpui::AnyView = cx.new(|_| gpui::EmptyView).into();
-            workspace.update(cx, |workspace, cx| {
-                workspace.tab_manager.update(cx, |_manager, cx| {
-                    cx.emit(TabManagerEvent::OpenInspector {
-                        title: "Row".into(),
-                        content,
-                        content_has_header: false,
-                    });
-                });
-            });
-        });
-        window.run_until_parked();
-
-        assert!(
-            rail_is_open(window, workspace),
-            "the rail starts open with content"
-        );
-    }
-
-    fn rail_is_open(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
-        window.update(|_, cx| workspace.read(cx).workspace_inspector.read(cx).is_open())
-    }
-
-    fn activate_tab(window: &mut VisualTestContext, workspace: &Entity<Workspace>, id: DocumentId) {
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace
-                    .tab_manager
-                    .update(cx, |manager, cx| manager.activate(id, cx));
-            });
-        });
-        window.run_until_parked();
-    }
-
-    fn close_tab(window: &mut VisualTestContext, workspace: &Entity<Workspace>, id: DocumentId) {
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(
-                    workspace.close_tab(id, window, cx),
-                    "a clean tab closes immediately"
-                );
-            });
-        });
-        window.run_until_parked();
-    }
-
-    fn record_tab_events(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> Rc<RefCell<Vec<TabManagerEvent>>> {
-        let events: Rc<RefCell<Vec<TabManagerEvent>>> = Rc::new(RefCell::new(Vec::new()));
-        let sink = events.clone();
-
-        window.update(|_, cx| {
-            let manager = workspace.read(cx).tab_manager.clone();
-            cx.subscribe(&manager, move |_, event: &TabManagerEvent, _| {
-                sink.borrow_mut().push(event.clone());
-            })
-            .detach();
-        });
-
-        events
-    }
-
-    /// Switching to a tab that owns nothing in the rail hides it, instead of
-    /// leaving the previous tab's content on screen. The rail is hidden, not
-    /// closed: a `Closed` would make the tab forget its saved rail state.
-    #[gpui::test]
-    fn switching_to_a_tab_that_owns_nothing_hides_the_rail(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let owns_nothing = open_code_tab(window, &workspace, &app_state);
-        let _owner = open_code_tab(window, &workspace, &app_state);
-        open_rail(window, &workspace);
-
-        let closed_events = Rc::new(Cell::new(0));
-        let closed_sink = closed_events.clone();
-        window.update(|_, cx| {
-            let inspector = workspace.read(cx).workspace_inspector.clone();
-            cx.subscribe(&inspector, move |_, event: &WorkspaceInspectorEvent, _| {
-                if matches!(event, WorkspaceInspectorEvent::Closed) {
-                    closed_sink.set(closed_sink.get() + 1);
-                }
-            })
-            .detach();
-        });
-
-        activate_tab(window, &workspace, owns_nothing);
-
-        assert!(
-            !rail_is_open(window, &workspace),
-            "a tab that owns nothing must not show the previous tab's rail"
-        );
-        assert_eq!(
-            closed_events.get(),
-            0,
-            "a tab switch hides the rail and must never close it"
-        );
-    }
-
-    /// A tab that mounts its content again when it becomes active keeps the
-    /// rail open: the hide runs first, so the tab's own `OpenInspector` wins.
-    #[gpui::test]
-    fn a_tab_that_remounts_its_content_keeps_the_rail_open(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let owner = open_code_tab(window, &workspace, &app_state);
-        let _other = open_code_tab(window, &workspace, &app_state);
-
-        window.update(|_, cx| {
-            let manager = workspace.read(cx).tab_manager.clone();
-            cx.subscribe(&manager, move |manager, event: &TabManagerEvent, cx| {
-                if matches!(event, TabManagerEvent::Activated(id) if *id == owner) {
-                    let content: gpui::AnyView = cx.new(|_| gpui::EmptyView).into();
-                    manager.update(cx, |_manager, cx| {
-                        cx.emit(TabManagerEvent::OpenInspector {
-                            title: "Row".into(),
-                            content,
-                            content_has_header: false,
-                        });
-                    });
-                }
-            })
-            .detach();
-        });
-
-        activate_tab(window, &workspace, owner);
-
-        assert!(
-            rail_is_open(window, &workspace),
-            "the active tab's own content must re-open the rail after the hide"
-        );
-    }
-
-    /// Closing the active tab runs the activation pass for the tab that takes
-    /// over, so a successor that owns nothing hides the rail.
-    #[gpui::test]
-    fn closing_the_active_tab_activates_the_tab_that_takes_over(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let successor = open_code_tab(window, &workspace, &app_state);
-        let closed = open_code_tab(window, &workspace, &app_state);
-        open_rail(window, &workspace);
-
-        let events = record_tab_events(window, &workspace);
-        close_tab(window, &workspace, closed);
-
-        let recorded = events.borrow().clone();
-        assert!(
-            matches!(
-                recorded.as_slice(),
-                [TabManagerEvent::Closed(first), TabManagerEvent::Activated(second)]
-                    if *first == closed && *second == successor
-            ),
-            "closing the active tab must activate its successor, got {recorded:?}"
-        );
-        assert!(
-            !rail_is_open(window, &workspace),
-            "a successor that owns nothing must not show the closed tab's rail"
-        );
-    }
-
-    /// With no tab left, nothing owns the rail any more.
-    #[gpui::test]
-    fn closing_the_last_tab_hides_the_rail(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let only = open_code_tab(window, &workspace, &app_state);
-        open_rail(window, &workspace);
-
-        close_tab(window, &workspace, only);
-
-        let active_id = window.update(|_, cx| workspace.read(cx).tab_manager.read(cx).active_id());
-        assert_eq!(active_id, None, "no tab is left");
-        assert!(
-            !rail_is_open(window, &workspace),
-            "closing the last tab must hide the rail"
-        );
-    }
-
-    #[cfg(feature = "mcp")]
-    fn open_approvals(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.dispatch(Command::OpenMcpApprovals, window, cx);
-            });
-        });
-        window.run_until_parked();
-    }
-
-    fn tabs_of_kind(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-        kind: crate::ui::document::DocumentKind,
-    ) -> Vec<DocumentId> {
-        window.update(|_, cx| {
-            workspace
-                .read(cx)
-                .tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .filter(|tab| tab.kind() == kind)
-                .map(|tab| tab.id())
-                .collect()
-        })
-    }
-
-    fn active_tab_id(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> Option<DocumentId> {
-        window.update(|_, cx| workspace.read(cx).tab_manager.read(cx).active_id())
-    }
-
-    /// The approvals open as a document tab, not as an overlay over the app.
-    #[cfg(feature = "mcp")]
-    #[gpui::test]
-    fn the_approvals_open_as_a_tab(cx: &mut TestAppContext) {
-        use crate::ui::document::DocumentKind;
-
-        let (workspace, _app_state, window) = new_workspace(cx);
-        open_approvals(window, &workspace);
-
-        let approvals = tabs_of_kind(window, &workspace, DocumentKind::McpApprovals);
-        assert_eq!(approvals.len(), 1, "the approvals must open one tab");
-        assert_eq!(
-            active_tab_id(window, &workspace),
-            approvals.first().copied(),
-            "the approvals tab must become the active tab"
-        );
-        assert_eq!(
-            window.update(|_, cx| workspace.read(cx).focus_target),
-            FocusTarget::Document,
-            "the approvals tab must take the keyboard"
-        );
-    }
-
-    /// Opening the approvals again focuses the tab that is already open
-    /// instead of adding a second one.
-    #[cfg(feature = "mcp")]
-    #[gpui::test]
-    fn opening_the_approvals_again_focuses_the_existing_tab(cx: &mut TestAppContext) {
-        use crate::ui::document::DocumentKind;
-
-        let (workspace, app_state, window) = new_workspace(cx);
-        open_approvals(window, &workspace);
-        let other = open_code_tab(window, &workspace, &app_state);
-        activate_tab(window, &workspace, other);
-
-        open_approvals(window, &workspace);
-
-        let approvals = tabs_of_kind(window, &workspace, DocumentKind::McpApprovals);
-        assert_eq!(approvals.len(), 1, "a second open must not add a tab");
-        assert_eq!(
-            active_tab_id(window, &workspace),
-            approvals.first().copied()
-        );
-    }
-
-    /// The status bar's approvals chip opens the same tab.
-    #[cfg(feature = "mcp")]
-    #[gpui::test]
-    fn the_status_bar_chip_opens_the_approvals_tab(cx: &mut TestAppContext) {
-        use crate::ui::document::DocumentKind;
-        use crate::ui::views::status_bar::OpenApprovalsRequested;
-
-        let (workspace, _app_state, window) = new_workspace(cx);
-        let status_bar = window.update(|_, cx| workspace.read(cx).status_bar.clone());
-
-        window.update(|_, cx| {
-            status_bar.update(cx, |_, cx| cx.emit(OpenApprovalsRequested));
-        });
-        window.run_until_parked();
-
-        assert_eq!(
-            tabs_of_kind(window, &workspace, DocumentKind::McpApprovals).len(),
-            1,
-            "the status bar chip must open the approvals tab"
-        );
-    }
-
-    /// Escape inside the approvals tab leaves the tab open: it is a document,
-    /// not an overlay that Cancel dismisses.
-    #[cfg(feature = "mcp")]
-    #[gpui::test]
-    fn escape_leaves_the_approvals_tab_open(cx: &mut TestAppContext) {
-        use crate::ui::document::DocumentKind;
-
-        let (workspace, _app_state, window) = new_workspace(cx);
-        open_approvals(window, &workspace);
-
-        window.simulate_keystrokes("escape");
-
-        assert_eq!(
-            tabs_of_kind(window, &workspace, DocumentKind::McpApprovals).len(),
-            1
-        );
-    }
-
-    /// The approvals keys run through the workspace like any key binding:
-    /// `a` approves the selected call instead of reaching `unreachable!`.
-    #[cfg(feature = "mcp")]
-    #[gpui::test]
-    fn the_approvals_keys_reach_the_approvals_tab(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        app_state.update(window, |state, _| {
-            state
-                .request_mcp_execution(
-                    "agent-a".to_string(),
-                    "conn-a".to_string(),
-                    "delete_records".to_string(),
-                    serde_json::from_value(serde_json::json!("destructive"))
-                        .expect("destructive classification"),
-                    serde_json::json!({ "table": "items" }),
-                )
-                .expect("queue a pending execution");
-        });
-        open_approvals(window, &workspace);
-
-        window.simulate_keystrokes("a");
-        window.run_until_parked();
-
-        let pending = window.update(|_, cx| {
-            app_state
-                .read(cx)
-                .list_mcp_pending_executions()
-                .expect("list pending executions")
-        });
-        assert!(pending.is_empty(), "`a` approves the selected call");
-    }
-
-    /// An open migrate wizard reports its own key context, and every command
-    /// its layer binds reaches it through the workspace's dispatch domains.
-    #[gpui::test]
-    fn the_migrate_wizard_keys_reach_the_wizard(cx: &mut TestAppContext) {
-        use dbflux_core::TableRef;
-
-        let (workspace, _app_state, window) = new_workspace(cx);
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.open_migrate_wizard(
-                    uuid::Uuid::new_v4(),
-                    None,
-                    vec![TableRef::new("users")],
-                    window,
-                    cx,
-                );
-                workspace.set_focus(FocusTarget::Document, window, cx);
-            });
-        });
-        window.run_until_parked();
-
-        let context = window
-            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)));
-        assert_eq!(context, crate::keymap::ContextId::MigrateWizard);
-
-        for command in [
-            Command::SelectNext,
-            Command::SelectPrev,
-            Command::ColumnLeft,
-            Command::ColumnRight,
-            Command::Execute,
-            Command::ExpandCollapse,
-            Command::MoveSelectedUp,
-            Command::MoveSelectedDown,
-            Command::NextPanelTab,
-            Command::PrevPanelTab,
-            Command::RunQuery,
-            Command::Cancel,
-        ] {
-            window.update(|window, cx| {
-                workspace.update(cx, |workspace, cx| workspace.dispatch(command, window, cx));
-            });
-        }
-    }
-
-    /// The Migrate action opens the wizard as a tab; repeating it for the same
-    /// selection focuses that tab, and a different selection gets its own.
-    #[gpui::test]
-    fn the_migrate_wizard_opens_as_a_tab_deduplicated_by_its_selection(cx: &mut TestAppContext) {
-        use crate::ui::document::DocumentKind;
-        use dbflux_core::TableRef;
-
-        let (workspace, app_state, window) = new_workspace(cx);
-        let profile_id = uuid::Uuid::new_v4();
-        let users = vec![TableRef {
-            schema: Some("public".to_string()),
-            name: "users".to_string(),
-        }];
-        let orders = vec![TableRef {
-            schema: Some("public".to_string()),
-            name: "orders".to_string(),
-        }];
-
-        let open_migrate = |window: &mut VisualTestContext, tables: Vec<TableRef>| {
-            window.update(|window, cx| {
-                workspace.update(cx, |workspace, cx| {
-                    workspace.open_migrate_wizard(profile_id, None, tables, window, cx);
-                });
-            });
-            window.run_until_parked();
-        };
-
-        open_migrate(window, users.clone());
-        let first = tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard);
-        assert_eq!(first.len(), 1, "the Migrate action must open one tab");
-
-        let other = open_code_tab(window, &workspace, &app_state);
-        activate_tab(window, &workspace, other);
-
-        open_migrate(window, users);
-        assert_eq!(
-            tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard),
-            first,
-            "the same selection must focus the existing wizard tab"
-        );
-        assert_eq!(active_tab_id(window, &workspace), first.first().copied());
-
-        open_migrate(window, orders);
-        assert_eq!(
-            tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard).len(),
-            2,
-            "a different selection must open its own wizard tab"
-        );
-    }
-
-    /// The panel keys move keyboard focus between the workspace panels:
-    /// Tab and Shift+Tab cycle them, Ctrl+Shift+digit jumps to one.
-    #[gpui::test]
-    fn keyboard_moves_between_the_workspace_panels(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        let target =
-            |window: &mut VisualTestContext| window.update(|_, cx| workspace.read(cx).focus_target);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Sidebar, window, cx)
-            })
-        });
-        window.run_until_parked();
-
-        window.simulate_keystrokes("tab");
-        assert_eq!(target(window), FocusTarget::Document);
-
-        window.simulate_keystrokes("shift-tab");
-        assert_eq!(target(window), FocusTarget::Sidebar);
-
-        window.simulate_keystrokes("ctrl-shift-4");
-        assert_eq!(target(window), FocusTarget::BackgroundTasks);
-
-        window.simulate_keystrokes("shift-tab");
-        assert_eq!(target(window), FocusTarget::Sidebar);
-
-        window.simulate_keystrokes("ctrl-shift-1");
-        assert_eq!(target(window), FocusTarget::Sidebar);
-    }
-
-    /// Ctrl+Shift+Page Up and Page Down move the active tab one place left
-    /// or right, as dragging it does, and stop at either end.
-    #[gpui::test]
-    fn ctrl_shift_page_keys_move_the_active_tab(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let first = open_code_tab(window, &workspace, &app_state);
-        let second = open_code_tab(window, &workspace, &app_state);
-        let order = |window: &mut VisualTestContext| -> Vec<DocumentId> {
-            window.update(|_, cx| {
-                workspace
-                    .read(cx)
-                    .tab_manager
-                    .read(cx)
-                    .documents()
-                    .iter()
-                    .map(|tab| tab.id())
-                    .collect()
-            })
-        };
-        activate_tab(window, &workspace, second);
-        window.update(|window, _| window.activate_window());
-
-        window.simulate_keystrokes("ctrl-shift-pageup");
-        window.run_until_parked();
-        assert_eq!(order(window), vec![second, first]);
-        assert_eq!(active_tab_id(window, &workspace), Some(second));
-
-        window.simulate_keystrokes("ctrl-shift-pageup");
-        window.run_until_parked();
-        assert_eq!(
-            order(window),
-            vec![second, first],
-            "the first place stops it"
-        );
-
-        window.simulate_keystrokes("ctrl-shift-pagedown");
-        window.run_until_parked();
-        assert_eq!(order(window), vec![first, second]);
-        assert_eq!(active_tab_id(window, &workspace), Some(second));
-    }
-
-    fn tasks_panel_rendered(window: &mut VisualTestContext) -> bool {
-        window.run_until_parked();
-        window.debug_bounds("tasks-panel").is_some()
-    }
-
-    fn tasks_expanded(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
-        window.update(|_, cx| workspace.read(cx).tasks_state.is_expanded())
-    }
-
-    /// Collapsed, the background tasks render nothing under the documents:
-    /// no bar and no panel.
-    #[gpui::test]
-    fn collapsed_background_tasks_render_nothing(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-
-        assert!(!tasks_expanded(window, &workspace));
-        assert!(!tasks_panel_rendered(window));
-        assert!(
-            window
-                .debug_bounds("panel-header-Background Tasks")
-                .is_none()
-        );
-    }
-
-    /// The status bar's tasks chip is the way into the collapsed panel.
-    #[gpui::test]
-    fn the_status_tasks_chip_expands_the_tasks_panel(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.run_until_parked();
-
-        let chip = window
-            .debug_bounds("tasks-toggle")
-            .expect("the status bar must draw the tasks chip");
-        window.simulate_click(chip.center(), gpui::Modifiers::none());
-
-        assert!(tasks_expanded(window, &workspace));
-        assert!(tasks_panel_rendered(window));
-    }
-
-    /// Focus Background Tasks expands the collapsed panel so focus lands on
-    /// something drawn.
-    #[gpui::test]
-    fn focusing_the_background_tasks_expands_their_panel(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        window.run_until_parked();
-
-        window.simulate_keystrokes("ctrl-shift-4");
-
-        window.update(|_, cx| {
-            assert_eq!(
-                workspace.read(cx).focus_target,
-                FocusTarget::BackgroundTasks
-            );
-        });
-        assert!(tasks_expanded(window, &workspace));
-        assert!(tasks_panel_rendered(window));
-    }
-
-    /// Tab and Shift+Tab skip the background tasks while their panel is
-    /// collapsed, and stop on them once it is expanded.
-    #[gpui::test]
-    fn focus_cycling_skips_the_collapsed_background_tasks(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        let target =
-            |window: &mut VisualTestContext| window.update(|_, cx| workspace.read(cx).focus_target);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Sidebar, window, cx)
-            })
-        });
-        window.run_until_parked();
-
-        window.simulate_keystrokes("tab");
-        assert_eq!(target(window), FocusTarget::Document);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
-                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
-                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
-                assert_eq!(workspace.focus_target, FocusTarget::Document);
-            })
-        });
-        assert!(!tasks_expanded(window, &workspace));
-
-        window
-            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.toggle_tasks_panel(cx)));
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Sidebar, window, cx);
-                assert!(workspace.dispatch(Command::CycleFocusForward, window, cx));
-                assert_eq!(workspace.focus_target, FocusTarget::BackgroundTasks);
-            })
-        });
-    }
-
-    /// Collapsing the panel while it holds focus returns focus to the
-    /// document instead of leaving it on an element that is no longer drawn.
-    #[gpui::test]
-    fn collapsing_the_focused_tasks_panel_returns_focus_to_the_document(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::BackgroundTasks, window, cx);
-                workspace.toggle_tasks_panel(cx);
-            })
-        });
-
-        assert!(!tasks_panel_rendered(window));
-        window.update(|_, cx| {
-            assert_eq!(workspace.read(cx).focus_target, FocusTarget::Document);
-        });
-    }
-
-    /// Letters the sidebar binds (`q` switches its tab) are text while its
-    /// filter has focus; `/` is what puts focus there.
-    #[gpui::test]
-    fn the_sidebar_filter_keeps_the_letters_typed_into_it(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Sidebar, window, cx)
-            })
-        });
-        window.run_until_parked();
-
-        let tab_before = window.update(|_, cx| sidebar.read(cx).active_tab());
-
-        window.simulate_keystrokes("/");
-        assert!(
-            window.update(|window, cx| sidebar.read(cx).search_input_is_focused(window, cx)),
-            "`/` focuses the sidebar filter"
-        );
-
-        window.simulate_keystrokes("q");
-        assert_eq!(
-            window.update(|_, cx| sidebar.read(cx).active_tab()),
-            tab_before,
-            "`q` typed in the filter does not switch the sidebar tab"
-        );
-        assert!(window.update(|window, cx| sidebar.read(cx).search_input_is_focused(window, cx)));
-    }
-
-    /// The palette opens from the keyboard and Escape closes it.
-    #[gpui::test]
-    fn the_command_palette_opens_and_closes_from_the_keyboard(cx: &mut TestAppContext) {
-        let (workspace, _, window) = new_workspace(cx);
-        let palette = window.update(|_, cx| workspace.read(cx).command_palette.clone());
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Sidebar, window, cx)
-            })
-        });
-        window.run_until_parked();
-
-        #[cfg(target_os = "macos")]
-        window.simulate_keystrokes("cmd-shift-p");
-        #[cfg(not(target_os = "macos"))]
-        window.simulate_keystrokes("ctrl-shift-p");
-        assert!(window.update(|_, cx| palette.read(cx).is_visible()));
-
-        window.simulate_keystrokes("escape");
-        assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
-    }
-
-    fn toast_count(window: &mut VisualTestContext) -> usize {
-        window.update(|_, cx| {
-            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
-                .host
-                .read(cx)
-                .toast_count()
-        })
-    }
-
-    fn last_toast_title(window: &mut VisualTestContext) -> Option<String> {
-        window.update(|_, cx| {
-            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
-                .host
-                .read(cx)
-                .last_toast_title()
-        })
-    }
-
-    /// Opens a buckets table for a profile with no live connection, so its
-    /// refresh settles synchronously into the error state without any I/O.
-    /// Returns the document and a counter of its change notifications.
-    fn open_buckets_tab(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-        app_state: &Entity<AppStateEntity>,
-    ) -> (
-        Entity<crate::ui::document::BucketsTableDocument>,
-        Rc<Cell<usize>>,
-        gpui::Subscription,
-    ) {
-        let document = window.update(|window, cx| {
-            cx.new(|cx| {
-                crate::ui::document::BucketsTableDocument::new(
-                    uuid::Uuid::new_v4(),
-                    app_state.clone(),
-                    window,
-                    cx,
-                )
-            })
-        });
-
-        window.update(|_, cx| {
-            workspace.update(cx, |workspace, cx| {
-                let pane =
-                    crate::ui::document::BucketsTableDocument::into_pane(document.clone(), cx);
-                workspace.tab_manager.update(cx, |manager, cx| {
-                    manager.open(Tab::Pane(Box::new(pane)), cx);
-                });
-            });
-        });
-
-        let notifications = Rc::new(Cell::new(0));
-        let subscription = window.update(|_, cx| {
-            cx.observe(&document, {
-                let notifications = notifications.clone();
-                move |_, _| notifications.set(notifications.get() + 1)
-            })
-        });
-
-        (document, notifications, subscription)
-    }
-
-    #[gpui::test]
-    fn refresh_schema_refreshes_the_focused_document_that_handles_it(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let (_document, notifications, _subscription) =
-            open_buckets_tab(window, &workspace, &app_state);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-            });
-        });
-        window.run_until_parked();
-
-        let toasts_before = toast_count(window);
-        notifications.set(0);
-
-        let handled = window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.dispatch(Command::RefreshSchema, window, cx)
-            })
-        });
-        window.run_until_parked();
-
-        assert!(handled);
-        assert!(
-            notifications.get() > 0,
-            "the buckets table must reload when it has document focus"
-        );
-        assert_eq!(
-            toast_count(window),
-            toasts_before,
-            "the connection-schema refresh must not run when the document handled the refresh"
-        );
-    }
-
-    #[gpui::test]
-    fn refresh_schema_falls_back_to_the_connection_schema_when_the_document_declines(
-        cx: &mut TestAppContext,
-    ) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        open_code_tab(window, &workspace, &app_state);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Document, window, cx);
-            });
-        });
-        window.run_until_parked();
-
-        let toasts_before = toast_count(window);
-
-        let handled = window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.dispatch(Command::RefreshSchema, window, cx)
-            })
-        });
-        window.run_until_parked();
-
-        assert!(handled);
-        assert_eq!(toast_count(window), toasts_before + 1);
-        assert_eq!(
-            last_toast_title(window),
-            Some(crate::ui::labels::connections_no_active_connection_message()),
-            "a query tab has no refresh, so the connection-schema refresh must run"
-        );
-    }
-
-    #[gpui::test]
-    fn refresh_schema_from_the_sidebar_reloads_only_the_connection_schema(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        let (_document, notifications, _subscription) =
-            open_buckets_tab(window, &workspace, &app_state);
-
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.set_focus(FocusTarget::Sidebar, window, cx);
-            });
-        });
-        window.run_until_parked();
-
-        let toasts_before = toast_count(window);
-        notifications.set(0);
-
-        let handled = window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.dispatch(Command::RefreshSchema, window, cx)
-            })
-        });
-        window.run_until_parked();
-
-        assert!(handled);
-        assert_eq!(
-            notifications.get(),
-            0,
-            "the active document must not refresh while the sidebar has focus"
-        );
-        assert_eq!(toast_count(window), toasts_before + 1);
-        assert_eq!(
-            last_toast_title(window),
-            Some(crate::ui::labels::connections_no_active_connection_message()),
-        );
-    }
-}
+mod tests;

@@ -1,6 +1,6 @@
 # DBFlux
 
-[English](../../README.md) · **Español** · [한국어](../ko/README.md) · [简体中文](../zh_Hans/README.md)
+[English](../../README.md) · **Español** · [한국어](../ko/README.md) · [简体中文](../zh_Hans/README.md) · [Português (Brasil)](../pt_BR/README.md)
 
 Una plataforma de datos extensible y orientada al teclado, distribuida como un cliente de escritorio Rust + GPUI.
 
@@ -76,6 +76,7 @@ Los paquetes para cada plataforma — tarball, AUR, `.deb`, `.rpm`, AppImage, Ni
 macOS e instalador de Windows — están en la página de [Releases](https://github.com/0xErwin1/dbflux/releases).
 La guía completa, incluyendo los pasos de Gatekeeper y SmartScreen para los builds sin firmar
 de macOS y Windows, está en [Instalar DBFlux](INSTALL.md).
+En macOS y Linux, Homebrew lo instala con `brew install --cask 0xErwin1/dbflux/dbflux`.
 
 ## Funcionalidades
 
@@ -92,8 +93,10 @@ de macOS y Windows, está en [Instalar DBFlux](INSTALL.md).
 - **InfluxDB** v1 y v2 (InfluxQL en v1, InfluxQL + Flux en v2)
 - **ClickHouse** y ClickHouse Cloud sobre HTTP(S), con descubrimiento de bases de datos/tablas, SELECTs visuales y ejecución explícita de SQL crudo
 - **TursoDB** y libSQL (`sqld`) sobre HTTP, con descubrimiento de esquema, CRUD tipado y transacciones interactivas por pestaña del editor
+- **DuckDB** en archivos y en memoria, con catálogos DuckLake adjuntados al conectar
 - **CloudWatch Logs** con navegación de log groups/streams y streaming de eventos
 - **Amazon S3** con navegación de buckets, preview/edición de objetos, CRUD completo y URLs presignadas, incluyendo endpoints compatibles con S3 (Cloudflare R2, MinIO)
+- **AWS Secrets Manager y Parameter Store** con listado paginado, navegación por paths de parámetros, detalles de secretos y lectura auditada del valor solo a pedido explícito
 - **Drivers externos por RPC** (registra drivers fuera de proceso vía el [Protocolo RPC de drivers](DRIVER_RPC_PROTOCOL.md))
 
 Ver [docs/DRIVERS.md](DRIVERS.md) para una matriz de capacidades completa y limitaciones por driver.

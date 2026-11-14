@@ -1,6 +1,6 @@
 # DBFlux
 
-[English](../../README.md) · [Español](../es/README.md) · **한국어** · [简体中文](../zh_Hans/README.md)
+[English](../../README.md) · [Español](../es/README.md) · **한국어** · [简体中文](../zh_Hans/README.md) · [Português (Brasil)](../pt_BR/README.md)
 
 Rust + GPUI 데스크톱 클라이언트로 제공되는, 확장 가능한 키보드 우선 데이터 플랫폼입니다.
 
@@ -77,6 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 Windows 인스톨러 — 는 [Releases](https://github.com/0xErwin1/dbflux/releases)
 페이지에 있습니다. 서명되지 않은 macOS 및 Windows 빌드에 대한 Gatekeeper와
 SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](INSTALL.md)에 있습니다.
+macOS와 Linux에서는 Homebrew로 `brew install --cask 0xErwin1/dbflux/dbflux`를 실행해 설치할 수 있습니다.
 
 ## 기능
 
@@ -95,6 +96,7 @@ SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](INSTALL.md)�
 - HTTP를 통한 **TursoDB** 및 libSQL (`sqld`): 스키마 탐색, 타입이 지정된 CRUD, 편집기 탭별 대화형 트랜잭션을 지원합니다
 - 로그 그룹/스트림 탐색과 이벤트 스트리밍을 지원하는 **CloudWatch Logs**
 - 버킷 탐색, 개체 미리 보기/편집, 전체 CRUD, 사전 서명된 URL을 지원하는 **Amazon S3** — S3 호환 엔드포인트(Cloudflare R2, MinIO) 포함
+- 페이지 나누기 목록, 파라미터 경로 탐색, 시크릿 세부 정보, 명시적으로 요청할 때만 감사와 함께 값을 조회하는 **AWS Secrets Manager 및 Parameter Store**
 - **RPC를 통한 외부 드라이버** ([Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md)을 통해 프로세스 외부 드라이버 등록)
 
 전체 기능 매트릭스와 드라이버별 제한 사항은 [docs/DRIVERS.md](DRIVERS.md)를 참조하세요.

@@ -8,8 +8,8 @@ use dbflux_core::{
     DriverFormDef, DriverKey, DriverMetadata, FormFieldKind, FormSection, FormTab, FormValues,
     Icon, MutationRequest, OrderByMode, PaginationStyle, PlaceholderStyle, QueryCapabilities,
     QueryGenError, QueryGenerator, QueryLanguage, ReadTemplateRequest, SelectQuery,
-    SqlMutationGenerator, SyntaxInfo, TransferFamily, VisualQuerySpec, WhereOperator, field,
-    field_password, field_required, with_default, with_help,
+    SqlMutationGenerator, SyntaxInfo, TransactionCapabilities, TransferFamily, VisualQuerySpec,
+    WhereOperator, field, field_password, field_required, with_default, with_help,
 };
 
 use crate::connection::ClickHouseConnection;
@@ -29,6 +29,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::MULTIPLE_DATABASES.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::VIEWS.bits()
@@ -39,7 +40,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::EXPORT_CSV.bits()
             | DriverCapabilities::EXPORT_JSON.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
-            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: Some(8123),
     uri_scheme: "http".to_string(),
@@ -51,6 +53,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -91,7 +94,17 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     }),
     mutation: None,
     ddl: None,
-    transactions: None,
+    // No transactions; declared only so callers can see that `readonly = 2`
+    // enforces `ReadOnlyEnforcement::Required` per request.
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: Vec::new(),
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
     limits: None,
     ssl_modes: None,
     ssl_cert_fields: None,
@@ -351,6 +364,15 @@ mod tests {
     };
 
     #[test]
+    fn metadata_declares_request_row_limit() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
+
+    #[test]
     fn metadata_is_conservative_and_has_no_mutation_contract() {
         for capability in [
             DriverCapabilities::INSERT,
@@ -364,7 +386,12 @@ mod tests {
             assert!(!METADATA.capabilities.contains(capability));
         }
         assert!(METADATA.mutation.is_none());
-        assert!(METADATA.transactions.is_none());
+        let transactions = METADATA
+            .transactions
+            .as_ref()
+            .expect("ClickHouse declares its read-only enforcement");
+        assert!(!transactions.supports_transactions);
+        assert!(METADATA.enforces_read_only());
         assert!(
             METADATA
                 .capabilities

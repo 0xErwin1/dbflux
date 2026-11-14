@@ -24,6 +24,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+N` / `Cmd+Shift+N` | Open connection manager |
 | `Ctrl+n` / `Cmd+n` | New query tab |
 | `Ctrl+w` / `Cmd+w` | Close tab |
+| `Ctrl+q` / `Cmd+q` | Quit DBFlux, asking first when a query is still running |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` | Move the active tab left / right |
 | `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9` | Switch to tab N |
@@ -38,7 +39,12 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+4` | Focus background tasks |
 | `Ctrl+Shift+A` / `Cmd+Shift+A` | Open audit viewer |
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
+| `F11` / `Ctrl+Cmd+F` | Toggle full screen |
+| `Ctrl+=` / `Cmd+=` | Make the interface, editor and data grid text larger (also `Ctrl+Shift+=` and `Ctrl++`) |
+| `Ctrl+-` / `Cmd+-` | Make the interface, editor and data grid text smaller |
+| `Ctrl+0` / `Cmd+0` | Reset the interface, editor and data grid text to the default sizes |
 | `Ctrl+m` | Open tab context menu |
+| `` Ctrl+` `` | Show or hide the console docked under the active table, collection or key-value browser, where its connection has one; in a console tab, return the keyboard to its input |
 | `Ctrl+,` / `Cmd+,` | Open settings |
 | `Ctrl+Shift+E` / `Cmd+Shift+E` | Hide or show the results of a query document, leaving the editor alone |
 | `Ctrl+Shift+R` / `Cmd+Shift+R` | Maximize the results of a query document over the editor, or restore the split |
@@ -54,7 +60,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+M` / `Cmd+Shift+M` | Open MCP approvals |
 | `Ctrl+Shift+G` / `Cmd+Shift+G` | Refresh MCP governance |
 
-`Ctrl+Shift+X` opens the audit viewer on the most recent error reported in this session, as the error toast's **View in Audit** does, and clears the count on the status bar's error badge; before any error it shows the user errors. `Ctrl+Shift+5` .. `Ctrl+Shift+7` behave like the activity rail: choosing the view already shown collapses the sidebar. `Ctrl+Shift+Y` lists the buttons of the newest toast on screen, such as **Copy**, **View in Audit** or **Reconnect now**, then **Show details** or **Hide details** when it has details, and **Dismiss**; the context menu keys drive it, and with no toast on screen it opens nothing. The MCP shortcuts exist in builds with MCP support. **Export connections** and **Import dashboard from JSON** run from the command palette.
+`Ctrl+Shift+X` opens the audit viewer on the most recent error reported in this session, as the error toast's **View in Audit** does, and clears the count on the status bar's error badge; before any error it shows the user errors. `Ctrl+Shift+5` .. `Ctrl+Shift+7` behave like the activity rail: choosing the view already shown collapses the sidebar. `Ctrl+Shift+Y` lists the buttons of the newest toast on screen, such as **Copy**, **View in Audit** or **Reconnect now**, then **Show details** or **Hide details** when it has details, and **Dismiss**; the context menu keys drive it, and with no toast on screen it opens nothing. The MCP shortcuts exist in builds with MCP support. **Export connections** and **Import dashboard from JSON** run from the command palette. On macOS the application menu carries About, Services, Hide and Quit; Quit uses the chord above.
 
 The shell's clickable items all have a key, and none of them joins the `Tab` cycle: the activity rail entries are `Ctrl+Shift+5` .. `Ctrl+Shift+7`, `Ctrl+Shift+A` (Audit), `Ctrl+Shift+M` (Approvals) and `Ctrl+,` (Settings); the title bar's command search is `Ctrl+Shift+P` and its bell `Ctrl+Shift+B`; the status bar's tasks entry is `Ctrl+Shift+T`, its approvals entry `Ctrl+Shift+M` and its error badge `Ctrl+Shift+X`; a tab is closed with `Ctrl+w`, opened with `Ctrl+n`, reordered with `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown`, and its right-click menu opens with `Ctrl+m`. The window's own minimize, maximize and close buttons are left to the desktop's shortcuts.
 
@@ -62,7 +68,7 @@ The shell's clickable items all have a key, and none of them joins the `Tab` cyc
 
 | Keys | Action |
 |------|--------|
-| `q` / `e` | Switch sidebar tab (Connections / Scripts) |
+| `q` / `e` | Previous / next sidebar tab (Connections / Scripts / Dashboards) |
 | `/` | Focus search |
 | `j` / `k` (or `Down` / `Up`) | Select next / previous |
 | `h` / `l` | Collapse / expand node (`l` on a disconnected connection connects it) |
@@ -116,19 +122,26 @@ While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
 `Shift+Tab` move between the query and replace fields while the replace field is
 shown; otherwise they cycle focus between panels, as they do outside the editor.
 
-The editor's toolbar is also a menu. `Shift+F10` opens the **pane actions** menu
+While a completion menu is open, `Tab` writes the highlighted suggestion in
+place of the word being completed, and each further `Tab` / `Shift+Tab` replaces
+it with the next / previous one, wrapping at either end. Once `Tab` has inserted
+a suggestion, the arrow keys also update the text. `Enter`, or typing any other
+character, keeps the inserted suggestion and closes the menu; `Escape` restores
+the word you typed. The whole cycle is one undo step.
+
+The action strip on the editor's left edge is also a menu. `Shift+F10` opens the **pane actions** menu
 from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
 the execution context bar, where `m` (or `Shift+F10`) opens it too. A script
 editor (Lua, Python, Bash) has no connection controls, so its context bar holds
 only an **Actions** button, which `Ctrl+k` focuses and `Enter`, `m` or a click
 presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Query
-history, Explain, Chart, Refresh and the auto-refresh interval, each with its
-shortcut when it has one. Move with `j` / `k` and choose with `Enter`, as in any
-[context menu](#context-menu); `Escape` closes it. The auto-refresh entry opens
-the interval list with keyboard focus (see [Dropdowns](#dropdowns)). While the
-query has results, the menu goes on with the results header: Next and Previous
-result tab, Close result tab, Maximize (Restore) results and Hide (Show)
-results. The menu is also in the command palette as **Open pane actions**.
+history, Explain and Chart, each with its shortcut when it has one. Move with
+`j` / `k` and choose with `Enter`, as in any [context menu](#context-menu);
+`Escape` closes it. While the query has results, the menu goes on with the
+results header: Refresh and the auto-refresh interval, Next and Previous result
+tab, Close result tab, Maximize (Restore) results and Hide (Show)
+results. The auto-refresh entry opens the interval list with keyboard focus (see
+[Dropdowns](#dropdowns)). The menu is also in the command palette as **Open pane actions**.
 
 ## Vim mode (opt-in)
 
@@ -179,6 +192,7 @@ status bar.
 | Normal / Visual / Visual Line / Visual Block | `gg` / `G` / `Ngg` / `NG` | Go to the first / last / 1-based absolute logical line (clamped to the buffer); Visual extends the selection |
 | Normal | `i` | Insert before the cursor |
 | Normal | `a` / `A` / `I` | Insert after the cursor / at the end of the line / at the first non-blank character of the line |
+| Normal | `o` / `O` | Open a new line below / above the cursor's line with the same indentation, and insert there |
 | Normal | `e` / `w` / `b` | Move to the end of a word / start of the next word / start of the previous word |
 | Normal | `E` / `W` / `B` | Make the corresponding word motion using whitespace-delimited words |
 | Normal | `x` | Delete the character under the cursor |
@@ -189,14 +203,35 @@ status bar.
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Delete / yank a characterwise horizontal or linewise vertical motion (`y` copies to the system clipboard) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Delete / yank a characterwise word-motion range (`y` copies to the system clipboard) |
 | Normal | `d` / `y` + `gg` / `G` | Delete / yank whole logical lines through an absolute target (`y` copies to the system clipboard) |
+| Normal / Visual | `$` / `^` / `0` | Move to the last character / first non-blank character / start of the line; `N$` moves to the end of the line N-1 lines below |
+| Normal / Visual | `f{char}` / `t{char}` / `F{char}` / `T{char}` | Move onto / just before the next `{char}` on the line, or onto / just after the previous one; a count finds the Nth |
+| Normal / Visual | `;` / `,` | Repeat the last `f` / `t` / `F` / `T` in the same / opposite direction |
+| Normal / Visual | `%` | Jump to the bracket matching the `()`, `[]` or `{}` bracket under the cursor or after it on the line |
+| Normal / Visual | `}` / `{` | Move to the next / previous empty line |
+| Normal | `d` / `c` / `y` + `$` / `^` / `0` / `f` / `t` / `F` / `T` / `;` / `,` / `%` / `}` / `{` | Act on the range of the motion; `f`, `t`, `$` and `%` include the destination character |
+| Normal | `d` / `c` / `y` + `i` / `a` + object | Act on a text object (see **Text objects** below), for example `ciw`, `di"`, `ca(` |
+| Normal | `D` / `C` | Delete / change to the end of the line, as `d$` / `c$` |
+| Normal | `s` / `S` | Change the character under the cursor (or the next N) / the whole line |
+| Normal | `J` | Join the line with the next one (or the next N-1) with one space |
+| Normal | `~` | Switch the case of the character under the cursor (or the next N) and move right |
+| Normal | `*` / `#` | Search the whole word under the cursor forward / backward |
+| Normal | `?` | Open the find panel searching backward |
+| Normal | `p` / `P` / `Np` | Put the system clipboard after / before the cursor; a count puts it that many times |
+| Normal | `Ctrl+Shift+V` | Put the system clipboard before the cursor, as `P` |
 | Normal | `u` | Undo |
+| Normal | `Ctrl+r` | Redo; a count redoes that many steps |
+| Normal | `.` | Repeat the last change, including the text typed after it; a count replaces the change's count |
+| Normal / Visual | `Ctrl+d` / `Ctrl+u` | Move half the visible lines down / up; a count moves that many lines |
 | Normal | `v` / `V` / `Ctrl+v` | Select characters / whole lines / a display-row rectangle in Visual mode |
 | Visual / Visual Line | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extend the selection with the same motions and counts as Normal mode |
 | Visual / Visual Line | `v` / `V` | Exit the active Visual mode / switch between characterwise and linewise selection |
 | Visual / Visual Line / Visual Block | `c` | Change the inclusive selected characters, logical lines, or block columns, then enter Insert mode |
 | Visual / Visual Line / Visual Block | `d` / `x` / `y` | Delete the selection (`d` / `x`) or yank it to the system clipboard (`y`) |
+| Visual / Visual Line | `i` / `a` + object | Select a text object |
+| Visual / Visual Line | `p` / `P` | Replace the selection with the clipboard; `p` then puts the replaced text on the clipboard, `P` keeps the clipboard |
 | Visual / Visual Line / Visual Block | `Escape` | Clear the selection and return to Normal mode |
 | Insert | `Escape` | Close an open completion menu, otherwise return to Normal mode |
+| Insert / Replace | `Ctrl+Shift+V` | Insert the system clipboard at the cursor, replacing the selection |
 | Replace | Typed characters | Overwrite the character under the cursor; at the end of a line they are appended |
 | Replace | `Backspace` | Restore the character this Replace session overwrote, otherwise move left |
 | Replace | `Escape` | Return to Normal mode |
@@ -210,15 +245,17 @@ of the line without joining lines;
 a counted `u` undoes that many steps. `0` without a count moves to the start of
 the line; after a nonzero digit it remains part of the count (for example,
 `20w`). An interrupted count does not carry over to the next command. In
-Visual mode, counted motions extend the editor selection. `gg` and `G` place the
+Visual mode, counted motions extend the editor selection, and a plain left
+click returns to Normal mode with the cursor where you clicked, as in Vim. `gg` and `G` place the
 cursor at the first non-blank character of the destination logical line; `G`
 is a single uppercase key. A pending `g` clears if interrupted or focus leaves
 the editor. In Normal mode, `d` / `y` / `c` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard.
 
 `Ctrl+Enter` uses the trimmed selection if it contains non-whitespace text;
-otherwise it uses the full buffer. For a Visual Block selection, it joins
-ordered nonempty row fragments with newlines, as with mouse Alt-drag. A
-whitespace-only block selection uses the full buffer. Block columns count
+otherwise it runs the statement under the cursor, as without Vim. For a Visual
+Block selection, it joins ordered nonempty row fragments with newlines, as with
+mouse Alt-drag. A whitespace-only block selection runs the statement under the
+cursor. Block columns count
 Unicode scalars, not visual cells: tabs, wide characters, and combining
 sequences may not align with on-screen columns.
 
@@ -251,18 +288,19 @@ Everything else in Normal mode:
 | `Space` | Starts a leader sequence (see **Leader key** below); on its own, nothing |
 | `Tab` / `Shift+Tab` | Cycle focus forward / backward between panels, as outside the editor (also in the Visual modes); no indent |
 | `Ctrl+v` | Enter Visual Block mode (not paste) |
-| Paste (`Cmd+v` or the context menu) | Nothing |
+| Paste (`Cmd+v` or the context menu) | Nothing; use `p`, `P`, or `Ctrl+Shift+V` |
 | Input method (IME) composition and commit | Dropped |
 | `Backspace` / `Delete` | Nothing |
 | `Escape` | Its usual meaning: cancel a running query, or leave the editor |
-| Shortcuts with `Ctrl`, `Alt`, or `Cmd`; arrow keys; the mouse | Work as usual, including undo and redo |
+| Shortcuts with `Ctrl`, `Alt`, or `Cmd`; arrow keys; the mouse | Work as usual, including undo and redo, except the Vim keys `Ctrl+r`, `Ctrl+d`, `Ctrl+u` and `Ctrl+v` |
 
 In Normal mode the cursor sits on a character, never past the end of a line.
 Leaving Insert mode moves it back one character, as Vim does. On an empty line
 `x` does nothing, so it never joins lines.
 
 In Insert mode the editor behaves as it does with Vim mode off, including `Ctrl+v` paste, except for
-`Escape`. With a completion or code-action menu open, `Escape` closes the menu
+`Escape`. `Ctrl+Shift+V` also pastes there, and in Replace mode it inserts the
+clipboard without overwriting. With a completion or code-action menu open, `Escape` closes the menu
 and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
 the editor either way. With several cursors or an inline suggestion showing,
 the first `Escape` clears them and the next one returns to Normal mode.
@@ -277,9 +315,15 @@ Visual character and line `c` change the inclusive selection through native edit
 
 `R` enters Replace mode. Each typed character overwrites the character under the cursor; at a line ending it is appended instead of replacing the line break. `Backspace` restores the characters overwritten in this Replace session in reverse order and otherwise only moves left. `Enter` inserts a line break and `Tab` indents, as in Insert mode. `Escape` returns to Normal mode and moves the cursor back one character. The whole Replace session is one undo step. A count before `R` is ignored.
 
+**Open line and put.** `o` / `O` open a new line below / above the cursor's logical line, keep that line's leading spaces and tabs and its LF or CRLF line ending, and enter Insert mode after the indentation. The new line and the text typed before `Escape` are one undo step. A count before `o` / `O` is ignored. `p` / `P` put the system clipboard in Normal mode and stay there. Whole lines go below / above the cursor's line, with the cursor on the first non-blank character of the first new line; other text goes after the character under the cursor / at the cursor, with the cursor on the last inserted character. A count puts the text that many times (`3p`). Each put is one undo step, and an empty clipboard puts nothing.
+
 Each `x`, `dd`, or motion-based `d` invocation is one undo step, including counted commands. Everything typed in one ordinary Insert session is one undo step, and each new Insert session starts another. An undo group is capped at 1000 changes, so a long session may require multiple undo steps. `u` undoes the same steps as `Ctrl+z` / `Cmd+z`.
 
 **IME limitation.** A late stale unmark from a prior composition after the next composition starts can prematurely commit the active native composition and split the Vim undo group. On a read-only or Normal-mode transition, pending displayed preedit is finalized as-is rather than accepting a later candidate. In Replace mode, text that arrives without a key press, such as an IME commit, is inserted rather than overwriting, and `Backspace` does not restore characters around it. This is not a claim of full IME safety; live UI behavior has not been validated.
+
+**Text objects.** After `d`, `c` or `y`, or in Visual and Visual Line mode, `i` selects the inside of an object and `a` a little more. `iw` / `aw` take the word under the cursor, `aw` with the spaces after it, or before it when there are none after; `iW` / `aW` use whitespace-delimited words. `i"` / `a"`, `i'` / `a'` and `` i` `` / `` a` `` take quoted text on the cursor's line: on a quote the quotes pair up from the line start, elsewhere the nearest quotes around the cursor are used, or the first quoted text after it; a quote after a backslash does not count, and `a"` adds the spaces after the closing quote. `i(` / `a(` (also `ib`, `i)`), `i[`, `i{` (also `iB`) and `i<` take the brackets around the cursor, across lines; `a(` includes the brackets. A count picks words or outer brackets (`d2i(`). When the inside of a bracket starts with a line break and the closing bracket has only spaces before it on its line, `i{` covers the whole lines in between, so `ci{` leaves the braces on their own lines.
+
+**Finds, searches and repeat.** `f`, `t`, `F` and `T` stay on the cursor's line and wait for the next key as the character, so `f` followed by `Space` finds a space; `Escape` cancels. After `t` or `T`, `;` skips a target right next to the cursor. `%` takes no count. `{` and `}` stop on empty lines only; a line of spaces belongs to its paragraph. `*` and `#` search literal text with the find panel's case setting and skip matches inside longer words; after them, `n` and `N` keep the direction and the whole-word rule; after `?`, they keep the backward direction. After `?`, `Enter` in the find panel goes to the previous match and `Shift+Enter` to the next. `.` repeats the last Normal-mode command that changed the text, with the text typed in the Insert session it opened when the cursor stayed at the end of that text; if the cursor left that text or focus left the editor during the session, `.` does nothing until the next change; it does not repeat Visual-mode commands or Replace mode, and a repeat is one undo step. `Ctrl+d` and `Ctrl+u` count the lines visible in the editor and move the cursor; the view follows the cursor.
 
 **Leader key.** In Normal mode and the Visual modes, the leader key starts a
 two-key sequence that runs a command without leaving the home row. The leader
@@ -312,7 +356,7 @@ stores the leader itself, shown as `Leader`, so the binding moves with the
 leader.
 
 **Read-only editors** (routine definitions) accept motions, `yy`, and
-motion-based `y`; `x`, `r`, `R`, `dd`, `cc`, motion-based `c` / `d`, Visual `c`, and `u` do nothing there.
+motion-based `y`; `x`, `r`, `R`, `o`, `O`, `p`, `P`, `Ctrl+Shift+V`, `dd`, `cc`, motion-based `c` / `d`, Visual `c`, and `u` do nothing there.
 A read-only delete does not change the clipboard.
 
 **Limitations.**
@@ -325,8 +369,13 @@ A read-only delete does not change the clipboard.
   `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` and `b` / `B` exclude the
   destination character, while `e` / `E` include it. Horizontal operator
   motions `h` / `l` are characterwise; vertical `j` / `k` are linewise.
-  Other marks, text objects, registers, macros, `.` repeat,
-  `:` commands, and a redo key are unsupported. This is not full Vim.
+  Other marks, registers, macros, and `:` commands are unsupported. This is
+  not full Vim.
+- There are no registers: `p` / `P` put the system clipboard. Text that DBFlux
+  itself last yanked or deleted keeps its kind (whole lines from `yy`, `dd`,
+  `j` / `k` and `gg` / `G` motions, and Visual Line; characters otherwise,
+  including Visual Block). Any other clipboard text is put as whole lines when
+  it ends with a line break, and as characters otherwise.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.
 - Normal mode blocks your typing and pasting only. Edits DBFlux makes itself,
@@ -344,21 +393,27 @@ A read-only delete does not change the clipboard.
 | `g` / `Shift+g` (or `Home` / `End`) | First / last row |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
-| `Alt+l` / `Alt+h` | Next / previous result tab of a query, or next / previous view (Documents, Schema, Aggregate) of a document collection, wrapping at either end |
+| `Alt+l` / `Alt+h` | Next / previous result tab of a query, next / previous view (Documents, Schema, Aggregate) of a document collection, or next / previous view (Data, Columns, Partitions) of a table, wrapping at either end |
 | `Alt+w` | Close the result tab shown; the editor gets focus when it was the last |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
-| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
+| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its formats to save or copy the loaded rows and, for a table, to export all rows; `Enter` runs one, `Escape` closes it |
 | `f` | Focus toolbar |
 | `Shift+f` | Clear the WHERE filter and reload the rows; in a document collection, empty the filter slot and find |
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
+| `e` | Edit the value of the selected secret in the AWS Secrets document: retrieves the value first when it is not loaded (the retrieval is audited when auditing is on; with auditing off, or when the audit write fails, it can succeed without a record), then opens the editor; only when it can be edited (plaintext, not managed by another service, not scheduled for deletion, in a store that accepts writes) |
+| `b` | Roll the selected secret back to its most recent earlier version in the AWS Secrets document (asks first; only in a store with staging labels, for a secret not managed by another service and not scheduled for deletion) |
+| `m` → Open in tab | Open the selected secret of the AWS Secrets document in its own tab (also the expand button of the details pane and the row menu's Open in tab). In that tab `e`, `b`, `x` and `F5` act on its one secret as they do in the listing. A tab whose region differs from the connection's, or whose secret was deleted, starts no read or write and says why (a save already in flight is not cancelled and may still land on the previous region). Edit value (`e`) in the listing opens that tab with the editor active, retrieving the value first when it is not loaded (audited when auditing is on). |
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
+| `t` | Show the next data view (Table, Tree, JSON) of a table or collection that offers more than one |
 | `Shift+t` | Show the next view of the result (Data or Grid, JSON, Chart and the other views it offers), wrapping; the keyboard stays in the results |
 | `v` | Toggle the value panel for the selected cell |
 | `Ctrl+Space` | Toggle the row inspector for the selected row |
+| `Shift+s` | Find the rows nearest to the selected row by its vector column, on a table with a `pgvector` `vector` column (also in the row context menu) |
+| `Esc` | Leave similar rows and return to the table page |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Maximize the results of a query document over the editor, or restore the split |
 | `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, show another view of the result, the value panel's and row inspector's buttons, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
@@ -382,6 +437,15 @@ A dump analysis tab takes the table keys in each of its two tables: `Alt+l` and
 that is still reading the file, and `m` lists the other table, a sort per column
 of the table the keyboard is in (as a header click sorts it) and Cancel while
 the file is read.
+
+A table's Columns view takes `j` / `k` to move between columns, `Space` to add
+the column under the cursor to the Data view or drop it, `Shift+t` to cycle the
+order (table order, size, name), `/` to filter the columns, and `F5` to read
+the statistics again. In the Partitions view, `F5` reads the partitions again.
+The Toolbar submenu of `m` lists Show Data, Show Columns, Show Partitions,
+Choose columns, Refresh column statistics, Profile the first rows and Refresh
+partitions when the table offers them. See [Columns and
+Partitions](TABLE_VIEWS.md).
 
 ## Schema diff
 
@@ -498,6 +562,8 @@ The tasks panel sits under the documents and starts collapsed. Collapsed, it tak
 
 The selected task is highlighted while the panel has focus; clicking a row selects it too. The actions menu lists the selected task's **Show output**, **Cancel task** and **Dismiss**, then **Clear finished** and **Hide the tasks panel**, each with its shortcut; the context menu keys drive it. **Clear finished tasks** is also a command palette entry.
 
+**Cancel task** is offered only for work that stops when cancelled, such as a query, an export or a key scan. A write already sent to the server, a key read, or a single metadata request runs to the end and shows no cancel.
+
 ## Notifications center
 
 The bell at the right end of the title bar opens the notifications center, a
@@ -541,6 +607,11 @@ While the popover is open it keeps the keyboard: the panels behind it see none o
 
 Letters are left to the search field, so typing filters the list.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/keyboard/command-palette-dark.webp">
+  <img src="images/keyboard/command-palette-light.webp" alt="The command palette filtered by a short query, listing matching commands with their key bindings">
+</picture>
+
 ## Data table
 
 These keys apply while a result grid or table has focus and no cell is being
@@ -580,7 +651,13 @@ panel, row inspector, document panel or query builder beside it.
 | `Enter` | Edit the value (value panel) |
 | `Escape` | Stop editing the value, or go back to the grid |
 | `Ctrl+h` | Go back to the grid |
-| `m` (or `Shift+F10`) | Open the grid's context menu. Its Toolbar entry lists the buttons of the open panel: in the value panel the other formats, word wrap, Format, Compact and, once the value changed, Revert and Save; in the row inspector Pin or Unpin |
+| `m` (or `Shift+F10`) | Open the grid's context menu. Its Toolbar entry lists the buttons of the open panel: in the value panel the other formats, word wrap, Format, Compact and, once the value changed, Revert and Save; in the row inspector Pin or Unpin, and Go to referenced row while it lists outgoing foreign-key references, or while the cursor sits on a foreign-key cell |
+
+**Go to referenced row** opens the row that a foreign key of the inspected
+row points to, as clicking a REFERENCES entry of the inspector does: it
+follows the grid cursor's cell when it sits on a single-column foreign key
+with a non-null value, otherwise the inspector's first outgoing reference. It
+has no key binding of its own; run it from the Toolbar entry above.
 
 The query builders have keys of their own, listed under
 [Query builders](#query-builders).
@@ -667,7 +744,8 @@ interval, bulk delete, and Stop or Search whole keyspace while a filtered scan
 reads page by page). In the New key and Add member dialogs `Tab` and `Shift+Tab`
 move through the fields like `j` and `k` and stay in the dialog. When the
 console asks to confirm a dangerous command, `Enter` in its empty field runs it
-and `Escape` cancels it.
+and `Escape` cancels it. The console of a document collection answers the same
+keys.
 
 ## Object storage
 
@@ -688,6 +766,22 @@ When you leave an object with unsaved edits, the dialog that asks what to do
 opens with **Save** focused, so `Enter` saves. `Tab` and `Shift+Tab` move
 between **Save**, **Cancel** and **Discard** without leaving the dialog, `Enter`
 or `Space` presses the focused button, and `Escape` cancels.
+
+## CSV and TSV files
+
+A CSV or TSV tab takes the [Data table](#data-table) keys in its table, and
+these. See [CSV and TSV Files](CSV_FILES.md).
+
+| Keys | Action |
+|------|--------|
+| `t` | Show the next view: table, text, Columns |
+| `Shift+t` | Switch the text between Raw and Aligned, or cycle the order of the columns in the Columns view |
+| `/` | In the Columns view, filter the columns by name or type |
+| `Escape` / `Enter` | Take the keyboard out of the text / put it back |
+| `]` | Load the next 500 records |
+| `F5` | Read the file again from its source |
+| `Ctrl+s` / `Cmd+s` | Save, from the table or from the text |
+| `m` (or `Shift+F10`) | Pane actions: the dialect controls, Insert row above, Add column, Rename column, Discard changes, Reload from file, Profile whole file, and Cancel loading while the rest of the file loads |
 
 ## Audit viewer
 
@@ -745,11 +839,11 @@ The keys are listed under the Migrate Wizard context in Settings > Keybindings.
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
 
 While you type in a text field outside a dialog, such as the sidebar search or
-the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd` keep
-working: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` and the
-others in [Global](#global-available-regardless-of-focus). Keys without those
-modifiers, including `Tab`, `Escape`, `Enter` and the arrows, stay with the
-field. A shortcut the field binds itself, such as `Ctrl+a` or `Ctrl+c`, wins
+the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd`, or
+that start with a function key such as `F11`, keep working: `Ctrl+Tab`,
+`Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` and the others in
+[Global](#global-available-regardless-of-focus). Other keys, including `Tab`,
+`Escape`, `Enter` and the arrows, stay with the field. A shortcut the field binds itself, such as `Ctrl+a` or `Ctrl+c`, wins
 over the global one. Inside a dialog, a menu, a dropdown or a picker the global
 shortcuts wait until it closes.
 

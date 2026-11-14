@@ -1,7 +1,7 @@
-pub mod assignments;
-pub mod columns;
-pub mod execution;
-pub mod filters;
-pub mod group_by;
-pub mod joins;
-pub mod sort;
+pub(crate) mod assignments;
+pub(crate) mod columns;
+pub(crate) mod execution;
+pub(crate) mod filters;
+pub(crate) mod group_by;
+pub(crate) mod joins;
+pub(crate) mod sort;

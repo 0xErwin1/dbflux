@@ -1,6 +1,6 @@
 # DBFlux
 
-[English](../../README.md) · [Español](../es/README.md) · [한국어](../ko/README.md) · **简体中文**
+[English](../../README.md) · [Español](../es/README.md) · [한국어](../ko/README.md) · **简体中文** · [Português (Brasil)](../pt_BR/README.md)
 
 一个可扩展、以键盘操作为先的数据平台，以 Rust + GPUI 桌面客户端的形式交付。
 
@@ -68,7 +68,7 @@ DBFlux 的翻译工作在 [Hosted Weblate](https://hosted.weblate.org/engage/dbf
 curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | sudo bash
 ```
 
-各平台都有对应的安装包 — tarball、AUR、`.deb`、`.rpm`、AppImage、Nix、macOS DMG 与 Windows 安装程序 — 都放在 [Releases](https://github.com/0xErwin1/dbflux/releases) 页面。完整指南（包括未签名的 macOS 与 Windows 构建所需的 Gatekeeper 与 SmartScreen 步骤）见[安装 DBFlux](INSTALL.md)。
+各平台都有对应的安装包 — tarball、AUR、`.deb`、`.rpm`、AppImage、Nix、macOS DMG 与 Windows 安装程序 — 都放在 [Releases](https://github.com/0xErwin1/dbflux/releases) 页面。完整指南（包括未签名的 macOS 与 Windows 构建所需的 Gatekeeper 与 SmartScreen 步骤）见[安装 DBFlux](INSTALL.md)。在 macOS 与 Linux 上，也可以通过 Homebrew 安装：`brew install --cask 0xErwin1/dbflux/dbflux`。
 
 ## 功能
 
@@ -85,8 +85,10 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - **InfluxDB** v1 与 v2（v1 为 InfluxQL，v2 为 InfluxQL + Flux）
 - **ClickHouse** 与 ClickHouse Cloud，基于 HTTP(S)，支持数据库 / 表发现、可视化 SELECT 与显式的原始 SQL 执行
 - **TursoDB** 与 libSQL（`sqld`），基于 HTTP，支持 Schema 发现、类型化增删改查以及按编辑器标签页隔离的交互式事务
+- **DuckDB** 文件与内存数据库，连接时可挂载 DuckLake 目录
 - **CloudWatch Logs**，支持日志组 / 流浏览与事件流
 - **Amazon S3**，支持存储桶浏览、对象预览 / 编辑、完整增删改查与预签名 URL，并兼容 S3 端点（Cloudflare R2、MinIO）
+- **AWS Secrets Manager 与 Parameter Store**，支持分页列表、参数路径浏览、密钥详情，以及仅在显式请求时进行并经过审计的值读取
 - **基于 RPC 的外部驱动**（通过[驱动 RPC 协议](DRIVER_RPC_PROTOCOL.md)注册进程外驱动）
 
 完整能力矩阵与各驱动限制参见 [docs/DRIVERS.md](DRIVERS.md)。

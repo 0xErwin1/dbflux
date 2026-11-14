@@ -12,9 +12,9 @@ license.workspace = true
 [lib]
 path = "src/lib.rs"
 
-[dependencies]
-rust-i18n = { workspace = true }
-sys-locale = { workspace = true }
+[lints]
+workspace = true
 
-[dev-dependencies]
+[dependencies]
+sys-locale = { workspace = true }
 serde_yaml = { workspace = true }

@@ -20,7 +20,7 @@ use gpui_component::{ActiveTheme, Sizable};
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-pub struct AddMemberEvent {
+pub(crate) struct AddMemberEvent {
     pub fields: Vec<(String, String)>,
 }
 
@@ -29,7 +29,7 @@ pub struct AddMemberEvent {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AddMemberFocus {
+pub(crate) enum AddMemberFocus {
     RowField(usize),
     RowValue(usize),
     RowDelete(usize),
@@ -60,7 +60,7 @@ struct ValueRow {
 // AddMemberModal
 // ---------------------------------------------------------------------------
 
-pub struct AddMemberModal {
+pub(crate) struct AddMemberModal {
     visible: bool,
     focus_handle: FocusHandle,
     key_type: KeyType,
@@ -74,7 +74,7 @@ pub struct AddMemberModal {
 }
 
 impl AddMemberModal {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         Self {
             visible: false,
             focus_handle: cx.focus_handle(),
@@ -87,11 +87,11 @@ impl AddMemberModal {
         }
     }
 
-    pub fn is_visible(&self) -> bool {
+    pub(crate) fn is_visible(&self) -> bool {
         self.visible
     }
 
-    pub fn active_context(&self) -> ContextId {
+    pub(crate) fn active_context(&self) -> ContextId {
         match self.edit_state {
             FormEditState::Navigating => ContextId::FormNavigation,
             FormEditState::Editing => ContextId::TextInput,
@@ -99,7 +99,7 @@ impl AddMemberModal {
         }
     }
 
-    pub fn dispatch_command(
+    pub(crate) fn dispatch_command(
         &mut self,
         cmd: Command,
         window: &mut Window,
@@ -112,7 +112,7 @@ impl AddMemberModal {
         }
     }
 
-    pub fn open(&mut self, key_type: KeyType, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open(&mut self, key_type: KeyType, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = true;
         self.key_type = key_type;
         self.error_message = None;
@@ -126,7 +126,7 @@ impl AddMemberModal {
         cx.notify();
     }
 
-    pub fn close(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.error_message = None;
         cx.notify();
@@ -424,6 +424,10 @@ impl EventEmitter<AddMemberEvent> for AddMemberModal {}
 // ---------------------------------------------------------------------------
 
 impl Render for AddMemberModal {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index runs 0..row_count, read from value_rows.len() above, and value_rows is not mutated in between"
+    )]
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();

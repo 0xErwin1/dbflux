@@ -5,10 +5,11 @@ use super::{
 };
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::detect_chart_columns;
+use dbflux_components::components::data_table::ROW_NUMBER_WIDTH;
 use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
-use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH};
 use dbflux_components::composites::{MenuItem, render_menu_header};
 use dbflux_components::controls::Button;
+use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
@@ -136,10 +137,12 @@ pub(super) fn place_context_menu(
 /// One row of the data grid's export menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ExportMenuEntry {
-    /// Write the result to a file in this format.
+    /// Write the loaded rows to a file in this format.
     Save(ExportFormat),
-    /// Put the result on the clipboard in this format.
+    /// Put the loaded rows on the clipboard in this format.
     Copy(ExportFormat),
+    /// Page through the whole table and stream it to a file in this format.
+    SaveAll(dbflux_transfer::FileFormat),
 }
 
 impl ExportMenuEntry {
@@ -151,6 +154,13 @@ impl ExportMenuEntry {
 
 /// The export menu row one step from `from`, wrapping at both ends and
 /// passing over disabled rows. Returns `from` when no other row is enabled.
+// index starts at from.min(count - 1) and only moves by modular steps over
+// count, so entries[index] stays below entries.len(); count > 0 after the
+// early return.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "index starts at from.min(count - 1) and moves only by modular steps over count, with count > 0 after the early return"
+)]
 pub(super) fn step_export_selection(
     entries: &[ExportMenuEntry],
     from: usize,
@@ -233,7 +243,10 @@ impl DataGridPanel {
         let toolbar_height = px(36.0); // Approximate toolbar height
         let position = Point {
             x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
-            y: self.panel_origin.y + toolbar_height + HEADER_HEIGHT + ROW_HEIGHT * row,
+            y: self.panel_origin.y
+                + toolbar_height
+                + fonts::grid_header_height(cx)
+                + fonts::grid_row_height(cx) * row,
         };
 
         self.context_menu = Some(TableContextMenu {
@@ -313,6 +326,14 @@ impl DataGridPanel {
                 .as_ref()
                 .and_then(|cid| {
                     let node = ts.visible_nodes().iter().find(|n| &n.id == cid)?;
+                    // NodeId::root(), child() and parent() all keep the
+                    // leading document index segment, and no crate builds a
+                    // NodeId from its public path field, so the
+                    // slice after it is in range.
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "cursor ids come from NodeId::root()/child()/parent(), which all keep the leading document index segment, so path has at least one element and [1..] is in range"
+                    )]
                     let path: Vec<String> = cid.path[1..].to_vec();
                     let path_opt = if path.is_empty() { None } else { Some(path) };
                     Some((path_opt, Some(node.value.clone())))
@@ -708,6 +729,12 @@ impl DataGridPanel {
             return ContextId::TextInput;
         }
 
+        // A focused query bar field takes the letters typed into it, even
+        // when a side panel last held the keyboard.
+        if self.focus.focused_query_input.is_some() {
+            return ContextId::TextInput;
+        }
+
         if let Some(context) = self.builder_rail_context(cx) {
             return context;
         }
@@ -763,10 +790,14 @@ impl DataGridPanel {
             .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
             .unwrap_or(false);
 
-        let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
-        let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
-        let has_generate_sql = !is_document_view && !is_column_header;
-        let has_copy_query = !is_column_header && self.has_copy_query_support();
+        // Must match `render_context_menu`, so the keyboard walks the same
+        // item list the menu draws.
+        let table_queries = self.offers_table_query_actions();
+        let has_filter = table_queries && self.has_filter_submenu(backend, is_document_view, cx);
+        let has_order =
+            table_queries && matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+        let has_generate_sql = table_queries && !is_document_view && !is_column_header;
+        let has_copy_query = table_queries && !is_column_header && self.has_copy_query_support();
         let can_chart = !is_column_header && self.can_chart_from_context_menu(cx);
 
         // Layout:
@@ -777,20 +808,24 @@ impl DataGridPanel {
         //   [sep + Toolbar]?          (if the grid shows any toolbar button)
         let inspect_row_enabled = !self.is_grouped_result();
 
-        let base_items = if is_column_header {
-            Vec::new()
-        } else {
-            self.adapt_menu_items_for_documents(
-                Self::build_context_menu_items(
-                    is_editable,
+        let base_items = match self.context_menu.as_ref() {
+            Some(menu) if !is_column_header => self.with_find_similar_rows(
+                self.adapt_menu_items_for_documents(
+                    Self::build_context_menu_items(
+                        is_editable,
+                        is_document_view,
+                        has_row_target,
+                        can_chart,
+                        inspect_row_enabled,
+                    ),
                     is_document_view,
-                    has_row_target,
-                    can_chart,
-                    inspect_row_enabled,
+                    cx,
                 ),
-                is_document_view,
+                menu,
+                has_row_target,
                 cx,
-            )
+            ),
+            _ => Vec::new(),
         };
         let base_count = base_items.len();
 
@@ -1041,6 +1076,7 @@ impl DataGridPanel {
                         cx.notify();
                     } else if menu.selected_index < base_count
                         && let Some(item) = base_items.get(menu.selected_index)
+                        && !item.disabled
                         && let Some(action) = item.action
                     {
                         self.handle_context_menu_action(action, window, cx);
@@ -1077,11 +1113,7 @@ impl DataGridPanel {
             return false;
         };
         let (_, _, filter_items, _) = self.build_filter_items(menu, backend, cx);
-        let mut actions = vec![
-            ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
-            ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
-            ContextMenuAction::RemoveOrdering,
-        ];
+        let mut actions = Self::column_header_menu_fixed_actions().to_vec();
         actions.extend(filter_items.into_iter().map(|(_, action)| action));
 
         match cmd {
@@ -1151,6 +1183,7 @@ impl DataGridPanel {
                 | ContextMenuAction::SetNull
                 | ContextMenuAction::UnsetField
                 | ContextMenuAction::RevertCell
+                | ContextMenuAction::FindSimilarRows
                 | ContextMenuAction::DuplicateRow
                 | ContextMenuAction::DeleteRow
                 | ContextMenuAction::GenerateSelectWhere
@@ -1203,14 +1236,25 @@ impl DataGridPanel {
     }
 
     /// The rows of the export menu, in the order it draws them: a save row
-    /// per format, then a copy row per format.
+    /// per format, a copy row per format, then, when the whole table can be
+    /// read again, an export-all row per streaming format.
     pub(super) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
         let formats = dbflux_export::available_formats(&self.result.shape);
+        let export_all_formats: &[dbflux_transfer::FileFormat] = if self.can_export_all_rows() {
+            &dbflux_transfer::FileFormat::ALL
+        } else {
+            &[]
+        };
 
         formats
             .iter()
             .map(|&format| ExportMenuEntry::Save(format))
             .chain(formats.iter().map(|&format| ExportMenuEntry::Copy(format)))
+            .chain(
+                export_all_formats
+                    .iter()
+                    .map(|&format| ExportMenuEntry::SaveAll(format)),
+            )
             .collect()
     }
 
@@ -1263,6 +1307,7 @@ impl DataGridPanel {
         match entry {
             ExportMenuEntry::Save(format) => self.export_with_format(format, window, cx),
             ExportMenuEntry::Copy(format) => self.copy_to_clipboard_with_format(format, window, cx),
+            ExportMenuEntry::SaveAll(format) => self.export_all_rows(format, window, cx),
         }
     }
 
@@ -1277,6 +1322,7 @@ impl DataGridPanel {
         }
 
         let result = self.result.clone();
+        let loaded_rows = loaded_row_count(&result);
         let base_name = self.export_base_name();
         let extension = format.extension();
         let suggested_name = format!("{}.{}", base_name, extension);
@@ -1348,20 +1394,27 @@ impl DataGridPanel {
                 Ok::<_, dbflux_export::ExportError>(())
             })();
 
-            let (message, is_error) = match &export_result {
-                Ok(()) if used_fallback => (
-                    crate::labels::context_menu_export_native_picker_fallback_toast(
-                        &target_path.display().to_string(),
+            let path_text = target_path.display().to_string();
+            let (message, is_error) = match (&export_result, loaded_rows) {
+                (Ok(()), Some(count)) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_rows_toast(
+                        count, &path_text,
                     ),
                     false,
                 ),
-                Ok(()) => (
-                    crate::labels::context_menu_export_exported_toast(
-                        &target_path.display().to_string(),
-                    ),
+                (Ok(()), None) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_toast(&path_text),
                     false,
                 ),
-                Err(e) => (
+                (Ok(()), Some(count)) => (
+                    crate::labels::context_menu_export_exported_rows_toast(count, &path_text),
+                    false,
+                ),
+                (Ok(()), None) => (
+                    crate::labels::context_menu_export_exported_toast(&path_text),
+                    false,
+                ),
+                (Err(e), _) => (
                     crate::labels::context_menu_export_failed_error(&e.to_string()),
                     true,
                 ),
@@ -1423,11 +1476,19 @@ impl DataGridPanel {
                     let byte_len = text.len();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
-                    self.pending.toast = Some(PendingToast {
-                        message: crate::labels::context_menu_clipboard_copied_toast(
+                    let message = match loaded_row_count(&self.result) {
+                        Some(count) => crate::labels::context_menu_clipboard_copied_rows_toast(
+                            count,
                             format_name,
                             byte_len,
                         ),
+                        None => crate::labels::context_menu_clipboard_copied_toast(
+                            format_name,
+                            byte_len,
+                        ),
+                    };
+                    self.pending.toast = Some(PendingToast {
+                        message,
                         is_error: false,
                     });
                     cx.notify();
@@ -1618,6 +1679,7 @@ impl DataGridPanel {
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
         let backend = self.filter_backend(cx);
+        let mut detail_rows = 0usize;
         let menu_items = if menu.is_column_header {
             self.render_column_header_menu_items(menu, backend, cx)
         } else {
@@ -1625,17 +1687,26 @@ impl DataGridPanel {
                 self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
             let can_chart = self.can_chart_from_context_menu(cx);
             let inspect_row_enabled = !self.is_grouped_result();
-            let visible_items = self.adapt_menu_items_for_documents(
-                Self::build_context_menu_items(
-                    is_editable,
+            let visible_items = self.with_find_similar_rows(
+                self.adapt_menu_items_for_documents(
+                    Self::build_context_menu_items(
+                        is_editable,
+                        menu.is_document_view,
+                        has_row_target,
+                        can_chart,
+                        inspect_row_enabled,
+                    ),
                     menu.is_document_view,
-                    has_row_target,
-                    can_chart,
-                    inspect_row_enabled,
+                    cx,
                 ),
-                menu.is_document_view,
+                menu,
+                has_row_target,
                 cx,
             );
+            detail_rows = visible_items
+                .iter()
+                .filter(|item| item.detail.is_some())
+                .count();
             let mut menu_items: Vec<AnyElement> = Vec::new();
             let mut visual_index = 0usize;
 
@@ -1651,12 +1722,15 @@ impl DataGridPanel {
                 cx,
             );
 
-            let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
-            let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+            let table_queries = self.offers_table_query_actions();
+            let has_filter =
+                table_queries && self.has_filter_submenu(backend, is_document_view, cx);
+            let has_order =
+                table_queries && matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
             let separators = QueryGroupSeparators::new(
                 has_filter,
                 has_order,
-                !is_document_view,
+                table_queries && !is_document_view,
                 self.has_copy_query_support(),
             );
 
@@ -1683,7 +1757,7 @@ impl DataGridPanel {
                 cx,
             );
             Self::render_generate_sql_submenu_section(
-                is_document_view,
+                is_document_view || !table_queries,
                 separators.generate_sql,
                 menu,
                 submenus_open_left,
@@ -1731,9 +1805,14 @@ impl DataGridPanel {
         };
 
         // Separators are shorter than rows, so this over-estimates a little;
-        // a menu placed a few pixels higher than necessary is harmless.
-        let menu_height =
-            MenuMetrics::ROW_HEIGHT * menu_items.len() as f32 + MenuMetrics::PADDING_Y * 2.0;
+        // a menu placed a few pixels higher than necessary is harmless. Rows
+        // with a detail line are taller.
+        let row_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT);
+        let detail_extra =
+            dbflux_components::fonts::ui_px(cx, MenuMetrics::DETAIL_ROW_HEIGHT) - row_height;
+        let menu_height = row_height * menu_items.len() as f32
+            + detail_extra * detail_rows as f32
+            + MenuMetrics::PADDING_Y * 2.0;
         let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
 
         self.render_context_menu_overlay(
@@ -1861,8 +1940,16 @@ impl DataGridPanel {
             ContextMenuAction::RemoveOrdering => {
                 self.handle_sort_clear(cx);
             }
+            ContextMenuAction::CopyColumnName => {
+                if let Some(column) = self.result.columns.get(menu.col) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(column.name.clone()));
+                }
+            }
             ContextMenuAction::InspectRow => {
                 self.open_row_inspector(menu.row, menu.col, cx);
+            }
+            ContextMenuAction::FindSimilarRows => {
+                self.find_similar_rows_at(menu.row, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {
                 let query = self.chart_host_current_query(cx);
@@ -1910,6 +1997,7 @@ impl DataGridPanel {
             self.inspector.inspector_row = None;
             self.inspector.row_inspector_content = None;
             self.inspector.incoming_references.cancel();
+            self.inspector.outgoing_labels = None;
             cx.emit(DataGridEvent::CloseInspector);
             return;
         }
@@ -1979,9 +2067,10 @@ impl DataGridPanel {
         let pinned = self.inspector.pinned;
         content.update(cx, |c, cx| {
             c.set_pinned(pinned, cx);
-            c.set_outgoing_references(outgoing_references, cx);
+            c.set_outgoing_references(outgoing_references.clone(), cx);
         });
 
+        self.load_outgoing_reference_labels(&outgoing_references, content.clone(), cx);
         self.load_incoming_references(&cells, content.clone(), cx);
 
         // Remember the active coordinates so refresh / tab activation /
@@ -2023,6 +2112,20 @@ impl DataGridPanel {
                     content.update(cx, |c, cx| c.set_pinned(pinned, cx));
                 }
             }
+            RowInspectorContentEvent::NavigateReference { index } => {
+                let reference = self
+                    .inspector
+                    .row_inspector_content
+                    .as_ref()
+                    .and_then(|content| content.read(cx).reference(index).cloned());
+
+                if let Some(target) = reference
+                    .as_ref()
+                    .and_then(|reference| self.reference_target(reference))
+                {
+                    self.navigate_to_reference(target, cx);
+                }
+            }
             RowInspectorContentEvent::Edit
             | RowInspectorContentEvent::Duplicate
             | RowInspectorContentEvent::Delete => {
@@ -2052,7 +2155,9 @@ impl DataGridPanel {
             RowInspectorContentEvent::Edit => self.handle_edit(row, col, window, cx),
             RowInspectorContentEvent::Duplicate => self.handle_duplicate_row(row, false, cx),
             RowInspectorContentEvent::Delete => self.handle_delete_row(row, cx),
-            RowInspectorContentEvent::Close | RowInspectorContentEvent::TogglePin => {}
+            RowInspectorContentEvent::Close
+            | RowInspectorContentEvent::TogglePin
+            | RowInspectorContentEvent::NavigateReference { .. } => {}
         }
     }
 
@@ -2118,6 +2223,16 @@ impl DataGridPanel {
                 target_table: fk.referenced_table.clone(),
                 target_pk: ref_col.clone(),
                 value: cell.value.clone(),
+                // The grid resolves the same referenced rows for its FK
+                // cells; a cache hit names the row without a query. The
+                // referenced column is part of the cache identity, so two
+                // foreign keys into one table never share a label.
+                display_label: self.fk_display.cached_label(
+                    fk.referenced_schema.as_deref(),
+                    &fk.referenced_table,
+                    ref_col,
+                    &cell.value,
+                ),
                 kind: ReferenceKind::Outgoing,
             });
         }
@@ -2234,6 +2349,7 @@ impl DataGridPanel {
                         schema: schema.clone(),
                         name: reference.target_table.clone(),
                     })
+                    .with_database(Some(database.clone()))
                     .with_semantic_filter(
                         dbflux_core::SemanticFilter::compare(
                             reference.column.as_str(),
@@ -2254,6 +2370,107 @@ impl DataGridPanel {
         };
 
         self.inspector.incoming_references.schedule(job, cx);
+    }
+
+    /// Resolves the readable label behind each outgoing REFERENCES entry
+    /// the panel's FK display cache could not seed: the referenced row
+    /// loads through `fetch_row_by_pk` in the background and is named by
+    /// its table's display column (cached table details, fetched when
+    /// missing). A row that no longer answers, or a failed fetch, keeps
+    /// the raw id.
+    ///
+    /// The lookup is held in `inspector.outgoing_labels`: opening another
+    /// row (or closing the inspector) drops it, cancelling its display
+    /// column and label fetches before they start; the generation check in
+    /// `resolve_outgoing_labels` only stops fetches that already began.
+    fn load_outgoing_reference_labels(
+        &mut self,
+        references: &[super::row_inspector::FkReference],
+        content: Entity<super::row_inspector::RowInspectorContent>,
+        cx: &mut Context<Self>,
+    ) {
+        let is_unresolved = |reference: &super::row_inspector::FkReference| {
+            matches!(
+                reference.kind,
+                super::row_inspector::ReferenceKind::Outgoing
+            ) && reference.display_label.is_none()
+        };
+        if !references.iter().any(is_unresolved) {
+            self.inspector.outgoing_labels = None;
+            return;
+        }
+
+        let Some(ReferenceLookupTarget {
+            profile_id,
+            database,
+            connection,
+            ..
+        }) = self.reference_lookup_target(cx)
+        else {
+            self.inspector.outgoing_labels = None;
+            return;
+        };
+
+        let generation = content.read(cx).generation();
+        let app_state = self.app_state.clone();
+        let references: Vec<super::row_inspector::FkReference> = references.to_vec();
+
+        let mut tables: Vec<(Option<String>, String)> = Vec::new();
+        for reference in references
+            .iter()
+            .filter(|reference| is_unresolved(reference))
+        {
+            let table = (
+                reference.target_schema.clone(),
+                reference.target_table.clone(),
+            );
+            if !tables.contains(&table) {
+                tables.push(table);
+            }
+        }
+
+        let task = cx.spawn(async move |_, cx| {
+            let display_columns = reference_display_columns(
+                &app_state,
+                profile_id,
+                &database,
+                &tables,
+                &connection,
+                cx,
+            )
+            .await;
+
+            super::row_inspector::resolve_outgoing_labels(
+                &content,
+                generation,
+                &references,
+                &display_columns,
+                |reference, executor| {
+                    let connection = connection.clone();
+                    let database = database.clone();
+                    let schema = reference.target_schema.clone();
+                    let table = reference.target_table.clone();
+                    let pk_column = reference.target_pk.clone();
+                    let value = reference.value.clone();
+
+                    executor.spawn(async move {
+                        connection
+                            .fetch_row_by_pk(
+                                &database,
+                                schema.as_deref().unwrap_or(""),
+                                &table,
+                                &pk_column,
+                                &value,
+                            )
+                            .map_err(|error| error.to_string())
+                    })
+                },
+                cx,
+            )
+            .await;
+        });
+
+        self.inspector.outgoing_labels = Some(task);
     }
 
     /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.
@@ -2385,11 +2602,7 @@ impl DataGridPanel {
                 return;
             };
 
-            state.stage_cell_value(
-                coord.row,
-                coord.col,
-                dbflux_components::components::data_table::model::CellValue::text(&text),
-            );
+            state.stage_pasted_text(coord.row, coord.col, &text);
 
             cx.notify();
         });
@@ -2443,6 +2656,10 @@ impl DataGridPanel {
             Some(VisualRowSource::Insert(insert_idx)) => {
                 if let Some(insert_data) = state.edit_buffer().get_pending_insert_by_idx(insert_idx)
                 {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "col < insert_data.len() is checked directly above"
+                    )]
                     if col < insert_data.len() {
                         insert_data[col].edit_text()
                     } else {
@@ -2485,6 +2702,51 @@ impl DataGridPanel {
         });
     }
 
+    /// Adds "Find similar rows" to the row actions when the table has a
+    /// vector column and the menu is on a row of the grid. The entry names
+    /// the column and K it reads, or, disabled, why it cannot run from this
+    /// row.
+    pub(in crate::data_grid_panel) fn with_find_similar_rows(
+        &self,
+        mut items: Vec<ContextMenuItem>,
+        menu: &TableContextMenu,
+        has_row_target: bool,
+        cx: &Context<Self>,
+    ) -> Vec<ContextMenuItem> {
+        if menu.is_document_view || !has_row_target || !self.can_find_similar_rows(menu.col, cx) {
+            return items;
+        }
+
+        let position_of =
+            |action: ContextMenuAction| items.iter().position(|item| item.action == Some(action));
+        let position = position_of(ContextMenuAction::InspectRow)
+            .map(|index| index + 1)
+            .or_else(|| position_of(ContextMenuAction::DuplicateRow))
+            .or_else(|| position_of(ContextMenuAction::AddRow).map(|index| index + 1))
+            .or_else(|| position_of(ContextMenuAction::ViewValue).map(|index| index + 1))
+            .unwrap_or(items.len());
+
+        let block = self.similar_rows_block(menu.row, menu.col, cx);
+        let detail = match &block {
+            Some(block) => Some(block.menu_reason()),
+            None => self.similar_rows_menu_detail(menu.col, cx),
+        };
+
+        items.insert(
+            position,
+            ContextMenuItem {
+                label: dbflux_i18n::t!("document.data.context_menu.item.find_similar_rows").into(),
+                action: Some(ContextMenuAction::FindSimilarRows),
+                icon: Some(AppIcon::ChartScatter),
+                is_separator: false,
+                is_danger: false,
+                detail: detail.map(Into::into),
+                disabled: block.is_some(),
+            },
+        );
+        items
+    }
+
     /// In a document grid the column-default entry has no meaning: it becomes
     /// "Unset field", and "Revert change" follows "Set NULL".
     fn adapt_menu_items_for_documents(
@@ -2507,6 +2769,8 @@ impl DataGridPanel {
                     icon: Some(AppIcon::CircleX),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 }),
                 Some(ContextMenuAction::SetNull) => {
                     adapted.push(item);
@@ -2516,6 +2780,8 @@ impl DataGridPanel {
                         icon: Some(AppIcon::RotateCcw),
                         is_separator: false,
                         is_danger: false,
+                        detail: None,
+                        disabled: false,
                     });
                 }
                 _ => adapted.push(item),
@@ -2904,7 +3170,7 @@ impl DataGridPanel {
                 Some(VisualRowSource::Insert(insert_idx)) => buffer
                     .pending_inserts()
                     .get(insert_idx)
-                    .and_then(|pi| pi.insert_after)
+                    .and_then(|pi| pi.insert_after())
                     .unwrap_or(self.result.rows.len().saturating_sub(1)),
                 None => self.result.rows.len().saturating_sub(1),
             }
@@ -3103,7 +3369,7 @@ impl DataGridPanel {
                 let insert_after = buffer
                     .pending_inserts()
                     .get(insert_idx)
-                    .and_then(|pi| pi.insert_after)
+                    .and_then(|pi| pi.insert_after())
                     .unwrap_or(base_row_count.saturating_sub(1));
 
                 let values = buffer
@@ -3167,6 +3433,8 @@ impl DataGridPanel {
 
         let base_row_count = self.result.rows.len();
 
+        let mut removed_insert = None;
+
         table_state.update(cx, |state, cx| {
             let buffer = state.edit_buffer_mut();
             buffer.set_base_row_count(base_row_count);
@@ -3179,18 +3447,28 @@ impl DataGridPanel {
                 }
                 Some(VisualRowSource::Insert(insert_idx)) => {
                     buffer.remove_pending_insert_by_idx(insert_idx);
+                    removed_insert = Some(insert_idx);
                 }
                 None => {}
             }
 
             cx.notify();
         });
+
+        if let Some(insert_idx) = removed_insert {
+            self.renumber_queued_inserts_after_removal(insert_idx);
+        }
     }
 
     // === Filter / Order from context menu ===
 
     /// Resolves the original `Value` for a cell from the result set.
-    fn resolve_cell_value(&self, visual_row: usize, col: usize, cx: &App) -> Option<Value> {
+    pub(super) fn resolve_cell_value(
+        &self,
+        visual_row: usize,
+        col: usize,
+        cx: &App,
+    ) -> Option<Value> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
         let table_state = self.grid_table.table_state.as_ref()?;
@@ -3630,10 +3908,11 @@ impl DataGridPanel {
     }
 
     fn has_copy_query_support(&self) -> bool {
-        matches!(
-            self.source,
-            DataSource::Table { .. } | DataSource::Collection { .. }
-        )
+        self.offers_table_query_actions()
+            && matches!(
+                self.source,
+                DataSource::Table { .. } | DataSource::Collection { .. }
+            )
     }
 
     /// Returns true when a "Chart this query" context menu item should be shown.
@@ -4036,7 +4315,16 @@ impl DataGridPanel {
     }
 }
 
-fn record_export_audit(
+/// How many rows an export of the loaded result writes, or `None` for a text
+/// or binary payload, which has no rows to count.
+fn loaded_row_count(result: &dbflux_core::QueryResult) -> Option<usize> {
+    let is_payload =
+        result.rows.is_empty() && (result.text_body.is_some() || result.raw_bytes.is_some());
+
+    (!is_payload).then_some(result.rows.len())
+}
+
+pub(super) fn record_export_audit(
     audit_service: &dbflux_audit::AuditService,
     format_name: &str,
     path: Option<&std::path::Path>,
@@ -4178,11 +4466,13 @@ async fn cached_or_fetched_schema_foreign_keys(
         return Ok(foreign_keys);
     }
 
-    let params = cx.update(|cx| {
-        app_state
-            .read(cx)
-            .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
-    })?;
+    let params = cx
+        .update(|cx| {
+            app_state
+                .read(cx)
+                .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
+        })
+        .map_err(|error| error.to_string())?;
 
     let fetched = cx
         .background_executor()
@@ -4203,6 +4493,95 @@ async fn cached_or_fetched_schema_foreign_keys(
     });
 
     Ok(foreign_keys)
+}
+
+/// The display column of each referenced table, from the connection's
+/// cached details when it has them — keyed by the referenced schema first
+/// and without one second, the shape MySQL writes — otherwise fetched on
+/// the background executor and cached for the next reader. A table whose
+/// details cannot be read has no display column and keeps naming its rows
+/// by id.
+async fn reference_display_columns(
+    app_state: &Entity<dbflux_ui_base::AppStateEntity>,
+    profile_id: uuid::Uuid,
+    database: &str,
+    tables: &[(Option<String>, String)],
+    connection: &std::sync::Arc<dyn dbflux_core::Connection>,
+    cx: &mut AsyncApp,
+) -> std::collections::HashMap<(Option<String>, String), Option<String>> {
+    let mut display_columns: std::collections::HashMap<(Option<String>, String), Option<String>> =
+        std::collections::HashMap::new();
+
+    for (schema, table) in tables {
+        let cached = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .and_then(|connected| {
+                    connected
+                        .table_details
+                        .get(&(database.to_string(), schema.clone(), table.clone()))
+                        .or_else(|| {
+                            connected.table_details.get(&(
+                                database.to_string(),
+                                None,
+                                table.clone(),
+                            ))
+                        })
+                        .cloned()
+                })
+        });
+
+        let column = match cached {
+            Some(details) => super::fk_display::pick_display_column(
+                details.columns.as_deref().unwrap_or(&[]),
+                details.foreign_keys.as_deref().unwrap_or(&[]),
+            ),
+            None => {
+                let request = {
+                    let connection = connection.clone();
+                    let database = database.to_string();
+                    let schema = schema.clone();
+                    let table = table.clone();
+                    cx.background_executor().spawn(async move {
+                        connection.table_details(&database, schema.as_deref(), &table)
+                    })
+                };
+
+                match request.await {
+                    Ok(details) => {
+                        let column = super::fk_display::pick_display_column(
+                            details.columns.as_deref().unwrap_or(&[]),
+                            details.foreign_keys.as_deref().unwrap_or(&[]),
+                        );
+                        cx.update(|cx| {
+                            app_state.update(cx, |state, _| {
+                                state.set_table_details(
+                                    profile_id,
+                                    database.to_string(),
+                                    schema.clone(),
+                                    table.clone(),
+                                    details,
+                                );
+                            });
+                        });
+                        column
+                    }
+                    Err(error) => {
+                        log::debug!(
+                            "row inspector: no column metadata for referenced table {table}: {error}"
+                        );
+                        None
+                    }
+                }
+            }
+        };
+
+        display_columns.insert((schema.clone(), table.clone()), column);
+    }
+
+    display_columns
 }
 
 #[cfg(test)]
@@ -4370,6 +4749,9 @@ mod tests {
         let labels = labels(&items);
 
         assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
+        assert!(labels.contains(&item_label(
+            "document.data.context_menu.item.copy_column_name"
+        )));
         assert!(!labels.contains(&item_label("document.data.context_menu.item.edit")));
         assert!(!labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
         assert!(!labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
@@ -4382,7 +4764,10 @@ mod tests {
 
         assert_eq!(
             labels(&items),
-            vec![item_label("document.data.context_menu.item.copy")]
+            vec![
+                item_label("document.data.context_menu.item.copy"),
+                item_label("document.data.context_menu.item.copy_column_name"),
+            ]
         );
     }
 
@@ -4399,6 +4784,21 @@ mod tests {
             false, false, false, false, true,
         ));
         assert!(!without_row.contains(&item_label("document.data.context_menu.item.view_value")));
+    }
+
+    /// Copy column name sits right after Copy, and the document menu, which
+    /// has no columns, leaves it out.
+    #[test]
+    fn copy_column_name_follows_copy_in_the_table_menu_only() {
+        let table = DataGridPanel::build_context_menu_items(false, false, true, false, true);
+        assert_eq!(
+            table[1].action,
+            Some(dbflux_components::components::data_table::ContextMenuAction::CopyColumnName)
+        );
+
+        let document = DataGridPanel::build_context_menu_items(true, true, true, false, true);
+        assert!(!document.iter().any(|item| item.action
+            == Some(dbflux_components::components::data_table::ContextMenuAction::CopyColumnName)));
     }
 
     #[test]

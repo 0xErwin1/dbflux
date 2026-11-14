@@ -36,14 +36,14 @@ impl OrthogonalRoute {
         Self { points }
     }
 
-    pub fn start(&self) -> RoutePoint {
+    pub(crate) fn start(&self) -> RoutePoint {
         self.points
             .first()
             .copied()
             .unwrap_or(RoutePoint { x: 0.0, y: 0.0 })
     }
 
-    pub fn end(&self) -> RoutePoint {
+    pub(crate) fn end(&self) -> RoutePoint {
         self.points
             .last()
             .copied()
@@ -51,7 +51,7 @@ impl OrthogonalRoute {
     }
 
     /// Unit direction of the final segment, which is what the arrowhead follows.
-    pub fn end_direction(&self) -> (f32, f32) {
+    pub(crate) fn end_direction(&self) -> (f32, f32) {
         let count = self.points.len();
         if count < 2 {
             return (0.0, 0.0);
@@ -64,7 +64,7 @@ impl OrthogonalRoute {
     }
 
     /// Unit direction the edge leaves the source with, used for the crow's foot.
-    pub fn start_direction(&self) -> (f32, f32) {
+    pub(crate) fn start_direction(&self) -> (f32, f32) {
         let (Some(from), Some(to)) = (self.points.first(), self.points.get(1)) else {
             return (0.0, 0.0);
         };

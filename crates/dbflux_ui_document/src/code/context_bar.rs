@@ -1,7 +1,7 @@
 use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
-use dbflux_components::controls::Button;
+use dbflux_components::controls::{Button, DropdownEnvironment};
 use dbflux_components::icons::DriverIconTone;
 use dbflux_components::primitives::{FocusShape, Icon, Text, focus_ring};
 use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields};
@@ -171,12 +171,28 @@ impl CodeDocument {
     }
 
     fn connection_items(app_state: &Entity<AppStateEntity>, cx: &App) -> Vec<DropdownItem> {
-        let mut items: Vec<_> = app_state
-            .read(cx)
+        let state = app_state.read(cx);
+
+        let mut items: Vec<_> = state
             .connections()
             .values()
             .map(|connected| {
-                DropdownItem::with_value(&connected.profile.name, connected.profile.id.to_string())
+                let item = DropdownItem::with_value(
+                    &connected.profile.name,
+                    connected.profile.id.to_string(),
+                );
+
+                // Each row carries its driver's logo, so the list says which
+                // engine a profile talks to before the name is read.
+                let Some(driver) = state.drivers().get(&connected.profile.driver_id()) else {
+                    return item;
+                };
+
+                let metadata = driver.metadata();
+                item.icon(AppIcon::for_driver(metadata.icon, metadata.category))
+                    .icon_tone(
+                        DriverIconTone::for_driver(metadata.icon, metadata.category).badge_tone(),
+                    )
             })
             .collect();
 
@@ -224,6 +240,7 @@ impl CodeDocument {
                 self.app_state.clone(),
                 connection_id,
                 self.source.exec_ctx.database.clone(),
+                self.source.exec_ctx.schema.clone(),
                 self.editor.completion_query_generation.clone(),
             ));
         let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
@@ -895,6 +912,9 @@ impl CodeDocument {
 
     fn on_schema_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
         self.source.exec_ctx.schema = Some(item.value.to_string());
+        // Reattach the completion provider, which captures the selected
+        // schema at construction.
+        self.sync_editor_language(cx);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
@@ -1044,6 +1064,7 @@ impl CodeDocument {
         });
 
         self.refresh_schema_dropdown_with_default(cx);
+        self.sync_editor_language(cx);
     }
 
     // === Data fetching helpers ===
@@ -1203,6 +1224,12 @@ impl CodeDocument {
         }
     }
 
+    // The single indexing site reads visible[0] after the is_empty() early
+    // return, so the bound lives on the function.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "visible[0] runs after the is_empty() early return, so visible has at least one slot"
+    )]
     pub(super) fn enter_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let visible = self.visible_context_bar_slots(cx);
         if visible.is_empty() {
@@ -1217,6 +1244,10 @@ impl CodeDocument {
     }
 
     /// Clamp `context_bar_slot` to a visible control after connection changes.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "both sites run after the is_empty() early return, so visible has at least one slot"
+    )]
     fn revalidate_context_bar_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let visible = self.visible_context_bar_slots(cx);
 
@@ -1232,7 +1263,7 @@ impl CodeDocument {
         self.update_context_bar_focus_rings(cx);
     }
 
-    fn exit_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn exit_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_context_bar_focus_rings(cx);
         self.focus_mode = SqlQueryFocus::Editor;
         self.editor
@@ -1280,6 +1311,10 @@ impl CodeDocument {
 
         match cmd {
             Command::FocusRight => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "pos comes from position() over visible and pos + 1 < visible.len() is checked before the indexing"
+                )]
                 if let Some(pos) = visible
                     .iter()
                     .position(|&slot| slot == self.context_bar_slot)
@@ -1292,6 +1327,10 @@ impl CodeDocument {
                 true
             }
             Command::FocusLeft => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "pos comes from position() over visible and pos > 0 is checked before the indexing"
+                )]
                 if let Some(pos) = visible
                     .iter()
                     .position(|&slot| slot == self.context_bar_slot)
@@ -1516,10 +1555,9 @@ impl CodeDocument {
                 .id("script-file-state")
                 .flex()
                 .min_w_0()
-                .ml_auto()
                 .items_center()
                 .gap(EditorMetrics::FILE_GAP)
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(EditorMetrics::FILE_FONT)
                 .text_color(theme.muted_foreground)
                 .child(
@@ -1538,9 +1576,99 @@ impl CodeDocument {
         )
     }
 
-    /// The bar of a script editor, which has no connection context: only the
+    /// The right end of the context bar: "Read only" on a read-only
+    /// document, the run summary ("3 statements · last run 0.32 s"), then the
+    /// script file and its state. It takes the room the controls leave and
+    /// truncates the path instead of wrapping onto a row of its own.
+    fn render_context_bar_trailing(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let is_db_language = self.supports_connection_context();
+
+        let execution_time = self
+            .execution
+            .active_execution_index
+            .and_then(|index| self.execution.execution_history.get(index))
+            .and_then(|record| {
+                record
+                    .finished_at
+                    .map(|finished| finished.duration_since(record.started_at))
+            });
+        let run_summary = super::statements::run_summary_label(
+            self.statement_count().filter(|_| is_db_language),
+            execution_time.map(|duration| duration.as_secs_f64()),
+        );
+
+        let file_state = if is_db_language {
+            self.render_script_file_state(cx)
+        } else {
+            None
+        };
+        let show_saved_label = self.session.show_saved_label && !is_db_language;
+
+        div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .justify_end()
+            .overflow_hidden()
+            .when(self.read_only, |el| {
+                el.child(
+                    div()
+                        .flex_shrink_0()
+                        .mr(EditorMetrics::LAST_RUN_MARGIN_RIGHT)
+                        .child(
+                            Text::caption(dbflux_i18n::t!("document.code.toolbar.read_only"))
+                                .muted_foreground(),
+                        ),
+                )
+            })
+            .when_some(run_summary, |el, summary| {
+                el.child(
+                    div()
+                        .id("context-run-summary")
+                        .debug_selector(|| "context-run-summary".to_string())
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(EditorMetrics::LAST_RUN_GAP)
+                        .mr(EditorMetrics::LAST_RUN_MARGIN_RIGHT)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
+                        .text_size(EditorMetrics::LAST_RUN_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(
+                            Icon::new(AppIcon::History)
+                                .size(EditorMetrics::LAST_RUN_ICON)
+                                .color(theme.muted_foreground),
+                        )
+                        .child(summary),
+                )
+            })
+            .when_some(file_state, |el, state| el.child(state))
+            .when(show_saved_label, |el| {
+                el.child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(EditorMetrics::LAST_RUN_GAP)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
+                        .text_size(EditorMetrics::LAST_RUN_FONT)
+                        .text_color(theme.success)
+                        .child(
+                            Icon::new(AppIcon::Check)
+                                .size(EditorMetrics::LAST_RUN_ICON)
+                                .color(theme.success),
+                        )
+                        .child(dbflux_i18n::t!("document.code.toolbar.saved")),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// The bar of a script editor, which has no connection context: the
     /// pane-actions button, so the bar still has a keyboard stop and the
-    /// toolbar menu a visible entry point.
+    /// editor's actions a menu entry point, then the run summary.
     fn render_script_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let focused = context_slot_is_keyboard_focused(
@@ -1572,6 +1700,7 @@ impl CodeDocument {
 
         div()
             .id("exec-context-bar")
+            .debug_selector(|| "exec-context-bar".to_string())
             .flex()
             .items_center()
             .min_h(EditorMetrics::BAR_HEIGHT)
@@ -1580,7 +1709,9 @@ impl CodeDocument {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.popover)
+            .gap(EditorMetrics::CONTEXT_GAP)
             .child(button)
+            .child(self.render_context_bar_trailing(cx))
             .into_any_element()
     }
 
@@ -1624,9 +1755,9 @@ impl CodeDocument {
         // flex_wrap() allows controls to wrap to the next line on narrow viewports
         // rather than overflowing the bar's right edge.
         let (connection_icon, connection_icon_color) = self.connection_driver_icon(cx);
-        let script_file_state = self.render_script_file_state(cx);
+        let trailing = self.render_context_bar_trailing(cx);
 
-        let main_row = div()
+        let controls = div()
             .flex()
             .flex_wrap()
             .items_center()
@@ -1846,13 +1977,22 @@ impl CodeDocument {
                             cx,
                         )),
                 )
-            })
-            .when_some(script_file_state, |el, state| el.child(state));
+            });
+
+        // The controls keep their width and wrap only when they alone do not
+        // fit; the trailing group takes what is left.
+        let main_row = div()
+            .flex()
+            .items_center()
+            .gap(EditorMetrics::CONTEXT_GAP)
+            .child(controls)
+            .child(trailing);
 
         // Outer bar: column layout so the custom date-range row can sit below
         // the main controls without stretching the bar's width.
         div()
             .id("exec-context-bar")
+            .debug_selector(|| "exec-context-bar".to_string())
             .flex()
             .flex_col()
             .justify_center()

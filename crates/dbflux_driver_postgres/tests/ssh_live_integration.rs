@@ -51,6 +51,7 @@ fn postgres_live_connects_through_ssh_with_private_key() -> Result<(), DbError> 
                 auth_method: SshAuthMethod::PrivateKey {
                     key_path: Some(PathBuf::from(required_env("DBFLUX_TEST_SSH_KEY_PATH")?)),
                 },
+                ssh_config_host: None,
             }),
             ssh_tunnel_profile_id: None,
         },

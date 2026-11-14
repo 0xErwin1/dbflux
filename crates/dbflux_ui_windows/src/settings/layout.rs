@@ -6,6 +6,8 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+use std::cell::Cell;
+use std::rc::Rc;
 
 pub(super) fn section_container(content: impl IntoElement) -> Div {
     div()
@@ -72,6 +74,50 @@ pub(super) fn single_form_section_shell(header: impl IntoElement, body: impl Int
         )
 }
 
+/// [`single_form_section_shell`] whose scrolling body follows `scroll`, so
+/// the section can scroll a field into view. `viewport` receives the bounds
+/// of the visible scrolling area, below the page head, every frame.
+pub(super) fn scrolled_form_section_shell(
+    header: impl IntoElement,
+    body: impl IntoElement,
+    scroll: &ScrollHandle,
+    viewport: Rc<Cell<Bounds<Pixels>>>,
+) -> Div {
+    let viewport_recorder = canvas(move |bounds, _, _| viewport.set(bounds), |_, _, _, _| {})
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .child(header)
+        .child(
+            div()
+                .debug_selector(|| "settings-form-viewport".to_string())
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(viewport_recorder)
+                .child(
+                    div()
+                        .id("settings-form-scroll")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(scroll)
+                        .px(SettingsMetrics::BODY_PADDING_X)
+                        .pb(Spacing::XL)
+                        .flex()
+                        .flex_col()
+                        .child(body),
+                )
+                .vertical_scrollbar(scroll),
+        )
+}
+
 /// Detail pane of a master-detail page: `header` (normally the first section
 /// header) and the form body, scrolling together inside the page margins.
 /// `footer` is drawn under the scrolling area, when present.
@@ -126,7 +172,7 @@ pub(super) fn form_row(
 /// [`form_row`] with a custom label column width.
 pub(crate) fn form_row_with_label_width(
     label: impl Into<SharedString>,
-    label_width: Pixels,
+    label_width: impl Into<AbsoluteLength>,
     control: impl IntoElement,
     help: Option<SharedString>,
 ) -> Div {
@@ -137,7 +183,7 @@ pub(crate) fn form_row_with_label_width(
         .py(FormMetrics::ROW_PADDING_Y)
         .child(
             div()
-                .w(label_width)
+                .w(label_width.into())
                 .flex_shrink_0()
                 .pt(FormMetrics::LABEL_PADDING_TOP)
                 .child(Text::body(label)),
@@ -174,9 +220,14 @@ pub(crate) fn check_row(checkbox: impl IntoElement, description: Option<SharedSt
         .when_some(description, |row, description| {
             row.child(
                 div()
-                    .pl(dbflux_components::tokens::Fields::CHECKBOX_SIZE
-                        + dbflux_components::tokens::Fields::CHECKBOX_GAP)
-                    .child(help_text(description)),
+                    .flex()
+                    .gap(dbflux_components::tokens::Fields::CHECKBOX_GAP)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(dbflux_components::tokens::Fields::CHECKBOX_SIZE),
+                    )
+                    .child(div().flex_1().min_w_0().child(help_text(description))),
             )
         })
 }
@@ -199,7 +250,7 @@ pub(crate) fn cursor_ring(focused: bool, child: impl IntoElement, cx: &App) -> D
 /// `cursor` is set.
 pub(crate) fn field_frame(
     cursor: bool,
-    width: Option<Pixels>,
+    width: Option<Rems>,
     mono: bool,
     field: impl IntoElement,
     cx: &App,
@@ -214,7 +265,7 @@ pub(crate) fn field_frame(
     };
 
     frame.when(mono, |frame| {
-        frame.font_family(dbflux_components::typography::AppFonts::MONO)
+        frame.font_family(dbflux_components::fonts::editor_family(cx))
     })
 }
 
@@ -254,14 +305,26 @@ pub(super) fn master_list_panel(
         .child(toolbar)
         .child(
             div()
-                .id(id.into())
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
                 .flex()
                 .flex_col()
-                .child(rows),
+                .child(rows)
+                .overflow_y_scrollbar()
+                .id(id),
         )
+}
+
+/// Viewport of a master list that keeps its own `scroll` handle, so the
+/// section can scroll the selected row into view: `list` fills it and the
+/// vertical scrollbar is overlaid on its right edge.
+pub(super) fn scrolled_list_viewport(list: Stateful<Div>, scroll: &ScrollHandle) -> Div {
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(list.size_full())
+        .vertical_scrollbar(scroll)
 }
 
 /// Content of a master list row: the icon and the name on the first line,

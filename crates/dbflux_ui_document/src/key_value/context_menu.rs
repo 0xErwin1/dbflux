@@ -391,8 +391,13 @@ impl super::KeyValueDocument {
 
     /// Computes a window-coordinate position for keyboard-triggered menus,
     /// aligned vertically with the selected row in the active panel.
-    pub(super) fn keyboard_menu_position(&self, target: KvMenuTarget) -> Point<Pixels> {
-        let toolbars = KeyValueMetrics::TOOLBAR_HEIGHT * 2.0;
+    pub(super) fn keyboard_menu_position(
+        &self,
+        target: KvMenuTarget,
+        window: &Window,
+    ) -> Point<Pixels> {
+        let rem_size = window.rem_size();
+        let toolbars = KeyValueMetrics::TOOLBAR_HEIGHT.to_pixels(rem_size) * 2.0;
 
         match target {
             KvMenuTarget::Key => {
@@ -401,8 +406,8 @@ impl super::KeyValueDocument {
                     x: self.panel_origin.x + KeyValueMetrics::LIST_PADDING_LEFT,
                     y: self.panel_origin.y
                         + toolbars
-                        + KeyValueMetrics::LIST_HEADER_HEIGHT
-                        + KeyValueMetrics::LIST_ROW_HEIGHT * row_index,
+                        + KeyValueMetrics::LIST_HEADER_HEIGHT.to_pixels(rem_size)
+                        + KeyValueMetrics::LIST_ROW_HEIGHT.to_pixels(rem_size) * row_index,
                 }
             }
             KvMenuTarget::Value => {
@@ -413,11 +418,11 @@ impl super::KeyValueDocument {
                         + KeyValueMetrics::VALUE_PADDING_X,
                     y: self.panel_origin.y
                         + toolbars
-                        + KeyValueMetrics::VALUE_HEADER_HEIGHT
-                        + KeyValueMetrics::META_ROW_HEIGHT
-                        + KeyValueMetrics::VALUE_TOOLBAR_HEIGHT
-                        + KeyValueMetrics::MEMBER_HEADER_HEIGHT
-                        + KeyValueMetrics::MEMBER_ROW_HEIGHT * row_index,
+                        + KeyValueMetrics::VALUE_HEADER_HEIGHT.to_pixels(rem_size)
+                        + KeyValueMetrics::META_ROW_HEIGHT.to_pixels(rem_size)
+                        + KeyValueMetrics::VALUE_TOOLBAR_HEIGHT.to_pixels(rem_size)
+                        + KeyValueMetrics::MEMBER_HEADER_HEIGHT.to_pixels(rem_size)
+                        + KeyValueMetrics::MEMBER_ROW_HEIGHT.to_pixels(rem_size) * row_index,
                 }
             }
         }
@@ -489,6 +494,14 @@ impl super::KeyValueDocument {
                 true
             }
             Command::MenuSelect => {
+                // selected_index starts at 0 when the menu opens and MenuUp /
+                // MenuDown keep it modulo menu.items.len(); items are not
+                // mutated while the menu is open. This dispatch does not
+                // re-check the invariant.
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "selected_index starts at 0 on open and the MenuUp/MenuDown arms keep it modulo menu.items.len(), which this dispatch does not re-check"
+                )]
                 if let Some(menu) = self.context_menu.take() {
                     let action = menu.items[menu.selected_index].action;
                     let target = menu.target;

@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_core::connection_manager::PrepareFetchError;
 use dbflux_core::{TaskKind, TaskTarget};
 use dbflux_ui_base::object_tree::{
     ObjectTreeEvent, ObjectTreeOutcome, ObjectTreeRequestKey, ObjectTreeRequestStatus,
@@ -431,6 +432,7 @@ impl Sidebar {
                 task_description,
                 Some(profile_id),
             );
+            state.tasks_mut().mark_uncancellable(task_id);
             task_id
         });
 
@@ -760,44 +762,21 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> bool {
-        let params = match self
+        let prepared = self
             .app_state
             .read(cx)
-            .prepare_fetch_schema_types(profile_id, database, schema)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                if e != "Schema types already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_types_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
-                return false;
-            }
-        };
+            .prepare_fetch_schema_types(profile_id, database, schema);
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { params.execute() });
-
-        self.spawn_fetch_with_result(
-            pending_action,
-            None,
-            task,
+        self.spawn_fetch_schema_metadata(
+            prepared,
+            |params| params.execute(),
+            crate::labels::cannot_load_schema_types_label,
             "Failed to fetch schema types",
             crate::labels::data_types_load_failed_label,
-            |app_state, res, cx| {
-                app_state.update(cx, |state, cx| {
-                    state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
-                    cx.emit(AppStateChanged);
-                });
+            |state, res| {
+                state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
             },
-            |_app_state, _cx| {},
+            pending_action,
             cx,
         )
     }
@@ -811,44 +790,21 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> bool {
-        let params = match self
+        let prepared = self
             .app_state
             .read(cx)
-            .prepare_fetch_schema_indexes(profile_id, database, schema)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                if e != "Schema indexes already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_indexes_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
-                return false;
-            }
-        };
+            .prepare_fetch_schema_indexes(profile_id, database, schema);
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { params.execute() });
-
-        self.spawn_fetch_with_result(
-            pending_action,
-            None,
-            task,
+        self.spawn_fetch_schema_metadata(
+            prepared,
+            |params| params.execute(),
+            crate::labels::cannot_load_schema_indexes_label,
             "Failed to fetch schema indexes",
             crate::labels::indexes_load_failed_label,
-            |app_state, res, cx| {
-                app_state.update(cx, |state, cx| {
-                    state.set_schema_indexes(res.profile_id, res.database, res.schema, res.indexes);
-                    cx.emit(AppStateChanged);
-                });
+            |state, res| {
+                state.set_schema_indexes(res.profile_id, res.database, res.schema, res.indexes);
             },
-            |_app_state, _cx| {},
+            pending_action,
             cx,
         )
     }
@@ -862,49 +818,26 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> bool {
-        let params = match self
+        let prepared = self
             .app_state
             .read(cx)
-            .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                if e != "Schema foreign keys already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_foreign_keys_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
-                return false;
-            }
-        };
+            .prepare_fetch_schema_foreign_keys(profile_id, database, schema);
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { params.execute() });
-
-        self.spawn_fetch_with_result(
-            pending_action,
-            None,
-            task,
+        self.spawn_fetch_schema_metadata(
+            prepared,
+            |params| params.execute(),
+            crate::labels::cannot_load_schema_foreign_keys_label,
             "Failed to fetch schema foreign keys",
             crate::labels::foreign_keys_load_failed_label,
-            |app_state, res, cx| {
-                app_state.update(cx, |state, cx| {
-                    state.set_schema_foreign_keys(
-                        res.profile_id,
-                        res.database,
-                        res.schema,
-                        res.foreign_keys,
-                    );
-                    cx.emit(AppStateChanged);
-                });
+            |state, res| {
+                state.set_schema_foreign_keys(
+                    res.profile_id,
+                    res.database,
+                    res.schema,
+                    res.foreign_keys,
+                );
             },
-            |_app_state, _cx| {},
+            pending_action,
             cx,
         )
     }
@@ -917,45 +850,72 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> bool {
-        let params = match self
+        let prepared = self
             .app_state
             .read(cx)
-            .prepare_fetch_schema_routines(profile_id, database, schema)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                if e != "Schema routines already cached" {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Network,
-                            crate::labels::cannot_load_schema_routines_label(),
-                        )
-                        .with_cause(e),
-                        cx,
-                    );
-                }
+            .prepare_fetch_schema_routines(profile_id, database, schema);
+
+        self.spawn_fetch_schema_metadata(
+            prepared,
+            |params| params.execute(),
+            crate::labels::cannot_load_schema_routines_label,
+            "Failed to fetch schema routines",
+            crate::labels::routines_load_failed_label,
+            |state, res| {
+                state.set_schema_routines(res.profile_id, res.database, res.schema, res.routines);
+            },
+            pending_action,
+            cx,
+        )
+    }
+
+    /// Runs one prepared schema-metadata fetch on the background executor and
+    /// applies its result to the app state.
+    ///
+    /// A cache hit starts nothing and reports nothing. A preparation failure
+    /// is reported to the user under `cannot_load_label`. Returns `true` only
+    /// when the fetch was started.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_fetch_schema_metadata<P, R>(
+        &mut self,
+        prepared: Result<P, PrepareFetchError>,
+        execute: fn(P) -> Result<R, String>,
+        cannot_load_label: fn() -> String,
+        error_log_prefix: &'static str,
+        load_failed_label: fn(&str) -> String,
+        apply: fn(&mut dbflux_ui_base::app_state_entity::AppStateEntity, R),
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) -> bool
+    where
+        P: Send + 'static,
+        R: Send + 'static,
+    {
+        let params = match prepared {
+            Ok(params) => params,
+            Err(PrepareFetchError::AlreadyCached) => return false,
+            Err(PrepareFetchError::Failed(error)) => {
+                report_error(
+                    UserFacingError::new(ErrorKind::Network, cannot_load_label()).with_cause(error),
+                    cx,
+                );
                 return false;
             }
         };
 
         let task = cx
             .background_executor()
-            .spawn(async move { params.execute() });
+            .spawn(async move { execute(params) });
 
         self.spawn_fetch_with_result(
             pending_action,
             None,
             task,
-            "Failed to fetch schema routines",
-            crate::labels::routines_load_failed_label,
-            |app_state, res, cx| {
+            error_log_prefix,
+            load_failed_label,
+            move |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
-                    state.set_schema_routines(
-                        res.profile_id,
-                        res.database,
-                        res.schema,
-                        res.routines,
-                    );
+                    apply(state, res);
                     cx.emit(AppStateChanged);
                 });
             },
@@ -1169,6 +1129,15 @@ pub(crate) mod object_tree_adapter_tests {
             dbflux_core::FormValues::new()
         }
 
+        // The `unwrap_in_result` site in this method is a bare assignment
+        // expression, which the compiler rejects as an `#[expect]` target (E0658),
+        // so the expect is attached to this method instead.
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                      policy: poisoning would itself mean the test harness panicked \
+                      mid-critical-section, so panicking is the intended failure mode"
+        )]
         fn connect_with_secrets(
             &self,
             _: &dbflux_core::ConnectionProfile,
@@ -1278,6 +1247,7 @@ pub(crate) mod object_tree_adapter_tests {
             presentation: CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -1335,6 +1305,12 @@ pub(crate) mod object_tree_adapter_tests {
                     "fake view refresh failure".into(),
                 ));
             }
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             Ok(self
                 .primary_snapshot
                 .lock()
@@ -1368,6 +1344,12 @@ pub(crate) mod object_tree_adapter_tests {
                     dbflux_core::FormattedError::new("listing failed"),
                 ));
             }
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             Ok(self.databases.lock().expect("fake databases").clone())
         }
 
@@ -1375,11 +1357,23 @@ pub(crate) mod object_tree_adapter_tests {
             &self,
             database: &str,
         ) -> Result<dbflux_core::DbSchemaInfo, dbflux_core::DbError> {
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             self.schema_calls
                 .lock()
                 .expect("fake schema calls")
                 .push(database.to_string());
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             let mut failures = self.schema_failures.lock().expect("failures");
             if let Some(remaining) = failures.get_mut(database)
                 && *remaining > 0
@@ -1393,6 +1387,12 @@ pub(crate) mod object_tree_adapter_tests {
             }
             drop(failures);
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
+                          policy: poisoning would itself mean the test harness panicked \
+                          mid-critical-section, so panicking is the intended failure mode"
+            )]
             self.schemas
                 .lock()
                 .expect("fake schemas")
@@ -2802,6 +2802,71 @@ pub(crate) mod object_tree_adapter_tests {
     }
 
     #[gpui::test]
+    async fn failed_database_list_is_cleared_by_reconnect(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::lazy();
+        fake.list_failures.store(1, Ordering::SeqCst);
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![])),
+        );
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        let profile_item = SchemaNodeId::Profile { profile_id }.to_string();
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.set_expanded(&profile_item, true, cx)
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+        let retry_id = format!("object-retry|{profile_item}");
+        assert!(
+            build_items(&window, cx)
+                .iter()
+                .any(|(id, _, _)| id == &retry_id)
+        );
+
+        state.update(cx, |state, _| {
+            let _teardown = state.disconnect(profile_id);
+        });
+        state.update(cx, |state, _| {
+            state
+                .profiles_mut()
+                .retain(|profile| profile.id != profile_id);
+        });
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![])),
+        );
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_tree(cx);
+                sidebar.set_expanded(&profile_item, false, cx);
+                sidebar.set_expanded(&profile_item, true, cx);
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+
+        assert_eq!(
+            fake.list_calls(),
+            2,
+            "the first expansion after reconnect must fetch the list again"
+        );
+        assert!(
+            !build_items(&window, cx)
+                .iter()
+                .any(|(id, _, _)| id == &retry_id),
+            "a failure from the previous session must not survive reconnect"
+        );
+    }
+
+    #[gpui::test]
     async fn authoritative_empty_database_list_does_not_resurrect_snapshot_database(
         cx: &mut TestAppContext,
     ) {
@@ -3066,7 +3131,7 @@ pub(crate) mod object_tree_adapter_tests {
                     "the rejected attempt must release the loading state"
                 );
                 assert!(
-                    sidebar.pending_actions.get(&table_item).is_none(),
+                    !sidebar.pending_actions.contains_key(&table_item),
                     "a fenced attempt must not keep a pending action alive"
                 );
             })
@@ -4321,6 +4386,88 @@ pub(crate) mod object_tree_adapter_tests {
         );
     }
 
+    /// A reloaded bucket of a time-series connection lists its measurements
+    /// as leaves of the measurement folder, the way the bucket renders before
+    /// it was invalidated, never as relational tables.
+    #[gpui::test]
+    async fn time_series_schema_retry_restores_measurement_leaves_after_invalidation(
+        cx: &mut TestAppContext,
+    ) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let mut fake = AdapterFakeConnection::lazy();
+        Arc::get_mut(&mut fake)
+            .expect("unique fake")
+            .metadata
+            .category = DatabaseCategory::TimeSeries;
+        fake.set_schema("app", fake_db_schema("app", vec![fake_table("app", "cpu")]));
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(dbflux_core::SchemaSnapshot::time_series(
+                dbflux_core::TimeSeriesSchema {
+                    databases: vec![dbflux_core::DatabaseInfo {
+                        name: "app".to_string(),
+                        is_current: true,
+                    }],
+                    current_database: Some("app".to_string()),
+                    measurements: Vec::new(),
+                    retention_policies: Vec::new(),
+                },
+            )),
+        );
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        let database_id = SchemaNodeId::Database {
+            profile_id,
+            name: "app".to_string(),
+        }
+        .to_string();
+        let retry_id = format!("object-retry|{database_id}");
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.set_expanded(&database_id, true, cx);
+                sidebar.invalidate_database_cache(profile_id, "app", cx);
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+        window
+            .update(cx, |sidebar, _, cx| sidebar.execute_item(&retry_id, cx))
+            .expect("sidebar alive");
+        cx.run_until_parked();
+
+        let rows = build_items(&window, cx);
+        let measurement_id = SchemaNodeId::Collection {
+            profile_id,
+            database: "app".to_string(),
+            name: "cpu".to_string(),
+        }
+        .to_string();
+        let measurements_folder_id = SchemaNodeId::CollectionsFolder {
+            profile_id,
+            database: "app".to_string(),
+        }
+        .to_string();
+        assert_eq!(
+            rows.iter().filter(|(id, _, _)| id == &database_id).count(),
+            1,
+            "recovered database must not duplicate: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(id, _, _)| id == &measurements_folder_id),
+            "the bucket lists its measurement folder: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(id, _, _)| id == &measurement_id),
+            "the measurement is a leaf of that folder: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|(id, _, _)| id.starts_with("T|")),
+            "no relational table rows: {rows:?}"
+        );
+    }
+
     #[gpui::test]
     async fn document_schema_retry_restores_collection_nodes_after_invalidation(
         cx: &mut TestAppContext,
@@ -4346,10 +4493,16 @@ pub(crate) mod object_tree_adapter_tests {
             cx,
             profile_id,
             fake.clone(),
-            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
-                name: "app".to_string(),
-                is_current: true,
-            }])),
+            Some(dbflux_core::SchemaSnapshot::document(
+                dbflux_core::DocumentSchema {
+                    databases: vec![dbflux_core::DatabaseInfo {
+                        name: "app".to_string(),
+                        is_current: true,
+                    }],
+                    current_database: Some("app".to_string()),
+                    collections: Vec::new(),
+                },
+            )),
         );
         let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
         let database_id = SchemaNodeId::Database {
@@ -4563,7 +4716,7 @@ pub(crate) mod object_tree_adapter_tests {
         window
             .update(cx, |sidebar, _, _| {
                 assert!(
-                    sidebar.pending_actions.get(&db_item).is_none(),
+                    !sidebar.pending_actions.contains_key(&db_item),
                     "stale schema completion must not restore a selection action"
                 );
             })
@@ -5520,7 +5673,7 @@ pub(crate) mod object_tree_adapter_tests {
         assert_eq!(connect_calls.load(Ordering::SeqCst), 1);
         state.read_with(cx, |state, _| {
             let connected = state.connections().get(&profile_id).expect("new session");
-            assert!(connected.database_connections.get("analytics").is_none());
+            assert!(!connected.database_connections.contains_key("analytics"));
             assert_eq!(connected.active_database.as_deref(), Some("main"));
             assert!(state.is_operation_pending(profile_id, Some("analytics")));
         });
@@ -5536,7 +5689,7 @@ pub(crate) mod object_tree_adapter_tests {
         assert_eq!(connect_calls.load(Ordering::SeqCst), 2);
         state.read_with(cx, |state, _| {
             let connected = state.connections().get(&profile_id).expect("new session");
-            assert!(connected.database_connections.get("analytics").is_some());
+            assert!(connected.database_connections.contains_key("analytics"));
             assert_eq!(connected.active_database.as_deref(), Some("analytics"));
             assert!(!state.is_operation_pending(profile_id, Some("analytics")));
         });

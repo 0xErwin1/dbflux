@@ -282,18 +282,26 @@ impl ObjectBrowserDocument {
             .into_any_element()
     }
 
+    /// Whether the preview of `key` offers to open it in its own tab.
+    ///
+    /// The pinned pane is narrow by design, and the same buffer can be taken
+    /// to a full-size tab. A text object is offered only once it decoded into
+    /// a buffer here, which is exactly the gate the editor tab applies. A CSV
+    /// or TSV object opens as a table that reads it in pages, so it is
+    /// offered whatever its size.
+    pub(super) fn offers_open_in_editor(&self, key: &str) -> bool {
+        self.editor_for(key).is_some()
+            || crate::file_format::file_document_format(std::path::Path::new(key)).is_some()
+    }
+
     fn render_preview_header(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let name = object_display_name(key);
         let icon = object_icon(name);
         let icon_color = object_icon_color(icon, cx);
         let is_dirty = self.editor_for(key).is_some_and(|editor| editor.dirty);
-        // The pinned pane is narrow by design; the same buffer can be taken to
-        // a full-size tab. Offered only once the object has actually decoded
-        // into a buffer here, which is exactly the gate the tab would apply.
-        let is_editable_text = self.editor_for(key).is_some();
 
-        let open_in_editor = is_editable_text.then(|| {
+        let open_in_editor = self.offers_open_in_editor(key).then(|| {
             let key = key.to_string();
 
             Button::new("object-browser-open-in-editor", "")
@@ -341,7 +349,7 @@ impl ObjectBrowserDocument {
                 div()
                     .min_w_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .font_weight(FontWeight::BOLD)
                     .text_color(ChromeColors::strong(theme))
                     .child(name.to_string()),
@@ -690,7 +698,7 @@ impl ObjectBrowserDocument {
         let value = |text: String| {
             div()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_color(ChromeColors::strong(theme))
                 .child(text)
                 .into_any_element()

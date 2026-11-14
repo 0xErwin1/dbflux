@@ -12,10 +12,10 @@ use dbflux_core::{
     KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyLoadState, KeyMetadataRequest,
     KeyPersistRequest, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
     KeyTypeRequest, KeyValuePrefixRequest, ListEnd, ListPushRequest, ListRemoveRequest,
-    ListSetRequest, QueryRequest, RangeOrder, SchemaLoadingStrategy, SetAddRequest,
-    SetRemoveRequest, StreamAddRequest, StreamClaimRequest, StreamDeleteRequest, StreamEntryId,
-    StreamGroupsRequest, StreamPendingRequest, StreamRangeRequest, ValueRepr, ZSetAddRequest,
-    ZSetRangeRequest, ZSetRemoveRequest,
+    ListSetRequest, QueryRequest, RangeOrder, ReadOnlyEnforcement, SchemaLoadingStrategy,
+    SetAddRequest, SetRemoveRequest, StreamAddRequest, StreamClaimRequest, StreamDeleteRequest,
+    StreamEntryId, StreamGroupsRequest, StreamPendingRequest, StreamRangeRequest, ValueRepr,
+    ZSetAddRequest, ZSetRangeRequest, ZSetRemoveRequest,
 };
 use dbflux_driver_redis::RedisDriver;
 use dbflux_test_support::containers;
@@ -91,22 +91,35 @@ fn redis_query_safety_refuses_protected_commands_before_effects() -> Result<(), 
         let connection = connect_redis(uri)?;
         let key = "redis:query-safety";
         connection.execute(&QueryRequest::new(format!("SET {key} original")))?;
-        let mut protected = vec![
-            QueryRequest::new(format!("SET {key} zero")).with_limit(0),
-            QueryRequest::new(format!("SET {key} ten")).with_limit(10),
-        ];
         let mut timed = QueryRequest::new(format!("SET {key} timed"));
         timed.statement_timeout = Some(Duration::from_secs(1));
-        protected.push(timed);
-        for request in protected {
-            let outcome = connection.execute(&request);
-            let current = connection.execute(&QueryRequest::new(format!("GET {key}")))?;
-            assert_eq!(current.text_body.as_deref(), Some("original"));
-            assert!(
-                matches!(outcome, Err(DbError::NotSupported(_))),
-                "protected Redis command must be refused as NotSupported"
-            );
-        }
+        let outcome = connection.execute(&timed);
+        let current = connection.execute(&QueryRequest::new(format!("GET {key}")))?;
+        assert_eq!(current.text_body.as_deref(), Some("original"));
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "a statement timeout must be refused as NotSupported"
+        );
+
+        let written =
+            connection.execute(&QueryRequest::new(format!("SET {key} zero")).with_limit(0))?;
+        assert_eq!(written.text_body.as_deref(), Some("OK"));
+        assert!(!written.rows_truncated());
+        let current = connection.execute(&QueryRequest::new(format!("GET {key}")))?;
+        assert_eq!(current.text_body.as_deref(), Some("zero"));
+
+        let list_key = "redis:query-safety:list";
+        connection.execute(&QueryRequest::new(format!("DEL {list_key}")))?;
+        connection.execute(&QueryRequest::new(format!("RPUSH {list_key} a b c d e")))?;
+        let bounded = connection
+            .execute(&QueryRequest::new(format!("LRANGE {list_key} 0 -1")).with_limit(3))?;
+        assert_eq!(bounded.rows.len(), 3);
+        assert!(bounded.rows_truncated());
+        let user_bounded = connection
+            .execute(&QueryRequest::new(format!("LRANGE {list_key} 0 1")).with_limit(3))?;
+        assert_eq!(user_bounded.rows.len(), 2);
+        assert!(!user_bounded.rows_truncated());
+        connection.execute(&QueryRequest::new(format!("DEL {list_key}")))?;
         for source in [
             ExecutionSourceContext::InstanceMetricQuery {
                 metric_id: "redis.connected_clients".to_string(),
@@ -145,6 +158,57 @@ fn redis_query_safety_refuses_protected_commands_before_effects() -> Result<(), 
 // ---------------------------------------------------------------------------
 // Schema introspection
 // ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_read_only_requests_refuse_writes_and_leave_the_key_unchanged() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let key = "redis:read-only";
+        connection.execute(&QueryRequest::new(format!("SET {key} original")))?;
+        connection.execute(&QueryRequest::new(
+            "SADD redis:read-only-set a b c".to_string(),
+        ))?;
+
+        let read_only =
+            |query: String| QueryRequest::new(query).with_read_only(ReadOnlyEnforcement::Required);
+
+        for query in [
+            format!("SET {key} changed"),
+            format!("EVAL \"redis.call('set', KEYS[1], 'x')\" 1 {key}"),
+            format!("EVAL_RO \"return redis.call('set', KEYS[1], 'x')\" 1 {key}"),
+            format!("EVAL_RO \"return redis.call('get', KEYS[1])\" 1 {key}"),
+            "EVAL_RO \"return redis.call('SLOWLOG', 'RESET')\" 0".to_string(),
+            format!("PFCOUNT {key}"),
+            "SRANDMEMBER redis:read-only-set -9223372036854775807".to_string(),
+            "CONFIG SET maxmemory-policy allkeys-lru".to_string(),
+            "SELECT 1".to_string(),
+        ] {
+            let outcome = connection.execute(&read_only(query.clone()));
+            assert!(
+                matches!(&outcome, Err(DbError::QueryFailed(error)) if error.to_string().contains("read-only request")),
+                "{query} must be refused by the read-only gate, got {outcome:?}"
+            );
+        }
+
+        let sampled =
+            connection.execute(&read_only("SRANDMEMBER redis:read-only-set 2".to_string()))?;
+        assert_eq!(sampled.rows.len(), 2, "a positive count is still a read");
+
+        let current = connection.execute(&QueryRequest::new(format!("GET {key}")))?;
+        assert_eq!(current.text_body.as_deref(), Some("original"));
+
+        let read = connection.execute(&read_only(format!("GET {key}")))?;
+        assert_eq!(read.text_body.as_deref(), Some("original"));
+
+        let encoding = connection.execute(&read_only(format!("OBJECT ENCODING {key}")))?;
+        assert!(encoding.text_body.is_some());
+
+        connection.execute(&read_only("PING".to_string()))?;
+
+        Ok(())
+    })
+}
 
 #[test]
 #[ignore = "requires Docker daemon"]

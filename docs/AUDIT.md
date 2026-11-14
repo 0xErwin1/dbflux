@@ -54,7 +54,8 @@ Every audit event is an `EventRecord` (`dbflux_core/src/observability/types.rs`)
 | `Governance` | `governance` | Policy evaluation outcomes |
 | `Config` | `config` | Profile changes, settings modifications |
 | `System` | `system` | Application startup, panics, migrations |
-| `ObjectStorage` | `object_storage` | Object-storage CRUD/mutation events (upload, delete, presign, rename, create bucket/folder, save-back edit) |
+| `ObjectStorage` | `object_storage` | Object-storage CRUD/mutation events (upload, download, delete, presign, rename, create bucket/folder, save-back edit) |
+| `SecretStore` | `secret_store` | Secret value retrievals (`secret_value_retrieved`, `secret_value_retrieve_failed`); the value itself is never recorded |
 
 ### Actor Types
 
@@ -80,6 +81,7 @@ Validation is enforced by `AuditService::validate_event()` before storage:
 | `Mcp` | `actor_id`, `object_id` (tool name) |
 | `Config` | `object_type`, `object_id` |
 | `ObjectStorage` | `connection_id`, `object_type`, `object_id` |
+| `SecretStore` | `connection_id`, `object_type` (store id), `object_id` (secret name) |
 | `Governance`, `System` | No additional fields |
 
 ## Privacy and Redaction
@@ -96,6 +98,11 @@ These can be changed at runtime via `AuditService::set_*()` methods. The MCP ser
 
 The audit viewer is the single place to review everything DBFlux logged: queries,
 connections, hooks, scripts, config changes, and AI/MCP governance decisions.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/audit/viewer-dark.webp">
+  <img src="images/audit/viewer-light.webp" alt="The audit viewer listing connection, query, configuration and startup events below its filter bar">
+</picture>
 
 ### Open it
 
@@ -130,6 +137,7 @@ Categories at a glance:
 | **Governance** | Policy decisions. |
 | **Config** | Profile and settings changes. |
 | **System** | Startup, migrations, and internal log events. |
+| **Object Storage** | Bucket creation and deletion, and object uploads, downloads, renames, deletions, new folders, presigned URLs, and saved edits. |
 
 ### Filter
 
@@ -178,6 +186,11 @@ lives in the same `dbflux.db` as everything else
 ([Data & Privacy](../PRIVACY.md#audit-and-privacy)).
 
 ## Viewing Audit Events
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/audit/event-details-dark.webp">
+  <img src="images/audit/event-details-light.webp" alt="An audit event expanded to show its action, actor, connection, decision and the fingerprint of the query">
+</picture>
 
 ### In the DBFlux UI
 
@@ -459,6 +472,8 @@ The tracing event shape:
 | `kind` | `ErrorKind` as string (`storage`, `network`, `auth`, `hook`, `driver`, `user`, `config`) |
 | `correlation_id` | UUID v7 linking the toast to the audit record |
 | `message` | The human-readable summary shown in the toast |
+| `cause` | The underlying error text shown in the toast's code block. Omitted when the error has no cause; stored in `details_json` |
+| `suggested_action` | The follow-up hint shown in the toast body. Omitted when unset; stored in `details_json` |
 
 The `correlation_id` field is extracted by `AuditFieldVisitor` into `EventRecord.correlation_id`. Note that the visitor routes both `record_str` (Display sigil `%val`) and `record_debug` (Debug sigil `?val`) through the same `record_string_by_name` dispatcher, so new typed slots added in the future are picked up regardless of which sigil the caller uses.
 

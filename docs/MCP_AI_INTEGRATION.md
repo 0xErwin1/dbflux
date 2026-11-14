@@ -70,6 +70,8 @@ The `client-id` value must match a trusted client entry you created in the DBFlu
 
 **Note**: If you built DBFlux without the `mcp` feature (`--no-default-features`), the MCP server will not be available.
 
+The server loads inline connection hooks and reusable hook bindings from the shared database. It runs PreConnect and PostConnect around connection setup, and PreDisconnect and PostDisconnect when an open connection is disconnected. Hook outcomes are recorded in the audit log. A detached PreConnect hook must emit its configured ready signal; after that signal, the server waits for the endpoint only for direct profiles. Pipeline and SSH-tunnel profiles skip that endpoint wait because their endpoint is resolved by the pipeline or tunnel. The standalone MCP server does not include the Lua hook executor; an enabled Lua hook returns an error identifying its phase and hook instead of being skipped.
+
 ## 3. Governance Model (Core Concepts)
 
 Every AI request is enforced through all of these layers in order:
@@ -88,15 +90,15 @@ All six layers run inside the server process on every `tools/call` request. None
 | Group | Tool ID | Class | What it does |
 |-------|---------|-------|--------------|
 | Connection | `list_connections` | metadata | Enumerate all configured database connections |
-| Connection | `connect` | metadata | Open a session against a configured connection |
+| Connection | `connect` | metadata | Open a session against a configured connection. The response reports `current_database` and the `databases` available on the server when the driver has databases; other tools take a `database` parameter to target a different one |
 | Connection | `disconnect` | metadata | Close an open session |
 | Connection | `get_connection_info` | metadata | Fetch driver capabilities and connection metadata |
 | Schema | `list_databases` | metadata | List all databases accessible on a connection |
 | Schema | `list_schemas` | metadata | List schemas within a database |
-| Schema | `list_tables` | metadata | List tables and views within a schema |
-| Schema | `list_collections` | metadata | List MongoDB collections |
+| Schema | `list_tables` | metadata | List tables and views within a schema. Pass `names_only: true` to get the names as strings instead of one object per entry |
+| Schema | `list_collections` | metadata | List MongoDB collections. Accepts `names_only` like `list_tables` |
 | Schema | `describe_object` | metadata | Get column/field definitions and indexes for a table |
-| Read | `select_data` | read | Execute a structured SELECT against a table or collection. Unsupported `joins` are rejected explicitly |
+| Read | `select_data` | read | Execute a structured SELECT against a table or collection. `joins` to other tables run on drivers that declare join support; document, key-value and other drivers that do not declare it return an explicit error. The `on` condition accepts only column comparisons joined by `AND`. With joins, a schema-qualified table on connections that drop the schema (SQLite, Turso), `$ilike` on drivers that do not declare it and an `order_by` direction other than `asc` or `desc` are refused. SQL Server runs joins too, with its row limit rendered as `OFFSET … FETCH`; the join tests run on SQLite |
 | Read | `count_records` | read | Return a row/document count for a target |
 | Read | `aggregate_data` | read | Run a read-only aggregation pipeline |
 | Read | `explain_query` | read | Show the query execution plan without executing the target mutation |
@@ -113,12 +115,12 @@ All six layers run inside the server process on every `tools/call` request. None
 | DDL | `create_type` | admin | Create a user-defined type |
 | DDL Destructive | `drop_table` | admin_destructive | Drop a table |
 | DDL Destructive | `drop_database` | admin_destructive | Drop a database |
-| Scripts | `list_scripts` | metadata | List saved scripts in the scripts directory |
+| Scripts | `list_scripts` | metadata | List saved scripts in the scripts directory (external scripts folders are not exposed) |
 | Scripts | `get_script` | read | Retrieve the source of a specific saved script |
 | Scripts | `create_script` | write | Save a new script to the scripts directory |
 | Scripts | `update_script` | write | Overwrite an existing saved script |
 | Scripts | `delete_script` | admin | Permanently remove a script |
-| Scripts | `execute_script` | computed | Execute a saved script against a connection. Classification is derived from the script body |
+| Scripts | `execute_script` | computed | Execute a saved database-query script against a connection. Classification is derived from the script body. Lua, Python and Bash scripts are rejected (see below) |
 | Approval | `request_execution` | admin | Queue a call for approval by a person. Once approved, call the tool itself with the same arguments to run it once |
 | Approval | `list_pending_executions` | read | View all executions awaiting approval |
 | Approval | `get_pending_execution` | read | Retrieve details of a specific pending execution. A rejected one returns `status: "rejected"` and the reason the person gave |
@@ -127,6 +129,12 @@ All six layers run inside the server process on every `tools/call` request. None
 | Audit | `query_audit_logs` | read | Search and filter the audit trail |
 | Audit | `get_audit_entry` | read | Retrieve a single audit log entry by ID |
 | Audit | `export_audit_logs` | read | Download audit log entries as CSV or JSON |
+
+When the driver fails a `select_data`, `count_records`, `aggregate_data` or `describe_object` call and the table or collection is not listed in the schema metadata of the database or schema that was queried, the error says where the name was looked up and lists the closest listed names. It reads "is not listed", because the table may not exist or the connection may not have access to it. If the call did not pass `database` and the server lists more than one database, the error adds that the table may be in another one. For tables, not collections, `count_records`, `aggregate_data`, and `select_data` where it is not checked before running (see below), do the same for a column named in `where` or `order_by`. A hint only includes names the client is allowed to list: table names need `list_tables`, column names need `describe_object`, and the database details need `list_databases`. The driver's own error text is kept at the end. The lookup runs only after the driver has failed the call, and drivers that do not expose this metadata return the original error.
+
+`select_data` checks its columns before it runs instead, on engines that read an unknown quoted identifier as a string: SQLite and Turso, where a misspelled column returns no rows rather than an error. On a relational table, and on every call with `joins`, each name in `columns`, `where` or `order_by` that is unqualified or qualified with its table is compared with the column metadata of the table, whatever its characters, folding only ASCII letters as SQLite does. A column that is not listed is refused with the same hint, followed by "The query was not run.", and nothing is executed. Table and view names resolve with ASCII case folding, and generated columns, the hidden columns of virtual tables, and `rowid`, `oid` and `_rowid_` where the engine accepts them count as listed. Without `describe_object` the refusal names no other column. The check is skipped, and the call runs as before, when the driver has no column metadata for the table, and nested paths and names qualified with another table are not checked, because the engine rejects them. It costs one column lookup per table the call names a column of. PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse and Redshift fail on an unknown column, so their calls run unchecked and a failure gets the hint described above.
+
+A pseudo-column the driver declares for the table, such as SQLite's `rowid`, MySQL's `_rowid` or PostgreSQL's `ctid` and `xmin`, counts as listed and is never suggested. A call without `joins` whose `columns` names one runs as a generated SELECT, the way a join does, so the value is returned: PostgreSQL returns `ctid` as text such as `(0,1)` and its other system columns as integers. That SELECT accepts less than an ordinary call: only the `where` operators a join accepts, plain ASCII identifiers, each column once, and `asc` or `desc` as the sort direction. On engines that are not checked before running, finding the pseudo-column costs one column lookup, made only when a `columns` entry is missing from the rows the call read.
 
 Deferred tools (explicitly rejected at request time in v1):
 
@@ -172,6 +180,41 @@ After a rejection, `get_pending_execution` returns `status: "rejected"` and a `r
 `request_execution` queues a call explicitly, with the same result as calling the tool under Ask. `request_execution`, `list_pending_executions` and `get_pending_execution` only create or read queue entries, so under Ask they run without being queued themselves.
 
 MCP clients can never approve or reject: `approve_execution` and `reject_execution` are denied over MCP whatever the policies say, with the error code `self_approval_forbidden`, and each attempt is audited. Only a person resolves pending executions, in the DBFlux UI.
+
+### Read scripts run read-only
+
+`execute_script` derives its class from the script body. A script classified `read` or `metadata` runs with read-only enforcement: the driver runs it in a session where the database itself rejects data modification (on MongoDB and Redis, DBFlux rejects it, as the table shows), and the call is governed and audited as `read` or `metadata`.
+
+| Driver | How the session is made read-only |
+|--------|-----------------------------------|
+| PostgreSQL, Redshift | `BEGIN READ ONLY`, rolled back afterwards |
+| MySQL, MariaDB | `START TRANSACTION READ ONLY`, rolled back afterwards. A script with an executable comment (`/*! */`, `/*M! */`) or `INTO`, or one that runs while a transaction or a `LOCK TABLES` lock may be open, does not run read-only and is governed as `write` |
+| SQLite | `PRAGMA query_only` |
+| ClickHouse | The per-request setting `readonly = 2` |
+| MongoDB | MongoDB has no read-only session, so DBFlux enforces it per operation: every operation is classified before it is sent and refused above the script's class (`read` or `metadata`), including `runCommand`, `adminCommand` and an `aggregate` with a `$out` or `$merge` stage. Change streams and operations DBFlux does not recognise are refused |
+| Redis | Redis has no read-only session, so DBFlux checks the single command a script sends against the flags the server reports for it in `COMMAND INFO`, before sending it. The command runs only if the server flags it `readonly` (or it is `PING`, `ECHO`, `TIME` or `INFO`) and reports no flag that marks a side effect, such as `write`, `admin`, `blocking`, `pubsub` or `may_replicate`. Commands with subcommands, such as `CONFIG` or `OBJECT`, are judged by the subcommand, which needs Redis 7 or later. Transactions, `SELECT`, subscriptions, every script command (`EVAL`, `EVALSHA`, `FCALL` and their `_RO` forms), `PFCOUNT`, module commands, commands the server does not describe, and `SRANDMEMBER`, `HRANDFIELD` or `ZRANDMEMBER` with a negative count are refused. This protects data, not availability: expensive reads such as `KEYS *` still run, and DBFlux sets no Redis read timeout |
+
+SQL Server, Turso, external IPC drivers, DynamoDB, CloudWatch and InfluxDB cannot enforce read-only, and neither can Redis Cluster connections or Redis servers that cannot answer `COMMAND INFO`. On those connections, and on any connection whose session already has an open transaction, the script is governed as `write`: the policy's decision for `write` applies (Allow, Ask or Deny), and the audit records `write`.
+
+The database stops data modification in the session, except on temporary tables, which a read-only transaction in PostgreSQL and MySQL may still change, and it does not stop functions with external effects, such as PostgreSQL `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` and advisory locks, or MySQL `GET_LOCK` and user-defined functions. For a read-only MCP client, least-privilege database credentials remain the real boundary.
+
+The editor's auto-refresh uses the same enforcement. On a connection whose driver cannot enforce read-only, auto-refresh switches back to Manual.
+
+### Scripts that `execute_script` cannot run
+
+`execute_script` only runs scripts written in a database query language. A saved Lua, Python or Bash script is listed by `list_scripts` and readable with `get_script`, but `execute_script` refuses it with "Script language not supported for execution (only database queries)" and nothing runs. Run those scripts from the DBFlux editor instead.
+
+### Editor safety settings do not apply
+
+The dangerous-query settings (**Confirm dangerous queries**, **Require WHERE for DELETE/UPDATE** and **Always require preview**) belong to the DBFlux editor. The MCP server does not read them, at the General level, as a per-driver override or as a per-connection override. An MCP call is gated only by the policies and the approval flow described above: to make destructive statements wait for a person, set the policy's decision for `destructive` (or `admin_destructive`) to Ask or Deny.
+
+### Read-only connections
+
+When a connection's profile has **Read-only** switched on in the Connection Manager, every call above the `read` class on that connection is denied with the error code `connection_read_only`. The check runs before the policies, so no policy, role or approval can allow the call: `request_execution` is denied, and a call approved before the setting was turned on is denied when it is repeated. Each denial is recorded as an `mcp_authorize` audit event with outcome `failure`.
+
+`execute_script` governs a read script as `write` on a driver that cannot enforce read-only, as described above, so on a read-only connection with such a driver it is denied too. `select_data`, `count_records` and the other read tools still run.
+
+The MCP server reads the setting from `dbflux.db` on every call, so a change made in the GUI applies to the next call without restarting the server. If the server cannot read the file, it treats the connection as read-only.
 
 ## 6. Built-in Policies and Roles
 
@@ -303,6 +346,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     },
     now_epoch_ms(),
@@ -353,6 +397,11 @@ To avoid polluting developer machines during tests:
 
 - Enable MCP in the target connection's governance settings (Connection Manager → MCP tab).
 - Or set `mcp_enabled_by_default: true` in the config if you want all connections enabled.
+
+### Request denied as connection read-only
+
+- The connection's profile has **Read-only** switched on (Connection Manager → Main tab → Safety). Only `metadata` and `read` calls run on it, whatever the policies say.
+- Turn the setting off to allow writes again. The next call sees the change.
 
 ### Policy denied
 

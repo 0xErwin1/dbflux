@@ -148,7 +148,27 @@ impl DocumentTaskRunner {
 
     // -- Mutation slot (writes — independent, no auto-cancel) --
 
+    /// Starts a write that runs as one driver call. Once sent it commits
+    /// regardless of a cancel, so the task offers no cancel control.
     pub fn start_mutation(
+        &mut self,
+        kind: TaskKind,
+        description: impl Into<String>,
+        cx: &mut App,
+    ) -> (TaskId, MutationCancelHandle) {
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
+            let (task_id, cancel_token) =
+                state.start_task_for_target(kind, description, self.default_target());
+            state.tasks_mut().mark_uncancellable(task_id);
+            (task_id, cancel_token)
+        });
+
+        (task_id, MutationCancelHandle::from_token(cancel_token))
+    }
+
+    /// Starts a write whose executor polls the returned handle between steps
+    /// (chunks or statements), so a cancel stops the remaining work.
+    pub fn start_cancellable_mutation(
         &mut self,
         kind: TaskKind,
         description: impl Into<String>,
@@ -158,8 +178,7 @@ impl DocumentTaskRunner {
             state.start_task_for_target(kind, description, self.default_target())
         });
 
-        let handle = MutationCancelHandle::from_token(cancel_token);
-        (task_id, handle)
+        (task_id, MutationCancelHandle::from_token(cancel_token))
     }
 
     pub fn cancel_mutation(&mut self, task_id: TaskId, cx: &mut App) {
@@ -241,6 +260,63 @@ mod tests {
             handle.is_cancelled(),
             "cancelling the CancelToken must flip is_cancelled() on the handle (DR-15.1)"
         );
+    }
+
+    fn runner_with_state(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        super::DocumentTaskRunner,
+    ) {
+        use gpui::AppContext as _;
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+        let runner = super::DocumentTaskRunner::new(app_state.clone());
+
+        (app_state, runner)
+    }
+
+    fn is_cancellable(
+        app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        task_id: dbflux_core::TaskId,
+        cx: &mut gpui::TestAppContext,
+    ) -> bool {
+        cx.read(|cx| {
+            app_state
+                .read(cx)
+                .tasks()
+                .get(task_id)
+                .expect("task exists")
+                .is_cancellable
+        })
+    }
+
+    #[gpui::test]
+    fn a_sent_mutation_offers_no_cancel(cx: &mut gpui::TestAppContext) {
+        let (app_state, mut runner) = runner_with_state(cx);
+
+        let (task_id, _handle) =
+            cx.update(|cx| runner.start_mutation(dbflux_core::TaskKind::Query, "Save row", cx));
+
+        assert!(!is_cancellable(&app_state, task_id, cx));
+    }
+
+    #[gpui::test]
+    fn a_chunked_mutation_that_polls_its_handle_stays_cancellable(cx: &mut gpui::TestAppContext) {
+        let (app_state, mut runner) = runner_with_state(cx);
+
+        let (task_id, _handle) = cx.update(|cx| {
+            runner.start_cancellable_mutation(dbflux_core::TaskKind::Query, "Update rows", cx)
+        });
+
+        assert!(is_cancellable(&app_state, task_id, cx));
     }
 
     // Inverse: cancelling the handle must also flip the shared token.

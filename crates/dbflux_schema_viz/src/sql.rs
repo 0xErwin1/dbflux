@@ -208,6 +208,7 @@ mod tests {
             storage_hints: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            pseudo_columns: Box::default(),
         }
     }
 

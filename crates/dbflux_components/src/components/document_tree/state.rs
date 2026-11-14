@@ -321,6 +321,7 @@ impl DocumentTreeState {
                 self.raw_documents.iter().map(value_to_json).collect();
 
             let json_str = if json_values.len() == 1 {
+                #[expect(clippy::indexing_slicing, reason = "guarded by json_values.len() == 1")]
                 serde_json::to_string_pretty(&json_values[0]).unwrap_or_default()
             } else {
                 serde_json::to_string_pretty(&json_values).unwrap_or_default()
@@ -631,7 +632,15 @@ impl DocumentTreeState {
             if let Some(idx) = current_idx
                 && idx + 1 < self.visible_nodes.len()
             {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "guarded by idx + 1 < self.visible_nodes.len()"
+                )]
                 let next_id = self.visible_nodes[idx + 1].id.clone();
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "guarded by idx + 1 < self.visible_nodes.len()"
+                )]
                 let is_child = self.visible_nodes[idx + 1].parent_id.as_ref() == Some(&current);
 
                 if is_child {
@@ -924,6 +933,10 @@ impl DocumentTreeState {
             return;
         };
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the len < 2 early return above leaves id.path.len() >= 2, so the 1.. slice is within the path"
+        )]
         let updated = set_value_at_path(raw_doc, &id.path[1..], value);
         if !updated {
             return;
@@ -1002,6 +1015,10 @@ fn set_value_at_path(current: &mut Value, path: &[String], new_value: Value) -> 
         let is_last = idx + 1 == path.len();
 
         if is_last {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "guarded by the item_idx >= items.len() early return above"
+            )]
             match cursor {
                 Value::Document(fields) => {
                     fields.insert(segment.clone(), new_value);

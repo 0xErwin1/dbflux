@@ -27,6 +27,8 @@ pub enum DbKind {
     S3,
     ClickHouse,
     Turso,
+    DuckDB,
+    AwsSecrets,
 }
 
 impl DbKind {
@@ -46,6 +48,8 @@ impl DbKind {
             DbKind::S3 => "Amazon S3",
             DbKind::ClickHouse => "ClickHouse",
             DbKind::Turso => "TursoDB",
+            DbKind::DuckDB => "DuckDB",
+            DbKind::AwsSecrets => "AWS Secrets",
         }
     }
 }
@@ -65,12 +69,12 @@ pub enum InfluxVersion {
 
 /// Returns `true` when the given SSL mode id string requires a root CA certificate.
 ///
-/// Covers all known cert-requiring ids across every driver (Postgres, MySQL, MongoDB, Redis).
-/// The UI uses this to decide whether to reveal the CA certificate path input.
+/// Covers all known cert-requiring ids across every driver (Postgres, MySQL, MongoDB, Redis,
+/// SQL Server). The UI uses this to decide whether to reveal the CA certificate path input.
 pub fn ssl_mode_id_requires_root_cert(id: &str) -> bool {
     matches!(
         id,
-        "verify-ca" | "verify-full" | "VERIFY_CA" | "VERIFY_IDENTITY" | "verify"
+        "verify-ca" | "verify-full" | "VERIFY_CA" | "VERIFY_IDENTITY" | "verify" | "required"
     )
 }
 
@@ -244,6 +248,14 @@ pub struct SshTunnelConfig {
     /// Authentication method (private key or password).
     #[serde(default)]
     pub auth_method: SshAuthMethod,
+
+    /// Alias of a host in the user's SSH config that this tunnel references, if any.
+    ///
+    /// When this is `Some`, the alias is the only source of the target: it is resolved at
+    /// connect time and `host`, `port` and `user` are never dialed from (A7). A resolution
+    /// failure is an error, never a fallback to the stored values.
+    #[serde(default)]
+    pub ssh_config_host: Option<String>,
 }
 
 /// Saved SSH tunnel profile for reuse across connections.
@@ -605,6 +617,45 @@ pub enum DbConfig {
     },
     /// Remote Turso endpoint; its auth token is only stored in the canonical keyring slot.
     Turso { url: String },
+    /// Embedded DuckDB database, optionally with a DuckLake catalog attached.
+    DuckDB {
+        /// Database file; empty opens an in-memory database.
+        path: PathBuf,
+        /// DuckLake catalog attached on connect as `lake` and made the default
+        /// database, e.g. `metadata.ducklake` or `postgres:dbname=lake`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ducklake_catalog: Option<String>,
+        /// Where DuckLake writes its Parquet files, e.g. `s3://bucket/lake/`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ducklake_data_path: Option<String>,
+        /// SQL run after opening, before the DuckLake attach (extensions,
+        /// `CREATE SECRET ... (PROVIDER credential_chain)`, settings).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        init_sql: Option<String>,
+    },
+    /// AWS Secrets Manager and Systems Manager Parameter Store, browsed as
+    /// two secret stores of one connection.
+    ///
+    /// Auth follows `S3`: an AWS profile/SSO `AuthProfileRef` (`profile`) or
+    /// static credentials (`access_key_id` plus the connection's
+    /// keyring-backed secret). When both are set, `profile` takes precedence.
+    AwsSecrets {
+        /// AWS region both services are reached in.
+        region: String,
+        /// Profile/SSO auth-profile reference (a profile UUID as a string),
+        /// bound to the `profile` `DRIVER_FORM` field declared as
+        /// `FormFieldKind::AuthProfileRef`.
+        #[serde(default)]
+        profile: Option<String>,
+        /// Static AWS access key id, stored in cleartext like `user` on
+        /// other drivers.
+        #[serde(default)]
+        access_key_id: Option<String>,
+        /// Custom endpoint URL (for example a LocalStack instance). `None`
+        /// uses the AWS SDK's default endpoint resolution.
+        #[serde(default)]
+        endpoint: Option<String>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -633,6 +684,8 @@ impl DbConfig {
             DbConfig::S3 { .. } => DbKind::S3,
             DbConfig::ClickHouse { .. } => DbKind::ClickHouse,
             DbConfig::Turso { .. } => DbKind::Turso,
+            DbConfig::DuckDB { .. } => DbKind::DuckDB,
+            DbConfig::AwsSecrets { .. } => DbKind::AwsSecrets,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -790,8 +843,26 @@ impl DbConfig {
         }
     }
 
+    pub fn default_aws_secrets() -> Self {
+        DbConfig::AwsSecrets {
+            region: "us-east-1".to_string(),
+            profile: None,
+            access_key_id: None,
+            endpoint: None,
+        }
+    }
+
     pub fn default_turso() -> Self {
         DbConfig::Turso { url: String::new() }
+    }
+
+    pub fn default_duckdb() -> Self {
+        DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: None,
+        }
     }
 
     pub fn default_clickhouse() -> Self {
@@ -816,8 +887,10 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -854,8 +927,10 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -905,8 +980,10 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -949,8 +1026,10 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -969,8 +1048,10 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -1023,8 +1104,10 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -1057,8 +1140,10 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
+            | DbConfig::DuckDB { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -1090,6 +1175,7 @@ impl DbConfig {
             DbConfig::SqlServer { database, .. } => database.clone(),
             DbConfig::Redshift { database, .. } => Some(database.clone()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
+            DbConfig::DuckDB { .. } | DbConfig::AwsSecrets { .. } => None,
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
             DbConfig::ClickHouse { database, .. } => Some(database.clone()),
@@ -1105,7 +1191,8 @@ impl DbConfig {
         match self {
             DbConfig::DynamoDB { region, .. }
             | DbConfig::CloudWatchLogs { region, .. }
-            | DbConfig::S3 { region, .. } => Some(region.as_str()),
+            | DbConfig::S3 { region, .. }
+            | DbConfig::AwsSecrets { region, .. } => Some(region.as_str()),
             _ => None,
         }
     }
@@ -1333,7 +1420,7 @@ fn strip_uri_userinfo(uri: &str) -> String {
 ///
 /// Returns `(sanitized_uri, extracted_password)` where `extracted_password` is
 /// URL-decoded when possible.
-pub fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
+pub(crate) fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
     let Some(scheme_end) = uri.find("://") else {
         return (uri.to_string(), None);
     };
@@ -1378,6 +1465,41 @@ pub fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
         format!("{}{}{}", prefix, sanitized_authority, suffix),
         Some(decoded_password),
     )
+}
+
+/// How the sidebar lays out a relational connection's objects.
+///
+/// - `Advanced` — each schema groups its tables and views in folders, next
+///   to its types, indexes, foreign keys and routines.
+/// - `Compact` — no folders: each schema lists its tables, views, routines
+///   and data types directly, and the instance views share one folder.
+/// - `Simple` — only databases, schemas, and their tables and views.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigatorView {
+    #[default]
+    Advanced,
+    Compact,
+    Simple,
+}
+
+impl NavigatorView {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Advanced => "advanced",
+            Self::Compact => "compact",
+            Self::Simple => "simple",
+        }
+    }
+
+    /// Parses a stored value; anything unknown is `Advanced`.
+    pub fn from_storage_str(value: &str) -> Self {
+        match value {
+            "compact" => Self::Compact,
+            "simple" => Self::Simple,
+            _ => Self::Advanced,
+        }
+    }
 }
 
 /// Deployment environment a connection points at.
@@ -1496,8 +1618,11 @@ pub struct ConnectionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_governance: Option<ConnectionMcpGovernance>,
 
-    /// When `true`, mutation operations (UPDATE / DELETE) are forbidden for this
-    /// profile regardless of actor context. Settable in Connection Manager.
+    /// When `true`, the mutation policy resolves to read-only with
+    /// `ReadOnlyReason::ProfileSetting`, which blocks data-grid edits, visual
+    /// query builder mutations, schema-diff apply and SQL editor statements
+    /// above `Read`. The MCP server reads it directly and denies every call
+    /// above `Read` on the connection. Settable in Connection Manager.
     /// Defaults to `false`.
     #[serde(default)]
     pub read_only_flag: bool,
@@ -1505,6 +1630,19 @@ pub struct ConnectionProfile {
     /// Deployment environment this connection belongs to, if the user set one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<ConnectionEnvironment>,
+
+    /// How the sidebar lays out this connection's objects.
+    #[serde(default)]
+    pub navigator_view: NavigatorView,
+
+    /// Whether the sidebar lists every database on the server. When `false`,
+    /// it lists only the database the connection is configured with.
+    #[serde(default = "default_show_all_databases")]
+    pub show_all_databases: bool,
+}
+
+fn default_show_all_databases() -> bool {
+    true
 }
 
 impl ConnectionProfile {
@@ -1528,6 +1666,8 @@ impl ConnectionProfile {
             mcp_governance: None,
             read_only_flag: false,
             environment: None,
+            navigator_view: NavigatorView::Advanced,
+            show_all_databases: true,
         }
     }
 
@@ -1553,6 +1693,8 @@ impl ConnectionProfile {
             access_kind: None,
             read_only_flag: false,
             environment: None,
+            navigator_view: NavigatorView::Advanced,
+            show_all_databases: true,
             mcp_governance: None,
         }
     }
@@ -1582,6 +1724,8 @@ impl ConnectionProfile {
             mcp_governance: None,
             read_only_flag: false,
             environment: None,
+            navigator_view: NavigatorView::Advanced,
+            show_all_databases: true,
         }
     }
 
@@ -1616,6 +1760,8 @@ impl ConnectionProfile {
             mcp_governance: None,
             read_only_flag: false,
             environment: None,
+            navigator_view: NavigatorView::Advanced,
+            show_all_databases: true,
         }
     }
 
@@ -1674,6 +1820,8 @@ impl ConnectionProfile {
             DbKind::S3 => "s3",
             DbKind::ClickHouse => "clickhouse",
             DbKind::Turso => "turso",
+            DbKind::DuckDB => "duckdb",
+            DbKind::AwsSecrets => "aws_secrets",
         }
     }
 
@@ -1683,6 +1831,14 @@ impl ConnectionProfile {
 
     pub fn ssh_secret_ref(&self) -> String {
         crate::storage::secrets::ssh_secret_ref(&self.id)
+    }
+
+    /// Whether DBFlux must ask for the connection password before connecting:
+    /// the driver authenticates with one, the keyring does not hold it, and no
+    /// value source (environment, secret manager, parameter store, auth
+    /// session field, stored literal) supplies it.
+    pub fn requires_password_prompt(&self, driver_requires_password: bool) -> bool {
+        driver_requires_password && !self.save_password && !self.value_refs.contains_key("password")
     }
 
     /// Returns true if this profile uses the new connect pipeline
@@ -1867,12 +2023,30 @@ mod tests {
     }
 
     #[test]
+    fn ssh_tunnel_config_without_alias_field_deserializes_with_none() {
+        // A tunnel config serialized before migration 044 carries no
+        // `ssh_config_host` field; it must still deserialize.
+        let json = r#"{
+            "host": "bastion.example.com",
+            "port": 22,
+            "user": "deploy",
+            "auth_method": "Password"
+        }"#;
+
+        let config: SshTunnelConfig =
+            serde_json::from_str(json).expect("legacy tunnel config should deserialize");
+
+        assert_eq!(config.ssh_config_host, None);
+    }
+
+    #[test]
     fn assign_ssh_tunnel_updates_and_clears_supported_configs() {
         let inline_tunnel = SshTunnelConfig {
             host: "bastion.example.com".to_string(),
             port: 2222,
             user: "dbflux".to_string(),
             auth_method: SshAuthMethod::Password,
+            ssh_config_host: None,
         };
         let tunnel_profile_id = Uuid::from_u128(1);
         let mut configs = [
@@ -1888,7 +2062,7 @@ mod tests {
             config.assign_ssh_tunnel(Some(inline_tunnel.clone()), None);
             assert!(matches!(
                 config.ssh_tunnel(),
-                Some(SshTunnelConfig { host, port, user, auth_method: SshAuthMethod::Password })
+                Some(SshTunnelConfig { host, port, user, auth_method: SshAuthMethod::Password, .. })
                     if host == "bastion.example.com" && *port == 2222 && user == "dbflux"
             ));
             assert_eq!(config.ssh_tunnel_profile_id(), None);
@@ -1910,6 +2084,7 @@ mod tests {
             port: 2222,
             user: "dbflux".to_string(),
             auth_method: SshAuthMethod::Password,
+            ssh_config_host: None,
         };
         let tunnel_profile_id = Uuid::from_u128(1);
         let mut configs = [
@@ -2299,6 +2474,44 @@ mod tests {
     }
 
     #[test]
+    fn ssl_mode_id_requires_root_cert_shows_picker_for_sqlserver_required() {
+        assert!(ssl_mode_id_requires_root_cert("required"));
+    }
+
+    #[test]
+    fn ssl_mode_id_requires_root_cert_keeps_other_driver_modes() {
+        for id in [
+            "verify-ca",
+            "verify-full",
+            "VERIFY_CA",
+            "VERIFY_IDENTITY",
+            "verify",
+        ] {
+            assert!(
+                ssl_mode_id_requires_root_cert(id),
+                "{id} must show the picker"
+            );
+        }
+        for id in [
+            "disable",
+            "allow",
+            "prefer",
+            "require",
+            "DISABLED",
+            "PREFERRED",
+            "REQUIRED",
+            "off",
+            "on",
+            "",
+        ] {
+            assert!(
+                !ssl_mode_id_requires_root_cert(id),
+                "{id} must hide the picker"
+            );
+        }
+    }
+
+    #[test]
     fn strip_password_from_uri_extracts_and_sanitizes_credentials() {
         let (sanitized, password) =
             strip_password_from_uri("postgresql://alice:p%40ss@localhost:5432/app?sslmode=require");
@@ -2377,6 +2590,63 @@ mod tests {
 
         profile.auth_profile_id = Some(Uuid::new_v4());
         assert!(profile.uses_pipeline());
+    }
+
+    fn unsaved_password_profile() -> ConnectionProfile {
+        let mut profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        profile.save_password = false;
+        profile
+    }
+
+    #[test]
+    fn password_prompt_required_when_password_is_neither_saved_nor_sourced() {
+        assert!(unsaved_password_profile().requires_password_prompt(true));
+    }
+
+    #[test]
+    fn password_prompt_not_required_when_driver_needs_no_password() {
+        assert!(!unsaved_password_profile().requires_password_prompt(false));
+    }
+
+    #[test]
+    fn password_prompt_not_required_when_password_is_saved() {
+        let mut profile = unsaved_password_profile();
+        profile.save_password = true;
+
+        assert!(!profile.requires_password_prompt(true));
+    }
+
+    #[test]
+    fn password_prompt_not_required_when_password_has_a_value_source() {
+        let sources = [
+            ValueRef::env("DB_PASS"),
+            ValueRef::secret("aws-secrets-manager", "db/creds", None),
+            ValueRef::parameter_with_key("aws-ssm", "/db/pass", None),
+            ValueRef::auth("password"),
+            ValueRef::literal("stored"),
+        ];
+
+        for source in sources {
+            let mut profile = unsaved_password_profile();
+            profile
+                .value_refs
+                .insert("password".to_string(), source.clone());
+
+            assert!(
+                !profile.requires_password_prompt(true),
+                "a password sourced from {source:?} must not be prompted"
+            );
+        }
+    }
+
+    #[test]
+    fn password_prompt_ignores_value_sources_of_other_fields() {
+        let mut profile = unsaved_password_profile();
+        profile
+            .value_refs
+            .insert("host".to_string(), ValueRef::env("DB_HOST"));
+
+        assert!(profile.requires_password_prompt(true));
     }
 
     #[test]

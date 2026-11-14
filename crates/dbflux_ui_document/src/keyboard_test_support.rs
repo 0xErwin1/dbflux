@@ -68,7 +68,9 @@ impl<D: Render> Render for KeymapHost<D> {
 /// Registers the component defaults, the theme, the app keymap and a toast
 /// host.
 pub(crate) fn init_keyboard_runtime(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    // `theme::init` runs `gpui_component::init` itself; running it twice
+    // registers every input binding twice, and an input action that
+    // propagates (Enter) then runs once per copy.
     cx.update(dbflux_components::theme::init);
     cx.update(init_keymap);
     cx.update(|cx| {
@@ -121,4 +123,62 @@ pub(crate) fn host_document_with_side_panels<D: Render>(
         Some(host) => (host, window),
         None => unreachable!("the window view builder always stores the host"),
     }
+}
+
+/// An app state with one profile named `name` connected through `driver`.
+/// Returns the state and the profile id.
+pub(crate) fn connected_app_state(
+    cx: &mut TestAppContext,
+    driver: &dbflux_test_support::fake_driver::FakeDriver,
+    name: &str,
+) -> (Entity<dbflux_ui_base::AppStateEntity>, uuid::Uuid) {
+    let profile_id = uuid::Uuid::new_v4();
+
+    let app_state = cx.update(|cx| {
+        cx.new(|_| {
+            let runtime =
+                dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+            dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                .expect("test storage setup")
+        })
+    });
+
+    let profile = dbflux_core::ConnectionProfile::new(
+        name,
+        dbflux_core::DbConfig::SQLite {
+            path: std::path::PathBuf::from(":memory:"),
+            connection_id: None,
+        },
+    );
+    let connection = driver.connect_arc(&profile).expect("fake connection");
+
+    cx.update(|cx| {
+        app_state.update(cx, |state, _| {
+            state.connections_mut().insert(
+                profile_id,
+                dbflux_core::ConnectedProfile {
+                    profile,
+                    connection,
+                    schema: None,
+                    mutation_policy: dbflux_core::MutationPolicy::default(),
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_columns: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                },
+            );
+        });
+    });
+
+    (app_state, profile_id)
 }

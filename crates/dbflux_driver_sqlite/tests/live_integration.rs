@@ -75,6 +75,131 @@ fn sqlite_file_connect_ping_query_and_schema() -> Result<(), DbError> {
 // Schema introspection
 // ---------------------------------------------------------------------------
 
+/// `PRAGMA foreign_key_list` reports a NULL target column for a reference that
+/// names only the parent table, and `PRAGMA index_info` a NULL name for an
+/// expression column. Both are valid schemas, so reading them must neither
+/// fail nor lose the foreign key.
+#[test]
+fn sqlite_schema_reads_implicit_foreign_key_targets_and_expression_indexes() -> Result<(), DbError>
+{
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE parents (code TEXT, region TEXT, PRIMARY KEY (code, region))",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE children (
+            id INTEGER PRIMARY KEY,
+            parent_code TEXT,
+            parent_region TEXT,
+            label TEXT,
+            FOREIGN KEY (parent_code, parent_region) REFERENCES parents
+        )",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE INDEX idx_children_label ON children (lower(label), id)",
+    ))?;
+
+    let table = connection.table_details("main", None, "children")?;
+
+    let foreign_keys = table.foreign_keys.as_ref().expect("foreign keys load");
+    assert_eq!(foreign_keys.len(), 1, "{foreign_keys:?}");
+    assert_eq!(foreign_keys[0].referenced_table, "parents");
+    assert_eq!(
+        foreign_keys[0].columns,
+        vec!["parent_code", "parent_region"]
+    );
+    assert_eq!(foreign_keys[0].referenced_columns, vec!["code", "region"]);
+
+    let indexes = match table.indexes.as_ref().expect("indexes load") {
+        dbflux_core::IndexData::Relational(indexes) => indexes,
+        other => panic!("expected relational index data, got {other:?}"),
+    };
+    let expression_index = indexes
+        .iter()
+        .find(|index| index.name == "idx_children_label")
+        .expect("the expression index is listed");
+    assert_eq!(expression_index.columns, vec!["id"]);
+
+    let schema_foreign_keys = connection.schema_foreign_keys("main", None)?;
+    let schema_foreign_key = schema_foreign_keys
+        .iter()
+        .find(|foreign_key| foreign_key.table_name == "children")
+        .expect("the schema-wide read lists the foreign key");
+    assert_eq!(
+        schema_foreign_key.referenced_columns,
+        vec!["code", "region"]
+    );
+
+    let schema_indexes = connection.schema_indexes("main", None)?;
+    assert!(
+        schema_indexes
+            .iter()
+            .any(|index| index.name == "idx_children_label" && index.columns == vec!["id"])
+    );
+
+    Ok(())
+}
+
+/// A reference that lists more columns than the parent's primary key has
+/// cannot be resolved in full, so it is left out rather than listed with
+/// fewer columns than were declared.
+#[test]
+fn sqlite_schema_omits_an_implicit_foreign_key_wider_than_the_parent_key() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE parents (code TEXT PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE children (
+            id INTEGER PRIMARY KEY,
+            parent_code TEXT,
+            parent_region TEXT,
+            FOREIGN KEY (parent_code, parent_region) REFERENCES parents
+        )",
+    ))?;
+
+    let table = connection.table_details("main", None, "children")?;
+    let foreign_keys = table.foreign_keys.as_ref().expect("foreign keys load");
+    assert!(foreign_keys.is_empty(), "{foreign_keys:?}");
+
+    let schema_foreign_keys = connection.schema_foreign_keys("main", None)?;
+    assert!(
+        schema_foreign_keys
+            .iter()
+            .all(|foreign_key| foreign_key.table_name != "children"),
+        "{schema_foreign_keys:?}"
+    );
+
+    Ok(())
+}
+
+/// The opposite mismatch: a reference with fewer columns than the parent's
+/// composite primary key is left out as well.
+#[test]
+fn sqlite_schema_omits_an_implicit_foreign_key_narrower_than_the_parent_key() -> Result<(), DbError>
+{
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE parents (code TEXT, region TEXT, PRIMARY KEY (code, region))",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE children (
+            id INTEGER PRIMARY KEY,
+            parent_code TEXT,
+            FOREIGN KEY (parent_code) REFERENCES parents
+        )",
+    ))?;
+
+    let table = connection.table_details("main", None, "children")?;
+    let foreign_keys = table.foreign_keys.as_ref().expect("foreign keys load");
+    assert!(foreign_keys.is_empty(), "{foreign_keys:?}");
+
+    Ok(())
+}
+
 #[test]
 fn sqlite_schema_introspection() -> Result<(), DbError> {
     let connection = connect_sqlite()?;

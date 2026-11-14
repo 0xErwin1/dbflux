@@ -5,7 +5,7 @@
 use crate::query::visual_query::{BoolOp, Comparator, LiteralValue, PredicateValue};
 
 /// Maximum number of path segments in a dotted LHS (`a.b.c.d.e` = 5).
-pub const PATH_DEPTH_CAP: usize = 5;
+pub(crate) const PATH_DEPTH_CAP: usize = 5;
 
 // =============================================================================
 // Token and Span
@@ -25,7 +25,7 @@ impl Span {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Token {
+pub(crate) enum Token {
     /// Unquoted identifier: `[A-Za-z_][A-Za-z0-9_]*`.
     Ident(String),
     /// `.` outside a string literal.
@@ -64,7 +64,7 @@ pub enum Token {
 }
 
 #[derive(Debug, Clone)]
-pub struct SpannedToken {
+pub(crate) struct SpannedToken {
     pub token: Token,
     pub span: Span,
 }
@@ -115,7 +115,11 @@ impl<'a> Scanner<'a> {
         ) {
             self.advance();
         }
-        let word = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "start == self.pos at scan entry and self.pos only rests on char boundaries (advance() is byte-wise but every slice endpoint follows consumed multi-byte sequences), so the slice is within and inside the valid UTF-8 input"
+        )]
+        let word = String::from_utf8_lossy(&self.src[start..self.pos]).into_owned();
         let span = Span::new(start, self.pos);
 
         // Check for keyword comparators and boolean ops (case-insensitive).
@@ -173,7 +177,12 @@ impl<'a> Scanner<'a> {
         if end > self.src.len() {
             return false;
         }
-        let slice = &self.src[self.pos..end];
+        let Some(slice) = self.src.get(self.pos..end) else {
+            // `end <= self.src.len()` was checked above and `pos` never
+            // exceeds the source length, so this arm is unreachable; report
+            // a non-match instead of panicking on a malformed cursor.
+            return false;
+        };
         let matches = slice
             .iter()
             .zip(kw.iter())
@@ -232,7 +241,11 @@ impl<'a> Scanner<'a> {
             while matches!(self.peek(), Some(b'0'..=b'9')) {
                 self.advance();
             }
-            let text = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "start..self.pos lies between char-boundary positions within the valid UTF-8 source, so from_utf8_lossy reproduces the same text without unwrapping"
+            )]
+            let text = String::from_utf8_lossy(&self.src[start..self.pos]);
             match text.parse::<f64>() {
                 Ok(f) => Ok(SpannedToken {
                     token: Token::Float(f),
@@ -243,7 +256,11 @@ impl<'a> Scanner<'a> {
                 }),
             }
         } else {
-            let text = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "start..self.pos lies between char-boundary positions within the valid UTF-8 source, so from_utf8_lossy reproduces the same text without unwrapping"
+            )]
+            let text = String::from_utf8_lossy(&self.src[start..self.pos]);
             match text.parse::<i64>() {
                 Ok(i) => Ok(SpannedToken {
                     token: Token::Int(i),
@@ -360,7 +377,7 @@ impl<'a> Scanner<'a> {
 /// Tokenize the full input string into a `Vec<SpannedToken>`.
 ///
 /// Exposed for testing; normal callers use `parse()` directly.
-pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, ParseError> {
+pub(crate) fn tokenize(input: &str) -> Result<Vec<SpannedToken>, ParseError> {
     let mut scanner = Scanner::new(input);
     let mut tokens = Vec::new();
     loop {
@@ -379,13 +396,13 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, ParseError> {
 // =============================================================================
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Lhs {
+pub(crate) enum Lhs {
     BareColumn(String),
     DottedPath { segments: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParsedPredicate {
+pub(crate) struct ParsedPredicate {
     pub lhs: Lhs,
     pub span: Span,
     pub comparator: Comparator,
@@ -393,7 +410,7 @@ pub struct ParsedPredicate {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum FilterExpr {
+pub(crate) enum FilterExpr {
     Predicate(ParsedPredicate),
     Bool {
         op: BoolOp,
@@ -402,7 +419,7 @@ pub enum FilterExpr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct RelationalFilterAst {
+pub(crate) struct RelationalFilterAst {
     pub root: FilterExpr,
 }
 
@@ -462,6 +479,10 @@ impl Parser {
             .unwrap_or(Span::new(0, 0))
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The tokenizer appends EOF and advance keeps its cursor at the final token"
+    )]
     fn advance(&mut self) -> &SpannedToken {
         let tok = &self.tokens[self.pos];
         if self.pos + 1 < self.tokens.len() {
@@ -723,7 +744,7 @@ impl IntoPredSingle for LiteralValue {
 // =============================================================================
 
 /// Parse the filter text into an AST.
-pub fn parse(input: &str) -> Result<RelationalFilterAst, ParseError> {
+pub(crate) fn parse(input: &str) -> Result<RelationalFilterAst, ParseError> {
     let tokens = tokenize(input)?;
     let mut parser = Parser::new(tokens);
     let root = parser.parse_expr()?;

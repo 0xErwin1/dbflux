@@ -1,15 +1,19 @@
 use gpui::Corners;
 use std::{
+    cell::RefCell,
+    collections::HashMap,
+    mem,
     ops::Range,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 
 use gpui::{
     App, BorderStyle, Bounds, ClickEvent, CursorStyle, Edges, Element, ElementId, GlobalElementId,
-    Half, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
+    Half, HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId,
     MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    SharedString, StyledText, TextLayout, TextRun, TextStyle, Window, point, px, quad,
+    SharedString, StyledText, TextAlign, TextLayout, TextRun, TextStyle, Window, point, px, quad,
+    size,
 };
 
 use crate::{
@@ -17,9 +21,11 @@ use crate::{
     input::Selection,
     text::TextViewMultiClickKind,
     text::node::LinkMark,
+    text::range_highlight::RevealAt,
     text::selection::word_range_at,
     text::state::LineSpan,
     text::text_view::{LinkClickHandlerFn, handle_link_click},
+    text_selection::text_rows_extent,
 };
 
 /// The style applied to one range of inline text.
@@ -97,6 +103,48 @@ pub(super) fn combine_highlights(
     combined
 }
 
+/// Layers a streamed fade-in over `highlights`: text inside each fade range
+/// loses that share of its color, and a highlight background or decoration
+/// color fades with it so an inline code chip or a link underline does not
+/// appear before its text.
+pub(super) fn fade_highlights(
+    highlights: Vec<(Range<usize>, InlineHighlight)>,
+    fades: &[(Range<usize>, f32)],
+) -> Vec<(Range<usize>, InlineHighlight)> {
+    if fades.is_empty() {
+        return highlights;
+    }
+    let fade_highlights = fades.iter().map(|(range, fade_out)| {
+        (
+            range.clone(),
+            InlineHighlight::from(HighlightStyle {
+                fade_out: Some(*fade_out),
+                ..Default::default()
+            }),
+        )
+    });
+    let mut combined = combine_highlights(highlights, fade_highlights);
+    // GPUI fades only the glyph color, so explicit decoration colors fade
+    // here too, or a link underline would show before its text does.
+    for (_, highlight) in &mut combined {
+        let Some(fade_out) = highlight.style.fade_out else {
+            continue;
+        };
+        let style = &mut highlight.style;
+        for color in [
+            style.background_color.as_mut(),
+            style.underline.as_mut().and_then(|u| u.color.as_mut()),
+            style.strikethrough.as_mut().and_then(|s| s.color.as_mut()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            color.fade_out(fade_out);
+        }
+    }
+    combined
+}
+
 /// Builds the [`TextRun`]s for `text_len` bytes of inline text: each
 /// highlight refines `default_style` over its range, and a highlight that
 /// names a font family shapes its run in that family.
@@ -161,14 +209,26 @@ pub(super) fn text_size_ranges(
 ///
 /// All text in TextView (including the CodeBlock) used this for text rendering.
 pub(super) struct Inline {
-    id: ElementId,
     text: SharedString,
     links: Rc<Vec<(Range<usize>, LinkMark)>>,
     highlights: Vec<(Range<usize>, InlineHighlight)>,
     styled_text: StyledText,
+    /// The resolved style from a parent deferred layout, when there is one.
+    text_style: Option<TextStyle>,
     paint_origin: Option<Point<Pixels>>,
+    selection_bounds: Option<Bounds<Pixels>>,
     selection_source: Option<(Arc<Mutex<InlineState>>, Range<usize>)>,
+    /// Range highlight backgrounds, painted behind the text.
+    range_backgrounds: Vec<(Range<usize>, Hsla)>,
+    /// The start of a pending reveal, when it is in this text.
+    reveal: Option<RevealAt>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    /// What this frame's layout was shaped with, to hand the shaped text to
+    /// the next frame (see [`RetainedLayout`]).
+    retained_key: Option<(Vec<TextRun>, TextStyle)>,
+    /// The shaped text is in the table, not in `styled_text`, until paint
+    /// takes it back.
+    handed_over: bool,
 
     state: Arc<Mutex<InlineState>>,
 }
@@ -176,10 +236,77 @@ pub(super) struct Inline {
 /// The inline text state, used RefCell to keep the selection state.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct InlineState {
-    hovered_index: Option<usize>,
     /// The text that actually rendering, matched with selection.
     pub(super) text: SharedString,
     pub(super) selection: Option<Selection>,
+}
+
+/// One frame's [`StyledText`], kept for the next frame's [`Inline`] of the
+/// same [`InlineState`].
+///
+/// A [`TextLayout`] remembers the size and the shaped lines of its last
+/// measurement and answers a repeated measure at the same wrap width from
+/// them, but a fresh `StyledText` every frame throws that away, so every
+/// frame of a scroll paid for a line wrapper, a shaping-cache lookup that
+/// hashes the whole paragraph, and the allocations around them for every
+/// visible paragraph. Handing the same `StyledText` to the next frame makes
+/// those measurements hits. A layout is only reused when the text, the runs
+/// (colors, fades, fonts) and the text style (font size, line height) it was
+/// shaped with are unchanged; a different wrap width misses inside
+/// `TextLayout` and reshapes as before.
+///
+/// `StyledText` is main-thread only (an `Rc` inside), while `InlineState`
+/// travels through the background parse, so the layouts live in a
+/// thread-local table keyed by the state's address, with a `Weak` to tell a
+/// live state from a reused address.
+struct RetainedLayout {
+    state: Weak<Mutex<InlineState>>,
+    styled_text: StyledText,
+    text: SharedString,
+    runs: Vec<TextRun>,
+    text_style: TextStyle,
+}
+
+thread_local! {
+    static RETAINED_LAYOUTS: RefCell<HashMap<usize, RetainedLayout>> = RefCell::new(HashMap::new());
+}
+
+/// Dead entries (states that were dropped without a final paint, e.g. a
+/// replaced document) are swept once the table grows past this many.
+const RETAINED_SWEEP_AT: usize = 4096;
+
+fn state_key(state: &Arc<Mutex<InlineState>>) -> usize {
+    Arc::as_ptr(state) as usize
+}
+
+/// Takes the layout retained for `state`, if the previous frame left one.
+fn take_retained_layout(state: &Arc<Mutex<InlineState>>) -> Option<RetainedLayout> {
+    RETAINED_LAYOUTS.with(|layouts| {
+        let retained = layouts.borrow_mut().remove(&state_key(state))?;
+        // The address may belong to a new state by now.
+        retained
+            .state
+            .upgrade()
+            .is_some_and(|live| Arc::ptr_eq(&live, state))
+            .then_some(retained)
+    })
+}
+
+/// Whether the table already holds a layout for `state`: every entry left
+/// by the previous frame is taken at layout time, so one that is present
+/// afterwards was put there this frame, by another element of the same state.
+fn has_retained_layout(state: &Arc<Mutex<InlineState>>) -> bool {
+    RETAINED_LAYOUTS.with(|layouts| layouts.borrow().contains_key(&state_key(state)))
+}
+
+fn retain_layout(state: &Arc<Mutex<InlineState>>, retained: RetainedLayout) {
+    RETAINED_LAYOUTS.with(|layouts| {
+        let mut layouts = layouts.borrow_mut();
+        if layouts.len() >= RETAINED_SWEEP_AT {
+            layouts.retain(|_, retained| retained.state.strong_count() > 0);
+        }
+        layouts.insert(state_key(state), retained);
+    });
 }
 
 impl InlineState {
@@ -190,8 +317,51 @@ impl InlineState {
 }
 
 impl Inline {
+    /// Hands the shaped text to the next frame (see [`RetainedLayout`]).
+    /// Called after prepaint, so an element that is laid out but never
+    /// painted (scrolled out of view) keeps its layout too; paint takes it
+    /// back for the duration of painting.
+    ///
+    /// When another element of the same state already handed one over this
+    /// frame (the same document shown twice), this one keeps its own: the
+    /// table holds one layout per state, and an element must never be left
+    /// to paint without its shaped text.
+    fn retain_styled_text(&mut self) {
+        if self.handed_over || self.retained_key.is_none() || has_retained_layout(&self.state) {
+            return;
+        }
+        let Some((runs, text_style)) = self.retained_key.take() else {
+            return;
+        };
+        retain_layout(
+            &self.state,
+            RetainedLayout {
+                state: Arc::downgrade(&self.state),
+                styled_text: mem::replace(&mut self.styled_text, StyledText::new("")),
+                text: self.text.clone(),
+                runs,
+                text_style,
+            },
+        );
+        self.handed_over = true;
+    }
+
+    /// Takes the shaped text back from the table for painting. `false` when
+    /// it is gone, in which case there is nothing to paint with.
+    fn reclaim_styled_text(&mut self) -> bool {
+        if !self.handed_over {
+            return true;
+        }
+        let Some(retained) = take_retained_layout(&self.state) else {
+            return false;
+        };
+        self.styled_text = retained.styled_text;
+        self.retained_key = Some((retained.runs, retained.text_style));
+        self.handed_over = false;
+        true
+    }
+
     pub(super) fn new(
-        id: impl Into<ElementId>,
         state: Arc<Mutex<InlineState>>,
         links: Vec<(Range<usize>, LinkMark)>,
         highlights: Vec<(Range<usize>, InlineHighlight)>,
@@ -203,21 +373,37 @@ impl Inline {
             .unwrap_or_default();
 
         Self {
-            id: id.into(),
             links: Rc::new(links),
             highlights,
             text: text.clone(),
             styled_text: StyledText::new(text),
+            text_style: None,
             paint_origin: None,
+            selection_bounds: None,
             selection_source: None,
+            range_backgrounds: Vec::new(),
+            reveal: None,
             link_click_handler,
+            retained_key: None,
+            handed_over: false,
             state,
         }
+    }
+
+    /// Use the resolved style captured by a deferred parent layout.
+    pub(super) fn text_style(mut self, text_style: TextStyle) -> Self {
+        self.text_style = Some(text_style);
+        self
     }
 
     /// Preserve the shared inline-flow baseline through GPUI's element-bound snapping.
     pub(super) fn paint_origin(mut self, origin: Point<Pixels>) -> Self {
         self.paint_origin = Some(origin);
+        self
+    }
+
+    pub(super) fn selection_bounds(mut self, bounds: Bounds<Pixels>) -> Self {
+        self.selection_bounds = Some(bounds);
         self
     }
 
@@ -228,6 +414,68 @@ impl Inline {
     ) -> Self {
         self.selection_source = Some((state, range));
         self
+    }
+
+    /// Paint `backgrounds` behind the text. They are not part of the text
+    /// runs, so changing them does not shape the text again.
+    pub(super) fn range_backgrounds(mut self, backgrounds: Vec<(Range<usize>, Hsla)>) -> Self {
+        self.range_backgrounds = backgrounds;
+        self
+    }
+
+    /// Scroll the line `reveal` starts on into view during prepaint.
+    pub(super) fn reveal(mut self, reveal: Option<RevealAt>) -> Self {
+        self.reveal = reveal;
+        self
+    }
+
+    /// Ask the enclosing list to scroll the line of the pending reveal into
+    /// view, and report where it is and whether it is inside the visible
+    /// area.
+    fn request_reveal(&self, window: &mut Window) {
+        let Some(reveal) = &self.reveal else {
+            return;
+        };
+        let text_layout = self.styled_text.layout();
+        let bounds = text_layout.bounds();
+        let line_height = text_layout.line_height();
+        let glyphs = glyph_boxes(
+            text_layout,
+            window.text_style().text_align,
+            bounds.size.width,
+        );
+        // The glyph drawing the text at the offset, or, for text with no
+        // glyph of its own such as a line break, the next glyph, or the last.
+        let offset = reveal.offset();
+        let (row, left, right) = range_boxes(&glyphs, offset..offset + 1)
+            .first()
+            .copied()
+            .or_else(|| {
+                glyphs
+                    .iter()
+                    .find(|glyph| glyph.text.start >= offset)
+                    .or(glyphs.last())
+                    .map(|glyph| (glyph.row, glyph.left, glyph.right))
+            })
+            .unwrap_or((0, Pixels::ZERO, Pixels::ZERO));
+        let line = Bounds::from_corners(
+            point(
+                bounds.left() + left,
+                bounds.top() + line_height * row as f32,
+            ),
+            point(
+                bounds.left() + right.max(left + px(1.)),
+                bounds.top() + line_height * (row + 1) as f32,
+            ),
+        );
+        window.request_autoscroll(line);
+        // A list scrolls the line to its edge, which layout may miss by a
+        // fraction of a pixel.
+        let visible = window.content_mask().bounds.dilate(px(0.5));
+        reveal.report(
+            line,
+            line.top() >= visible.top() && line.bottom() <= visible.bottom(),
+        );
     }
 
     /// Get link at given mouse position.
@@ -244,6 +492,19 @@ impl Inline {
         }
 
         None
+    }
+
+    /// Get the range of the link at given mouse position.
+    fn link_range_for_position(
+        layout: &TextLayout,
+        links: &[(Range<usize>, LinkMark)],
+        position: Point<Pixels>,
+    ) -> Option<Range<usize>> {
+        let offset = layout.index_for_position(position).ok()?;
+        links
+            .iter()
+            .find(|(range, _)| range.contains(&offset))
+            .map(|(range, _)| range.clone())
     }
 
     /// Paint selected bounds for debug.
@@ -280,7 +541,35 @@ impl Inline {
             return (is_selectable, true, Some((0..self.text.len()).into()));
         }
 
+        if text_view_state.preserve_inline_selection {
+            let selection = if let Some((source, range)) = &self.selection_source {
+                source
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.selection)
+                    .and_then(|selection| {
+                        let start = selection.start.max(range.start);
+                        let end = selection.end.min(range.end);
+                        (start < end)
+                            .then(|| Selection::new(start - range.start, end - range.start))
+                    })
+            } else {
+                self.state.lock().ok().and_then(|state| state.selection)
+            };
+            return (true, selection.is_some(), selection);
+        }
+
         if let Some(selection) = text_view_state.multi_click_selection() {
+            if selection.kind == TextViewMultiClickKind::Line {
+                return (
+                    true,
+                    true,
+                    selection
+                        .line_bounds
+                        .filter(|row| row.contains(&bounds.center()))
+                        .map(|_| Selection::new(0, self.text.len())),
+                );
+            }
             return (
                 is_selectable,
                 true,
@@ -322,6 +611,30 @@ impl Inline {
         // (not scrolled) lies outside that band and is still excluded, while
         // the highlight quads painted for off-screen glyphs are clipped away by
         // GPUI's content mask as before.
+        //
+        // Each character is tested with its row's top and height, so an inline
+        // whose rows all miss the band, or all lie strictly inside it with no
+        // endpoint on any row, has the same answer for every character. Decide
+        // those without the walk below, which scans the layout twice per
+        // character: one long code block alone made every paint of a held
+        // selection cost tens of milliseconds.
+        if self.text.is_empty() {
+            return (true, true, None);
+        }
+        let (rows_top, rows_bottom) = match self.selection_bounds {
+            Some(bounds) => (bounds.top(), bounds.top() + bounds.size.height),
+            None => text_rows_extent(text_layout, line_height),
+        };
+        let band_top = selection_start.y.min(selection_end.y);
+        let band_bottom = selection_start.y.max(selection_end.y);
+        if rows_bottom <= band_top || rows_top > band_bottom {
+            return (true, true, None);
+        }
+        if band_top < rows_top && band_bottom >= rows_bottom && text_layout.len() >= self.text.len()
+        {
+            return (true, true, Some((0..self.text.len()).into()));
+        }
+
         let mut selection: Option<Selection> = None;
         let mut offset = 0;
         let mut chars = self.text.chars().peekable();
@@ -339,8 +652,19 @@ impl Inline {
                 }
             }
 
-            if point_in_text_selection(pos, char_width, selection_start, selection_end, line_height)
-            {
+            let selection_pos = self
+                .selection_bounds
+                .map_or(pos, |bounds| point(pos.x, bounds.top()));
+            let selection_height = self
+                .selection_bounds
+                .map_or(line_height, |bounds| bounds.size.height);
+            if point_in_text_selection(
+                selection_pos,
+                char_width,
+                selection_start,
+                selection_end,
+                selection_height,
+            ) {
                 if selection.is_none() {
                     selection = Some((offset..offset).into());
                 }
@@ -356,55 +680,80 @@ impl Inline {
         (true, true, selection)
     }
 
+    /// One box per laid-out row, from the row's start to its last character,
+    /// clipped to `mask_bounds`.
+    ///
+    /// Walks the wrapped line layouts rather than every character:
+    /// [`TextLayout::position_for_index`] scans a line's rows and glyphs on
+    /// each call, so a per-character walk cost O(chars × glyphs) for every
+    /// selectable inline on every frame — the largest single cost of painting
+    /// a long chat message while it scrolls.
+    ///
+    /// A row followed by another row (a wrap or a newline) is extended by half
+    /// a line height past its last glyph: the character walk gave that width
+    /// to a character whose successor sits on the next row, and the selection
+    /// geometry was tuned against it.
     fn text_line_bounds(
-        &self,
         text_layout: &TextLayout,
         line_height: Pixels,
         mask_bounds: Bounds<Pixels>,
     ) -> Vec<Bounds<Pixels>> {
-        let mut line_bounds = Vec::new();
-        let mut current_line_y = None;
-        let mut current_bounds: Option<Bounds<Pixels>> = None;
-        let mut offset = 0;
-
-        for c in self.text.chars() {
-            let next_offset = offset + c.len_utf8();
-            let Some(pos) = text_layout.position_for_index(offset) else {
-                offset = next_offset;
-                continue;
-            };
-
-            let mut char_width = line_height.half();
-            if let Some(next_pos) = text_layout.position_for_index(next_offset) {
-                if next_pos.y == pos.y {
-                    char_width = next_pos.x - pos.x;
+        let origin = text_layout.bounds().origin;
+        let lines = text_layout.line_layouts();
+        let row_count: usize = lines
+            .iter()
+            .map(|line| line.wrap_boundaries.len() + 1)
+            .sum();
+        let mut line_bounds = Vec::with_capacity(row_count);
+        let mut row_ix = 0;
+        let mut y = origin.y;
+        for line in &lines {
+            let layout = &line.unwrapped_layout;
+            let mut row_start = 0;
+            let row_ends = line
+                .wrap_boundaries
+                .iter()
+                .map(|boundary| layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index)
+                .chain([line.len()]);
+            for row_end in row_ends {
+                let mut width = layout.x_for_index(row_end) - layout.x_for_index(row_start);
+                row_ix += 1;
+                if row_ix < row_count {
+                    width += line_height.half();
                 }
-            }
-
-            let bounds = Bounds::from_corners(pos, point(pos.x + char_width, pos.y + line_height))
-                .intersect(&mask_bounds);
-            if bounds.size.width > px(0.) && bounds.size.height > px(0.) {
-                if current_line_y == Some(pos.y) {
-                    if let Some(current) = current_bounds.as_mut() {
-                        *current = current.union(&bounds);
-                    }
-                } else {
-                    if let Some(current) = current_bounds.take() {
-                        line_bounds.push(current);
-                    }
-                    current_line_y = Some(pos.y);
-                    current_bounds = Some(bounds);
+                let bounds = Bounds::new(point(origin.x, y), size(width, line_height))
+                    .intersect(&mask_bounds);
+                if bounds.size.width > px(0.) && bounds.size.height > px(0.) {
+                    line_bounds.push(bounds);
                 }
+                y += line_height;
+                row_start = row_end;
             }
-
-            offset = next_offset;
         }
-
-        if let Some(current) = current_bounds {
-            line_bounds.push(current);
-        }
-
         line_bounds
+    }
+
+    /// The caret line boxes at the two ends of a painted selection, where the
+    /// touch handles are drawn.
+    fn selection_edges(
+        selection: &Selection,
+        text_layout: &TextLayout,
+    ) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+        let (start, end) = (
+            selection.start.min(selection.end),
+            selection.start.max(selection.end),
+        );
+        let line_height = text_layout.line_height();
+        Some((
+            crate::touch_selection::caret_line_box(
+                text_layout.position_for_index(start)?,
+                line_height,
+            ),
+            crate::touch_selection::caret_line_box(
+                text_layout.position_for_index(end)?,
+                line_height,
+            ),
+        ))
     }
 
     /// Paint the selection background.
@@ -480,6 +829,28 @@ impl Inline {
             ));
         }
     }
+
+    /// Paint each range highlight behind the text of its range.
+    fn paint_range_highlights(&self, text_layout: &TextLayout, window: &mut Window) {
+        let glyphs = glyph_boxes(
+            text_layout,
+            window.text_style().text_align,
+            text_layout.bounds().size.width,
+        );
+        let origin = text_layout.bounds().origin;
+        let line_height = text_layout.line_height();
+        for (range, color) in &self.range_backgrounds {
+            for (row, left, right) in range_boxes(&glyphs, range.clone()) {
+                window.paint_quad(gpui::fill(
+                    Bounds::from_corners(
+                        point(origin.x + left, origin.y + line_height * row as f32),
+                        point(origin.x + right, origin.y + line_height * (row + 1) as f32),
+                    ),
+                    *color,
+                ));
+            }
+        }
+    }
 }
 
 impl IntoElement for Inline {
@@ -495,7 +866,7 @@ impl Element for Inline {
     type PrepaintState = Hitbox;
 
     fn id(&self) -> Option<ElementId> {
-        Some(self.id.clone())
+        None
     }
 
     fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
@@ -509,10 +880,23 @@ impl Element for Inline {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let text_style = window.text_style();
+        let text_style = self
+            .text_style
+            .clone()
+            .unwrap_or_else(|| window.text_style());
         let runs = text_runs(self.text.len(), &text_style, &self.highlights);
 
-        self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
+        // Reuse the previous frame's shaped text when it was shaped from the
+        // same text, runs and style; `StyledText` consumes its runs on every
+        // layout, so they are handed over again either way.
+        let retained = take_retained_layout(&self.state).filter(|retained| {
+            retained.text == self.text && retained.runs == runs && retained.text_style == text_style
+        });
+        self.styled_text = match retained {
+            Some(retained) => retained.styled_text.with_runs(runs.clone()),
+            None => StyledText::new(self.text.clone()).with_runs(runs.clone()),
+        };
+        self.retained_key = Some((runs, text_style));
         let (layout_id, _) =
             self.styled_text
                 .request_layout(global_element_id, inspector_id, window, cx);
@@ -537,7 +921,7 @@ impl Element for Inline {
         // `max_lines` can snap its clip to a whole-line boundary. The state
         // stack only holds an entry during prepaint when that view set
         // `max_lines`, so this is a no-op otherwise.
-        if let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned() {
+        if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
             let state = text_view_state.read(cx);
             if state.max_lines.is_some()
                 && let Ok(mut line_spans) = state.line_spans.lock()
@@ -550,13 +934,16 @@ impl Element for Inline {
             }
         }
 
+        self.request_reveal(window);
+
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        self.retain_styled_text();
         hitbox
     }
 
     fn paint(
         &mut self,
-        global_id: Option<&GlobalElementId>,
+        _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
@@ -567,17 +954,26 @@ impl Element for Inline {
         let bounds = Bounds::new(self.paint_origin.unwrap_or(bounds.origin), bounds.size);
         let current_view = window.current_view();
         let hitbox = prepaint;
-        let Ok(mut state) = self.state.lock() else {
+        if !self.reclaim_styled_text() {
+            // Cannot happen (only this element takes what it handed over,
+            // and a live state is never swept); skip the frame rather than
+            // paint an unmeasured placeholder.
             return;
-        };
-
+        }
         let text_layout = self.styled_text.layout().clone();
-        self.styled_text
-            .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
+        if !self.range_backgrounds.is_empty() {
+            self.paint_range_highlights(&text_layout, window);
+        }
+        _ = text_layout.paint_background(window, cx);
 
         // layout selections
         let (is_selectable, is_selection, selection) =
             self.layout_selections(&text_layout, &bounds, window, cx);
+
+        let Ok(mut state) = self.state.lock() else {
+            _ = text_layout.paint_foreground(window, cx);
+            return;
+        };
 
         state.selection = selection;
         if let Some((source, range)) = &self.selection_source
@@ -597,8 +993,9 @@ impl Element for Inline {
         }
 
         // link cursor pointer
-        let mouse_position = window.mouse_position();
-        if let Some(_) = Self::link_for_position(&text_layout, &self.links, mouse_position) {
+        let hovered_link =
+            Self::link_range_for_position(&text_layout, &self.links, window.mouse_position());
+        if hovered_link.is_some() {
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
         }
 
@@ -608,18 +1005,32 @@ impl Element for Inline {
                 .map(|state| state.read(cx).text_view_style.selection())
                 .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
             Self::paint_selection(selection, &text_layout, &bounds, window, color);
+            if let Some((start, end)) = Self::selection_edges(selection, &text_layout)
+                && let Some(text_view_state) = GlobalState::global(cx).text_view_state()
+            {
+                text_view_state
+                    .read(cx)
+                    .selection_adapter
+                    .register_selection_edges(start, end);
+            }
         }
 
+        _ = text_layout.paint_foreground(window, cx);
+
         if is_selectable {
-            if let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned() {
-                let text_bounds = self.text_line_bounds(
+            if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
+                let text_bounds = Self::text_line_bounds(
                     &text_layout,
                     text_layout.line_height(),
                     window.content_mask().bounds,
                 );
-                text_view_state.update(cx, |state, _| {
-                    state.selection_adapter.register_inline(text_bounds);
-                });
+                let adapter = &text_view_state.read(cx).selection_adapter;
+                adapter.register_inline(text_bounds);
+                adapter.register_text_run(crate::TextSelectionRun::new(
+                    self.text.clone(),
+                    text_layout.clone(),
+                    hitbox.bounds,
+                ));
             }
 
             window.on_mouse_event({
@@ -627,12 +1038,35 @@ impl Element for Inline {
                 let text_layout = text_layout.clone();
                 let inline_state = self.state.clone();
                 let text = self.text.clone();
-                let text_view_state = GlobalState::global(cx).text_view_state().cloned();
+                let text_view_state = GlobalState::global(cx).text_view_state();
+                let line_bounds = self.selection_bounds;
                 move |event: &MouseDownEvent, phase, window, cx| {
                     if !phase.bubble()
                         || !hitbox.is_hovered(window)
                         || event.button != MouseButton::Left
                     {
+                        return;
+                    }
+
+                    if event.click_count == 3
+                        && let Some(line_bounds) = line_bounds
+                    {
+                        GlobalState::suppress_text_selection(cx);
+                        if let Some(view) = &text_view_state {
+                            view.update(cx, |state, cx| {
+                                state.set_multi_click_line(line_bounds, cx)
+                            });
+                        }
+                        cx.notify(current_view);
+                        return;
+                    }
+
+                    // A finger selects read-only text with a long press only;
+                    // a double tap selects nothing here, neither the mouse's
+                    // plain word nor the window layer's touch selection. The
+                    // handles and the menu on a double tap belong to `Input`.
+                    if event.click_count == 2 && GlobalState::is_touch_press(cx) {
+                        GlobalState::suppress_text_selection(cx);
                         return;
                     }
 
@@ -676,25 +1110,29 @@ impl Element for Inline {
             });
         }
 
-        // mouse move, update hovered link
-        window.on_mouse_event({
-            let hitbox = hitbox.clone();
-            let text_layout = text_layout.clone();
-            let mut hovered_index = state.hovered_index;
-            move |event: &MouseMoveEvent, phase, window, cx| {
-                if !phase.bubble() || !hitbox.is_hovered(window) {
-                    return;
-                }
+        // Mouse move: repaint only when the pointer enters, leaves or moves
+        // between links, so the link cursor follows it. Hovering plain text
+        // changes nothing painted.
+        if !self.links.is_empty() {
+            window.on_mouse_event({
+                let hitbox = hitbox.clone();
+                let text_layout = text_layout.clone();
+                let links = self.links.clone();
+                let mut hovered_link = hovered_link;
+                move |event: &MouseMoveEvent, phase, window, cx| {
+                    if !phase.bubble() || !hitbox.is_hovered(window) {
+                        return;
+                    }
 
-                let current = hovered_index;
-                let updated = text_layout.index_for_position(event.position).ok();
-                //  notify update when hovering over different links
-                if current != updated {
-                    hovered_index = updated;
-                    cx.notify(current_view);
+                    let updated =
+                        Self::link_range_for_position(&text_layout, &links, event.position);
+                    if hovered_link != updated {
+                        hovered_link = updated;
+                        cx.notify(current_view);
+                    }
                 }
-            }
-        });
+            });
+        }
 
         if !is_selection {
             // click to open link
@@ -702,7 +1140,7 @@ impl Element for Inline {
                 let links = self.links.clone();
                 let text_layout = text_layout.clone();
                 let hitbox = hitbox.clone();
-                let text_view_state = GlobalState::global(cx).text_view_state().cloned();
+                let text_view_state = GlobalState::global(cx).text_view_state();
                 let link_click_handler = self.link_click_handler.clone();
 
                 move |event: &MouseUpEvent, phase, window, cx| {
@@ -736,7 +1174,136 @@ impl Element for Inline {
                 }
             });
         }
+
+        drop(state);
+        self.retain_styled_text();
     }
+}
+
+/// Where one glyph of laid-out text paints: its row, and its horizontal
+/// extent past the text's origin, alignment applied. `text` is the byte range
+/// of the text it draws.
+#[derive(Clone, Debug, PartialEq)]
+struct GlyphBox {
+    text: Range<usize>,
+    row: usize,
+    left: Pixels,
+    right: Pixels,
+}
+
+/// The glyphs of `text_layout`, sorted by the text they draw, each placed
+/// the way GPUI paints it: every row aligned in `align_width` by `align`,
+/// and a glyph reaching to the next one on its row, or to the row's end.
+///
+/// Glyphs are read in the order they paint, so right-to-left text, whose
+/// glyphs paint in the reverse order of its text, is placed as it shows.
+fn glyph_boxes(text_layout: &TextLayout, align: TextAlign, align_width: Pixels) -> Vec<GlyphBox> {
+    let mut boxes = Vec::new();
+    let mut row = 0;
+    let mut line_start = 0;
+    for line in text_layout.line_layouts() {
+        let layout = &line.unwrapped_layout;
+        let glyphs = layout
+            .runs
+            .iter()
+            .flat_map(|run| run.glyphs.iter())
+            .collect::<Vec<_>>();
+        // Each row starts at a wrap boundary glyph, and ends where the next
+        // row starts, or at the end of the line.
+        let run_offsets = layout
+            .runs
+            .iter()
+            .scan(0, |offset, run| {
+                let start = *offset;
+                *offset += run.glyphs.len();
+                Some(start)
+            })
+            .collect::<Vec<_>>();
+        let row_starts = line
+            .wrap_boundaries
+            .iter()
+            .map(|boundary| run_offsets[boundary.run_ix] + boundary.glyph_ix)
+            .collect::<Vec<_>>();
+        let line_boxes = boxes.len();
+        let mut from = 0;
+        for (row_in_line, to) in row_starts.iter().copied().chain([glyphs.len()]).enumerate() {
+            let start_x = if row_in_line == 0 {
+                Pixels::ZERO
+            } else {
+                glyphs[from].position.x
+            };
+            let end_x = glyphs
+                .get(to)
+                .map_or(layout.width, |glyph| glyph.position.x);
+            let shift = aligned_row_left(align, align_width, end_x - start_x) - start_x;
+            for ix in from..to {
+                let glyph = glyphs[ix];
+                let right = if ix + 1 < to {
+                    glyphs[ix + 1].position.x
+                } else {
+                    end_x
+                };
+                boxes.push(GlyphBox {
+                    text: line_start + glyph.index..line_start + glyph.index,
+                    row: row + row_in_line,
+                    left: shift + glyph.position.x,
+                    right: shift + right,
+                });
+            }
+            from = to;
+        }
+
+        // A glyph draws its text up to where the next glyph's text starts.
+        let line_boxes = &mut boxes[line_boxes..];
+        line_boxes.sort_by_key(|glyph| glyph.text.start);
+        let line_end = line_start + line.len();
+        for ix in 0..line_boxes.len() {
+            let start = line_boxes[ix].text.start;
+            line_boxes[ix].text.end = line_boxes[ix + 1..]
+                .iter()
+                .map(|glyph| glyph.text.start)
+                .find(|next| *next > start)
+                .unwrap_or(line_end);
+        }
+
+        row += line.wrap_boundaries.len() + 1;
+        line_start = line_end + 1;
+    }
+    boxes
+}
+
+fn aligned_row_left(align: TextAlign, align_width: Pixels, width: Pixels) -> Pixels {
+    match align {
+        TextAlign::Left => Pixels::ZERO,
+        TextAlign::Center => (align_width - width) / 2.,
+        TextAlign::Right => align_width - width,
+    }
+}
+
+/// The boxes behind the text of `range`, as a row and the horizontal extent
+/// on it, from `glyphs` sorted by the text they draw: every glyph drawing
+/// some of that text, joined where they touch on a row.
+fn range_boxes(glyphs: &[GlyphBox], range: Range<usize>) -> Vec<(usize, Pixels, Pixels)> {
+    let first = glyphs.partition_point(|glyph| glyph.text.end <= range.start);
+    let mut hits = glyphs[first..]
+        .iter()
+        .take_while(|glyph| glyph.text.start < range.end)
+        .map(|glyph| (glyph.row, glyph.left, glyph.right))
+        .collect::<Vec<_>>();
+    hits.sort_by(|a, b| {
+        (a.0, a.1)
+            .partial_cmp(&(b.0, b.1))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut boxes: Vec<(usize, Pixels, Pixels)> = Vec::with_capacity(hits.len());
+    for (row, left, right) in hits {
+        match boxes.last_mut() {
+            Some(last) if last.0 == row && left <= last.2 => last.2 = last.2.max(right),
+            _ => boxes.push((row, left, right)),
+        }
+    }
+    boxes
 }
 
 fn selection_for_multi_click(
@@ -757,12 +1324,14 @@ fn selection_for_multi_click(
         // Known limitation: a paragraph maps to a single Inline run here. When a
         // paragraph embeds an inline image it is split into multiple Inline runs,
         // so triple-click only selects the run on the clicked side of the image.
-        TextViewMultiClickKind::Paragraph => (!text.is_empty()).then_some(0..text.len()),
+        TextViewMultiClickKind::Paragraph | TextViewMultiClickKind::Line => {
+            (!text.is_empty()).then_some(0..text.len())
+        }
     }
 }
 
 /// Check if a `pos` is within a `bounds`, considering multi-line selections.
-fn point_in_text_selection(
+pub(super) fn point_in_text_selection(
     pos: Point<Pixels>,
     char_width: Pixels,
     selection_start: Point<Pixels>,
@@ -804,22 +1373,439 @@ fn point_in_text_selection(
     }
 }
 
+#[cfg(test)]
+mod fade_highlights_tests {
+    use super::*;
+
+    #[test]
+    fn fades_text_and_background_only_inside_the_range() {
+        let code = InlineHighlight::from(HighlightStyle {
+            background_color: Some(gpui::red()),
+            ..Default::default()
+        });
+        let combined = fade_highlights(vec![(0..4, code)], &[(2..6, 0.5)]);
+
+        let ranges: Vec<_> = combined.iter().map(|(range, _)| range.clone()).collect();
+        assert_eq!(ranges, vec![0..2, 2..4, 4..6]);
+
+        let (_, untouched) = &combined[0];
+        assert_eq!(untouched.style.fade_out, None);
+        assert_eq!(untouched.style.background_color.unwrap().a, 1.0);
+
+        let (_, faded_code) = &combined[1];
+        assert_eq!(faded_code.style.fade_out, Some(0.5));
+        assert_eq!(faded_code.style.background_color.unwrap().a, 0.5);
+
+        let (_, faded_text) = &combined[2];
+        assert_eq!(faded_text.style.fade_out, Some(0.5));
+        assert!(faded_text.style.background_color.is_none());
+    }
+
+    #[test]
+    fn fades_explicit_decoration_colors_with_the_text() {
+        let link = InlineHighlight::from(HighlightStyle {
+            underline: Some(gpui::UnderlineStyle {
+                color: Some(gpui::blue()),
+                ..Default::default()
+            }),
+            strikethrough: Some(gpui::StrikethroughStyle {
+                color: Some(gpui::red()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let combined = fade_highlights(vec![(0..4, link)], &[(0..4, 0.75)]);
+
+        let (_, faded) = &combined[0];
+        assert_eq!(faded.style.underline.unwrap().color.unwrap().a, 0.25);
+        assert_eq!(faded.style.strikethrough.unwrap().color.unwrap().a, 0.25);
+    }
+
+    #[test]
+    fn no_fades_leave_highlights_untouched() {
+        let bold = InlineHighlight::from(HighlightStyle {
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..Default::default()
+        });
+        let highlights = vec![(1..3, bold)];
+        assert_eq!(fade_highlights(highlights.clone(), &[]), highlights);
+    }
+}
+
+#[cfg(test)]
+mod line_bounds_tests {
+    use super::*;
+    use super::{
+        test_draw::in_prepaint,
+        test_fonts::{BODY, WideMonoTextSystem},
+    };
+    use gpui::{AvailableSpace, TestApp, size};
+
+    /// The character walk this replaced, kept as the oracle: one box per
+    /// character from `position_for_index`, unioned per row.
+    fn by_character(
+        text: &str,
+        text_layout: &TextLayout,
+        line_height: Pixels,
+        mask_bounds: Bounds<Pixels>,
+    ) -> Vec<Bounds<Pixels>> {
+        let mut line_bounds = Vec::new();
+        let mut current_line_y = None;
+        let mut current_bounds: Option<Bounds<Pixels>> = None;
+        let mut offset = 0;
+        for c in text.chars() {
+            let next_offset = offset + c.len_utf8();
+            let Some(pos) = text_layout.position_for_index(offset) else {
+                offset = next_offset;
+                continue;
+            };
+            let mut char_width = line_height.half();
+            if let Some(next_pos) = text_layout.position_for_index(next_offset)
+                && next_pos.y == pos.y
+            {
+                char_width = next_pos.x - pos.x;
+            }
+            let bounds = Bounds::from_corners(pos, point(pos.x + char_width, pos.y + line_height))
+                .intersect(&mask_bounds);
+            if bounds.size.width > px(0.) && bounds.size.height > px(0.) {
+                if current_line_y == Some(pos.y) {
+                    if let Some(current) = current_bounds.as_mut() {
+                        *current = current.union(&bounds);
+                    }
+                } else {
+                    if let Some(current) = current_bounds.take() {
+                        line_bounds.push(current);
+                    }
+                    current_line_y = Some(pos.y);
+                    current_bounds = Some(bounds);
+                }
+            }
+            offset = next_offset;
+        }
+        if let Some(current) = current_bounds {
+            line_bounds.push(current);
+        }
+        line_bounds
+    }
+
+    #[test]
+    fn row_walk_matches_the_character_walk() {
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        in_prepaint(&mut app, |window, cx| {
+            let style = TextStyle {
+                font_family: BODY.into(),
+                font_size: px(16.).into(),
+                ..Default::default()
+            };
+            let origin = point(px(7.), px(11.));
+            let mask = Bounds::new(point(px(0.), px(0.)), size(px(1000.), px(1000.)));
+            let clipped = Bounds::new(point(px(20.), px(30.)), size(px(50.), px(60.)));
+            for text in [
+                "",
+                "one row",
+                "a long paragraph that wraps onto several rows of eight pixel glyphs",
+                "first line\nsecond line that also wraps around\n\nfourth",
+                "中文与 English 混排的一段文字也会换行",
+                "trailing newline\n",
+            ] {
+                for wrap_width in [40., 100., 1000.] {
+                    let runs = text_runs(text.len(), &style, &[]);
+                    let styled =
+                        StyledText::new(SharedString::from(text.to_string())).with_runs(runs);
+                    let layout = styled.layout().clone();
+                    let mut element = styled.into_any_element();
+                    element.layout_as_root(
+                        size(
+                            AvailableSpace::Definite(px(wrap_width)),
+                            AvailableSpace::MinContent,
+                        ),
+                        window,
+                        cx,
+                    );
+                    element.prepaint_at(origin, window, cx);
+                    let line_height = layout.line_height();
+                    for mask in [mask, clipped] {
+                        let expected = by_character(text, &layout, line_height, mask);
+                        let actual = Inline::text_line_bounds(&layout, line_height, mask);
+                        let context = format!("{text:?} at {wrap_width}px in {mask:?}");
+                        // The character walk placed a wrapped row's first
+                        // character at the end of the row before it: that row's
+                        // box started one glyph in, and a row holding only that
+                        // one glyph had no box at all. The row walk covers every
+                        // row from its start, so it may see more rows, never
+                        // fewer, and agrees on every row the walk could see.
+                        assert!(
+                            actual.len() >= expected.len(),
+                            "rows of {context}: {} < {}",
+                            actual.len(),
+                            expected.len()
+                        );
+                        for (row, expected) in expected.iter().enumerate() {
+                            let actual = actual
+                                .iter()
+                                .find(|actual| actual.top() == expected.top())
+                                .unwrap_or_else(|| panic!("row {row} of {context} is missing"));
+                            assert_eq!(
+                                actual.bottom(),
+                                expected.bottom(),
+                                "row {row} of {context}"
+                            );
+                            assert_eq!(actual.right(), expected.right(), "row {row} of {context}");
+                            assert!(
+                                actual.left() <= expected.left(),
+                                "row {row} of {context} starts at {:?}, after {:?}",
+                                actual.left(),
+                                expected.left()
+                            );
+                        }
+                        for actual in &actual {
+                            assert_eq!(
+                                actual.left(),
+                                origin.x.max(mask.left()),
+                                "left of {context}"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod range_highlight_tests {
+    use super::*;
+    use super::{
+        test_draw::in_prepaint,
+        test_fonts::{BODY, WideMonoTextSystem},
+    };
+    use gpui::{AvailableSpace, TestApp, size};
+
+    /// Lays `text` out at `wrap_width` and returns the highlight boxes of
+    /// `range` with rows aligned by `align`: the left and right edges past
+    /// the text's origin, and the row.
+    fn boxes(
+        text: &'static str,
+        wrap_width: f32,
+        align: TextAlign,
+        range: Range<usize>,
+    ) -> Vec<(Pixels, Pixels, usize)> {
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        in_prepaint(&mut app, move |window, cx| {
+            let style = TextStyle {
+                font_family: BODY.into(),
+                font_size: px(16.).into(),
+                ..Default::default()
+            };
+            let styled = StyledText::new(SharedString::from(text)).with_runs(text_runs(
+                text.len(),
+                &style,
+                &[],
+            ));
+            let layout = styled.layout().clone();
+            let mut element = styled.into_any_element();
+            element.layout_as_root(
+                size(
+                    AvailableSpace::Definite(px(wrap_width)),
+                    AvailableSpace::MinContent,
+                ),
+                window,
+                cx,
+            );
+            let origin = point(px(7.), px(11.));
+            element.prepaint_at(origin, window, cx);
+            let glyphs = glyph_boxes(&layout, align, layout.bounds().size.width);
+            range_boxes(&glyphs, range)
+                .into_iter()
+                .map(|(row, left, right)| (left, right, row))
+                .collect()
+        })
+    }
+
+    /// The selection fast paths decide a whole inline from this extent, so it
+    /// must start exactly at the first row the per-character walk tests and
+    /// reach at least the bottom of the last one. It may reach further: a
+    /// trailing empty line, or a last row whose only character the walk
+    /// places at the end of the row before it, holds no row the walk tests.
+    #[test]
+    fn text_rows_extent_matches_the_character_walk() {
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        in_prepaint(&mut app, |window, cx| {
+            let style = TextStyle {
+                font_family: BODY.into(),
+                font_size: px(16.).into(),
+                ..Default::default()
+            };
+            let origin = point(px(7.), px(11.3));
+            for text in [
+                "one row",
+                "a long paragraph that wraps onto several rows of eight pixel glyphs",
+                "first line\nsecond line that also wraps around\n\nfourth",
+                "中文与 English 混排的一段文字也会换行",
+                "trailing newline\n",
+            ] {
+                for wrap_width in [40., 100., 1000.] {
+                    let runs = text_runs(text.len(), &style, &[]);
+                    let styled =
+                        StyledText::new(SharedString::from(text.to_string())).with_runs(runs);
+                    let layout = styled.layout().clone();
+                    let mut element = styled.into_any_element();
+                    element.layout_as_root(
+                        size(
+                            AvailableSpace::Definite(px(wrap_width)),
+                            AvailableSpace::MinContent,
+                        ),
+                        window,
+                        cx,
+                    );
+                    element.prepaint_at(origin, window, cx);
+                    // Taller than the layout's rows, as a window line height
+                    // may be.
+                    let line_height = layout.line_height() + px(3.);
+                    let rows_y = text
+                        .char_indices()
+                        .filter_map(|(offset, _)| layout.position_for_index(offset))
+                        .map(|position| position.y);
+                    let top = rows_y.clone().fold(Pixels::MAX, Pixels::min);
+                    let bottom = rows_y.fold(Pixels::MIN, Pixels::max) + line_height;
+
+                    let (rows_top, rows_bottom) = text_rows_extent(&layout, line_height);
+                    let context = format!("{text:?} at {wrap_width}px");
+                    assert_eq!(rows_top, top, "top of {context}");
+                    assert!(rows_bottom >= bottom, "bottom of {context}");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn a_highlight_starting_a_wrapped_row_paints_only_that_row() {
+        // Three rows of "aaaa ", "bbbb ", "cccc".
+        let text = "aaaa bbbb cccc";
+        let rows = boxes(text, 45., TextAlign::Left, 0..text.len());
+        assert_eq!(rows.len(), 3, "{rows:?}");
+
+        let bbbb = text.find("bbbb").unwrap();
+        let highlight = boxes(text, 45., TextAlign::Left, bbbb..bbbb + 4);
+        assert_eq!(highlight.len(), 1, "{highlight:?}");
+        assert_eq!(highlight[0].0, px(0.));
+        assert_eq!(highlight[0].2, 1);
+
+        // Across the wrap, each row only as far as its text.
+        let across = boxes(text, 45., TextAlign::Left, 2..7);
+        assert_eq!(across.len(), 2, "{across:?}");
+        assert_eq!(across[0].1, rows[0].1);
+        assert_eq!((across[1].0, across[1].2), (px(0.), 1));
+    }
+
+    #[test]
+    fn highlights_after_a_hard_line_break_start_on_its_row() {
+        // Rows "aa", "bbb cc": the break is one byte of the text, not a glyph.
+        let text = "aa\nbbb cc";
+        let bbb = text.find("bbb").unwrap();
+        let aa = boxes(text, 1000., TextAlign::Left, 0..2);
+        let highlight = boxes(text, 1000., TextAlign::Left, bbb..bbb + 3);
+        assert_eq!(highlight.len(), 1, "{highlight:?}");
+        assert_eq!(highlight[0].0, px(0.));
+        assert_eq!(highlight[0].2, 1);
+        // Three glyphs as wide as the two of "aa" and a half.
+        assert_eq!(highlight[0].1, (aa[0].1 - aa[0].0) * 1.5);
+    }
+
+    #[test]
+    fn highlights_follow_centered_and_right_aligned_rows() {
+        // Rows "aaaa ", "bbbb ", "cc": the last is narrower than the text, so
+        // alignment moves it.
+        let text = "aaaa bbbb cc";
+        let cc = text.find("cc").unwrap()..text.len();
+        let widest = boxes(text, 45., TextAlign::Left, 0..5)[0].1;
+        let left = boxes(text, 45., TextAlign::Left, cc.clone())[0];
+        let center = boxes(text, 45., TextAlign::Center, cc.clone())[0];
+        let right = boxes(text, 45., TextAlign::Right, cc)[0];
+        let width = left.1 - left.0;
+        assert!(width > px(0.) && width < widest, "{left:?} in {widest:?}");
+        // GPUI aligns each row in the width of the laid-out text, the wrap
+        // width here.
+        let align_width = px(45.);
+        assert_eq!(left.0, px(0.));
+        assert_eq!(
+            center,
+            (
+                (align_width - width) / 2.,
+                (align_width + width) / 2.,
+                left.2
+            )
+        );
+        assert_eq!(right, (align_width - width, align_width, left.2));
+    }
+}
+
 /// A platform text system for tests where the `Mono` family shapes twice as
 /// wide as every other family, so a measurement that ignores the family of a
 /// run comes out visibly short.
 #[cfg(test)]
+pub(super) mod test_draw {
+    use gpui::{App, Context, IntoElement, Render, Styled as _, TestApp, Window, canvas, px};
+    use std::{cell::RefCell, rc::Rc};
+
+    struct Probe {
+        body: Option<Box<dyn FnOnce(&mut Window, &mut App)>>,
+    }
+
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let body = self.body.take();
+            canvas(
+                move |_, window, cx| {
+                    if let Some(body) = body {
+                        body(window, cx);
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .w(px(1000.))
+            .h(px(1000.))
+        }
+    }
+
+    /// Runs `f` inside a real prepaint pass and returns its value.
+    ///
+    /// Measuring an inline object lays its GPUI element out through the
+    /// window, which GPUI only permits while a frame is being drawn, so a test
+    /// that builds a real element cannot call the measurement helpers straight
+    /// from `TestAppWindow::update`.
+    pub(crate) fn in_prepaint<R: 'static>(
+        app: &mut TestApp,
+        f: impl FnOnce(&mut Window, &mut App) -> R + 'static,
+    ) -> R {
+        let slot: Rc<RefCell<Option<R>>> = Rc::new(RefCell::new(None));
+        let out = slot.clone();
+        let mut window = app.open_window(|_, _| Probe {
+            body: Some(Box::new(move |window, cx| {
+                *out.borrow_mut() = Some(f(window, cx));
+            })),
+        });
+        window.draw();
+        let value = slot.borrow_mut().take();
+        value.expect("prepaint probe did not run")
+    }
+}
+
+#[cfg(test)]
 pub(super) mod test_fonts {
     use gpui::{
-        Bounds, DevicePixels, Font, FontId, FontMetrics, FontRun, GlyphId, LineLayout, Pixels,
-        PlatformTextSystem, RenderGlyphParams, ShapedGlyph, ShapedRun, Size, TextRenderingMode,
-        point, px, size,
+        Bounds, DevicePixels, Font, FontId, FontMetrics, FontRun, FontWeight, GlyphId, LineLayout,
+        Pixels, PlatformTextSystem, RenderGlyphParams, ShapedGlyph, ShapedRun, Size,
+        TextRenderingMode, point, px, size,
     };
-    use std::borrow::Cow;
+    use std::{borrow::Cow, cell::RefCell};
 
     pub(crate) const BODY: &str = "Body";
     pub(crate) const MONO: &str = "Mono";
     const BODY_ID: FontId = FontId(1);
     const MONO_ID: FontId = FontId(2);
+    const BOLD_BODY_ID: FontId = FontId(3);
+    const BOLD_MONO_ID: FontId = FontId(4);
     const UNITS_PER_EM: f32 = 1000.;
 
     pub(crate) struct WideMonoTextSystem;
@@ -827,7 +1813,13 @@ pub(super) mod test_fonts {
     impl WideMonoTextSystem {
         /// Advance of one glyph in `font_id`, in em units.
         fn advance_units(font_id: FontId) -> f32 {
-            if font_id == MONO_ID { 1000. } else { 500. }
+            match font_id {
+                MONO_ID => 1000.,
+                BOLD_MONO_ID => 1250.,
+                BODY_ID => 500.,
+                BOLD_BODY_ID => 750.,
+                _ => 500.,
+            }
         }
 
         /// Width of `text` shaped entirely in `family` at `font_size`.
@@ -835,6 +1827,28 @@ pub(super) mod test_fonts {
             let font_id = if family == MONO { MONO_ID } else { BODY_ID };
             font_size * (Self::advance_units(font_id) / UNITS_PER_EM) * text.chars().count() as f32
         }
+    }
+
+    thread_local! {
+        static SHAPED_LINE_RECORDER: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    struct ShapeRecorderGuard;
+
+    impl Drop for ShapeRecorderGuard {
+        fn drop(&mut self) {
+            SHAPED_LINE_RECORDER.with(|recorder| recorder.borrow_mut().take());
+        }
+    }
+
+    /// Runs `f` while recording text submitted to [`PlatformTextSystem::layout_line`].
+    pub(crate) fn record_shaped_lines<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
+        SHAPED_LINE_RECORDER.with(|recorder| *recorder.borrow_mut() = Some(Vec::new()));
+        let _guard = ShapeRecorderGuard;
+        let result = f();
+        let shaped_lines =
+            SHAPED_LINE_RECORDER.with(|recorder| recorder.borrow_mut().take().unwrap_or_default());
+        (result, shaped_lines)
     }
 
     impl PlatformTextSystem for WideMonoTextSystem {
@@ -847,11 +1861,17 @@ pub(super) mod test_fonts {
         }
 
         fn font_id(&self, descriptor: &Font) -> anyhow::Result<FontId> {
-            Ok(if descriptor.family.as_ref() == MONO {
-                MONO_ID
-            } else {
-                BODY_ID
-            })
+            Ok(
+                match (
+                    descriptor.family.as_ref() == MONO,
+                    descriptor.weight == FontWeight::BOLD,
+                ) {
+                    (true, true) => BOLD_MONO_ID,
+                    (true, false) => MONO_ID,
+                    (false, true) => BOLD_BODY_ID,
+                    (false, false) => BODY_ID,
+                },
+            )
         }
 
         fn font_metrics(&self, _font_id: FontId) -> FontMetrics {
@@ -906,6 +1926,12 @@ pub(super) mod test_fonts {
         }
 
         fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
+            SHAPED_LINE_RECORDER.with(|recorder| {
+                if let Some(lines) = recorder.borrow_mut().as_mut() {
+                    lines.push(text.to_string());
+                }
+            });
+
             let mut position = px(0.);
             let mut shaped_runs = Vec::new();
             let mut run_start = 0;
@@ -933,7 +1959,8 @@ pub(super) mod test_fonts {
                 font_size,
                 width: position,
                 ascent: font_size * (metrics.ascent / UNITS_PER_EM),
-                descent: font_size * (metrics.descent / UNITS_PER_EM),
+                // Native backends normalize the signed font metric for shaped lines.
+                descent: font_size * (-metrics.descent / UNITS_PER_EM),
                 runs: shaped_runs,
                 len: text.len(),
             }
@@ -951,8 +1978,12 @@ pub(super) mod test_fonts {
 
 #[cfg(test)]
 mod tests {
-    use super::{InlineHighlight, combine_highlights, point_in_text_selection, text_runs};
-    use gpui::{FontWeight, HighlightStyle, SharedString, TextStyle, point, px};
+    use super::{
+        GlyphBox, InlineHighlight, aligned_row_left, combine_highlights, point_in_text_selection,
+        range_boxes, text_runs,
+    };
+    use gpui::{FontWeight, HighlightStyle, SharedString, TextAlign, TextStyle, point, px};
+    use std::ops::Range;
 
     fn mono(style: HighlightStyle) -> InlineHighlight {
         InlineHighlight {
@@ -977,6 +2008,61 @@ mod tests {
             .map(|run| (run.len, run.font.family.as_ref()))
             .collect::<Vec<_>>();
         assert_eq!(families, vec![(4, "Body"), (4, "Mono"), (4, "Body")]);
+    }
+
+    #[test]
+    fn rows_align_the_way_gpui_paints_them() {
+        let width = px(100.);
+        assert_eq!(aligned_row_left(TextAlign::Left, width, px(40.)), px(0.));
+        assert_eq!(aligned_row_left(TextAlign::Center, width, px(40.)), px(30.));
+        assert_eq!(aligned_row_left(TextAlign::Right, width, px(40.)), px(60.));
+    }
+
+    fn glyph(text: Range<usize>, row: usize, left: f32, right: f32) -> GlyphBox {
+        GlyphBox {
+            text,
+            row,
+            left: px(left),
+            right: px(right),
+        }
+    }
+
+    #[test]
+    fn range_boxes_join_the_glyphs_of_a_range_on_each_row() {
+        // "ab cd" wrapped after the space, glyphs 8px wide.
+        let glyphs = [
+            glyph(0..1, 0, 0., 8.),
+            glyph(1..2, 0, 8., 16.),
+            glyph(2..3, 0, 16., 24.),
+            glyph(3..4, 1, 0., 8.),
+            glyph(4..5, 1, 8., 16.),
+        ];
+        let boxes = |range| range_boxes(&glyphs, range);
+        assert_eq!(boxes(1..2), [(0, px(8.), px(16.))]);
+        assert_eq!(boxes(0..5), [(0, px(0.), px(24.)), (1, px(0.), px(16.))]);
+        // Starting at the wrap paints the next row only.
+        assert_eq!(boxes(3..5), [(1, px(0.), px(16.))]);
+        assert!(boxes(2..2).is_empty());
+    }
+
+    #[test]
+    fn range_boxes_follow_right_to_left_glyphs() {
+        // Three two-byte letters painted right to left: the first letter's
+        // glyph is the rightmost.
+        let glyphs = [
+            glyph(0..2, 0, 16., 24.),
+            glyph(2..4, 0, 8., 16.),
+            glyph(4..6, 0, 0., 8.),
+        ];
+        assert_eq!(range_boxes(&glyphs, 0..2), [(0, px(16.), px(24.))]);
+        assert_eq!(range_boxes(&glyphs, 2..6), [(0, px(0.), px(16.))]);
+    }
+
+    #[test]
+    fn range_boxes_cover_a_glyph_drawing_part_of_the_range() {
+        // A ligature drawing "fi" in one glyph.
+        let glyphs = [glyph(0..2, 0, 0., 10.), glyph(2..3, 0, 10., 15.)];
+        assert_eq!(range_boxes(&glyphs, 1..2), [(0, px(0.), px(10.))]);
     }
 
     #[test]
@@ -1251,5 +2337,132 @@ mod tests {
             end,
             line_height
         ));
+    }
+}
+
+#[cfg(test)]
+mod retained_layout_tests {
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, Window, div, px,
+    };
+
+    use super::RETAINED_LAYOUTS;
+    use crate::text::{TextView, TextViewState};
+
+    /// The same document shown twice in one window, as a preview beside the
+    /// text: both `Inline`s share every `InlineState`.
+    struct Twice {
+        state: Entity<TextViewState>,
+    }
+
+    impl Render for Twice {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(300.))
+                .child(TextView::new(&self.state))
+                .child(TextView::new(&self.state))
+        }
+    }
+
+    /// Without the hand-over rule the second copy's prepaint replaced the
+    /// first copy's entry, and the first copy painted with the second's
+    /// layout — at the second's bounds.
+    #[gpui::test]
+    fn the_same_paragraph_rendered_twice_in_a_frame_keeps_one_layout_and_paints_both(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(crate::init);
+        let (_, cx) = cx.add_window_view(|_, cx| Twice {
+            state: cx
+                .new(|cx| TextViewState::markdown("First paragraph.\n\nSecond **paragraph**.", cx)),
+        });
+        cx.run_until_parked();
+
+        // Frame 1 fills the table, frame 2 reuses it; neither may lose the
+        // shaped text of either copy (painting an unmeasured placeholder
+        // panics inside GPUI).
+        for _ in 0..3 {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        let retained = RETAINED_LAYOUTS.with(|layouts| layouts.borrow().len());
+        assert_eq!(retained, 2, "one layout per paragraph state");
+    }
+
+    struct Once {
+        state: Entity<TextViewState>,
+    }
+
+    impl Render for Once {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(300.)).child(TextView::new(&self.state))
+        }
+    }
+
+    /// A paragraph with a code span is laid out by `InlineFlow`, as one
+    /// `Inline` per wrapped fragment. The fragments' states have to outlive
+    /// the frame, or every frame shapes the fragments again and leaves the
+    /// table an entry nobody will take.
+    #[gpui::test]
+    fn inline_flow_fragments_keep_their_layouts_across_frames(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let (_, cx) = cx.add_window_view(|_, cx| Once {
+            state: cx.new(|cx| TextViewState::markdown("Call `foo` now.", cx)),
+        });
+        cx.run_until_parked();
+
+        for _ in 0..3 {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        // "Call ", "foo" and " now.": three fragments on one line.
+        let (retained, alive) = RETAINED_LAYOUTS.with(|layouts| {
+            let layouts = layouts.borrow();
+            (
+                layouts.len(),
+                layouts
+                    .values()
+                    .filter(|retained| retained.state.strong_count() > 0)
+                    .count(),
+            )
+        });
+        assert_eq!(retained, 3, "one layout per fragment");
+        assert_eq!(
+            alive, 3,
+            "every retained layout belongs to a live fragment state"
+        );
+    }
+
+    #[gpui::test]
+    fn shortening_an_inline_flow_releases_obsolete_fragment_layouts(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let source = "word `code` ".repeat(100);
+        let (view, cx) = cx.add_window_view(|_, cx| Once {
+            state: cx.new(|cx| TextViewState::markdown(&source, cx)),
+        });
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        view.update(cx, |view, cx| {
+            view.state.update(cx, |state, cx| {
+                state.set_text("word `code` now", cx);
+            });
+        });
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        let alive = RETAINED_LAYOUTS.with(|layouts| {
+            layouts
+                .borrow()
+                .values()
+                .filter(|retained| retained.state.strong_count() > 0)
+                .count()
+        });
+        assert_eq!(alive, 3, "one live layout per remaining fragment");
     }
 }

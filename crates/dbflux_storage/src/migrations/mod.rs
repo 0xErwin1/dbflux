@@ -181,7 +181,18 @@ impl MigrationRegistry {
         registry.register(mod_036_app_pending_execution_rejection_reason::MigrationImpl);
         registry.register(mod_037_qry_saved_document_queries::MigrationImpl);
         registry.register(mod_038_general_settings_vim_leader::MigrationImpl);
-        registry.register(mod_039_cfg_telemetry::MigrationImpl);
+        registry.register(mod_039_cfg_script_roots::MigrationImpl);
+        registry.register(mod_040_general_settings_fonts::MigrationImpl);
+        registry.register(mod_041_general_settings_toast_timeout::MigrationImpl);
+        registry.register(mod_042_connection_profile_navigator_view::MigrationImpl);
+        registry.register(mod_043_connection_profile_show_all_databases::MigrationImpl);
+        registry.register(mod_044_ssh_tunnel_config_host::MigrationImpl);
+        registry.register(mod_045_general_settings_table_alias::MigrationImpl);
+        registry.register(mod_046_connection_profile_read_only::MigrationImpl);
+        registry.register(mod_047_general_settings_grid_fk_labels::MigrationImpl);
+        registry.register(mod_048_general_settings_scrollbar_visibility::MigrationImpl);
+        registry.register(mod_049_general_settings_inspector_width::MigrationImpl);
+        registry.register(mod_050_cfg_telemetry::MigrationImpl);
         registry
     }
 
@@ -410,7 +421,18 @@ mod mod_035_cfg_keybinding_overrides;
 mod mod_036_app_pending_execution_rejection_reason;
 mod mod_037_qry_saved_document_queries;
 mod mod_038_general_settings_vim_leader;
-mod mod_039_cfg_telemetry;
+mod mod_039_cfg_script_roots;
+mod mod_040_general_settings_fonts;
+mod mod_041_general_settings_toast_timeout;
+mod mod_042_connection_profile_navigator_view;
+mod mod_043_connection_profile_show_all_databases;
+mod mod_044_ssh_tunnel_config_host;
+mod mod_045_general_settings_table_alias;
+mod mod_046_connection_profile_read_only;
+mod mod_047_general_settings_grid_fk_labels;
+mod mod_048_general_settings_scrollbar_visibility;
+mod mod_049_general_settings_inspector_width;
+mod mod_050_cfg_telemetry;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -504,8 +526,8 @@ mod tests {
 
         stmt.query_map([], |row| row.get::<_, String>(1))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .expect("every row reads")
     }
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
@@ -527,8 +549,8 @@ mod tests {
             .unwrap();
         stmt.query_map([], |row| row.get::<_, String>(0))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .expect("every row reads")
     }
 
     #[test]
@@ -1068,6 +1090,41 @@ mod tests {
     }
 
     #[test]
+    fn test_046_existing_profiles_load_as_not_read_only() {
+        let temp_dir = temp_dir("046_connection_profile_read_only");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+        registry.run_all(&conn).expect("create schema");
+        conn.execute_batch(
+            "ALTER TABLE cfg_connection_profiles DROP COLUMN read_only;
+             DELETE FROM sys_migrations WHERE name = '046_connection_profile_read_only';
+             INSERT INTO cfg_connection_profiles (id, name) VALUES ('legacy', 'Legacy');",
+        )
+        .expect("restore pre-046 schema with an existing profile");
+
+        registry.run_all(&conn).expect("upgrade profile schema");
+        let read_only: i64 = conn
+            .query_row(
+                "SELECT read_only FROM cfg_connection_profiles WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read the migrated flag");
+        assert_eq!(read_only, 0, "existing profiles must load as not read-only");
+
+        registry
+            .run_all(&conn)
+            .expect("rerun profile schema upgrade");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn test_migration_name_order_invariant() {
         let temp_dir = temp_dir("name_order");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1119,7 +1176,18 @@ mod tests {
             "036_app_pending_execution_rejection_reason",
             "037_qry_saved_document_queries",
             "038_general_settings_vim_leader",
-            "039_cfg_telemetry",
+            "039_cfg_script_roots",
+            "040_general_settings_fonts",
+            "041_general_settings_toast_timeout",
+            "042_connection_profile_navigator_view",
+            "043_connection_profile_show_all_databases",
+            "044_ssh_tunnel_config_host",
+            "045_general_settings_table_alias",
+            "046_connection_profile_read_only",
+            "047_general_settings_grid_fk_labels",
+            "048_general_settings_scrollbar_visibility",
+            "049_general_settings_inspector_width",
+            "050_cfg_telemetry",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

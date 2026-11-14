@@ -46,6 +46,54 @@ fn primary_shift_n_is_not_bound_to_any_other_command() {
 }
 
 #[test]
+fn primary_q_quits_from_the_global_context() {
+    let keymap = default_keymap();
+    let chord = KeyChord::new("q", Modifiers::primary());
+
+    assert_eq!(
+        keymap.resolve(ContextId::Global, &chord),
+        Some(Command::Quit)
+    );
+}
+
+/// The quit chord belongs to the application wherever the global layer
+/// applies: no panel takes it away, and the macOS application menu labels its
+/// Quit item from this single binding. The Settings window is a window of its
+/// own with its own layer, which keeps the literal Ctrl+Q that closed it
+/// before this chord existed.
+#[test]
+fn primary_q_runs_quit_wherever_the_global_layer_applies() {
+    let keymap = default_keymap();
+    let chord = KeyChord::new("q", Modifiers::primary());
+
+    for context in [
+        ContextId::Global,
+        ContextId::Sidebar,
+        ContextId::Editor,
+        ContextId::Results,
+        ContextId::BackgroundTasks,
+        ContextId::TextInput,
+        ContextId::ContextBar,
+    ] {
+        assert_eq!(
+            keymap.resolve(context, &chord),
+            Some(Command::Quit),
+            "primary+q must quit in {context:?}"
+        );
+    }
+
+    for context in ContextId::all_variants() {
+        let resolved = keymap.resolve(*context, &chord);
+        assert!(
+            resolved.is_none()
+                || resolved == Some(Command::Quit)
+                || (*context == ContextId::Settings && resolved == Some(Command::CloseWindow)),
+            "primary+q resolves to {resolved:?} in {context:?}"
+        );
+    }
+}
+
+#[test]
 fn chord_display_parts_follow_the_platform_modifier() {
     let chord = KeyChord::new("n", Modifiers::primary_shift());
 
@@ -261,6 +309,128 @@ fn results_layer_owns_navigation_and_crud_letters() {
             "Results layer must keep `{letter}` → {expected:?} so the \
              typing-vs-grid focus invariant in CodeDocument stays meaningful",
         );
+    }
+}
+
+#[test]
+fn results_layer_binds_shift_s_to_find_similar_rows() {
+    let keymap = default_keymap();
+    let chord = KeyChord::new("s", Modifiers::shift());
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &chord),
+        Some(Command::FindSimilarRows),
+    );
+}
+
+/// A text field inside a results document keeps every printable key the
+/// Results layer binds. A text input binds no printable key of its own, so a
+/// bare letter bound at the window root would take the character before the
+/// field saw it: `r` renames a row and `t` cycles the view, but in a focused
+/// filter, sort, projection or builder-rail field they are typed text. The
+/// keys a field does not consume — F5, the panel chords, the result tabs and
+/// Enter — keep reaching the layer from it.
+#[test]
+fn results_layer_letters_are_typed_in_a_focused_field() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    for (keys, command) in [
+        ("r", Command::Rename),
+        ("t", Command::CycleDocumentView),
+        ("o", Command::ResultsAddRow),
+        ("y", Command::ResultsCopyRow),
+        ("i", Command::ToggleRecordView),
+        ("v", Command::ToggleValuePanel),
+        ("x", Command::Delete),
+        ("space", Command::ExpandCollapse),
+    ] {
+        let in_grid = top_action(&keymap, keys, &grid)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the results grid"));
+        assert!(
+            runs_command(in_grid.as_ref(), command),
+            "`{keys}` must run {command:?} in the results grid"
+        );
+
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in a focused results field"
+        );
+    }
+
+    // The keys a field does not consume keep reaching the layer from it. Ctrl+J
+    // and Ctrl+K stay the input's own Down and Up, and Ctrl+Z its undo, which
+    // is why they are not listed here.
+    for (keys, command) in [
+        ("f5", Command::RefreshSchema),
+        ("ctrl-h", Command::FocusLeft),
+        ("ctrl-l", Command::FocusRight),
+        ("alt-h", Command::PrevResultTab),
+        ("alt-l", Command::NextResultTab),
+        ("enter", Command::Execute),
+    ] {
+        let in_field = top_action(&keymap, keys, &field)
+            .unwrap_or_else(|| panic!("`{keys}` bound in a focused results field"));
+        assert!(
+            runs_command(in_field.as_ref(), command),
+            "`{keys}` must run {command:?} from a focused results field"
+        );
+    }
+}
+
+/// The audit log and the side panels hold text fields of their own, so they
+/// get the same gate: a bare printable key a field would receive as typed text
+/// stops matching while that field has the keyboard, and every other key the
+/// layer binds keeps behaving exactly as it does outside a field.
+#[test]
+fn panel_letters_are_typed_in_a_focused_field() {
+    let keymap = native_keymap();
+
+    for context in [ContextId::Audit, ContextId::Inspector] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let panel = element_stack(root.clone(), &[]);
+        let field = element_stack(root, &["Input"]);
+        let mut gated = 0;
+
+        for letter in 'a'..='z' {
+            let keys = letter.to_string();
+            let Some(in_panel) = top_action(&keymap, &keys, &panel) else {
+                continue;
+            };
+
+            gated += 1;
+            let in_field = top_action(&keymap, &keys, &field);
+            assert!(
+                in_field
+                    .as_ref()
+                    .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+                "`{keys}` is typed text in a focused {context:?} field"
+            );
+            assert!(
+                in_panel.as_any().is::<RunCommand>(),
+                "`{keys}` runs a {context:?} command in the panel"
+            );
+        }
+
+        assert!(gated > 0, "{context:?} binds printable keys");
+
+        for keys in ["f5", "enter", "escape", "down", "up", "pagedown", "ctrl-h"] {
+            let (Some(in_panel), Some(in_field)) = (
+                top_action(&keymap, keys, &panel),
+                top_action(&keymap, keys, &field),
+            ) else {
+                continue;
+            };
+
+            assert!(
+                runs_same_command(in_panel.as_ref(), in_field.as_ref()),
+                "`{keys}` does the same thing from a focused {context:?} field"
+            );
+        }
     }
 }
 
@@ -628,6 +798,17 @@ fn runs_command(action: &dyn Action, command: Command) -> bool {
         .is_some_and(|run| run.command.as_ref() == command.action_id())
 }
 
+/// Whether both actions run the same command.
+fn runs_same_command(left: &dyn Action, right: &dyn Action) -> bool {
+    match (
+        left.as_any().downcast_ref::<RunCommand>(),
+        right.as_any().downcast_ref::<RunCommand>(),
+    ) {
+        (Some(left), Some(right)) => left.command.as_ref() == right.command.as_ref(),
+        _ => false,
+    }
+}
+
 /// The key contexts a window root reports for `context`. The settings
 /// window adds the active section and whether the section or its navigation
 /// has the keyboard, which the section keys of the Settings layer match on.
@@ -965,8 +1146,9 @@ fn overlay_roots_do_not_keep_the_global_chords() {
 }
 
 /// The copies of the global chords follow the user's overrides: a rebound
-/// chord moves, a shortcut moved to a bare key or to a predicate of the
-/// user's own stays out of the text roots.
+/// chord moves, a shortcut moved to a function key comes along, and one
+/// moved to a bare letter or to a predicate of the user's own stays out of
+/// the text roots.
 #[test]
 fn global_chords_in_text_roots_follow_the_overrides() {
     let next_tab = BindingSlot::new(
@@ -984,6 +1166,11 @@ fn global_chords_in_text_roots_follow_the_overrides() {
         Command::ToggleCommandPalette,
         KeyChord::new("p", Modifiers::primary_shift()),
     );
+    let prev_tab = BindingSlot::new(
+        ContextId::Global,
+        Command::PrevTab,
+        KeyChord::new("tab", Modifiers::ctrl_shift()),
+    );
 
     let mut overrides = KeymapOverrides::new();
     overrides.set(
@@ -997,11 +1184,16 @@ fn global_chords_in_text_roots_follow_the_overrides() {
         close_tab,
         Some(KeySequence::from(KeyChord::new("f4", Modifiers::none()))),
     );
+    overrides.set(
+        prev_tab,
+        Some(KeySequence::from(KeyChord::new("x", Modifiers::none()))),
+    );
     overrides.set_predicate(palette, Some("Editor && !Modal".to_string()));
 
     let mut keymap = gpui::Keymap::default();
     keymap.add_bindings(native_bindings(
         &overrides.effective_bindings(default_keymap()),
+        false,
     ));
 
     let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
@@ -1010,7 +1202,12 @@ fn global_chords_in_text_roots_follow_the_overrides() {
     let rebound = top_action(&keymap, "ctrl-shift-j", stack).expect("the rebound chord");
     assert!(runs_command(rebound.as_ref(), Command::NextTab));
     assert!(top_action(&keymap, "ctrl-tab", stack).is_none());
-    assert!(top_action(&keymap, "f4", stack).is_none());
+    let function_key = top_action(&keymap, "f4", stack).expect("the function key");
+    assert!(runs_command(
+        function_key.as_ref(),
+        Command::CloseCurrentTab
+    ));
+    assert!(top_action(&keymap, "x", stack).is_none());
     assert!(top_action(&keymap, "ctrl-shift-p", stack).is_none());
 }
 
@@ -1023,6 +1220,86 @@ fn ctrl_shift_digit_focus_chords_are_native_bindings() {
 
     let action = top_action(&keymap, "ctrl-shift-2", &[root]).expect("bound");
     assert!(runs_command(action.as_ref(), Command::FocusEditor));
+}
+
+fn native_keymap_for_layout(is_us_layout: bool) -> gpui::Keymap {
+    let mut keymap = gpui::Keymap::default();
+    keymap.add_bindings(native_bindings(
+        &KeymapOverrides::new().effective_bindings(default_keymap()),
+        is_us_layout,
+    ));
+    keymap
+}
+
+/// GPUI's Linux backend reports Ctrl+Shift+digit as Ctrl and the shifted
+/// symbol, so with the US layout those keystrokes must reach the same
+/// commands.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[test]
+fn ctrl_shift_digit_chords_match_the_keystrokes_linux_reports() {
+    let keymap = native_keymap_for_layout(true);
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Sidebar, &[]);
+
+    for (keys, command) in [
+        ("ctrl-!", Command::FocusSidebar),
+        ("ctrl-@", Command::FocusEditor),
+        ("ctrl-#", Command::FocusResults),
+        ("ctrl-$", Command::FocusBackgroundTasks),
+        ("ctrl-%", Command::ShowConnectionsView),
+        ("ctrl-^", Command::ShowScriptsView),
+        ("ctrl-&", Command::ShowDashboardsView),
+    ] {
+        let action = top_action(&keymap, keys, std::slice::from_ref(&root))
+            .unwrap_or_else(|| panic!("{keys} is unbound"));
+        assert!(runs_command(action.as_ref(), command), "{keys}");
+    }
+}
+
+/// On another layout the same symbol can come from a different digit
+/// (Shift+6 types `&` on the Spanish layout), so no symbol copy is bound and
+/// the original chords keep their commands.
+#[test]
+fn ctrl_shift_digit_symbol_copies_are_not_bound_on_other_layouts() {
+    let keymap = native_keymap_for_layout(false);
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Sidebar, &[]);
+    let stack = std::slice::from_ref(&root);
+
+    for keys in [
+        "ctrl-!", "ctrl-@", "ctrl-#", "ctrl-$", "ctrl-%", "ctrl-^", "ctrl-&",
+    ] {
+        assert!(top_action(&keymap, keys, stack).is_none(), "{keys}");
+    }
+
+    for (keys, command) in [
+        ("ctrl-shift-1", Command::FocusSidebar),
+        ("ctrl-shift-2", Command::FocusEditor),
+        ("ctrl-shift-5", Command::ShowConnectionsView),
+        ("ctrl-shift-6", Command::ShowScriptsView),
+        ("ctrl-shift-7", Command::ShowDashboardsView),
+    ] {
+        let action =
+            top_action(&keymap, keys, stack).unwrap_or_else(|| panic!("{keys} is unbound"));
+        assert!(runs_command(action.as_ref(), command), "{keys}");
+    }
+}
+
+#[test]
+fn only_us_keyboard_layouts_are_classified_as_us() {
+    for layout in ["English (US)", "English (US, euro on 5)"] {
+        assert!(is_us_keyboard_layout(layout), "{layout}");
+    }
+
+    for layout in [
+        "Spanish",
+        "Spanish (Latin American)",
+        "German",
+        "French",
+        "English (UK)",
+        "unknown",
+        "",
+    ] {
+        assert!(!is_us_keyboard_layout(layout), "{layout}");
+    }
 }
 
 /// The keys the document tree bound itself before the keymap owned them,
@@ -1217,13 +1494,17 @@ fn input_bindings_run_the_input_actions() {
         &["Input"],
     );
 
-    let mut expected: Vec<(&'static str, Box<dyn Action>)> = vec![
+    let expected: Vec<(&'static str, Box<dyn Action>)> = vec![
         ("ctrl-j", Box::new(InputMoveDown)),
         ("ctrl-k", Box::new(InputMoveUp)),
         ("ctrl-space", Box::new(TriggerCompletion)),
     ];
     #[cfg(not(target_os = "macos"))]
-    expected.push(("ctrl-shift-z", Box::new(gpui_component::input::Redo)));
+    let expected: Vec<(&'static str, Box<dyn Action>)> = {
+        let mut expected = expected;
+        expected.push(("ctrl-shift-z", Box::new(gpui_component::input::Redo)));
+        expected
+    };
 
     assert_element_bindings(&stack, expected, "input");
 }
@@ -1292,6 +1573,130 @@ fn run_query_wins_over_the_inputs_own_primary_enter() {
     );
     let action = top_action(&keymap, run, &stack).expect("bound");
     assert!(runs_command(action.as_ref(), Command::RunQuery));
+}
+
+#[test]
+fn toggle_full_screen_has_a_global_default_chord() {
+    let mut keymap = gpui::Keymap::default();
+    keymap.add_bindings(keymap_keybindings());
+
+    #[cfg(target_os = "macos")]
+    let chord = "ctrl-cmd-f";
+    #[cfg(not(target_os = "macos"))]
+    let chord = "f11";
+
+    let stack = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Editor, &[]),
+        &["CodeEditor", "Input"],
+    );
+    let action = top_action(&keymap, chord, &stack).expect("bound");
+    assert!(runs_command(action.as_ref(), Command::ToggleFullScreen));
+}
+
+/// A function key types no character, so a global binding on one reaches the
+/// text roots like a Ctrl or Cmd chord does, and stops at dialogs the same way.
+#[test]
+fn toggle_full_screen_reaches_text_roots_and_stops_at_dialogs() {
+    let keymap = native_keymap();
+
+    #[cfg(target_os = "macos")]
+    let chord = "ctrl-cmd-f";
+    #[cfg(not(target_os = "macos"))]
+    let chord = "f11";
+
+    for context in [ContextId::TextInput, ContextId::ContextBar] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let inside_input = element_stack(root.clone(), &["Input"]);
+
+        for stack in [std::slice::from_ref(&root), inside_input.as_slice()] {
+            let action = top_action(&keymap, chord, stack)
+                .unwrap_or_else(|| panic!("`{chord}` must be bound in {context:?}"));
+            assert!(
+                runs_command(action.as_ref(), Command::ToggleFullScreen),
+                "`{chord}` in {context:?} must toggle full screen, got {}",
+                action.name()
+            );
+        }
+    }
+
+    for context in [ContextId::ConfirmModal, ContextId::CommandPalette] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        assert!(
+            top_action(&keymap, chord, std::slice::from_ref(&root)).is_none(),
+            "`{chord}` must not fire while {context:?} owns the keyboard"
+        );
+    }
+}
+
+/// The interface size chords work wherever the workspace keeps the global
+/// chords, including the schema diagram, which swallows every key it does
+/// not bind, and stop at dialogs.
+#[test]
+fn interface_size_chords_reach_every_workspace_context() {
+    let keymap = native_keymap();
+
+    #[cfg(target_os = "macos")]
+    let chords = [
+        ("cmd-=", Command::IncreaseInterfaceSize),
+        ("cmd-shift-=", Command::IncreaseInterfaceSize),
+        ("cmd-+", Command::IncreaseInterfaceSize),
+        ("cmd--", Command::DecreaseInterfaceSize),
+        ("cmd-0", Command::ResetInterfaceSize),
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let chords = [
+        ("ctrl-=", Command::IncreaseInterfaceSize),
+        ("ctrl-shift-=", Command::IncreaseInterfaceSize),
+        ("ctrl-+", Command::IncreaseInterfaceSize),
+        ("ctrl--", Command::DecreaseInterfaceSize),
+        ("ctrl-0", Command::ResetInterfaceSize),
+    ];
+
+    let stacks = [
+        element_stack(
+            root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Editor, &[]),
+            &["CodeEditor", "Input"],
+        ),
+        element_stack(
+            root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]),
+            &["Input"],
+        ),
+        vec![root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Sidebar,
+            &[],
+        )],
+        vec![root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Results,
+            &[],
+        )],
+        vec![root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::SchemaViz,
+            &[],
+        )],
+    ];
+
+    for (chord, command) in chords {
+        for stack in &stacks {
+            let action = top_action(&keymap, chord, stack)
+                .unwrap_or_else(|| panic!("`{chord}` must be bound in {stack:?}"));
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{chord}` in {stack:?} must run {command:?}, got {}",
+                action.name()
+            );
+        }
+
+        for context in [ContextId::ConfirmModal, ContextId::CommandPalette] {
+            let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+            assert!(
+                top_action(&keymap, chord, std::slice::from_ref(&root)).is_none(),
+                "`{chord}` must not fire while {context:?} owns the keyboard"
+            );
+        }
+    }
 }
 
 #[test]
@@ -2556,4 +2961,144 @@ fn changing_the_leader_moves_default_and_user_leader_bindings(cx: &mut gpui::Tes
         set_vim_leader(default_vim_leader(), cx);
         apply_keymap_overrides(KeymapOverrides::new(), cx);
     });
+}
+
+/// The action a menu item carries is the one the keymap binds, so the chord
+/// the menu shows is the effective one, user overrides included.
+#[gpui::test]
+fn run_command_for_returns_the_bound_action(cx: &mut gpui::TestAppContext) {
+    let _keymap_state = keymap_state_test_guard();
+
+    let bound = run_command_for(ContextId::Global, Command::Quit).expect("quit is bound");
+    assert!(runs_command(&bound, Command::Quit));
+    assert!(
+        !bound.from_user_binding,
+        "the default binding is not a user one"
+    );
+
+    assert!(
+        run_command_for(ContextId::Sidebar, Command::Quit).is_none(),
+        "the sidebar binds no quit"
+    );
+
+    let slot = BindingSlot::new(
+        ContextId::Global,
+        Command::Quit,
+        KeyChord::new("q", Modifiers::primary()),
+    );
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        slot,
+        Some(KeySequence::from(KeyChord::new(
+            "q",
+            Modifiers::primary_shift(),
+        ))),
+    );
+    cx.update(|cx| apply_keymap_overrides(overrides, cx));
+
+    let rebound = run_command_for(ContextId::Global, Command::Quit).expect("quit stays bound");
+    assert!(runs_command(&rebound, Command::Quit));
+    assert!(
+        rebound.from_user_binding,
+        "the rebound chord comes from the user's binding"
+    );
+}
+
+#[test]
+fn test_sidebar_tab_switch_bindings() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Sidebar, &KeyChord::new("q", Modifiers::none())),
+        Some(Command::SidebarPrevTab)
+    );
+    assert_eq!(
+        keymap.resolve(ContextId::Sidebar, &KeyChord::new("e", Modifiers::none())),
+        Some(Command::SidebarNextTab)
+    );
+}
+
+/// Users' keybinding overrides store three identifiers per row: the context
+/// name, the command id and the default keys in their storage form. The
+/// keyboard engine now lives in `bolt_keys`; these identifiers must survive
+/// that move byte for byte, so a row saved by an earlier release still
+/// names the same binding.
+#[test]
+fn persisted_identifiers_round_trip_through_their_storage_forms() {
+    let keymap = default_keymap();
+    let slots = dbflux_app::keymap::default_slots(keymap);
+    assert!(!slots.is_empty());
+
+    for slot in &slots {
+        let context_id = slot.context.id();
+        let command_id = slot.command.id();
+        let default_keys = slot.default_keys.to_storage_string();
+
+        assert_eq!(
+            KeySequence::from_storage_string(&default_keys),
+            Ok(slot.default_keys.clone()),
+            "{context_id}/{command_id}: the stored keys parse back unchanged"
+        );
+        assert!(
+            ContextId::all_variants()
+                .iter()
+                .any(|context| context.id() == context_id),
+            "{context_id}: the stored context name still names a context"
+        );
+        assert!(
+            Command::all_variants()
+                .into_iter()
+                .any(|command| command.id() == command_id),
+            "{command_id}: the stored command id still names a command"
+        );
+    }
+
+    // A row in the exact form the overrides have always stored — including
+    // a payload command's family id (`switch_to_tab`, never
+    // `switch_to_tab_3`) — still matches its binding after the move.
+    use dbflux_storage::repositories::keybinding_overrides::KeybindingOverrideDto;
+
+    assert_eq!(ContextId::Global.id(), "global");
+    assert_eq!(Command::SwitchToTab(3).id(), "switch_to_tab");
+    assert_eq!(Command::SwitchToTab(3).action_id(), "switch_to_tab_3");
+
+    let slot = BindingSlot::new(
+        ContextId::Global,
+        Command::NewQueryTab,
+        KeyChord::new("n", Modifiers::ctrl()),
+    );
+    let row = KeybindingOverrideDto {
+        context: "global".to_string(),
+        command_id: "new_query_tab".to_string(),
+        default_keys: "ctrl+n".to_string(),
+        keys: Some("ctrl+t".to_string()),
+        predicate: None,
+    };
+
+    let reloaded = KeymapOverrides::from_dtos(keymap, &[row]);
+    assert_eq!(
+        reloaded.effective_keys(&slot),
+        Some(KeySequence::parse("ctrl+t").expect("valid sequence")),
+        "a stored row keeps rebinding the same binding"
+    );
+}
+
+#[test]
+fn test_results_e_edits_the_value() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &KeyChord::new("e", Modifiers::none())),
+        Some(Command::EditValue)
+    );
+}
+
+#[test]
+fn test_results_b_rolls_the_secret_back() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &KeyChord::new("b", Modifiers::none())),
+        Some(Command::RollBackVersion)
+    );
 }

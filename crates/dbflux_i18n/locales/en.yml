@@ -39,6 +39,13 @@ access:
   ssh_failed: SSH connection failed
   save_as_tunnel: Save as tunnel
   ssh_disabled_hint: Enable SSH tunnel to configure connection through a bastion host
+app_menu:
+  about: About %{app}
+  services: Services
+  hide: Hide %{app}
+  hide_others: Hide Others
+  show_all: Show All
+  quit: Quit %{app}
 audit:
   toast:
     mcp_governance_persisted: MCP governance state persisted
@@ -64,7 +71,7 @@ chart:
     hovered_point: HOVERED POINT
     time: Time
     value: Value
-    source_doc: SOURCE DOC
+    source_row: SOURCE ROW
     quick_actions: QUICK ACTIONS
     show_in_tree: Show in tree
 common:
@@ -171,12 +178,118 @@ components:
   value_source:
     literal: Literal
     env: Environment Variable
+    dotenv: "Dotenv File"
+    file: "Secret File"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Auth Session Field
     json_key_placeholder: JSON key (optional)
+    placeholder:
+      env: "VARIABLE_NAME"
+      dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
+    hint:
+      env: "Read from the environment variable %{name} each time DBFlux connects. DBFlux does not store the value."
+      dotenv: "Read from %{key} in %{path} each time DBFlux connects. The file must be readable only by you."
+      dotenv_missing_key: "Add the key after the path: ~/path/to/file.env#KEY"
+      file: "Read from %{path} each time DBFlux connects. The file must be readable only by you."
+      file_with_key: "Read from %{key} in the JSON file %{path} each time DBFlux connects. The file must be readable only by you."
   file_picker:
     browse: "Browse…"
+  column_projection:
+    trigger: "%{selected} of %{total} columns"
+    search_placeholder: "Search columns"
+    select_all: "Select all"
+    select_none: "Select none"
+    selected_count: "%{selected} of %{total} selected"
+    apply: "Apply"
+    no_match: "No columns match the search"
+    hint: "Space toggles · Enter applies · Esc discards"
+  column_profile:
+    filter_placeholder: "Filter columns"
+    sort:
+      table_order: "Sort: table order"
+      size: "Sort: size"
+      name: "Sort: name"
+    source:
+      file_footer: "Sizes from the file footer"
+      catalog: "Sizes from %{name}"
+      planner_statistics: "Statistics from %{name}"
+      loaded_rows: "From the %{rows} loaded rows"
+      full_scan: "From all %{rows} rows"
+      sample: "Distributions from the first %{rows} rows read"
+      read_at: "read at %{time}"
+      file_modified: "file modified %{time}"
+    header:
+      column: "Column"
+      codec: "Codec"
+      on_disk: "On disk"
+      ratio: "Ratio"
+      share: "Share of table"
+      distinct: "Distinct"
+      nulls: "Nulls"
+      distribution: "Distribution"
+    footer:
+      counts: "%{total} columns · %{shown} shown in Data"
+      hint: "Toggle a column to add or drop it from the Data projection"
+      counts_only: "%{total} columns"
+    loading: "Reading column statistics…"
+    empty: "This table has no columns"
+    no_match: "No columns match the filter"
+    error_title: "Could not read column statistics"
+    badge:
+      sort_key: "Sort key"
+      partition_key: "Partition key"
+      sort_key_position: "Sort key %{position}"
+      distribution_key: "Distribution key"
+    action:
+      refresh: "Refresh statistics"
+      sample: "Profile the first %{rows} rows"
+      full_scan: "Profile whole file"
+      running: "Profiling…"
+    fact:
+      engine: "Engine"
+      sort_key: "Sort key"
+      partition_key: "Partition key"
+      primary_key: "Primary key"
+      sampling_key: "Sampling key"
+      ttl: "TTL"
+      distribution_style: "Distribution"
+      active_parts: "Active parts"
+      statistics_updated: "Statistics updated"
+      rows: "Rows"
+      on_disk: "On disk"
+      raw: "Raw"
+      ratio: "Ratio"
+      row_groups: "Row groups"
+      unsorted: "Unsorted"
+      created_by: "Written by"
+  read_estimate:
+    lead: "Will read"
+    row_groups: "%{touched} of %{total} row groups"
+    more:
+      one: "+%{count} more"
+      many: "+%{count} more"
+    parts: "%{touched} of %{total} parts"
+    granules: "%{touched} of %{total} granules"
+    rows: "%{rows} rows"
+    lead_upper: "Reads up to"
+  partition_list:
+    summary: "%{count} partitions"
+    summary_with_key: "%{count} partitions · PARTITION BY %{key}"
+    refresh: "Refresh partitions"
+    loading: "Reading partitions…"
+    empty: "This table has no partitions"
+    error_title: "Could not read the partitions"
+    header:
+      partition: "Partition"
+      parts: "Parts"
+      rows: "Rows"
+      on_disk: "On disk"
+      raw: "Raw"
+      ratio: "Ratio"
+      range: "Key range"
+      modified: "Last change"
 composites:
   rail:
     add: "Add"
@@ -206,6 +319,13 @@ connection_manager:
     ssm: "SSM"
     proxy: "Proxy"
     ssh: "SSH"
+  navigator_view:
+    label: "Navigator view"
+    help: "Advanced groups tables and views in folders, next to the schema's types, indexes, foreign keys and routines. Compact drops the folders: each schema lists its tables, views, routines and data types directly, and the instance views share one Instance folder. Simple shows only databases, schemas, and their tables and views."
+    option:
+      advanced: "Advanced"
+      compact: "Compact"
+      simple: "Simple"
   environment:
     none: "None"
     help: "Marks which environment this connection points at."
@@ -220,6 +340,7 @@ connection_manager:
     seconds: seconds
     connection_name: Connection name
     password: Password
+    password_unreadable: "Saved password could not be read: the system keyring may be locked"
     key_passphrase_optional: Key passphrase (optional)
     ssh_password: SSH password
     ca_cert_path: Path to CA certificate
@@ -317,6 +438,9 @@ connection_manager:
     settings: Settings
     mcp: MCP
   field:
+    show_all_databases: "Show all databases"
+    read_only_help: "Blocks changes from the data grid, the query builder, schema diff and the query editor, and denies MCP writes on this connection. Read statements still run."
+    read_only: "Read-only"
     name: Name
     ssl_mode: SSL mode
     ca_certificate: CA certificate
@@ -324,6 +448,8 @@ connection_manager:
     client_key: Client key
   section:
     transport: TRANSPORT
+    navigator: "NAVIGATOR"
+    safety: "SAFETY"
   banner:
     correct_following: Please correct the following
     testing_connection: "Testing connection…"
@@ -351,10 +477,10 @@ connection_manager:
       relational: "Relational"
       document: "Document"
       key_value: "Key-value"
-      wide_column: "Wide column"
       time_series_and_logs: "Time series and logs"
-      graph: "Graph"
       object_storage: "Object storage"
+      secret_store: "Secret stores"
+      other: "Other"
   export:
     target:
       connection: connection
@@ -440,6 +566,8 @@ connection_manager:
       bundle_file: Bundle file
       bundle_encrypted: Bundle is encrypted
       passphrase: Passphrase
+      show_passphrase: Show passphrase
+      hide_passphrase: Hide passphrase
     hint:
       no_native_picker: No native file picker on this system — type or paste the bundle path above.
       external_refs: External value references travel as-is
@@ -847,6 +975,7 @@ document:
       query: Query
       script: Script
       system: System
+      secret_store: "Secret Store"
     export:
       unsupported_source: Export is only available for the built-in audit viewer
       exported:
@@ -1037,6 +1166,7 @@ document:
         created_with_limitations: "Created bucket \"%{name}\" with limitations"
     breadcrumb: "Buckets"
   chart:
+    session_samples_only: "Samples collected in this chart session"
     pane_actions:
       refresh: "Refresh"
       auto_refresh: "Auto-refresh interval…"
@@ -1150,7 +1280,6 @@ document:
       checking: "Checking…"
       run: Run
       last_run: "last run %{seconds} s"
-      new_tab: New tab
       read_only: Read-only
       saved: Saved
       save: Save
@@ -1167,6 +1296,8 @@ document:
       restore_results: "Restore results"
       hide_results: "Hide results"
       show_results: "Show results"
+      results_right: "Show results on the right"
+      results_bottom: "Show results below"
     vim:
       normal: "NORMAL"
       insert: "INSERT"
@@ -1202,6 +1333,11 @@ document:
         many: "No text is selected, so the entire script will run as %{count} statements in order. Continue?"
       cancel: Cancel
       run: Run Script
+      run_statement: "Run Only This Statement"
+      transaction:
+        title: "Transaction statement under the cursor"
+        message: "The statement under the cursor (line %{line}) is \"%{statement}\", which only opens or ends a transaction. Running it alone does not run the rest of the script. Run the entire script of %{count} statements instead?"
+        message_statement_only: "The statement under the cursor (line %{line}) is \"%{statement}\", which only opens or ends a transaction. Running it alone does not run the rest of the script, and this connection cannot run a whole script at once: select the statements to run them together. Run only this statement?"
     dangerous_query:
       fallback:
         title: Warning
@@ -1293,6 +1429,7 @@ document:
         write_query_first: Write a query first to open it in a chart
         connecting: "Connecting to database '%{database}', please wait…"
         redis_flush_disabled: FLUSHALL / FLUSHDB is disabled in settings
+        read_only_profile: "This connection's profile is set to read-only. Only statements that read data run here."
       result_title:
         query_failed: Query failed
         script_failed: Script failed
@@ -1300,6 +1437,7 @@ document:
         run_script: "Run %{name} script"
       copy_error: Copy error
       result_tab_title: "Result %{index}"
+      count_rows_failed: Could not count the rows of the query
       error:
         select_source: Select at least one source
         start_time_required: Start time is required
@@ -1320,6 +1458,24 @@ document:
       native_picker_fallback: "Native file picker unavailable — script saved to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
     title:
       untitled: Untitled
+  console:
+    title: "Command"
+    subtitle: "runs against %{database}, dangerous commands ask first"
+    placeholder: "Type a command and press Enter"
+    placeholder_example: "Type a command such as %{example} and press Enter"
+    binary: "<%{count} bytes of binary data>"
+    empty: "(empty)"
+    affected: "(%{count} affected)"
+    result_set: "-- result set %{index} --"
+    more_lines: "… %{count} more lines"
+    cancelled: "Not run."
+    run_anyway: "Run anyway"
+    cancel: "Cancel"
+    destructive_title: "Run a destructive command?"
+    destructive_body: "This command can delete data and cannot be undone."
+    connection_inactive: "The connection is closed. Connect again to run commands."
+    connecting: "Still connecting to %{database}. Try again in a moment."
+    tab_title: "Console · %{connection} · %{database}"
   dashboard:
     pane_actions:
       open_panel: "Open panel"
@@ -1436,7 +1592,6 @@ document:
       stats:
         rebuilding: "Rebuilding chart…"
         no_stats: No stats available for this series.
-        unavailable: unavailable
         title: Stats
         window:
           title: Window
@@ -1444,16 +1599,11 @@ document:
           end: end
           span: span
           points: points
-        source:
-          title: Source
-          measurement: measurement
-          field: field
-          host: host
-          region: region
     context_menu:
       header: "%{column} · row %{row}"
       item:
         copy: Copy
+        copy_column_name: Copy column name
         view_document: View document
         add_document: Add document
         duplicate_document: Duplicate document
@@ -1465,6 +1615,7 @@ document:
         set_null: Set to NULL
         add_row: Add row
         inspect_row: Inspect row
+        find_similar_rows: Find similar rows
         view_value: View value
         duplicate_row: Duplicate row
         delete_row: Delete row
@@ -1515,6 +1666,17 @@ document:
         value_compact: "Compact the value"
         value_revert: "Revert the value"
         value_save: "Save the value"
+        view_table_data: "Show Data"
+        view_table_columns: "Show Columns"
+        view_table_partitions: "Show Partitions"
+        column_picker: "Choose columns"
+        refresh_profile: "Refresh column statistics"
+        sample_profile: "Profile the first rows"
+        refresh_partitions: "Refresh partitions"
+        nearest_distance: "Change the distance (now %{distance})"
+        nearest_clear: "Back to the table rows"
+        nearest_column: "Change the vector column"
+        go_to_referenced_row: "Go to referenced row"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -1530,6 +1692,12 @@ document:
         toast:
           native_picker_fallback: "Native file picker unavailable — exported to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
           exported: "Exported to %{path}"
+          exported_rows:
+            one: "Exported 1 loaded row to %{path}"
+            many: "Exported %{count} loaded rows to %{path}"
+          native_picker_fallback_rows:
+            one: "Native file picker unavailable — exported 1 loaded row to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+            many: "Native file picker unavailable — exported %{count} loaded rows to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
       clipboard:
         error:
           binary_unsupported: Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead.
@@ -1537,6 +1705,9 @@ document:
           failed: "Copy failed: %{error}"
         toast:
           copied: "Copied %{format} (%{bytes} bytes) to clipboard"
+          copied_rows:
+            one: "Copied 1 loaded row as %{format} (%{bytes} bytes) to clipboard"
+            many: "Copied %{count} loaded rows as %{format} (%{bytes} bytes) to clipboard"
       document:
         toast:
           inserted: Document inserted
@@ -1545,7 +1716,6 @@ document:
           insert_failed: "Failed to insert document: %{error}"
           update_failed: "Failed to update document: %{error}"
     grid:
-      rows_omitted: Rows omitted from this result set because an execution limit was reached.
       edit_bar:
         clean: No unsaved changes
         dirty:
@@ -1589,17 +1759,38 @@ document:
         rows:
           one: "%{count} row"
           many: "%{count} rows"
+        executed: "Statement executed"
+        affected_rows:
+          one: "%{count} row affected"
+          many: "%{count} rows affected"
+        limited_rows:
+          first: "First %{count} rows loaded"
+          of_total: "%{loaded}/%{total} rows loaded"
+          count: Count rows
+          load_all: Load all rows
         pending_changes:
           one: "%{count} pending change"
           many: "%{count} pending changes"
       export:
         trigger: Export
-        save_as_file: Save as file
-        copy_to_clipboard: Copy to clipboard
+        save_as_file: Save loaded rows as file
+        copy_to_clipboard: Copy loaded rows to clipboard
+        export_all_rows: Export all rows to file
+        all:
+          task: "Export all rows of %{table}"
+          toast:
+            exported:
+              one: "Exported 1 row to %{path}"
+              many: "Exported all %{count} rows to %{path}"
+            cancelled: "Export cancelled — %{path} holds only the rows written before it stopped"
+            dropped_columns: "Fields that first appear after the first page are not in the file: %{columns}"
+          error:
+            failed: "Export of all rows failed: %{error}"
         format:
           csv: CSV
           json_pretty: "JSON (pretty)"
           json_compact: "JSON (compact)"
+          json_lines: "JSON (one object per line)"
           text: Text
           binary: Binary
           hex: Hex
@@ -1631,6 +1822,39 @@ document:
         builder_notice: Rows come from the builder query
         edit_in_builder: Edit in builder
         reset_builder: Reset
+      nearest:
+        summary: "Similar to %{anchor} by %{column}"
+        similar_to: "Similar to"
+        by: "by"
+        k: "K"
+        anchor: "anchor"
+        anchor_row: "row %{row}"
+        read_only: "Similar rows are read-only"
+        menu_detail: "by %{column} · nearest %{limit}"
+        menu_blocked:
+          no_vector: "No value in %{column}"
+          pending_edits:
+            one: "Save or revert 1 change first"
+            many: "Save or revert %{count} changes first"
+        column:
+          l2: "L2 distance"
+          cosine: "Cosine distance"
+          inner_product: "Inner product"
+        rows:
+          of_total: "%{count} nearest of %{total} rows"
+          count: "%{count} nearest rows"
+        back_to_table: Back to table
+        distance:
+          l2: L2
+          cosine: Cosine
+          inner_product: Inner product
+        error:
+          no_vector: "The selected row has no value in %{column}"
+          failed: "Finding similar rows failed: %{error}"
+          pending_edits:
+            one: "Save or revert your change first"
+            many: "Save or revert your %{count} changes first"
+          invalid_k: "K must be a whole number from 1 to %{max}"
       toast:
         query_imported: Query imported successfully
         mutation_queued: Mutation queued for approval.
@@ -1708,6 +1932,9 @@ document:
         partial_delete:
           row: "Deleted %{done} of %{total} row(s), then failed: %{error}"
           document: "Deleted %{done} of %{total} document(s), then failed: %{error}"
+        unidentified_delete:
+          row: "Deleted %{done} row(s); %{skipped} row(s) were not deleted because their primary key values could not be read. They stay marked for delete."
+          document: "Deleted %{done} document(s); %{skipped} document(s) were not deleted because their _id values could not be read. They stay marked for delete."
         chunk_size_reduced: "Chunk size reduced from %{original} to %{effective} — driver parameter limit forced the chunk floor below %{floor}. Processing will be slower than expected."
         chunk_size_adjusted: "Chunk size adjusted from %{original} to %{effective} to stay within driver parameter limits."
         execution_completed:
@@ -1734,6 +1961,157 @@ document:
         references: REFERENCES
         row: ROW
       title: "Row %{row}"
+    table_views:
+      tab:
+        data: "Data"
+        columns: "Columns"
+        partitions: "Partitions"
+      projection_keeps_keys: "The primary key stays in the projection so rows can still be edited: %{columns}"
+      sample_failed: "Profiling a sample failed: %{error}"
+      badge:
+        sort_position: "Sort %{position}"
+        sort: "Sort"
+        partition: "Part"
+        distribution: "Dist"
+      header_nulls: "%{percent} null"
+      refresh_failed: "Refreshing the column statistics failed: %{error}"
+  delimited:
+    unsaved_summary: "Unsaved edits to %{name}"
+    loading: "Loading %{name}…"
+    error:
+      open_failed: "Could not open %{name}"
+      load_more_failed: "Could not load more of %{name}"
+      reread_failed: "Could not re-read %{name}"
+      save_failed: "Could not save %{name}"
+      next_page_required: "A row was added after the last loaded record, so its place in the file is not known yet. Load the next page, then save again."
+      full_load_required: "A column was added before the whole file was loaded. Load every page, then save again."
+      saved_version_unknown: "%{name} was saved, but its new version could not be read"
+      reopen_failed: "%{name} was saved, but could not be opened again"
+      unsaved_changes_block_reread: "The table has unsaved changes, which reading the file again would drop. Save or discard them first."
+      save_while_rereading: "The file is being read again, which replaces the rows these edits belong to. Wait until it has been read, then save."
+      add_row_failed: "Could not add a row to %{name}"
+      no_columns: "The file has no columns, so a new row would have no fields and the saved file would not keep it."
+      edit_failed: "Could not edit %{name}"
+      edit_while_read_only: "The file is being saved or read again, so the value from the editor was not applied. Edit the cell again once that is done."
+      add_column_failed: "Could not add a column to %{name}"
+      add_column_needs_full_load: "A column can be added only once every record of the file is loaded."
+      rename_column_failed: "Could not rename a column of %{name}"
+      rename_no_header: "The file has no header row, so its columns have no names to change. To read the first row as column names, turn on Header row in the toolbar."
+      rename_no_header_record: "The file has no records, so there is no header row whose names could change."
+      edit_rows_read_again: "The file was read again from its source while the editor was open, after a save or a reload, so its rows were replaced and the value was not applied. Edit the cell again."
+      edit_changes_discarded: "The changes were discarded while the editor was open, so the value was not applied. Edit the cell again."
+      edit_row_removed: "The row this cell belongs to was removed while the editor was open, so the value was not applied."
+      column_while_read_only: "The file is being saved or read again, so the column was not changed. Try again once that is done."
+      save_while_loading_rest: "The rest of the file is still loading, and a save now would drop the records it reads. Wait until it has loaded, or cancel it from the footer, then save."
+      text_apply_failed: "Could not apply the text of %{name}"
+      text_unclosed_quote: "Line %{line}: a quoted field is never closed. Close it with a quote, or remove the quote that opens it."
+      text_unencodable: "Line %{line}: %{character} cannot be written in %{encoding}. Remove the character or change the file's encoding."
+      text_header_field_removed: "The header line has fewer fields than before. Columns cannot be removed: put the field back."
+      text_header_reordered: "The fields of the header line were reordered. Columns cannot be moved: put the fields back in their order."
+      text_columns_need_full_load: "The header line has new fields, and columns can be added only once every record of the file is loaded. To go on, remove the new header fields. To add the columns, switch to the table, load the rest of the file there, and add the fields to the header line again."
+      text_too_many_fields: "Line %{line} has %{fields} fields and the file has %{columns} columns. To add a column, add its name to the header line in the same edit."
+      text_too_many_fields_no_header: "Line %{line} has %{fields} fields and the file has %{columns} columns. A file without a header row cannot gain columns from its text: remove the extra fields."
+      text_unmapped: "The table changed after this text was shown, so your edit can no longer be matched to its rows. Copy your edit, undo it in the text until the text is as it was shown, and make it again on the text that then appears. Discard also drops it, with every other pending change."
+      refused:
+        unsupported: "%{encoding} text cannot be read with %{character} as its delimiter or quote. Choose another delimiter, quote or encoding."
+        line_break: "A line break cannot be the delimiter or the quote. Choose another character."
+        quote_equals_delimiter: "The quote and the delimiter are both %{character}. Choose a different character for one of them."
+      read:
+        unexpected_length: "The file returned a different number of bytes than were asked for, so it could not be read."
+      write:
+        sink: "Could not write the edited file: %{cause}"
+        records_moved: "The file no longer matches the records that were loaded from it. Reload the file and edit it again."
+        conflicting_edits: "The pending edits change the same record in ways that conflict, so the file was not written."
+        unencodable: "A value contains %{character}, which %{encoding} cannot represent. Remove the character or change the file's encoding."
+        unquotable: "A value contains the delimiter or a line break, starts with U+FEFF, or is the only and empty field of its record, and the file has no quote character to enclose it. Change the value or choose a quote character."
+        leading_byte_order_mark: "A record would become the first of the file, and its leading U+FEFF would then be read as a byte-order mark and lost. Edit the first field of that record, or keep a record before it."
+        fused_line_break: "Removing these records would merge an empty line into the line break before it, and the file has no quote character to keep it apart. Delete that empty line too, or choose a quote character."
+        truncated_code_unit: "The file ends in the middle of a character, so it cannot be edited as it is. Replace or delete its last record in the same save."
+        unclosed_quote: "A record ends inside a quoted field that is never closed, so a column cannot be added after it. Edit that record first."
+      page:
+        out_of_order: "The page starts at record %{found}, and the next record to load is %{expected}."
+        no_header: "The file has no header record, so its columns have no names."
+        column_out_of_range: "There is no column at index %{column}."
+    warning:
+      malformed_text: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The detected encoding is probably wrong."
+      malformed_text_chosen: "Some bytes are not valid %{encoding} text and are shown as \uFFFD. The chosen encoding is probably wrong."
+      detected_delimiter_unreadable: "The detected delimiter %{detected} cannot be read in %{encoding} text, so the file is read with %{delimiter} and its columns are probably wrong. Choose another encoding or delimiter."
+    status:
+      delimiter: "Delimiter: %{delimiter}"
+      encoding: "Encoding: %{encoding}"
+      records:
+        all:
+          one: "%{count} record"
+          many: "%{count} records"
+        of_total: "%{loaded} of %{total} records loaded"
+        partial: "%{loaded} records loaded, more in the file"
+    delimiter:
+      comma: Comma
+      tab: Tab
+      semicolon: Semicolon
+      pipe: Pipe
+    quote:
+      double: "Double quote"
+      single: "Single quote"
+      none: "No quoting"
+    toolbar:
+      delimiter: "Delimiter"
+      quote: "Quote"
+      encoding: "Encoding"
+      header: "Header row"
+      reset: "Reset to detected"
+      detected: "%{value} (detected)"
+    footer:
+      load_more: Load more
+      loading_more: "Loading…"
+      rereading: "Reading the file again…"
+      loading_rest: "Loading the rest of the file…"
+    action:
+      save: Save
+      saving: "Saving…"
+      discard: "Discard changes"
+      insert_above: "Insert row above"
+      reload: "Reload from file"
+      add_column: "Add column"
+      rename_column: "Rename column"
+      cancel: "Cancel"
+    column:
+      add_title: "Add column"
+      rename_title: "Rename column"
+      name_placeholder: "Column name"
+      confirm_add: "Add"
+      confirm_rename: "Rename"
+      no_header_note: "This file has no header row, so the name is not written to the file and the column shows as %{name}."
+    load_rest:
+      title: "Load the rest of the file"
+      body: "A column can be added only once every record of the file is loaded, and %{loaded} records of this %{size} file are loaded so far. Loading the rest reads every remaining record into memory, which takes a while for a large file. You can cancel it from the footer, and the records read until then stay loaded."
+      confirm: "Load the rest"
+      cancel: "Cancel loading"
+    view:
+      table: "Table"
+      text: "Text"
+      raw: "Raw"
+      aligned: "Aligned"
+      columns: "Columns"
+    text:
+      more_in_file: "More records follow in the file. Load more to show them here."
+      capped: "The text shows the first %{shown} of the %{loaded} loaded records. The table shows all of them."
+      render_failed: "The pending changes cannot be shown as text: %{cause}"
+      aligned_hint: "Aligned text is for reading: a line break inside a value shows as ↵, a tab as ⇥, and a value longer than %{width} characters is cut."
+      apply_failed: "The text cannot be applied: %{cause}"
+      read_only_capped: "This text cannot be edited because it does not show every loaded record, and an edit of part of the records cannot be matched back to them. Edit in the table."
+      raw_edit_hint: "Edits are applied to the table when you switch views, save or load more. Only field values are taken from the text: a line whose values did not change keeps its line break and quoting from the file, and changed or added lines are written with the file's columns."
+    columns:
+      type:
+        integer: "Integer"
+        decimal: "Decimal"
+        boolean: "Boolean"
+        date: "Date"
+        timestamp: "Timestamp"
+        text: "Text"
+      progress: "%{scanned} of %{total}"
+      error:
+        scan_failed: "Could not profile %{file}"
   dump_analysis:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"
@@ -1832,6 +2210,163 @@ document:
       back: Back
       continue: Continue
       close: Close
+  file:
+    error:
+      source_changed: "The file was changed elsewhere since it was opened, so nothing was saved and your edits are kept. To see its new content, discard your edits and choose Reload from file, then make them again."
+      storage:
+        read: "Could not read the file: %{cause}"
+        local_io: "Could not access %{path}: %{cause}"
+        temporary_file: "Could not save %{target}: writing a temporary file in %{directory} failed: %{cause}"
+        object_store: "Could not access %{bucket}/%{key}: %{cause}"
+        read_only_file: "The file is read-only."
+    warning:
+      cannot_save_in_place: This file reports no modification time or content tag, so it cannot be saved in place.
+  spreadsheet:
+    unsaved_summary: "Unsaved edits to %{name}"
+    formula_warning:
+      one: "%{count} formula cell will be replaced by a value"
+      many: "%{count} formula cells will be replaced by values"
+    read_only:
+      xls: "This .xls file is read-only: DBFlux cannot write the .xls format. Save it as .xlsx to edit it."
+    action:
+      append_row: "Append row"
+      save: "Save"
+      saving: "Saving…"
+    error:
+      save_failed: "Could not save %{name}"
+      rows_only_at_end: "Rows can only be added at the end of a sheet. Inserting or deleting a row inside a sheet would move the cells that formulas, charts and ranges point at, so only a row appended and not saved yet can be deleted."
+      save_while_reading: "A sheet is being read. Save again once it is shown."
+      input:
+        a1_reference: "Cell %{cell} of sheet %{sheet} holds a formula with an A1-style reference. An ods file takes OpenFormula references such as [.A1] or [.A1:.B3]. Fix the formula, or start the value with ' to store it as text."
+      write:
+        malformed: "The file is not a spreadsheet package DBFlux can edit in place, so nothing was saved."
+        sheet_out_of_range: "The sheet being saved is no longer in the file. Reload the file and edit it again."
+        not_a_worksheet: "Sheet %{sheet} is not a worksheet, so it has no cells to edit."
+        cell_out_of_range: "Row %{row}, column %{column} of sheet %{sheet} is past the last cell a sheet can hold."
+        text_too_long: "Cell %{cell} of sheet %{sheet} holds %{length} characters, more than the 32767 a cell can hold. Shorten the text."
+        invalid_character: "Cell %{cell} of sheet %{sheet} contains %{character}, which a spreadsheet file cannot store. Remove the character."
+        non_finite_number: "Cell %{cell} of sheet %{sheet} holds %{value}, which a cell cannot store as a number."
+        date_out_of_range: "Cell %{cell} of sheet %{sheet} holds the date %{date}, outside the dates this workbook can store."
+        covered_cell: "Cell %{cell} of sheet %{sheet} is covered by a merged cell. Edit the first cell of the merged range instead."
+        shared_formula_master: "Cell %{cell} of sheet %{sheet} holds a formula the cells of %{range} share, so editing it would change them too. Edit it in a spreadsheet application."
+        inside_formula_range: "Cell %{cell} of sheet %{sheet} is inside the formula range %{range}, which only a spreadsheet application can edit as a whole."
+      open_failed: "Could not open %{name}"
+      sheet_failed: "Could not read sheet %{sheet} of %{name}"
+      not_a_spreadsheet: "The file is not an xlsx, xlsm, xls or ods workbook."
+      encrypted: "The workbook is encrypted or protected with a password to open, which DBFlux cannot read."
+      chart_sheet: "Sheet %{sheet} is a chart sheet and has no cells to show."
+      sheet_out_of_range: "Sheet %{index} does not exist. The workbook has %{count} sheets."
+      sheet_too_large: "Sheet %{sheet} spans %{rows} rows by %{columns} columns, %{cells} cells, more than the %{limit} cells DBFlux loads for one sheet."
+      malformed: "The workbook could not be decoded."
+    loading: "Loading %{name}…"
+    reading_sheet: "Reading sheet %{sheet}…"
+    empty:
+      title: "Sheet %{sheet} is empty"
+      description: "The sheet holds no values or formulas."
+    no_worksheet:
+      title: "%{name} has no worksheet"
+      description: "Every sheet of this workbook is a chart or another sheet without cells."
+    summary:
+      sheets:
+        one: "%{count} sheet"
+        many: "%{count} sheets"
+      rows:
+        one: "%{count} row"
+        many: "%{count} rows"
+      columns:
+        one: "%{count} column"
+        many: "%{count} columns"
+      in_memory: "the whole sheet is loaded in memory"
+    tab:
+      hidden: "hidden"
+      chart: "chart"
+      chart_tooltip: "A chart sheet holds a chart and no cells, so it cannot be shown here."
+    formula_pending: "Recalculated when opened"
+    formula:
+      no_selection: "Select a cell to see its formula."
+      none: "No formula"
+      unavailable: "Formula not available for .xls files"
+    view:
+      table: "Table"
+      text: "Text"
+    text:
+      building: "Writing the sheet as CSV…"
+      cut:
+        one: "The text was cut: it shows the first %{shown} of %{total} row."
+        many: "The text was cut: it shows the first %{shown} of %{total} rows."
+      render_failed: "The sheet could not be shown as CSV: %{cause}"
+    save_as:
+      action: "Save as .xlsx"
+      title: "Save as a new .xlsx file?"
+      body: "DBFlux writes the values of every sheet of %{name} into a new .xlsx file, which can be edited. The new file does not keep formulas (each becomes the value it shows, because DBFlux cannot read .xls formulas), formatting, number formats other than dates, merged cells, column widths, charts, images or macros. %{name} is not changed."
+      chart_sheets: "Chart sheets hold no cells and are not written: %{sheets}."
+      object: "The new file is saved on this computer only and is not uploaded to the bucket."
+      confirm: "Choose file…"
+      cancel: "Cancel"
+      dialog_title: "Save as .xlsx"
+      dialog_title_object: "Save a copy as .xlsx on this computer"
+      dialog_filter: "Excel workbook"
+      saved: "Saved %{name}"
+      error:
+        failed: "Could not save %{name} as .xlsx"
+        replaces_source: "The new file would replace the original .xls file, which is never changed. Choose another name or folder."
+        dialog_unavailable: "No file dialog is available: %{error}"
+        sheet: "Sheet %{sheet} cannot be written to an .xlsx file under its name."
+        cell: "Cell %{cell} of sheet %{sheet} cannot be written to an .xlsx file."
+        write: "Writing the .xlsx file failed."
+  parquet:
+    loading: "Loading %{name}…"
+    empty:
+      title: "%{name} has no rows"
+      description: "The file holds a schema but no rows to show."
+    action:
+      reload: "Reload from file"
+    footer:
+      load_more: "Load more"
+      loading_more: "Loading…"
+      source_changed: "The file changed since it was opened. Reload it to see its new content."
+    header:
+      nulls: "%{percent} null"
+    status:
+      rows:
+        all:
+          one: "%{count} row"
+          many: "%{count} rows"
+        of_total: "%{loaded} of %{total} rows loaded"
+      columns: "%{shown} of %{total} columns shown"
+    view:
+      data: "Data"
+      columns: "Columns"
+    summary:
+      columns:
+        one: "%{count} column"
+        many: "%{count} columns"
+      rows:
+        one: "%{count} row"
+        many: "%{count} rows"
+      read_by_range: "read by range"
+      downloaded_whole: "downloaded whole"
+    download:
+      title: "Download the whole object?"
+      body: "%{name} is %{size}. This storage service cannot read part of an object, so DBFlux downloads all of it once and reads its rows from that copy."
+      body_changed: "%{name} changed since it was downloaded and is now %{size}. This storage service cannot read part of an object, so reloading downloads all of it again and replaces the rows shown."
+      confirm: "Download"
+      cancel: "Cancel"
+      unchanged: "%{name} has not changed since it was downloaded."
+    error:
+      open_failed: "Could not open %{name}"
+      load_more_failed: "Could not load more of %{name}"
+      projection_failed: "Could not read the chosen columns of %{name}"
+      source_changed: "The file changed since it was opened, so no more rows were read. Reload it to see its new content."
+      short_read: "The file returned fewer bytes than requested. It may have changed while it was being read."
+      not_parquet: "The file is not in Parquet format."
+      footer_too_large: "The Parquet footer is %{size}, more than the %{limit} DBFlux reads."
+      unsupported_codec: "Column %{column} is compressed with %{codec}, which DBFlux cannot read."
+      encrypted: "The Parquet file is encrypted, which DBFlux cannot read."
+      malformed: "The file is not valid Parquet."
+      unindexed_chunk_too_large: "Column %{column} has no page index, so showing any of its rows means reading its whole %{size} chunk, more than the %{limit} limit."
+      no_columns_selected: "No columns were selected to read."
+      column_out_of_range: "Column %{index} does not exist. The file has %{count} columns."
   governance:
     refresh: "Refresh"
     no_pending: No pending executions
@@ -1969,17 +2504,7 @@ document:
       toast_deleted: "Deleted %{count} keys matching %{pattern}"
       toast_exported: "Keys exported to %{path}"
     console:
-      title: "Command"
-      subtitle: "runs against %{database}, dangerous commands ask first"
-      placeholder: "Type a command and press Enter"
-      binary: "<%{count} bytes of binary data>"
-      empty: "(empty)"
-      more_lines: "… %{count} more lines"
-      cancelled: "Not run."
-      run_anyway: "Run anyway"
       cancel: "Cancel"
-      destructive_title: "Run a destructive command?"
-      destructive_body: "This command can delete data and cannot be undone."
     expiry:
       title: "Expiry"
       mode:
@@ -2878,9 +3403,6 @@ document:
       custom: Custom
       on_open: On open
     result_warnings:
-      rows_omitted:
-        summary: Rows omitted from query result
-        cause: At least one result set omitted rows because an execution limit was reached.
       context:
         query: query result
         table_browse: table browse result
@@ -2898,7 +3420,386 @@ document:
       close_others: Close others
       close_right: Close to the right
     new: New tab
+    close_named: "Close %{title}"
     unsaved_changes: Unsaved changes
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Close tab"
+    retry: "Retry"
+    removed:
+      title: "This secret was deleted"
+      body: "%{name} is no longer in the store. Nothing is read or written from this tab. Close it, and open the secret again if it is recreated."
+      draft_title: "Deleted — your unsaved text is kept"
+      draft_body: "%{name} was deleted, so nothing can be saved. The text below is read-only; copy what you need, then discard it."
+    scheduled:
+      draft_title: "Deletion scheduled — your unsaved text is kept"
+      draft_body: "%{name} is scheduled for deletion, so nothing can be saved. The text below is read-only. Restore the secret to edit it again, or discard the text."
+    region_mismatch:
+      title: "This connection is on another region"
+      body: "%{name} belongs to %{region}, and the connection is on %{live}. Nothing is read or written from this tab until the connection is back on %{region}."
+    footer:
+      value_scope: "Value visible in this tab only, cleared on close"
+      hint:
+        reveal: "reveal"
+        edit: "edit"
+        roll_back: "roll back"
+    rotation_badge:
+      on: "Rotation on"
+      off: "Rotation off"
+  secret_store:
+    title: "%{store} · %{connection}"
+    search_placeholder: "Search runs on the store, values are never listed"
+    toolbar:
+      refresh: "Refresh"
+    load_more: "Load next page"
+    loading_more: "Loading the next page…"
+    region:
+      label: "Region"
+      switch_failed: "Could not switch to region %{region}: %{error}"
+    columns:
+      name: "Name"
+      description: "Description"
+      rotation: "Rotation"
+      last_changed: "Last changed"
+      type: "Type"
+      tier: "Tier"
+      version: "Version"
+      last_modified: "Last modified"
+    badge:
+      managed: "Managed by %{service}"
+      deletes: "Deletes %{date}"
+    path_mode:
+      tree: "Tree"
+      flat: "Flat"
+      toggle: "Switch tree and flat listing"
+    path:
+      up: "Up one level"
+    empty:
+      loading: "Listing secrets…"
+      error: "The secrets could not be listed: %{error}"
+      no_match: "No secret matches \"%{query}\""
+      no_secrets: "This store holds no secrets here"
+    error:
+      connection_unavailable: "The connection is not available"
+      store_unavailable: "The connection has no store %{store}"
+      may_have_landed: "The service may have applied the change before it failed. Check the secret before trying again."
+      audit_unrecorded: "The failure could not be written to the audit trail."
+    footer:
+      loaded:
+        one: "%{count} secret loaded"
+        many: "%{count} secrets loaded"
+      paths:
+        one: "%{count} path"
+        many: "%{count} paths"
+      parameters:
+        one: "%{count} parameter"
+        many: "%{count} parameters"
+      tree_summary: "%{paths} · %{parameters} loaded under %{path}"
+      flat_summary: "%{parameters} under %{path}"
+      hint:
+        open: "open"
+        retrieve: "retrieve value"
+        copy_arn: "copy ARN"
+        filter: "filter"
+        up: "up"
+    status:
+      list_timing:
+        one: "List · %{count} secret · %{millis} ms"
+        many: "List · %{count} secrets · %{millis} ms"
+      list_timing_parameters:
+        one: "List · %{count} parameter · %{millis} ms"
+        many: "List · %{count} parameters · %{millis} ms"
+      describe_timing: "Describe · %{millis} ms"
+      retrieve_timing: "Retrieve value · %{millis} ms"
+      duration_tooltip: "Client-side duration of the last store call"
+    date:
+      short: "%{month} %{day}, %{time}"
+      short_with_year: "%{month} %{day}, %{year}, %{time}"
+      months:
+        jan: "Jan"
+        feb: "Feb"
+        mar: "Mar"
+        apr: "Apr"
+        may: "May"
+        jun: "Jun"
+        jul: "Jul"
+        aug: "Aug"
+        sep: "Sep"
+        oct: "Oct"
+        nov: "Nov"
+        dec: "Dec"
+    rotation:
+      off: "Off"
+      enabled: "Enabled"
+      disabled: "Disabled"
+      every_days: "Every %{count} days"
+      every_hours: "Every %{count} hours"
+      on_schedule: "On a schedule"
+      window: "Window"
+      schedule_with_window: "%{schedule} · window %{window} (%{expression})"
+      title: "Rotation"
+      status: "Status"
+      schedule: "Schedule"
+      next: "Next rotation"
+      function: "Function"
+      last: "Last rotated"
+    details:
+      none: "Select a secret to see its details"
+      close: "Close"
+      loading: "Loading the details…"
+      failed: "The details could not be loaded"
+      title: "Secret details"
+      resource_id: "ARN"
+      type: "Type"
+      tier: "Tier"
+      data_type: "Data type"
+      encryption_key: "Encryption key"
+      description: "Description"
+      version: "Version"
+      last_modified: "Last modified"
+      created: "Created"
+      last_changed: "Last changed"
+      last_retrieved: "Last retrieved"
+      open_in_tab: "Open in tab"
+      resize: "Resize the details pane"
+    versions:
+      title: "Versions"
+      history_title: "History"
+      count:
+        one: "%{count} version"
+        many: "%{count} versions"
+      column:
+        version: "Version"
+        labels: "Staging labels"
+        created: "Created"
+      no_labels: "no labels"
+      history_version: "v%{id}"
+      loading: "Loading the versions…"
+      failed: "The versions could not be loaded"
+      scheduled_for_deletion: "Scheduled for deletion; restore it to see its versions"
+      not_connected: "Not connected; connect to see the versions"
+      retrieve: "Retrieve version %{version}"
+      back_to_current: "Back to current"
+      shown: "Showing version %{version}"
+      not_current: "This is not the current version. The retrieval is audited, the value is not."
+      current_unknown: "The current version is not known right now. The retrieval is audited, the value is not."
+    tags:
+      title: "Tags"
+      none: "No tags"
+    managed:
+      title: "Managed by %{service}"
+      body: "%{name} belongs to %{service}. %{service} rotates and updates it, so DBFlux shows it read only."
+    action:
+      copy_resource_id: "Copy ARN"
+    context_menu:
+      copy_name: "Copy name"
+      copy_path: "Copy path"
+      arn_loading: "The ARN arrives with the details…"
+      arn_missing: "The store reports no resource identifier"
+      arn_failed: "The details could not be loaded: %{error}"
+      open_in_tab: "Open in tab"
+    toast:
+      value_copied: "Value copied to the clipboard"
+      resource_id_copied: "ARN copied to the clipboard"
+      error_copied: "Error copied to the clipboard"
+      name_copied: "Name copied to the clipboard"
+      path_copied: "Path copied to the clipboard"
+    value:
+      title: "Value"
+      not_loaded: "Value not loaded"
+      not_loaded_hint: "DBFlux fetches the value only when you ask. Each retrieval is recorded in the audit log, without the value."
+      encrypted_hint: "This value is decrypted with its encryption key when retrieved. The retrieval is audited, the value is not."
+      needs_decrypt: "Needs permission to decrypt with %{key}"
+      retrieve: "Retrieve value"
+      retrieving: "Retrieving the value…"
+      retrieved_at: "Retrieved %{time} · audited"
+      view:
+        key_value: "Key/value"
+        plaintext: "Plaintext"
+        key_value_unavailable: "Key/value is not available: the value is not a one-level JSON object with scalar values."
+      kind:
+        dotenv:
+          one: "dotenv · %{count} line"
+          many: "dotenv · %{count} lines"
+        json_keys:
+          one: "JSON · %{count} key"
+          many: "JSON · %{count} keys"
+        json_items:
+          one: "JSON · %{count} item"
+          many: "JSON · %{count} items"
+        text:
+          one: "text · %{count} line"
+          many: "text · %{count} lines"
+        binary: "binary"
+      binary_size: "Binary · %{size}"
+      read_only: "Read only"
+      binary_note: "Binary values are written by other tools. DBFlux shows them as base64 and does not edit them."
+      reveal: "Reveal"
+      hide: "Hide"
+      reveal_all: "Reveal or hide the value"
+      show_all: "Reveal all"
+      hide_all: "Hide all"
+      copy: "Copy value"
+      copy_json: "Copy JSON"
+      copy_all: "Copy value"
+      tab_only: "Value visible in this tab only, cleared on close"
+      failed_decrypt: "The value could not be decrypted"
+      failed: "The value could not be retrieved"
+      copy_error: "Copy error"
+      view_in_audit: "View in Audit"
+      metadata_loaded: "Metadata loaded · only the value failed"
+      deletion_scheduled: "Deletion scheduled for %{date}"
+      deletion_scheduled_body: "Its value cannot be retrieved until it is restored."
+      deletion_scheduled_unknown: "Deletion scheduled"
+
+    edit:
+      open: "Edit value"
+      save: "Save as new version"
+      discard: "Discard"
+      hint: "Saving writes a new version and makes it current. The text is saved exactly as it is here."
+      invalid_json: "The stored value was JSON, and the edited text is not valid JSON: %{error}"
+      unsaved_block: "%{name} has unsaved edits. Save or discard them first."
+      connection_replaced: "The connection was replaced while the value was being edited. Discard the editor and retrieve the value again before saving."
+      refused_managed: "The value of %{name} is managed by %{service}, so it cannot be edited."
+      refused_deletion: "Deletion is scheduled for %{name}, so its value cannot be edited until it is restored."
+      change_summary: "Unsaved value edits"
+      find: "Find"
+      modified: "modified"
+      footer:
+        version: "version %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "1 line changed"
+        changed_other: "%{count} lines changed"
+        saving_note: "Saving creates a new version and makes it current"
+        caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "This secret changed elsewhere. Saving writes a new version over it."
+      hint_formatted: "Saving writes a new version and makes it current. Formatted saves a value stored on one line back on one line, and a value stored on several lines as it is here; Raw saves the text exactly as it is here."
+      mode:
+        formatted: "Formatted"
+        raw: "Raw"
+        toggle: "Switch between Formatted and Raw"
+    dialog:
+      cancel: "Cancel"
+    write:
+      refused_managed: "%{name} is managed by %{service}, so it cannot be changed here."
+      refused_deletion: "Deletion is scheduled for %{name}. Restore it before changing it."
+      region_switching: "The region is being switched. Wait for the connection to settle, then try again; nothing was written."
+      connection_replaced: "The connection was replaced while this dialog was open. Nothing was written. Open it again from the current connection."
+      details_stale: "The details shown were read from a previous connection. They are being read again; try again in a moment."
+      in_progress: "Another change is still being written. Wait for it to finish."
+      landed_on_previous_session: "A change finished after the connection was replaced. It was written on the previous connection and this document was not updated; refresh it to see the current state."
+    rollback:
+      button: "Roll back"
+      action: "Roll back to version %{version}"
+      footnote: "Roll back makes the chosen version the current one and keeps the version that was current as the previous one. No value is rewritten."
+      title: "Roll back %{name}"
+      lead: "Make version %{version} the current version of %{name}?"
+      effect: "Applications that read the current version will receive the value of the chosen version. Version %{current}, current now, stays available as the previous version."
+      confirm: "Roll back"
+      done: "%{name} now uses version %{version}"
+      no_earlier_version: "%{name} has no earlier version to roll back to."
+      history_loading: "The versions are still loading. Try again in a moment."
+      pending_reason: "This version is staged by an unfinished rotation, so it cannot be rolled back to."
+      only_pending: "Every earlier version is staged by an unfinished rotation and cannot be rolled back to."
+    delete:
+      button: "Delete"
+      title:
+        secret: "Delete secret"
+        parameter: "Delete parameter"
+      lead_scheduled: "Delete %{name}? Applications that read it start failing immediately: the secret is unavailable until you restore it. The recovery window only limits how long it can be restored."
+      lead_irreversible: "Delete %{name}? This cannot be undone. The parameter is removed at once, and applications that read it start failing immediately."
+      window_label: "Recovery window"
+      window_option: "%{count} days"
+      window_hint: "You can restore the secret during this window."
+      confirm_label:
+        secret: "Type the secret name to confirm"
+        parameter: "Type the parameter name to confirm"
+      confirm_placeholder: "Name"
+      confirm_aria: "Type %{name} to confirm the deletion"
+      confirm_scheduled: "Schedule deletion"
+      confirm_irreversible: "Delete permanently"
+      done: "Deleted %{name}"
+      done_scheduled: "Deletion of %{name} is scheduled for %{date}"
+      done_scheduled_undated: "Deletion of %{name} is scheduled"
+      scheduled_detail: "%{name} was deleted on %{deleted} with a %{days} day recovery window. Its value cannot be retrieved until it is restored."
+      row_deleted: "Deleted"
+      row_deletes_on: "Deletes on"
+    restore:
+      button: "Restore secret"
+      done: "Restored %{name}"
+    rotate:
+      button: "Rotate now"
+      immediately: "Rotate immediately"
+      refused_off: "Rotation is off for %{name}. Turn it on with Edit rotation before rotating."
+      done: "Started a rotation of %{name}"
+      done_version: "Started a rotation of %{name}; version %{version} will become current when the rotation finishes"
+      title: "Rotate %{name} now"
+      lead: "Rotate %{name} now?"
+      effect: "This runs the secret's rotation function now and creates a new version that becomes current when the rotation finishes. Until then, applications that read the secret still receive the old value."
+      confirm: "Rotate now"
+    rotation_edit:
+      button: "Edit rotation"
+      title: "Edit rotation of %{name}"
+      enabled: "Rotate this secret automatically"
+      schedule: "Schedule"
+      schedule_hint: "rate(30 days), rate(12 hours) or a six-field cron(...) expression."
+      schedule_placeholder: "rate(30 days)"
+      window: "Rotation window"
+      window_hint: "Whole hours, from 1h to 24h. Empty keeps the current window."
+      window_placeholder: "4h"
+      function: "Rotation function"
+      function_hint: "The function that rotates the secret, as its ARN. Empty keeps the current function."
+      function_placeholder: "Function ARN"
+      already_off: "Rotation is already off."
+      confirm: "Save rotation"
+      done: "Updated the rotation of %{name}"
+      unfinished: "Rotation is off, but version %{version} still holds the pending stage of a rotation that never finished."
+      unfinished_title: "A cancelled rotation left version %{version} pending"
+      unfinished_body: "Check the credentials behind version %{version}, then move or remove its pending stage. Until then a later rotation can be refused."
+    tags_edit:
+      button: "Edit tags"
+      title: "Edit tags of %{name}"
+      lead: "Changing a tag does not touch the value or any version."
+      key_placeholder: "key"
+      value_placeholder: "value"
+      key_label: "Tag %{row} key"
+      value_label: "Tag %{row} value"
+      remove: "Remove tag"
+      add: "Add tag"
+      confirm: "Save tags"
+      done: "Updated the tags of %{name}"
+      no_change: "No tag differs from the ones the secret has."
+      duplicate: "The key %{key} appears in more than one row."
+    description_edit:
+      button: "Edit description"
+      title: "Edit description of %{name}"
+      label: "Description"
+      placeholder: "No description"
+      confirm: "Save description"
+      confirm_version: "Save as new version"
+      done: "Updated the description of %{name}"
+      done_version: "Updated the description of %{name}; version %{version} holds the new description"
+      rewrites_title: "This writes the value again as a new version"
+      rewrites_body: "This store changes a description only by writing the value again, so saving creates a new version. The value, its type and its key stay as they are."
+    create:
+      button_secret: "New secret"
+      button_parameter: "New parameter"
+      title_secret: "New secret"
+      title_parameter: "New parameter"
+      name: "Name"
+      name_placeholder: "Name"
+      type: "Type"
+      value: "Value"
+      description: "Description"
+      description_placeholder: "Optional"
+      tier: "Tier"
+      key: "Encryption key"
+      key_placeholder: "Default key"
+      tags: "Tags"
+      confirm: "Create"
+      done: "Created %{name}"
+      exists: "%{name} already exists. Choose another name; creating never replaces a secret."
 document_tree:
   search_placeholder: Search…
   view:
@@ -2919,6 +3820,7 @@ documents:
       object_storage_account: No active connection for this object-storage account
       bucket: No active connection for this bucket
       object: No active connection for this object
+      secret_store: "No active connection for this secret store"
   error:
     write_initial_script_failed: "Failed to write initial script content: %{error}"
     save_session_failed: Failed to save session manifest
@@ -3035,6 +3937,7 @@ login:
     no_url: No login URL is available for this provider.
     no_url_provided: Login URL not provided by provider
 modals:
+  close: Close
   active_query:
     title: Active query running
     prompt: A query is still running on this connection. What would you like to do?
@@ -3200,6 +4103,13 @@ modals:
     remember: Remember for this session
     cancel: Cancel
     connect: Connect
+  connection_password:
+    title: "Password required"
+    connection_label: "Connection"
+    placeholder: "Password"
+    show_password: "Show password"
+    hide_password: "Hide password"
+    remember: "Remember until DBFlux closes"
   unsaved_changes:
     title: Unsaved changes
     prompt: You have unsaved changes in the following documents. What would you like to do?
@@ -3261,6 +4171,8 @@ palette:
       name: Save file as…
     open_script_file:
       name: Open script file…
+    add_external_scripts_folder:
+      name: "Add external scripts folder…"
     toggle_comment:
       name: Toggle line comment
     open_history:
@@ -3297,10 +4209,20 @@ palette:
       name: Focus tasks panel
     toggle_sidebar:
       name: Toggle sidebar
+    toggle_full_screen:
+      name: Toggle full screen
+    increase_interface_size:
+      name: "Increase interface size"
+    decrease_interface_size:
+      name: "Decrease interface size"
+    reset_interface_size:
+      name: "Reset interface size"
     toggle_editor:
       name: Toggle editor panel
     toggle_results:
       name: Toggle results panel
+    toggle_results_position:
+      name: "Move results beside or below the editor"
     toggle_tasks:
       name: Toggle tasks panel
     clear_finished_tasks:
@@ -3354,6 +4276,9 @@ scripts:
       sql: SQL Files
       javascript_mongodb: JavaScript (MongoDB)
       redis: Redis
+      delimited: CSV / TSV Files
+      parquet: "Parquet Files"
+      spreadsheet: "Spreadsheet Files"
       all_files: All Files
   error:
     read_file_failed: "Failed to read file %{path}: %{error}"
@@ -3380,6 +4305,7 @@ settings:
     persist_error: "Failed to persist MCP governance: %{error}"
   general:
     unit:
+      pixels: "px"
       mebibytes: "MiB"
       seconds: "s"
       milliseconds: "ms"
@@ -3411,16 +4337,66 @@ settings:
       option:
         default: "Default"
         compact: "Compact"
+    scrollbars:
+      help: "Applies to every window."
+      label: "Show scrollbars"
+      option:
+        while_scrolling: "While scrolling"
+        on_hover: "On hover"
+        always: "Always"
     language:
       label: Language
       option:
         system: System
       notice: "Applies after restarting DBFlux."
+    ui_font_family:
+      label: "Interface font"
+      help: "Font of menus, labels, tabs and dialogs."
+      option:
+        default: "Default (%{family})"
+    ui_font_size:
+      label: "Interface font size"
+      help: "From 8 to 32 px. Every interface text, row and control scales with it."
+      error: "Interface font size must be a number from %{min} to %{max}"
+    editor_font_family:
+      label: "Editor font"
+      help: "Font of the code editor."
+      option:
+        default: "Default (%{family})"
+    editor_font_size:
+      label: "Editor font size"
+      help: "From 8 to 32 px. The line height and the console text follow it."
+      error: "Editor font size must be a number from %{min} to %{max}"
+    grid_font_family:
+      label: "Data grid font"
+      help: "Font of table cells and column names."
+      option:
+        same_as_editor: "Same as editor"
+    grid_font_size:
+      label: "Data grid font size"
+      help: "From 8 to 32 px. Row height, header height and automatic column widths follow it."
+      error: "Data grid font size must be a number from %{min} to %{max}"
+    font_family:
+      option:
+        not_installed: "%{family} (not installed)"
+      search_placeholder: "Search fonts"
+      no_matches: "No fonts match"
     editor:
       group: "Editor"
+    data_grid:
+      group: "Data grid"
+    grid_fk_labels:
+      label: "Show referenced-row labels in foreign-key cells"
+      hint: "Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after saving; the row inspector always resolves references."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
+    table_alias_completion:
+      label: "Add an alias to table completions"
+      hint: "Accepting a table after FROM or JOIN inserts it with an alias built from its initials: access_control becomes access_control ac."
+    table_alias_use_as:
+      label: "Write the alias with AS"
+      hint: "Inserts access_control AS ac instead of access_control ac."
     vim_leader:
       label: "Leader key"
       hint: "Starts the Vim leader sequences in Normal and Visual modes, such as leader then a for the pane actions. Applies to open editors when saved."
@@ -3454,6 +4430,7 @@ settings:
     max_background_tasks:
       label: Max concurrent background tasks
       error: Max background tasks must be >= 1
+      help: "Counts running connects, disconnects, connection hooks, database switches, schema tasks and key-value scans. At the cap, new connects, database switches, schema and table-detail loads and key-value pages are refused. Queries, data-grid loads and exports are not limited."
     pause_refresh_on_error:
       label: Pause auto-refresh on error
     refresh_only_if_visible:
@@ -3480,11 +4457,22 @@ settings:
       error: Key-value preview size limit must be >= 1 MiB
     key_value_size_limit_hint:
       label: "Values larger than this are not downloaded automatically; use \"Load anyway\" to fetch the full value."
+    notifications:
+      group: "Notifications"
+    toast_timeout:
+      label: "Toast timeout"
+      hint: "Success, Info and Warning toasts close on their own after this. Errors, and toasts with an action or progress, stay until dismissed. Hovering a toast holds its timer."
+      option:
+        "4s": "4 seconds"
+        "8s": "8 seconds"
+        "15s": "15 seconds"
+        never: "Keep until dismissed"
     share_stable_db:
       label: Use the stable database
       error: Failed to update the shared-database setting
       hint: "Applied on next launch. Shares the stable database (dbflux.db) instead of this nightly build's dbflux-nightly.db."
     override_value_header: Override Value
+    override_field: "Override %{field}"
     placeholder:
       refresh_policy: Refresh policy
     save:
@@ -3561,6 +4549,7 @@ settings:
       open_tab_menu: Open tab menu
       move_tab_left: Move tab left
       move_tab_right: Move tab right
+      quit: Quit DBFlux
       focus_sidebar: Focus sidebar
       focus_editor: Focus editor
       focus_results: Focus results
@@ -3602,6 +4591,7 @@ settings:
       save_query: Save
       save_file_as: Save file as…
       open_script_file: Open script file…
+      add_external_scripts_folder: "Add external scripts folder…"
       toggle_comment: Toggle line comment
       export_results: Export results
       clear_filter: Clear filter
@@ -3624,6 +4614,7 @@ settings:
       cycle_result_view: "Cycle result view"
       toggle_value_panel: Toggle value panel
       toggle_row_inspector: Toggle row inspector
+      find_similar_rows: Find similar rows
       results_set_null: Set cell to NULL
       open_context_menu: Open context menu
       open_pane_actions: Open pane actions
@@ -3632,6 +4623,7 @@ settings:
       menu_select: Menu select
       menu_back: Menu back
       sidebar_next_tab: Sidebar next tab
+      sidebar_prev_tab: Sidebar previous tab
       refresh_schema: Refresh schema
       open_connection_manager: Open connection manager
       export_connections: "Export connections"
@@ -3640,10 +4632,15 @@ settings:
       create_folder: Create folder
       toggle_editor: Toggle editor panel
       toggle_results: Toggle results panel
+      toggle_results_position: "Move results beside or below the editor"
       toggle_tasks: Toggle tasks panel
       cancel_task: Cancel task
       clear_finished_tasks: Clear finished tasks
       toggle_sidebar: Toggle sidebar
+      toggle_full_screen: Toggle full screen
+      increase_interface_size: "Increase interface size"
+      decrease_interface_size: "Decrease interface size"
+      reset_interface_size: "Reset interface size"
       open_settings: Open settings
       open_login_modal: Open auth profile login
       open_sso_wizard: Open AWS SSO wizard
@@ -3703,6 +4700,8 @@ settings:
       toggle_console: Toggle console
       load_more: Load more
       edit_expiry: Edit expiry…
+      edit_value: Edit value
+      roll_back_version: "Roll back to the previous version"
       copy_preview: Copy preview
       import_items: "Import…"
       import_from_client: "Import from another client…"
@@ -4192,6 +5191,7 @@ settings:
     kind:
       driver: Driver
       auth_provider: Auth Provider
+      secret_provider: Secret Provider
     action:
       add_variable: "Add variable"
       add_argument: "Add argument"
@@ -4363,6 +5363,8 @@ shutdown:
   failed: Shutdown failed
 
 sidebar:
+  row:
+    actions: "Actions for %{name}"
   header:
     new_dashboard: "New Dashboard"
     add: "Add"
@@ -4379,6 +5381,7 @@ sidebar:
   dialog:
     import_script_title: Import Script
     script_files_filter: Script files
+    add_external_folder_title: Add External Scripts Folder
   empty:
     connections_title: No connections yet
     connections_hint: Use + to add a new connection
@@ -4425,6 +5428,7 @@ sidebar:
     delete_count: "Delete %{count} items"
     close: Close
     new_query: New query
+    open_console: Open console
     drop_database: Drop database
     new_connection: New connection
     new_folder: New folder
@@ -4433,12 +5437,17 @@ sidebar:
     new_script_folder: New folder
     reveal_file_manager: Reveal in file manager
     copy_path: Copy path
+    copy_column_name: Copy column name
+    copy_field_name: Copy field name
     schema_diff_unsupported: Schema diff is only available for relational connections.
     new_dashboard: New dashboard…
     import_dashboard: Import dashboard from JSON…
     rename_ellipsis: Rename…
     copy_metric_id: Copy metric ID
     copy_inspector_id: Copy inspector ID
+    remove_external_folder: Remove from sidebar
+    refresh_scripts: Refresh
+    unavailable_reason: "Unavailable: %{reason}"
   overlay:
     add_folder: New folder
     add_connection: New connection
@@ -4458,16 +5467,24 @@ sidebar:
     skipped_tables:
       one: 1 table outside the active profile/database was skipped
       many: "%{count} tables outside the active profile/database were skipped"
+    add_external_folder: Add external folder
   status:
     connected: "%{count} connected"
     idle: "%{count} idle"
     no_connections: "No connections yet"
     connection_summary: "%{connected} connected · %{idle} idle"
     profile_fallback_name: connection
+    external_folders: "%{count} external folders"
+    unavailable_folders: "%{count} unavailable"
   tabs:
     dashboards: "Dashboards"
     connections: CONNECTIONS
     scripts: SCRIPTS
+  root_section:
+    confirm_message: "Run \"%{action}\" on \"%{item}\"?"
+    action:
+      delete_bucket: "Delete bucket"
+      delete_bucket_description: "Deletes the bucket. Only an empty bucket can be deleted, and this cannot be undone."
   task:
     connecting: "Connecting to %{name}"
     disconnecting: "Disconnecting %{name}"
@@ -4476,7 +5493,7 @@ sidebar:
     disconnect_hook_cancelled: Disconnect hook cancelled
     post_disconnect_hook_cancelled: Post-disconnect hook cancelled
     loading_event_streams: "Loading event streams: %{name}"
-    listing_buckets: "Listing buckets: %{name}"
+    listing_root_section: "Listing %{section}: %{name}"
     loading_database_schema: "Loading schema: %{name}"
     connecting_to_database: "Connecting to database: %{name}"
     refreshing_database: "Refreshing database: %{name}"
@@ -4498,6 +5515,7 @@ sidebar:
         opening_access: "Pipeline: Opening access (%{method})"
         connecting: "Pipeline: Connecting driver (%{driver})"
         fetching_schema: "Pipeline: Fetching schema"
+    listing_secret_paths: "Listing secret paths: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}' updated"
     edit_reconnect_body: Reconnect to apply the changes to the live session.
@@ -4523,7 +5541,16 @@ sidebar:
       indexes: "Failed to load indexes: %{error}"
       foreign_keys: "Failed to load foreign keys: %{error}"
       routines: "Failed to load routines: %{error}"
-    list_buckets_failed: "Failed to list buckets: %{error}"
+    list_root_section_failed: "Failed to list %{section}: %{error}"
+    root_section_action_failed: "%{action} failed for %{item}: %{error}"
+    root_section_action_audit_failed: "%{action} on %{item} succeeded, but its audit event was not recorded: %{error}"
+    root_section_action_connection_changed: "%{action} was not run on %{item}: the connection changed after the action was requested."
+    root_section_action_refused:
+      read_only: "%{action} was not run: this connection is read-only."
+      read_only_profile: "%{action} was not run: this connection's profile is set to read-only."
+      read_only_server: "%{action} was not run: the server rejected mutations for this connection."
+      approval_unavailable: "%{action} was not run: this connection requires approval, which is not available for sidebar actions yet."
+    root_section_invalid_id: "The driver declared the root section \"%{section}\", which was skipped: section ids must be unique and cannot contain \"|\"."
     code_generation_failed: "Code generation failed: %{error}"
     loading_event_streams: Loading event streams…
     load_schema_failed: "Failed to load schema: %{error}"
@@ -4544,16 +5571,19 @@ sidebar:
       config: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' has an invalid configuration: %{summary}"
       launch: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' did not start: %{summary}"
       probe: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' failed during driver probe: %{summary}"
+    add_external_folder_failed: "Could not add the folder: %{error}"
+    remove_external_folder_failed: "Could not remove the folder: %{error}"
+    script_operation_failed: "The script operation failed: %{error}"
+    list_secret_paths_failed: "Failed to list secret paths: %{error}"
   tree:
     container:
       relational: Tables (%{count})
       document: Collections (%{count})
       key_value: Keys (%{count})
-      graph: Nodes (%{count})
       time_series: Measurements (%{count})
-      wide_column: Tables (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
+      secret_store: Stores (%{count})
     folder:
       empty_databases:
         one: "%{count} empty database"
@@ -4578,6 +5608,7 @@ sidebar:
       saved_charts: Saved Charts
       instance_metrics: Instance Metrics
       instance_inspectors: Instance Inspectors
+      instance: Instance
       metrics: Metrics
     node:
       instance_overview: Instance Overview
@@ -4591,6 +5622,7 @@ sidebar:
       error_retry: "Error: %{error} — click to retry"
       connect_failed: "Connection failed: %{error}"
       remote_listing_count: "%{label} (%{count})"
+      load_more: "Load more"
       remote_dashboards_error_retry: "Error: %{error} — collapse and expand to retry"
       used_by_objects:
         one: Used by 1 object
@@ -4608,6 +5640,8 @@ sidebar:
       metrics: No metrics available
       inspectors: No inspectors available
       remote_dashboards: No dashboards in this account/region
+    scripts_root_scanning: "%{label} (scanning…)"
+    scripts_root_unavailable: "%{label} (unavailable)"
   dashboards:
     unassigned: "No connection"
     empty_title: "No dashboards yet"
@@ -4648,6 +5682,14 @@ ssh:
   private_key_with_path: "Private Key (%{path})"
   private_key_hint: "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)"
   auth_label: Auth
+  config_host:
+    label: SSH config host
+    manual_entry: "Manual (no SSH config entry)"
+    resolved: "Resolved target: %{target}"
+    unsupported: "uses %{directive}: tunnels cannot dial it"
+    alias_missing: "Alias not found in ~/.ssh/config"
+    load_error: "Could not read ~/.ssh/config: %{error}"
+    diagnostic: "~/.ssh/config: %{diagnostic}"
 sso_wizard:
   title: AWS SSO
   step:
@@ -4724,6 +5766,8 @@ toast:
     show_details: Show details
     hide_details: Hide details
     dismiss: Dismiss
+  stack:
+    hidden_more: "%{count} more"
 workspace:
   rail:
     connections: "Connections"

@@ -6,6 +6,9 @@ edition.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
 mlua = { workspace = true, features = ["lua54", "send", "vendored"] }

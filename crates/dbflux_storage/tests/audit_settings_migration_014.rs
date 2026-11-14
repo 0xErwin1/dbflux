@@ -8,14 +8,18 @@ use rusqlite::Connection;
 use dbflux_storage::migrations::MigrationRegistry;
 use dbflux_storage::repositories::audit_settings::AuditSettingsRepository;
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-#[test] fixture helper: SQLite setup failures must abort the test run with context"
+)]
 fn columns(conn: &Connection, table: &str) -> std::collections::HashSet<String> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
         .unwrap();
     stmt.query_map([], |row| row.get::<_, String>(1))
         .unwrap()
-        .filter_map(|r| r.ok())
-        .collect()
+        .collect::<Result<_, _>>()
+        .unwrap()
 }
 
 #[test]

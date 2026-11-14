@@ -337,6 +337,11 @@ pub enum SchemaNodeId {
     ScriptFile {
         path: String,
     },
+    /// An external folder registered as a scripts root; `path` is its canonical
+    /// path. Unlike a `ScriptsFolder` it is never renamed, moved or deleted.
+    ScriptsRoot {
+        path: String,
+    },
 
     // Instance metrics sidebar nodes (gated on DriverCapabilities::INSTANCE_METRICS)
     /// Root folder for per-server chartable metric series.
@@ -360,24 +365,52 @@ pub enum SchemaNodeId {
         metric_id: String,
     },
 
+    /// Folder that holds the instance overview, metrics and inspectors in the
+    /// Simple navigator view.
+    InstanceFolder {
+        profile_id: Uuid,
+    },
+
     // Instance overview sidebar node (gated on INSTANCE_METRICS | INSTANCE_INSPECTOR)
     /// Clickable leaf that opens the synthesized read-only "Instance Overview" dashboard.
     InstanceOverviewLeaf {
         profile_id: Uuid,
     },
 
-    /// Clickable leaf for a single container of an object-storage connection
-    /// (`DatabaseCategory::ObjectStorage`). Listed flat under the connection —
-    /// the prefix hierarchy stays inside the object browser document.
-    Bucket {
+    /// Folder of a driver-declared root section (`RootSectionDef::id`).
+    RootSection {
         profile_id: Uuid,
-        name: String,
+        section_id: String,
     },
 
-    /// Folder that groups the containers of an object-storage connection.
-    /// Activating it opens the buckets table document.
-    BucketsFolder {
+    /// One listed item of a root section. `item_id` may contain `|`.
+    RootSectionItem {
         profile_id: Uuid,
+        section_id: String,
+        item_id: String,
+    },
+
+    /// Row that loads the next page of a root section listing.
+    RootSectionLoadMore {
+        profile_id: Uuid,
+        section_id: String,
+    },
+
+    /// One store of a secret-store connection (`DatabaseCategory::SecretStore`),
+    /// keyed by its `SecretStoreDescriptor::id`. Activating it opens the
+    /// store's document.
+    SecretStore {
+        profile_id: Uuid,
+        store_id: String,
+    },
+
+    /// A path level of a hierarchical secret store, such as `/app/prod/`.
+    /// Expanding it lists its sub-paths; activating it opens the store's
+    /// document at that path.
+    SecretPath {
+        profile_id: Uuid,
+        store_id: String,
+        path: String,
     },
 }
 
@@ -442,13 +475,18 @@ pub enum SchemaNodeKind {
     DependentItem,
     ScriptsFolder,
     ScriptFile,
+    ScriptsRoot,
     InstanceMetricsFolder,
     InstanceMetricLeaf,
     InstanceInspectorsFolder,
     InstanceInspectorLeaf,
     InstanceOverviewLeaf,
-    Bucket,
-    BucketsFolder,
+    InstanceFolder,
+    RootSection,
+    RootSectionItem,
+    RootSectionLoadMore,
+    SecretStore,
+    SecretPath,
 }
 
 impl SchemaNodeId {
@@ -514,13 +552,18 @@ impl SchemaNodeId {
             Self::DependentItem { .. } => SchemaNodeKind::DependentItem,
             Self::ScriptsFolder { .. } => SchemaNodeKind::ScriptsFolder,
             Self::ScriptFile { .. } => SchemaNodeKind::ScriptFile,
+            Self::ScriptsRoot { .. } => SchemaNodeKind::ScriptsRoot,
             Self::InstanceMetricsFolder { .. } => SchemaNodeKind::InstanceMetricsFolder,
             Self::InstanceMetricLeaf { .. } => SchemaNodeKind::InstanceMetricLeaf,
             Self::InstanceInspectorsFolder { .. } => SchemaNodeKind::InstanceInspectorsFolder,
             Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
             Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
-            Self::Bucket { .. } => SchemaNodeKind::Bucket,
-            Self::BucketsFolder { .. } => SchemaNodeKind::BucketsFolder,
+            Self::InstanceFolder { .. } => SchemaNodeKind::InstanceFolder,
+            Self::RootSection { .. } => SchemaNodeKind::RootSection,
+            Self::RootSectionItem { .. } => SchemaNodeKind::RootSectionItem,
+            Self::RootSectionLoadMore { .. } => SchemaNodeKind::RootSectionLoadMore,
+            Self::SecretStore { .. } => SchemaNodeKind::SecretStore,
+            Self::SecretPath { .. } => SchemaNodeKind::SecretPath,
         }
     }
 
@@ -528,7 +571,8 @@ impl SchemaNodeId {
         match self {
             Self::ConnectionFolder { .. }
             | Self::ScriptsFolder { .. }
-            | Self::ScriptFile { .. } => None,
+            | Self::ScriptFile { .. }
+            | Self::ScriptsRoot { .. } => None,
             Self::Profile { profile_id, .. }
             | Self::DatabasesFolder { profile_id, .. }
             | Self::Database { profile_id, .. }
@@ -589,8 +633,12 @@ impl SchemaNodeId {
             | Self::InstanceInspectorsFolder { profile_id, .. }
             | Self::InstanceInspectorLeaf { profile_id, .. }
             | Self::InstanceOverviewLeaf { profile_id, .. }
-            | Self::Bucket { profile_id, .. }
-            | Self::BucketsFolder { profile_id } => Some(*profile_id),
+            | Self::InstanceFolder { profile_id, .. }
+            | Self::RootSection { profile_id, .. }
+            | Self::RootSectionItem { profile_id, .. }
+            | Self::RootSectionLoadMore { profile_id, .. }
+            | Self::SecretStore { profile_id, .. }
+            | Self::SecretPath { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -641,6 +689,7 @@ const P_BASE_TYPE: &str = "BT";
 const P_PLACEHOLDER: &str = "PH";
 const P_SCRIPTS_FOLDER: &str = "SCF";
 const P_SCRIPT_FILE: &str = "SCR";
+const P_SCRIPTS_ROOT: &str = "SCX";
 const P_DEPENDENTS_FOLDER: &str = "DEPF";
 const P_DEPENDENT_ITEM: &str = "DEP";
 const P_ROUTINES_FOLDER: &str = "RTF";
@@ -656,9 +705,15 @@ const P_INST_METRIC_LEAF: &str = "IML";
 const P_INST_INSPECTORS_FOLDER: &str = "IIF";
 const P_INST_INSPECTOR_LEAF: &str = "IIL";
 const P_INST_OVERVIEW_LEAF: &str = "IOL";
+const P_INST_FOLDER: &str = "INSF";
 // Object-storage bucket leaf.
-const P_BUCKET: &str = "BKT";
-const P_BUCKETS_FOLDER: &str = "BKTF";
+// Driver-declared root section nodes.
+const P_ROOT_SECTION: &str = "RSC";
+const P_ROOT_SECTION_ITEM: &str = "RSCI";
+const P_ROOT_SECTION_MORE: &str = "RSCM";
+// Secret-store store and path nodes.
+const P_SECRET_STORE: &str = "SST";
+const P_SECRET_PATH: &str = "SSP";
 // Dashboard and saved-chart sidebar node prefixes.
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
@@ -1079,6 +1134,9 @@ mod tests {
         assert!(!SchemaNodeKind::ScriptFile.is_expandable_folder());
         assert!(SchemaNodeKind::ScriptFile.shows_pointer_cursor());
 
+        assert!(SchemaNodeKind::ScriptsRoot.is_expandable_folder());
+        assert!(!SchemaNodeKind::ScriptsRoot.shows_pointer_cursor());
+
         assert!(!SchemaNodeKind::Column.needs_click_handler());
         assert!(!SchemaNodeKind::Column.is_expandable_folder());
         assert!(!SchemaNodeKind::Column.shows_pointer_cursor());
@@ -1088,6 +1146,9 @@ mod tests {
     fn pipe_preserving_paths_round_trip_for_script_nodes() {
         roundtrip(SchemaNodeId::ScriptsFolder {
             path: Some("/tmp/dbflux|scripts|archive".into()),
+        });
+        roundtrip(SchemaNodeId::ScriptsRoot {
+            path: "/srv/shared|sql".into(),
         });
         roundtrip(SchemaNodeId::ScriptFile {
             path: "/tmp/dbflux|scripts|query.sql".into(),
@@ -1296,6 +1357,7 @@ mod tests {
         let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
 
         roundtrip(SchemaNodeId::InstanceMetricsFolder { profile_id: uuid });
+        roundtrip(SchemaNodeId::InstanceFolder { profile_id: uuid });
         roundtrip(SchemaNodeId::InstanceMetricLeaf {
             profile_id: uuid,
             metric_id: "pg.tx_commit_rate".into(),
@@ -1308,21 +1370,77 @@ mod tests {
         roundtrip(SchemaNodeId::InstanceOverviewLeaf { profile_id: uuid });
     }
 
-    /// T21: bucket leaves round-trip so the sidebar can parse the node ID it
-    /// rendered, including names containing dots and hyphens.
+    /// Root section nodes round-trip, including an item id that contains the
+    /// `|` separator.
     #[test]
-    fn bucket_nodes_round_trip_via_display_and_from_str() {
+    fn root_section_nodes_round_trip_via_display_and_from_str() {
         let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
 
-        roundtrip(SchemaNodeId::Bucket {
+        roundtrip(SchemaNodeId::RootSection {
             profile_id: uuid,
-            name: "prod-logs".into(),
+            section_id: "buckets".into(),
         });
-        roundtrip(SchemaNodeId::Bucket {
+        roundtrip(SchemaNodeId::RootSectionItem {
             profile_id: uuid,
-            name: "media.assets.example".into(),
+            section_id: "buckets".into(),
+            item_id: "media.assets.example".into(),
         });
-        roundtrip(SchemaNodeId::BucketsFolder { profile_id: uuid });
+        roundtrip(SchemaNodeId::RootSectionItem {
+            profile_id: uuid,
+            section_id: "topics".into(),
+            item_id: "odd|name".into(),
+        });
+        roundtrip(SchemaNodeId::RootSectionLoadMore {
+            profile_id: uuid,
+            section_id: "buckets".into(),
+        });
+    }
+
+    #[test]
+    fn root_section_nodes_carry_their_profile_and_kind() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let item = SchemaNodeId::RootSectionItem {
+            profile_id: uuid,
+            section_id: "buckets".into(),
+            item_id: "logs".into(),
+        };
+
+        assert_eq!(item.profile_id(), Some(uuid));
+        assert_eq!(item.kind(), SchemaNodeKind::RootSectionItem);
+        assert!(SchemaNodeKind::RootSection.is_expandable_folder());
+        assert!(!SchemaNodeKind::RootSectionItem.is_expandable_folder());
+        assert!(SchemaNodeKind::RootSectionItem.needs_click_handler());
+        assert!(SchemaNodeKind::RootSectionLoadMore.needs_click_handler());
+        assert!(SchemaNodeKind::RootSectionLoadMore.shows_pointer_cursor());
+    }
+
+    #[test]
+    fn root_section_item_without_an_item_id_is_rejected() {
+        let id = "RSCI|12345678-1234-1234-1234-123456789abc|buckets";
+
+        assert!(id.parse::<SchemaNodeId>().is_err());
+    }
+
+    /// Secret-store nodes round-trip, including a path that itself contains
+    /// the `|` separator.
+    #[test]
+    fn secret_store_nodes_round_trip_via_display_and_from_str() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        roundtrip(SchemaNodeId::SecretStore {
+            profile_id: uuid,
+            store_id: "parameter-store".into(),
+        });
+        roundtrip(SchemaNodeId::SecretPath {
+            profile_id: uuid,
+            store_id: "parameter-store".into(),
+            path: "/app/prod/".into(),
+        });
+        roundtrip(SchemaNodeId::SecretPath {
+            profile_id: uuid,
+            store_id: "parameter-store".into(),
+            path: "/odd|name/".into(),
+        });
     }
 
     #[test]

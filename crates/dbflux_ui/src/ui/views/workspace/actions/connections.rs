@@ -184,18 +184,26 @@ impl Workspace {
 
     /// Checks whether the application may quit now.
     ///
-    /// Returns `true` when no query is running on any connection. Otherwise
-    /// opens the active-query prompt and returns `false`; choosing "Quit
-    /// anyway" then emits [`QuitConfirmed`].
+    /// Returns `true` when no query is running on any connection and no open
+    /// document has changes the quit cannot save on its own. Otherwise opens
+    /// one prompt and returns `false`: the active-query prompt when a query
+    /// runs, and the unsaved-changes prompt when it does not. "Quit anyway"
+    /// in the first opens the second when it is needed, so the two never show
+    /// at once. The answer that quits emits [`QuitConfirmed`].
     pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        !self.prompt_active_query(ActiveQueryScope::Quit, window, cx)
+        if self.prompt_active_query(ActiveQueryScope::Quit, window, cx) {
+            return false;
+        }
+
+        !self.prompt_unsaved_before_quit(Vec::new(), window, cx)
     }
 
     /// Close action for the main window's in-app (Linux CSD) title bar.
     ///
     /// Follows the window-manager close: [`Self::request_quit`] first, so a
-    /// running query opens the prompt, then graceful shutdown through
-    /// [`QuitConfirmed`]. Removing the window directly would skip both.
+    /// running query or unsaved changes open their prompt, then graceful
+    /// shutdown through [`QuitConfirmed`]. Removing the window directly would
+    /// skip both.
     pub(in crate::ui::views::workspace) fn title_bar_close_handler(
         &self,
         cx: &mut Context<Self>,
@@ -318,8 +326,16 @@ impl Workspace {
                     self.cancel_running_queries(profile_filter, cx);
                     self.disconnect_profile_now(profile_id, cx);
                 }
-                // The shutdown sequence cancels every task itself.
-                ActiveQueryScope::Quit => cx.emit(QuitConfirmed),
+                // The shutdown sequence cancels every task itself. The
+                // unsaved-changes prompt comes next when a document needs it,
+                // and keeps the keyboard.
+                ActiveQueryScope::Quit => {
+                    if self.prompt_unsaved_before_quit(Vec::new(), window, cx) {
+                        return;
+                    }
+
+                    cx.emit(QuitConfirmed);
+                }
             },
         }
 
@@ -992,6 +1008,57 @@ mod active_query_prompt_tests {
         assert!(harness.is_connected(second_profile));
     }
 
+    /// The quit command is what the keymap binds and what the application
+    /// menu runs, so it takes the same path as the window's close button.
+    #[gpui::test]
+    fn the_quit_command_confirms_the_quit_without_a_running_query(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        harness.connect("prod");
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        harness.dispatch(Command::Quit);
+
+        assert!(!harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    #[gpui::test]
+    fn the_quit_command_opens_the_prompt_with_a_running_query(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        let query = harness.start_query(profile_id);
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        harness.dispatch(Command::Quit);
+
+        assert!(harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 0);
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Running));
+
+        harness.force();
+
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    /// A second quit command while the prompt is up leaves the question to
+    /// the prompt: it reopens nothing and quits nothing.
+    #[gpui::test]
+    fn the_quit_command_leaves_the_open_prompt_alone(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        let query = harness.start_query(profile_id);
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        harness.dispatch(Command::Quit);
+        assert!(harness.prompt_visible());
+
+        harness.dispatch(Command::Quit);
+
+        assert!(harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 0);
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Running));
+    }
+
     #[gpui::test]
     fn title_bar_close_with_a_running_query_opens_the_prompt(cx: &mut TestAppContext) {
         let mut harness = new_harness(cx);
@@ -1038,6 +1105,21 @@ mod active_query_prompt_tests {
 
         assert!(!harness.prompt_visible());
         assert_eq!(quit_confirmed.get(), 0);
+    }
+
+    #[gpui::test]
+    fn begin_shutdown_records_the_connected_profiles(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+
+        let app_state = harness.app_state.clone();
+        harness.window.update(|_, cx| {
+            assert!(app_state.read(cx).begin_shutdown());
+            assert_eq!(
+                app_state.read(cx).last_connected_profiles(),
+                vec![profile_id]
+            );
+        });
     }
 
     /// Asserts a prompt choice returned while the driver cancel was still

@@ -645,6 +645,75 @@ mod tests {
         cx.update(|cx| assert!(doc.read(cx).new_bucket().is_none()));
     }
 
+    /// S4/S7: each checkbox of the New Bucket dialog announces the text drawn
+    /// beside it, through the naming rule of `dbflux_components::accessibility`.
+    #[gpui::test]
+    fn the_new_bucket_dialog_checkboxes_are_named_by_the_text_beside_them(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::BucketsTableDocument;
+        use dbflux_components::accessibility::{FrameCapture, accessibility_node, accessible_name};
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+        use gpui::{AppContext as _, Role, VisualTestContext};
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        // The dialog is rendered for real: the document is the window's root
+        // view, the toolbar intent opens it, and the render pass drains it.
+        let (doc, window) = cx.add_window_view(|window, cx| {
+            BucketsTableDocument::new(uuid::Uuid::new_v4(), app_state, window, cx)
+        });
+
+        window.update(|_window, cx| {
+            doc.update(cx, |doc, cx| doc.request_new_bucket(cx));
+        });
+        window.run_until_parked();
+
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+
+        for (id, key) in [
+            (
+                "new-bucket-versioning",
+                "document.buckets_table.new_bucket.option.versioning",
+            ),
+            (
+                "new-bucket-block-public",
+                "document.buckets_table.new_bucket.option.block_public_access",
+            ),
+            (
+                "new-bucket-object-lock",
+                "document.buckets_table.new_bucket.option.object_lock",
+            ),
+        ] {
+            let expected = dbflux_i18n::t!(key).to_string();
+
+            assert_eq!(
+                accessible_name(&frame, id),
+                Some(expected),
+                "{id} must be named by the text drawn beside it"
+            );
+
+            let node = accessibility_node(&frame, id)
+                .unwrap_or_else(|| panic!("{id} must be an accessibility node"));
+            assert_eq!(node.role(), Role::CheckBox, "{id} has the checkbox role");
+        }
+    }
+
     /// T39: the naming rule the spec pins down — length first, character set
     /// second, with a message that says which one failed.
     #[test]

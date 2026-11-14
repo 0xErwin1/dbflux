@@ -17,6 +17,7 @@ Both are created from the repository's own templates — never from a remembered
 - An issue uses one of the forms in `.github/ISSUE_TEMPLATE/` — `bug_report.yml` for a defect, `feature_request.yml` for a capability. Fill the form's fields in the order it declares them, and keep the `[bug] ` / `[feature] ` title prefix and the `Labels I plan to apply` checklist it renders.
 - A pull request uses `.github/pull_request_template.md` verbatim: `Summary`, `What does this resolve?`, `How was this solved?`, `Validation`, `Where was this tested?`, `Checklist`, `Labels to apply`. Do not add sections of your own; follow-up work and known limitations belong where the template asks for them.
 - The mechanics (duplicate search, choosing the form, `gh` commands, reading the full branch delta) live in `skills/issue-creation/SKILL.md` and `skills/branch-pr/SKILL.md`.
+- Open the issue first and wait for maintainer approval (the `status:approved` label) before implementing a feature or behavior change; a bug fix may open its issue and PR together, and the maintainer may skip the wait. PRs are squash-merged, so split large work into independent PRs from `main` rather than long stacks (see `CONTRIBUTING.md` § Pull Requests).
 - Use only labels from the taxonomy in `CONTRIBUTING.md` § Label Guide, and never invent labels such as `area:*`.
 - A contributor without write access to `0xErwin1/dbflux` cannot apply labels from a fork. State the labels the change needs where the template asks for them and ask a maintainer to apply them during triage — do not drop that part of the template.
 
@@ -136,8 +137,9 @@ cargo run -p dbflux --features ui-automation
 
 - Prioritize correctness and clarity over speed
 - Do not write comments that summarize code; only explain non-obvious "why"
-- Prefer implementing in existing files unless it's a new logical component
-- Avoid creating many small files
+- Keep code organized by module: extend the module that owns the behavior, and once a file passes ~1000 lines of production code, split it into a module directory (`foo/mod.rs` plus submodules) by responsibility. New files belong inside the module directory they serve, not loose next to unrelated files.
+- Keep tests in the module's `tests` submodule (`foo/tests.rs` or `foo/tests/`), not inline in large files and not as sibling `*_tests.rs` files.
+- Keep functions under ~100 lines; split new or substantially rewritten functions that exceed it into private helpers. Existing functions and files over these limits are exempt until they are refactored.
 - Avoid creative additions unless explicitly requested
 - Use full words for variable names (no abbreviations like "q" for "queue")
 
@@ -264,6 +266,14 @@ impl Render for MyComponent {
 - Use `.when_some(option, |this, value| ...)` for Option-based conditionals
 - Call `cx.notify()` when state changes affect rendering
 
+### Font Size Scaling
+
+- Interface sizes that follow the UI font size are rems built with `dbflux_components::tokens::ui(px)`: font sizes, text row and control heights, inline icons, and widths that hold text. Spacing, borders, radii and layout panel sizes stay `Pixels`.
+- Every window must render under `gpui_component::Root`, which sets the rem size from the UI font size. A window without it keeps the default 16 px rem and ignores the setting.
+- Pixel arithmetic on a rem token converts first: `token.to_pixels(window.rem_size())`, or `fonts::ui_px(cx, token)` without a `Window`.
+- The data grid and the code editor follow their own font sizes: use `fonts::grid_*` / `fonts::grid_px` and `fonts::editor_*` / `fonts::editor_scaled`, not `tokens::ui`.
+- Do not write `text_size(px(..))`. The `dbflux_components` style guardrails reject it in every UI crate.
+
 ### Entity Updates in Render
 
 Use `pending_*` fields with `.take()` to safely update other entities or open modals:
@@ -362,7 +372,7 @@ The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate ma
 - `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, DashboardDocument, KeyValueDocument, AuditDocument, InstanceInspectorDocument, BucketsTableDocument, ObjectBrowserDocument, ObjectEditorDocument), data_grid_panel, governance view.
 - `dbflux_ui_sidebar` — connections + scripts sidebar tree.
 - `dbflux_ui_windows` — settings window and connection manager window.
-- `dbflux_ui` — thin integrator (~16k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server. Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
+- `dbflux_ui` — thin integrator: workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server, app_menu (the macOS application menu bar). Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
 
 `dbflux_ui` has **no per-driver feature flags** and no driver dependencies. Per-driver features live on `dbflux_app` (which registers drivers) and on the `dbflux` binary. The cross-cutting `lua`/`aws`/`mcp` features on UI crates only forward to `dbflux_app` and sibling UI crates.
 
@@ -411,8 +421,10 @@ Key abstractions for UI adaptation:
 - `QueryLanguage`: Determines editor syntax highlighting, placeholder text, comment prefix
 - `DriverCapabilities`: Determines which features to enable (pagination, transactions, etc.)
 - `CollectionPresentation`: Determines how a collection/container opens (for example data grid vs event stream)
+- `ObjectFacet` (via `Connection::object_facets` for tables and `Connection::collection_facets` for collections, both default `[Tabular]`): Determines the view modes, gates, filter wording and grid actions inside the data document, per object. A table can carry several (PostgreSQL adds `Document` for a `jsonb` column, `TimeSeries` for a hypertable and `Vector` for each `vector(n)` column). Never derive them from `DatabaseCategory` in the UI; only the RPC adapter uses `category_collection_facets`
 - `CollectionChildInfo`: Declares driver-owned child sources that appear in the sidebar without the UI inferring them from driver-specific conventions
 - `EventStreamTarget`: Lets the workspace/audit viewer open driver-backed event streams without embedding driver-specific routing
+- `RootSectionSource` (via `Connection::root_section_source`, gated by `DriverCapabilities::ROOT_SECTIONS`): Declares driver-owned object kinds at the connection root (S3 buckets), with their paginated listing, presentation and classified item actions. The sidebar renders them through one generic builder keyed by section id
 - `SourceContextSpec`: Lets drivers declare extra query-context controls while the UI stays generic
 - `FormFieldKind::AuthProfileRef { provider_id: Option<String> }`: Drives the connection-manager auth-profile dropdown. Drivers that need the picker declare a `profile` field as `AuthProfileRef { provider_id: None }`; the UI renders and field-syncs this arm generically instead of matching driver ids (DEC-1). A `None` filter enumerates built-in and external RPC-backed providers alike.
 
@@ -433,6 +445,7 @@ Key abstractions for UI adaptation:
 - RPC services are first-class persisted descriptors with `RpcServiceKind` (`Driver`, `AuthProvider`).
 - Both `Driver` and `AuthProvider` services are active. `AuthProvider` services connect through `RpcAuthProvider` in `dbflux_ipc`, which implements `DynAuthProvider` from `dbflux_core`.
 - The runtime seam for service discovery/classification lives in `dbflux_app::rpc_services`; extend that boundary for future RPC capabilities instead of hardcoding new driver-only bootstrap logic in `app_state.rs`.
+- `SecretProvider` services connect through `RpcSecretProvider` in `dbflux_ipc` (implements `DynSecretProvider`) and are registered into every connection's value resolver; see `docs/SECRET_PROVIDER_RPC_PROTOCOL.md`.
 - Preserve compatibility for external driver registration IDs as `rpc:<socket_id>`.
 - `DynAuthProvider::fetch_dynamic_options` is a real trait method (default implementation returns `Permanent("not supported")`); `RpcAuthProvider` implements it by dispatching `FetchDynamicOptions` requests over IPC.
 - The auth-provider IPC protocol is at v1.3. v1.2 added the `FetchDynamicOptions` request / `DynamicOptions` response variants plus the `secret_dependency_opt_in` manifest flag; v1.3 added the `audit_emit_opt_in` manifest flag and audit event emission (`EmitAuditEvent`). Providers advertising v1.2+ have `fetch_dynamic_options` available; older providers get `Permanent("not supported")`.
@@ -461,13 +474,15 @@ Key abstractions for UI adaptation:
 4. Define the connection form in the driver crate (e.g. `const DRIVER_FORM: DriverFormDef`) and return it from `DbDriver::form_definition()`. Form definitions live with the driver, not in `dbflux_core`.
 5. Implement `ErrorFormatter` for driver-specific error messages
 6. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
+   - Override `Connection::object_facets` when an object exposes more than one paradigm, and implement the matching `QueryGenerator` method (for example `generate_nearest_neighbors` for `ObjectFacet::Vector`).
 7. Implement `LanguageService` when the driver speaks a non-SQL dialect (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`). SQL drivers can reuse `SqlLanguageService` from `dbflux_core`.
 8. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag. The feature MUST also be added to `default` in `crates/dbflux/Cargo.toml` — release builds ship default features, so a driver left out of `default` silently ships disabled.
 9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
-10. Register the driver's `live_integration` test suite as its own step in `.github/workflows/tests.yml`'s Driver Live Integration job — it enumerates suites explicitly, so a new driver's Docker-backed tests do not run in CI until added there.
+10. Register the driver's `live_integration` test suite as its own step in the matching group of `.github/workflows/tests.yml`'s Driver Live Integration matrix, guarded by `if: matrix.group == '<group>'`, and add its container image to that group's `images` list — the matrix enumerates suites explicitly, so a new driver's Docker-backed tests do not run in CI until added there.
 11. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
 12. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
 13. Optional: implement `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) and advertise `DriverCapabilities::INSTANCE_METRICS` (time-series) and/or `INSTANCE_INSPECTOR` (tabular snapshots). The catalog exposes metrics, inspectors, a `DefaultInstanceDashboard` descriptor for the read-only Instance Overview, and optional `InspectorRowAction`s gated by per-driver privilege probes. See `docs/DASHBOARDS.md` § Instance Overview and inspectors.
+14. Optional: implement `RootSectionSource` (`dbflux_core/src/connection/root_section/mod.rs`) and advertise `DriverCapabilities::ROOT_SECTIONS` for driver-owned object kinds at the connection root. Give each item action its `ExecutionClassification`. Never add a `SchemaNodeKind` per object kind.
 
 For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_services` rather than adding a parallel bootstrap path.
 
@@ -475,14 +490,16 @@ For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_s
 
 Drivers declare their capabilities via `DriverMetadata`:
 
-- `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
+- `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage, SecretStore
 - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
 - `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
+- `ObjectFacet` (`dbflux_core/src/schema/facet.rs`): per-object paradigms. A new paradigm lands as one facet variant, a driver that emits it and the view that renders it, in the same plan. Never add a core facet, `DataStructure` variant or view kind as a skeleton to be filled in later.
+- A new `DatabaseCategory` also needs its arm in `category_presentation` (`dbflux_components/src/category.rs`), the single source of category icons, tones and container labels.
 
 ### Documentation translations
 
-- `docs/es/` and `docs/zh_Hans/` mirror `docs/`, the driver READMEs, and the root documents the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`).
-- Any edit to one of those English pages must be applied to every counterpart that already exists under `docs/es/` and `docs/zh_Hans/`, in the same change. Do not leave a translation for a follow-up.
+- `docs/es/`, `docs/ko/` and `docs/zh_Hans/` mirror `docs/`, the driver READMEs, and the root documents the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`).
+- Any edit to one of those English pages must be applied to every counterpart that already exists under `docs/es/`, `docs/ko/` and `docs/zh_Hans/`, in the same change. Do not leave a translation for a follow-up.
 - A page with no counterpart yet needs none; the site serves the English body with a notice.
 - Keep headings, relative links, and ```mermaid fences aligned with the English page, because the site pairs pages by structure. See `docs/TRANSLATIONS.md`.
 
@@ -496,10 +513,10 @@ Drivers declare their capabilities via `DriverMetadata`:
 
 Documents are open-tab entities managed through a closure-erasing shell. The polymorphism mechanism is `PaneHandle`, not a closed enum. See `ARCHITECTURE.md` § Document System for the full picture.
 
-1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
+1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures covering rendering and focus, command dispatch, pure metadata reads, dedup matching, event subscription, and optional document-specific helpers such as the close and quit policy. `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
 2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`crates/dbflux_ui_document/src/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
-3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`, 29 LOC). No per-document event enums.
-4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
+3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`). No per-document event enums.
+4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — the identity key for tab deduplication; the variant list lives in that file and is the source of truth. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
 5. **Chrome**: `ResultPanel` + `ViewHandle` (`dbflux_components::result_panel`) is the universal chrome host for data-result views. View entities expose `into_view_handle(entity, cx) -> ViewHandle` whose `toolbar_segments` closure returns `ToolbarSegment`s positioned `Left | Center | Right` with `index`. Filter bars, axis bars, range chips all become segments — the chrome row uses `flex_wrap` so segments wrap when narrow.
 6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `crates/dbflux_ui_document/src/code/live_output.rs`.
 7. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus via their own `FocusHandle`.
@@ -556,7 +573,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 **Important runtime rules**:
 - `preview_mutation` must stay read-only; it may return generated SQL/query text or a non-mutating plan, but must never execute the mutation being previewed
 - `preview_ddl` is intentionally not exposed from the MCP surface until DBFlux has a truly safe schema-preview path
-- `select_data` must reject unsupported `joins` explicitly rather than ignoring them
+- `select_data` runs `joins` only on a connection whose driver declares `QueryCapabilities::supports_joins` and whose `QueryGenerator::generate_select` renders the spec; every other connection gets an explicit error, never a result with the join left out. The `on` condition is parsed into structured column comparisons (`parse_join_condition` in `dbflux_core`), table, alias and column names must be plain identifiers, and the generated query must classify as a read before it runs. Never build `JoinOn::RawExpression` from tool input
 
 **Trust model**:
 
@@ -604,7 +621,7 @@ The right-rail builder composes SELECT / UPDATE / DELETE without writing SQL. It
 The document query builder is a separate rail for document collections, with the same rules:
 
 - The spec is `DocumentQuerySpec` in `dbflux_core/src/query/document_query.rs`. Drivers implement `DocumentQueryCodec` and return it from `Connection::document_query_codec()`; the codec renders a spec as find slots, a pipeline and preview text, and parses the slots back with the clauses it cannot represent.
-- The UI gates on `DocumentFeatures::VISUAL_BUILDER` (and `DocumentFeatures::AGGREGATE` for Aggregate mode), never on a driver id. It lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder.rs`.
+- The UI gates on `DocumentFeatures::VISUAL_BUILDER` (and `DocumentFeatures::AGGREGATE` for Aggregate mode), never on a driver id. It lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder/mod.rs`.
 - Execution goes through the query slots and `browse_collection` (Find) or the Aggregate view (Aggregate); the builder never executes generated shell text.
 - Persistence: migration `037_qry_saved_document_queries`, `DocumentQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_document_queries.rs`) and `SavedDocumentQueryManager` (`crates/dbflux_ui_base/src/saved_document_query_manager.rs`).
 
@@ -624,7 +641,7 @@ DBFlux MCP uses a unified JSON WHERE clause syntax that works across all databas
 - `ColumnRef::Nested(vec!["metadata", "profile", "age"])` — Nested document field (MongoDB, JSONB)
 - `ColumnRef::JsonPath { column: "config", path: "$.notifications.email" }` — JSON path syntax
 
-**Operators**: Standard comparison (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`), pattern matching (`$like`, `$ilike`, `$regex`), NULL handling (`null`, `$eq: null`), array operations (`$contains`, `$overlap`, `$size`, `$all`), and logical composition (`$and`, `$or`, `$not`).
+**Operators**: Standard comparison (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`), pattern matching (`$like`, `$ilike`, `$regex`), NULL handling (`null`, `$eq: null`), existence (`$exists`), array operations (`$contains`, `$overlap`, `$size`, `$all`), and logical composition (`$and`, `$or`, `$not`).
 
 **Type Coercion**: Automatic type conversion (string ↔ number ↔ boolean) with validation.
 
@@ -705,6 +722,17 @@ Rules that matter when touching documentation:
   name a file are rewritten to site routes at build time, so `[Settings](SETTINGS.md)` works in
   both places.
 - Diagrams go in ```mermaid fences. They render as diagrams on the site; ASCII art does not.
+- Screenshots live in `docs/images/<page>/` as WebP, one light and one dark file, and every locale
+  shares them: `images/...` from `docs/`, `../images/...` from a translation. Embed them with
+  `<picture>` so GitHub and the site both pick the theme's image:
+
+  ```html
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/usage/main-window-dark.webp">
+    <img src="images/usage/main-window-light.webp" alt="The main window with a PostgreSQL table open">
+  </picture>
+  ```
+
 - Adding a document to `docs/` gives it a page automatically. Its place in the reading order is
   declared in `web/src/data/nav.ts`; unlisted documents still get a page and appear under "Not yet
   filed" on the documentation index.

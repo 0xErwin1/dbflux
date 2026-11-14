@@ -139,6 +139,7 @@ pub enum Icon {
     S3,
     Clickhouse,
     Turso,
+    Duckdb,
 
     // Time-series brands
     Influxdb,
@@ -168,17 +169,20 @@ pub enum DatabaseCategory {
     /// Examples: Redis, Valkey, DynamoDB, etcd
     KeyValue,
 
-    /// Graph databases with nodes, edges, and graph queries.
-    /// Examples: Neo4j, ArangoDB, Amazon Neptune
-    Graph,
+    /// Holds postcard wire index 3 (formerly a graph category no driver
+    /// declared) so the categories after it keep their indices in the
+    /// `DriverMetadata` that driver RPC peers send.
+    #[doc(hidden)]
+    ReservedGraph,
 
     /// Time-series databases optimized for temporal data.
     /// Examples: InfluxDB, TimescaleDB, QuestDB
     TimeSeries,
 
-    /// Wide-column stores with keyspaces and column families.
-    /// Examples: Cassandra, ScyllaDB, HBase
-    WideColumn,
+    /// Holds postcard wire index 5 (formerly a wide-column category no
+    /// driver declared), like [`Self::ReservedGraph`].
+    #[doc(hidden)]
+    ReservedWideColumn,
 
     /// Log streaming services with log groups and queryable log events.
     /// Examples: AWS CloudWatch Logs
@@ -187,6 +191,10 @@ pub enum DatabaseCategory {
     /// Object storage services with buckets and key-addressed binary objects.
     /// Examples: AWS S3, Cloudflare R2, MinIO
     ObjectStorage,
+
+    /// Secret managers with named, versioned secret values.
+    /// Examples: AWS Secrets Manager, AWS Systems Manager Parameter Store
+    SecretStore,
 }
 
 impl DatabaseCategory {
@@ -195,11 +203,11 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Relational",
             DatabaseCategory::Document => "Document",
             DatabaseCategory::KeyValue => "Key-Value",
-            DatabaseCategory::Graph => "Graph",
             DatabaseCategory::TimeSeries => "Time Series",
-            DatabaseCategory::WideColumn => "Wide Column",
             DatabaseCategory::LogStream => "Log Stream",
             DatabaseCategory::ObjectStorage => "Object Storage",
+            DatabaseCategory::SecretStore => "Secret Store",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Unknown",
         }
     }
 
@@ -210,11 +218,11 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Tables",
             DatabaseCategory::Document => "Collections",
             DatabaseCategory::KeyValue => "Keys",
-            DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Measurements",
-            DatabaseCategory::WideColumn => "Tables",
             DatabaseCategory::LogStream => "Log Groups",
             DatabaseCategory::ObjectStorage => "Buckets",
+            DatabaseCategory::SecretStore => "Stores",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Objects",
         }
     }
 
@@ -224,11 +232,11 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Table",
             DatabaseCategory::Document => "Collection",
             DatabaseCategory::KeyValue => "Key",
-            DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Measurement",
-            DatabaseCategory::WideColumn => "Table",
             DatabaseCategory::LogStream => "Log Group",
             DatabaseCategory::ObjectStorage => "Bucket",
+            DatabaseCategory::SecretStore => "Store",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Object",
         }
     }
 
@@ -238,11 +246,11 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Rows",
             DatabaseCategory::Document => "Documents",
             DatabaseCategory::KeyValue => "Values",
-            DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Points",
-            DatabaseCategory::WideColumn => "Rows",
             DatabaseCategory::LogStream => "Log events",
             DatabaseCategory::ObjectStorage => "Objects",
+            DatabaseCategory::SecretStore => "Secrets",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Records",
         }
     }
 
@@ -252,11 +260,11 @@ impl DatabaseCategory {
             DatabaseCategory::Relational => "Row",
             DatabaseCategory::Document => "Document",
             DatabaseCategory::KeyValue => "Value",
-            DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Point",
-            DatabaseCategory::WideColumn => "Row",
             DatabaseCategory::LogStream => "Log event",
             DatabaseCategory::ObjectStorage => "Object",
+            DatabaseCategory::SecretStore => "Secret",
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Record",
         }
     }
 
@@ -297,22 +305,22 @@ impl DatabaseCategory {
         );
 
         let category_specific = match self {
-            DatabaseCategory::Relational
-            | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn => DriverCapabilities::from_bits_truncate(
-                DriverCapabilities::SCHEMAS.bits()
-                    | DriverCapabilities::VIEWS.bits()
-                    | DriverCapabilities::FOREIGN_KEYS.bits()
-                    | DriverCapabilities::INDEXES.bits()
-                    | DriverCapabilities::CHECK_CONSTRAINTS.bits()
-                    | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
-                    | DriverCapabilities::CUSTOM_TYPES.bits()
-                    | DriverCapabilities::TRIGGERS.bits()
-                    | DriverCapabilities::STORED_PROCEDURES.bits()
-                    | DriverCapabilities::SEQUENCES.bits()
-                    | DriverCapabilities::RETURNING.bits()
-                    | DriverCapabilities::ROUTINES.bits(),
-            ),
+            DatabaseCategory::Relational | DatabaseCategory::TimeSeries => {
+                DriverCapabilities::from_bits_truncate(
+                    DriverCapabilities::SCHEMAS.bits()
+                        | DriverCapabilities::VIEWS.bits()
+                        | DriverCapabilities::FOREIGN_KEYS.bits()
+                        | DriverCapabilities::INDEXES.bits()
+                        | DriverCapabilities::CHECK_CONSTRAINTS.bits()
+                        | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
+                        | DriverCapabilities::CUSTOM_TYPES.bits()
+                        | DriverCapabilities::TRIGGERS.bits()
+                        | DriverCapabilities::STORED_PROCEDURES.bits()
+                        | DriverCapabilities::SEQUENCES.bits()
+                        | DriverCapabilities::RETURNING.bits()
+                        | DriverCapabilities::ROUTINES.bits(),
+                )
+            }
 
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 DriverCapabilities::from_bits_truncate(
@@ -339,15 +347,16 @@ impl DatabaseCategory {
                     | DriverCapabilities::KV_STREAM_DELETE.bits(),
             ),
 
-            DatabaseCategory::Graph => DriverCapabilities::from_bits_truncate(
-                DriverCapabilities::GRAPH_TRAVERSAL.bits()
-                    | DriverCapabilities::EDGE_PROPERTIES.bits(),
-            ),
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => {
+                DriverCapabilities::empty()
+            }
 
             DatabaseCategory::ObjectStorage => DriverCapabilities::from_bits_truncate(
                 DriverCapabilities::OBJECT_STORAGE.bits()
                     | DriverCapabilities::OBJECT_PREFIX_DELETE.bits(),
             ),
+
+            DatabaseCategory::SecretStore => DriverCapabilities::SECRET_STORE,
         };
 
         common.union(category_specific)
@@ -392,7 +401,7 @@ bitflags! {
     /// The UI queries these flags to determine which features to enable.
     /// Drivers declare their capabilities at registration time.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct DriverCapabilities: u64 {
+    pub struct DriverCapabilities: u128 {
         // === Connection features ===
 
         /// Driver supports multiple databases per server.
@@ -649,6 +658,38 @@ bitflags! {
         /// routing JS-looking input to the script engine instead of the
         /// driver's normal query parser.
         const SCRIPT_EXECUTION = 1 << 61;
+
+        /// Driver commands can run one at a time from a native command
+        /// console embedded in its documents, through `Connection::execute`
+        /// and the driver's `LanguageService`. The console's presentation
+        /// comes from [`DriverMetadata::native_console`].
+        const NATIVE_CONSOLE = 1 << 62;
+
+        /// `Connection::execute` enforces `QueryRequest::limit`: it stops
+        /// reading rows at the limit and marks the result truncated, instead
+        /// of refusing the request. The native console sends the editor row
+        /// limit only to drivers that advertise this.
+        const REQUEST_ROW_LIMIT = 1 << 63;
+
+        /// Connection exposes one or more secret stores through
+        /// `Connection::secret_stores`. A driver whose connections return no
+        /// stores MUST NOT advertise this flag.
+        const SECRET_STORE = 1 << 64;
+
+        /// Connection reaches one cloud region, and the user can move it to
+        /// another one without editing the profile: `Connection::current_region`
+        /// reports the region in use, `Connection::available_regions` lists the
+        /// ones it can move to, and `DbDriver::with_region` builds the config
+        /// for the new one. Gates the region control in the documents that
+        /// browse cloud resources; a driver without a region MUST NOT
+        /// advertise this flag.
+        const REGION_SWITCH = 1 << 65;
+
+        /// Connection declares sidebar root sections through
+        /// `Connection::root_section_source`. The sidebar renders them with
+        /// one generic builder; a driver whose connections return no source
+        /// MUST NOT advertise this flag.
+        const ROOT_SECTIONS = 1 << 66;
     }
 }
 
@@ -658,42 +699,67 @@ mod capability_bits_tests {
 
     #[test]
     fn instance_metrics_bit_value() {
-        assert_eq!(DriverCapabilities::INSTANCE_METRICS.bits(), 1u64 << 54);
+        assert_eq!(DriverCapabilities::INSTANCE_METRICS.bits(), 1u128 << 54);
     }
 
     #[test]
     fn instance_inspector_bit_value() {
-        assert_eq!(DriverCapabilities::INSTANCE_INSPECTOR.bits(), 1u64 << 55);
+        assert_eq!(DriverCapabilities::INSTANCE_INSPECTOR.bits(), 1u128 << 55);
     }
 
     #[test]
     fn bulk_insert_bit_value() {
-        assert_eq!(DriverCapabilities::BULK_INSERT.bits(), 1u64 << 56);
+        assert_eq!(DriverCapabilities::BULK_INSERT.bits(), 1u128 << 56);
     }
 
     #[test]
     fn truncate_table_bit_value() {
-        assert_eq!(DriverCapabilities::TRUNCATE_TABLE.bits(), 1u64 << 57);
+        assert_eq!(DriverCapabilities::TRUNCATE_TABLE.bits(), 1u128 << 57);
     }
 
     #[test]
     fn disable_fk_checks_bit_value() {
-        assert_eq!(DriverCapabilities::DISABLE_FK_CHECKS.bits(), 1u64 << 58);
+        assert_eq!(DriverCapabilities::DISABLE_FK_CHECKS.bits(), 1u128 << 58);
     }
 
     #[test]
     fn object_storage_bit_value() {
-        assert_eq!(DriverCapabilities::OBJECT_STORAGE.bits(), 1u64 << 59);
+        assert_eq!(DriverCapabilities::OBJECT_STORAGE.bits(), 1u128 << 59);
     }
 
     #[test]
     fn object_prefix_delete_bit_value() {
-        assert_eq!(DriverCapabilities::OBJECT_PREFIX_DELETE.bits(), 1u64 << 60);
+        assert_eq!(DriverCapabilities::OBJECT_PREFIX_DELETE.bits(), 1u128 << 60);
     }
 
     #[test]
     fn script_execution_bit_value() {
-        assert_eq!(DriverCapabilities::SCRIPT_EXECUTION.bits(), 1u64 << 61);
+        assert_eq!(DriverCapabilities::SCRIPT_EXECUTION.bits(), 1u128 << 61);
+    }
+
+    #[test]
+    fn native_console_bit_value() {
+        assert_eq!(DriverCapabilities::NATIVE_CONSOLE.bits(), 1u128 << 62);
+    }
+
+    #[test]
+    fn request_row_limit_bit_value() {
+        assert_eq!(DriverCapabilities::REQUEST_ROW_LIMIT.bits(), 1u128 << 63);
+    }
+
+    #[test]
+    fn secret_store_bit_value() {
+        assert_eq!(DriverCapabilities::SECRET_STORE.bits(), 1u128 << 64);
+    }
+
+    #[test]
+    fn region_switch_bit_value() {
+        assert_eq!(DriverCapabilities::REGION_SWITCH.bits(), 1u128 << 65);
+    }
+
+    #[test]
+    fn root_sections_bit_value() {
+        assert_eq!(DriverCapabilities::ROOT_SECTIONS.bits(), 1u128 << 66);
     }
 
     #[test]
@@ -761,9 +827,14 @@ mod capability_bits_tests {
             DriverCapabilities::OBJECT_STORAGE,
             DriverCapabilities::OBJECT_PREFIX_DELETE,
             DriverCapabilities::SCRIPT_EXECUTION,
+            DriverCapabilities::NATIVE_CONSOLE,
+            DriverCapabilities::REQUEST_ROW_LIMIT,
+            DriverCapabilities::SECRET_STORE,
+            DriverCapabilities::REGION_SWITCH,
+            DriverCapabilities::ROOT_SECTIONS,
         ];
 
-        let mut seen_bits: u64 = 0;
+        let mut seen_bits: u128 = 0;
         for cap in named {
             let bits = cap.bits();
             assert_eq!(
@@ -778,6 +849,44 @@ mod capability_bits_tests {
             );
             seen_bits |= bits;
         }
+    }
+}
+
+#[cfg(test)]
+mod native_console_tests {
+    use super::*;
+
+    fn metadata(language: QueryLanguage, capabilities: DriverCapabilities) -> DriverMetadata {
+        DriverMetadataBuilder::new("test", "Test", DatabaseCategory::KeyValue, language)
+            .capabilities(capabilities)
+            .build()
+    }
+
+    #[test]
+    fn drivers_without_the_capability_have_no_console() {
+        let metadata = metadata(QueryLanguage::RedisCommands, DriverCapabilities::KV_GET);
+
+        assert_eq!(metadata.native_console(), None);
+    }
+
+    #[test]
+    fn the_console_profile_follows_the_query_language() {
+        let redis = metadata(
+            QueryLanguage::RedisCommands,
+            DriverCapabilities::NATIVE_CONSOLE,
+        )
+        .native_console()
+        .expect("console profile");
+        assert_eq!(redis.prompt("0"), "0>");
+        assert_eq!(redis.example_command, "PING");
+
+        let custom = metadata(
+            QueryLanguage::Custom("rpc".to_string()),
+            DriverCapabilities::NATIVE_CONSOLE,
+        )
+        .native_console()
+        .expect("an external driver still gets a console");
+        assert_eq!(custom.example_command, "");
     }
 }
 
@@ -844,7 +953,7 @@ impl<'de> Deserialize<'de> for DriverCapabilities {
     where
         D: serde::Deserializer<'de>,
     {
-        let bits = u64::deserialize(deserializer)?;
+        let bits = u128::deserialize(deserializer)?;
         Ok(Self::from_bits(bits).unwrap_or_else(Self::empty))
     }
 }
@@ -1264,7 +1373,18 @@ fn split_sql_statements(text: &str) -> Vec<String> {
 /// Byte ranges of the `;`-delimited segments in `text` (separators excluded,
 /// segments untrimmed, empty segments kept). Shared scanner behind
 /// [`split_sql_statements`] and [`QueryLanguage::statement_bounds_at`].
-fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+///
+/// Bounds proof for the indexed accesses below: `chars` is built once from
+/// `char_indices`, so `len == chars.len()` and every `byte` offset is a char
+/// boundary of `text`. Each `chars[index]` sits under `while index < len`, and
+/// every lookahead `chars[index + 1]` is separately guarded by
+/// `index + 1 < len`, in all four state machines (line comment, block
+/// comment, quoted string/identifier, dollar quote).
+#[expect(
+    clippy::indexing_slicing,
+    reason = "every chars[index] is under `while index < len` and every chars[index + 1] lookahead under a separate `index + 1 < len` guard; offsets come from char_indices so text[range] slices stay on char boundaries"
+)]
+pub(crate) fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let len = chars.len();
 
@@ -1387,6 +1507,12 @@ fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
 /// `$` of that opening tag. The tag identifier must be empty (`$$`) or a valid
 /// identifier (letters, digits, underscore, not starting with a digit), which
 /// also prevents misreading parameter placeholders such as `$1`.
+///
+/// `chars[index]` is only read under `while index < chars.len()`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "chars[index] is read only under `while index < chars.len()`"
+)]
 fn dollar_tag_end(chars: &[(usize, char)], start: usize) -> Option<usize> {
     let mut index = start + 1;
 
@@ -1411,6 +1537,14 @@ fn dollar_tag_end(chars: &[(usize, char)], start: usize) -> Option<usize> {
 
 /// Whether the opening tag at `chars[tag_start..=tag_end]` repeats starting at
 /// `chars[index]`.
+///
+/// `tag_start + tag_len == tag_end + 1 <= chars.len()` (the tag end is returned
+/// only for `index < chars.len()`), and the early return below bounds
+/// `index + tag_len <= chars.len()`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the `index + tag_len > chars.len()` early return bounds chars[index + offset]; tag_start + tag_len == tag_end + 1 <= chars.len() bounds chars[tag_start + offset]"
+)]
 fn matches_tag(chars: &[(usize, char)], index: usize, tag_start: usize, tag_end: usize) -> bool {
     let tag_len = tag_end + 1 - tag_start;
     if index + tag_len > chars.len() {
@@ -1444,6 +1578,19 @@ pub struct SyntaxInfo {
 
     /// Whether identifier names are case-sensitive.
     pub case_sensitive_identifiers: bool,
+
+    /// Whether the engine reads a quoted identifier that names no column as
+    /// a string literal instead of failing, so a misspelled column returns
+    /// wrong rows rather than an error. SQLite does this with its
+    /// double-quoted string literal fallback
+    /// (<https://www.sqlite.org/quirks.html#dblquote>).
+    ///
+    /// Callers that build queries from names they cannot vouch for check
+    /// those names against the metadata first on such engines. Not
+    /// serialized, so the driver RPC wire format is unchanged and external
+    /// RPC drivers report `false`.
+    #[serde(skip)]
+    pub misreads_unknown_quoted_identifiers: bool,
 }
 
 impl Default for SyntaxInfo {
@@ -1455,6 +1602,7 @@ impl Default for SyntaxInfo {
             supports_schemas: false,
             default_schema: None,
             case_sensitive_identifiers: true,
+            misreads_unknown_quoted_identifiers: false,
         }
     }
 }
@@ -1753,7 +1901,15 @@ pub struct TransactionCapabilities {
     /// Whether nested transactions (savepoints) are supported.
     pub supports_nested_transactions: bool,
 
-    /// Whether the driver supports READ ONLY transactions.
+    /// Whether the driver honours
+    /// [`ReadOnlyEnforcement::Required`](crate::ReadOnlyEnforcement::Required):
+    /// it refuses or prevents every write of such a request before the write
+    /// reaches storage. Either the database session enforces it (a read-only
+    /// transaction, a query-only flag, a per-request setting), or the driver
+    /// classifies every typed operation it sends and refuses the ones above
+    /// read and the ones it does not recognise (MongoDB). Matching the query
+    /// text alone never qualifies. Callers rely on it to decide whether a read
+    /// can run unattended.
     pub supports_read_only: bool,
 
     /// Whether the driver supports deferrable transactions.
@@ -1771,7 +1927,7 @@ impl Default for TransactionCapabilities {
             default_isolation_level: Some(IsolationLevel::ReadCommitted),
             supports_savepoints: true,
             supports_nested_transactions: true,
-            supports_read_only: true,
+            supports_read_only: false,
             supports_deferrable: false,
         }
     }
@@ -2066,6 +2222,15 @@ impl Clone for DriverMetadata {
 }
 
 impl DriverMetadata {
+    /// Whether the driver honours
+    /// [`ReadOnlyEnforcement::Required`](crate::ReadOnlyEnforcement::Required)
+    /// (see [`TransactionCapabilities::supports_read_only`]).
+    pub fn enforces_read_only(&self) -> bool {
+        self.transactions
+            .as_ref()
+            .is_some_and(|transactions| transactions.supports_read_only)
+    }
+
     /// Check if a capability is supported.
     pub fn supports(&self, capability: DriverCapabilities) -> bool {
         self.capabilities.contains(capability)
@@ -2091,6 +2256,13 @@ impl DriverMetadata {
         self.category == DatabaseCategory::LogStream
     }
 
+    /// Presentation of the native command console, or `None` when the driver
+    /// does not advertise [`DriverCapabilities::NATIVE_CONSOLE`].
+    pub fn native_console(&self) -> Option<NativeConsoleProfile> {
+        self.supports(DriverCapabilities::NATIVE_CONSOLE)
+            .then(|| NativeConsoleProfile::for_language(&self.query_language))
+    }
+
     /// Editor presentation profile for this driver.
     ///
     /// Returns the driver's `editor_profile` override when set, otherwise a
@@ -2100,6 +2272,42 @@ impl DriverMetadata {
         self.editor_profile
             .clone()
             .unwrap_or_else(|| EditorLanguageProfile::from_language(&self.query_language))
+    }
+}
+
+/// Presentation of a driver's native command console.
+///
+/// Derived from the driver's [`QueryLanguage`] so external drivers that
+/// advertise [`DriverCapabilities::NATIVE_CONSOLE`] get a working console
+/// without shipping extra metadata over RPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeConsoleProfile {
+    /// Printed after the context name in the prompt (`0>` for database `0`).
+    pub prompt_terminator: &'static str,
+
+    /// A harmless command shown in the empty input. Empty when the language
+    /// has no obvious one.
+    pub example_command: &'static str,
+}
+
+impl NativeConsoleProfile {
+    pub fn for_language(language: &QueryLanguage) -> Self {
+        let example_command = match language {
+            QueryLanguage::RedisCommands => "PING",
+            QueryLanguage::MongoQuery => "db.collection.find({})",
+            QueryLanguage::Sql => "SELECT 1",
+            _ => "",
+        };
+
+        Self {
+            prompt_terminator: ">",
+            example_command,
+        }
+    }
+
+    /// The prompt for commands run against `context` (usually a database).
+    pub fn prompt(&self, context: &str) -> String {
+        format!("{context}{}", self.prompt_terminator)
     }
 }
 
@@ -2628,12 +2836,12 @@ mod tests {
     fn test_routines_capability_bit() {
         assert_eq!(
             DriverCapabilities::ROUTINES.bits(),
-            1u64 << 47,
+            1u128 << 47,
             "ROUTINES must be bit 47"
         );
         assert_eq!(
             DriverCapabilities::MULTI_STATEMENT.bits(),
-            1u64 << 48,
+            1u128 << 48,
             "MULTI_STATEMENT must be bit 48"
         );
         assert_eq!(
@@ -2681,11 +2889,6 @@ mod tests {
         assert!(kv.contains(DriverCapabilities::KV_TTL));
         assert!(!kv.contains(DriverCapabilities::SCHEMAS));
         assert!(!kv.contains(DriverCapabilities::NESTED_DOCUMENTS));
-
-        let graph = DatabaseCategory::Graph.relevant_capabilities();
-        assert!(graph.contains(DriverCapabilities::GRAPH_TRAVERSAL));
-        assert!(!graph.contains(DriverCapabilities::KV_SCAN));
-        assert!(!graph.contains(DriverCapabilities::SCHEMAS));
     }
 
     #[test]
@@ -2694,7 +2897,6 @@ mod tests {
             DatabaseCategory::Relational,
             DatabaseCategory::Document,
             DatabaseCategory::KeyValue,
-            DatabaseCategory::Graph,
         ] {
             let relevant = category.relevant_capabilities();
             assert!(
@@ -2792,7 +2994,10 @@ mod tests {
         let tc = TransactionCapabilities::default();
         assert!(tc.supports_transactions);
         assert!(tc.supports_savepoints);
-        assert!(tc.supports_read_only);
+        assert!(
+            !tc.supports_read_only,
+            "read-only enforcement must be declared by a driver that implements it"
+        );
         assert!(tc.default_isolation_level.is_some());
     }
 
@@ -2863,6 +3068,7 @@ mod tests {
             supports_schemas: true,
             default_schema: Some("dbo".to_string()),
             case_sensitive_identifiers: false,
+            misreads_unknown_quoted_identifiers: false,
         };
         assert_eq!(custom.identifier_quote, '[');
         assert_eq!(custom.placeholder_style, PlaceholderStyle::NamedColon);
@@ -2947,8 +3153,29 @@ mod tests {
         assert!(tc.default_isolation_level.is_some());
         assert!(tc.supports_savepoints);
         assert!(tc.supports_nested_transactions);
-        assert!(tc.supports_read_only);
+        assert!(!tc.supports_read_only);
         assert!(!tc.supports_deferrable);
+    }
+
+    #[test]
+    fn metadata_enforces_read_only_only_when_its_transactions_declare_it() {
+        let mut metadata = DriverMetadataBuilder::new(
+            "test",
+            "Test Driver",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+        assert!(!metadata.enforces_read_only());
+
+        metadata.transactions = Some(TransactionCapabilities::default());
+        assert!(!metadata.enforces_read_only());
+
+        metadata.transactions = Some(TransactionCapabilities {
+            supports_read_only: true,
+            ..TransactionCapabilities::default()
+        });
+        assert!(metadata.enforces_read_only());
     }
 
     // --- DriverLimits Tests ---
@@ -3060,9 +3287,7 @@ mod tests {
         assert_eq!(DatabaseCategory::Relational.display_name(), "Relational");
         assert_eq!(DatabaseCategory::Document.display_name(), "Document");
         assert_eq!(DatabaseCategory::KeyValue.display_name(), "Key-Value");
-        assert_eq!(DatabaseCategory::Graph.display_name(), "Graph");
         assert_eq!(DatabaseCategory::TimeSeries.display_name(), "Time Series");
-        assert_eq!(DatabaseCategory::WideColumn.display_name(), "Wide Column");
         assert_eq!(
             DatabaseCategory::ObjectStorage.display_name(),
             "Object Storage"
@@ -3074,12 +3299,10 @@ mod tests {
         assert_eq!(DatabaseCategory::Relational.container_name(), "Tables");
         assert_eq!(DatabaseCategory::Document.container_name(), "Collections");
         assert_eq!(DatabaseCategory::KeyValue.container_name(), "Keys");
-        assert_eq!(DatabaseCategory::Graph.container_name(), "Nodes");
         assert_eq!(
             DatabaseCategory::TimeSeries.container_name(),
             "Measurements"
         );
-        assert_eq!(DatabaseCategory::WideColumn.container_name(), "Tables");
         assert_eq!(DatabaseCategory::ObjectStorage.container_name(), "Buckets");
     }
 
@@ -3088,9 +3311,7 @@ mod tests {
         assert_eq!(DatabaseCategory::Relational.record_name(), "Rows");
         assert_eq!(DatabaseCategory::Document.record_name(), "Documents");
         assert_eq!(DatabaseCategory::KeyValue.record_name(), "Values");
-        assert_eq!(DatabaseCategory::Graph.record_name(), "Nodes");
         assert_eq!(DatabaseCategory::TimeSeries.record_name(), "Points");
-        assert_eq!(DatabaseCategory::WideColumn.record_name(), "Rows");
         assert_eq!(DatabaseCategory::ObjectStorage.record_name(), "Objects");
     }
 
@@ -3296,7 +3517,7 @@ mod tests {
     fn metric_catalog_capability_bit_value_and_unique() {
         let bits = DriverCapabilities::METRIC_CATALOG.bits();
 
-        assert_eq!(bits, 1u64 << 50, "METRIC_CATALOG must equal 1 << 50");
+        assert_eq!(bits, 1u128 << 50, "METRIC_CATALOG must equal 1 << 50");
         assert_eq!(
             bits.count_ones(),
             1,
@@ -3400,7 +3621,7 @@ mod tests {
     fn test_dashboard_import_bit_value() {
         assert_eq!(
             DriverCapabilities::DASHBOARD_IMPORT.bits(),
-            1u64 << 51,
+            1u128 << 51,
             "DASHBOARD_IMPORT must equal 1 << 51"
         );
     }
@@ -3433,7 +3654,7 @@ mod tests {
     fn test_dashboard_sync_bit_value() {
         assert_eq!(
             DriverCapabilities::DASHBOARD_SYNC.bits(),
-            1u64 << 52,
+            1u128 << 52,
             "DASHBOARD_SYNC must equal 1 << 52"
         );
     }
@@ -3475,7 +3696,7 @@ mod tests {
     fn test_chart_authoring_bit_value() {
         assert_eq!(
             DriverCapabilities::CHART_AUTHORING.bits(),
-            1u64 << 53,
+            1u128 << 53,
             "CHART_AUTHORING must equal 1 << 53"
         );
     }

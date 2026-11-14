@@ -1,0 +1,13 @@
+{
+  "title": "DBFlux redesign: DBFlux redesign directions",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Explorations, row \"DBFlux redesign directions\".",
+  "artboards": [
+    {
+      "file": "01-main.html",
+      "title": "Directions overview",
+      "tradeoff": "Overview of the three directions side by side; compares them at a glance but shows no full screen.",
+      "width": 1440,
+      "height": 900
+    }
+  ]
+}

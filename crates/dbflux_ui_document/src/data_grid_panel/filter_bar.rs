@@ -1,7 +1,8 @@
+use super::*;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
-use dbflux_core::VisualQuerySpec;
+use dbflux_core::{ObjectFacet, VisualQuerySpec};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -44,6 +45,12 @@ pub(crate) enum FilterMode {
 /// String literals (single- and double-quoted) are skipped atomically so that
 /// `email = 'a.b@x.com'` returns `Raw` while `user.email = 'x'` returns
 /// `Relational`. Does not perform full parsing; this is intentionally cheap.
+// The five bytes[i] reads below each sit in a loop or guard conditioned on
+// i < bytes.len(); the bound is not re-checked per access.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "five bytes[i] reads: the outer match under while i < bytes.len(), the closing-quote check at the top of each inner while i < bytes.len() loop, and the doubled-quote check behind i < bytes.len() && in each quote arm"
+)]
 pub(crate) fn classify_filter_input(text: &str) -> FilterMode {
     if text.trim().is_empty() {
         return FilterMode::Raw;
@@ -228,6 +235,79 @@ pub(crate) fn render_relational_error(
 /// when a resolve error is active.
 pub(crate) fn filter_input_has_error(state: &RelationalFilterState) -> bool {
     matches!(state, RelationalFilterState::Error { .. })
+}
+
+impl DataGridPanel {
+    // === Filter bar presentation helpers ===
+
+    /// Filter verb and filter keyword ("SELECT * FROM" / "find" / "FROM") shown
+    /// in the toolbar to the left of the source name and to the left of the filter
+    /// input, respectively.
+    ///
+    /// Derived from the source's facets: a collection its driver declares as
+    /// documents is read with `find`; every other source is read with SQL.
+    pub(crate) fn filter_labels_for_source(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> (&'static str, &'static str) {
+        if !source.is_table()
+            && Self::source_facets(source, app_state, cx).contains(&ObjectFacet::Document)
+        {
+            return ("find", "WHERE");
+        }
+
+        ("SELECT * FROM", "WHERE")
+    }
+
+    /// Caption and label that name the source left of the filter input.
+    ///
+    /// A collection whose driver describes its browse query shows that query,
+    /// in the connection's own language, with no caption. Every other source
+    /// shows the category-derived verb and the qualified source name.
+    pub(crate) fn source_query_labels(&self, cx: &App) -> (&'static str, String) {
+        if let (DataSource::Collection { .. }, Some(label)) =
+            (&self.source, &self.filter_bar.browse_query_label)
+        {
+            return ("", label.clone());
+        }
+
+        let (prefix, _) = Self::filter_labels_for_source(&self.source, &self.app_state, cx);
+
+        let source_name = match &self.source {
+            DataSource::Table { table, .. } => table.qualified_name(),
+            DataSource::Collection { collection, .. } => collection.qualified_name(),
+            DataSource::QueryResult { .. } => String::new(),
+        };
+
+        (prefix, source_name)
+    }
+
+    /// Filter input placeholder text, derived from the source's facets.
+    ///
+    /// Returns an empty string for a time-series collection because its
+    /// `browse_collection` ignores the filter field (InfluxDB) — showing a
+    /// misleading placeholder would lie to the user.
+    pub(super) fn filter_placeholder_for_source(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> &'static str {
+        const SQL_EXAMPLE: &str = "e.g. id > 10 AND name LIKE '%test%'";
+
+        if source.is_table() {
+            return SQL_EXAMPLE;
+        }
+
+        let facets = Self::source_facets(source, app_state, cx);
+        if facets.contains(&ObjectFacet::Document) {
+            r#"e.g. {"name": {"$regex": "test"}}"#
+        } else if super::facets::time_series_facet(&facets).is_some() {
+            ""
+        } else {
+            SQL_EXAMPLE
+        }
+    }
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ use dbflux_components::components::tree_nav::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Spacing, ui};
 use dbflux_core::keymap_types::Command;
 use dbflux_core::{TableRef, transfer_compatible};
 use dbflux_ui_base::app_state_entity::AppStateEntity;
@@ -51,7 +51,7 @@ use uuid::Uuid;
 use crate::migrate_wizard::phases::can_advance_from_source_target;
 use crate::migrate_wizard::tree_model::{TreeModel, TreePayload, object_tree_node_id};
 
-const ROW_HEIGHT: Pixels = Heights::ROW_COMPACT;
+const ROW_HEIGHT: Rems = Heights::ROW_COMPACT;
 const INDENT_PX: f32 = 14.0;
 
 /// Which of the two trees an operation targets.
@@ -1175,7 +1175,7 @@ impl SourceTargetPhase {
             .when(is_checkable, |parent| {
                 parent.child(checkbox_glyph(is_checked, theme))
             })
-            .when_some(row.icon, |parent, icon| {
+            .when_some(row.icon.clone(), |parent, icon| {
                 parent.child(Icon::new(icon).small().color(icon_color))
             })
             .child(Text::body(row.label.to_string()).color(text_color));
@@ -1211,7 +1211,7 @@ impl SourceTargetPhase {
 /// `TreeNav` holds no checkbox state, so the wizard renders its own.
 fn checkbox_glyph(checked: bool, theme: &gpui_component::Theme) -> impl IntoElement {
     div()
-        .size(px(14.0))
+        .size(ui(14.0))
         .flex()
         .items_center()
         .justify_center()
@@ -1828,6 +1828,7 @@ pub(crate) mod shared_coordinator_tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -1952,6 +1953,10 @@ pub(crate) mod shared_coordinator_tests {
             &dbflux_core::DefaultSqlDialect
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
             self.list_calls.fetch_add(1, Ordering::SeqCst);
             if self.list_failures.load(Ordering::SeqCst) > 0 {
@@ -1963,6 +1968,10 @@ pub(crate) mod shared_coordinator_tests {
             Ok(self.databases.lock().expect("databases").clone())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn schema_for_database(
             &self,
             database: &str,

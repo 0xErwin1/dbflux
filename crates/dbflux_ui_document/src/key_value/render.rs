@@ -113,7 +113,7 @@ pub(super) fn type_badge_element(key_type: Option<KeyType>, cx: &App) -> impl In
         )
         .child(
             div()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(KeyValueMetrics::TYPE_BADGE_FONT)
                 .font_weight(FontWeight::BOLD)
                 .text_color(color)
@@ -169,7 +169,7 @@ impl Render for KeyValueDocument {
         let filter_row = self.render_filter_row(cx);
         let key_list = self.render_key_list_section(cx);
         let value_pane = self.render_value_section(cx);
-        let console = self.render_console(cx);
+        let console = self.render_console();
         let bulk_modal = self
             .bulk_delete
             .as_ref()
@@ -224,7 +224,7 @@ impl Render for KeyValueDocument {
                     .child(key_list)
                     .child(value_pane),
             )
-            .child(console)
+            .children(console)
             .when_some(bulk_menu_overlay, |root, overlay| root.child(overlay))
             .when(self.new_key_modal.read(cx).is_visible(), |root| {
                 root.child(self.new_key_modal.clone())
@@ -269,8 +269,7 @@ impl KeyValueDocument {
         };
 
         if command == Command::ToggleConsole {
-            self.toggle_console(window, cx);
-            return true;
+            return self.toggle_console(window, cx);
         }
 
         if matches!(command, Command::NextPanelTab | Command::PrevPanelTab) {
@@ -297,6 +296,14 @@ impl KeyValueDocument {
     /// Alt+L / Alt+H: the next or previous mode of the open expiry editor,
     /// otherwise the next or previous key type filter (All first), wrapping.
     /// Returns false when neither is offered.
+    // next comes from step_index, a modular step over the list length, so it
+    // is a valid index into modes / options; both lists are non-empty
+    // (ExpiryMode::ALL is a const array, options always holds the None
+    // entry).
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next is a modular step over the list length and both lists are non-empty (ExpiryMode::ALL is a const array; options always holds the None entry)"
+    )]
     fn step_panel_tab(
         &mut self,
         forward: bool,
@@ -448,7 +455,7 @@ impl KeyValueDocument {
         let pattern_field = div()
             .flex_1()
             .min_w(KeyValueMetrics::PATTERN_MIN_WIDTH)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -680,7 +687,7 @@ impl KeyValueDocument {
                     .px(Spacing::MD)
                     .border_b_1()
                     .border_color(theme.table_row_border)
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(KeyValueMetrics::LIST_ROW_FONT)
                     .child(type_badge_element(entry.key_type, cx))
                     .child(div().text_color(strong).child(entry.key.clone()))
@@ -721,7 +728,7 @@ impl KeyValueDocument {
                                 .gap(KeyValueMetrics::FOOTER_GAP)
                                 .h(KeyValueMetrics::BULK_ROW_HEIGHT)
                                 .px(Spacing::MD)
-                                .font_family(AppFonts::MONO)
+                                .font_family(dbflux_components::fonts::editor_family(cx))
                                 .text_size(KeyValueMetrics::LIST_ROW_FONT)
                                 .text_color(muted)
                                 .child(div().w(KeyValueMetrics::TYPE_BADGE_WIDTH))
@@ -806,7 +813,7 @@ impl KeyValueDocument {
                     ))
                     .child(
                         div()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_color(strong)
                             .child(state.pattern.clone()),
                     )
@@ -815,7 +822,11 @@ impl KeyValueDocument {
                     )),
             )
             .when_some(state.confirm_input.clone(), |block, input| {
-                block.child(div().font_family(AppFonts::MONO).child(input))
+                block.child(
+                    div()
+                        .font_family(dbflux_components::fonts::editor_family(cx))
+                        .child(input),
+                )
             });
 
         let note = div()

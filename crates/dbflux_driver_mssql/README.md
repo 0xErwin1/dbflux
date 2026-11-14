@@ -16,6 +16,7 @@ Microsoft SQL Server driver for DBFlux, built on the
 
 - SQL Server / Azure SQL relational driver with SQL query execution and schema
   discovery.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL statement line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Authentication via SQL Server logins (username + password); URI mode accepts
   ADO, JDBC, and `sqlserver://user:pass@host:port/db` connection strings.
 - Reports `Application Name` as `dbflux/<version>` unless the connection
@@ -29,7 +30,12 @@ Microsoft SQL Server driver for DBFlux, built on the
   - `on` — encrypted, accepts self-signed certs. Best for local/dev
     SQL Server with its auto-generated cert.
   - `required` — encrypted, validates the cert chain. Use against
-    servers with a real CA-signed cert (Azure SQL, etc.).
+    servers with a real CA-signed cert (Azure SQL, etc.). Selecting
+    `required` reveals the **CA certificate** path; when set, the chain
+    is validated against that CA (tiberius `trust_cert_ca`), so servers
+    signed by a private or corporate CA connect without trusting every
+    certificate. Left empty, the system trust store is used. The `on`
+    mode ignores the path.
   In URI mode, `?trust=true|false` explicitly overrides the derived
   value if you need an unusual combination (e.g. `?encrypt=required&trust=true`).
 - Optional SQL Server named instances (`SQLEXPRESS`, `MSSQLSERVER2019`,
@@ -70,6 +76,10 @@ Microsoft SQL Server driver for DBFlux, built on the
   capped at 1000 rows per statement per T-SQL's `VALUES` row limit, exposed
   via `DriverLimits::max_bulk_insert_rows`) and driver-native `CREATE TABLE`
   DDL from a source table's columns (`TRUNCATE_TABLE` is also supported).
+- Batched primary-key row lookup (`fetch_rows_by_pks`): one
+  `WHERE pk IN (...)` statement per chunk of at most 100 values, with an
+  optional column projection; used to resolve foreign-key labels in the data
+  grid.
 - Write-privilege probe: after connecting, checks `DATABASEPROPERTYEX(DB_NAME(), 'Updateability')` for a read-only database (e.g. an Always On readable secondary) and, otherwise, whether the login holds `INSERT`/`UPDATE`/`DELETE` on any visible non-system base table via `HAS_PERMS_BY_NAME`, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; an empty database is inconclusive and leaves the policy unchanged).
 
 ### Instance Metrics
@@ -119,6 +129,30 @@ Requires the `VIEW SERVER STATE` permission.
   the `ALTER ANY CONNECTION` permission. On older or restricted logins,
   the KILL itself may fail with a permission error; the driver surfaces
   that to the user.
+
+### Dropped sessions
+
+- Each session's socket has TCP keepalive enabled (first probe after 60
+  seconds idle), so NAT gateways, firewalls and load balancers that drop
+  silent connections keep the session open.
+- When the server or the network drops the session anyway, the next call
+  fails with an I/O error (broken pipe, connection reset or unexpected end
+  of file). The driver drops the dead client and marks the connection for
+  reconnection, the same way it does after a cancel.
+- Metadata reads (databases, tables, views, table and view details, schema
+  types, indexes, foreign keys and routines) open a new session, restore the
+  active database and retry once, so opening a table after an idle period
+  works without reconnecting by hand.
+- Row edits (insert, update, delete), browsing, counting and the row and
+  dependency lookups open the new session before they run, so they work
+  without reconnecting by hand once a previous call has detected the drop.
+  If nothing detected it yet, the first operation fails and is not replayed;
+  a failed write is never replayed. Recovery is serialized, so concurrent callers share one new
+  session instead of each replacing the other's. A server error that reports
+  a killed session (596, 233, 6005) is treated the same way as a dropped
+  socket.
+- A query batch is never retried, because the server may already have run
+  it. Its error is shown, and the next query or ping opens a new session.
 
 ### Schema discovery
 
@@ -189,7 +223,8 @@ Requires the `VIEW SERVER STATE` permission.
 - `N'…'` Unicode string literals; `0x…` (uppercase) binary literals;
   `1`/`0` for boolean (`BIT`) values.
 - `OFFSET … ROWS FETCH NEXT … ROWS ONLY` pagination (with a fallback
-  `ORDER BY 1` so OFFSET-without-ORDER-BY queries do not error out).
+  `ORDER BY (SELECT NULL)` so OFFSET-without-ORDER-BY queries do not error
+  out and no column is sorted).
 - `SELECT TOP N` is not used; OFFSET/FETCH is the canonical pagination form.
 - `UPSERT` is intentionally not generated; SQL Server's `MERGE` has known
   bugs and should be written by hand.
@@ -248,6 +283,16 @@ Requires the `VIEW SERVER STATE` permission.
 
 ## Limitations
 
+- The `required` mode's CA certificate replaces the system trust store
+  rather than extending it, must hold exactly one certificate, and must
+  use a `.pem`, `.crt` or `.der` extension (tiberius with rustls).
+  `sqlserver://` URLs have no CA certificate parameter; ADO and JDBC
+  connection strings accept tiberius's `TrustServerCertificateCA=<path>`
+  key instead. Do not combine it with `TrustServerCertificate=true` —
+  tiberius panics when both trust settings are set.
+- Through an SSH tunnel the driver connects to `127.0.0.1`, so that is the
+  server name verified in `required` mode: a private-CA certificate issued
+  for the real hostname fails hostname verification.
 - Faithful `CREATE TABLE` generation (schema diff) refuses, rather than
   flattening, tables whose creation semantics it cannot reproduce: computed
   columns, user-defined/CLR (and alias) column types, sparse columns,
@@ -321,6 +366,8 @@ Requires the `VIEW SERVER STATE` permission.
   enforced. The bound applies to retained rows, not to total transferred
   bytes, and a single huge row is retained in full. A mutation under a row
   limit completes all of its effects.
+- Batched primary-key row lookup sends at most 100 values per query; a larger
+  request runs as several `IN (...)` statements.
 - The row-limit cap applies to ordinary SQL execution, not to every execute
   context: a capped request aimed at the driver's instance metrics or
   inspectors is rejected before the connection lock or any dispatch — those
@@ -369,3 +416,4 @@ Requires the `VIEW SERVER STATE` permission.
   Server disables FK checking per-table via `ALTER TABLE ... NOCHECK
   CONSTRAINT`, which does not fit the engine's single global toggle; a
   per-table variant is a possible future addition.
+- No database-enforced read-only mode: requests that require one are refused, so MCP `execute_script` governs scripts classified `Read` or `Metadata` as writes, and editor auto-refresh is unavailable on SQL Server connections.

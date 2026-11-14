@@ -1,11 +1,19 @@
-pub mod count;
-pub mod parser;
-pub mod resolver;
+pub(crate) mod count;
+pub(crate) mod parser;
+pub(crate) mod resolver;
 
 #[cfg(test)]
 mod integration_sqlite;
 
+#[expect(
+    unreachable_pub,
+    reason = "Preserve the public error payload alias despite its private module path"
+)]
 pub use parser::ParseError;
+#[expect(
+    unreachable_pub,
+    reason = "Preserve the public lowering return-type alias and the root error re-export"
+)]
 pub use resolver::{RelationalLowering, ResolveError};
 
 use crate::query::visual_query::SourceTable;

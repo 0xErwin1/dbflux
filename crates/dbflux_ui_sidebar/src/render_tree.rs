@@ -4,9 +4,25 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics, TreeMetrics};
-use dbflux_components::typography::AppFonts;
 use gpui::FontWeight;
 use std::time::Duration;
+
+/// Whether `item_id` is an error placeholder row, whose label is the full
+/// failure message and is usually wider than the sidebar.
+fn is_error_retry_row(item_id: &str) -> bool {
+    item_id.starts_with("object-retry|")
+        || item_id.starts_with("metrics-retry|")
+        || item_id.starts_with(crate::root_sections::DECLARATIONS_RETRY_PREFIX)
+        || item_id.starts_with(crate::root_sections::LISTING_RETRY_PREFIX)
+}
+
+/// Whether a row draws its chevron pointing down.
+///
+/// A profile keeps its expanded flag across a disconnect so it reopens on
+/// reconnect, but while it has no children there is nothing open under it.
+fn reads_expanded(node_kind: SchemaNodeKind, is_expanded: bool, has_children: bool) -> bool {
+    is_expanded && (has_children || node_kind != SchemaNodeKind::Profile)
+}
 
 fn sidebar_tree_label(
     label: SharedString,
@@ -133,8 +149,9 @@ pub(super) fn render_tree_item(
         || item_id.starts_with("KL|");
     if is_loading_row {
         let theme = cx.theme();
-        let label_start =
-            TreeMetrics::INDENT * depth as f32 + TreeMetrics::CHEVRON + TreeMetrics::GAP;
+        let label_start = dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT) * depth as f32
+            + dbflux_components::fonts::ui_px(cx, TreeMetrics::CHEVRON)
+            + TreeMetrics::GAP;
         return ListItem::new(ix).h(TreeMetrics::ROW_HEIGHT).child(
             div()
                 .w_full()
@@ -183,9 +200,9 @@ pub(super) fn render_tree_item(
     );
 
     let theme = cx.theme();
-    let indent_per_level = f32::from(TreeMetrics::INDENT);
+    let indent_per_level = f32::from(dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT));
     let is_folder = entry.is_folder();
-    let is_expanded = entry.is_expanded();
+    let is_expanded = reads_expanded(node_kind, entry.is_expanded(), is_folder);
 
     let needs_chevron = matches!(
         node_kind,
@@ -211,6 +228,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::RoutinesFolder
                 | SchemaNodeKind::CustomType
                 | SchemaNodeKind::ScriptsFolder
+                | SchemaNodeKind::ScriptsRoot
                 | SchemaNodeKind::Collection
                 | SchemaNodeKind::CollectionChild
                 | SchemaNodeKind::CollectionsFolder
@@ -225,6 +243,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::SavedChartsFolder
                 | SchemaNodeKind::InstanceMetricsFolder
                 | SchemaNodeKind::InstanceInspectorsFolder
+                | SchemaNodeKind::InstanceFolder
         ));
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
@@ -403,6 +422,10 @@ pub(super) fn render_tree_item(
                     let item_id = item_id.clone();
                     move || format!("row-{item_id}")
                 })
+                // Named by the item rather than by what the row draws: while the
+                // inline editor stands in for the label, the drawn text is the
+                // editor, and the name would be the menu glyph on its own.
+                .aria_label(label_text.clone())
                 .w_full()
                 .flex()
                 .items_center()
@@ -472,7 +495,14 @@ pub(super) fn render_tree_item(
                         .flex()
                         .justify_center()
                         .when_some(chevron_icon, |el, icon| {
-                            el.cursor_pointer()
+                            // The arrow draws only an icon, so the row's own
+                            // text names it, and its expanded state says which
+                            // way it folds.
+                            let chevron_name = label_text.clone();
+                            el.role(Role::Button)
+                                .aria_label(chevron_name)
+                                .aria_expanded(is_expanded)
+                                .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
                                 })
@@ -535,12 +565,22 @@ pub(super) fn render_tree_item(
                     )
                 })
                 .when(!is_being_renamed, |el| {
+                    let error_tooltip =
+                        is_error_retry_row(item_id.as_ref()).then(|| label_text.clone());
+
                     el.child(
                         div()
+                            .id(SharedString::from(format!("row-label-{item_id}")))
                             .flex_1()
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
+                            .when_some(error_tooltip, |el, tooltip| {
+                                el.tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(tooltip.clone())
+                                        .build(window, cx)
+                                })
+                            })
                             .child(sidebar_tree_label(
                                 label_text.clone(),
                                 node_kind,
@@ -555,7 +595,7 @@ pub(super) fn render_tree_item(
                         div()
                             .flex_shrink_0()
                             .ml(TreeMetrics::GAP)
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(TreeMetrics::META_FONT)
                             .text_color(theme.muted_foreground)
                             .child(count),
@@ -936,115 +976,144 @@ pub(super) fn render_tree_item(
                     },
                 )
                 // Scripts folder drop target (before/into/after zones)
-                .when(node_kind == SchemaNodeKind::ScriptsFolder, |el| {
-                    let sidebar_for_drop = sidebar_entity.clone();
-                    let sidebar_for_move = sidebar_entity.clone();
-                    let item_id_for_drop = item_id.to_string();
-                    let item_id_for_move = item_id.to_string();
-                    let item_id_for_move_drag_move = item_id_for_move.clone();
-                    let drop_target_bg = theme.drop_target;
+                .when(
+                    matches!(
+                        node_kind,
+                        SchemaNodeKind::ScriptsFolder | SchemaNodeKind::ScriptsRoot
+                    ),
+                    |el| {
+                        let sidebar_for_drop = sidebar_entity.clone();
+                        let sidebar_for_move = sidebar_entity.clone();
+                        let item_id_for_drop = item_id.to_string();
+                        let item_id_for_move = item_id.to_string();
+                        let item_id_for_move_drag_move = item_id_for_move.clone();
+                        let drop_target_bg = theme.drop_target;
 
-                    let scripts_drop_target = params.scripts_drop_target.as_ref();
-                    let is_scripts_drop_into = scripts_drop_target.is_some_and(|t| {
-                        t.item_id == item_id.as_ref() && t.position == DropPosition::Into
-                    });
-                    let is_scripts_drop_before = scripts_drop_target.is_some_and(|t| {
-                        t.item_id == item_id.as_ref() && t.position == DropPosition::Before
-                    });
-                    let is_scripts_drop_after = scripts_drop_target.is_some_and(|t| {
-                        t.item_id == item_id.as_ref() && t.position == DropPosition::After
-                    });
+                        let scripts_drop_target = params.scripts_drop_target.as_ref();
+                        let is_scripts_drop_into = scripts_drop_target.is_some_and(|t| {
+                            t.item_id == item_id.as_ref() && t.position == DropPosition::Into
+                        });
+                        let is_scripts_drop_before = scripts_drop_target.is_some_and(|t| {
+                            t.item_id == item_id.as_ref() && t.position == DropPosition::Before
+                        });
+                        let is_scripts_drop_after = scripts_drop_target.is_some_and(|t| {
+                            t.item_id == item_id.as_ref() && t.position == DropPosition::After
+                        });
 
-                    let el = if is_scripts_drop_into {
-                        el.bg(drop_target_bg)
-                    } else {
-                        el
-                    };
+                        let el = if is_scripts_drop_into {
+                            el.bg(drop_target_bg)
+                        } else {
+                            el
+                        };
 
-                    let el = if is_scripts_drop_before {
-                        el.border_t_2().border_color(ChromeColors::tint(theme))
-                    } else if is_scripts_drop_after {
-                        el.border_b_2().border_color(ChromeColors::tint(theme))
-                    } else {
-                        el
-                    };
+                        let el = if is_scripts_drop_before {
+                            el.border_t_2().border_color(ChromeColors::tint(theme))
+                        } else if is_scripts_drop_after {
+                            el.border_b_2().border_color(ChromeColors::tint(theme))
+                        } else {
+                            el
+                        };
 
-                    el.drag_over::<ScriptsDragState>(move |style, _, _, _| style)
-                        .on_drag_move::<ScriptsDragState>(move |event, _, cx| {
-                            let target_id = parse_node_id(&item_id_for_move_drag_move);
-                            let is_root_target = matches!(
-                                target_id,
-                                Some(SchemaNodeId::ScriptsFolder { path: None })
-                            );
+                        el.drag_over::<ScriptsDragState>(move |style, _, _, _| style)
+                            .on_drag_move::<ScriptsDragState>(move |event, _, cx| {
+                                let target_id = parse_node_id(&item_id_for_move_drag_move);
+                                let is_root_target = matches!(
+                                    target_id,
+                                    Some(SchemaNodeId::ScriptsFolder { path: None })
+                                        | Some(SchemaNodeId::ScriptsRoot { .. })
+                                );
 
-                            let target_path = match target_id.as_ref() {
-                                Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
-                                    Some(std::path::PathBuf::from(p))
-                                }
-                                Some(SchemaNodeId::ScriptsFolder { path: None }) => {
-                                    dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
-                                }
-                                _ => None,
-                            };
+                                let managed_root = sidebar_for_move
+                                    .read(cx)
+                                    .app_state
+                                    .read(cx)
+                                    .scripts_directory()
+                                    .map(|dir| dir.root_path().to_path_buf());
 
-                            let source_paths = event.drag(cx).all_paths();
-                            let invalid_target = target_path.as_ref().is_some_and(|target| {
-                                source_paths
-                                    .iter()
-                                    .any(|source| *target == *source || target.starts_with(source))
-                            });
-
-                            if invalid_target {
-                                sidebar_for_move.update(cx, |this, cx| {
-                                    if this.scripts_drop_target.is_some() {
-                                        this.scripts_drop_target = None;
-                                        cx.notify();
+                                let target_path = match target_id.as_ref() {
+                                    Some(SchemaNodeId::ScriptsFolder { path: Some(p) })
+                                    | Some(SchemaNodeId::ScriptsRoot { path: p }) => {
+                                        Some(std::path::PathBuf::from(p))
                                     }
+                                    Some(SchemaNodeId::ScriptsFolder { path: None }) => {
+                                        managed_root
+                                    }
+                                    _ => None,
+                                };
+
+                                let source_paths = event.drag(cx).all_paths();
+
+                                // A folder row and the folder a drop beside it
+                                // lands in share a root (roots only take drops
+                                // into them), so the row path decides it.
+                                let crosses_roots = target_path.as_ref().is_some_and(|target| {
+                                    !sidebar_for_move
+                                        .read(cx)
+                                        .app_state
+                                        .read(cx)
+                                        .scripts_directory()
+                                        .is_some_and(|dir| dir.share_root(&source_paths, target))
                                 });
-                                return;
-                            }
 
-                            let top = event.bounds.origin.y;
-                            let height = event.bounds.size.height;
-                            let zone_top = top + (height / 3.0);
-                            let zone_bottom = top + (height * (2.0 / 3.0));
-
-                            let drop_position = if is_root_target {
-                                DropPosition::Into
-                            } else if event.event.position.y < zone_top {
-                                DropPosition::Before
-                            } else if event.event.position.y > zone_bottom {
-                                DropPosition::After
-                            } else {
-                                DropPosition::Into
-                            };
-
-                            sidebar_for_move.update(cx, |this, cx| {
-                                this.scripts_drop_target = Some(DropTarget {
-                                    item_id: item_id_for_move_drag_move.clone(),
-                                    position: drop_position,
-                                });
-                                cx.notify();
-                            });
-                        })
-                        .on_drop(move |state: &ScriptsDragState, _, cx| {
-                            sidebar_for_drop.update(cx, |this, cx| {
-                                let target_matches_row = this
-                                    .scripts_drop_target
-                                    .as_ref()
-                                    .is_some_and(|t| t.item_id == item_id_for_drop);
-
-                                if !target_matches_row {
-                                    this.scripts_drop_target = Some(DropTarget {
-                                        item_id: item_id_for_drop.clone(),
-                                        position: DropPosition::Into,
+                                let invalid_target = crosses_roots
+                                    || target_path.as_ref().is_some_and(|target| {
+                                        source_paths.iter().any(|source| {
+                                            *target == *source || target.starts_with(source)
+                                        })
                                     });
+
+                                if invalid_target {
+                                    sidebar_for_move.update(cx, |this, cx| {
+                                        if this.scripts_drop_target.is_some() {
+                                            this.scripts_drop_target = None;
+                                            cx.notify();
+                                        }
+                                    });
+                                    return;
                                 }
 
-                                this.handle_script_drop_with_position(state, cx);
-                            });
-                        })
-                })
+                                let top = event.bounds.origin.y;
+                                let height = event.bounds.size.height;
+                                let zone_top = top + (height / 3.0);
+                                let zone_bottom = top + (height * (2.0 / 3.0));
+
+                                let drop_position = if is_root_target {
+                                    DropPosition::Into
+                                } else if event.event.position.y < zone_top {
+                                    DropPosition::Before
+                                } else if event.event.position.y > zone_bottom {
+                                    DropPosition::After
+                                } else {
+                                    DropPosition::Into
+                                };
+
+                                sidebar_for_move.update(cx, |this, cx| {
+                                    this.scripts_drop_target = Some(DropTarget {
+                                        item_id: item_id_for_move_drag_move.clone(),
+                                        position: drop_position,
+                                    });
+                                    cx.notify();
+                                });
+                            })
+                            .on_drop(move |state: &ScriptsDragState, _, cx| {
+                                sidebar_for_drop.update(cx, |this, cx| {
+                                    let target_matches_row = this
+                                        .scripts_drop_target
+                                        .as_ref()
+                                        .is_some_and(|t| t.item_id == item_id_for_drop);
+
+                                    if !target_matches_row {
+                                        this.scripts_drop_target = Some(DropTarget {
+                                            item_id: item_id_for_drop.clone(),
+                                            position: DropPosition::Into,
+                                        });
+                                    }
+
+                                    this.handle_script_drop_with_position(state, cx);
+                                });
+                            })
+                    },
+                )
                 // Menu button for items that have context menus
                 .when(has_context_menu, |el| {
                     let sidebar_for_menu = sidebar_entity.clone();
@@ -1069,6 +1138,13 @@ pub(super) fn render_tree_item(
                                 let item_id = item_id_for_menu.clone();
                                 move || format!("menu-btn-{item_id}")
                             })
+                            // The button draws only an ellipsis, so it is named
+                            // after the row it opens the menu for.
+                            .role(Role::Button)
+                            .aria_label(dbflux_i18n::t!(
+                                "sidebar.row.actions",
+                                name = label_text.clone()
+                            ))
                             .flex_shrink_0()
                             .ml_auto()
                             .px_1()
@@ -1146,8 +1222,10 @@ fn render_failure_slice(
     let theme = cx.theme();
     let danger = theme.danger;
     let muted = theme.muted_foreground;
-    let row_height = TreeMetrics::ROW_HEIGHT;
-    let block_left = TreeMetrics::PADDING_X + TreeMetrics::INDENT * depth as f32 + Spacing::SM;
+    let row_height = dbflux_components::fonts::ui_px(cx, TreeMetrics::ROW_HEIGHT);
+    let block_left = TreeMetrics::PADDING_X
+        + dbflux_components::fonts::ui_px(cx, TreeMetrics::INDENT) * depth as f32
+        + Spacing::SM;
 
     let failure = params
         .failure_details
@@ -1184,7 +1262,7 @@ fn render_failure_slice(
         .border_color(danger)
         .child(
             div()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(ShellMetrics::FAILURE_FONT)
                 .line_height(ShellMetrics::FAILURE_LINE_HEIGHT)
                 .text_color(muted)
@@ -1311,6 +1389,7 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::CollectionField => Some(resolve_collection_field_type_icon(label)),
         SchemaNodeKind::CollectionIndex => Some(AppIcon::Hash),
         SchemaNodeKind::ScriptsFolder => Some(AppIcon::Folder),
+        SchemaNodeKind::ScriptsRoot => Some(AppIcon::HardDrive),
         SchemaNodeKind::ScriptFile => {
             let icon = parsed_id
                 .as_ref()
@@ -1339,8 +1418,11 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::InstanceInspectorsFolder => Some(AppIcon::Server),
         SchemaNodeKind::InstanceInspectorLeaf => Some(AppIcon::Server),
         SchemaNodeKind::InstanceOverviewLeaf => Some(AppIcon::Layers),
-        SchemaNodeKind::Bucket => Some(AppIcon::Box),
-        SchemaNodeKind::BucketsFolder => Some(AppIcon::Box),
+        SchemaNodeKind::InstanceFolder => Some(AppIcon::Server),
+        SchemaNodeKind::RootSectionItem => Some(AppIcon::Box),
+        SchemaNodeKind::RootSection => Some(AppIcon::Box),
+        SchemaNodeKind::SecretStore => Some(AppIcon::Lock),
+        SchemaNodeKind::SecretPath => Some(AppIcon::Folder),
         _ => None,
     }
 }
@@ -1420,6 +1502,7 @@ fn resolve_node_icon(
         }
         SchemaNodeKind::CollectionIndex => (Some(AppIcon::Hash), "", params.color_purple),
         SchemaNodeKind::ScriptsFolder => (Some(AppIcon::Folder), "", theme.muted_foreground),
+        SchemaNodeKind::ScriptsRoot => (Some(AppIcon::HardDrive), "", params.color_purple),
         SchemaNodeKind::ScriptFile => {
             let icon = parsed_id
                 .as_ref()
@@ -1455,13 +1538,15 @@ fn resolve_node_icon(
             (Some(AppIcon::ChartSpline), "", params.color_orange)
         }
         SchemaNodeKind::InstanceMetricLeaf => (Some(AppIcon::ChartSpline), "", params.color_teal),
-        SchemaNodeKind::InstanceInspectorsFolder => {
+        SchemaNodeKind::InstanceInspectorsFolder | SchemaNodeKind::InstanceFolder => {
             (Some(AppIcon::Server), "", params.color_orange)
         }
         SchemaNodeKind::InstanceInspectorLeaf => (Some(AppIcon::Server), "", params.color_teal),
         SchemaNodeKind::InstanceOverviewLeaf => (Some(AppIcon::Layers), "", params.color_orange),
-        SchemaNodeKind::Bucket => (Some(AppIcon::Box), "", params.color_teal),
-        SchemaNodeKind::BucketsFolder => (Some(AppIcon::Box), "", params.color_orange),
+        SchemaNodeKind::RootSectionItem => (Some(AppIcon::Box), "", params.color_teal),
+        SchemaNodeKind::RootSection => (Some(AppIcon::Box), "", params.color_orange),
+        SchemaNodeKind::SecretStore => (Some(AppIcon::Lock), "", params.color_orange),
+        SchemaNodeKind::SecretPath => (Some(AppIcon::Folder), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
     }
 }
@@ -1535,7 +1620,10 @@ fn resolve_collection_field_type_icon(label: &str) -> AppIcon {
 
 #[cfg(test)]
 mod tests {
-    use super::{icon_for_node_kind, sidebar_tree_label, split_folder_count};
+    use super::{
+        icon_for_node_kind, is_error_retry_row, reads_expanded, sidebar_tree_label,
+        split_folder_count,
+    };
     use dbflux_components::typography::AppFonts;
     use dbflux_core::SchemaNodeKind;
     use gpui::FontWeight;
@@ -1553,6 +1641,23 @@ mod tests {
             !render_code.contains('\u{2022}'),
             "a leaf row must not draw a bullet where the chevron goes (P1Sidebar)"
         );
+    }
+
+    #[test]
+    fn a_profile_without_children_reads_collapsed() {
+        assert!(!reads_expanded(SchemaNodeKind::Profile, true, false));
+        assert!(reads_expanded(SchemaNodeKind::Profile, true, true));
+        assert!(!reads_expanded(SchemaNodeKind::Profile, false, true));
+        assert!(reads_expanded(SchemaNodeKind::Database, true, false));
+    }
+
+    #[test]
+    fn error_placeholder_rows_are_recognised_by_their_retry_prefix() {
+        assert!(is_error_retry_row("object-retry|profile|db"));
+        assert!(is_error_retry_row("metrics-retry|profile|db"));
+        assert!(is_error_retry_row("root-sections-retry|profile"));
+        assert!(is_error_retry_row("root-section-retry|profile|buckets"));
+        assert!(!is_error_retry_row("connect-failure|profile|0"));
     }
 
     #[test]

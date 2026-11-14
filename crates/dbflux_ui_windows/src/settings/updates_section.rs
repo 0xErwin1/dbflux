@@ -18,7 +18,7 @@ use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
 #[cfg(feature = "telemetry")]
 use dbflux_components::tokens::{ChamferCut, Fields, Heights};
-use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing, ui};
 use dbflux_core::ReleaseChannel;
 use dbflux_core::chrono::Utc;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
@@ -34,7 +34,7 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
 /// Width of the label column in a settings row.
-const ROW_LABEL_WIDTH: Pixels = px(200.0);
+const ROW_LABEL_WIDTH: Rems = ui(200.0);
 
 /// Vertical padding of a settings row.
 const ROW_PADDING_Y: Pixels = px(7.0);
@@ -533,7 +533,7 @@ impl UpdatesSection {
             .flex()
             .items_center()
             .gap(Spacing::MD)
-            .child(Icon::new(icon).size(px(15.0)).color(color))
+            .child(Icon::new(icon).size(ui(15.0)).color(color))
             .child(Text::body(headline).text_color(theme.accent_foreground))
             .child(
                 Text::code(detail)

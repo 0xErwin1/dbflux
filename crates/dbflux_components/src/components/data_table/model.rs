@@ -46,6 +46,14 @@ pub struct RowData {
 pub struct CellValue {
     pub kind: CellKind,
     display_text: Arc<str>,
+
+    /// Whether `display_text` is a legend the host shows in place of an
+    /// empty value rather than the value itself.
+    placeholder: bool,
+
+    /// The `(label, id_suffix)` pair a resolved foreign key draws on one
+    /// line; see [`Self::with_fk_label`]. `None` on every other cell.
+    fk_spans: Option<(Arc<str>, Arc<str>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +114,26 @@ impl TableModel {
         if let Some(row) = new_rows.get_mut(row_idx) {
             row.cells = values.iter().map(CellValue::from).collect();
         }
+        Self {
+            columns: self.columns.clone(),
+            rows: new_rows,
+        }
+    }
+
+    /// The model with row `row_idx` showing the cells `edits` overrides in
+    /// it, and every other cell unchanged. The cells are copied as they are,
+    /// so values a `Value` cannot hold (binary sizes, placeholders) survive.
+    pub fn with_row_edits(&self, row_idx: usize, edits: &EditBuffer) -> Self {
+        let mut new_rows = self.rows.clone();
+
+        if let Some(row) = new_rows.get_mut(row_idx) {
+            for (col, cell) in row.cells.iter_mut().enumerate() {
+                if edits.is_cell_dirty(row_idx, col) {
+                    *cell = edits.get_cell(row_idx, col, &CellValue::null()).clone();
+                }
+            }
+        }
+
         Self {
             columns: self.columns.clone(),
             rows: new_rows,
@@ -246,11 +274,33 @@ impl From<&Value> for CellValue {
 
 const MAX_DISPLAY_LEN: usize = 200;
 
+/// How many characters of a foreign-key id are drawn beside its label; a
+/// longer id (a uuid) shows this many and an ellipsis instead.
+const FK_ID_DISPLAY_LEN: usize = 8;
+
+/// How many characters of a foreign-key label are drawn. The ` · #…` id
+/// suffix beside it takes the rest of [`MAX_DISPLAY_LEN`], so a composed
+/// display never outgrows a plain text cell's.
+const FK_LABEL_DISPLAY_LEN: usize = MAX_DISPLAY_LEN - FK_ID_DISPLAY_LEN - 5;
+
+/// `text` cut at `limit` characters with an ellipsis, for display only.
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+
+    let mut cut: String = text.chars().take(limit).collect();
+    cut.push('\u{2026}');
+    cut
+}
+
 impl CellValue {
     pub fn null() -> Self {
         Self {
             kind: CellKind::Null,
             display_text: "NULL".into(),
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -258,6 +308,8 @@ impl CellValue {
         Self {
             kind: CellKind::Bool(b),
             display_text: if b { "true" } else { "false" }.into(),
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -265,6 +317,8 @@ impl CellValue {
         Self {
             kind: CellKind::Int(i),
             display_text: i.to_string().into(),
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -277,6 +331,8 @@ impl CellValue {
         Self {
             kind: CellKind::Float(f),
             display_text: display.into(),
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -297,6 +353,8 @@ impl CellValue {
         Self {
             kind: CellKind::Text(s.into()),
             display_text,
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -304,6 +362,8 @@ impl CellValue {
         Self {
             kind: CellKind::Bytes(len),
             display_text: format!("<{} bytes>", len).into(),
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -313,6 +373,8 @@ impl CellValue {
         Self {
             kind: CellKind::Unsupported(type_name.into()),
             display_text: label.into(),
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -333,6 +395,8 @@ impl CellValue {
         Self {
             kind: CellKind::Json(s.into()),
             display_text,
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -341,6 +405,8 @@ impl CellValue {
         Self {
             kind: CellKind::Missing,
             display_text: "missing".into(),
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -357,7 +423,67 @@ impl CellValue {
         Self {
             kind: CellKind::Nested { is_array, count },
             display_text: display_text.into(),
+            placeholder: false,
+            fk_spans: None,
         }
+    }
+
+    /// An empty text value the grid draws as `legend`, muted and in italics.
+    ///
+    /// It is empty text in every other respect: the editor opens on it
+    /// empty, committing that unchanged stages nothing, and it copies as
+    /// empty text. The host chooses when a cell needs one and what it says.
+    pub fn placeholder(legend: &str) -> Self {
+        Self {
+            kind: CellKind::Text("".into()),
+            display_text: legend.into(),
+            placeholder: true,
+            fk_spans: None,
+        }
+    }
+
+    /// Whether this cell is drawn as a legend rather than its value; see
+    /// [`Self::placeholder`].
+    pub fn is_placeholder(&self) -> bool {
+        self.placeholder
+    }
+
+    /// Attaches a resolved foreign-key label to this cell, drawn as the
+    /// label with the raw id after it (`María López · #8`).
+    ///
+    /// The cell keeps the value it was built with: an int stays an `Int`,
+    /// so mutations carry the typed value and row identity survives a
+    /// reload. The label is display-only, normalized the way
+    /// [`Self::text`] draws text (whitespace flattened to one line) and
+    /// cut to [`FK_LABEL_DISPLAY_LEN`]. A label that is empty or the id
+    /// itself leaves the cell unchanged, so the id is never drawn twice.
+    pub fn with_fk_label(mut self, display_value: &str) -> Self {
+        let raw_id = self.edit_text();
+
+        let label: String = display_value
+            .chars()
+            .map(|c| if c.is_whitespace() { ' ' } else { c })
+            .collect();
+        let label = label.trim();
+
+        if label.is_empty() || label == raw_id {
+            return self;
+        }
+
+        let label = truncate_chars(label, FK_LABEL_DISPLAY_LEN);
+        let id_for_display = truncate_chars(&raw_id, FK_ID_DISPLAY_LEN);
+
+        self.display_text = format!("{label} · #{id_for_display}").into();
+        self.fk_spans = Some((label.into(), format!(" · #{id_for_display}").into()));
+        self.placeholder = false;
+        self
+    }
+
+    /// The `(label, id_suffix)` pair drawn for a resolved foreign-key
+    /// reference, the label in the cell's text color and the suffix muted;
+    /// see [`Self::with_fk_label`].
+    pub fn fk_spans(&self) -> Option<(Arc<str>, Arc<str>)> {
+        self.fk_spans.clone()
     }
 
     pub fn is_missing(&self) -> bool {
@@ -373,6 +499,8 @@ impl CellValue {
         Self {
             kind: CellKind::AutoGenerated(expression.into()),
             display_text: expression.into(),
+            placeholder: false,
+            fk_spans: None,
         }
     }
 
@@ -414,6 +542,76 @@ impl CellValue {
         }
     }
 
+    /// Whether `self` and `other` hold the same value, whatever text the
+    /// grid draws for them.
+    ///
+    /// The display text cannot answer this: it replaces every whitespace
+    /// character with a space and cuts long values, so two different texts
+    /// can be drawn alike, and a null is drawn like the text `NULL`.
+    ///
+    /// An editor hands a value back as text, so a number or a boolean is the
+    /// same value as the text an editor opens with for it and as the text the
+    /// grid draws for it. A value that text cannot spell out (bytes, an
+    /// unsupported type, a column default, a nested value) is drawn and
+    /// copied as a placeholder, and that placeholder stands for the value
+    /// rather than replacing it.
+    pub fn holds_same_value(&self, other: &CellValue) -> bool {
+        match (&self.kind, &other.kind) {
+            (
+                CellKind::Text(own) | CellKind::Json(own),
+                CellKind::Text(theirs) | CellKind::Json(theirs),
+            ) => own == theirs,
+
+            (CellKind::Text(text) | CellKind::Json(text), _) => other.is_written_as(text),
+            (_, CellKind::Text(text) | CellKind::Json(text)) => self.is_written_as(text),
+
+            // The display text of every other kind is built from its whole
+            // value, so within one kind it tells two values apart — except a
+            // resolved foreign-key label, which rewrites the display of a
+            // scalar without changing its value. When either side carries
+            // one, scalars compare by what the editor spells out; other
+            // kinds keep the display text, because `edit_text` is empty for
+            // them and would collapse different values into one.
+            (own, theirs) => {
+                let same_kind = std::mem::discriminant(own) == std::mem::discriminant(theirs);
+                let labeled_scalar = matches!(
+                    own,
+                    CellKind::Bool(_) | CellKind::Int(_) | CellKind::Float(_)
+                ) && (self.fk_spans.is_some() || other.fk_spans.is_some());
+
+                same_kind
+                    && if labeled_scalar {
+                        self.edit_text() == other.edit_text()
+                    } else {
+                        self.display_text == other.display_text
+                    }
+            }
+        }
+    }
+
+    /// Whether `text` stands for this value when it is not text itself: a
+    /// number or a boolean spelled out, or the placeholder drawn or copied
+    /// for a value that text cannot spell out.
+    ///
+    /// A null and an absent field are not placeholders: they hold no value,
+    /// so any text, `NULL` included, is a change to them.
+    fn is_written_as(&self, text: &str) -> bool {
+        match &self.kind {
+            CellKind::Bool(_) | CellKind::Int(_) | CellKind::Float(_) => {
+                self.display_text.as_ref() == text || self.edit_text() == text
+            }
+
+            CellKind::Bytes(_)
+            | CellKind::Unsupported(_)
+            | CellKind::AutoGenerated(_)
+            | CellKind::Nested { .. } => {
+                self.display_text.as_ref() == text || super::clipboard::format_cell(self) == text
+            }
+
+            CellKind::Null | CellKind::Missing | CellKind::Text(_) | CellKind::Json(_) => false,
+        }
+    }
+
     pub fn needs_modal_editor(&self) -> bool {
         match &self.kind {
             CellKind::Text(s) => s.contains('\n') || s.len() > 100,
@@ -440,14 +638,35 @@ impl CellValue {
     }
 }
 
+/// Where a pending insert is shown among the base rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertAnchor {
+    /// Above the first base row.
+    BeforeFirst,
+    /// After this base row index.
+    After(usize),
+    /// After the last base row.
+    End,
+}
+
 /// A pending insert with its data and target visual position.
 #[derive(Debug, Clone)]
 pub struct PendingInsert {
     /// Cell values for the new row.
     pub data: Vec<CellValue>,
-    /// Visual position: insert AFTER this base row index.
-    /// If None, insert at the end.
-    pub insert_after: Option<usize>,
+    /// Visual position of the new row.
+    pub anchor: InsertAnchor,
+}
+
+impl PendingInsert {
+    /// The base row index the new row is shown after. `None` for a row above
+    /// the first base row and for a row at the end.
+    pub fn insert_after(&self) -> Option<usize> {
+        match self.anchor {
+            InsertAnchor::After(row) => Some(row),
+            InsertAnchor::BeforeFirst | InsertAnchor::End => None,
+        }
+    }
 }
 
 /// A key cell value that tells rows apart across reloads.
@@ -459,6 +678,8 @@ enum IdentityValue {
     Float(u64),
     Text(Arc<str>),
     Json(Arc<str>),
+    /// The index of a row that is identified by its position.
+    Position(usize),
 }
 
 impl IdentityValue {
@@ -481,20 +702,43 @@ impl IdentityValue {
     }
 }
 
-/// Identity of base row `row` in `model`, read from `identity_columns`.
+/// What tells the base rows of a model apart.
+#[derive(Debug, Clone)]
+enum RowIdentityScheme {
+    /// The values of these columns. No column identifies no row.
+    Columns(Vec<usize>),
+    /// The row index.
+    Position,
+}
+
+impl Default for RowIdentityScheme {
+    fn default() -> Self {
+        Self::Columns(Vec::new())
+    }
+}
+
+/// Identity of base row `row` in `model` under `scheme`.
 fn row_identity(
     model: &TableModel,
     row: usize,
-    identity_columns: &[usize],
+    scheme: &RowIdentityScheme,
 ) -> Option<Vec<IdentityValue>> {
-    if identity_columns.is_empty() {
-        return None;
-    }
+    match scheme {
+        RowIdentityScheme::Columns(identity_columns) => {
+            if identity_columns.is_empty() {
+                return None;
+            }
 
-    identity_columns
-        .iter()
-        .map(|&col| model.cell(row, col).and_then(IdentityValue::from_cell))
-        .collect()
+            identity_columns
+                .iter()
+                .map(|&col| model.cell(row, col).and_then(IdentityValue::from_cell))
+                .collect()
+        }
+
+        RowIdentityScheme::Position => {
+            (row < model.row_count()).then(|| vec![IdentityValue::Position(row)])
+        }
+    }
 }
 
 /// Pending edits lifted off the rows they were staged on, keyed by row
@@ -503,7 +747,7 @@ fn row_identity(
 /// [`EditBuffer::restore_by_identity`] after it.
 #[derive(Debug, Clone, Default)]
 pub struct KeyedPendingEdits {
-    identity_columns: Vec<usize>,
+    identity: RowIdentityScheme,
     column_count: usize,
     rows: Vec<KeyedRowEdits>,
     /// Edited rows whose identity could not be read.
@@ -521,8 +765,16 @@ struct KeyedRowEdits {
 #[derive(Debug, Clone)]
 struct KeyedInsert {
     data: Vec<CellValue>,
-    /// Identity of the base row the insert is shown after.
-    anchor: Option<Vec<IdentityValue>>,
+    anchor: KeyedAnchor,
+}
+
+/// The [`InsertAnchor`] of a pending insert, with the base row it is shown
+/// after named by its identity.
+#[derive(Debug, Clone)]
+enum KeyedAnchor {
+    BeforeFirst,
+    After(Vec<IdentityValue>),
+    End,
 }
 
 /// Represents what a visual row index maps to.
@@ -559,16 +811,16 @@ pub enum EditAction {
     MarkDelete { row: usize },
     /// Row unmarked from deletion
     UnmarkDelete { row: usize },
-    /// Pending insert added: (insert_idx, insert_after, data)
+    /// Pending insert added: (insert_idx, anchor, data)
     AddInsert {
         insert_idx: usize,
-        insert_after: Option<usize>,
+        anchor: InsertAnchor,
         data: Vec<CellValue>,
     },
-    /// Pending insert removed: (insert_idx, insert_after, data)
+    /// Pending insert removed: (insert_idx, anchor, data)
     RemoveInsert {
         insert_idx: usize,
-        insert_after: Option<usize>,
+        anchor: InsertAnchor,
         data: Vec<CellValue>,
     },
     /// Pending insert cell modified
@@ -708,6 +960,21 @@ impl EditBuffer {
         model: &TableModel,
         identity_columns: &[usize],
     ) -> KeyedPendingEdits {
+        self.snapshot_with(model, RowIdentityScheme::Columns(identity_columns.to_vec()))
+    }
+
+    /// Lift the pending edits off the rows of `model`, keyed by row index.
+    ///
+    /// For rows that have no key and are identified by their position. Laid
+    /// back by [`EditBuffer::restore_by_identity`], every edit lands on the
+    /// row at the same index, so this only fits a reload that keeps the rows
+    /// it already had where they were, such as one that appends rows. An edit
+    /// on an index the reloaded model does not reach is dropped and counted.
+    pub fn snapshot_by_position(&self, model: &TableModel) -> KeyedPendingEdits {
+        self.snapshot_with(model, RowIdentityScheme::Position)
+    }
+
+    fn snapshot_with(&self, model: &TableModel, identity: RowIdentityScheme) -> KeyedPendingEdits {
         let mut edited_rows: BTreeSet<usize> = self.overrides.keys().map(|&(row, _)| row).collect();
         edited_rows.extend(
             self.row_states
@@ -717,13 +984,13 @@ impl EditBuffer {
         );
 
         let mut snapshot = KeyedPendingEdits {
-            identity_columns: identity_columns.to_vec(),
+            identity,
             column_count: model.col_count(),
             ..KeyedPendingEdits::default()
         };
 
         for row in edited_rows {
-            let Some(key) = row_identity(model, row, identity_columns) else {
+            let Some(key) = row_identity(model, row, &snapshot.identity) else {
                 snapshot.unkeyed_rows += 1;
                 continue;
             };
@@ -750,9 +1017,12 @@ impl EditBuffer {
             .iter()
             .map(|insert| KeyedInsert {
                 data: insert.data.clone(),
-                anchor: insert
-                    .insert_after
-                    .and_then(|row| row_identity(model, row, identity_columns)),
+                anchor: match insert.anchor {
+                    InsertAnchor::BeforeFirst => KeyedAnchor::BeforeFirst,
+                    InsertAnchor::After(row) => row_identity(model, row, &snapshot.identity)
+                        .map_or(KeyedAnchor::End, KeyedAnchor::After),
+                    InsertAnchor::End => KeyedAnchor::End,
+                },
             })
             .collect();
 
@@ -776,7 +1046,7 @@ impl EditBuffer {
 
         let mut rows_by_identity: HashMap<Vec<IdentityValue>, usize> = HashMap::new();
         for row in 0..model.row_count() {
-            if let Some(key) = row_identity(model, row, &edits.identity_columns) {
+            if let Some(key) = row_identity(model, row, &edits.identity) {
                 rows_by_identity.entry(key).or_insert(row);
             }
         }
@@ -794,13 +1064,17 @@ impl EditBuffer {
         }
 
         for insert in edits.inserts {
-            let insert_after = insert
-                .anchor
-                .and_then(|key| rows_by_identity.get(&key).copied());
+            let anchor = match insert.anchor {
+                KeyedAnchor::BeforeFirst => InsertAnchor::BeforeFirst,
+                KeyedAnchor::After(key) => rows_by_identity
+                    .get(&key)
+                    .map_or(InsertAnchor::End, |&row| InsertAnchor::After(row)),
+                KeyedAnchor::End => InsertAnchor::End,
+            };
 
             self.pending_inserts.push(PendingInsert {
                 data: insert.data,
-                insert_after,
+                anchor,
             });
         }
 
@@ -879,7 +1153,7 @@ impl EditBuffer {
         let idx = self.pending_inserts.len();
         self.pending_inserts.push(PendingInsert {
             data: row_data,
-            insert_after: None, // At the end
+            anchor: InsertAnchor::End,
         });
         idx
     }
@@ -891,19 +1165,60 @@ impl EditBuffer {
         after_row: usize,
         row_data: Vec<CellValue>,
     ) -> usize {
+        self.add_pending_insert_at(InsertAnchor::After(after_row), row_data)
+    }
+
+    /// Add a pending insert row at `anchor`, below the pending inserts that
+    /// already sit there.
+    /// Returns the index in pending_inserts.
+    pub fn add_pending_insert_at(
+        &mut self,
+        anchor: InsertAnchor,
+        row_data: Vec<CellValue>,
+    ) -> usize {
         let idx = self.pending_inserts.len();
 
         self.push_undo(EditAction::AddInsert {
             insert_idx: idx,
-            insert_after: Some(after_row),
+            anchor,
             data: row_data.clone(),
         });
 
         self.pending_inserts.push(PendingInsert {
             data: row_data,
-            insert_after: Some(after_row),
+            anchor,
         });
         idx
+    }
+
+    /// Add a pending insert row at `anchor`, placed at `position` in the list
+    /// of pending inserts, clamped to its end, so that the table shows it
+    /// before the pending insert that was at `position` when both share an
+    /// anchor. The inserts from `position` on move up by one index. Undo
+    /// removes it from that index, and redo puts it back there.
+    /// Returns the index in pending_inserts.
+    pub fn add_pending_insert_at_index(
+        &mut self,
+        position: usize,
+        anchor: InsertAnchor,
+        row_data: Vec<CellValue>,
+    ) -> usize {
+        let insert_idx = position.min(self.pending_inserts.len());
+
+        self.push_undo(EditAction::AddInsert {
+            insert_idx,
+            anchor,
+            data: row_data.clone(),
+        });
+
+        self.pending_inserts.insert(
+            insert_idx,
+            PendingInsert {
+                data: row_data,
+                anchor,
+            },
+        );
+        insert_idx
     }
 
     /// Check if a row is a pending insert (virtual row).
@@ -931,24 +1246,24 @@ impl EditBuffer {
     /// Compute the visual row ordering that interleaves pending inserts.
     ///
     /// Returns a vector where index = visual row, value = source (base or insert).
-    /// Pending inserts are placed AFTER their `insert_after` base row.
+    /// Pending inserts anchored above the first base row come first, and the
+    /// others are placed AFTER the base row of their anchor. Inserts that
+    /// share an anchor keep the order they were added in.
     pub fn compute_visual_order(&self) -> Vec<VisualRowSource> {
         let mut result = Vec::with_capacity(self.base_row_count + self.pending_inserts.len());
 
         // Build list of pending inserts sorted by their target position
-        let mut inserts_at: Vec<(usize, usize)> = self
-            .pending_inserts
-            .iter()
-            .enumerate()
-            .map(|(idx, pi)| {
-                // insert_after = Some(n) means insert after base row n
-                // insert_after = None means insert at the end
-                let pos = pi
-                    .insert_after
-                    .unwrap_or(self.base_row_count.saturating_sub(1));
-                (pos, idx)
-            })
-            .collect();
+        let mut inserts_at: Vec<(usize, usize)> = Vec::with_capacity(self.pending_inserts.len());
+
+        for (idx, pi) in self.pending_inserts.iter().enumerate() {
+            match pi.anchor {
+                InsertAnchor::BeforeFirst => result.push(VisualRowSource::Insert(idx)),
+                InsertAnchor::After(row) => inserts_at.push((row, idx)),
+                InsertAnchor::End => {
+                    inserts_at.push((self.base_row_count.saturating_sub(1), idx));
+                }
+            }
+        }
 
         // Sort by position so we can interleave correctly
         inserts_at.sort_by_key(|(pos, idx)| (*pos, *idx));
@@ -970,7 +1285,7 @@ impl EditBuffer {
             }
         }
 
-        // Add any remaining inserts (those with insert_after = None or past the end)
+        // Add any remaining inserts (those anchored at the end or past it)
         for &(_, insert_idx) in insert_iter {
             result.push(VisualRowSource::Insert(insert_idx));
         }
@@ -1001,6 +1316,17 @@ impl EditBuffer {
             && state.is_pending_delete()
         {
             self.push_undo(EditAction::UnmarkDelete { row });
+            self.lift_delete(row);
+        }
+    }
+
+    /// Takes a row out of `PendingDelete` into the state it had before it
+    /// was marked: dirty while it holds staged cells, which a delete keeps,
+    /// and clean otherwise.
+    fn lift_delete(&mut self, row: usize) {
+        if self.overrides.keys().any(|&(r, _)| r == row) {
+            self.row_states.insert(row, RowState::Dirty);
+        } else {
             self.row_states.remove(&row);
         }
     }
@@ -1064,10 +1390,14 @@ impl EditBuffer {
         }
 
         // Record action for undo
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the bounds check above returns early when insert_idx >= self.pending_inserts.len()"
+        )]
         let insert = &self.pending_inserts[insert_idx];
         self.push_undo(EditAction::RemoveInsert {
             insert_idx,
-            insert_after: insert.insert_after,
+            anchor: insert.anchor,
             data: insert.data.clone(),
         });
 
@@ -1112,6 +1442,10 @@ impl EditBuffer {
                 new_value: value.clone(),
             });
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the get_mut + col < insert.data.len() guards above establish both bounds"
+            )]
             if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
                 && col < insert.data.len()
             {
@@ -1185,7 +1519,7 @@ impl EditBuffer {
             }
 
             EditAction::MarkDelete { row } => {
-                self.row_states.remove(&row);
+                self.lift_delete(row);
                 self.redo_stack.push(EditAction::MarkDelete { row });
             }
 
@@ -1196,7 +1530,7 @@ impl EditBuffer {
 
             EditAction::AddInsert {
                 insert_idx,
-                insert_after,
+                anchor,
                 data,
             } => {
                 // Remove the insert that was added
@@ -1205,21 +1539,21 @@ impl EditBuffer {
                 }
                 self.redo_stack.push(EditAction::AddInsert {
                     insert_idx,
-                    insert_after,
+                    anchor,
                     data,
                 });
             }
 
             EditAction::RemoveInsert {
                 insert_idx,
-                insert_after,
+                anchor,
                 data,
             } => {
                 // Re-add the insert that was removed
                 // Insert at the same position if possible
                 let insert = PendingInsert {
                     data: data.clone(),
-                    insert_after,
+                    anchor,
                 };
                 if insert_idx <= self.pending_inserts.len() {
                     self.pending_inserts.insert(insert_idx, insert);
@@ -1228,7 +1562,7 @@ impl EditBuffer {
                 }
                 self.redo_stack.push(EditAction::RemoveInsert {
                     insert_idx,
-                    insert_after,
+                    anchor,
                     data,
                 });
             }
@@ -1239,6 +1573,10 @@ impl EditBuffer {
                 old_value,
                 new_value,
             } => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the get_mut + col < insert.data.len() guards above establish both bounds"
+                )]
                 if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
                     && col < insert.data.len()
                 {
@@ -1302,19 +1640,19 @@ impl EditBuffer {
             }
 
             EditAction::UnmarkDelete { row } => {
-                self.row_states.remove(&row);
+                self.lift_delete(row);
                 self.undo_stack.push(EditAction::UnmarkDelete { row });
             }
 
             EditAction::AddInsert {
                 insert_idx,
-                insert_after,
+                anchor,
                 data,
             } => {
                 // Re-add the insert
                 let insert = PendingInsert {
                     data: data.clone(),
-                    insert_after,
+                    anchor,
                 };
                 if insert_idx <= self.pending_inserts.len() {
                     self.pending_inserts.insert(insert_idx, insert);
@@ -1323,14 +1661,14 @@ impl EditBuffer {
                 }
                 self.undo_stack.push(EditAction::AddInsert {
                     insert_idx,
-                    insert_after,
+                    anchor,
                     data,
                 });
             }
 
             EditAction::RemoveInsert {
                 insert_idx,
-                insert_after,
+                anchor,
                 data,
             } => {
                 // Remove the insert again
@@ -1339,7 +1677,7 @@ impl EditBuffer {
                 }
                 self.undo_stack.push(EditAction::RemoveInsert {
                     insert_idx,
-                    insert_after,
+                    anchor,
                     data,
                 });
             }
@@ -1350,6 +1688,10 @@ impl EditBuffer {
                 old_value,
                 new_value,
             } => {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "the get_mut + col < insert.data.len() guards above establish both bounds"
+                )]
                 if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
                     && col < insert.data.len()
                 {
@@ -1371,8 +1713,8 @@ impl EditBuffer {
 #[cfg(test)]
 mod tests {
     use super::{
-        CellValue, ColumnKind, ColumnSpec, EditBuffer, RowData, RowState, TableModel,
-        VisualRowSource,
+        CellValue, ColumnKind, ColumnSpec, EditBuffer, FK_LABEL_DISPLAY_LEN, IdentityValue,
+        InsertAnchor, RowData, RowState, TableModel, VisualRowSource,
     };
 
     #[test]
@@ -1396,6 +1738,307 @@ mod tests {
                 VisualRowSource::Insert(2),
             ]
         );
+    }
+
+    /// The text of the first cell of every visual row, a base row shown as
+    /// `base <index>`.
+    fn visual_labels(buffer: &EditBuffer) -> Vec<String> {
+        buffer
+            .compute_visual_order()
+            .into_iter()
+            .map(|source| match source {
+                VisualRowSource::Base(row) => format!("base {row}"),
+                VisualRowSource::Insert(insert_idx) => buffer
+                    .get_pending_insert_by_idx(insert_idx)
+                    .and_then(|cells| cells.first())
+                    .map(CellValue::edit_text)
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// The first cell of every pending insert, in index order.
+    fn insert_labels(buffer: &EditBuffer) -> Vec<String> {
+        buffer
+            .pending_inserts()
+            .iter()
+            .map(|insert| {
+                insert
+                    .data
+                    .first()
+                    .map(CellValue::edit_text)
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// A buffer of three base rows with pending inserts `a` and `b` after
+    /// row 0 and `tail` at the end.
+    fn buffer_with_inserts() -> EditBuffer {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(3);
+
+        buffer.add_pending_insert_at(InsertAnchor::After(0), vec![CellValue::text("a")]);
+        buffer.add_pending_insert_at(InsertAnchor::After(0), vec![CellValue::text("b")]);
+        buffer.add_pending_insert_at(InsertAnchor::End, vec![CellValue::text("tail")]);
+
+        buffer
+    }
+
+    #[test]
+    fn an_insert_at_an_index_is_shown_before_the_insert_it_displaces() {
+        let mut buffer = buffer_with_inserts();
+
+        let index = buffer.add_pending_insert_at_index(
+            1,
+            InsertAnchor::After(0),
+            vec![CellValue::text("new")],
+        );
+
+        assert_eq!(index, 1);
+        assert_eq!(insert_labels(&buffer), ["a", "new", "b", "tail"]);
+        assert_eq!(
+            visual_labels(&buffer),
+            ["base 0", "a", "new", "b", "base 1", "base 2", "tail"]
+        );
+    }
+
+    #[test]
+    fn an_insert_at_the_first_index_or_past_the_end_goes_first_or_last() {
+        let mut buffer = buffer_with_inserts();
+
+        buffer.add_pending_insert_at_index(
+            0,
+            InsertAnchor::After(0),
+            vec![CellValue::text("first")],
+        );
+        assert_eq!(insert_labels(&buffer), ["first", "a", "b", "tail"]);
+        assert_eq!(
+            visual_labels(&buffer),
+            ["base 0", "first", "a", "b", "base 1", "base 2", "tail"]
+        );
+
+        let index = buffer.add_pending_insert_at_index(
+            99,
+            InsertAnchor::End,
+            vec![CellValue::text("last")],
+        );
+        assert_eq!(index, 4, "clamped to the end");
+        assert_eq!(insert_labels(&buffer), ["first", "a", "b", "tail", "last"]);
+    }
+
+    #[test]
+    fn undo_and_redo_of_an_insert_at_an_index_restore_the_exact_list() {
+        let mut buffer = buffer_with_inserts();
+        let before = insert_labels(&buffer);
+
+        buffer.add_pending_insert_at_index(1, InsertAnchor::After(0), vec![CellValue::text("new")]);
+        let after = insert_labels(&buffer);
+
+        assert!(buffer.undo());
+        assert_eq!(insert_labels(&buffer), before);
+        assert_eq!(
+            visual_labels(&buffer),
+            ["base 0", "a", "b", "base 1", "base 2", "tail"]
+        );
+
+        assert!(buffer.redo());
+        assert_eq!(insert_labels(&buffer), after);
+        assert_eq!(
+            visual_labels(&buffer),
+            ["base 0", "a", "new", "b", "base 1", "base 2", "tail"]
+        );
+
+        // The earlier history still undoes by index: the next undo removes
+        // `tail`, the last insert added before.
+        assert!(buffer.undo());
+        assert!(buffer.undo());
+        assert_eq!(insert_labels(&buffer), ["a", "b"]);
+    }
+
+    #[test]
+    fn an_insert_at_an_index_keeps_the_index_readers_right() {
+        let mut buffer = buffer_with_inserts();
+        buffer.add_pending_insert_at_index(1, InsertAnchor::After(0), vec![CellValue::text("new")]);
+
+        // Every visual row resolves to the insert it shows.
+        let shown: Vec<String> = buffer
+            .compute_visual_order()
+            .into_iter()
+            .filter_map(|source| match source {
+                VisualRowSource::Insert(index) => buffer
+                    .get_pending_insert_by_idx(index)
+                    .and_then(|cells| cells.first())
+                    .map(CellValue::edit_text),
+                VisualRowSource::Base(_) => None,
+            })
+            .collect();
+        assert_eq!(shown, ["a", "new", "b", "tail"]);
+
+        // A cell edit and a removal by index reach the insert at that index.
+        buffer.set_insert_cell(2, 0, CellValue::text("b2"));
+        buffer.remove_pending_insert_by_idx(1);
+        assert_eq!(insert_labels(&buffer), ["a", "b2", "tail"]);
+
+        assert!(buffer.undo());
+        assert!(buffer.undo());
+        assert_eq!(insert_labels(&buffer), ["a", "new", "b", "tail"]);
+    }
+
+    #[test]
+    fn an_insert_before_the_first_row_is_the_first_visual_row() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(2);
+
+        let insert_idx =
+            buffer.add_pending_insert_at(InsertAnchor::BeforeFirst, vec![CellValue::text("top")]);
+
+        assert_eq!(
+            buffer.compute_visual_order(),
+            vec![
+                VisualRowSource::Insert(insert_idx),
+                VisualRowSource::Base(0),
+                VisualRowSource::Base(1),
+            ]
+        );
+        assert_eq!(
+            buffer.pending_inserts()[insert_idx].anchor,
+            InsertAnchor::BeforeFirst
+        );
+        assert_eq!(buffer.pending_inserts()[insert_idx].insert_after(), None);
+    }
+
+    #[test]
+    fn inserts_before_the_first_row_keep_the_order_they_were_added_in() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(2);
+
+        buffer.add_pending_insert_at(InsertAnchor::BeforeFirst, vec![CellValue::text("first")]);
+        buffer.add_pending_insert_after(0, vec![CellValue::text("after 0")]);
+        buffer.add_pending_insert_at(InsertAnchor::BeforeFirst, vec![CellValue::text("second")]);
+        buffer.add_pending_insert_at(InsertAnchor::End, vec![CellValue::text("tail")]);
+
+        assert_eq!(
+            visual_labels(&buffer),
+            ["first", "second", "base 0", "after 0", "base 1", "tail"]
+        );
+    }
+
+    #[test]
+    fn an_insert_before_the_first_row_of_an_empty_table_comes_before_one_at_the_end() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(0);
+
+        buffer.add_pending_insert(vec![CellValue::text("tail")]);
+        buffer.add_pending_insert_at(InsertAnchor::BeforeFirst, vec![CellValue::text("top")]);
+
+        assert_eq!(visual_labels(&buffer), ["top", "tail"]);
+    }
+
+    #[test]
+    fn an_insert_before_the_first_row_can_be_removed_undone_and_redone() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(1);
+
+        let insert_idx =
+            buffer.add_pending_insert_at(InsertAnchor::BeforeFirst, vec![CellValue::text("top")]);
+        buffer.add_pending_insert_after(0, vec![CellValue::text("after 0")]);
+
+        buffer.remove_pending_insert_by_idx(insert_idx);
+        assert_eq!(visual_labels(&buffer), ["base 0", "after 0"]);
+
+        assert!(buffer.undo());
+        assert_eq!(
+            visual_labels(&buffer),
+            ["top", "base 0", "after 0"],
+            "undoing the removal must put the row back above the first row"
+        );
+
+        assert!(buffer.undo());
+        assert!(buffer.undo());
+        assert_eq!(visual_labels(&buffer), ["base 0"]);
+        assert!(!buffer.has_pending_operations());
+
+        assert!(buffer.redo());
+        assert_eq!(
+            visual_labels(&buffer),
+            ["top", "base 0"],
+            "redoing the insert must put the row back above the first row"
+        );
+    }
+
+    #[test]
+    fn an_insert_before_the_first_row_stays_there_across_a_reload() {
+        let before = keyed_model(&[1, 2]);
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(before.row_count());
+
+        buffer.add_pending_insert_at(
+            InsertAnchor::BeforeFirst,
+            vec![CellValue::int(0), CellValue::text("top")],
+        );
+
+        let after = keyed_model(&[2, 1]);
+        let (rebased, dropped_rows) = reload(&buffer, &before, &after, &[0]);
+
+        assert_eq!(dropped_rows, 0);
+        assert_eq!(
+            rebased.compute_visual_order(),
+            vec![
+                VisualRowSource::Insert(0),
+                VisualRowSource::Base(0),
+                VisualRowSource::Base(1),
+            ]
+        );
+    }
+
+    /// Rows identified by position keep their edits at the same index, which
+    /// is where the rows of a model that only grew at the end still are.
+    #[test]
+    fn edits_keyed_by_position_stay_on_their_row_index() {
+        let before = keyed_model(&[1, 2, 3]);
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(before.row_count());
+
+        buffer.set_cell(1, 1, CellValue::text("bob"));
+        buffer.mark_for_delete(2);
+        buffer.add_pending_insert_after(1, vec![CellValue::int(9), CellValue::text("new")]);
+        buffer.add_pending_insert_at(
+            InsertAnchor::BeforeFirst,
+            vec![CellValue::int(0), CellValue::text("top")],
+        );
+
+        let after = keyed_model(&[7, 7, 7, 7]);
+        let snapshot = buffer.snapshot_by_position(&before);
+        let mut rebased = buffer.clone();
+        rebased.reset_for_base(after.row_count());
+
+        assert_eq!(rebased.restore_by_identity(snapshot, &after), 0);
+        assert!(rebased.is_cell_dirty(1, 1));
+        assert!(rebased.is_pending_delete(2));
+        assert_eq!(
+            rebased.compute_visual_order(),
+            vec![
+                VisualRowSource::Insert(1),
+                VisualRowSource::Base(0),
+                VisualRowSource::Base(1),
+                VisualRowSource::Insert(0),
+                VisualRowSource::Base(2),
+                VisualRowSource::Base(3),
+            ]
+        );
+
+        let shorter = keyed_model(&[7, 7]);
+        let snapshot = buffer.snapshot_by_position(&before);
+        let mut rebased = buffer.clone();
+        rebased.reset_for_base(shorter.row_count());
+
+        assert_eq!(
+            rebased.restore_by_identity(snapshot, &shorter),
+            1,
+            "the row marked for deletion is past the end of the shorter model"
+        );
+        assert!(rebased.is_cell_dirty(1, 1));
     }
 
     #[test]
@@ -1659,12 +2302,12 @@ mod tests {
         let inserts = rebased.pending_inserts();
         assert_eq!(inserts.len(), 2);
         assert_eq!(
-            inserts[0].insert_after,
-            Some(0),
+            inserts[0].anchor,
+            InsertAnchor::After(0),
             "the insert must stay after the row with key 2, now at index 0"
         );
         assert_eq!(inserts[0].data[1].display_text().as_ref(), "new");
-        assert_eq!(inserts[1].insert_after, None);
+        assert_eq!(inserts[1].anchor, InsertAnchor::End);
     }
 
     #[test]
@@ -1710,5 +2353,226 @@ mod tests {
 
         let (_, dropped_rows) = reload(&buffer, &model, &model, &[0]);
         assert_eq!(dropped_rows, 1);
+    }
+
+    /// Undoing a delete puts the row back in the state it had before: dirty
+    /// while it holds staged cells, so a save of every pending change still
+    /// finds it, and clean otherwise.
+    #[test]
+    fn undoing_a_delete_restores_the_state_the_row_had() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(2);
+
+        buffer.set_cell(0, 0, CellValue::text("edited"));
+        buffer.mark_for_delete(0);
+        buffer.mark_for_delete(1);
+
+        assert!(buffer.undo());
+        assert!(buffer.undo());
+
+        assert!(buffer.row_state(0).is_dirty());
+        assert!(buffer.row_state(1).is_clean());
+        assert_eq!(buffer.dirty_rows(), vec![0]);
+        assert!(buffer.pending_delete_rows().is_empty());
+    }
+
+    /// Unmarking a delete, and redoing an unmark, do the same.
+    #[test]
+    fn unmarking_a_delete_restores_the_state_the_row_had() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(1);
+
+        buffer.set_cell(0, 0, CellValue::text("edited"));
+        buffer.mark_for_delete(0);
+        buffer.unmark_delete(0);
+
+        assert!(buffer.row_state(0).is_dirty());
+
+        assert!(buffer.undo());
+        assert!(buffer.row_state(0).is_pending_delete());
+
+        assert!(buffer.redo());
+        assert!(buffer.row_state(0).is_dirty());
+        assert_eq!(buffer.dirty_rows(), vec![0]);
+    }
+
+    #[test]
+    fn a_placeholder_shows_its_legend() {
+        let cell = CellValue::placeholder("Pending");
+
+        assert!(cell.is_placeholder());
+        assert_eq!(cell.display_text().as_ref(), "Pending");
+        assert!(!CellValue::text("Pending").is_placeholder());
+    }
+
+    #[test]
+    fn a_placeholder_edits_as_empty_text() {
+        assert_eq!(CellValue::placeholder("Pending").edit_text(), "");
+    }
+
+    /// An editor opened on a placeholder starts empty, so committing it
+    /// unchanged must not stage a change.
+    #[test]
+    fn a_placeholder_holds_the_same_value_as_empty_text() {
+        let placeholder = CellValue::placeholder("Pending");
+
+        assert!(placeholder.holds_same_value(&CellValue::text("")));
+        assert!(CellValue::text("").holds_same_value(&placeholder));
+        assert!(!placeholder.holds_same_value(&CellValue::text("Pending")));
+        assert!(!placeholder.holds_same_value(&CellValue::text("x")));
+    }
+
+    #[test]
+    fn a_placeholder_copies_as_empty_text() {
+        assert_eq!(
+            super::super::clipboard::format_cell(&CellValue::placeholder("Pending")),
+            ""
+        );
+    }
+
+    #[test]
+    fn a_labeled_cell_cuts_a_long_id_to_its_leading_characters() {
+        let uuid = "44444444-0000-4000-8000-000000000001";
+        let cell = CellValue::text(uuid).with_fk_label("María López");
+
+        assert_eq!(cell.display_text().as_ref(), "María López · #44444444…");
+        assert_eq!(
+            cell.fk_spans()
+                .map(|(label, id_suffix)| (label.to_string(), id_suffix.to_string())),
+            Some(("María López".to_string(), " · #44444444…".to_string()))
+        );
+        assert_eq!(cell.edit_text(), uuid, "editing carries the full id");
+    }
+
+    #[test]
+    fn a_labeled_cell_edits_and_copies_as_its_raw_id() {
+        let cell = CellValue::text("8").with_fk_label("María López");
+
+        assert_eq!(cell.edit_text(), "8");
+        assert_eq!(cell.to_value(), dbflux_core::Value::Text("8".to_string()));
+        assert_eq!(super::super::clipboard::format_cell(&cell), "8");
+    }
+
+    #[test]
+    fn a_labeled_cell_holds_the_same_value_as_the_cell_it_labels() {
+        let cell = CellValue::text("8").with_fk_label("María López");
+
+        assert!(cell.holds_same_value(&CellValue::text("8")));
+        assert!(CellValue::text("8").holds_same_value(&cell));
+        assert!(!cell.holds_same_value(&CellValue::text("María López")));
+    }
+
+    /// A label rewrites what a scalar cell draws, not the scalar it holds:
+    /// committing the raw id back must clear the staged edit instead of
+    /// keeping it as a change. Bytes keep the display-text comparison —
+    /// `edit_text` is empty for every binary value, so it cannot tell two
+    /// lengths apart.
+    #[test]
+    fn a_labeled_scalar_holds_the_same_value_as_the_unlabeled_one() {
+        let labeled_int = CellValue::int(8).with_fk_label("Alice");
+        assert!(labeled_int.holds_same_value(&CellValue::int(8)));
+        assert!(CellValue::int(8).holds_same_value(&labeled_int));
+        assert!(!labeled_int.holds_same_value(&CellValue::int(9)));
+        assert!(
+            !labeled_int.holds_same_value(&CellValue::float(8.0)),
+            "an int and a float are different values even when spelled alike"
+        );
+
+        let labeled_float = CellValue::float(1.5).with_fk_label("Alice");
+        assert!(labeled_float.holds_same_value(&CellValue::float(1.5)));
+        assert!(!labeled_float.holds_same_value(&CellValue::float(2.5)));
+
+        let labeled_bool = CellValue::bool(true).with_fk_label("Alice");
+        assert!(labeled_bool.holds_same_value(&CellValue::bool(true)));
+        assert!(!labeled_bool.holds_same_value(&CellValue::bool(false)));
+
+        let labeled_bytes = CellValue::bytes(16).with_fk_label("Alice");
+        assert!(
+            !labeled_bytes.holds_same_value(&CellValue::bytes(32)),
+            "a labeled binary cell stays a different value from another length"
+        );
+    }
+
+    #[test]
+    fn a_labeled_cell_keeps_the_typed_value_of_the_cell_it_labels() {
+        let cell = CellValue::int(8).with_fk_label("Alice");
+
+        assert_eq!(cell.to_value(), dbflux_core::Value::Int(8));
+        assert_eq!(cell.edit_text(), "8");
+        assert_eq!(
+            IdentityValue::from_cell(&cell),
+            IdentityValue::from_cell(&CellValue::int(8)),
+            "the label must not change how a row is identified across reloads"
+        );
+        assert_eq!(cell.display_text().as_ref(), "Alice · #8");
+        assert_eq!(
+            cell.fk_spans()
+                .map(|(label, id_suffix)| (label.to_string(), id_suffix.to_string())),
+            Some(("Alice".to_string(), " · #8".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_labeled_cell_draws_its_label_on_one_line() {
+        let cell = CellValue::int(8).with_fk_label("María\nLópez");
+        assert_eq!(cell.display_text().as_ref(), "María López · #8");
+
+        let messy = CellValue::int(8).with_fk_label("María \n\t López");
+        let display = messy.display_text();
+        assert!(
+            !display.contains('\n'),
+            "a label with a newline stays on one line: {display}"
+        );
+    }
+
+    #[test]
+    fn a_labeled_cell_cuts_a_long_label() {
+        let long_label = "x".repeat(FK_LABEL_DISPLAY_LEN + 50);
+        let cell = CellValue::int(8).with_fk_label(&long_label);
+
+        let expected: String = "x".repeat(FK_LABEL_DISPLAY_LEN) + "\u{2026}";
+        assert_eq!(cell.display_text().as_ref(), format!("{expected} · #8"));
+        assert_eq!(
+            cell.fk_spans().map(|(label, _)| label.to_string()),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn a_labeled_cell_without_a_distinct_label_is_left_unchanged() {
+        for cell in [
+            CellValue::int(8).with_fk_label(""),
+            CellValue::int(8).with_fk_label(" \n\t "),
+            CellValue::int(8).with_fk_label("8"),
+        ] {
+            assert!(cell.fk_spans().is_none());
+            assert_eq!(cell.display_text().as_ref(), "8");
+            assert_eq!(cell.to_value(), dbflux_core::Value::Int(8));
+        }
+    }
+
+    #[test]
+    fn keeping_row_edits_changes_only_the_edited_cells() {
+        let mut model = keyed_model(&[1, 2]);
+        model.rows[0].cells.push(CellValue::bytes(16));
+
+        let mut buffer = EditBuffer::new();
+        buffer.set_cell(0, 1, CellValue::text("edited"));
+        buffer.set_cell(1, 1, CellValue::text("other row"));
+
+        let kept = model.with_row_edits(0, &buffer);
+
+        assert_eq!(kept.cell(0, 1).unwrap().display_text().as_ref(), "edited");
+        assert!(
+            kept.cell(0, 2)
+                .unwrap()
+                .holds_same_value(&CellValue::bytes(16)),
+            "an unedited binary cell keeps its value"
+        );
+        assert_eq!(
+            kept.cell(1, 1).unwrap().display_text().as_ref(),
+            "original",
+            "another row's edits stay pending"
+        );
     }
 }

@@ -121,6 +121,22 @@ impl TabBar {
         cx.emit(TabBarEvent::CloseTab(id));
     }
 
+    /// Commits the input the active document still holds in an open editor,
+    /// before a right-click on a tab opens the tab menu.
+    ///
+    /// The click moves focus out of the document, and an inline editor that
+    /// loses focus drops what was typed into it before any menu item can run.
+    /// Every item of this menu closes tabs, the active one included, so the
+    /// value is committed first and the close it leads to asks about it. Input
+    /// the document cannot commit stays where it is, and the close refuses it.
+    fn commit_active_pending_input(&mut self, cx: &mut Context<Self>) {
+        self.tab_manager.update(cx, |manager, cx| {
+            if let Some(tab) = manager.active_id().and_then(|id| manager.document(id)) {
+                tab.as_pane().commit_pending_input(cx);
+            }
+        });
+    }
+
     pub fn open_context_menu_for_active(&mut self, cx: &mut Context<Self>) {
         let manager = self.tab_manager.read(cx);
         let Some(active_id) = manager.active_id() else {
@@ -172,6 +188,10 @@ impl TabBar {
 }
 
 /// Returns the next non-separator index after `current`, or `current` if at the end.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "items[idx] is reached only while the loop condition holds idx < items.len()"
+)]
 pub fn next_actionable_index(current: usize, items: &[MenuItem]) -> usize {
     let mut idx = current + 1;
     while idx < items.len() {
@@ -184,6 +204,15 @@ pub fn next_actionable_index(current: usize, items: &[MenuItem]) -> usize {
 }
 
 /// Returns the previous non-separator index before `current`, or `current` if at the start.
+// current is the context menu's selected_index: 0 on open, then written by
+// next/prev_actionable_index and by context_menu_hover_at with a rendered row
+// index, so it stays below items.len(). This helper does not re-check that
+// bound; current == items.len() still works, a larger value panics at
+// items[idx].
+#[expect(
+    clippy::indexing_slicing,
+    reason = "current is the menu's selected_index: 0 on open, then a next/prev_actionable_index result or a context_menu_hover_at index taken from the rendered build_tab_menu_items() rows, all below items.len(); this helper does not re-check the upper bound"
+)]
 pub fn prev_actionable_index(current: usize, items: &[MenuItem]) -> usize {
     if current == 0 {
         return current;
@@ -244,7 +273,7 @@ impl Render for TabBar {
                 .flex()
                 .min_w_0()
                 .items_center()
-                .overflow_x_hidden()
+                .overflow_x_scroll()
                 .gap(TabMetrics::DOCUMENT_BAR_GAP)
                 .children(tabs)
                 .child(new_tab_btn),
@@ -286,9 +315,9 @@ impl TabBar {
             theme.muted_foreground
         };
         let title_element = if is_active {
-            document_tab_title(title, true, cx)
+            document_tab_title(title.as_str(), true, cx)
         } else {
-            document_tab_title(title, false, cx).font_weight(FontWeight::NORMAL)
+            document_tab_title(title.as_str(), false, cx).font_weight(FontWeight::NORMAL)
         };
         let hover_group: SharedString = format!("tab-group-{}", id.0).into();
 
@@ -298,6 +327,7 @@ impl TabBar {
             cx,
         )
         .group(hover_group.clone())
+        .debug_selector(|| format!("tab-{}", id.0))
         .role(Role::Tab)
         .aria_selected(is_active)
         .min_w(TabMetrics::DOCUMENT_TAB_MIN_WIDTH)
@@ -339,6 +369,7 @@ impl TabBar {
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                this.commit_active_pending_input(cx);
                 this.context_menu = Some(TabContextMenu {
                     tab_id: id,
                     tab_index: idx,
@@ -369,7 +400,14 @@ impl TabBar {
         })
         // Spinner or close button. Inactive tabs show the close button only
         // while hovered.
-        .child(self.render_tab_action(id, is_executing, is_active, hover_group, cx))
+        .child(self.render_tab_action(
+            id,
+            is_executing,
+            is_active,
+            hover_group,
+            &title,
+            cx,
+        ))
     }
 
     fn render_tab_action(
@@ -378,6 +416,7 @@ impl TabBar {
         is_executing: bool,
         is_active: bool,
         hover_group: SharedString,
+        title: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         if is_executing {
@@ -391,6 +430,9 @@ impl TabBar {
 
         div()
             .id(ElementId::Name(format!("tab-close-{}", id.0).into()))
+            .debug_selector(|| format!("tab-close-{}", id.0))
+            .role(Role::Button)
+            .aria_label(dbflux_i18n::t!("document.tabs.close_named", title = title))
             .flex()
             .items_center()
             .justify_center()
@@ -726,6 +768,23 @@ mod tests {
             assert_eq!(tab.role(), Role::Tab);
             assert_eq!(tab.is_selected(), Some(selected), "tab {id:?}");
         }
+
+        // The close button draws only an icon, so it is named after the tab it
+        // closes.
+        let tab_title =
+            dbflux_components::accessibility::accessible_name(&frame, &format!("tab-{}", active.0))
+                .expect("the tab is named by its title");
+        let close = node(&format!("tab-close-{}", active.0));
+
+        assert_eq!(close.role(), Role::Button);
+        assert_eq!(
+            close.label(),
+            Some(
+                dbflux_i18n::t!("document.tabs.close_named", title = tab_title)
+                    .to_string()
+                    .as_str()
+            )
+        );
     }
 }
 
@@ -752,6 +811,8 @@ fn tab_icon(icon: super::types::DocumentIcon) -> AppIcon {
         DocumentIcon::DumpAnalysis => AppIcon::HardDrive,
         DocumentIcon::McpApprovals => AppIcon::Bot,
         DocumentIcon::Migrate => AppIcon::ArrowUpDown,
+        DocumentIcon::SecretStore => AppIcon::Lock,
+        DocumentIcon::Secret => AppIcon::KeyRound,
     }
 }
 

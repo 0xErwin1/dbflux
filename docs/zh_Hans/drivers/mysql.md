@@ -12,7 +12,9 @@
 ## 功能
 
 - 在同一个 crate 中提供 MySQL 与 MariaDB 的关系型驱动程序实现。
+- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL 语句，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 支持 SQL 执行、Schema 发现、索引、外键、CHECK 约束与唯一约束。
+- 以 MySQL 存储的精确小数展示 `DECIMAL` 取值。
 - 支持身份认证、SSH 隧道，以及 URI/手动两种连接模式。
 - TLS 支持五种原生 SSL 模式（`DISABLED`、`PREFERRED`、`REQUIRED`、`VERIFY_CA`、`VERIFY_IDENTITY`）：`VERIFY_CA` 会校验证书链但跳过主机名校验，`VERIFY_IDENTITY` 则两者都校验。自定义根 CA 会在校验模式下取代系统信任库；客户端证书 + 私钥可启用双向 TLS。使用 `rustls`/`aws-lc-rs` 后端。
 - 通过专用的取消路径（`KILL QUERY` 流程）支持查询取消。
@@ -52,6 +54,9 @@
 
 - 显式语句超时和有界实例指标/检查器请求会在执行前被拒绝；无界请求保持兼容。保留行数上限不限制字节数、服务端工作量、引擎内存分配或运行时间。未验证托管 MariaDB。
 - 仅支持 SQL 的驱动程序；不提供文档型或键值 API。
+- MariaDB 没有 `information_schema.VIEW_TABLE_USAGE`，因此删除表确认会在视图定义中搜索 `` `database`.`table` `` 名称来查找依赖视图；只通过另一个视图读取该表的视图不会被列出。
+- 早于 8.0.16 的 MySQL 不保存 `CHECK` 约束，因此表详情中不会列出。早于 10.2.22（10.3 系列早于 10.3.10）的 MariaDB 会保存这些约束，但没有 `information_schema.CHECK_CONSTRAINTS`，因此表详情会列出检查约束，但不含其条件表达式。
+- 由于没有十进制列类型，`DECIMAL` 列会被报告为 `ColumnKind::Float`：图表等使用列类型的功能会把它们当作浮点数处理，但值本身保持精确。
 
 - 实例指标每次调用只返回一个数据点（`SHOW GLOBAL STATUS` 的当前快照），而非历史时序。累计计数器（例如 `mysql.bytes_sent`）单调递增 —— 应将其理解为两次采样之间的增量，而不是绝对速率。
 
@@ -62,6 +67,7 @@
 - 代码生成只覆盖受支持的 MySQL/MariaDB 结构；不受支持的生成器 ID 会返回 `NotSupported`。
 - 例程列表仅涵盖 FUNCTION 与 PROCEDURE 类型。MySQL 的聚合函数（通过 `CREATE AGGREGATE FUNCTION` UDF 插件注册）与窗口函数不会出现在 `information_schema.ROUTINES` 中，因此也不会被列出。
 - `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` 需要 `SHOW_ROUTINE` 权限（MySQL 8.0+）或该例程的所有权；权限不足时，定义列会返回 `NULL`，查看器会显示一条提示，而不是源码。
+- 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）在 `START TRANSACTION READ ONLY` 中运行并回滚。请求只能包含不带可执行注释（`/*! */`、`/*M! */`）且不含 `INTO` 一词的 `SELECT`、`WITH`、`SHOW`、`DESCRIBE`、`EXPLAIN`、`TABLE` 和 `VALUES` 语句；除非服务器证明没有打开的事务且会话不可能持有 `LOCK TABLES` 锁，否则会被拒绝。MySQL 会拒绝该会话中的数据修改，但 `TEMPORARY` 表除外，只读事务仍可修改它们；它也不会阻止具有外部效果的函数，例如 `GET_LOCK` 或用户定义函数；真正的边界仍是最小权限的数据库凭据。
 
 ## DDL 能力
 

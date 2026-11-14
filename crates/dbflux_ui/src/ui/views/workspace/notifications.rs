@@ -484,6 +484,14 @@ impl Workspace {
     }
 
     /// Shows the next or previous filter chip's list, wrapping.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`NotificationFilter::ALL` is a four-element const array; \
+                  `current` is an `iter().position()` hit in it or 0, and \
+                  `next` is `(current + 1) % count` or \
+                  `(current + count - 1) % count`, so `next` stays below \
+                  `count = filters.len()`"
+    )]
     fn step_notification_filter(&mut self, forward: bool, cx: &mut Context<Self>) {
         let filters = NotificationFilter::ALL;
         let current = filters
@@ -635,7 +643,8 @@ impl Workspace {
             .get()
             .map(|bounds| (viewport.width - bounds.right()).max(px(0.0)))
             .unwrap_or(ShellMetrics::TITLE_BAR_PADDING_X);
-        let top = ShellMetrics::TITLE_BAR_HEIGHT + NotificationMetrics::POPOVER_GAP_TOP;
+        let top = ShellMetrics::TITLE_BAR_HEIGHT.to_pixels(window.rem_size())
+            + NotificationMetrics::POPOVER_GAP_TOP;
         let max_height = viewport.height * NotificationMetrics::POPOVER_MAX_HEIGHT_FRACTION;
 
         let popover = self.build_notifications_popover(cx).max_height(max_height);
@@ -1101,6 +1110,13 @@ mod tests {
             self.window.update(|window, _| window.refresh());
             self.window.run_until_parked();
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test harness: retains the existing \
+                          panic-on-poisoned-mutex policy for the frame-capture \
+                          lock, and panics when no frame has been drawn yet \
+                          instead of encoding that state in the `Option` return"
+            )]
             let frame = self
                 .frames
                 .0

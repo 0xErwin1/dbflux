@@ -29,6 +29,8 @@ dirs.workspace = true
 secrecy.workspace = true
 rusqlite.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
+dbflux_components = { workspace = true, features = ["test-support"] }
+dbflux_ui_base = { workspace = true, features = ["test-support"] }
 
 [features]
 default = []
@@ -40,3 +42,6 @@ default = []
 mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp"]
 lua = ["dbflux_app/lua", "dbflux_ui_base/lua"]
 aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
+
+[lints]
+workspace = true

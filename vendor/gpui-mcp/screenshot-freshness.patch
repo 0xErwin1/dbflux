@@ -1,5 +1,5 @@
 diff --git a/crates/gpui-mcp-capture/src/lib.rs b/crates/gpui-mcp-capture/src/lib.rs
-index b4f78e70..bdedaf69 100644
+index b4f78e7..bdedaf6 100644
 --- a/crates/gpui-mcp-capture/src/lib.rs
 +++ b/crates/gpui-mcp-capture/src/lib.rs
 @@ -2,7 +2,7 @@
@@ -321,27 +321,37 @@ index b4f78e70..bdedaf69 100644
      fn capture_stability_deadline_is_bounded() {
          assert!(CaptureOptions::new(Duration::from_millis(31)).is_err());
 diff --git a/crates/gpui-mcp-protocol/src/lib.rs b/crates/gpui-mcp-protocol/src/lib.rs
-index 6b4eca0a..41ae0b0a 100644
+index 7e967a5..a839b1b 100644
 --- a/crates/gpui-mcp-protocol/src/lib.rs
 +++ b/crates/gpui-mcp-protocol/src/lib.rs
-@@ -966,9 +966,15 @@ pub enum Operation {
+@@ -1181,15 +1181,24 @@ pub enum Operation {
          after_frame_count: u64,
          /// Maximum wait duration from one through 30,000 milliseconds.
          timeout_ms: u64,
 +        /// Wait until a newer frame has also been presented to the platform window, not only
-+        /// painted. Only [`Operation::Refresh`] advances the presented-frame token, so send one
-+        /// before waiting. Absent means `false`, which keeps the root-paint behavior.
++        /// painted. Only [`Operation::Refresh`] and [`Operation::RequestFrame`] advance the
++        /// presented-frame token, so send one before waiting. Absent means `false`, which keeps the root-paint behavior.
 +        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
 +        presented: bool,
      },
-     /// Request a new GPUI frame and return the last completed-frame token observed before the
--    /// refresh was scheduled.
-+    /// refresh was scheduled. Once the refreshed frame has been presented, the presented-frame
-+    /// token that [`Operation::WaitForFrame`] waits on with `presented` passes that value.
+     /// Invalidate every cached view, request a new GPUI frame, and return the last
+-    /// completed-frame token observed before the refresh was scheduled.
++    /// completed-frame token observed before the refresh was scheduled. Once the refreshed
++    /// frame has been presented, the presented-frame token that [`Operation::WaitForFrame`]
++    /// waits on with `presented` passes that value.
+     ///
+     /// The frame renders every view, so it costs far more than an ordinary update. Use
+     /// [`Operation::RequestFrame`] to settle a frame without that cost.
      Refresh,
-     /// Return current GPUI client-area geometry for native region capture.
-     GetWindowGeometry,
-@@ -1143,7 +1149,7 @@ impl WireResponse {
+     /// Request a new GPUI frame that replays every cached view that was not notified, and
+-    /// return the last completed-frame token observed before the frame was scheduled.
++    /// return the last completed-frame token observed before the frame was scheduled. Once
++    /// that frame has been presented, the presented-frame token that
++    /// [`Operation::WaitForFrame`] waits on with `presented` passes that value.
+     RequestFrame,
+     /// Report whether the window is invalidated, so GPUI will draw another frame without
+     /// further invalidation, together with the last completed-frame token.
+@@ -1429,7 +1438,7 @@ impl WireResponse {
  mod tests {
      use super::{
          AppId, Capabilities, EndpointDescriptor, InstanceId, LocalEndpoint, NativeWindowId,
@@ -350,7 +360,7 @@ index 6b4eca0a..41ae0b0a 100644
      };
  
      #[test]
-@@ -1223,6 +1229,38 @@ mod tests {
+@@ -1531,6 +1540,38 @@ mod tests {
          Ok(())
      }
  
@@ -390,7 +400,7 @@ index 6b4eca0a..41ae0b0a 100644
      fn endpoint_identity_rejects_zero_ids() {
          let value = serde_json::json!({
 diff --git a/crates/gpui-mcp-server/src/tools.rs b/crates/gpui-mcp-server/src/tools.rs
-index 8443c9b1..521023fe 100644
+index c867e54..0eb691d 100644
 --- a/crates/gpui-mcp-server/src/tools.rs
 +++ b/crates/gpui-mcp-server/src/tools.rs
 @@ -1,4 +1,4 @@
@@ -399,7 +409,7 @@ index 8443c9b1..521023fe 100644
  use std::future::Future;
  use std::io::Cursor;
  use std::sync::atomic::AtomicU64;
-@@ -46,6 +46,16 @@ mod visual;
+@@ -63,6 +63,16 @@ const TASK_TOOLS: [&str; 4] = [
  const MAX_TREE_SNAPSHOTS: usize = 32;
  const MAX_IMAGE_SNAPSHOTS: usize = 8;
  const MAX_WAIT_MS: u64 = 30_000;
@@ -416,7 +426,7 @@ index 8443c9b1..521023fe 100644
  
  #[derive(Default)]
  struct SnapshotStore {
-@@ -289,6 +299,13 @@ struct WaitStateArgs {
+@@ -312,6 +322,13 @@ struct WaitStateArgs {
      timeout_ms: u64,
  }
  
@@ -430,7 +440,7 @@ index 8443c9b1..521023fe 100644
  #[derive(Debug, Deserialize, JsonSchema)]
  struct HighlightArgs {
      /// One through 64 stable semantic node identifiers.
-@@ -626,6 +643,7 @@ impl GpuiMcp {
+@@ -668,6 +685,7 @@ impl GpuiMcp {
              .call(Operation::WaitForFrame {
                  after_frame_count: frame_count,
                  timeout_ms,
@@ -438,8 +448,8 @@ index 8443c9b1..521023fe 100644
              })
              .await?
          {
-@@ -638,6 +656,32 @@ impl GpuiMcp {
-         settle_refresh_frames(wait, |operation| self.call(operation)).await
+@@ -686,6 +704,32 @@ impl GpuiMcp {
+         settle_requested_frames(wait, |operation| self.call(operation)).await
      }
  
 +    /// Read the drawn-frame count and the semantic tree generation for `wait_until_idle`.
@@ -469,9 +479,9 @@ index 8443c9b1..521023fe 100644
 +    }
 +
      async fn capture(&self, target: ScreenshotTarget) -> Result<Screenshot, String> {
-         self.settle_after_refresh(Duration::from_secs(2)).await?;
+         self.settle_requested_frames(Duration::from_secs(2)).await?;
          let client = self.client().await?;
-@@ -671,6 +715,72 @@ impl GpuiMcp {
+@@ -736,6 +780,70 @@ impl GpuiMcp {
      }
  }
  
@@ -539,28 +549,45 @@ index 8443c9b1..521023fe 100644
 +    })
 +}
 +
-+/// Refresh twice, each time waiting until the refreshed frame has been presented to the
-+/// platform window rather than only painted, so a native capture that follows can read it.
- async fn settle_refresh_frames<F, Fut>(wait: Duration, mut call: F) -> Result<FrameStats, String>
+ /// Frames an input may cause before settlement stops waiting, so a window that
+ /// animates, and is therefore always pending, still settles.
+ const MAX_SETTLE_FRAMES: usize = 4;
+@@ -766,6 +874,7 @@ where
+         let BridgeResult::FrameStats(stats) = call(Operation::WaitForFrame {
+             after_frame_count: pending.completed.frame_count,
+             timeout_ms,
++            presented: false,
+         })
+         .await?
+         else {
+@@ -778,6 +887,9 @@ where
+ 
+ /// Draw two fresh frames, whether or not anything is pending. Cached views that
+ /// were not notified replay, so these frames cost what an idle frame costs.
++///
++/// Each wait lasts until the requested frame has been presented to the platform
++/// window rather than only painted, so a native capture that follows can read it.
+ async fn settle_requested_frames<F, Fut>(wait: Duration, mut call: F) -> Result<FrameStats, String>
  where
      F: FnMut(Operation) -> Fut,
-@@ -687,6 +797,7 @@ where
+@@ -796,6 +908,7 @@ where
          let BridgeResult::FrameStats(stats) = call(Operation::WaitForFrame {
-             after_frame_count: before_refresh.frame_count,
+             after_frame_count: before_request.frame_count,
              timeout_ms,
 +            presented: true,
          })
          .await?
          else {
-@@ -1231,10 +1342,128 @@ mod tests {
+@@ -1541,11 +1654,128 @@ mod tests {
      use serde_json::json;
  
      use super::{
--        FindArgs, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs, click_point,
-+        FindArgs, IDLE_CHECK_INTERVAL_MS, IDLE_INTERVALS, IdleSample, MIN_IDLE_TIMEOUT_MS, Role,
-+        StartVideoRecordingArgs, UiTree, WaitIdleArgs, WaitStateArgs, click_point,
-         default_result_limit_for_test, find_nodes, settle_refresh_frames, state_matches, tree_diff,
-+        wait_until_idle,
+-        FindArgs, MAX_SETTLE_FRAMES, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs,
++        FindArgs, IDLE_CHECK_INTERVAL_MS, IDLE_INTERVALS, IdleSample, MAX_SETTLE_FRAMES,
++        MIN_IDLE_TIMEOUT_MS, Role, StartVideoRecordingArgs, UiTree, WaitIdleArgs, WaitStateArgs,
+         click_point, default_result_limit_for_test, find_nodes, settle_pending_frames,
+-        settle_requested_frames, state_matches, tree_diff,
++        settle_requested_frames, state_matches, tree_diff, wait_until_idle,
      };
  
 +    fn sample(frame_count: u64, generation: u64) -> IdleSample {
@@ -682,7 +709,7 @@ index 8443c9b1..521023fe 100644
      fn node_with_actions(role: Role, actions: Vec<NodeAction>) -> UiNode {
          UiNode {
              id: "cm-field-host".to_owned(),
-@@ -1326,6 +1555,7 @@ mod tests {
+@@ -1662,6 +1892,7 @@ mod tests {
              operations[1],
              Operation::WaitForFrame {
                  after_frame_count: 11,
@@ -690,7 +717,7 @@ index 8443c9b1..521023fe 100644
                  ..
              }
          ));
-@@ -1334,6 +1564,7 @@ mod tests {
+@@ -1670,6 +1901,7 @@ mod tests {
              operations[3],
              Operation::WaitForFrame {
                  after_frame_count: 14,
@@ -698,7 +725,7 @@ index 8443c9b1..521023fe 100644
                  ..
              }
          ));
-@@ -1479,6 +1710,7 @@ mod tests {
+@@ -1910,6 +2142,7 @@ mod tests {
                  "get_element_bounds",
                  "wait_for_element",
                  "wait_for_state",
@@ -707,7 +734,7 @@ index 8443c9b1..521023fe 100644
                  "load_ui_snapshot",
                  "diff_ui_snapshots",
 diff --git a/crates/gpui-mcp-server/src/tools/tree.rs b/crates/gpui-mcp-server/src/tools/tree.rs
-index c978738c..8d5960c3 100644
+index c978738..8d5960c 100644
 --- a/crates/gpui-mcp-server/src/tools/tree.rs
 +++ b/crates/gpui-mcp-server/src/tools/tree.rs
 @@ -1,8 +1,9 @@
@@ -755,34 +782,34 @@ index c978738c..8d5960c3 100644
      async fn save_ui_snapshot(
          &self,
 diff --git a/crates/gpui-mcp/src/registry.rs b/crates/gpui-mcp/src/registry.rs
-index 11e929a4..581cb4ec 100644
+index 8908e17..850074f 100644
 --- a/crates/gpui-mcp/src/registry.rs
 +++ b/crates/gpui-mcp/src/registry.rs
-@@ -57,6 +57,7 @@ pub(crate) struct SharedState {
+@@ -149,6 +149,7 @@ pub(crate) struct SharedState {
+     timings: Mutex<TimingState>,
      logs: Mutex<VecDeque<LogEntry>>,
-     generation: watch::Sender<u64>,
      completed_frame: watch::Sender<FrameStats>,
 +    presented_frame: watch::Sender<u64>,
      window_geometry: RwLock<Option<WindowGeometry>>,
  }
  
-@@ -64,6 +65,7 @@ impl SharedState {
+@@ -167,6 +168,7 @@ impl SharedState {
      pub(crate) fn new() -> Arc<Self> {
-         let (generation, _) = watch::channel(0);
+         let (semantic_frames, _) = watch::channel(0);
          let (completed_frame, _) = watch::channel(FrameStats::default());
 +        let (presented_frame, _) = watch::channel(0);
          Arc::new(Self {
              tree: RwLock::new(UiTree::default()),
-             pending: Mutex::new(PendingFrame::default()),
-@@ -72,6 +74,7 @@ impl SharedState {
+             intake: Mutex::new(SemanticIntake::default()),
+@@ -184,6 +186,7 @@ impl SharedState {
+             timings: Mutex::new(TimingState::default()),
              logs: Mutex::new(VecDeque::with_capacity(512)),
-             generation,
              completed_frame,
 +            presented_frame,
              window_geometry: RwLock::new(None),
          })
      }
-@@ -335,6 +338,56 @@ impl SharedState {
+@@ -516,6 +519,56 @@ impl SharedState {
              .map_err(|_| BridgeError::new(ErrorCode::Timeout, "frame wait timed out"))?
      }
  
@@ -813,7 +840,7 @@ index 11e929a4..581cb4ec 100644
 +    /// current frame statistics.
 +    ///
 +    /// Only [`Self::mark_frames_presented`] advances the presented-frame token, so the caller
-+    /// must have scheduled it, as `Operation::Refresh` does.
++    /// must have scheduled it, as `Operation::Refresh` and `Operation::RequestFrame` do.
 +    pub(crate) async fn wait_for_presented_frame(
 +        &self,
 +        after_frame_count: u64,
@@ -836,28 +863,26 @@ index 11e929a4..581cb4ec 100644
 +        Ok(self.frame_stats())
 +    }
 +
+     /// Show legacy highlights as fixed-rectangle annotations in their own group.
      pub(crate) fn set_highlights(&self, highlights: Vec<Highlight>) {
-         *self
-             .highlights
-@@ -686,7 +739,7 @@ mod tests {
+         let specs = highlights
+@@ -1329,7 +1382,9 @@ mod tests {
      use std::collections::BTreeMap;
      use std::time::Duration;
  
--    use gpui_mcp_protocol::{NodeState, Role, SemanticDiagnosticCode, UiNode};
-+    use gpui_mcp_protocol::{ErrorCode, NodeState, Role, SemanticDiagnosticCode, UiNode};
+-    use gpui_mcp_protocol::{NodeState, Role, SemanticDiagnosticCode, UiNode, ViewRenderCause};
++    use gpui_mcp_protocol::{
++        ErrorCode, NodeState, Role, SemanticDiagnosticCode, UiNode, ViewRenderCause,
++    };
  
-     use super::SharedState;
+     use super::{SharedState, TreeBuilder, ViewRecord};
  
-@@ -813,6 +866,75 @@ mod tests {
+@@ -1479,6 +1534,71 @@ mod tests {
          Ok(())
      }
  
 +    fn complete_frame(state: &SharedState) {
-+        state.begin_frame();
-+        assert!(state.record(node("stable", None)));
-+        state.finish_frame();
-+        state.begin_root_paint();
-+        state.finish_root_paint();
++        draw_frame(state, 1, &[]);
 +    }
 +
 +    /// Root paint is not presentation: a painted frame alone must not release a
@@ -925,10 +950,10 @@ index 11e929a4..581cb4ec 100644
      async fn frame_wait_never_returns_a_started_but_incomplete_frame() -> Result<(), String> {
          let state = SharedState::new();
 diff --git a/crates/gpui-mcp/src/service.rs b/crates/gpui-mcp/src/service.rs
-index 06791283..5249f72f 100644
+index 2ccc388..55dc8a8 100644
 --- a/crates/gpui-mcp/src/service.rs
 +++ b/crates/gpui-mcp/src/service.rs
-@@ -576,7 +576,7 @@ fn spawn_ui_pump(
+@@ -773,7 +773,7 @@ fn spawn_message_listener(
  #[allow(clippy::too_many_lines)]
  fn handle_ui_operation(
      operation: Operation,
@@ -937,7 +962,7 @@ index 06791283..5249f72f 100644
      document_host: &DocumentHost,
      resource_host: &ResourceHost,
      command_host: &CommandHost,
-@@ -616,11 +616,9 @@ fn handle_ui_operation(
+@@ -812,16 +812,12 @@ fn handle_ui_operation(
              window.refresh();
              Ok(BridgeResult::Ack)
          }
@@ -946,13 +971,21 @@ index 06791283..5249f72f 100644
 -            window.refresh();
 -            Ok(BridgeResult::FrameStats(completed))
 -        }
+-        Operation::RequestFrame => {
+-            let completed = state.frame_stats();
+-            window.request_frame();
+-            Ok(BridgeResult::FrameStats(completed))
+-        }
 +        Operation::Refresh => Ok(BridgeResult::FrameStats(refresh_and_track_presentation(
 +            state, window,
 +        ))),
-         Operation::GetPointerLocation => Ok(BridgeResult::PointerLocation(
-             input::pointer_location(window),
-         )),
-@@ -885,11 +883,19 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
++        Operation::RequestFrame => Ok(BridgeResult::FrameStats(
++            request_frame_and_track_presentation(state, window),
++        )),
+         Operation::GetPendingFrame => Ok(BridgeResult::PendingFrame(PendingFrame {
+             pending: window.frame_pending(),
+             completed: state.frame_stats(),
+@@ -1098,11 +1094,19 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
          Operation::WaitForFrame {
              after_frame_count,
              timeout_ms,
@@ -977,23 +1010,43 @@ index 06791283..5249f72f 100644
          Operation::GetWindowGeometry => context
              .state
              .window_geometry()
-@@ -944,6 +950,30 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
+@@ -1230,6 +1234,49 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
      }
  }
  
-+/// Request a new frame and return the completed-frame token observed before the request,
++/// Refresh the window and return the completed-frame token observed before the refresh,
 +/// arranging for the presented-frame token to pass it once the refreshed frame is presented.
-+///
-+/// GPUI runs next-frame callbacks at the start of a frame request, before that request draws
-+/// and presents. The outer callback therefore runs at the start of the request that draws the
-+/// refreshed frame, and the inner one, registered from it, at the start of the following
-+/// request, after the refreshed frame's `present` has returned.
 +fn refresh_and_track_presentation(
 +    state: &Arc<SharedState>,
 +    window: &mut Window,
 +) -> gpui_mcp_protocol::FrameStats {
 +    let completed = state.frame_stats();
 +    window.refresh();
++    track_presentation(state, window);
++    completed
++}
++
++/// Request a frame without discarding cached views and return the completed-frame token
++/// observed before the request, arranging for the presented-frame token to pass it once the
++/// requested frame is presented.
++fn request_frame_and_track_presentation(
++    state: &Arc<SharedState>,
++    window: &mut Window,
++) -> gpui_mcp_protocol::FrameStats {
++    let completed = state.frame_stats();
++    window.request_frame();
++    track_presentation(state, window);
++    completed
++}
++
++/// Advance the presented-frame token once the frame the window was just invalidated for has
++/// been presented.
++///
++/// GPUI runs next-frame callbacks at the start of a frame request, before that request draws
++/// and presents. The outer callback therefore runs at the start of the request that draws the
++/// invalidated frame, and the inner one, registered from it, at the start of the following
++/// request, after that frame's `present` has returned.
++fn track_presentation(state: &Arc<SharedState>, window: &mut Window) {
 +    let state = Arc::downgrade(state);
 +    window.on_next_frame(move |window, _| {
 +        window.on_next_frame(move |_, _| {
@@ -1002,13 +1055,12 @@ index 06791283..5249f72f 100644
 +            }
 +        });
 +    });
-+    completed
 +}
 +
  async fn request_ui_refresh(
      command_tx: &Sender<UiCommand>,
      operation_timeout: Duration,
-@@ -1441,9 +1471,65 @@ mod tests {
+@@ -1777,9 +1824,102 @@ mod tests {
      };
  
      use super::{
@@ -1072,6 +1124,43 @@ index 06791283..5249f72f 100644
 +            state.presented_frame_count(),
 +            state.frame_stats().frame_count
 +        );
++    }
++
++    /// A requested frame replays cached views instead of rendering them, but it is
++    /// presented the same way, so it advances the presented-frame token the way a
++    /// refresh does.
++    #[gpui::test]
++    fn request_frame_marks_presentation_at_the_request_after_the_requested_frame(
++        cx: &mut gpui::TestAppContext,
++    ) {
++        let automation = Automation::isolated();
++        let attached = automation.clone();
++        let (_view, visual) = cx.add_window_view(move |window, _| {
++            attached.attach(window);
++            EmptyView
++        });
++        visual.run_until_parked();
++        let state = automation.state.clone();
++
++        let before =
++            visual.update(|window, _| request_frame_and_track_presentation(&state, window));
++        visual.run_until_parked();
++        assert!(state.presented_frame_count() <= before.frame_count);
++
++        assert_eq!(
++            visual.update(|window, cx| window.simulate_next_frame(cx)),
++            1
++        );
++        assert!(
++            state.presented_frame_count() <= before.frame_count,
++            "the request that draws the requested frame has not presented it yet"
++        );
++
++        assert_eq!(
++            visual.update(|window, cx| window.simulate_next_frame(cx)),
++            1
++        );
++        assert!(state.presented_frame_count() > before.frame_count);
 +    }
  
      #[test]

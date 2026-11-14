@@ -16,6 +16,13 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
 
 - Driver relacional para SQL Server / Azure SQL con ejecución de queries SQL y
   descubrimiento de schema.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
+  con la validación del editor, la confirmación de queries peligrosas, las
+  filas de auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Autenticación mediante logins de SQL Server (usuario + contraseña); el modo
   URI acepta connection strings ADO, JDBC y
   `sqlserver://user:pass@host:port/db`.
@@ -30,8 +37,13 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
   - `on` — encriptado, acepta certificados autofirmados. Ideal para SQL Server
     local/de desarrollo con su certificado autogenerado.
   - `required` — encriptado, valida la cadena del certificado. Úsalo contra
-    servidores con un certificado firmado por una CA real (Azure SQL, etc.). En
-    modo URI, `?trust=true|false` sobrescribe explícitamente el valor derivado
+    servidores con un certificado firmado por una CA real (Azure SQL, etc.).
+    Seleccionar `required` muestra la ruta de **CA certificate**; cuando se
+    define, la cadena se valida contra esa CA (`trust_cert_ca` de tiberius),
+    por lo que los servidores firmados por una CA privada o corporativa
+    conectan sin confiar en cualquier certificado. Si se deja vacía, se usa
+    el almacén de confianza del sistema. El modo `on` ignora la ruta.
+  En modo URI, `?trust=true|false` sobrescribe explícitamente el valor derivado
     si necesitas una combinación inusual (p. ej.
     `?encrypt=required&trust=true`).
 - Soporte opcional de instancias con nombre de SQL Server (`SQLEXPRESS`,
@@ -139,6 +151,31 @@ Requiere el permiso `VIEW SERVER STATE`.
   restringidos, el propio KILL puede fallar con un error de permisos; el driver
   lo muestra al usuario.
 
+### Sesiones caídas
+
+- El socket de cada sesión tiene TCP keepalive activado (primer sondeo tras
+  60 segundos de inactividad), para que los gateways NAT, firewalls y
+  balanceadores que cortan conexiones silenciosas mantengan la sesión abierta.
+- Si aun así el servidor o la red cortan la sesión, la siguiente llamada
+  falla con un error de I/O (broken pipe, connection reset o fin de archivo
+  inesperado). El driver descarta el cliente muerto y marca la conexión para
+  reconectar, igual que tras una cancelación.
+- Las lecturas de metadatos (bases de datos, tablas, vistas, detalles de
+  tablas y vistas, tipos, índices, foreign keys y rutinas del schema) abren
+  una sesión nueva, restauran la base de datos activa y reintentan una vez,
+  así que abrir una tabla tras un rato inactivo funciona sin reconectar a mano.
+- Las ediciones de filas (insert, update, delete), la navegación, el conteo y
+  las consultas de filas y dependencias abren la sesión nueva antes de
+  ejecutarse, así que funcionan sin reconectar a mano una vez que una llamada
+  anterior detectó la caída. Si nada la detectó todavía, la primera operación
+  falla y no se repite; una escritura fallida nunca se repite. La recuperación está serializada, de modo
+  que los llamadores concurrentes comparten una sola sesión nueva en lugar de
+  reemplazarse entre sí. Un error del servidor que indica una sesión terminada
+  (596, 233, 6005) se trata igual que un socket caído.
+- Un batch de queries nunca se reintenta, porque el servidor puede haberlo
+  ejecutado ya. Se muestra su error, y la siguiente query o ping abre una
+  sesión nueva.
+
 ### Descubrimiento de schema
 
 - Bases de datos (`sys.databases`, oculta las bases de datos de sistema).
@@ -213,8 +250,9 @@ Requiere el permiso `VIEW SERVER STATE`.
 - Comillas de identificador con `[corchetes]` con escape de `]`.
 - Literales de string Unicode `N'…'`; literales binarios `0x…` (en mayúsculas);
   `1`/`0` para valores booleanos (`BIT`).
-- Paginación `OFFSET … ROWS FETCH NEXT … ROWS ONLY` (con un fallback `ORDER BY
-  1` para que las queries con OFFSET sin ORDER BY no den error).
+- Paginación `OFFSET … ROWS FETCH NEXT … ROWS ONLY` (con un fallback
+  `ORDER BY (SELECT NULL)` para que las queries con OFFSET sin ORDER BY no den
+  error y no se ordene por ninguna columna).
 - `SELECT TOP N` no se usa; OFFSET/FETCH es la forma canónica de paginación.
 - `UPSERT` intencionalmente no se genera; `MERGE` en SQL Server tiene bugs
   conocidos y debería escribirse a mano.
@@ -273,6 +311,18 @@ Requiere el permiso `VIEW SERVER STATE`.
 
 ## Limitaciones
 
+- El certificado de CA del modo `required` reemplaza el almacén de confianza
+  del sistema en lugar de ampliarlo, debe contener exactamente un certificado
+  y debe usar la extensión `.pem`, `.crt` o `.der` (tiberius con rustls).
+  Las URL `sqlserver://` no tienen parámetro de certificado de CA; las cadenas
+  de conexión ADO y JDBC aceptan en su lugar la clave
+  `TrustServerCertificateCA=<ruta>` de tiberius. No la combines con
+  `TrustServerCertificate=true`: tiberius entra en pánico cuando ambos
+  ajustes de confianza están presentes.
+- A través de un túnel SSH el driver se conecta a `127.0.0.1`, por lo que ese
+  es el nombre de servidor que se verifica en el modo `required`: un
+  certificado de CA privada emitido para el hostname real falla la
+  verificación del hostname.
 - La generación fiel de `CREATE TABLE` (schema diff) se niega, en vez de
   aplanar, las tablas cuya semántica de creación no puede reproducir: columnas
   calculadas, tipos de columna definidos por el usuario/CLR (y alias), columnas
@@ -406,3 +456,4 @@ Requiere el permiso `VIEW SERVER STATE`.
   Server deshabilita la comprobación de FK por tabla vía `ALTER TABLE ...
   NOCHECK CONSTRAINT`, lo cual no encaja con el toggle global único del motor;
   una variante por tabla es una posible mejora futura.
+- Sin modo de solo lectura aplicado por la base de datos: las peticiones que lo requieren se rechazan, así que `execute_script` en MCP gobierna como escrituras los scripts clasificados `Read` o `Metadata`, y el auto-refresh del editor no está disponible en conexiones de SQL Server.

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dbflux_core::ServerNotice;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
@@ -19,29 +20,30 @@ use dbflux_core::{
     ErrorLocation, ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
     ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
     IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
-    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
-    TransactionCapabilities, TransactionStateNote, TransferFamily, TypeDefinition, Value, ViewInfo,
-    WhereOperator, field_password, field_required, field_use_uri, generate_create_table,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
+    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
+    RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TransactionStateNote, TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator,
+    field_password, field_required, field_use_uri, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
     strip_leading_comments, validate_ddl_fragment, when_checked, when_unchecked, with_default,
     with_help,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use half::f16;
-use native_tls::TlsConnector;
 use postgres::types::{Date as PgDate, FromSql, Kind, Timestamp as PgTimestamp, Type};
 use postgres::{
     CancelToken as PgCancelToken, Client, NoTls, SimpleQueryMessage,
     fallible_iterator::FallibleIterator,
 };
 use postgres_native_tls::MakeTlsConnector;
+
+use crate::tls::{PgTlsFiles, TlsVerification, build_tls_connector, take_uri_tls_files};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -56,6 +58,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::SCHEMAS.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits()
@@ -85,6 +89,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: true,
         default_schema: Some("public".to_string()),
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -253,6 +258,10 @@ impl SqlDialect for PostgresDialect {
         true
     }
 
+    fn mutation_target_alias(&self) -> dbflux_core::MutationTargetAlias {
+        dbflux_core::MutationTargetAlias::Accepted
+    }
+
     fn supports_drop_cascade(&self) -> bool {
         true
     }
@@ -328,7 +337,7 @@ impl SqlDialect for PostgresDialect {
     }
 }
 
-static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
+pub(crate) static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
 
 // =============================================================================
 // PostgreSQL Code Generator
@@ -717,16 +726,18 @@ impl DbDriver for PostgresDriver {
                 &config.database,
                 password,
                 &config.ssl_mode,
+                &config.tls_files,
             )
         } else {
-            self.connect_direct(
-                &config.host,
-                config.port,
-                &config.user,
-                &config.database,
+            self.connect_direct(&PostgresConnectParams {
+                host: &config.host,
+                port: config.port,
+                user: &config.user,
                 password,
-                &config.ssl_mode,
-            )
+                database: &config.database,
+                ssl_mode: &config.ssl_mode,
+                tls_files: &config.tls_files,
+            })
         }
     }
 
@@ -967,6 +978,7 @@ struct ExtractedPostgresConfig {
     database: String,
     /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`). Defaults to `"prefer"` when absent.
     ssl_mode: String,
+    tls_files: PgTlsFiles,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -993,6 +1005,9 @@ fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig,
             user,
             database,
             ssl_mode,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ssh_tunnel,
             ..
         } => Ok(ExtractedPostgresConfig {
@@ -1003,6 +1018,11 @@ fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig,
             user: user.clone(),
             database: database.clone(),
             ssl_mode: ssl_mode.clone().unwrap_or_else(|| "prefer".to_string()),
+            tls_files: PgTlsFiles::new(
+                ssl_root_cert_path.as_deref(),
+                ssl_client_cert_path.as_deref(),
+                ssl_client_key_path.as_deref(),
+            ),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -1019,6 +1039,7 @@ struct PostgresConnectParams<'a> {
     database: &'a str,
     /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`).
     ssl_mode: &'a str,
+    tls_files: &'a PgTlsFiles,
 }
 
 /// Escapes a value for a libpq keyword/value connection string.
@@ -1071,6 +1092,81 @@ fn build_keyword_conn_string(
     pairs.join(" ")
 }
 
+/// Notices one request keeps; a loop raising a notice per row would
+/// otherwise hold every one of them in memory and in the result.
+const MAX_KEPT_NOTICES: usize = 100;
+
+/// Collects the notices and warnings the server sends on one client.
+#[derive(Clone, Default)]
+struct NoticeBuffer(Arc<Mutex<CollectedNotices>>);
+
+#[derive(Default)]
+struct CollectedNotices {
+    kept: Vec<ServerNotice>,
+    dropped: usize,
+}
+
+impl NoticeBuffer {
+    fn push(&self, notice: ServerNotice) {
+        let mut notices = self.lock();
+        if notices.kept.len() < MAX_KEPT_NOTICES {
+            notices.kept.push(notice);
+        } else {
+            notices.dropped += 1;
+        }
+    }
+
+    fn clear(&self) {
+        *self.lock() = CollectedNotices::default();
+    }
+
+    /// The notices kept since the last clear, followed by one that counts
+    /// those past the limit.
+    fn take(&self) -> Vec<ServerNotice> {
+        let CollectedNotices { mut kept, dropped } = std::mem::take(&mut *self.lock());
+        if dropped > 0 {
+            kept.push(ServerNotice {
+                severity: "INFO".to_string(),
+                message: format!("{dropped} more notices were not kept"),
+            });
+        }
+        kept
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, CollectedNotices> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+fn server_notice(notice: &postgres::error::DbError) -> ServerNotice {
+    ServerNotice {
+        severity: notice.severity().to_string(),
+        message: notice.message().to_string(),
+    }
+}
+
+/// Connects with a notice callback that records every server notice into
+/// `notices`; `Client::connect` would only log them.
+fn connect_client<T>(
+    conn_string: &str,
+    tls: T,
+    notices: &NoticeBuffer,
+) -> Result<Client, postgres::Error>
+where
+    T: postgres::tls::MakeTlsConnect<postgres::Socket> + 'static + Send,
+    T::TlsConnect: Send,
+    T::Stream: Send,
+    <T::TlsConnect as postgres::tls::TlsConnect<postgres::Socket>>::Future: Send,
+{
+    let notices = notices.clone();
+    conn_string
+        .parse::<postgres::Config>()?
+        .notice_callback(move |notice| notices.push(server_notice(&notice)))
+        .connect(tls)
+}
+
 /// Establishes a PostgreSQL connection using the native sslmode identifier from the profile.
 ///
 /// Maps sslmode string values directly to the appropriate TLS strategy, matching PostgreSQL's
@@ -1078,84 +1174,56 @@ fn build_keyword_conn_string(
 /// - `"disable"` — no TLS
 /// - `"allow"` / `"prefer"` — try TLS first, fall back to plain
 /// - `"require"` — TLS required, self-signed certs accepted
-/// - `"verify-ca"` / `"verify-full"` — TLS required with certificate validation
-fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
-    let conn_string = with_client_identity(&build_keyword_conn_string(
-        params.host,
-        params.port,
-        params.user,
-        params.password,
-        params.database,
+/// - `"verify-ca"` — TLS required, certificate chain validated, hostname not checked
+/// - `"verify-full"` — TLS required, certificate chain and hostname validated
+fn connect_postgres(
+    params: &PostgresConnectParams,
+    notices: &NoticeBuffer,
+) -> Result<Client, DbError> {
+    let ssl_mode = parse_pg_sslmode(params.ssl_mode);
+
+    let conn_string = with_client_identity(&with_keyword_sslmode(
+        &build_keyword_conn_string(
+            params.host,
+            params.port,
+            params.user,
+            params.password,
+            params.database,
+        ),
+        ssl_mode,
     ));
 
-    match params.ssl_mode {
-        "disable" => Client::connect(&conn_string, NoTls)
-            .map_err(|e| format_pg_error(&e, params.host, params.port)),
-
-        "allow" | "prefer" => {
-            // Try SSL with permissive cert checking; fall back to plain if SSL fails.
-            let connector = TlsConnector::builder()
-                .danger_accept_invalid_certs(true)
-                .build()
-                .map_err(|e| {
-                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
-                })?;
-
-            let tls = MakeTlsConnector::new(connector);
-
-            match Client::connect(&conn_string, tls) {
-                Ok(client) => Ok(client),
-                Err(_) => Client::connect(&conn_string, NoTls)
-                    .map_err(|e| format_pg_error(&e, params.host, params.port)),
-            }
-        }
-
-        "require" => {
-            let connector = TlsConnector::builder()
-                .danger_accept_invalid_certs(true)
-                .build()
-                .map_err(|e| {
-                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
-                })?;
-
-            let tls = MakeTlsConnector::new(connector);
-
-            Client::connect(&conn_string, tls)
-                .map_err(|e| format_pg_error(&e, params.host, params.port))
-        }
-
-        "verify-ca" | "verify-full" => {
-            let connector = TlsConnector::builder()
-                .danger_accept_invalid_certs(false)
-                .build()
-                .map_err(|e| {
-                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
-                })?;
-
-            let tls = MakeTlsConnector::new(connector);
-
-            Client::connect(&conn_string, tls)
-                .map_err(|e| format_pg_error(&e, params.host, params.port))
-        }
-
-        // Unknown modes fall back to prefer behaviour (try TLS, allow plain fallback).
-        _ => {
-            let connector = TlsConnector::builder()
-                .danger_accept_invalid_certs(true)
-                .build()
-                .map_err(|e| {
-                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
-                })?;
-
-            let tls = MakeTlsConnector::new(connector);
-
-            match Client::connect(&conn_string, tls) {
-                Ok(client) => Ok(client),
-                Err(_) => Client::connect(&conn_string, NoTls)
-                    .map_err(|e| format_pg_error(&e, params.host, params.port)),
-            }
-        }
+    if ssl_mode == PgSslMode::Disable {
+        return connect_client(&conn_string, NoTls, notices)
+            .map_err(|e| format_pg_error(&e, params.host, params.port));
     }
+
+    let tls = MakeTlsConnector::new(build_tls_connector(
+        ssl_mode.tls_verification(),
+        params.tls_files,
+    )?);
+
+    match connect_client(&conn_string, tls, notices) {
+        Ok(client) => Ok(client),
+        Err(e) if ssl_mode == PgSslMode::Prefer && is_tls_negotiation_failure(&e) => {
+            log::info!("[SSL] TLS negotiation failed ({e}), retrying without TLS (prefer)");
+            connect_client(&conn_string, NoTls, notices)
+                .map_err(|e| format_pg_error(&e, params.host, params.port))
+        }
+        Err(e) => Err(format_pg_error(&e, params.host, params.port)),
+    }
+}
+
+/// Whether a failed TLS attempt in `prefer` mode failed while negotiating
+/// TLS, the only case where libpq-style `prefer` retries without it. A server
+/// answer (wrong password, unknown database, missing privilege) or a network
+/// error is the real failure, and a plaintext retry would only hide it.
+///
+/// A server that refuses TLS never gets here: the client already continues in
+/// plaintext on the same socket.
+fn is_tls_negotiation_failure(error: &postgres::Error) -> bool {
+    error.as_db_error().is_none()
+        && std::error::Error::source(error).is_some_and(|source| source.is::<native_tls::Error>())
 }
 
 impl PostgresDriver {
@@ -1168,36 +1236,38 @@ impl PostgresDriver {
         let uri = with_client_identity(&uri);
 
         let ssl_mode = parse_pg_uri_sslmode(&uri);
+        let uri = with_protocol_sslmode(&uri);
+        let (uri, tls_files) = take_uri_tls_files(&uri);
+        let notices = NoticeBuffer::default();
 
-        if ssl_mode == PgUriSslMode::Disable {
-            let client =
-                Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?;
+        if ssl_mode == PgSslMode::Disable {
+            let client = connect_client(&uri, NoTls, &notices)
+                .map_err(|e| format_pg_uri_error(&e, base_uri))?;
 
             let cancel_token = client.cancel_token();
             log::info!("[CONNECT] PostgreSQL connection established via URI");
 
             return Ok(Box::new(PostgresConnection {
                 client: Arc::new(Mutex::new(client)),
+                notices,
                 ssh_tunnel: None,
                 cancel_token,
-                active_query: RwLock::new(None),
+                active_query: Arc::new(RwLock::new(None)),
                 cancelled: Arc::new(AtomicBool::new(false)),
             }));
         }
 
-        let accept_invalid_certs = matches!(ssl_mode, PgUriSslMode::Prefer | PgUriSslMode::Require);
+        let tls = MakeTlsConnector::new(build_tls_connector(
+            ssl_mode.tls_verification(),
+            &tls_files,
+        )?);
 
-        let connector = TlsConnector::builder()
-            .danger_accept_invalid_certs(accept_invalid_certs)
-            .build()
-            .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into()))?;
-
-        let tls = MakeTlsConnector::new(connector);
-
-        let client = match Client::connect(&uri, tls) {
+        let client = match connect_client(&uri, tls, &notices) {
             Ok(c) => c,
-            Err(_) if ssl_mode == PgUriSslMode::Prefer => {
-                Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?
+            Err(e) if ssl_mode == PgSslMode::Prefer && is_tls_negotiation_failure(&e) => {
+                log::info!("[SSL] TLS negotiation failed ({e}), retrying without TLS (prefer)");
+                connect_client(&uri, NoTls, &notices)
+                    .map_err(|e| format_pg_uri_error(&e, base_uri))?
             }
             Err(e) => return Err(format_pg_uri_error(&e, base_uri)),
         };
@@ -1207,47 +1277,38 @@ impl PostgresDriver {
 
         Ok(Box::new(PostgresConnection {
             client: Arc::new(Mutex::new(client)),
+            notices,
             ssh_tunnel: None,
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
 
     fn connect_direct(
         &self,
-        host: &str,
-        port: u16,
-        user: &str,
-        database: &str,
-        password: Option<&str>,
-        ssl_mode: &str,
+        params: &PostgresConnectParams,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
             "Connecting directly to PostgreSQL at {}:{} as {} (database: {})",
-            host,
-            port,
-            user,
-            database
+            params.host,
+            params.port,
+            params.user,
+            params.database
         );
 
-        let client = connect_postgres(&PostgresConnectParams {
-            host,
-            port,
-            user,
-            password,
-            database,
-            ssl_mode,
-        })?;
+        let notices = NoticeBuffer::default();
+        let client = connect_postgres(params, &notices)?;
 
         let cancel_token = client.cancel_token();
-        log::info!("Successfully connected to {}:{}", host, port);
+        log::info!("Successfully connected to {}:{}", params.host, params.port);
 
         Ok(Box::new(PostgresConnection {
             client: Arc::new(Mutex::new(client)),
+            notices,
             ssh_tunnel: None,
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -1263,48 +1324,30 @@ impl PostgresDriver {
         database: &str,
         db_password: Option<&str>,
         ssl_mode: &str,
+        tls_files: &PgTlsFiles,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        log::info!(
-            "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port,
-            db_host,
-            db_port
-        );
-
-        let phase_start = Instant::now();
-        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        log::info!(
-            "[CONNECT] SSH session phase completed in {:.2}ms",
-            phase_start.elapsed().as_secs_f64() * 1000.0
-        );
-
-        log::info!("[SSH] Setting up tunnel to {}:{}", db_host, db_port);
-        let phase_start = Instant::now();
-
-        let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel { tunnel, ssh_host } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port = tunnel.local_port();
-
-        log::info!(
-            "[SSH] Tunnel ready on 127.0.0.1:{} in {:.2}ms",
-            local_port,
-            phase_start.elapsed().as_secs_f64() * 1000.0
-        );
 
         log::info!("[DB] Connecting to PostgreSQL via tunnel");
         let phase_start = Instant::now();
 
-        let client = connect_postgres(&PostgresConnectParams {
-            host: "127.0.0.1",
-            port: local_port,
-            user: db_user,
-            password: db_password,
-            database,
-            ssl_mode,
-        })?;
+        let notices = NoticeBuffer::default();
+        let client = connect_postgres(
+            &PostgresConnectParams {
+                host: "127.0.0.1",
+                port: local_port,
+                user: db_user,
+                password: db_password,
+                database,
+                ssl_mode,
+                tls_files,
+            },
+            &notices,
+        )?;
 
         let cancel_token = client.cancel_token();
 
@@ -1318,58 +1361,132 @@ impl PostgresDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             db_host,
             db_port,
-            tunnel_config.host
+            ssh_host
         );
 
         Ok(Box::new(PostgresConnection {
             client: Arc::new(Mutex::new(client)),
+            notices,
             ssh_tunnel: Some(tunnel),
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
 }
 
+/// libpq `sslmode`, shared by the form and URI connect paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PgUriSslMode {
+enum PgSslMode {
     Disable,
     Prefer,
     Require,
-    Verify,
+    VerifyCa,
+    VerifyFull,
 }
 
-fn parse_pg_uri_sslmode(uri: &str) -> PgUriSslMode {
+impl PgSslMode {
+    /// The `sslmode` the driver's own parser accepts. The verify modes must
+    /// map to `require`: left at the default `prefer`, a server that declines
+    /// TLS would get a plaintext connection.
+    fn protocol_sslmode(self) -> &'static str {
+        match self {
+            PgSslMode::Disable => "disable",
+            PgSslMode::Prefer => "prefer",
+            PgSslMode::Require | PgSslMode::VerifyCa | PgSslMode::VerifyFull => "require",
+        }
+    }
+
+    fn tls_verification(self) -> TlsVerification {
+        match self {
+            PgSslMode::Disable | PgSslMode::Prefer | PgSslMode::Require => TlsVerification {
+                chain: false,
+                hostname: false,
+            },
+            PgSslMode::VerifyCa => TlsVerification {
+                chain: true,
+                hostname: false,
+            },
+            PgSslMode::VerifyFull => TlsVerification {
+                chain: true,
+                hostname: true,
+            },
+        }
+    }
+}
+
+/// Parses a libpq `sslmode` value. Unknown values fall back to `prefer`.
+fn parse_pg_sslmode(value: &str) -> PgSslMode {
+    match value.to_ascii_lowercase().as_str() {
+        "disable" => PgSslMode::Disable,
+        "require" => PgSslMode::Require,
+        "verify-ca" => PgSslMode::VerifyCa,
+        "verify-full" => PgSslMode::VerifyFull,
+        _ => PgSslMode::Prefer,
+    }
+}
+
+fn with_keyword_sslmode(conn_string: &str, ssl_mode: PgSslMode) -> String {
+    format!("{} sslmode={}", conn_string, ssl_mode.protocol_sslmode())
+}
+
+/// Rewrites a libpq `sslmode` in the URI query (`allow`, `verify-ca`,
+/// `verify-full`, any case) to the value the driver's parser accepts.
+/// Unknown values are left in place so the parser still rejects them.
+fn with_protocol_sslmode(uri: &str) -> String {
+    let Some((base, query)) = uri.split_once('?') else {
+        return uri.to_string();
+    };
+
+    let pairs: Vec<String> = query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some(("sslmode", value)) if is_libpq_sslmode(value) => {
+                format!("sslmode={}", parse_pg_sslmode(value).protocol_sslmode())
+            }
+            _ => pair.to_string(),
+        })
+        .collect();
+
+    format!("{}?{}", base, pairs.join("&"))
+}
+
+fn is_libpq_sslmode(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full"
+    )
+}
+
+fn parse_pg_uri_sslmode(uri: &str) -> PgSslMode {
     let Some(query_start) = uri.find('?') else {
-        return PgUriSslMode::Prefer;
+        return PgSslMode::Prefer;
     };
 
     let query = &uri[query_start + 1..];
 
-    let sslmode = query
+    query
         .split('&')
         .find_map(|pair| pair.split_once('=').filter(|(key, _)| *key == "sslmode"))
-        .map(|(_, value)| value.to_ascii_lowercase());
-
-    match sslmode.as_deref() {
-        Some("disable") => PgUriSslMode::Disable,
-        Some("prefer") | Some("allow") => PgUriSslMode::Prefer,
-        Some("require") => PgUriSslMode::Require,
-        Some("verify-ca") | Some("verify-full") => PgUriSslMode::Verify,
-        _ => PgUriSslMode::Prefer,
-    }
+        .map(|(_, value)| parse_pg_sslmode(value))
+        .unwrap_or(PgSslMode::Prefer)
 }
 
 pub struct PostgresConnection {
     client: Arc<Mutex<Client>>,
+    /// Notices the server sent on `client`. Only read under the `client`
+    /// lock, so a drain sees exactly the notices of the calls made while it
+    /// was held.
+    notices: NoticeBuffer,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
     cancel_token: PgCancelToken,
-    active_query: RwLock<Option<Uuid>>,
+    active_query: Arc<RwLock<Option<Uuid>>>,
     cancelled: Arc<AtomicBool>,
 }
 
 struct PostgresCancelHandle {
+    active_query: Arc<RwLock<Option<Uuid>>>,
     cancel_token: PgCancelToken,
     cancelled: Arc<AtomicBool>,
 }
@@ -1377,6 +1494,11 @@ struct PostgresCancelHandle {
 impl QueryCancelHandle for PostgresCancelHandle {
     fn cancel(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
+
+        if !has_active_query(&self.active_query)? {
+            log::debug!("[CANCEL] No query is running, no cancel request sent");
+            return Ok(());
+        }
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel query: {}", e);
@@ -1390,6 +1512,20 @@ impl QueryCancelHandle for PostgresCancelHandle {
     fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
     }
+}
+
+/// Reports whether `execute` is currently running a cancellable query.
+///
+/// PostgreSQL applies a cancel request to whatever statement is executing
+/// when it arrives, so a cancel is only sent while the marker is set. Other
+/// calls that hold the client mutex, such as `ping` or schema loads, never
+/// set it and are therefore never cancelled.
+fn has_active_query(active_query: &RwLock<Option<Uuid>>) -> Result<bool, DbError> {
+    let active = active_query
+        .read()
+        .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+    Ok(active.is_some())
 }
 
 fn postgres_code_generators() -> Vec<CodeGeneratorInfo> {
@@ -1423,7 +1559,8 @@ fn plan_postgres_table_browse(
 ) -> Result<SemanticPlan, DbError> {
     let sql = if let Some(filter) = request.semantic_filter.as_ref() {
         let mut sql = format!(
-            "SELECT * FROM {}",
+            "SELECT {} FROM {}",
+            request.select_list_with(&POSTGRES_DIALECT),
             request.table.quoted_with(&POSTGRES_DIALECT)
         );
         let where_clause = render_semantic_filter_sql(filter, &POSTGRES_DIALECT)?;
@@ -1651,6 +1788,23 @@ impl Connection for PostgresConnection {
             .unwrap_or(dbflux_core::WritePrivilege::Unknown)
     }
 
+    fn table_view_features(&self) -> dbflux_core::TableViewFeatures {
+        dbflux_core::TableViewFeatures::COLUMN_PROFILE
+            | dbflux_core::TableViewFeatures::COLUMN_PROJECTION
+    }
+
+    fn table_profile(
+        &self,
+        table: &dbflux_core::TableRef,
+    ) -> Result<dbflux_core::TableProfile, DbError> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+        crate::table_views::table_profile(&mut client, table)
+    }
+
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         let pg_signal_backend = self
             .client
@@ -1687,44 +1841,15 @@ impl Connection for PostgresConnection {
         {
             return Err(DbError::NotSupported("PostgreSQL: row limits on instance catalog queries are unsupported; rejected before execution".to_string()));
         }
+        req.refuse_read_only_for_instance_catalog("PostgreSQL")?;
+        if req.read_only.is_required() {
+            ensure_no_transaction_control(&req.sql)?;
+        }
 
         self.cancelled.store(false, Ordering::SeqCst);
 
-        if let Some(source) = req
-            .execution_context
-            .as_ref()
-            .and_then(|ctx| ctx.source.as_ref())
-        {
-            match source {
-                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
-                    let mut client = self.client.lock().map_err(|_| {
-                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
-                    })?;
-                    return crate::instance_catalog::dispatch_metric_series(&mut client, metric_id);
-                }
-                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
-                    let mut client = self.client.lock().map_err(|_| {
-                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
-                    })?;
-                    return crate::instance_catalog::dispatch_inspector_snapshot(
-                        &mut client,
-                        metric_id,
-                    );
-                }
-                _ => {}
-            }
-        }
-
         let start = Instant::now();
         let query_id = Uuid::new_v4();
-        let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
-
-        let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
-        log::debug!(
-            "[QUERY] Executing (id={}): {}",
-            query_id,
-            sql_preview.replace('\n', " ")
-        );
 
         let mut client = match self.client.lock() {
             Ok(guard) => guard,
@@ -1734,22 +1859,85 @@ impl Connection for PostgresConnection {
             }
         };
 
-        // A multi-statement batch cannot use the extended (prepared) protocol,
-        // which rejects more than one command per statement (SQLSTATE 42601).
-        // Route it through the simple query protocol, which executes the whole
-        // batch and returns one result set per statement.
-        if req.limit.is_none() && QueryLanguage::Sql.statement_count(&req.sql) > 1 {
-            return execute_statement_batch(&mut client, &req.sql, query_id, start, req.limit);
+        // Declared after `client` so it drops first: the marker must be cleared
+        // before the connection is released, or a cancel arriving in between
+        // would land on the next statement run on this connection.
+        let active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    return crate::instance_catalog::dispatch_metric_series(&mut client, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut client,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
         }
-        if let Some(limit) = req.limit {
-            return execute_bounded_request(
+
+        let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
+        log::debug!(
+            "[QUERY] Executing (id={}): {}",
+            query_id,
+            sql_preview.replace('\n', " ")
+        );
+
+        // Everything the server sends from here on answers the user's
+        // request. The driver's own statements in the paths below (savepoint
+        // probes, the blocks it opens and ends, `BEGIN READ ONLY` outside any
+        // block) raise no notice on success, and an error result drops the
+        // notices, so the drained buffer holds only the user's statements.
+        self.notices.clear();
+
+        let routed = if req.read_only.is_required() {
+            Some(execute_read_only_request(
+                &mut client,
+                &req.sql,
+                req.limit,
+                query_id,
+                start,
+                &self.cancelled,
+            ))
+        } else if req.limit.is_none() && QueryLanguage::Sql.statement_count(&req.sql) > 1 {
+            // A multi-statement batch cannot use the extended (prepared)
+            // protocol, which rejects more than one command per statement
+            // (SQLSTATE 42601). Route it through the simple query protocol,
+            // which executes the whole batch and returns one result set per
+            // statement.
+            Some(execute_statement_batch(
                 &mut client,
                 &req.sql,
                 query_id,
                 start,
-                limit,
-                &self.cancelled,
-            );
+                req.limit,
+            ))
+        } else {
+            req.limit.map(|limit| {
+                execute_bounded_request(
+                    &mut client,
+                    &req.sql,
+                    query_id,
+                    start,
+                    limit,
+                    &self.cancelled,
+                )
+            })
+        };
+
+        if let Some(outcome) = routed {
+            let notices = self.notices.take();
+            return outcome.map(|mut result| {
+                result.set_server_notices(notices);
+                result
+            });
         }
 
         let (columns, rows) = {
@@ -1789,6 +1977,8 @@ impl Connection for PostgresConnection {
             (columns, rows)
         };
 
+        let notices = self.notices.take();
+        drop(active_query_guard);
         drop(client);
 
         let query_time = start.elapsed();
@@ -1815,6 +2005,7 @@ impl Connection for PostgresConnection {
 
         let mut result = QueryResult::table(columns, result_rows, None, total_time);
         result.set_unsupported_types(unsupported_type_names(&result.rows));
+        result.set_server_notices(notices);
 
         Ok(result)
     }
@@ -1847,25 +2038,12 @@ impl Connection for PostgresConnection {
     fn cancel_active(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
 
-        let active = self
-            .active_query
-            .read()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+        if !has_active_query(&self.active_query)? {
+            log::debug!("[CANCEL] No query is running, no cancel request sent");
+            return Ok(());
+        }
 
-        let query_id = match *active {
-            Some(id) => id,
-            None => {
-                log::debug!("[CANCEL] No active query to cancel");
-                return Ok(());
-            }
-        };
-
-        drop(active);
-
-        log::info!(
-            "[CANCEL] Sending cancel request for active query {}",
-            query_id
-        );
+        log::info!("[CANCEL] Sending cancel request for the running query");
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel query: {}", e);
@@ -1878,6 +2056,7 @@ impl Connection for PostgresConnection {
 
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(PostgresCancelHandle {
+            active_query: self.active_query.clone(),
             cancel_token: self.cancel_token.clone(),
             cancelled: self.cancelled.clone(),
         })
@@ -1975,6 +2154,10 @@ impl Connection for PostgresConnection {
         SchemaLoadingStrategy::ConnectionPerDatabase
     }
 
+    fn object_facets(&self, table: &TableInfo) -> Vec<dbflux_core::ObjectFacet> {
+        crate::facets::table_facets(table)
+    }
+
     fn table_details(
         &self,
         _database: &str,
@@ -2018,6 +2201,26 @@ impl Connection for PostgresConnection {
         let indexes = get_indexes(&mut client, schema_name, table)?;
         let foreign_keys = get_foreign_keys(&mut client, schema_name, table)?;
         let constraints = get_constraints(&mut client, schema_name, table)?;
+        let pseudo_columns = match get_system_columns(&mut client, schema_name, table) {
+            Ok(names) => names,
+            Err(error) => {
+                log::warn!(
+                    "[SCHEMA] Cannot read the system columns of {schema_name}.{table}: {error}"
+                );
+                Box::default()
+            }
+        };
+        // A missing or unreadable TimescaleDB catalog only loses the time
+        // series view; the table details still load.
+        let hypertable = match crate::facets::hypertable_hint(&mut client, schema_name, table) {
+            Ok(hint) => hint,
+            Err(error) => {
+                log::warn!(
+                    "[SCHEMA] Cannot read the TimescaleDB dimensions of {schema_name}.{table}: {error}"
+                );
+                None
+            }
+        };
 
         log::debug!(
             "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -2039,7 +2242,8 @@ impl Connection for PostgresConnection {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
-            storage_hints: None,
+            storage_hints: hypertable.map(|hint| vec![hint]),
+            pseudo_columns,
         })
     }
 
@@ -2260,6 +2464,64 @@ impl Connection for PostgresConnection {
         Ok(Some(map))
     }
 
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values. Honors `projection`; an empty projection list
+    /// falls back to `*` rather than emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        _database: &str,
+        schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[dbflux_core::Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let select_list = match projection {
+            Some(columns) if !columns.is_empty() => columns
+                .iter()
+                .map(|column| POSTGRES_DIALECT.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => "*".to_string(),
+        };
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let literals = chunk
+                .iter()
+                .map(|value| POSTGRES_DIALECT.value_to_literal(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {} FROM {}.{} WHERE {} IN ({})",
+                select_list,
+                POSTGRES_DIALECT.quote_identifier(schema),
+                POSTGRES_DIALECT.quote_identifier(table),
+                POSTGRES_DIALECT.quote_identifier(pk_column),
+                literals,
+            );
+
+            let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(column, value)| (column.name.clone(), value))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
+    }
+
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
         Some(dbflux_core::extract_referenced_tables(query))
     }
@@ -2458,205 +2720,15 @@ impl Connection for PostgresConnection {
     }
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
-        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
-        Some(&GENERATOR)
+        Some(&crate::vector::POSTGRES_QUERY_GENERATOR)
     }
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
         plan_postgres_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| POSTGRES_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        if !order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&POSTGRES_DIALECT), dir)
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
-        sql
-    }
-
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            quoted_table, cols, placeholders_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-
-        let set_parts: Vec<String> = set
-            .iter()
-            .enumerate()
-            .map(|(i, (col, _))| format!("{} = ${}", POSTGRES_DIALECT.quote_identifier(col), i + 1))
-            .collect();
-        let set_str = set_parts.join(", ");
-
-        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
-        if let Some(f) = filter {
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        let mut sql = format!("DELETE FROM {}", quoted_table);
-        let mut params = Vec::new();
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let conflict_cols = conflict_columns
-            .iter()
-            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let update_parts: Vec<String> = update_columns
-            .iter()
-            .map(|col| {
-                let idx = columns.iter().position(|c| c == col).unwrap_or(0) + 1;
-                format!("{} = ${}", POSTGRES_DIALECT.quote_identifier(col), idx)
-            })
-            .collect();
-        let update_str = update_parts.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
-            quoted_table, cols, placeholders_str, conflict_cols, update_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        sql
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
-        format!("TRUNCATE {} RESTART IDENTITY CASCADE", quoted_table)
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
+        Ok(truncate_table_statement(table))
     }
 
     fn build_drop_index_sql(
@@ -2664,25 +2736,16 @@ impl Connection for PostgresConnection {
         index_name: &str,
         _table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
-        let quoted_index = POSTGRES_DIALECT.quote_identifier(index_name);
-        if if_exists {
-            format!("DROP INDEX IF EXISTS {} CASCADE", quoted_index)
-        } else {
-            format!("DROP INDEX {} CASCADE", quoted_index)
-        }
+    ) -> Result<String, DbError> {
+        Ok(drop_index_statement(index_name, if_exists))
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT version()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok(VERSION_QUERY)
     }
 
     fn supports_transactional_ddl(&self) -> bool {
         true
-    }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        Ok(translate_filter_to_sql(filter))
     }
 
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
@@ -2727,6 +2790,58 @@ impl Connection for PostgresConnection {
 }
 
 impl RelationalConnection for PostgresConnection {}
+
+/// SQL text of `build_truncate_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn truncate_table_statement(table: &str) -> String {
+    let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+    format!("TRUNCATE {} RESTART IDENTITY CASCADE", quoted_table)
+}
+
+/// SQL text of `build_drop_index_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn drop_index_statement(index_name: &str, if_exists: bool) -> String {
+    let quoted_index = POSTGRES_DIALECT.quote_identifier(index_name);
+    if if_exists {
+        format!("DROP INDEX IF EXISTS {} CASCADE", quoted_index)
+    } else {
+        format!("DROP INDEX {} CASCADE", quoted_index)
+    }
+}
+
+/// SQL text of `version_query`, kept as a constant so the exact query is
+/// testable without a live server.
+const VERSION_QUERY: &str = "SELECT version()";
+
+#[cfg(test)]
+mod sql_statement_tests {
+    use super::*;
+
+    #[test]
+    fn truncate_table_statement_matches_the_driver_contract() {
+        assert_eq!(
+            truncate_table_statement("users"),
+            "TRUNCATE \"users\" RESTART IDENTITY CASCADE"
+        );
+    }
+
+    #[test]
+    fn drop_index_statement_matches_the_driver_contract() {
+        assert_eq!(
+            drop_index_statement("idx_users_email", false),
+            "DROP INDEX \"idx_users_email\" CASCADE"
+        );
+        assert_eq!(
+            drop_index_statement("idx_users_email", true),
+            "DROP INDEX IF EXISTS \"idx_users_email\" CASCADE"
+        );
+    }
+
+    #[test]
+    fn version_query_is_the_postgres_version_select() {
+        assert_eq!(VERSION_QUERY, "SELECT version()");
+    }
+}
 
 impl ConnectionExt for PostgresConnection {
     fn as_relational(&self) -> Option<&dyn RelationalConnection> {
@@ -2852,6 +2967,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }
         })
         .collect();
@@ -3194,6 +3310,42 @@ fn get_foreign_keys(
     Ok(fks)
 }
 
+/// Reads the system columns of a relation (`ctid`, `xmin`, `tableoid`, ...),
+/// which a query may name although they are not user columns:
+/// <https://www.postgresql.org/docs/current/ddl-system-columns.html>.
+///
+/// The catalog lists them as the `pg_attribute` rows with a negative `attnum`
+/// (<https://www.postgresql.org/docs/current/catalog-pg-attribute.html>), so
+/// the answer follows the relation: tables, partitioned, materialized and
+/// foreign tables have them, a view has none.
+const SYSTEM_COLUMNS_QUERY: &str = r#"
+    SELECT a.attname
+    FROM pg_catalog.pg_attribute a
+    JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1
+      AND c.relname = $2
+      AND a.attnum < 0
+    ORDER BY a.attnum DESC
+"#;
+
+fn get_system_columns(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<Box<[String]>, DbError> {
+    let rows = client
+        .query(SYSTEM_COLUMNS_QUERY, &[&schema, &table])
+        .map_err(|e| format_pg_query_error(&e))?;
+
+    rows.iter()
+        .map(|row| {
+            row.try_get::<_, String>(0)
+                .map_err(|e| format_pg_query_error(&e))
+        })
+        .collect()
+}
+
 fn get_constraints(
     client: &mut Client,
     schema: &str,
@@ -3446,7 +3598,7 @@ fn json_value_to_pg_literal(value: &JsonValue) -> String {
 /// Convert a Value to a safe PostgreSQL literal string.
 ///
 /// Uses escaped single-quoted literals for readable generated SQL.
-fn value_to_pg_literal(value: &Value) -> String {
+pub(crate) fn value_to_pg_literal(value: &Value) -> String {
     match value {
         Value::Null => "NULL".to_string(),
         Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
@@ -3490,7 +3642,7 @@ fn pg_escape_string(s: &str) -> String {
 }
 
 /// Quote a string as a PostgreSQL literal.
-fn pg_quote_string(s: &str) -> String {
+pub(crate) fn pg_quote_string(s: &str) -> String {
     format!("'{}'", pg_escape_string(s))
 }
 
@@ -4322,6 +4474,61 @@ impl<'a> FromSql<'a> for PgNumericText {
     }
 }
 
+/// An unsigned system integer as the binary protocol sends it: `oid`, `xid`
+/// and `cid` in 4 big-endian bytes, `xid8` in 8. These are the types of the
+/// `tableoid`, `xmin`, `xmax`, `cmin` and `cmax` system columns:
+/// <https://www.postgresql.org/docs/current/datatype-oid.html>.
+struct PgSystemInteger(u64);
+
+impl<'a> FromSql<'a> for PgSystemInteger {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if let Ok(bytes) = <[u8; 4]>::try_from(raw) {
+            return Ok(Self(u64::from(u32::from_be_bytes(bytes))));
+        }
+
+        <[u8; 8]>::try_from(raw)
+            .map(|bytes| Self(u64::from_be_bytes(bytes)))
+            .map_err(|_| numeric_decode_error("system integer payload has an unexpected length"))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.name(), "oid" | "xid" | "cid" | "xid8")
+    }
+}
+
+fn system_integer_value(PgSystemInteger(value): PgSystemInteger) -> Value {
+    match i64::try_from(value) {
+        Ok(value) => Value::Int(value),
+        Err(_) => Value::Text(value.to_string()),
+    }
+}
+
+/// A `tid`, the type of the `ctid` system column: a 4-byte block number and a
+/// 2-byte tuple index, rendered as PostgreSQL prints it, `(0,1)`.
+struct PgTid(String);
+
+impl<'a> FromSql<'a> for PgTid {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let bytes = <[u8; 6]>::try_from(raw)
+            .map_err(|_| numeric_decode_error("tid payload has an unexpected length"))?;
+
+        let block = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let offset = u16::from_be_bytes([bytes[4], bytes[5]]);
+
+        Ok(Self(format!("({block},{offset})")))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.name() == "tid"
+    }
+}
+
 /// Maps a column decode result to a cell value.
 ///
 /// A real SQL NULL becomes `Null`. A decode failure (the decoder rejects the
@@ -4695,6 +4902,12 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
 
         "bytea" => decode_to_value(row, idx, type_name, Value::Bytes),
 
+        "oid" | "xid" | "cid" | "xid8" => {
+            decode_to_value(row, idx, type_name, system_integer_value)
+        }
+
+        "tid" => decode_to_value(row, idx, type_name, |PgTid(text)| Value::Text(text)),
+
         _ => match col_type.kind() {
             Kind::Enum(_) => decode_to_value(row, idx, type_name, |PgText(text)| Value::Text(text)),
 
@@ -4916,7 +5129,7 @@ fn format_pg_error(e: &postgres::Error, host: &str, port: u16) -> DbError {
     formatted.into_connection_error()
 }
 
-fn format_pg_query_error(e: &postgres::Error) -> DbError {
+pub(crate) fn format_pg_query_error(e: &postgres::Error) -> DbError {
     let formatted = PostgresErrorFormatter::format_postgres_error(e);
     let message = formatted.to_display_string();
     log::error!("PostgreSQL query failed: {}", message);
@@ -5024,6 +5237,26 @@ fn statement_opens_transaction(statement: &str) -> bool {
     second_keyword.eq_ignore_ascii_case("TRANSACTION")
 }
 
+/// `BEGIN`, `BEGIN WORK`, `BEGIN TRANSACTION` or `START TRANSACTION` with no
+/// transaction modes, which would have to apply before the block's first
+/// statement.
+fn is_plain_begin(statement: &str) -> bool {
+    let words: Vec<String> = strip_leading_comments(statement)
+        .split(|character: char| character.is_whitespace() || character == ';')
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+
+    matches!(
+        words
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        ["BEGIN"] | ["BEGIN", "WORK" | "TRANSACTION"] | ["START", "TRANSACTION"]
+    )
+}
+
 /// Splits the leading keyword, after any comments, from the rest of `sql`.
 fn split_leading_keyword(sql: &str) -> (&str, &str) {
     let stripped = strip_leading_comments(sql);
@@ -5033,6 +5266,136 @@ fn split_leading_keyword(sql: &str) -> (&str, &str) {
         .unwrap_or(stripped.len());
 
     stripped.split_at(keyword_end)
+}
+
+/// Refuses a read-only request that contains a transaction-control statement.
+///
+/// The request runs inside a `BEGIN READ ONLY` block the driver opens, so a
+/// `COMMIT` or `ROLLBACK` in it would end that block and let every later
+/// statement run read-write. Statements are split with
+/// [`QueryLanguage::split_statements`] and each one is prepared on its own by
+/// [`execute_bounded_request`], so a statement the splitter merged with the
+/// next one is rejected by the server instead of running.
+fn ensure_no_transaction_control(sql: &str) -> Result<(), DbError> {
+    let has_transaction_control = QueryLanguage::Sql
+        .split_statements(sql)
+        .iter()
+        .any(|statement| classify_transaction_control(statement) != TransactionControl::None);
+
+    if has_transaction_control {
+        return Err(DbError::NotSupported("PostgreSQL: a read-only request cannot run transaction-control statements (BEGIN, COMMIT, ROLLBACK, SAVEPOINT, RELEASE, PREPARE TRANSACTION); rejected before execution".to_string()));
+    }
+
+    Ok(())
+}
+
+/// Refuses read-only execution when the session is inside a transaction
+/// block, open or aborted.
+///
+/// `BEGIN READ ONLY` inside an open block only raises a warning and leaves the
+/// block read-write, and the closing `ROLLBACK` would discard the user's work,
+/// so the request must not run there. `SAVEPOINT` is rejected with SQLSTATE
+/// 25P01 only outside a block, which reads the state the `postgres` crate does
+/// not expose.
+fn ensure_outside_transaction_block(client: &mut Client) -> Result<(), DbError> {
+    let refusal = || {
+        DbError::NotSupported("PostgreSQL: read-only execution cannot run inside an open transaction; end it with COMMIT or ROLLBACK first. The request was rejected before execution".to_string())
+    };
+
+    match client.batch_execute("SAVEPOINT dbflux_read_only_probe") {
+        Err(error)
+            if error.code() == Some(&postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) =>
+        {
+            Ok(())
+        }
+        Err(error) if is_in_failed_transaction(&error) => Err(refusal()),
+        Err(error) => Err(format_pg_query_error(&error)),
+        Ok(()) => {
+            if let Err(error) = client.batch_execute("RELEASE SAVEPOINT dbflux_read_only_probe") {
+                log::warn!("[QUERY] Releasing the read-only probe savepoint failed: {error}");
+            }
+            Err(refusal())
+        }
+    }
+}
+
+/// Runs a request that requires read-only enforcement inside a `BEGIN READ
+/// ONLY` block and always rolls the block back.
+///
+/// The block takes a snapshot (`SELECT 1`) before the request runs, because
+/// PostgreSQL only lets `SET TRANSACTION READ WRITE` change the access mode
+/// before the first query. Every statement goes through the extended protocol
+/// via [`execute_bounded_request`], one prepared statement at a time, inside
+/// the block the driver opened.
+fn execute_read_only_request(
+    client: &mut Client,
+    sql: &str,
+    limit: Option<u32>,
+    query_id: Uuid,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    ensure_outside_transaction_block(client)?;
+
+    if let Err(error) = client.batch_execute("BEGIN READ ONLY; SELECT 1") {
+        rollback_read_only_block(client);
+        return Err(format_pg_query_error(&error));
+    }
+
+    let outcome = execute_bounded_request(
+        client,
+        sql,
+        query_id,
+        start,
+        limit.unwrap_or(u32::MAX),
+        cancelled,
+    )
+    .map_err(|error| without_transaction_note(error, TransactionStateNote::Aborted));
+
+    match client.batch_execute("ROLLBACK") {
+        Ok(()) => outcome,
+        Err(error) => {
+            log::warn!("[QUERY] ROLLBACK of a read-only request failed: {error}");
+            outcome.and(Err(format_pg_query_error(&error)))
+        }
+    }
+}
+
+fn rollback_read_only_block(client: &mut Client) {
+    if let Err(error) = client.batch_execute("ROLLBACK") {
+        log::warn!("[QUERY] ROLLBACK of a read-only request failed: {error}");
+    }
+}
+
+/// Removes a transaction note the shared batch recovery attached to an error.
+///
+/// A failed read-only request leaves the driver's own block aborted, and the
+/// recovery path reports that as the user's aborted transaction. The driver
+/// rolls that block back right after, so the note would send the user to end
+/// a transaction that no longer exists.
+fn without_transaction_note(mut error: DbError, note: TransactionStateNote) -> DbError {
+    let formatted = match &mut error {
+        DbError::ConnectionFailed(formatted)
+        | DbError::QueryFailed(formatted)
+        | DbError::AuthFailed(formatted)
+        | DbError::ConstraintViolation(formatted)
+        | DbError::SyntaxError(formatted)
+        | DbError::PermissionDenied(formatted)
+        | DbError::ObjectNotFound(formatted) => formatted,
+        _ => return error,
+    };
+
+    let message = note.message();
+    formatted.hint = match formatted.hint.take() {
+        Some(hint) if hint == message => None,
+        Some(hint) => match hint.strip_suffix(message) {
+            Some(rest) => Some(rest.trim_end().to_string()),
+            None => Some(hint),
+        },
+        None => None,
+    };
+
+    error
 }
 
 /// Executes a multi-statement batch via the simple query protocol.
@@ -5172,9 +5535,97 @@ fn execute_bounded_request(
         Err(error) => return Err(bounded_statement_error(&error, query_id)),
     };
 
+    // A procedure that commits or rolls back fails inside the transaction
+    // the portal needs, so `CALL` keeps the streaming path.
+    if limit > 0
+        && !statement.columns().is_empty()
+        && !split_leading_keyword(sql).0.eq_ignore_ascii_case("CALL")
+        && let Some(result) = fetch_first_page(client, &statement, limit, start)
+            .map_err(|error| bounded_statement_error(&error, query_id))?
+    {
+        return Ok(result);
+    }
+
     let mut remaining_rows = limit as usize;
     stream_bounded_statement(client, &statement, &mut remaining_rows, start)
         .map_err(|error| bounded_statement_error(&error, query_id))
+}
+
+/// Fetches at most `limit` rows of a row-returning statement through a
+/// portal, so the server stops producing rows at the limit instead of
+/// streaming the whole result only for the rows past it to be dropped.
+///
+/// One row past the limit is fetched and dropped, so the result is flagged as
+/// truncated only when rows remain. PostgreSQL runs a data-modifying statement
+/// to completion before it returns its first row, so `RETURNING` keeps its
+/// full effect.
+///
+/// A portal needs a transaction block, so the statement runs in one the
+/// driver opens and commits. Returns `None` without running the statement
+/// when the session is already in a block, which the driver must not end.
+fn fetch_first_page(
+    client: &mut Client,
+    statement: &postgres::Statement,
+    limit: u32,
+    start: Instant,
+) -> Result<Option<QueryResult>, postgres::Error> {
+    match in_transaction_block(client) {
+        Ok(false) => {}
+        Ok(true) => return Ok(None),
+        Err(error) if is_in_failed_transaction(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    }
+
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let max_rows = i32::try_from(limit.saturating_add(1)).unwrap_or(i32::MAX);
+    let mut transaction = client.transaction()?;
+    let portal = transaction.bind(statement, &[])?;
+    let fetched = transaction.query_portal(&portal, max_rows)?;
+    drop(portal);
+    transaction.commit()?;
+
+    let columns = statement_columns(statement);
+    let truncated = fetched.len() > limit;
+    let rows: Vec<Row> = fetched
+        .iter()
+        .take(limit)
+        .map(|row| {
+            (0..columns.len())
+                .map(|index| postgres_value_to_value(row, index))
+                .collect()
+        })
+        .collect();
+
+    let mut result = QueryResult::table(columns, rows, None, start.elapsed());
+    result.set_rows_truncated(truncated);
+    result.set_unsupported_types(unsupported_type_names(&result.rows));
+    Ok(Some(result))
+}
+
+/// Whether the session is inside a transaction block. Outside one, each
+/// statement runs in its own implicit transaction, so the transaction and the
+/// statement start at the same time; inside an open block they differ. Unlike
+/// a `SAVEPOINT` probe, this leaves no `ERROR` in the server log.
+fn in_transaction_block(client: &mut Client) -> Result<bool, postgres::Error> {
+    let messages = client.simple_query("SELECT transaction_timestamp() = statement_timestamp()")?;
+    let outside_block = messages.iter().any(|message| {
+        matches!(message, postgres::SimpleQueryMessage::Row(row) if row.get(0) == Some("t"))
+    });
+    Ok(!outside_block)
+}
+
+fn statement_columns(statement: &postgres::Statement) -> Vec<ColumnMeta> {
+    statement
+        .columns()
+        .iter()
+        .map(|column| ColumnMeta {
+            name: column.name().to_string(),
+            type_name: column.type_().name().to_string(),
+            kind: pg_oid_to_kind(column.type_().oid()),
+            nullable: true,
+            is_primary_key: false,
+        })
+        .collect()
 }
 
 /// Prepares a request that splits into several statements without letting a
@@ -5232,17 +5683,7 @@ fn stream_bounded_statement(
     remaining_rows: &mut usize,
     start: Instant,
 ) -> Result<QueryResult, postgres::Error> {
-    let columns: Vec<ColumnMeta> = statement
-        .columns()
-        .iter()
-        .map(|column| ColumnMeta {
-            name: column.name().to_string(),
-            type_name: column.type_().name().to_string(),
-            kind: pg_oid_to_kind(column.type_().oid()),
-            nullable: true,
-            is_primary_key: false,
-        })
-        .collect();
+    let columns = statement_columns(statement);
 
     let mut stream = client.query_raw(statement, std::iter::empty::<i32>())?;
     let mut rows: Vec<Row> = Vec::new();
@@ -5439,6 +5880,24 @@ fn execute_bounded_batch(
             }
             log::info!("[QUERY] Batch query {} was cancelled", query_id);
             return Err(DbError::Cancelled);
+        }
+
+        // At a plain `BEGIN`, PostgreSQL's implicit block becomes the user's
+        // block. Running it inside the block the driver opened in its place
+        // would change nothing but raise `there is already a transaction in
+        // progress`, so the driver's block is adopted instead.
+        if *control == TransactionControl::Open
+            && block == BatchBlock::Implicit
+            && is_plain_begin(statement)
+        {
+            results.push(QueryResult::table(
+                Vec::new(),
+                Vec::new(),
+                Some(0),
+                start.elapsed(),
+            ));
+            block = BatchBlock::Explicit;
+            continue;
         }
 
         if opens {
@@ -5691,7 +6150,7 @@ fn has_application_name(conn_str: &str) -> bool {
     })
 }
 
-fn pg_quote_ident(ident: &str) -> String {
+pub(crate) fn pg_quote_ident(ident: &str) -> String {
     debug_assert!(!ident.is_empty(), "identifier cannot be empty");
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
@@ -5867,66 +6326,6 @@ fn get_schema_foreign_keys(
     }
 
     Ok(builder.build_sorted())
-}
-
-/// Translate a Value filter expression to a SQL WHERE clause string for PostgreSQL.
-fn translate_filter_to_sql(filter: &Value) -> String {
-    match filter {
-        Value::Document(doc) => {
-            let mut parts = Vec::new();
-            for (key, value) in doc {
-                let quoted_col = POSTGRES_DIALECT.quote_identifier(key);
-                let expr = match value {
-                    Value::Null => format!("{} IS NULL", quoted_col),
-                    Value::Text(s) => format!("{} = '{}'", quoted_col, pg_escape_string(s)),
-                    Value::Int(i) => format!("{} = {}", quoted_col, i),
-                    Value::Bool(b) => {
-                        format!("{} = {}", quoted_col, if *b { "TRUE" } else { "FALSE" })
-                    }
-                    Value::Float(f) => format!("{} = {}", quoted_col, f),
-                    Value::Array(arr) => {
-                        if arr.is_empty() {
-                            "1=1".to_string()
-                        } else {
-                            let items: Vec<String> = arr.iter().map(value_to_pg_literal).collect();
-                            format!("{} = ANY(ARRAY[{}])", quoted_col, items.join(", "))
-                        }
-                    }
-                    _ => format!("{} = {}", quoted_col, value_to_pg_literal(value)),
-                };
-                parts.push(expr);
-            }
-            if parts.is_empty() {
-                String::new()
-            } else {
-                parts.join(" AND ")
-            }
-        }
-        Value::Text(s) => {
-            // Treat a plain text filter as a raw SQL expression (for advanced users)
-            s.clone()
-        }
-        _ => String::new(),
-    }
-}
-
-/// Collect all Value items from a filter expression into a vector for parameterized queries.
-fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    if let Value::Document(doc) = filter {
-        for value in doc.values() {
-            match value {
-                Value::Array(arr) => {
-                    for item in arr {
-                        if !matches!(item, Value::Null) {
-                            params.push(item.clone());
-                        }
-                    }
-                }
-                Value::Null => {}
-                _ => params.push(value.clone()),
-            }
-        }
-    }
 }
 
 // =============================================================================
@@ -6144,17 +6543,19 @@ mod tests {
     use super::{
         NUMERIC_SIGN_NAN, NUMERIC_SIGN_NEGATIVE, NUMERIC_SIGN_NEGATIVE_INFINITY,
         NUMERIC_SIGN_POSITIVE, NUMERIC_SIGN_POSITIVE_INFINITY, POSTGRES_DIALECT, PgAnyValue,
-        PgNumericText, PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator,
+        PgNumericText, PgSslMode, PgTextSearchText, PgVectorText, PostgresCodeGenerator,
         PostgresDialect, PostgresDriver, PostgresErrorFormatter, TSQUERY_OP_AND, TSQUERY_OP_NOT,
-        TSQUERY_OP_OR, TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_numeric,
-        decode_pgvector_halfvec, decode_pgvector_sparsevec, decode_pgvector_vector, decode_tsquery,
-        decode_tsvector, decoded_to_value, format_pgvector_dense, format_pgvector_float4,
-        format_pgvector_sparse, inject_password_into_pg_uri, naive_timestamp_to_value,
-        numeric_array_to_value, parse_pg_uri_sslmode, pg_date_to_value, pg_timestamp_to_value,
-        pgvector_array_decode_to_value, pgvector_array_values_to_value,
-        plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
-        undecodable_to_value, unsupported_type_names, with_client_identity,
+        TSQUERY_OP_OR, TSQUERY_OP_PHRASE, TlsVerification, build_keyword_conn_string,
+        decode_numeric, decode_pgvector_halfvec, decode_pgvector_sparsevec, decode_pgvector_vector,
+        decode_tsquery, decode_tsvector, decoded_to_value, format_pgvector_dense,
+        format_pgvector_float4, format_pgvector_sparse, inject_password_into_pg_uri,
+        naive_timestamp_to_value, numeric_array_to_value, parse_pg_sslmode, parse_pg_uri_sslmode,
+        pg_date_to_value, pg_timestamp_to_value, pgvector_array_decode_to_value,
+        pgvector_array_values_to_value, plan_postgres_semantic_request, prokind_to_routine_kind,
+        text_search_array_values_to_value, undecodable_to_value, unsupported_type_names,
+        with_client_identity, with_keyword_sslmode, with_protocol_sslmode,
     };
+    use super::{PgSystemInteger, PgTid, system_integer_value};
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, ConnectionProfile,
         CreateTableSpec, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
@@ -6163,8 +6564,37 @@ mod tests {
         TableBrowseRequest, TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition,
         Value, WhereOperator,
     };
+    use postgres::config::SslMode;
     use postgres::types::{FromSql, Kind, Type};
     use std::str::FromStr;
+    use std::sync::RwLock;
+    use uuid::Uuid;
+
+    #[test]
+    fn has_active_query_reports_false_when_nothing_is_running() {
+        let marker = RwLock::new(None);
+
+        assert!(!super::has_active_query(&marker).expect("read marker"));
+    }
+
+    #[test]
+    fn has_active_query_reports_true_while_a_query_is_marked() {
+        let marker = RwLock::new(Some(Uuid::new_v4()));
+
+        assert!(super::has_active_query(&marker).expect("read marker"));
+    }
+
+    #[test]
+    fn active_query_guard_marks_the_query_and_clears_it_on_drop() {
+        let marker = RwLock::new(None);
+        let query_id = Uuid::new_v4();
+
+        let guard = super::ActiveQueryGuard::activate(&marker, query_id).expect("activate");
+        assert_eq!(*marker.read().expect("read marker"), Some(query_id));
+
+        drop(guard);
+        assert_eq!(*marker.read().expect("read marker"), None);
+    }
 
     fn sparsevec_payload(dimension: i32, indices: &[i32], values: &[f32]) -> Vec<u8> {
         assert_eq!(indices.len(), values.len());
@@ -6318,6 +6748,49 @@ mod tests {
 
     fn wep(position: u16, weight: u16) -> u16 {
         (weight << 14) | position
+    }
+
+    #[test]
+    fn system_integers_decode_from_their_binary_payloads() {
+        let decode =
+            |ty: &Type, raw: &[u8]| PgSystemInteger::from_sql(ty, raw).map(system_integer_value);
+
+        assert!(matches!(
+            decode(&Type::XID, &[0, 0, 2, 234]),
+            Ok(Value::Int(746))
+        ));
+        assert!(matches!(
+            decode(&Type::OID, &[0, 0, 64, 0]),
+            Ok(Value::Int(16384))
+        ));
+        assert!(matches!(
+            decode(&Type::CID, &[255, 255, 255, 255]),
+            Ok(Value::Int(4_294_967_295))
+        ));
+        assert!(matches!(
+            decode(&Type::XID, &[0, 0, 0, 1, 0, 0, 2, 234]),
+            Ok(Value::Int(4_294_968_042))
+        ));
+        assert!(matches!(
+            decode(&Type::XID, &[255; 8]),
+            Ok(Value::Text(text)) if text == "18446744073709551615"
+        ));
+        assert!(decode(&Type::XID, &[1, 2, 3]).is_err());
+
+        for ty in [Type::OID, Type::XID, Type::CID] {
+            assert!(PgSystemInteger::accepts(&ty), "{ty}");
+        }
+        assert!(!PgSystemInteger::accepts(&Type::INT4));
+    }
+
+    #[test]
+    fn tid_decodes_to_its_text_form() {
+        let PgTid(text) =
+            PgTid::from_sql(&Type::TID, &[0, 0, 0, 3, 0, 17]).expect("valid tid payload");
+
+        assert_eq!(text, "(3,17)");
+        assert!(PgTid::from_sql(&Type::TID, &[0, 0, 0, 3]).is_err());
+        assert!(PgTid::accepts(&Type::TID));
     }
 
     #[test]
@@ -7183,20 +7656,132 @@ mod tests {
     fn parse_pg_uri_sslmode_uses_reasonable_defaults() {
         assert_eq!(
             parse_pg_uri_sslmode("postgresql://localhost:5432/app"),
-            PgUriSslMode::Prefer
+            PgSslMode::Prefer
         );
         assert_eq!(
             parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=disable"),
-            PgUriSslMode::Disable
+            PgSslMode::Disable
         );
         assert_eq!(
             parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=require"),
-            PgUriSslMode::Require
+            PgSslMode::Require
         );
         assert_eq!(
             parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=verify-full"),
-            PgUriSslMode::Verify
+            PgSslMode::VerifyFull
         );
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=verify-ca"),
+            PgSslMode::VerifyCa
+        );
+    }
+
+    #[test]
+    fn parse_pg_sslmode_maps_every_form_value() {
+        assert_eq!(parse_pg_sslmode("disable"), PgSslMode::Disable);
+        assert_eq!(parse_pg_sslmode("allow"), PgSslMode::Prefer);
+        assert_eq!(parse_pg_sslmode("prefer"), PgSslMode::Prefer);
+        assert_eq!(parse_pg_sslmode("require"), PgSslMode::Require);
+        assert_eq!(parse_pg_sslmode("verify-ca"), PgSslMode::VerifyCa);
+        assert_eq!(parse_pg_sslmode("verify-full"), PgSslMode::VerifyFull);
+        assert_eq!(parse_pg_sslmode("VERIFY-CA"), PgSslMode::VerifyCa);
+        assert_eq!(parse_pg_sslmode("bogus"), PgSslMode::Prefer);
+    }
+
+    #[test]
+    fn tls_modes_require_tls_at_the_protocol_level() {
+        assert_eq!(PgSslMode::Disable.protocol_sslmode(), "disable");
+        assert_eq!(PgSslMode::Prefer.protocol_sslmode(), "prefer");
+        for mode in [
+            PgSslMode::Require,
+            PgSslMode::VerifyCa,
+            PgSslMode::VerifyFull,
+        ] {
+            assert_eq!(mode.protocol_sslmode(), "require");
+        }
+    }
+
+    #[test]
+    fn form_conn_string_never_downgrades_a_required_mode_to_prefer() {
+        for (form_value, expected) in [
+            ("require", SslMode::Require),
+            ("verify-ca", SslMode::Require),
+            ("verify-full", SslMode::Require),
+            ("prefer", SslMode::Prefer),
+        ] {
+            let conn_string = with_keyword_sslmode(
+                &build_keyword_conn_string("db.example.com", 5432, "app", None, "app"),
+                parse_pg_sslmode(form_value),
+            );
+            let config: postgres::Config = conn_string.parse().expect("conn string should parse");
+
+            assert_eq!(config.get_ssl_mode(), expected, "form value {form_value}");
+        }
+    }
+
+    #[test]
+    fn uri_sslmode_is_rewritten_to_a_value_the_driver_parses() {
+        for (uri, expected) in [
+            (
+                "postgresql://app@db.example.com/app?sslmode=verify-ca",
+                SslMode::Require,
+            ),
+            (
+                "postgresql://app@db.example.com/app?connect_timeout=5&sslmode=VERIFY-FULL",
+                SslMode::Require,
+            ),
+            (
+                "postgresql://app@db.example.com/app?sslmode=allow",
+                SslMode::Prefer,
+            ),
+            ("postgresql://app@db.example.com/app", SslMode::Prefer),
+        ] {
+            let rewritten = with_protocol_sslmode(uri);
+            let config: postgres::Config = rewritten.parse().expect("URI should parse");
+
+            assert_eq!(config.get_ssl_mode(), expected, "uri {uri}");
+        }
+
+        assert_eq!(
+            with_protocol_sslmode(
+                "postgresql://app@db.example.com/app?connect_timeout=5&sslmode=verify-ca"
+            ),
+            "postgresql://app@db.example.com/app?connect_timeout=5&sslmode=require"
+        );
+    }
+
+    #[test]
+    fn uri_with_unknown_sslmode_is_left_for_the_driver_to_reject() {
+        let uri = "postgresql://app@db.example.com/app?sslmode=verify-ful";
+
+        assert_eq!(with_protocol_sslmode(uri), uri);
+    }
+
+    #[test]
+    fn verify_ca_checks_the_chain_but_not_the_hostname() {
+        assert_eq!(
+            PgSslMode::VerifyCa.tls_verification(),
+            TlsVerification {
+                chain: true,
+                hostname: false
+            }
+        );
+        assert_eq!(
+            PgSslMode::VerifyFull.tls_verification(),
+            TlsVerification {
+                chain: true,
+                hostname: true
+            }
+        );
+        for mode in [PgSslMode::Prefer, PgSslMode::Require] {
+            assert_eq!(
+                mode.tls_verification(),
+                TlsVerification {
+                    chain: false,
+                    hostname: false
+                }
+            );
+        }
     }
 
     #[test]
@@ -8101,3 +8686,148 @@ mod picker_tests {
         assert_eq!(driver.picker_rank(), 0);
     }
 }
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::{ensure_no_transaction_control, without_transaction_note};
+    use dbflux_core::{DbError, FormattedError, TransactionStateNote};
+
+    #[test]
+    fn read_only_requests_refuse_transaction_control_statements() {
+        for sql in [
+            "COMMIT; DELETE FROM items",
+            "SELECT 1; ROLLBACK",
+            "BEGIN",
+            "START TRANSACTION",
+            "END",
+            "ABORT",
+            "SAVEPOINT s",
+            "RELEASE SAVEPOINT s",
+            "PREPARE TRANSACTION 'x'",
+            "/* note */ commit",
+        ] {
+            assert!(
+                matches!(
+                    ensure_no_transaction_control(sql),
+                    Err(DbError::NotSupported(_))
+                ),
+                "{sql} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_requests_accept_ordinary_statements() {
+        for sql in [
+            "SELECT 1",
+            "WITH d AS (DELETE FROM items RETURNING *) SELECT * FROM d",
+            "EXPLAIN ANALYZE DELETE FROM items",
+            "SELECT 'COMMIT'; SELECT 2",
+            "DO $$ BEGIN PERFORM 1; END $$",
+            "SET TRANSACTION READ WRITE",
+        ] {
+            assert!(
+                ensure_no_transaction_control(sql).is_ok(),
+                "{sql} must reach the read-only transaction"
+            );
+        }
+    }
+
+    #[test]
+    fn the_aborted_note_is_removed_from_a_read_only_failure() {
+        let error = DbError::QueryFailed(FormattedError::new("boom").with_hint("check the table"))
+            .with_transaction_note(TransactionStateNote::Aborted);
+
+        let cleaned = without_transaction_note(error, TransactionStateNote::Aborted);
+
+        assert_eq!(
+            cleaned
+                .formatted()
+                .and_then(|formatted| formatted.hint.as_deref()),
+            Some("check the table")
+        );
+
+        let only_note = DbError::QueryFailed(FormattedError::new("boom"))
+            .with_transaction_note(TransactionStateNote::Aborted);
+        let cleaned = without_transaction_note(only_note, TransactionStateNote::Aborted);
+        assert_eq!(
+            cleaned
+                .formatted()
+                .and_then(|formatted| formatted.hint.as_deref()),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod notice_buffer_tests {
+    use super::NoticeBuffer;
+    use dbflux_core::ServerNotice;
+
+    fn notice(message: &str) -> ServerNotice {
+        ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn take_drains_the_notices_recorded_through_any_clone() {
+        let buffer = NoticeBuffer::default();
+        buffer.clone().push(notice("first"));
+        buffer.clone().push(notice("second"));
+
+        assert_eq!(buffer.take(), vec![notice("first"), notice("second")]);
+        assert!(buffer.take().is_empty());
+    }
+
+    #[test]
+    fn a_flood_keeps_the_first_notices_and_counts_the_rest() {
+        let buffer = NoticeBuffer::default();
+        for index in 0..super::MAX_KEPT_NOTICES + 5 {
+            buffer.push(notice(&format!("n{index}")));
+        }
+
+        let notices = buffer.take();
+        assert_eq!(notices.len(), super::MAX_KEPT_NOTICES + 1);
+        assert_eq!(notices[0], notice("n0"));
+        assert_eq!(
+            notices[super::MAX_KEPT_NOTICES].message,
+            "5 more notices were not kept"
+        );
+        assert!(buffer.take().is_empty(), "take resets the count");
+    }
+
+    #[test]
+    fn only_a_begin_without_modes_is_plain() {
+        for statement in [
+            "BEGIN",
+            "begin work",
+            "BEGIN TRANSACTION",
+            "START TRANSACTION",
+            "-- go\nBEGIN",
+        ] {
+            assert!(super::is_plain_begin(statement), "{statement}");
+        }
+        for statement in [
+            "BEGIN ISOLATION LEVEL SERIALIZABLE",
+            "START TRANSACTION READ ONLY",
+            "COMMIT",
+        ] {
+            assert!(!super::is_plain_begin(statement), "{statement}");
+        }
+    }
+
+    #[test]
+    fn clear_discards_notices_recorded_before_a_request() {
+        let buffer = NoticeBuffer::default();
+        buffer.push(notice("from a schema refresh"));
+        buffer.clear();
+        buffer.push(notice("from the request"));
+
+        assert_eq!(buffer.take(), vec![notice("from the request")]);
+    }
+}
+
+#[cfg(test)]
+mod prefer_fallback_tests;

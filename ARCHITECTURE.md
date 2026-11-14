@@ -15,7 +15,7 @@ The text below is exhaustive but dense; these three diagrams give the mental mod
 
 ### Layered crate map
 
-Dependencies point downward. `dbflux_core` is the dependency-free contract layer every other crate builds on; the UI never depends on a concrete driver crate (see [Driver/UI decoupling](#driver-system)).
+Dependencies point downward. `dbflux_core` is the shared contract layer the rest of the workspace builds on; it takes one narrow dependency of its own, `dbflux_policy`, for the execution-classification and schema-alter types it re-exports. The UI never depends on a concrete driver crate (see [Driver/UI decoupling](#driver-system)).
 
 ```mermaid
 flowchart TB
@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["Supporting libraries"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["Policy — dbflux_policy"]
+        policy["ExecutionClassification,<br/>schema-alter classification"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "generic seams only" .-> core
@@ -93,7 +98,7 @@ flowchart TB
     start["Connect from<br/>Connection Manager / sidebar"] --> prep["AppState::prepare_pipeline_input<br/>(provider-agnostic input)"]
     prep --> pre{{"PreConnect hooks"}}
     pre --> auth["Pipeline: Authenticating<br/>(DynAuthProvider, e.g. AWS SSO)"]
-    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/dotenv/secret/param/auth)"]
     values --> access["Pipeline: OpeningAccess"]
     access --> tunnel{"Access kind?"}
     tunnel -->|Direct| connect
@@ -110,7 +115,7 @@ flowchart TB
 - UI: `gpui`, `gpui-component` (Cargo.toml).
 - Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB), and HTTP via `reqwest` (ClickHouse) (Cargo.toml).
 - AWS auth/integration: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: `interprocess` local sockets + `bincode` message framing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
+- IPC/RPC: `interprocess` local sockets + `postcard` message framing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` + `base64` + `serde_json` via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 - Serialization/config: `serde`, `serde_json`, `dirs` (Cargo.toml).
@@ -224,7 +229,13 @@ crates/
         file_ops.rs         # Auto-save, scratch/shadow file management
         focus.rs            # Internal focus management
         live_output.rs      # Document-owned streamed script output buffer
-        render.rs           # Toolbar, editor, and live output rendering
+        render.rs           # Action strip, editor, and live output rendering
+      console/              # NativeConsole: reusable command console docked under a document
+        mod.rs              # Entity, execution, audit, history recall, render
+        format.rs           # Dangerous-command gate, result formatting, recall list
+      console_document/     # ConsoleDocument: a native console in its own tab
+        mod.rs
+        pane.rs             # ConsoleDocument::into_pane constructor
       key_value/            # Redis/key-value-specific document tab
         mod.rs              # KeyValueDocument entity
         pane.rs             # KeyValueDocument::into_pane constructor
@@ -241,8 +252,8 @@ crates/
         mod.rs              # AuditDocument entity
         pane.rs             # AuditDocument::into_pane constructor
         view.rs             # LogStreamView boundary struct
-        render.rs           # Extracted render code (~1300 LOC)
-        commands.rs         # Extracted command dispatch (~560 LOC)
+        render.rs           # Extracted render code
+        commands.rs         # Extracted command dispatch
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -260,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView entity (re-exported by dbflux_ui)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -271,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # Connection tree; walks the snapshot's DatabaseLayout
   dbflux_ui_windows/        # Settings window + connection manager window
     src/
       ssh_shared.rs         # Shared SSH auth UI components
@@ -304,10 +315,11 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # Per-profile hook bindings
-  dbflux_ui/                # Thin integrator (~13.5k LOC): wires the six UI crates together
+  dbflux_ui/                # Thin integrator: wires the six UI crates together
     src/                    # Re-exports moved subsystems via pub use shims at old module paths
       lib.rs                # Crate root; re-exports via shim modules
       app.rs                # GPUI app bootstrap
+      app_menu.rs           # macOS application menu bar (About, Services, Hide, Quit)
       ipc_server.rs         # App-control IPC server (Focus, OpenScript)
       assets.rs             # GPUI AssetSource impl for embedded SVG icons
       platform.rs           # Shim: pub use dbflux_ui_base::platform::*
@@ -427,7 +439,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + app/driver protocol constants
     src/protocol.rs         # Single-instance app-control messages
     src/driver_protocol.rs  # Driver RPC request/response schema (DTOs + errors)
-    src/framing.rs          # Length-prefixed bincode transport framing
+    src/framing.rs          # Length-prefixed postcard transport framing
     src/socket.rs           # Cross-platform socket naming helpers
   dbflux_driver_ipc/        # DbDriver adapter for external RPC services
     src/driver.rs           # IpcDriver + managed host lifecycle
@@ -465,10 +477,17 @@ crates/
     src/connection.rs       # Tokio bridge, batch execution, schema discovery, CRUD, error mapping
     src/session.rs          # ExecutionSessionFactory/ExecutionSession over per-stream connections
     src/dialect.rs          # SQLite dialect, value conversion, DDL code generation
+  dbflux_driver_duckdb/     # Embedded DuckDB driver with DuckLake catalogs
+    src/driver.rs           # Metadata, connection form, shared instance registry, DuckLake attach
+    src/connection.rs       # Execution, read-only checks, catalog discovery, CRUD, execution sessions
+    src/dialect.rs          # DuckDB dialect and value literals
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
     src/driver.rs           # Bucket/object discovery, ObjectStoreConnection impl, presign/copy/versions
+  dbflux_driver_aws_secrets/ # AWS Secrets Manager + Parameter Store driver (DatabaseCategory::SecretStore)
+    src/secrets_manager/    # SecretStoreSource over ListSecrets/DescribeSecret/GetSecretValue
+    src/parameter_store/    # SecretStoreSource over DescribeParameters/GetParameter, client-side path grouping
   dbflux_aws/               # AWS auth providers + Secrets Manager/SSM value providers
     src/auth.rs             # AWS SSO/shared/static providers and SSO login flow
     src/config.rs           # ~/.aws/config parser/cache and profile write-back helpers
@@ -485,6 +504,9 @@ crates/
   dbflux_proxy/             # SOCKS5/HTTP CONNECT proxy tunnel
     src/lib.rs              # ProxyTunnelConfig, SOCKS5/HTTP handshake, tunnel loop
   dbflux_ssh/               # SSH tunnel support
+  dbflux_byte_source/       # Random-access byte sources for file readers (memory, local file)
+  dbflux_parquet/           # Parquet footer and page-index reads over a byte source (no GPUI)
+  dbflux_spreadsheet/       # xlsx, xlsm, xls and ods sheet reads over a byte source with calamine, in-place xlsx and ods cell edits, values-only xlsx writes (no GPUI)
   dbflux_export/            # Export (CSV, JSON, Text, Binary)
     src/lib.rs              # Shape-based export API and format dispatch
     src/binary.rs           # Binary/hex/base64 exporter
@@ -576,17 +598,17 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 
 1. **`Tab`** (`tab_manager.rs`) — `#[non_exhaustive]` enum with a single `Pane(Box<PaneHandle>)` variant. Kept as enum for forward-compatibility (e.g., future detachable pane variants). `TabManager` holds a `Vec<Tab>` plus MRU ordering.
 
-2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Each operation (render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe, plus optional helpers such as `resolve_close`, `save_for_close`, `flush_for_shutdown`, and `is_file_backed_empty`) is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`. `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file (all under `crates/dbflux_ui_document/src/`). Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
+2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Every operation is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`: rendering and focus, command dispatch, pure metadata reads (title, close eligibility, connection and active context, change summary, refresh policy), mutations such as the active tab and refresh policy, dedup matching, event subscription, and optional document-specific helpers (close, save and quit policy, side panels, pane actions, status segments). `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file (all under `crates/dbflux_ui_document/src/`). Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
 
-3. **`DocumentKey`** (`dedup.rs`) — identity enum used for tab deduplication. Variants: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Replaces the `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
+3. **`DocumentKey`** (`dedup.rs`) — identity enum used for tab deduplication; the variant list lives in `dedup.rs` and is the source of truth. Replaces the `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
 
-4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — unified event enum replacing four per-document event enums that were deleted. Variants: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
+4. **`DocumentEvent`** (`handle.rs`) — unified event enum replacing four per-document event enums that were deleted; the variant list lives in `handle.rs`.
 
 5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — universal chrome host. `ResultPanel` owns a chrome row and delegates body rendering to a `ViewHandle` (7 closures: render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode). The slot system (`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`) lets views contribute arbitrary chrome: `ResultPanel` merges built-in segments (mode bar at Left/0 when `available_modes.len() >= 2`) and view-provided segments, sorts by `(position, index)`, and renders them in a `flex_wrap` row.
 
 **Pane actions**
 
-A document lists the actions it otherwise offers only to the pointer (its toolbar buttons and similar controls) by filling the optional `PaneHandle::pane_actions` closure with `PaneAction` entries: a label, an optional icon, the shortcut the effective keymap gives the same command, an enabled flag, and what running it does (`PaneActionRun::Command`, run through the workspace exactly as its key binding, or `PaneActionRun::Callback` for an action without a command). `Command::OpenPaneActions` goes to the active document first, so a pane with a menu of its own can answer it; otherwise the workspace (`views/workspace/pane_actions.rs`) snapshots the entries into a menu drawn over the document area. While it is open the workspace reports `ContextId::ContextMenu`, so the context-menu keys drive it. The workspace never knows the document type, and a document opts in from its own `pane.rs` without changes to `workspace/mod.rs`, `tab_manager.rs` or `tab_bar.rs`. `CodeDocument` lists its whole toolbar; the data table keeps `m` for its own context menu, which serves as its actions menu.
+A document lists the actions it otherwise offers only to the pointer (its toolbar buttons and similar controls) by filling the optional `PaneHandle::pane_actions` closure with `PaneAction` entries: a label, an optional icon, the shortcut the effective keymap gives the same command, an enabled flag, and what running it does (`PaneActionRun::Command`, run through the workspace exactly as its key binding, or `PaneActionRun::Callback` for an action without a command). `Command::OpenPaneActions` goes to the active document first, so a pane with a menu of its own can answer it; otherwise the workspace (`views/workspace/pane_actions.rs`) snapshots the entries into a menu drawn over the document area. While it is open the workspace reports `ContextId::ContextMenu`, so the context-menu keys drive it. The workspace never knows the document type, and a document opts in from its own `pane.rs` without changes to `workspace/mod.rs`, `tab_manager.rs` or `tab_bar.rs`. `CodeDocument` lists its whole action strip and the Refresh button of its results; the data table keeps `m` for its own context menu, which serves as its actions menu.
 
 **The document types**
 
@@ -601,6 +623,7 @@ A document lists the actions it otherwise offers only to the pointer (its toolba
 - `BucketsTableDocument` (`crates/dbflux_ui_document/src/buckets_table/`) — connection-root object-storage view (name, region, object count, size, versioning, created), reusing `dbflux_components::data_table` rather than `DataGridPanel`; keyed by `DocumentKey::ObjectStoreBucketsRoot`.
 - `ObjectBrowserDocument` (`crates/dbflux_ui_document/src/object_browser/`) — split tree/preview object-storage browser with paginated and lazy-tree navigation, preview, metadata, upload, delete, rename, and presign; keyed by `DocumentKey::ObjectBrowser`.
 - `ObjectEditorDocument` (`crates/dbflux_ui_document/src/object_editor/`) — standalone "open in editor" tab for S3 text objects, sharing the `object_text` module (line-ending detection, language highlighting, save audit) with `ObjectBrowserDocument`'s inline editor; keyed by `DocumentKey::ObjectEditor`.
+- `SecretStoreDocument` (`crates/dbflux_ui_document/src/secret_store/`) — paginated secret listing with name search, a details pane, and explicit, audited value retrieval for one `SecretStoreSource`; values are held as `secrecy` types and rendered only through secret inputs, so they never reach the UI automation tree; keyed by `DocumentKey::SecretStore`.
 
 **Adding a new document type** (no changes required outside the new module):
 1. Create `crates/dbflux_ui_document/src/<name>/mod.rs` with the entity.
@@ -647,13 +670,14 @@ A right-rail builder composes SELECT/UPDATE/DELETE statements without writing SQ
 
 **Persistence**: migration `017_qry_saved_queries` adds the `qry_*` table family (root + columns/sorts/joins child tables, cascading FKs, `UNIQUE (profile_id, name)`), fronted by `SavedQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`) and the in-memory `SavedQueryManager` (`crates/dbflux_ui_base/src/saved_query_manager.rs`). A `TableProbe` seam verifies table existence when importing a saved query onto another connection without reaching into driver code.
 
-**Document query builder**: document collections get their own rail, gated on `DocumentFeatures::VISUAL_BUILDER` plus a codec from `Connection::document_query_codec()`, never on a driver id. `DocumentQuerySpec` (`crates/dbflux_core/src/query/document_query.rs`) models the filter tree, typed values, include/exclude projection, sort, limit, skip and an optional group stage (`$count` / `$sum` / `$avg`). The driver implements `DocumentQueryCodec` to render a spec as the find slots (`DocumentFindSlots`), a pipeline and preview text, and to parse the slots back, returning clauses it cannot represent as `UnrepresentableClause`s so the UI shows a sync conflict instead of overwriting them. The UI lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder.rs`: Find writes the slots and runs through `browse_collection`, so results stay editable, while Aggregate mode (also gated on `DocumentFeatures::AGGREGATE`) runs the pipeline through the Aggregate view with read-only results. Saved document queries use migration `037_qry_saved_document_queries` (spec stored as JSON, `UNIQUE (profile_id, database_name, collection_name, name)`), `DocumentQueryRepo` and `SavedDocumentQueryManager` (`crates/dbflux_ui_base/src/saved_document_query_manager.rs`).
+**Document query builder**: document collections get their own rail, gated on `DocumentFeatures::VISUAL_BUILDER` plus a codec from `Connection::document_query_codec()`, never on a driver id. `DocumentQuerySpec` (`crates/dbflux_core/src/query/document_query.rs`) models the filter tree, typed values, include/exclude projection, sort, limit, skip and an optional group stage (`$count` / `$sum` / `$avg`). The driver implements `DocumentQueryCodec` to render a spec as the find slots (`DocumentFindSlots`), a pipeline and preview text, and to parse the slots back, returning clauses it cannot represent as `UnrepresentableClause`s so the UI shows a sync conflict instead of overwriting them. The UI lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder/mod.rs`: Find writes the slots and runs through `browse_collection`, so results stay editable, while Aggregate mode (also gated on `DocumentFeatures::AGGREGATE`) runs the pipeline through the Aggregate view with read-only results. Saved document queries use migration `037_qry_saved_document_queries` (spec stored as JSON, `UNIQUE (profile_id, database_name, collection_name, name)`), `DocumentQueryRepo` and `SavedDocumentQueryManager` (`crates/dbflux_ui_base/src/saved_document_query_manager.rs`).
 
 ### Data Visualization
 
 - **Data table**: `crates/dbflux_components/src/components/data_table/` custom virtualized table with sorting, selection, horizontal scrolling via phantom scroller pattern, keyboard navigation, column resizing, and context menu with CRUD operations.
 - **Document tree**: `crates/dbflux_components/src/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
 - **Key-value view**: `crates/dbflux_ui_document/src/key_value/` Redis-specific document tab with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu. Integrates with the workspace via a `PaneHandle` constructed in `key_value/pane.rs`.
+- **Native console**: `crates/dbflux_ui_document/src/console/` is a command console for connections whose driver advertises `DriverCapabilities::NATIVE_CONSOLE`; `DriverMetadata::native_console()` derives its prompt and example from the query language. Commands run through `Connection::execute` (through the editor's `ExecutionSessionBinding` where the driver offers isolated sessions) after the driver's `LanguageService` validation and dangerous-command detection, carry the confirmed ceiling after a confirmation, emit the same `query_execute` audit rows as the editor and land in the shared query history. The editor row limit is sent only to drivers that advertise `DriverCapabilities::REQUEST_ROW_LIMIT`. Input completion reuses the editor's `QueryCompletionProvider`. The key-value document and the table and collection `DataDocument` dock it; `ConsoleDocument` (`console_document/`, `DocumentKey::Console`) hosts it in its own tab, opened from a database's sidebar menu.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provides `SchemaGraph` (table nodes and FK edges), layout algorithms (LeftRight, Snowflake, Compact), DBML export, and SQL DDL export. Accessed via `SchemaVizDocument` in `crates/dbflux_ui_document/src/schema_viz/mod.rs` with toolbar dropdowns (Layout, Export), toast feedback, audit events, and cancellable background task loading. Integrates with the workspace via a `PaneHandle` constructed in `schema_viz/pane.rs`.
 - Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
 - Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor.
@@ -682,15 +706,16 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - Driver-owned child resources under collections/containers are published through generic `CollectionChildInfo` metadata. The sidebar must not infer driver-specific children from names, field types, or driver IDs.
 - Routines (functions, procedures, aggregates, window functions) appear as a per-schema "Routines" folder when the driver sets the `ROUTINES` capability and populates the `schema_routines` seam. The UI renders the folder generically; it does not special-case any driver.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` remains collapsible and resizable with ToggleSidebar (Ctrl+B), and manages transient reveal separately from the explicit collapse choice.
+- The connection tree walks one projection: `SchemaSnapshot::database_layout` (`crates/dbflux_core/src/schema/listing.rs`) says whether each database groups tables and views under schemas, lists its objects in one `ObjectFolder` (collections or measurements), or is a keyspace. The sidebar (`tree_builder/object_folder.rs`) builds each database's content from that description, and its context menu reads object facets and the same layout. Object kinds a driver shows at the connection root, such as S3 buckets, are not in the snapshot; they come from the driver's root sections (see Driver System).
 - `dbflux_ui_base::object_tree` provides a generic lazy hierarchy with one coordinator per `AppStateEntity`. Core/app boundaries fence session and target-slot application; sidebar and wizard adapters retain compatible IDs while keeping interaction state local to each consumer. This does not cover every sidebar-specific family.
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure; `tree_manager.rs` handles in-memory management.
 
 ### Driver System
 
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs` defines:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage, SecretStore
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (each carries editor mode, placeholder, comment prefix)
-  - `DriverCapabilities`: `u64` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
+  - `DriverCapabilities`: `u128` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
 - **Driver-owned connection forms**: each `DbDriver` returns its `&DriverFormDef` from `form_definition()`. Form definitions live in the driver crate (e.g. `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`), not in core. `DriverFormDef` carries tabs → sections → fields, where `FormFieldKind` covers `Text`, `Password`, `WriteOnly` (secrets), `FilePath`, `Select`, `DynamicSelect` (runtime-fetched options, `depends_on` + `RefreshTrigger`), and `AuthProfileRef { provider_id }`.
 - **Error formatting**: `crates/dbflux_core/src/core/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
@@ -700,10 +725,15 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - **Driver/UI decoupling**: The UI and app orchestration layers must never branch on concrete driver IDs or embed driver-specific routing. The core exposes the seams, and drivers fill them.
   - `DriverMetadata` covers broad adaptation (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`).
   - `CollectionPresentation` tells the UI how a collection/container opens (for example data grid vs event stream).
+  - `ObjectFacet` (`crates/dbflux_core/src/schema/facet.rs`) names the paradigms one object exposes: `Tabular`, `Document`, `Vector`, `TimeSeries`. `CollectionPresentation` picks which document opens; facets pick the view modes, the gates and the filter wording inside the data document. `Connection::object_facets` (tables) and `Connection::collection_facets` (collections) default to `[Tabular]` and drivers override them: PostgreSQL adds `Document` for a `json`/`jsonb` column, `TimeSeries` for a TimescaleDB hypertable and one `Vector` per `vector(n)` column; MongoDB and DynamoDB declare `[Document, Tabular]`; InfluxDB declares `TimeSeries` on `time`. Only the RPC adapter derives facets from the declared category (`category_collection_facets`), since the wire carries none. `TimeSeries` opens the chart over its time column next to the rows; `Document` on a table opens a read-only document tree with JSON values expanded. The enum is exhaustive, so a new facet does not compile until `DataViewMode::for_facet` (`crates/dbflux_ui_document/src/data_view.rs`) handles it. Nearest-neighbor SQL stays driver-owned through `QueryGenerator::generate_nearest_neighbors`, defaulted to unsupported.
+  - `category_presentation` (`crates/dbflux_components/src/category.rs`) is the one table of per-category fallback icons, tones and schema-tree container labels; a new `DatabaseCategory` adds one arm there instead of a match in each UI crate.
+  - `DataStructure::ReservedGraph` and `ReservedWideColumn` only hold postcard wire indices 3 and 4, and `DatabaseCategory::ReservedGraph` and `ReservedWideColumn` hold indices 3 and 5, so the variants after them keep their indices for driver RPC peers; `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` pins the indices of both enums. Do not remove or reorder their variants.
   - `CollectionChildInfo` lets drivers publish child sources under a collection/container without UI heuristics.
   - `EventStreamTarget` gives workspace/audit a generic identifier for driver-backed event streams.
   - `SourceContextSpec` lets drivers declare extra query-context controls without hardcoding driver names in `dbflux_ui`.
   - `ObjectStoreConnection` (`crates/dbflux_core/src/core/traits.rs`), reached via `Connection::object_store_api()`, is the object-storage seam (bucket/object listing, CRUD, presign, copy, versions); `CollectionPresentation::ObjectBrowser` and `PaneHandle::status_segments()` let the UI open and chrome object-storage documents without branching on driver ID.
+  - `RootSectionSource` (`crates/dbflux_core/src/connection/root_section/mod.rs`), reached via `Connection::root_section_source()` and gated by `DriverCapabilities::ROOT_SECTIONS`, declares the object kinds shown at the root of a connection in the sidebar. Each `RootSectionDef` carries a stable id, a label, an empty-state label, an optional folder `RootSectionPresentation`, the `RootItemPresentation` its items open in, whether activating the connection row opens the section, and its item actions. `list_items` returns `RootSectionPage`s of `RootSectionItem`s with a `next_page_token`. Node ids `SchemaNodeId::RootSection`, `RootSectionItem` and `RootSectionLoadMore` carry the section id, so a new object kind needs no `SchemaNodeKind` variant. One generic renderer (`crates/dbflux_ui_sidebar/src/root_sections/`) builds the folders, caches listings per profile and loads further pages on demand. A failed declaration fetch or first page shows a retry row and is never cached as empty. A section id must not contain `|`, because node ids embed it; the sidebar rejects and reports such a declaration. A section whose folder or item presentation needs `Connection::object_store_api` is hidden on a connection without one. The workspace routes activation by the declared presentation (`ObjectContainerTable` opens the containers table, `ObjectBrowser` the object browser). Labels are `LocalizedText`: an optional key from the host's i18n catalog plus a mandatory English fallback, resolved with `dbflux_i18n::try_translate`. Each `RootSectionAction` carries an `ExecutionClassification`: `Destructive`, `Admin` and `AdminDestructive` ask for confirmation, and every run, successful or not, records a `Governance` audit row. An action runs only on the connection it was requested on, and the profile's `MutationPolicy` gates every action above `Read`: `ReadOnly` refuses it, and so does `ApprovalRequired` until approval routing covers these actions. A successful action lists the section again and reloads the open document that shows it. External drivers reach the seam over driver RPC 1.9 (`RootSections`, `RootSectionItems`, `ExecuteRootSectionAction`). S3 is the reference implementation: one `buckets` section whose items open in the object browser, with a Delete bucket action classified `AdminDestructive`.
+  - `TableViewFeatures` (`crates/dbflux_core/src/data/column_profile.rs`), reported by `Connection::table_view_features()`, gates a table's Columns and Partitions views, read estimate, sample profile and column picker. The data come from `table_profile`, `table_partitions`, `estimate_table_read` and `sample_table_profile`, and `TableBrowseRequest::columns` carries the projection. The UI (`crates/dbflux_ui_document/src/data_grid_panel/table_views.rs`) renders them with the shared `ColumnProfileView`, `PartitionListView`, `ColumnProjectionPicker` and `ReadEstimateBar` from `dbflux_components`. The Parquet document uses the same profile view, picker and estimate bar, and the CSV document uses the profile view.
   - If the UI needs new behavior, add a generic core abstraction first; do not add `if driver_id == ...` in `dbflux_ui` or app-facing workflow code.
 
 ### Auth & Access Pipeline
@@ -856,6 +886,11 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
   - Wraps the async `turso_serverless` SDK behind the synchronous `Connection` contract with one Tokio runtime per profile; futures are driven from a scoped thread when the caller is already inside a Tokio context
   - Implements `ExecutionSessionFactory` on the root connection: every isolated session is a fresh Hrana stream, so editor transactions, grid CRUD, and MCP operations never share server-side transaction state
   - Reuses the SQLite dialect, PRAGMA-based discovery, and shared SQL builders; no query cancellation, SSH tunneling, or replicas
+- **DuckDB**: `crates/dbflux_driver_duckdb/` — `DatabaseCategory::Relational` and `QueryLanguage::Sql` driver for embedded DuckDB files, in-memory databases, and DuckLake catalogs:
+  - Bundles DuckDB through the `duckdb` crate; connections to the same file (or the same profile's in-memory database) are cloned from one live instance, because DuckDB locks a file per process
+  - Attaches the profile's DuckLake catalog as `lake` on connect; each attached catalog is a database under `SchemaLoadingStrategy::LazyPerDatabase`, discovered from `duckdb_databases()`, `duckdb_tables()`, and `duckdb_columns()`
+  - Implements `ExecutionSessionFactory` on the root connection: every session is its own DuckDB connection to the shared instance, so an editor transaction never captures grid, sidebar, or MCP requests
+  - Read-only enforcement accepts only text DuckDB's parser serializes as SELECT statements (`json_serialize_sql`) and runs it inside `BEGIN TRANSACTION READ ONLY`; because such a transaction still reads files and URLs, table functions outside an allow-list and table names DuckDB would read as files are refused
 - **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — `DatabaseCategory::LogStream` driver for AWS CloudWatch Logs:
   - Log group/stream discovery exposed as collections; log groups open as event streams via `CollectionPresentation::EventStream` and a generic `EventStreamTarget`, consumed by the `AuditDocument`/log-stream viewer without any driver-specific UI branch
   - Query modes (Logs Insights QL, OpenSearch PPL/SQL) are surfaced through `SourceContextSpec`; `DriverMetadata.query_language` defaults to `Sql` for editor behavior
@@ -865,7 +900,11 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
   - Bucket discovery (`BucketsTableDocument` at the connection root) and per-level paginated object navigation (`ObjectBrowserDocument`), with an optional non-paginated tree mode
   - `ObjectStoreConnection` implementation covers upload, delete, recursive prefix/bucket delete (batched `DeleteObjects`), copy, presign, bucket details/versioning, and object versions
   - Full CRUD from the UI: upload, type-to-confirm recursive delete, folder/bucket creation with per-endpoint graceful degradation, rename (copy-then-delete), presigned URLs
-  - Every mutation audited under `EventCategory::ObjectStorage`; credentials and presigned URLs are never logged or persisted
+  - Every mutation made from the buckets table or the object browser is audited under `EventCategory::ObjectStorage` when auditing is enabled; a failed audit write is logged as a warning and the mutation still stands, with no fallback record; the sidebar Delete bucket action is a root section action and is audited under `EventCategory::Governance`. Credentials and presigned URLs are never logged or persisted
+- **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — `aws-sdk-secretsmanager` + `aws-sdk-ssm` driver (`DatabaseCategory::SecretStore`):
+  - Exposes two stores through `Connection::secret_stores()` and the provider-neutral `SecretStoreSource` seam (`dbflux_core/src/connection/secret_store/`), gated by `DriverCapabilities::SECRET_STORE`; per-store `SecretStoreCapabilities` gate UI behavior
+  - Listing (`ListSecrets`, `DescribeParameters`) never fetches values; Parameter Store paths are grouped client-side into direct entries and child paths
+  - Values are read only by an explicit retrieval, audited under `EventCategory::SecretStore` without the value; a denied `kms:Decrypt` maps to `DbError::PermissionDenied`
 
 ### Driver README policy
 
@@ -874,14 +913,14 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
 
 ### Supporting Components
 
-- Toast system: `crates/dbflux_ui_base/src/toast.rs` custom implementation with auto-dismiss (4s) for success/info/warning toasts. (Shim at `crates/dbflux_ui/src/ui/components/toast.rs`.)
+- Toast system: `crates/dbflux_ui_base/src/toast.rs` custom implementation with a configurable auto-dismiss for success/info/warning toasts (default 8 s, warning toasts after twice that; from Settings > General).
 - Tunnel infrastructure: `crates/dbflux_tunnel_core/` provides RAII `Tunnel` with `TunnelConnector` trait and `ForwardingConnection<R>` bidirectional forwarder.
 - Proxy tunneling: `crates/dbflux_proxy/` implements SOCKS5 and HTTP CONNECT proxy tunnels via `TunnelConnector`.
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` implements SSH tunnel via `TunnelConnector`, all operations serialized to one thread for libssh2 safety.
 - Export: `crates/dbflux_export/` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver. Each format has its own module (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`). File-dialog availability is probed at runtime via `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` (on Linux: checks `PATH` for `xdg-desktop-portal`, `zenity`, `kdialog`); when no backend is available, exports fall back to `fallback_export_dir()` (`~/.local/share/dbflux/exports/`) with `unique_path_in()` deconfliction. A clipboard export path is also available as an alternative target.
 - Test support: `crates/dbflux_test_support/` provides Docker container management and fixtures for live integration tests across all drivers. DynamoDB Local is used only for integration tests and local validation; production usage targets remote AWS DynamoDB endpoints.
 - Icon system: `AppIcon` enum defined in `crates/dbflux_components/src/icons/mod.rs`; embedded SVG bytes and the `ALL_ICONS` list remain at `crates/dbflux_ui/src/ui/icons/mod.rs` (resources live under `crates/dbflux_ui/resources/`), loaded via `assets.rs`.
-- Platform detection: `crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences with `is_x11()`, `floating_window_kind()`, and `apply_window_options()` for proper window min size hints. (Shim at `crates/dbflux_ui/src/platform.rs`.)
+- Platform detection: `crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences with `is_x11()`, `apply_main_window_options()` for the main window, `floating_window_kind()` / `apply_window_options()` for the secondary windows, and the window min size hints. (Shim at `crates/dbflux_ui/src/platform.rs`.)
 
 ### MCP Governance System
 
@@ -974,9 +1013,11 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).
 - ClickHouse: HTTP(S) driver using `reqwest` with dynamic JSON decoding, database/table discovery, and read-oriented SQL support for self-hosted ClickHouse and ClickHouse Cloud (crates/dbflux_driver_clickhouse/src/driver.rs).
 - TursoDB: `turso_serverless` driver over Hrana HTTP with per-profile Tokio bridging, PRAGMA-based schema discovery, typed CRUD, and per-stream execution sessions for interactive transactions (crates/dbflux_driver_turso/src/connection.rs).
+- DuckDB: bundled `duckdb` driver for files, in-memory databases, and DuckLake catalogs, with one shared instance per file, catalog-per-database discovery, query cancellation, and read-only transactions (crates/dbflux_driver_duckdb/src/connection.rs).
 - Amazon S3: `aws-sdk-s3` driver with AWS profile/SSO or static credentials, endpoint override and path-style addressing for S3-compatible endpoints (Cloudflare R2, MinIO), bucket/object CRUD, presigned URLs, and copy/versions support (crates/dbflux_driver_s3/src/driver.rs).
+- AWS Secrets: `aws-sdk-secretsmanager` and `aws-sdk-ssm` driver with AWS profile/SSO or static credentials and endpoint override, paginated secret and parameter listing, details, and explicit value retrieval (crates/dbflux_driver_aws_secrets/src/driver/mod.rs).
 - AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.
-- Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts `RpcServiceKind::Driver` into runtime `DbDriver`s, and wires `RpcServiceKind::AuthProvider` into `RpcAuthProvider` (which implements `DynAuthProvider`). Preserves `rpc:<socket_id>` compatibility. Auth-provider IPC protocol is at v1.2: adds `FetchDynamicOptions` / `DynamicOptions` variants and the `secret_dependency_opt_in` manifest flag. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
+- Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts `RpcServiceKind::Driver` into runtime `DbDriver`s, wires `RpcServiceKind::AuthProvider` into `RpcAuthProvider` (which implements `DynAuthProvider`), and wires `RpcServiceKind::SecretProvider` into `RpcSecretProvider` (which implements `DynSecretProvider`; see [Secret Provider RPC Protocol](docs/SECRET_PROVIDER_RPC_PROTOCOL.md)). Preserves `rpc:<socket_id>` compatibility. Auth-provider IPC protocol is at v1.2: adds `FetchDynamicOptions` / `DynamicOptions` variants and the `secret_dependency_opt_in` manifest flag. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
 - Proxy: SOCKS5/HTTP CONNECT tunnels via `dbflux_tunnel_core::Tunnel` (crates/dbflux_proxy/src/lib.rs).
 - SSH: `ssh2` sessions with local TCP forwarding via `dbflux_tunnel_core::Tunnel` (crates/dbflux_ssh/src/lib.rs).
 - OS keyring: optional secret storage for passwords, SSH passphrases, and proxy credentials (crates/dbflux_core/src/storage/secrets.rs).
@@ -985,13 +1026,14 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 ## Configuration
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
-- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
+- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `aws_secrets`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
 - Runtime data: All runtime configuration is stored in `~/.local/share/dbflux/dbflux.db` (single SQLite file).
   - `cfg_connection_profiles` + child tables (auth, proxy, SSH bindings)
   - `cfg_auth_profiles` (provider-agnostic auth profile storage)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
-  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC service descriptors; `cfg_services.service_kind` records `driver` vs `auth_provider`)
+  - `cfg_script_roots` (external scripts folders listed in place; removing a row never touches the folder)
+  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC service descriptors; `cfg_services.service_kind` records `driver`, `auth_provider` or `secret_provider`)
   - `cfg_governance_*` tables (roles, policies, trusted clients)
   - `cfg_drivers` (per-driver settings overrides)
   - `cfg_folders` (connection tree organization)
@@ -1008,7 +1050,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - Import is idempotent (tracked in `sys_legacy_imports`)
 - Session data (data dir):
   - `sessions/` scratch and shadow files for editor auto-save and recovery (crates/dbflux_storage/src/artifacts.rs).
-  - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs).
+  - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory` also holds the external folders registered in `cfg_script_roots`; every file operation stays inside one root (inside an external root by resolved path, so symlinks leading out are neither listed nor written through), changes update the cached trees in memory and scans run off the UI thread, and the MCP script tools only see `scripts/`.
 - Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## Build & Deploy

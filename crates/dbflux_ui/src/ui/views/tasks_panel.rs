@@ -3,7 +3,6 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics};
-use dbflux_components::typography::AppFonts;
 use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -93,6 +92,14 @@ impl TasksPanel {
             .or(Some(self.selected_index.min(last)))
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`current` returned by `selected_position` is a row of `tasks` \
+                  (an `iter().position()` hit, or `selected_index.min(last)`), \
+                  and the four callers' closures map it into `0..=last` (`min`, \
+                  `saturating_sub`, `0`, and `last` itself), so `index` stays \
+                  below `tasks.len()`"
+    )]
     fn move_selection(
         &mut self,
         target: impl FnOnce(usize, usize) -> usize,
@@ -494,7 +501,7 @@ impl TasksPanel {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(ShellMetrics::TASK_META_FONT)
                             .text_color(muted)
                             .child(Self::format_elapsed(task.elapsed_secs)),
@@ -517,7 +524,7 @@ impl TasksPanel {
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .font_family(AppFonts::MONO)
+                                .font_family(dbflux_components::fonts::editor_family(cx))
                                 .text_size(ShellMetrics::TASK_META_FONT)
                                 .text_color(muted)
                                 .child(format!("{}%", Self::progress_percent(progress))),
@@ -573,7 +580,7 @@ impl TasksPanel {
                         .pl(ShellMetrics::TASK_ERROR_INDENT)
                         .pr(ShellMetrics::TASKS_PADDING_X)
                         .bg(danger.opacity(ShellMetrics::TASK_ERROR_ALPHA))
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(ShellMetrics::TASK_ERROR_FONT)
                         .text_color(danger)
                         .children(
@@ -594,7 +601,7 @@ impl TasksPanel {
                         .flex()
                         .flex_col()
                         .bg(track)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(ShellMetrics::TASK_ERROR_FONT)
                         .text_color(muted)
                         .children(
@@ -761,7 +768,8 @@ mod tests {
         });
 
         let query_id = start_task(&app_state, TaskKind::Query, window);
-        let key_value_ids = [TaskKind::KeyScan, TaskKind::KeyGet, TaskKind::KeyMutation]
+        let key_scan_id = start_task(&app_state, TaskKind::KeyScan, window);
+        let key_read_and_write_ids = [TaskKind::KeyGet, TaskKind::KeyMutation]
             .map(|kind| start_task(&app_state, kind, window));
         window.run_until_parked();
 
@@ -771,13 +779,19 @@ mod tests {
                 .is_some(),
             "a running query keeps its cancel button"
         );
+        assert!(
+            window
+                .debug_bounds(selector("cancel-task", key_scan_id))
+                .is_some(),
+            "a running key scan offers a cancel button"
+        );
 
-        for task_id in key_value_ids {
+        for task_id in key_read_and_write_ids {
             assert!(
                 window
                     .debug_bounds(selector("cancel-task", task_id))
                     .is_none(),
-                "a key-value task must not render a cancel button"
+                "a key read or write must not render a cancel button"
             );
         }
     }

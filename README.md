@@ -1,6 +1,6 @@
 # DBFlux
 
-**English** · [Español](docs/es/README.md) · [한국어](docs/ko/README.md) · [简体中文](docs/zh_Hans/README.md)
+**English** · [Español](docs/es/README.md) · [한국어](docs/ko/README.md) · [简体中文](docs/zh_Hans/README.md) · [Português (Brasil)](docs/pt_BR/README.md)
 
 An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop client.
 
@@ -78,6 +78,7 @@ Packages for every platform — tarball, AUR, `.deb`, `.rpm`, AppImage, Nix, mac
 DMG and the Windows installer — are on the [Releases](https://github.com/0xErwin1/dbflux/releases)
 page. The full guide, including the Gatekeeper and SmartScreen steps for the
 unsigned macOS and Windows builds, is in [Installing DBFlux](docs/INSTALL.md).
+On macOS and Linux, Homebrew installs it with `brew install --cask 0xErwin1/dbflux/dbflux`.
 
 ## Features
 
@@ -94,8 +95,10 @@ unsigned macOS and Windows builds, is in [Installing DBFlux](docs/INSTALL.md).
 - **InfluxDB** v1 and v2 (InfluxQL on v1, InfluxQL + Flux on v2)
 - **ClickHouse** and ClickHouse Cloud over HTTP(S), with database/table discovery, visual SELECTs, and explicit raw SQL execution
 - **TursoDB** and libSQL (`sqld`) over HTTP, with schema discovery, typed CRUD, and interactive transactions per editor tab
+- **DuckDB** files and in-memory databases, with DuckLake catalogs attached on connect
 - **CloudWatch Logs** with log group/stream browsing and event streaming
 - **Amazon S3** with bucket browsing, object preview/editing, full CRUD, and presigned URLs, including S3-compatible endpoints (Cloudflare R2, MinIO)
+- **AWS Secrets Manager and Parameter Store** with paginated listing, parameter path browsing, secret details, and audited value retrieval on explicit request
 - **External drivers over RPC** (register out-of-process drivers via the [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md))
 
 See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driver limitations.
@@ -294,6 +297,21 @@ nix develop
 # Traditional
 nix-shell
 ```
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+Stable and release-candidate Windows releases are Authenticode-signed: `dbflux.exe` in the portable ZIP and the installer, and the setup executable itself. Nightly builds are not Authenticode-signed. Every release artifact, on every platform, also carries a GPG signature and a SHA256 checksum.
+
+| Role | Members |
+|------|---------|
+| Committers and reviewers | [@0xErwin1](https://github.com/0xErwin1) |
+| Approvers | [@0xErwin1](https://github.com/0xErwin1) |
+
+Changes from contributors without commit access are reviewed before they are merged. Signed binaries are built only by GitHub Actions from this repository, and every signing request is approved manually.
+
+Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user. See the [Privacy Policy](PRIVACY.md) for details.
 
 ## License
 

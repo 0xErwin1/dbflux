@@ -4,6 +4,11 @@ Una base de datos clave-valor se abre como explorador de claves: la lista de
 claves a la izquierda, el valor de la clave seleccionada a la derecha y una
 consola de comandos debajo.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/key-value/browser-dark.webp">
+  <img src="../images/key-value/browser-light.webp" alt="El explorador de claves de una base de datos Redis, con las claves agrupadas en carpetas y los campos de un hash seleccionado">
+</picture>
+
 - **Lista de claves.** Las claves se cargan por páginas; **Cargar más**
   (`Ctrl+J`) continúa el escaneo y el pie muestra "Cargadas N de total" frente
   al conteo de claves de la base de datos. **Árbol** agrupa las claves en
@@ -19,7 +24,9 @@ consola de comandos debajo.
   String, Hash, List, Set, ZSet, Stream, JSON) se ejecuta en el servidor, así que
   cubre todo el keyspace. Una búsqueda filtrada sigue escaneando hasta tener una
   página de coincidencias; **Detener** la termina y **Buscar en todo el
-  keyspace** lee hasta el final.
+  keyspace** lee hasta el final. `Escape` o **Cancelar tarea** en el panel de
+  tareas también detienen un escaneo en curso: Redis se detiene entre round
+  trips de `SCAN`, los demás drivers antes de la página siguiente.
 - **Caducidad.** Haz clic en el TTL de la cabecera del valor, o pulsa `t`, para
   fijar la caducidad: **Nunca**, **En** una duración (`1h`, `24h`, `7d`, `30d` o
   cualquier valor tipo `1h30m`) o **El** una fecha y hora local. La hora absoluta
@@ -37,6 +44,12 @@ consola de comandos debajo.
   antigua, con una columna por campo y los grupos de consumidores al lado:
   lectores, entradas pendientes, último ID entregado y **Reclamar** para pasar
   las pendientes a otro lector.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/key-value/sorted-set-dark.webp">
+  <img src="../images/key-value/sorted-set-light.webp" alt="Un sorted set de Redis en el explorador de claves, ordenado por puntuación con una barra relativa a la puntuación máxima">
+</picture>
+
 - **Eliminación masiva.** **Acciones masivas → Eliminar claves que coinciden con
   el patrón** escanea toda la base de datos con el patrón y el tipo actuales,
   lista las primeras coincidencias con el total y pide escribir el patrón.
@@ -44,9 +57,9 @@ consola de comandos debajo.
   Lines. Las claves se eliminan en lotes con `UNLINK` y la eliminación queda
   registrada en el registro de auditoría.
 - **Consola.** `` Ctrl+` `` abre una consola que ejecuta comandos contra la base de
-  datos abierta y guarda un historial (`Arriba`/`Abajo`). Los comandos
-  peligrosos pasan por la misma confirmación que el editor (ver
-  [Confirmación de queries peligrosas](EDITOR.md#confirmación-de-queries-peligrosas)).
+  datos abierta, con la confirmación del editor para comandos peligrosos, filas
+  de auditoría, el historial de consultas en `Up`/`Down` y autocompletado de
+  comandos. Ver [Consola](CONSOLE.md).
 
 En la barra lateral, cada base de datos de una conexión clave-valor muestra su
 conteo de claves, y las bases de datos sin claves se agrupan en una sola fila

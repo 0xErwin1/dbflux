@@ -1,8 +1,8 @@
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c686556c..8fba482e 100644
+index 01ccbce..3b84efb 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -2521,6 +2521,22 @@ impl Window {
+@@ -2649,6 +2649,22 @@ impl Window {
          true
      }
  
@@ -25,7 +25,7 @@ index c686556c..8fba482e 100644
      /// Insert text through the focused element's active input handler.
      ///
      /// Returns `false` when the current frame has no active input handler.
-@@ -2545,6 +2561,18 @@ impl Window {
+@@ -2673,6 +2689,18 @@ impl Window {
          replaced
      }
  
@@ -44,7 +44,7 @@ index c686556c..8fba482e 100644
      /// Close this window.
      pub fn remove_window(&mut self) {
          self.removed = true;
-@@ -7220,26 +7248,42 @@ impl Window {
+@@ -7552,26 +7580,42 @@ impl Window {
              .push((action, Box::new(listener)));
      }
  

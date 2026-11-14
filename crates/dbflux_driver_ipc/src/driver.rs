@@ -132,7 +132,7 @@ impl IpcDriver {
         Self {
             socket_id,
             kind,
-            metadata,
+            metadata: crate::connection::without_uncertifiable_enforcement(metadata),
             form_definition,
             settings_schema: settings_schema.map(Arc::new),
             launch: None,
@@ -369,8 +369,20 @@ impl IpcDriver {
 
         // Explicit injection prevents the driver host from depending on implicit
         // env inheritance — belt-and-suspenders alongside the fail-closed check
-        // in dbflux_driver_host::main.
-        if let Ok(token) = std::env::var(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV) {
+        // in dbflux_driver_host::main. The process store is the primary source
+        // and a caller-supplied environment variable is the fallback, matching
+        // what the parent sends in its Hello; injecting it explicitly here also
+        // keeps it ahead of any launch-config entry for the same variable.
+        let auth_token = dbflux_ipc::process_auth_token()
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                std::env::var(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV)
+                    .ok()
+                    .filter(|token| !token.is_empty())
+            });
+
+        if let Some(token) = auth_token {
             command.env(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV, token);
         }
 
@@ -452,6 +464,10 @@ impl IpcDriver {
 
         let mut index = 0;
         while index < args.len() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the loop guard re-checks `index < args.len()` before every iteration, so this index is in bounds"
+            )]
             match args[index].as_str() {
                 "--driver" => {
                     let value = args

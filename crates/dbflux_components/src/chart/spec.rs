@@ -1,136 +1,17 @@
-//! Chart specification types that define what to render.
+//! The persisted chart specification composite and its constructors.
+//!
+//! The specification value types (chart kinds, axis and series specs, the
+//! binding) live in `bolt::chart::spec` and are re-exported here. What stays
+//! product-side is the composite and everything that binds it to a
+//! `dbflux_core::ColumnMeta` column list: the constructors and the
+//! group-series split, which read a `QueryResult`'s cells.
 
 use dbflux_core::{ColumnKind, QueryResult, Value};
 use serde::{Deserialize, Serialize};
 
-/// Y-axis scale mode.
-///
-/// `Linear` is the default and preserves existing behavior byte-for-byte.
-/// `Log` applies `ln(y + 1)` (log1p) before projecting data values to screen
-/// coordinates.  Using `y + 1` instead of `y` avoids `ln(0) = -∞` for
-/// zero-count buckets, which is the common case in audit time-series charts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum YScale {
-    #[default]
-    Linear,
-    Log,
-}
-
-/// Chart rendering kinds. `Line`, `Bar`, and `Scatter` are all fully
-/// implemented and share the same kind-agnostic render model.
-///
-/// `#[serde(default)]` on the containing `ChartSpec.kind` field ensures that
-/// existing serialized `ChartSpec` JSON without a `kind` key deserializes to
-/// `Line` — preserving forward compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum ChartKind {
-    #[default]
-    Line,
-    Bar,
-    Scatter,
-    /// Filled line chart: the area between the series line and the baseline is
-    /// shaded. Shares all of Line's geometry and hover behaviour.
-    Area,
-    /// Stacked vertical bars: each X position shows one bar per series,
-    /// stacked cumulatively rather than grouped side-by-side. The Y axis is
-    /// re-scaled at render time to the maximum stack sum, since the precomputed
-    /// `RenderModel.y_max` reflects individual-series maxima only.
-    StackedBar,
-    /// Pie chart: no X/Y axes; each visible series becomes one wedge sized by
-    /// the sum of that series' Y values. Focus by angle from the pie centre.
-    Pie,
-    /// Single-stat / number chart: shows the latest value per visible series
-    /// as large text, with no axes or gridlines. CloudWatch widgets with
-    /// `properties.view = "singleValue"` import as `Number`.
-    Number,
-}
-
-/// Axis classification used to pick the appropriate tick and label format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AxisKind {
-    /// Time axis; ticks are formatted as human-readable dates/times.
-    Time,
-    /// Numeric axis; ticks are formatted as decimal numbers.
-    Numeric,
-}
-
-/// Specification for a single axis.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AxisSpec {
-    /// Index into `QueryResult.columns` for the data source.
-    pub column_index: usize,
-    /// Human-readable label (typically the column name).
-    pub label: String,
-    /// Determines tick-formatting strategy.
-    pub kind: AxisKind,
-    /// Optional unit label rendered near the axis (e.g. "ms", "req/s").
-    ///
-    /// `None` in v0.6 — drivers do not yet supply unit metadata.
-    /// This field is a forward-compatibility seam for v0.7 driver metadata.
-    pub unit: Option<String>,
-}
-
-/// Specification for one Y series.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SeriesSpec {
-    /// Index into `QueryResult.columns` for the data source.
-    pub column_index: usize,
-    /// Human-readable label (typically the column name).
-    pub label: String,
-    /// Index into the panel palette; wraps modulo palette length.
-    pub color_slot: u8,
-    /// Value of the `binding.group_by` column this series is restricted to.
-    /// `None` plots every row. Set by `ChartSpec::with_group_series`.
-    #[serde(default)]
-    pub group_value: Option<String>,
-}
-
-/// Aggregation kind for the AxisBar binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum AggKind {
-    /// No aggregation — raw values are passed through.
-    #[default]
-    None,
-    Sum,
-    Avg,
-    Min,
-    Max,
-}
-
-/// Column binding specification for the AxisBar.
-///
-/// Maps logical roles (X, Y, group, filter, aggregation) to column indices
-/// in the current `QueryResult`. Uses `Vec<usize>` for Y rather than
-/// `SmallVec` to keep the dependency footprint minimal.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BindingSpec {
-    /// Column index for the X axis.
-    pub x: usize,
-    /// Column indices for Y series (up to 4 in v0.6).
-    #[serde(default)]
-    pub y: Vec<usize>,
-    /// Optional column index for the group-by dimension.
-    #[serde(default)]
-    pub group_by: Option<usize>,
-    /// Optional simple column-equality filter expression.
-    #[serde(default)]
-    pub filter: Option<String>,
-    /// Aggregation applied to each Y series.
-    #[serde(default)]
-    pub aggregation: AggKind,
-}
-
-impl Default for BindingSpec {
-    fn default() -> Self {
-        Self {
-            x: 0,
-            y: Vec::new(),
-            group_by: None,
-            filter: None,
-            aggregation: AggKind::None,
-        }
-    }
-}
+pub use bolt::chart::spec::{
+    AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ManualChartSelection, SeriesSpec, YScale,
+};
 
 /// Full specification describing what and how to render a chart.
 ///
@@ -170,15 +51,6 @@ pub struct ChartSpec {
 
 fn default_decimation_threshold() -> usize {
     10_000
-}
-
-/// A manual column selection entered by the user via the picker UI.
-#[derive(Debug, Clone)]
-pub struct ManualChartSelection {
-    pub x_col: usize,
-    pub y_cols: Vec<usize>,
-    /// Column whose distinct values split every Y column into one series each.
-    pub group_by: Option<usize>,
 }
 
 /// Key a row's group-by cell is matched on.
@@ -465,20 +337,6 @@ impl ChartSpec {
 mod tests {
     use super::*;
 
-    #[test]
-    fn y_scale_defaults_to_linear() {
-        assert_eq!(YScale::default(), YScale::Linear);
-    }
-
-    #[test]
-    fn y_scale_serde_round_trip() {
-        for scale in [YScale::Linear, YScale::Log] {
-            let json = serde_json::to_string(&scale).expect("serialize");
-            let back: YScale = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(scale, back, "round-trip failed for {:?}", scale);
-        }
-    }
-
     /// Old JSON without a `y_scale` field must deserialize to `YScale::Linear`
     /// so that existing persisted chart specs are not broken.
     #[test]
@@ -497,21 +355,6 @@ mod tests {
             YScale::Linear,
             "missing 'y_scale' should default to Linear"
         );
-    }
-
-    #[test]
-    fn chart_kind_defaults_to_line() {
-        assert_eq!(ChartKind::default(), ChartKind::Line);
-    }
-
-    #[test]
-    fn chart_kind_serde_round_trip() {
-        let kinds = [ChartKind::Line, ChartKind::Bar, ChartKind::Scatter];
-        for kind in kinds {
-            let json = serde_json::to_string(&kind).expect("serialize");
-            let back: ChartKind = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(kind, back, "round-trip failed for {:?}", kind);
-        }
     }
 
     #[test]
@@ -632,46 +475,6 @@ mod tests {
             .with_group_series(&result);
         assert_eq!(ungrouped.series.len(), 1);
         assert!(ungrouped.series[0].group_value.is_none());
-    }
-
-    #[test]
-    fn binding_spec_defaults_are_sensible() {
-        let b = BindingSpec::default();
-        assert_eq!(b.x, 0);
-        assert!(b.y.is_empty());
-        assert!(b.group_by.is_none());
-        assert!(b.filter.is_none());
-        assert_eq!(b.aggregation, AggKind::None);
-    }
-
-    // Seam preservation: these references ensure ChartKind variants remain
-    // reachable and cannot silently disappear across refactors.
-    #[test]
-    fn seam_chart_kind_all_variants_are_reachable() {
-        // This test exists solely so the compiler will catch removal of variants.
-        let _bar = ChartKind::Bar;
-        let _scatter = ChartKind::Scatter;
-        let _area = ChartKind::Area;
-        let _stacked = ChartKind::StackedBar;
-        let _pie = ChartKind::Pie;
-        assert_ne!(ChartKind::Bar, ChartKind::Line);
-        assert_ne!(ChartKind::Scatter, ChartKind::Line);
-        assert_ne!(ChartKind::Area, ChartKind::Line);
-        assert_ne!(ChartKind::StackedBar, ChartKind::Line);
-        assert_ne!(ChartKind::Pie, ChartKind::Line);
-        assert_ne!(ChartKind::Bar, ChartKind::Scatter);
-    }
-
-    #[test]
-    fn chart_kind_serde_round_trip_new_variants() {
-        // Verify that StackedBar and Pie survive a JSON round-trip so persisted
-        // ChartSpec documents can be read back after these variants are added.
-        let kinds = [ChartKind::Area, ChartKind::StackedBar, ChartKind::Pie];
-        for kind in kinds {
-            let json = serde_json::to_string(&kind).expect("serialize");
-            let back: ChartKind = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(kind, back, "round-trip failed for {:?}", kind);
-        }
     }
 
     // ---------------------------------------------------------------------------
@@ -828,5 +631,56 @@ mod tests {
         // Column index 99 is out of bounds; only column 1 is valid.
         assert_eq!(spec.series.len(), 1);
         assert_eq!(spec.series[0].column_index, 1);
+    }
+
+    #[test]
+    fn chart_spec_serde_round_trip_keeps_every_field() {
+        let spec = ChartSpec::from_bindings(
+            &BindingSpec {
+                x: 0,
+                y: vec![1],
+                group_by: None,
+                filter: None,
+                aggregation: AggKind::None,
+            },
+            &three_col_meta(),
+            10_000,
+        )
+        .expect("spec");
+
+        let json = serde_json::to_string(&spec).expect("serialize");
+        let back: ChartSpec = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.kind, spec.kind);
+        assert_eq!(back.x_axis.column_index, spec.x_axis.column_index);
+        let (back_series, spec_series): (Vec<_>, Vec<_>) = (
+            back.series
+                .iter()
+                .map(|s| {
+                    (
+                        s.column_index,
+                        s.label.as_str(),
+                        s.color_slot,
+                        s.group_value.clone(),
+                    )
+                })
+                .collect(),
+            spec.series
+                .iter()
+                .map(|s| {
+                    (
+                        s.column_index,
+                        s.label.as_str(),
+                        s.color_slot,
+                        s.group_value.clone(),
+                    )
+                })
+                .collect(),
+        );
+        assert_eq!(back_series, spec_series);
+        assert_eq!(back.legend_visible, spec.legend_visible);
+        assert_eq!(back.decimation_threshold, spec.decimation_threshold);
+        assert_eq!(back.binding, spec.binding);
+        assert_eq!(back.track_source_indices, spec.track_source_indices);
+        assert_eq!(back.y_scale, spec.y_scale);
     }
 }

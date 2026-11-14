@@ -674,3 +674,131 @@ fn schema_foreign_keys_pair_positionally_and_constraint_text_is_pinned() -> Resu
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn table_profile_reads_planner_statistics_and_projects_columns() -> Result<(), DbError> {
+    use dbflux_core::{
+        ProfileSource, TableBrowseRequest, TableFactKind, TableRef, TableViewFeatures,
+    };
+
+    containers::with_postgres_url(|uri| {
+        let connection = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE profile_orders AS \
+             SELECT i AS id, CASE WHEN i % 4 = 0 THEN NULL ELSE (ARRAY['US','DE','AR'])[1 + i % 3] END AS country, \
+             (i % 10)::int AS bucket FROM generate_series(1, 2000) AS i",
+        ))?;
+
+        let table = TableRef::with_schema("public", "profile_orders");
+        let before = connection.table_profile(&table)?;
+        assert!(
+            before
+                .facts
+                .iter()
+                .any(|fact| fact.kind == TableFactKind::StatisticsUpdated
+                    && fact.value.as_ref() == "never")
+        );
+
+        connection.execute(&QueryRequest::new("ANALYZE profile_orders"))?;
+
+        assert!(
+            connection
+                .table_view_features()
+                .contains(TableViewFeatures::COLUMN_PROFILE)
+        );
+        let profile = connection.table_profile(&table)?;
+
+        assert_eq!(
+            profile.source_label,
+            ProfileSource::PlannerStatistics("pg_stats")
+        );
+        assert_eq!(profile.row_count, Some(2_000));
+        assert_eq!(profile.engine.as_deref(), Some("heap"));
+
+        let country = &profile.columns[1];
+        assert_eq!(country.null_count, Some(500));
+        assert_eq!(country.distinct_count, Some(3));
+        assert_eq!(country.top_values.len(), 3);
+
+        let id = &profile.columns[0];
+        let range = id.range.as_ref().expect("id has a histogram");
+        assert_eq!((range.min.as_ref(), range.max.as_ref()), ("1", "2000"));
+        assert_eq!(id.distinct_count, Some(2_000));
+
+        let page = connection.browse_table(
+            &TableBrowseRequest::new(table.clone()).with_columns(vec!["bucket".to_string()]),
+        )?;
+        assert_eq!(
+            page.columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bucket"]
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn table_profile_reads_planner_statistics_of_a_partitioned_table_from_its_leaves()
+-> Result<(), DbError> {
+    use dbflux_core::{TableFactKind, TableRef};
+
+    containers::with_postgres_url(|uri| {
+        let connection = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE profile_events (id int NOT NULL, region text NOT NULL) \
+             PARTITION BY RANGE (id); \
+             CREATE TABLE profile_events_low PARTITION OF profile_events \
+             FOR VALUES FROM (1) TO (1001); \
+             CREATE TABLE profile_events_high PARTITION OF profile_events \
+             FOR VALUES FROM (1001) TO (3001) PARTITION BY LIST (region); \
+             CREATE TABLE profile_events_high_us PARTITION OF profile_events_high \
+             FOR VALUES IN ('US'); \
+             CREATE TABLE profile_events_high_de PARTITION OF profile_events_high \
+             FOR VALUES IN ('DE'); \
+             CREATE TABLE profile_events_empty PARTITION OF profile_events \
+             FOR VALUES FROM (3001) TO (4001); \
+             INSERT INTO profile_events \
+             SELECT i, CASE WHEN i % 2 = 0 THEN 'US' ELSE 'DE' END \
+             FROM generate_series(1, 3000) AS i",
+        ))?;
+
+        let table = TableRef::with_schema("public", "profile_events");
+        let before = connection.table_profile(&table)?;
+
+        assert_eq!(before.row_count, None);
+        assert!(before.total_compressed_bytes.is_some_and(|bytes| bytes > 0));
+
+        connection.execute(&QueryRequest::new("ANALYZE profile_events_low"))?;
+
+        let partly_analyzed = connection.table_profile(&table)?;
+
+        assert_eq!(
+            partly_analyzed.row_count, None,
+            "a leaf without an estimate keeps the total unknown instead of undercounting"
+        );
+
+        connection.execute(&QueryRequest::new("ANALYZE profile_events"))?;
+
+        let profile = connection.table_profile(&table)?;
+
+        assert_eq!(profile.row_count, Some(3_000));
+        assert!(
+            profile
+                .total_compressed_bytes
+                .is_some_and(|bytes| bytes > 0)
+        );
+        assert!(
+            profile
+                .facts
+                .iter()
+                .any(|fact| fact.kind == TableFactKind::PartitionKey)
+        );
+
+        Ok(())
+    })
+}

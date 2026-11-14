@@ -92,6 +92,9 @@ pub enum EventCategory {
     /// Object-storage CRUD/mutation events (upload, delete, presign, rename,
     /// create bucket/folder, save-back edit).
     ObjectStorage,
+    /// Secret-store events: every value retrieval, successful or not. The
+    /// value itself is never part of the event.
+    SecretStore,
 }
 
 impl EventCategory {
@@ -107,6 +110,7 @@ impl EventCategory {
             EventCategory::Mcp => "mcp",
             EventCategory::Governance => "governance",
             EventCategory::ObjectStorage => "object_storage",
+            EventCategory::SecretStore => "secret_store",
         }
     }
 
@@ -122,6 +126,7 @@ impl EventCategory {
             "mcp" => Some(EventCategory::Mcp),
             "governance" => Some(EventCategory::Governance),
             "object_storage" => Some(EventCategory::ObjectStorage),
+            "secret_store" => Some(EventCategory::SecretStore),
             _ => None,
         }
     }
@@ -690,6 +695,7 @@ mod tests {
             EventCategory::Mcp,
             EventCategory::Governance,
             EventCategory::ObjectStorage,
+            EventCategory::SecretStore,
         ] {
             let parsed = EventCategory::from_str_repr(category.as_str());
             assert_eq!(
@@ -713,6 +719,15 @@ mod tests {
         assert_eq!(
             EventCategory::from_str_repr("object_storage"),
             Some(EventCategory::ObjectStorage)
+        );
+    }
+
+    #[test]
+    fn secret_store_category_string_repr() {
+        assert_eq!(EventCategory::SecretStore.as_str(), "secret_store");
+        assert_eq!(
+            EventCategory::from_str_repr("secret_store"),
+            Some(EventCategory::SecretStore)
         );
     }
 

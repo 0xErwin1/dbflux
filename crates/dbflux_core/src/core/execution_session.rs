@@ -241,6 +241,10 @@ mod tests {
     }
 
     impl ExecutionSessionFactory for FakeFactory {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: the session mutex is poisoned only after an earlier panic in the same test; propagating that panic is intended"
+        )]
         fn open(&self) -> Result<Arc<dyn ExecutionSession>, DbError> {
             self.open_calls.fetch_add(1, Ordering::SeqCst);
             if self.admission_closed.load(Ordering::SeqCst) {
@@ -259,6 +263,10 @@ mod tests {
             Ok(session)
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: the session mutex is poisoned only after an earlier panic in the same test; propagating that panic is intended"
+        )]
         fn shutdown(&self) -> Result<(), DbError> {
             self.shutdown_calls.fetch_add(1, Ordering::SeqCst);
             self.admission_closed.store(true, Ordering::SeqCst);

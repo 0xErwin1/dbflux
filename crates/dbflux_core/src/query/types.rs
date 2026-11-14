@@ -4,14 +4,28 @@ use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 use uuid::Uuid;
 
-pub const UNSUPPORTED_TYPES_METADATA_KEY: &str = "unsupported_types";
+pub(crate) const UNSUPPORTED_TYPES_METADATA_KEY: &str = "unsupported_types";
 
 /// `metadata_extra` key marking that a driver omitted result rows because an
 /// execution cap (e.g. a configured row limit) was reached. `true` must be
 /// written only when rows were actually dropped — it is not a guarantee that
 /// the driver enforced any cap, and its absence is not a promise of
 /// completeness.
-pub const ROWS_TRUNCATED_METADATA_KEY: &str = "rows_truncated";
+pub(crate) const ROWS_TRUNCATED_METADATA_KEY: &str = "rows_truncated";
+
+/// `metadata_extra` key holding the notices and warnings the server raised
+/// while running the statement that produced the result. It is presentation
+/// data and must not be forwarded into audit details.
+pub const SERVER_NOTICES_METADATA_KEY: &str = "server_notices";
+
+/// A non-error message the server sent while running a statement, such as a
+/// PostgreSQL `WARNING` or `NOTICE`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerNotice {
+    /// Severity as reported by the server (`WARNING`, `NOTICE`, `INFO`, ...).
+    pub severity: String,
+    pub message: String,
+}
 
 pub(crate) fn encode_unsupported_types(
     metadata: &mut Option<HashMap<String, serde_json::Value>>,
@@ -100,6 +114,25 @@ impl QueryResultShape {
 
 // -- Query Request --
 
+/// Whether the database itself must refuse writes while a request runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReadOnlyEnforcement {
+    /// No read-only guarantee is requested: the request runs with the
+    /// session's normal permissions.
+    #[default]
+    None,
+
+    /// The request must run where every write is refused before it reaches
+    /// storage, or not run at all. See [`QueryRequest::read_only`].
+    Required,
+}
+
+impl ReadOnlyEnforcement {
+    pub fn is_required(self) -> bool {
+        matches!(self, Self::Required)
+    }
+}
+
 /// Parameters for executing a SQL query.
 #[derive(Debug, Clone, Default)]
 pub struct QueryRequest {
@@ -159,6 +192,27 @@ pub struct QueryRequest {
     /// performed the authorisation, so this field cannot be built from
     /// untrusted bytes.
     pub confirmed_ceiling: Option<crate::ExecutionClassification>,
+
+    /// Read-only enforcement requested for this execution.
+    ///
+    /// Only the code that authorised the request as a read may set
+    /// [`ReadOnlyEnforcement::Required`]: the MCP policy decision for a
+    /// `Read`/`Metadata` script, or the editor's auto-refresh of a read
+    /// query. It is never derived from document content.
+    ///
+    /// With `Required`, a driver either applies a mode the database enforces
+    /// (a read-only transaction, a query-only session flag, a per-request
+    /// setting) inside the same locked session call that runs the SQL, never
+    /// as a separate execution another caller could interleave with, and
+    /// removes it before returning; or classifies every typed operation it is
+    /// about to send and refuses any write or unknown operation before it
+    /// reaches the server. Matching keywords in the query text never
+    /// qualifies. A driver that cannot do either, or that finds the session
+    /// inside a transaction it must not end, refuses the whole request with
+    /// [`DbError::NotSupported`](crate::DbError::NotSupported) before anything
+    /// runs. Drivers that honour it declare
+    /// [`TransactionCapabilities::supports_read_only`](crate::TransactionCapabilities::supports_read_only).
+    pub read_only: ReadOnlyEnforcement,
 }
 
 impl QueryRequest {
@@ -174,6 +228,53 @@ impl QueryRequest {
     pub fn with_confirmed_ceiling(mut self, ceiling: crate::ExecutionClassification) -> Self {
         self.confirmed_ceiling = Some(ceiling);
         self
+    }
+
+    /// Sets the read-only enforcement for this execution. See
+    /// [`QueryRequest::read_only`] for who may set it.
+    pub fn with_read_only(mut self, read_only: ReadOnlyEnforcement) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Refuses a request that requires read-only enforcement, for a driver
+    /// that cannot provide it. Call it before anything runs, so the refusal
+    /// has no side effects.
+    pub fn refuse_read_only_enforcement(&self, driver: &str) -> Result<(), crate::DbError> {
+        if self.read_only.is_required() {
+            return Err(crate::DbError::NotSupported(format!(
+                "{driver}: database-enforced read-only execution is unsupported; the request was rejected before execution"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Refuses a request that requires read-only enforcement when its source
+    /// is an instance metric or inspector query, which a driver runs outside
+    /// its read-only session. Call it before anything runs, so the refusal has
+    /// no side effects.
+    pub fn refuse_read_only_for_instance_catalog(
+        &self,
+        driver: &str,
+    ) -> Result<(), crate::DbError> {
+        let is_instance_catalog = matches!(
+            self.execution_context
+                .as_ref()
+                .and_then(|context| context.source.as_ref()),
+            Some(
+                crate::ExecutionSourceContext::InstanceMetricQuery { .. }
+                    | crate::ExecutionSourceContext::InstanceInspectorQuery { .. }
+            )
+        );
+
+        if self.read_only.is_required() && is_instance_catalog {
+            return Err(crate::DbError::NotSupported(format!(
+                "{driver}: read-only enforcement cannot be applied to an instance catalog query; the request was rejected before execution"
+            )));
+        }
+
+        Ok(())
     }
 
     pub fn with_limit(mut self, limit: u32) -> Self {
@@ -224,7 +325,7 @@ pub enum ColumnKind {
 
 /// Returns `ColumnKind::Unknown`. Used as a serde default so that JSON
 /// fixtures serialised before this field was introduced deserialise cleanly.
-pub fn default_column_kind_unknown() -> ColumnKind {
+pub(crate) fn default_column_kind_unknown() -> ColumnKind {
     ColumnKind::Unknown
 }
 
@@ -438,6 +539,41 @@ impl QueryResult {
         );
     }
 
+    /// Replaces the server notices attached to this result. An empty input
+    /// removes the entry; unrelated `metadata_extra` entries are preserved.
+    pub fn set_server_notices(&mut self, notices: impl IntoIterator<Item = ServerNotice>) {
+        let notices: Vec<ServerNotice> = notices.into_iter().collect();
+
+        if notices.is_empty() {
+            if let Some(metadata) = self.metadata_extra.as_mut() {
+                metadata.remove(SERVER_NOTICES_METADATA_KEY);
+                if metadata.is_empty() {
+                    self.metadata_extra = None;
+                }
+            }
+            return;
+        }
+
+        match serde_json::to_value(notices) {
+            Ok(value) => {
+                self.metadata_extra
+                    .get_or_insert_with(HashMap::new)
+                    .insert(SERVER_NOTICES_METADATA_KEY.to_string(), value);
+            }
+            Err(error) => log::warn!("Failed to encode server notices: {error}"),
+        }
+    }
+
+    /// Reads the server notices without consuming them. A missing or
+    /// malformed entry reads as no notices.
+    pub fn server_notices(&self) -> Vec<ServerNotice> {
+        self.metadata_extra
+            .as_ref()
+            .and_then(|metadata| metadata.get(SERVER_NOTICES_METADATA_KEY))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default()
+    }
+
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }
@@ -621,6 +757,56 @@ mod tests {
     }
 
     #[test]
+    fn server_notices_round_trip_without_consuming() {
+        let mut result = QueryResult::empty();
+        let notice = ServerNotice {
+            severity: "WARNING".to_string(),
+            message: "there is no transaction in progress".to_string(),
+        };
+        result.set_server_notices([notice.clone()]);
+
+        assert_eq!(result.server_notices(), vec![notice.clone()]);
+        assert_eq!(result.server_notices(), vec![notice]);
+    }
+
+    #[test]
+    fn empty_server_notices_remove_the_key() {
+        let mut result = QueryResult::empty();
+        result.set_server_notices([ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: "hello".to_string(),
+        }]);
+        result.set_server_notices(Vec::new());
+
+        assert!(result.server_notices().is_empty());
+        assert!(result.metadata_extra.is_none());
+    }
+
+    #[test]
+    fn malformed_server_notices_read_as_empty() {
+        let mut result = QueryResult::empty();
+        result.metadata_extra = Some(HashMap::from([(
+            SERVER_NOTICES_METADATA_KEY.to_string(),
+            serde_json::json!("not a list"),
+        )]));
+
+        assert!(result.server_notices().is_empty());
+    }
+
+    #[test]
+    fn server_notices_preserve_unrelated_metadata() {
+        let mut result = QueryResult::empty();
+        result.set_rows_truncated(true);
+        result.set_server_notices([ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: "hello".to_string(),
+        }]);
+        result.set_server_notices(Vec::new());
+
+        assert!(result.rows_truncated());
+    }
+
+    #[test]
     fn unsupported_types_are_sorted_and_deduplicated() {
         let mut result = QueryResult::empty();
         result.set_unsupported_types([
@@ -719,5 +905,75 @@ mod tests {
         result.set_rows_truncated(false);
 
         assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn query_request_requests_no_read_only_enforcement_by_default() {
+        let request = QueryRequest::new("SELECT 1");
+
+        assert_eq!(request.read_only, ReadOnlyEnforcement::None);
+        assert!(!request.read_only.is_required());
+    }
+
+    #[test]
+    fn with_read_only_marks_the_request_as_requiring_enforcement() {
+        let request = QueryRequest::new("SELECT 1").with_read_only(ReadOnlyEnforcement::Required);
+
+        assert!(request.read_only.is_required());
+    }
+
+    #[test]
+    fn refuse_read_only_for_instance_catalog_rejects_only_required_catalog_requests() {
+        let catalog_context = |source| ExecutionContext {
+            source: Some(source),
+            ..Default::default()
+        };
+        let metric = catalog_context(crate::ExecutionSourceContext::InstanceMetricQuery {
+            metric_id: "metric".to_string(),
+            start_ms: 0,
+            end_ms: 1,
+        });
+        let inspector = catalog_context(crate::ExecutionSourceContext::InstanceInspectorQuery {
+            metric_id: "inspector".to_string(),
+        });
+
+        for context in [metric, inspector] {
+            let plain = QueryRequest::new("SELECT 1").with_execution_context(Some(context.clone()));
+            assert!(
+                plain
+                    .refuse_read_only_for_instance_catalog("Test driver")
+                    .is_ok()
+            );
+
+            let required = plain.with_read_only(ReadOnlyEnforcement::Required);
+            match required.refuse_read_only_for_instance_catalog("Test driver") {
+                Err(crate::DbError::NotSupported(message)) => {
+                    assert!(message.starts_with("Test driver"), "{message}");
+                }
+                other => panic!("expected NotSupported, got {other:?}"),
+            }
+        }
+
+        let required_query =
+            QueryRequest::new("SELECT 1").with_read_only(ReadOnlyEnforcement::Required);
+        assert!(
+            required_query
+                .refuse_read_only_for_instance_catalog("Test driver")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn refuse_read_only_enforcement_rejects_only_required_requests() {
+        let plain = QueryRequest::new("SELECT 1");
+        assert!(plain.refuse_read_only_enforcement("Test driver").is_ok());
+
+        let required = QueryRequest::new("SELECT 1").with_read_only(ReadOnlyEnforcement::Required);
+        match required.refuse_read_only_enforcement("Test driver") {
+            Err(crate::DbError::NotSupported(message)) => {
+                assert!(message.starts_with("Test driver"), "{message}");
+            }
+            other => panic!("expected NotSupported, got {other:?}"),
+        }
     }
 }

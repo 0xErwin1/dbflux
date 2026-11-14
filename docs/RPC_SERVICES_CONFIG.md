@@ -6,6 +6,7 @@ DBFlux now persists a first-class RPC services foundation through `RpcServiceKin
 
 - `Driver` — adapted into runtime database drivers
 - `AuthProvider` — adapted into runtime auth-provider registries in both the app and the MCP server
+- `SecretProvider` — adapted into runtime secret providers registered into every connection's value resolver; see [Secret Provider RPC Protocol](SECRET_PROVIDER_RPC_PROTOCOL.md)
 
 ## Storage
 
@@ -61,7 +62,7 @@ Services are managed through the Settings UI under the **RPC Services** section,
 To add or edit a service:
 1. Open Settings → RPC Services
 2. Add a new service or select an existing one
-3. Choose the service kind (`Driver` or `Auth Provider`)
+3. Choose the service kind (`Driver`, `Auth provider` or `Secret provider`)
 4. Configure socket ID, command path, arguments, environment variables, and timeout
 5. Save changes
 
@@ -72,7 +73,9 @@ Notes:
 - DBFlux preserves compatibility for driver registration IDs as `rpc:<socket_id>`.
 - If API metadata is missing on an existing driver row, DBFlux defaults it to the current `driver_rpc` contract at version `1.1`.
 - If API metadata is missing on an auth-provider row, DBFlux defaults it to the current `auth_provider_rpc` contract at version `1.2`.
-- `api_family` / `api_major` are used as startup preflight for auth providers before DBFlux probes the socket.
+- If API metadata is missing on a secret-provider row, DBFlux defaults it to the `secret_provider_rpc` contract at version `1.0`.
+- `Secret provider` services (storage value `secret_provider`) are active only as value sources for connection, proxy, SSH tunnel and auth-profile fields; they never appear as drivers or auth providers.
+- `api_family` / `api_major` are used as startup preflight for auth providers and secret providers before DBFlux probes the socket.
 
 ## Semantics
 
@@ -84,6 +87,7 @@ Notes:
 - Services with `service_kind='auth_provider'` are loaded into auth-provider registries when they pass compatibility checks and probe successfully
 - Driver-path negotiation selects the highest mutually supported compatible minor version during `Hello`, then requires every later envelope to use that exact negotiated version
 - Auth-provider negotiation follows the same family/major/minor scheme under `auth_provider_rpc`; incompatible family or major versions are skipped before registration
+- Services with `service_kind='secret_provider'` negotiate under `secret_provider_rpc`, must announce a valid manifest in `Hello`, and are skipped when their `provider_id` is reserved (`aws-secrets-manager`, `aws-ssm`) or already registered
 
 ## Fields
 
@@ -94,7 +98,7 @@ Notes:
 - `command` (optional): executable to run when DBFlux needs to start the service.
   - If omitted and `args` is also empty, DBFlux treats the service as already running and does not spawn anything.
   - For `driver`, if omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
-  - For `auth_provider`, if DBFlux must launch the service, `command` must be set explicitly.
+  - For `auth_provider` and `secret_provider`, if DBFlux must launch the service, `command` must be set explicitly.
 - `args` (optional): process arguments.
 - `env` (optional): environment variables for the spawned process.
 - `startup_timeout_ms` (optional): max wait time for socket readiness after spawn.

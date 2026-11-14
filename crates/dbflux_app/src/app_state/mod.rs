@@ -3,6 +3,7 @@
 //! This module contains the core `AppState` struct which manages all application-level
 //! state including connections, profiles, settings, and audit services.
 
+use dbflux_core::connection_manager::PrepareFetchError;
 use dbflux_core::observability::actions::{
     CONFIG_CHANGE, CONFIG_CREATE, CONFIG_DELETE, CONFIG_UPDATE,
 };
@@ -11,8 +12,8 @@ use dbflux_core::observability::{
 };
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AuthProfile, CancelToken, Connection, ConnectionHooks, ConnectionProfile, DbDriver,
-    DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams,
+    AuthProfile, CancelToken, Connection, ConnectionHooks, ConnectionProfile, DbDriver, DbError,
+    DbSchemaInfo, DriverKey, EffectiveSettings, ExternalScriptRoot, FetchCollectionChildrenParams,
     FetchSchemaColumnsParams, FormValues, GeneralSettings, GlobalOverrides, HistoryEntry,
     HookContext, HookPhase, SavedQuery, SchemaColumnInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, ShutdownPhase, SshTunnelProfile,
@@ -20,6 +21,7 @@ use dbflux_core::{
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo;
+use dbflux_storage::repositories::script_roots::ScriptRootDto;
 use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
@@ -57,6 +59,32 @@ pub use dbflux_core::{
     TableDetailsPrepareError,
 };
 
+/// Why an external scripts folder could not be added or removed.
+#[derive(Debug)]
+pub enum ScriptRootError {
+    /// The managed scripts directory failed to initialize, so there is nothing
+    /// to attach a folder to.
+    ScriptsUnavailable,
+    /// The folder overlaps one already registered, or is not a folder.
+    Invalid(Box<DbError>),
+    /// No registered folder has that id.
+    UnknownRoot,
+    Storage(dbflux_storage::error::StorageError),
+}
+
+impl std::fmt::Display for ScriptRootError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ScriptsUnavailable => write!(f, "the scripts directory is unavailable"),
+            Self::Invalid(error) => write!(f, "{error}"),
+            Self::UnknownRoot => write!(f, "the scripts folder is not registered"),
+            Self::Storage(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for ScriptRootError {}
+
 /// Records that `ScriptsDirectory::new()` failed during startup.
 ///
 /// The failure text is retained for internal diagnostics only; the drain
@@ -64,6 +92,16 @@ pub use dbflux_core::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptsDirectoryDiagnostic {
     pub message: String,
+}
+
+/// What the password prompt shows before connecting a profile whose password is
+/// neither saved nor supplied by a value source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionPasswordPrompt {
+    pub profile_id: Uuid,
+    pub profile_name: String,
+    /// Driver-provided name of the secret field, when it is not a password.
+    pub field_label: Option<String>,
 }
 
 pub struct AppState {
@@ -82,6 +120,7 @@ pub struct AppState {
     protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
+    secret_provider_registry: crate::secret_provider_registry::SecretProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
     scripts_directory: Option<ScriptsDirectory>,
     storage_runtime: StorageRuntime,
@@ -106,6 +145,10 @@ pub struct AppState {
     /// Passphrases entered via the modal prompt are held here for the process
     /// lifetime. Never serialized, logged, or written to disk.
     pub session_passphrase_vault: Arc<RwLock<dbflux_ssh::SessionPassphraseVault>>,
+    /// Connection passwords the user asked to remember for this session, keyed
+    /// by profile. Held only in memory; never serialized, logged, or written
+    /// to the keyring.
+    remembered_connection_passwords: HashMap<Uuid, SecretString>,
     #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
 
@@ -241,10 +284,6 @@ impl AppState {
     #[allow(dead_code)]
     pub fn is_connected(&self) -> bool {
         self.facade.connections.is_connected()
-    }
-
-    pub fn has_connections(&self) -> bool {
-        self.facade.connections.has_connections()
     }
 
     #[allow(dead_code)]
@@ -512,7 +551,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaRoutinesParams, String> {
+    ) -> Result<FetchSchemaRoutinesParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_routines(profile_id, database, schema)
@@ -673,6 +712,88 @@ impl AppState {
         )
     }
 
+    /// Like `prepare_connect_profile_with_passphrase`, also carrying the
+    /// password the user typed into the connect prompt. That password is used
+    /// instead of the keyring for this connect.
+    pub fn prepare_connect_profile_with_secrets(
+        &self,
+        profile_id: Uuid,
+        override_passphrase: Option<&str>,
+        password: Option<SecretString>,
+    ) -> Result<ConnectProfileParams, dbflux_core::PrepareConnectError> {
+        let mut params =
+            self.prepare_connect_profile_with_passphrase(profile_id, override_passphrase)?;
+        params.password_override = password;
+        Ok(params)
+    }
+
+    /// The prompt to show before connecting `profile_id`, or `None` when the
+    /// driver needs no password, the keyring or a value source supplies it, or
+    /// the user asked DBFlux to remember it for this session.
+    pub fn connection_password_prompt(&self, profile_id: Uuid) -> Option<ConnectionPasswordPrompt> {
+        if self
+            .remembered_connection_passwords
+            .contains_key(&profile_id)
+        {
+            return None;
+        }
+
+        let profile = self.password_prompt_profile(profile_id)?;
+        let field_label = self
+            .driver_for_profile(profile)
+            .and_then(|driver| driver.secret_field_label(&driver.extract_values(&profile.config)));
+
+        Some(ConnectionPasswordPrompt {
+            profile_id,
+            profile_name: profile.name.clone(),
+            field_label,
+        })
+    }
+
+    /// The password remembered for this session, while the profile still has
+    /// no other password source.
+    pub fn remembered_connection_password(&self, profile_id: Uuid) -> Option<SecretString> {
+        self.password_prompt_profile(profile_id)?;
+        self.remembered_connection_passwords
+            .get(&profile_id)
+            .cloned()
+    }
+
+    /// Keeps a prompted password in memory until DBFlux exits. It is never
+    /// written to the keyring or to disk.
+    pub fn remember_connection_password(&mut self, profile_id: Uuid, password: SecretString) {
+        self.remembered_connection_passwords
+            .insert(profile_id, password);
+    }
+
+    pub fn forget_connection_password(&mut self, profile_id: Uuid) {
+        self.remembered_connection_passwords.remove(&profile_id);
+    }
+
+    /// Keeps the password a profile connected with for its live session, so
+    /// per-database connections and database switches reuse it.
+    pub fn set_session_password(&mut self, profile_id: Uuid, password: SecretString) {
+        self.facade
+            .connections
+            .set_session_password(profile_id, password);
+    }
+
+    fn password_prompt_profile(&self, profile_id: Uuid) -> Option<&ConnectionProfile> {
+        let profile = self
+            .facade
+            .profiles
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)?;
+        let driver_requires_password = self
+            .driver_for_profile(profile)
+            .is_some_and(|driver| driver.requires_password());
+
+        profile
+            .requires_password_prompt(driver_requires_password)
+            .then_some(profile)
+    }
+
     /// Resolve the SSH tunnel profile ID associated with a connection profile, if any.
     pub fn ssh_tunnel_id_for_profile(&self, profile_id: Uuid) -> Option<Uuid> {
         self.facade
@@ -709,15 +830,24 @@ impl AppState {
         }
     }
 
+    /// Installs a finished connection for `profile`.
+    ///
+    /// `profile` is the copy taken when the connection attempt started. The
+    /// read-only setting is taken from the saved profile instead, so a save
+    /// made while the attempt was running decides the session's policy.
     pub fn apply_connect_profile(
         &mut self,
-        profile: ConnectionProfile,
+        mut profile: ConnectionProfile,
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn std::any::Any + Send + Sync>>,
         is_mcp_actor: bool,
         probe: dbflux_core::WritePrivilege,
     ) {
+        if let Some(saved) = self.facade.profiles.find_by_id(profile.id) {
+            profile.read_only_flag = saved.read_only_flag;
+        }
+
         self.facade.connections.apply_connect_profile(
             profile,
             connection,
@@ -769,6 +899,35 @@ impl AppState {
         );
     }
 
+    pub fn prepare_switch_region(
+        &self,
+        profile_id: Uuid,
+        region: &str,
+    ) -> Result<dbflux_core::connection_manager::SwitchRegionParams, String> {
+        self.facade.connections.prepare_switch_region(
+            profile_id,
+            region,
+            &self.facade.secrets.secret_store_arc(),
+        )
+    }
+
+    pub fn apply_switch_region(
+        &mut self,
+        profile_id: Uuid,
+        original_profile: ConnectionProfile,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+        session_generation: u64,
+    ) -> bool {
+        self.facade.connections.apply_switch_region(
+            profile_id,
+            original_profile,
+            connection,
+            schema,
+            session_generation,
+        )
+    }
+
     pub fn add_database_connection(
         &mut self,
         profile_id: Uuid,
@@ -785,7 +944,7 @@ impl AppState {
         &self,
         profile_id: Uuid,
         database: &str,
-    ) -> Result<FetchDatabaseSchemaParams, String> {
+    ) -> Result<FetchDatabaseSchemaParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_database_schema(profile_id, database)
@@ -820,7 +979,7 @@ impl AppState {
     pub fn prepare_fetch_database_list(
         &self,
         profile_id: Uuid,
-    ) -> Result<FetchDatabaseListParams, String> {
+    ) -> Result<FetchDatabaseListParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_database_list(profile_id)
@@ -834,7 +993,7 @@ impl AppState {
         &self,
         profile_id: Uuid,
         database: &str,
-    ) -> Result<FetchExplicitDatabaseSchemaParams, String> {
+    ) -> Result<FetchExplicitDatabaseSchemaParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_explicit_database_schema(profile_id, database)
@@ -931,7 +1090,7 @@ impl AppState {
         database: &str,
         schema: Option<&str>,
         table: &str,
-    ) -> Result<FetchTableDetailsParams, String> {
+    ) -> Result<FetchTableDetailsParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_table_details(profile_id, database, schema, table)
@@ -1055,7 +1214,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaTypesParams, String> {
+    ) -> Result<FetchSchemaTypesParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_types(profile_id, database, schema)
@@ -1066,7 +1225,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaColumnsParams, String> {
+    ) -> Result<FetchSchemaColumnsParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_columns(profile_id, database, schema)
@@ -1077,7 +1236,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaIndexesParams, String> {
+    ) -> Result<FetchSchemaIndexesParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_indexes(profile_id, database, schema)
@@ -1088,7 +1247,7 @@ impl AppState {
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
-    ) -> Result<FetchSchemaForeignKeysParams, String> {
+    ) -> Result<FetchSchemaForeignKeysParams, PrepareFetchError> {
         self.facade
             .connections
             .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
@@ -1118,7 +1277,11 @@ impl AppState {
         self.facade.secrets.delete_password(profile);
     }
 
-    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
+    #[allow(clippy::result_large_err)]
+    pub fn get_password(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<Option<SecretString>, dbflux_core::DbError> {
         self.facade.secrets.get_password(profile)
     }
 
@@ -1240,6 +1403,20 @@ impl AppState {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
         self.facade.connections.clear_connect_failure(profile.id);
+        self.remembered_connection_passwords.remove(&profile.id);
+
+        // The navigator view and the database filter only lay out the
+        // sidebar, so an open connection takes them at once instead of
+        // waiting for the reconnect other edits need.
+        if let Some(connected) = self.connections_mut().get_mut(&profile.id) {
+            connected.profile.navigator_view = profile.navigator_view;
+            connected.profile.show_all_databases = profile.show_all_databases;
+        }
+
+        self.facade
+            .connections
+            .apply_profile_read_only_flag(profile.id, profile.read_only_flag);
+
         self.facade.profiles.update(profile);
 
         self.record_config_event(
@@ -1802,10 +1979,96 @@ impl AppState {
         self.scripts_directory.as_mut()
     }
 
-    pub fn refresh_scripts(&mut self) {
-        if let Some(dir) = self.scripts_directory.as_mut() {
-            dir.refresh();
+    /// Registers `path` as an external scripts folder and persists it.
+    ///
+    /// `path` must be canonical, as `ScriptsDirectory::validate_external_root`
+    /// returns it. The root starts unscanned: the caller scans it in the
+    /// background. If persisting fails the registration is rolled back, so the
+    /// sidebar never shows a folder that would vanish on restart.
+    pub fn add_external_script_root(
+        &mut self,
+        path: PathBuf,
+    ) -> Result<ExternalScriptRoot, ScriptRootError> {
+        let dir = self
+            .scripts_directory
+            .as_mut()
+            .ok_or(ScriptRootError::ScriptsUnavailable)?;
+
+        let root = ExternalScriptRoot::new(path);
+        dir.add_external_root_pending(root.clone())
+            .map_err(|error| ScriptRootError::Invalid(Box::new(error)))?;
+
+        let dto = ScriptRootDto {
+            id: root.id.to_string(),
+            path: root.path.to_string_lossy().to_string(),
+            label: root.label.clone(),
+        };
+
+        if let Err(error) = self.storage_runtime.script_roots().insert(&dto) {
+            dir.remove_external_root(root.id);
+
+            self.record_config_event(
+                EventOutcome::Failure,
+                CONFIG_CREATE,
+                "script_root",
+                root.id.to_string(),
+                format!("Failed to add external scripts folder '{}'", root.label),
+                Some(error.to_string()),
+            );
+
+            return Err(ScriptRootError::Storage(error));
         }
+
+        self.record_config_event(
+            EventOutcome::Success,
+            CONFIG_CREATE,
+            "script_root",
+            root.id.to_string(),
+            format!("Added external scripts folder '{}'", root.label),
+            None,
+        );
+
+        Ok(root)
+    }
+
+    /// Unregisters an external scripts folder. The folder and its files are
+    /// never touched. The stored row goes first, so a failed write keeps the
+    /// folder listed rather than reappearing after a restart.
+    pub fn remove_external_script_root(&mut self, id: Uuid) -> Result<(), ScriptRootError> {
+        let label = self
+            .scripts_directory
+            .as_ref()
+            .and_then(|dir| dir.external_root(id))
+            .map(|mounted| mounted.label().to_string())
+            .ok_or(ScriptRootError::UnknownRoot)?;
+
+        if let Err(error) = self.storage_runtime.script_roots().delete(&id.to_string()) {
+            self.record_config_event(
+                EventOutcome::Failure,
+                CONFIG_DELETE,
+                "script_root",
+                id.to_string(),
+                format!("Failed to remove external scripts folder '{label}'"),
+                Some(error.to_string()),
+            );
+
+            return Err(ScriptRootError::Storage(error));
+        }
+
+        if let Some(dir) = self.scripts_directory.as_mut() {
+            dir.remove_external_root(id);
+        }
+
+        self.record_config_event(
+            EventOutcome::Success,
+            CONFIG_DELETE,
+            "script_root",
+            id.to_string(),
+            format!("Removed external scripts folder '{label}'"),
+            None,
+        );
+
+        Ok(())
     }
 
     // --- ArtifactStore (filesystem boundary for scratch/shadow) ---
@@ -1951,8 +2214,41 @@ impl AppState {
 
     // --- Shutdown ---
 
+    /// Starts the shutdown once. The first call also records which profiles
+    /// are connected, before the shutdown sequence disconnects them, so the
+    /// next launch can reopen them.
     pub fn begin_shutdown(&self) -> bool {
-        self.facade.begin_shutdown()
+        let initiated = self.facade.begin_shutdown();
+
+        if initiated {
+            self.remember_connected_profiles();
+        }
+
+        initiated
+    }
+
+    fn remember_connected_profiles(&self) {
+        let mut profile_ids: Vec<Uuid> = self.connections().keys().copied().collect();
+        profile_ids.sort();
+
+        if let Err(error) = self
+            .storage_runtime
+            .ui_state()
+            .set_last_connected_profiles(&profile_ids)
+        {
+            log::warn!("Failed to record the connected profiles at quit: {error}");
+        }
+    }
+
+    /// Profiles that were connected when the app last started quitting.
+    pub fn last_connected_profiles(&self) -> Vec<Uuid> {
+        match self.storage_runtime.ui_state().last_connected_profiles() {
+            Ok(profile_ids) => profile_ids,
+            Err(error) => {
+                log::warn!("Failed to read the profiles connected at last quit: {error}");
+                Vec::new()
+            }
+        }
     }
 
     pub fn is_shutting_down(&self) -> bool {
@@ -2039,10 +2335,14 @@ impl AppState {
 
     /// Asks the driver to cancel the query running on `target`'s connection.
     ///
-    /// Returns immediately: the driver calls run on their own thread, because
-    /// they may block (a network round trip to send a cancel or KILL, or a
+    /// Returns immediately: the driver call runs on its own thread, because
+    /// it may block (a network round trip to send a cancel or KILL, or a
     /// connection lock held by the running query) and callers run on the UI
     /// thread. The query's own task reports the cancellation when it ends.
+    ///
+    /// Only `cancel_active` is called. Calling the cancel handle as well
+    /// sends a second server cancel request, which the server may apply to
+    /// the next statement run on the same connection.
     pub fn cancel_query_for_target(&self, target: &dbflux_core::TaskTarget) {
         let Some(connection) = self.facade.connections.connection_for_task_target(target) else {
             return;
@@ -2051,10 +2351,6 @@ impl AppState {
         let spawned = std::thread::Builder::new()
             .name("dbflux-query-cancel".to_string())
             .spawn(move || {
-                if let Err(error) = connection.cancel_handle().cancel() {
-                    log::warn!("Failed to send cancel via handle: {}", error);
-                }
-
                 if let Err(error) = connection.cancel_active() {
                     log::warn!("Failed to send cancel to database: {}", error);
                 }
@@ -2818,6 +3114,11 @@ impl AppState {
 }
 
 impl AppState {
+    /// External secret providers as `(provider id, display name)`, sorted by display name.
+    pub fn secret_providers(&self) -> Vec<(String, String)> {
+        self.secret_provider_registry.list()
+    }
+
     pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
         &self.auth_provider_registry
     }
@@ -2998,7 +3299,8 @@ impl AppState {
         let cache = Arc::new(dbflux_core::values::ValueCache::new(
             std::time::Duration::from_secs(300),
         ));
-        let resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+        let mut resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+        self.secret_provider_registry.register_into(&mut resolver);
 
         #[cfg(feature = "aws")]
         let aws_profile_name = auth_profile
@@ -3318,6 +3620,32 @@ mod tests {
             Vec::new(),
         )
         .expect("test storage setup")
+    }
+
+    #[test]
+    fn an_in_memory_runtime_keeps_scripts_inside_its_temporary_directory() {
+        let mut state = test_state_with_profiles(HashMap::new(), Vec::new());
+
+        let runtime_root = state
+            .storage_runtime()
+            .dbflux_db_path()
+            .parent()
+            .map(|root| std::fs::canonicalize(root).expect("canonical runtime root"))
+            .expect("runtime root");
+
+        let directory = state.scripts_directory_mut().expect("scripts directory");
+        assert!(
+            directory.root_path().starts_with(&runtime_root),
+            "scripts root {} is outside the test runtime {}",
+            directory.root_path().display(),
+            runtime_root.display()
+        );
+
+        let created = directory
+            .create_file(None, "probe", "sql")
+            .expect("create script");
+        assert!(created.starts_with(&runtime_root));
+        assert!(created.is_file());
     }
 
     #[test]
@@ -3677,6 +4005,180 @@ mod tests {
             Some("example-sso-profile")
         );
         assert!(input.auth_provider.is_some());
+    }
+
+    // --- Password prompt for profiles that do not save their password ---
+
+    use dbflux_core::secrecy::ExposeSecret;
+
+    static PASSWORD_TEST_FORM: std::sync::LazyLock<dbflux_core::DriverFormDef> =
+        std::sync::LazyLock::new(|| dbflux_core::DriverFormDef { tabs: vec![] });
+
+    struct PasswordTestDriver {
+        metadata: dbflux_core::DriverMetadata,
+    }
+
+    impl DbDriver for PasswordTestDriver {
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::Postgres
+        }
+
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn form_definition(&self) -> &dbflux_core::DriverFormDef {
+            &PASSWORD_TEST_FORM
+        }
+
+        fn driver_key(&self) -> dbflux_core::DriverKey {
+            "builtin:password-test".into()
+        }
+
+        fn build_config(
+            &self,
+            _values: &dbflux_core::FormValues,
+        ) -> Result<DbConfig, dbflux_core::DbError> {
+            Ok(DbConfig::default_postgres())
+        }
+
+        fn extract_values(&self, _config: &DbConfig) -> dbflux_core::FormValues {
+            dbflux_core::FormValues::new()
+        }
+
+        fn connect_with_secrets(
+            &self,
+            _profile: &ConnectionProfile,
+            _password: Option<&SecretString>,
+            _ssh_secret: Option<&SecretString>,
+        ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("test driver".into()))
+        }
+
+        fn test_connection(
+            &self,
+            _profile: &ConnectionProfile,
+        ) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+    }
+
+    fn password_test_drivers(requires_password: bool) -> HashMap<String, Arc<dyn DbDriver>> {
+        let capabilities = if requires_password {
+            dbflux_core::DriverCapabilities::AUTHENTICATION
+        } else {
+            dbflux_core::DriverCapabilities::empty()
+        };
+        let metadata = dbflux_core::DriverMetadataBuilder::new(
+            "password-test",
+            "PasswordTest",
+            dbflux_core::DatabaseCategory::Relational,
+            dbflux_core::QueryLanguage::Sql,
+        )
+        .capabilities(capabilities)
+        .build();
+
+        HashMap::from([(
+            "postgres".to_string(),
+            Arc::new(PasswordTestDriver { metadata }) as Arc<dyn DbDriver>,
+        )])
+    }
+
+    fn unsaved_password_profile() -> ConnectionProfile {
+        let mut profile = ConnectionProfile::new("orders", DbConfig::default_postgres());
+        profile.save_password = false;
+        profile
+    }
+
+    #[test]
+    fn password_prompt_is_requested_for_an_unsaved_password() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let state = test_state_with_profiles(password_test_drivers(true), vec![profile]);
+
+        let prompt = state
+            .connection_password_prompt(profile_id)
+            .expect("an unsaved password must be prompted");
+
+        assert_eq!(prompt.profile_id, profile_id);
+        assert_eq!(prompt.profile_name, "orders");
+    }
+
+    #[test]
+    fn password_prompt_is_skipped_when_the_driver_needs_no_password() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let state = test_state_with_profiles(password_test_drivers(false), vec![profile]);
+
+        assert!(state.connection_password_prompt(profile_id).is_none());
+    }
+
+    #[test]
+    fn password_prompt_is_skipped_for_saved_or_sourced_passwords() {
+        let mut saved = unsaved_password_profile();
+        saved.save_password = true;
+        let mut sourced = unsaved_password_profile();
+        sourced.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::env("DB_PASSWORD"),
+        );
+        let (saved_id, sourced_id) = (saved.id, sourced.id);
+        let state = test_state_with_profiles(password_test_drivers(true), vec![saved, sourced]);
+
+        assert!(state.connection_password_prompt(saved_id).is_none());
+        assert!(state.connection_password_prompt(sourced_id).is_none());
+    }
+
+    #[test]
+    fn remembered_password_suppresses_the_prompt_and_is_used_to_connect() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let mut state = test_state_with_profiles(password_test_drivers(true), vec![profile]);
+
+        state.remember_connection_password(profile_id, SecretString::from("typed"));
+
+        assert!(state.connection_password_prompt(profile_id).is_none());
+        let remembered = state
+            .remembered_connection_password(profile_id)
+            .expect("remembered password");
+        assert_eq!(remembered.expose_secret(), "typed");
+
+        state.forget_connection_password(profile_id);
+        assert!(state.connection_password_prompt(profile_id).is_some());
+    }
+
+    #[test]
+    fn remembered_password_is_ignored_once_the_profile_saves_its_password() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let mut state =
+            test_state_with_profiles(password_test_drivers(true), vec![profile.clone()]);
+        state.remember_connection_password(profile_id, SecretString::from("typed"));
+
+        let mut saved = profile;
+        saved.save_password = true;
+        state.update_profile(saved);
+
+        assert!(state.remembered_connection_password(profile_id).is_none());
+    }
+
+    #[test]
+    fn prepared_connect_carries_the_provided_password() {
+        let profile = unsaved_password_profile();
+        let profile_id = profile.id;
+        let state = test_state_with_profiles(password_test_drivers(true), vec![profile]);
+
+        let params = state
+            .prepare_connect_profile_with_secrets(profile_id, None, Some(SecretString::from("")))
+            .unwrap_or_else(|error| panic!("prepare should succeed: {error:?}"));
+
+        assert_eq!(
+            params
+                .password_override
+                .as_ref()
+                .map(|password| password.expose_secret().to_string()),
+            Some(String::new())
+        );
     }
 
     #[test]

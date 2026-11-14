@@ -253,6 +253,23 @@ pub(super) fn dashboard_toolbar(
             .map(|profile| Badge::new(profile.name.clone(), BadgeTone::Neutral))
     });
 
+    // Session-only notice: instance-metric panels accumulate samples only
+    // while DBFlux runs, so a wide shared range (e.g. Last 7 days) must not
+    // imply history the panels do not have.
+    let has_accumulating_panels = dashboard.panel_slots.iter().any(|slot| match slot {
+        crate::dashboard::DashboardPanelSlot::Loaded { panel, .. } => {
+            panel.read(cx).source_is_accumulating()
+        }
+        _ => false,
+    });
+    let session_samples_note = has_accumulating_panels.then(|| {
+        div()
+            .flex_shrink_0()
+            .text_size(DocumentMetrics::TABLE_META_FONT)
+            .text_color(theme.muted_foreground)
+            .child(dbflux_i18n::t!("document.chart.session_samples_only"))
+    });
+
     let title = div()
         .flex()
         .min_w_0()
@@ -338,6 +355,7 @@ pub(super) fn dashboard_toolbar(
         .id("dashboard-toolbar")
         .child(title)
         .child(div().flex_1())
+        .children(session_samples_note)
         .child(presets)
         .child(div().flex_shrink_0().child(refresh_btn))
         .children(actions);

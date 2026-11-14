@@ -49,104 +49,104 @@ pub(crate) mod row_id {
             .join("-")
     }
 
-    pub fn all_columns() -> String {
+    pub(crate) fn all_columns() -> String {
         "columns-all".to_string()
     }
 
-    pub fn picked_column(alias: &str, column: &str) -> String {
+    pub(crate) fn picked_column(alias: &str, column: &str) -> String {
         format!("columns-picked-{alias}.{column}")
     }
 
-    pub fn column_choice(column: &str) -> String {
+    pub(crate) fn column_choice(column: &str) -> String {
         format!("columns-choice-{column}")
     }
 
-    pub fn column_entry() -> String {
+    pub(crate) fn column_entry() -> String {
         "columns-entry".to_string()
     }
 
-    pub fn filters_empty(target: FilterTarget) -> String {
+    pub(crate) fn filters_empty(target: FilterTarget) -> String {
         format!("{}-empty", tree(target))
     }
 
-    pub fn filter_group(target: FilterTarget, path: &[usize]) -> String {
+    pub(crate) fn filter_group(target: FilterTarget, path: &[usize]) -> String {
         format!("{}-group-{}", tree(target), path_key(path))
     }
 
-    pub fn filter_predicate(target: FilterTarget, node_id: u64) -> String {
+    pub(crate) fn filter_predicate(target: FilterTarget, node_id: u64) -> String {
         format!("{}-predicate-{node_id}", tree(target))
     }
 
-    pub fn fk_banner() -> String {
+    pub(crate) fn fk_banner() -> String {
         "joins-banner".to_string()
     }
 
-    pub fn join(index: usize) -> String {
+    pub(crate) fn join(index: usize) -> String {
         format!("join-{index}")
     }
 
-    pub fn join_group(index: usize, path: &[usize]) -> String {
+    pub(crate) fn join_group(index: usize, path: &[usize]) -> String {
         format!("join-{index}-group-{}", path_key(path))
     }
 
-    pub fn join_condition(index: usize, node_id: u64) -> String {
+    pub(crate) fn join_condition(index: usize, node_id: u64) -> String {
         format!("join-{index}-condition-{node_id}")
     }
 
-    pub fn join_expression(index: usize) -> String {
+    pub(crate) fn join_expression(index: usize) -> String {
         format!("join-{index}-on")
     }
 
-    pub fn join_add() -> String {
+    pub(crate) fn join_add() -> String {
         "joins-add".to_string()
     }
 
-    pub fn group_by(index: usize) -> String {
+    pub(crate) fn group_by(index: usize) -> String {
         format!("group-by-{index}")
     }
 
-    pub fn group_by_add() -> String {
+    pub(crate) fn group_by_add() -> String {
         "group-by-add".to_string()
     }
 
-    pub fn aggregate(index: usize) -> String {
+    pub(crate) fn aggregate(index: usize) -> String {
         format!("aggregate-{index}")
     }
 
-    pub fn aggregate_add() -> String {
+    pub(crate) fn aggregate_add() -> String {
         "aggregate-add".to_string()
     }
 
-    pub fn sort(index: usize) -> String {
+    pub(crate) fn sort(index: usize) -> String {
         format!("sort-{index}")
     }
 
-    pub fn sort_key() -> String {
+    pub(crate) fn sort_key() -> String {
         "sort-key".to_string()
     }
 
     /// The last line of the sort card: adding a sort key, limit and offset.
-    pub fn paging() -> String {
+    pub(crate) fn paging() -> String {
         "paging".to_string()
     }
 
-    pub fn assignment(index: usize) -> String {
+    pub(crate) fn assignment(index: usize) -> String {
         format!("set-{index}")
     }
 
-    pub fn assignment_add() -> String {
+    pub(crate) fn assignment_add() -> String {
         "set-add".to_string()
     }
 
-    pub fn execution_mode() -> String {
+    pub(crate) fn execution_mode() -> String {
         "execution-mode".to_string()
     }
 
-    pub fn chunk_size() -> String {
+    pub(crate) fn chunk_size() -> String {
         "execution-chunk".to_string()
     }
 
-    pub fn lock_timeout() -> String {
+    pub(crate) fn lock_timeout() -> String {
         "execution-lock".to_string()
     }
 }
@@ -268,6 +268,12 @@ impl QueryBuilderPanel {
 
     /// Shows the next (or previous) mode, wrapping, when the mode switch is
     /// shown. Returns whether the switch is there.
+    // next is a modular step over the MODES const array, so it is a valid
+    // index.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "next is a modular step over the non-empty MODES const array"
+    )]
     fn step_mode(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
         if !self.shows_mutation_selector(cx) {
             return false;
@@ -452,6 +458,12 @@ impl QueryBuilderPanel {
         add_group: &dyn Fn(Vec<usize>) -> RailTarget<Self>,
         rows: &mut Vec<RailRow<Self>>,
     ) {
+        // saturating_sub(1) keeps the range end at or below path.len(), so
+        // the slice is always in range (an empty path yields an empty slice).
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "saturating_sub(1) keeps the range end at or below path.len(), so the range is always valid"
+        )]
         let parent = path[..path.len().saturating_sub(1)].to_vec();
 
         match node {
@@ -605,6 +617,12 @@ impl QueryBuilderPanel {
                 this.add_join_subgroup(join, path.clone(), cx)
             })
         };
+        // saturating_sub(1) keeps the range end at or below path.len(), so
+        // the slice is always in range (an empty path yields an empty slice).
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "saturating_sub(1) keeps the range end at or below path.len(), so the range is always valid"
+        )]
         let parent = path[..path.len().saturating_sub(1)].to_vec();
 
         match node {
@@ -703,12 +721,22 @@ impl QueryBuilderPanel {
             if let Some(state) = self.agg_alias_inputs.get(index) {
                 row = row.field("alias", RailTarget::text(state.clone()));
             }
+            // AGG_FN_ORDER is a non-empty const slice, so index 0 exists.
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "AGG_FN_ORDER is a non-empty const slice, so index 0 exists"
+            )]
             rows.push(
                 row.on_remove(move |this: &mut Self, _, cx| this.remove_aggregate_row(index, cx))
                     .on_add(add_aggregate(AGG_FN_ORDER[0])),
             );
         }
 
+        // AGG_FN_ORDER is a non-empty const slice, so index 0 exists.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "AGG_FN_ORDER is a non-empty const slice, so index 0 exists"
+        )]
         let mut add_row =
             RailRow::new(row_id::aggregate_add()).on_add(add_aggregate(AGG_FN_ORDER[0]));
         for function in AGG_FN_ORDER {
@@ -854,6 +882,12 @@ impl QueryBuilderPanel {
             );
         }
         let current = state.exec_options.mode;
+        // index comes from position() over the EXECUTION_MODES const array
+        // (or 0) and is stepped modulo its length.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "index comes from position() over the non-empty EXECUTION_MODES const array (or 0) and is stepped modulo EXECUTION_MODES.len()"
+        )]
         rows.push(modes.on_toggle(move |this: &mut Self, _, cx| {
             let index = EXECUTION_MODES
                 .iter()

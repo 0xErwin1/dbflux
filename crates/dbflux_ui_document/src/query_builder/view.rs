@@ -26,7 +26,7 @@ use super::panel::QueryBuilderPanel;
 /// Renders a sticky header (source + Save/Reset), a scrollable middle pane
 /// containing the section cards, and a sticky footer with Run / Open in
 /// Editor. State syncs that need `Window` are flushed at the top.
-pub fn render_panel(
+pub(crate) fn render_panel(
     panel: &mut QueryBuilderPanel,
     window: &mut Window,
     cx: &mut Context<QueryBuilderPanel>,

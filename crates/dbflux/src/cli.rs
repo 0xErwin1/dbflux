@@ -14,7 +14,7 @@ const CONNECT_RETRIES: usize = 20;
 const RETRY_DELAY_MS: u64 = 50;
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
-pub fn run(args: &[String]) -> i32 {
+pub(crate) fn run(args: &[String]) -> i32 {
     let path = args.get(1).map(PathBuf::from);
 
     match try_send(path.as_ref()) {
@@ -91,6 +91,12 @@ fn spawn_gui() -> io::Result<()> {
         .stderr(Stdio::null());
 
     #[cfg(unix)]
+    #[expect(
+        unsafe_code,
+        reason = "`CommandExt::pre_exec` is the documented unsafe API for \
+                  post-fork, pre-exec setup; the closure only calls `setsid()` \
+                  and maps `errno`, both async-signal-safe"
+    )]
     {
         use std::os::unix::process::CommandExt;
         unsafe {

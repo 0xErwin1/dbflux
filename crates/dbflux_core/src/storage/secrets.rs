@@ -41,7 +41,7 @@ const SERVICE_NAME: &str = "dbflux";
 /// locked keyring with no prompter on the desktop, competing providers on the
 /// same bus name, a stuck D-Bus session) would otherwise block the calling
 /// thread — on the connection-manager save path, the GPUI main thread — forever.
-pub const SECRET_STORE_OP_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const SECRET_STORE_OP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long DBFlux stops writing to the keyring after one write timed out.
 ///
@@ -293,7 +293,7 @@ pub fn connection_secret_ref(profile_id: &uuid::Uuid) -> String {
     format!("dbflux:conn:{}", profile_id)
 }
 
-pub fn ssh_secret_ref(profile_id: &uuid::Uuid) -> String {
+pub(crate) fn ssh_secret_ref(profile_id: &uuid::Uuid) -> String {
     format!("dbflux:ssh:{}", profile_id)
 }
 

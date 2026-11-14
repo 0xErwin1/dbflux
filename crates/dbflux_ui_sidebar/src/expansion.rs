@@ -1,155 +1,7 @@
 use super::*;
-use dbflux_core::TaskKind;
-use dbflux_core::{DbSchemaInfo, SchemaDropTarget, SchemaObjectKind};
+use dbflux_core::{SchemaDropTarget, SchemaObjectKind};
 
 impl Sidebar {
-    fn remove_database_from_snapshot(snapshot: &mut SchemaSnapshot, database: &str) {
-        match &mut snapshot.structure {
-            dbflux_core::DataStructure::Relational(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.schemas.clear();
-                    schema.tables.clear();
-                    schema.views.clear();
-                }
-            }
-            dbflux_core::DataStructure::Document(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.collections.clear();
-                }
-            }
-            dbflux_core::DataStructure::Graph(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.node_labels.clear();
-                    schema.relationship_types.clear();
-                    schema.property_keys.clear();
-                }
-            }
-            dbflux_core::DataStructure::TimeSeries(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.measurements.clear();
-                    schema.retention_policies.clear();
-                }
-            }
-            dbflux_core::DataStructure::Vector(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.collections.clear();
-                }
-            }
-            dbflux_core::DataStructure::MultiModel(schema) => {
-                schema.databases.retain(|entry| entry.name != database);
-
-                if schema.current_database.as_deref() == Some(database) {
-                    schema.current_database = None;
-                    schema.tables.clear();
-                    schema.collections.clear();
-                    schema.graphs.clear();
-                }
-            }
-            dbflux_core::DataStructure::KeyValue(_)
-            | dbflux_core::DataStructure::WideColumn(_)
-            | dbflux_core::DataStructure::Search(_) => {}
-        }
-    }
-
-    fn remove_object_from_db_schema(db_schema: &mut DbSchemaInfo, target: &SchemaDropTarget) {
-        match target.kind {
-            SchemaObjectKind::Table | SchemaObjectKind::Collection => {
-                db_schema.tables.retain(|entry| entry.name != target.name);
-            }
-            SchemaObjectKind::View => {
-                db_schema.views.retain(|entry| entry.name != target.name);
-            }
-            SchemaObjectKind::Database => {}
-        }
-    }
-
-    fn remove_object_from_snapshot(snapshot: &mut SchemaSnapshot, target: &SchemaDropTarget) {
-        match &mut snapshot.structure {
-            dbflux_core::DataStructure::Relational(schema) => {
-                let matches_current_database = target
-                    .database
-                    .as_deref()
-                    .is_none_or(|database| schema.current_database.as_deref() == Some(database));
-
-                if !matches_current_database {
-                    return;
-                }
-
-                if let Some(schema_name) = target.schema.as_deref() {
-                    if let Some(db_schema) = schema
-                        .schemas
-                        .iter_mut()
-                        .find(|entry| entry.name == schema_name)
-                    {
-                        Self::remove_object_from_db_schema(db_schema, target);
-                    }
-                    return;
-                }
-
-                match target.kind {
-                    SchemaObjectKind::Table => {
-                        schema.tables.retain(|entry| entry.name != target.name);
-                    }
-                    SchemaObjectKind::View => {
-                        schema.views.retain(|entry| entry.name != target.name);
-                    }
-                    SchemaObjectKind::Collection | SchemaObjectKind::Database => {}
-                }
-            }
-            dbflux_core::DataStructure::Document(schema) => {
-                let matches_current_database = target
-                    .database
-                    .as_deref()
-                    .is_none_or(|database| schema.current_database.as_deref() == Some(database));
-
-                if matches_current_database && target.kind == SchemaObjectKind::Collection {
-                    schema.collections.retain(|entry| entry.name != target.name);
-                }
-            }
-            dbflux_core::DataStructure::MultiModel(schema) => {
-                let matches_current_database = target
-                    .database
-                    .as_deref()
-                    .is_none_or(|database| schema.current_database.as_deref() == Some(database));
-
-                if !matches_current_database {
-                    return;
-                }
-
-                match target.kind {
-                    SchemaObjectKind::Table => {
-                        schema.tables.retain(|entry| entry.name != target.name);
-                    }
-                    SchemaObjectKind::Collection => {
-                        schema.collections.retain(|entry| entry.name != target.name);
-                    }
-                    SchemaObjectKind::View | SchemaObjectKind::Database => {}
-                }
-            }
-            dbflux_core::DataStructure::KeyValue(_)
-            | dbflux_core::DataStructure::Graph(_)
-            | dbflux_core::DataStructure::WideColumn(_)
-            | dbflux_core::DataStructure::TimeSeries(_)
-            | dbflux_core::DataStructure::Search(_)
-            | dbflux_core::DataStructure::Vector(_) => {}
-        }
-    }
-
     pub fn expand_collapse(&mut self, cx: &mut Context<Self>) {
         let tree = self.active_tree_state().clone();
         let entry = tree.read(cx).selected_entry().cloned();
@@ -242,7 +94,9 @@ impl Sidebar {
         // never propagated, leaving the folder visually stuck open.
         if matches!(
             parsed,
-            Some(SchemaNodeId::ScriptsFolder { .. }) | Some(SchemaNodeId::ScriptFile { .. })
+            Some(SchemaNodeId::ScriptsFolder { .. })
+                | Some(SchemaNodeId::ScriptFile { .. })
+                | Some(SchemaNodeId::ScriptsRoot { .. })
         ) {
             self.refresh_scripts_tree(cx);
         } else {
@@ -258,6 +112,7 @@ impl Sidebar {
         item_id: &str,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.inline_list_fetches.clear();
         let parsed = parse_node_id(item_id);
 
         if let Some(SchemaNodeId::Database { profile_id, name }) = &parsed
@@ -444,13 +299,36 @@ impl Sidebar {
             self.spawn_fetch_instance_catalog(*profile_id, cx);
         }
 
-        if let Some(SchemaNodeId::BucketsFolder { profile_id }) = &parsed {
-            self.spawn_fetch_buckets(*profile_id, cx);
+        if let Some(SchemaNodeId::RootSection { profile_id, .. }) = &parsed {
+            self.spawn_fetch_root_sections(*profile_id, cx);
+        }
+
+        if let Some(SchemaNodeId::SecretStore {
+            profile_id,
+            store_id,
+        }) = &parsed
+        {
+            self.spawn_fetch_secret_paths(
+                crate::secret_store::SecretPathKey::new(*profile_id, store_id, None),
+                cx,
+            );
+        }
+
+        if let Some(SchemaNodeId::SecretPath {
+            profile_id,
+            store_id,
+            path,
+        }) = &parsed
+        {
+            self.spawn_fetch_secret_paths(
+                crate::secret_store::SecretPathKey::new(*profile_id, store_id, Some(path)),
+                cx,
+            );
         }
 
         if let Some(SchemaNodeId::Profile { profile_id }) = &parsed {
-            if self.profile_category(*profile_id, cx) == Some(DatabaseCategory::ObjectStorage) {
-                self.spawn_fetch_buckets(*profile_id, cx);
+            if self.profile_has_root_sections(*profile_id, cx) {
+                self.spawn_fetch_root_sections(*profile_id, cx);
             } else {
                 let key = dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseList {
                     profile_id: *profile_id,
@@ -813,89 +691,6 @@ impl Sidebar {
         self.pending_instance_catalog_fetches.remove(&profile_id);
     }
 
-    /// List the buckets of an object-storage connection for the sidebar tree.
-    ///
-    /// Buckets are the only level the sidebar shows — prefixes and objects
-    /// stay inside the object browser document. Deduplicated per profile so an
-    /// expand/collapse burst issues at most one `list_buckets` call.
-    pub(super) fn spawn_fetch_buckets(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        if self.bucket_cache.contains_key(&profile_id)
-            || self.pending_bucket_fetches.contains_key(&profile_id)
-        {
-            return;
-        }
-
-        let Some((connection, profile_name)) = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(&profile_id)
-            .map(|connected| (connected.connection.clone(), connected.profile.name.clone()))
-        else {
-            return;
-        };
-
-        let app_state = self.app_state.clone();
-        let load_task_id = app_state.update(cx, |state, _| {
-            let (task_id, _) = state.start_task_for_profile(
-                TaskKind::LoadSchema,
-                crate::labels::listing_buckets_task_label(&profile_name),
-                Some(profile_id),
-            );
-            task_id
-        });
-
-        let sidebar = cx.entity().clone();
-
-        let background_task = cx.background_executor().spawn(async move {
-            match connection.object_store_api() {
-                Some(api) => api.list_buckets().map_err(|err| err.to_string()),
-                None => Err("connection does not expose an object store".to_string()),
-            }
-        });
-
-        let task = cx.spawn(async move |_this, cx| {
-            let result = background_task.await;
-
-            cx.update(|cx| {
-                match &result {
-                    Ok(_) => {
-                        app_state.update(cx, |state, _| {
-                            state.complete_task(load_task_id);
-                        });
-                    }
-                    Err(message) => {
-                        let details = crate::labels::list_buckets_failed_label(message);
-                        app_state.update(cx, |state, _| {
-                            state.fail_task_with_details(load_task_id, message.clone(), details);
-                        });
-                    }
-                }
-
-                sidebar.update(cx, |sidebar, cx| {
-                    sidebar.pending_bucket_fetches.remove(&profile_id);
-                    match result {
-                        Ok(buckets) => {
-                            sidebar.bucket_cache.insert(profile_id, buckets);
-                        }
-                        Err(message) => {
-                            log::warn!("Failed to list buckets for {}: {}", profile_id, message);
-                        }
-                    }
-                    sidebar.rebuild_tree_with_overrides(cx);
-                });
-            });
-        });
-
-        self.pending_bucket_fetches.insert(profile_id, task);
-    }
-
-    /// Drop the cached bucket listing so the next expansion re-lists.
-    pub(super) fn clear_bucket_cache(&mut self, profile_id: Uuid) {
-        self.bucket_cache.remove(&profile_id);
-        self.pending_bucket_fetches.remove(&profile_id);
-    }
-
     /// Whether `profile_id`'s tree node is currently expanded: the user's
     /// explicit collapse/expand override when there is one, otherwise the
     /// builder's default (the active connection expands, the rest stay
@@ -930,6 +725,80 @@ impl Sidebar {
             .is_some_and(|item| item.presentation == CollectionPresentation::EventStream)
     }
 
+    /// Starts the fetch behind each visible routines or data-types loading row.
+    ///
+    /// The Simple navigator view lists these objects directly in the schema, so
+    /// no folder expansion triggers their fetch. Each row is fetched once until
+    /// the next node expansion, so a failed fetch does not retry on every rebuild.
+    fn fetch_visible_inline_lists(&mut self, items: &[TreeItem], cx: &mut Context<Self>) {
+        fn collect<'a>(items: &'a [TreeItem], found: &mut Vec<&'a str>) {
+            for item in items {
+                if item.is_expanded() {
+                    collect(&item.children, found);
+                } else if item.children.is_empty() {
+                    found.push(&item.id);
+                }
+            }
+        }
+
+        let mut visible_leaves = Vec::new();
+        collect(items, &mut visible_leaves);
+        for leaf_id in visible_leaves {
+            let parsed = parse_node_id(leaf_id);
+            if !matches!(
+                parsed,
+                Some(
+                    SchemaNodeId::RoutinesLoadingFolder { .. }
+                        | SchemaNodeId::TypesLoadingFolder { .. }
+                )
+            ) || !self.inline_list_fetches.insert(leaf_id.to_string())
+            {
+                continue;
+            }
+            match parsed {
+                Some(SchemaNodeId::RoutinesLoadingFolder {
+                    profile_id,
+                    database,
+                    schema,
+                }) => {
+                    let item_id = SchemaNodeId::RoutinesFolder {
+                        profile_id,
+                        database: database.clone(),
+                        schema: schema.clone(),
+                    }
+                    .to_string();
+                    self.spawn_fetch_schema_routines(
+                        profile_id,
+                        &database,
+                        Some(&schema),
+                        PendingAction::ExpandSchemaRoutinesFolder { item_id },
+                        cx,
+                    );
+                }
+                Some(SchemaNodeId::TypesLoadingFolder {
+                    profile_id,
+                    database,
+                    schema,
+                }) => {
+                    let item_id = SchemaNodeId::TypesFolder {
+                        profile_id,
+                        database: database.clone(),
+                        schema: schema.clone(),
+                    }
+                    .to_string();
+                    self.spawn_fetch_schema_types(
+                        profile_id,
+                        &database,
+                        Some(&schema),
+                        PendingAction::ExpandTypesFolder { item_id },
+                        cx,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
         let selected_id = self
             .tree_state
@@ -939,6 +808,7 @@ impl Sidebar {
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
         let items = self.build_tree_items_with_overrides(cx);
+        self.fetch_visible_inline_lists(&items, cx);
         self.prune_connection_selection(&items);
         self.visible_entry_count = Self::count_visible_entries(&items);
         self.gutter_metadata = compute_gutter_map(&items);
@@ -985,37 +855,52 @@ impl Sidebar {
             self.clear_instance_catalog_cache(profile_id);
         }
 
-        let stale_bucket_ids: Vec<Uuid> = self
-            .bucket_cache
-            .keys()
+        let stale_root_section_ids: Vec<Uuid> = self
+            .root_section_cache
+            .profile_ids()
+            .chain(
+                self.pending_root_section_fetches
+                    .keys()
+                    .map(|key| &key.profile_id),
+            )
             .filter(|id| !connected_profile_ids.contains(id))
             .copied()
             .collect();
-        for profile_id in stale_bucket_ids {
-            self.clear_bucket_cache(profile_id);
+        for profile_id in stale_root_section_ids {
+            self.clear_root_section_cache(profile_id, cx);
         }
 
-        // An object-storage connection that finishes while its profile node is
-        // already expanded (the active profile expands by default) never
-        // re-fires the expand handler, so the listing would sit on the
+        let stale_secret_path_ids: std::collections::HashSet<Uuid> = self
+            .secret_path_cache
+            .keys()
+            .map(|key| key.profile_id)
+            .filter(|id| !connected_profile_ids.contains(id))
+            .collect();
+        for profile_id in stale_secret_path_ids {
+            self.clear_secret_path_cache(profile_id);
+        }
+
+        // A connection with root sections that finishes while its profile
+        // node is already expanded (the active profile expands by default)
+        // never re-fires the expand handler, so its sections would sit on the
         // "Loading..." placeholder until a manual collapse/expand. Kick the
-        // bucket fetch here instead; `spawn_fetch_buckets` deduplicates
+        // fetch here instead; `spawn_fetch_root_sections` deduplicates
         // against the cache and in-flight fetches.
-        let expanded_object_store_ids: Vec<Uuid> = connected_profile_ids
+        let expanded_root_section_ids: Vec<Uuid> = connected_profile_ids
             .iter()
             .filter(|id| {
-                self.profile_category(**id, cx) == Some(DatabaseCategory::ObjectStorage)
-                    && self.profile_node_is_expanded(**id, cx)
+                self.profile_has_root_sections(**id, cx) && self.profile_node_is_expanded(**id, cx)
             })
             .copied()
             .collect();
-        for profile_id in expanded_object_store_ids {
-            self.spawn_fetch_buckets(profile_id, cx);
+        for profile_id in expanded_root_section_ids {
+            self.spawn_fetch_root_sections(profile_id, cx);
         }
 
         self.cleanup_stale_overrides(cx);
 
         let items = self.build_tree_items_with_overrides(cx);
+        self.fetch_visible_inline_lists(&items, cx);
         self.prune_connection_selection(&items);
         self.visible_entry_count = Self::count_visible_entries(&items);
         self.gutter_metadata = compute_gutter_map(&items);
@@ -1079,7 +964,7 @@ impl Sidebar {
                     .retain(|key, _| key.database != db_name);
 
                 if let Some(schema) = conn.schema.as_mut() {
-                    Self::remove_database_from_snapshot(schema, db_name);
+                    schema.remove_database(db_name);
                 }
             }
 
@@ -1135,17 +1020,17 @@ impl Sidebar {
                 }
 
                 if let Some(db_schema) = conn.database_schemas.get_mut(cache_db) {
-                    Self::remove_object_from_db_schema(db_schema, target);
+                    db_schema.remove_object(target);
                 }
 
                 if let Some(db_conn) = conn.database_connections.get_mut(cache_db)
                     && let Some(schema) = db_conn.schema.as_mut()
                 {
-                    Self::remove_object_from_snapshot(schema, target);
+                    schema.remove_object(target);
                 }
 
                 if let Some(schema) = conn.schema.as_mut() {
-                    Self::remove_object_from_snapshot(schema, target);
+                    schema.remove_object(target);
                 }
             }
         });

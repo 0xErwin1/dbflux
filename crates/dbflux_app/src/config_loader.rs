@@ -22,13 +22,39 @@ use dbflux_storage::repositories::connection_profile_value_refs::ConnectionProfi
 use dbflux_storage::repositories::connection_profiles::ConnectionProfileDto;
 use dbflux_storage::repositories::driver_overrides::DriverOverridesDto;
 use dbflux_storage::repositories::driver_setting_values::DriverSettingValueDto;
-use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
+use dbflux_storage::repositories::general_settings::{
+    GeneralSettingsDto, GeneralSettingsRepository,
+};
 use dbflux_storage::repositories::hook_definitions::{
     HookDefinitionDto, HookDefinitionReplacement,
 };
 
 pub fn save_general_settings(
     runtime: &StorageRuntime,
+    settings: &GeneralSettings,
+) -> Result<(), dbflux_storage::error::StorageError> {
+    save_general_settings_to(&runtime.general_settings(), settings)
+}
+
+/// Saves `settings` through a connection of its own to the database at
+/// `db_path`. The repository connection of a [`StorageRuntime`] cannot leave
+/// the thread that owns it, so a write made on a background thread opens its
+/// own.
+pub fn save_general_settings_at(
+    db_path: &std::path::Path,
+    settings: &GeneralSettings,
+) -> Result<(), dbflux_storage::error::StorageError> {
+    let connection = dbflux_storage::sqlite::open_database(db_path)?;
+    // The repository takes the shared connection type; this one never leaves
+    // the thread that opened it.
+    #[allow(clippy::arc_with_non_send_sync)]
+    let repo = GeneralSettingsRepository::new(std::sync::Arc::new(connection));
+
+    save_general_settings_to(&repo, settings)
+}
+
+fn save_general_settings_to(
+    repo: &GeneralSettingsRepository,
     settings: &GeneralSettings,
 ) -> Result<(), dbflux_storage::error::StorageError> {
     let editor_row_limit = i64::try_from(settings.editor_row_limit)
@@ -40,8 +66,6 @@ pub fn save_general_settings(
             )
         })?;
 
-    // Save to normalized general_settings table
-    let repo = runtime.general_settings();
     let dto = GeneralSettingsDto {
         id: 1,
         theme: general_settings_theme_to_storage(settings.theme).to_string(),
@@ -101,8 +125,21 @@ pub fn save_general_settings(
         language: settings.language.clone(),
         key_value_size_limit_mib: settings.key_value_size_limit_mib as i64,
         vim_mode: if settings.vim_mode { 1 } else { 0 },
+        table_alias_completion: i32::from(settings.table_alias_completion),
+        table_alias_use_as: i32::from(settings.table_alias_use_as),
         editor_row_limit,
         vim_leader: settings.vim_leader.clone(),
+        ui_font_family: settings.ui_font_family.clone(),
+        ui_font_size: f64::from(settings.ui_font_size),
+        editor_font_family: settings.editor_font_family.clone(),
+        editor_font_size: f64::from(settings.editor_font_size),
+        grid_font_family: settings.grid_font_family.clone(),
+        grid_font_size: f64::from(settings.grid_font_size),
+        toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
+        grid_fk_labels: if settings.grid_fk_labels { 1 } else { 0 },
+        scrollbar_visibility: scrollbar_visibility_to_storage(settings.scrollbar_visibility)
+            .to_string(),
+        workspace_inspector_width_px: settings.workspace_inspector_width_px.map(f64::from),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -356,6 +393,9 @@ pub fn save_profiles(
             environment: profile
                 .environment
                 .map(|environment| environment.as_str().to_string()),
+            navigator_view: profile.navigator_view.as_str().to_string(),
+            show_all_databases: profile.show_all_databases,
+            read_only: profile.read_only_flag,
         };
 
         repo.upsert(&dto)?;
@@ -486,6 +526,8 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::S3 => "S3",
         DbKind::ClickHouse => "ClickHouse",
         DbKind::Turso => "Turso",
+        DbKind::DuckDB => "DuckDB",
+        DbKind::AwsSecrets => "AwsSecrets",
     }
     .to_string()
 }
@@ -506,6 +548,8 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "S3" => Some(DbKind::S3),
         "ClickHouse" => Some(DbKind::ClickHouse),
         "Turso" => Some(DbKind::Turso),
+        "DuckDB" => Some(DbKind::DuckDB),
+        "AwsSecrets" => Some(DbKind::AwsSecrets),
         _ => None,
     }
 }
@@ -525,6 +569,8 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::S3 => dbflux_core::DbConfig::default_s3(),
         DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
         DbKind::Turso => dbflux_core::DbConfig::default_turso(),
+        DbKind::DuckDB => dbflux_core::DbConfig::default_duckdb(),
+        DbKind::AwsSecrets => dbflux_core::DbConfig::default_aws_secrets(),
     }
 }
 
@@ -775,6 +821,21 @@ fn value_ref_to_dto(
             key.to_string(),
             env_key.clone(),
         ),
+        ValueRef::Dotenv {
+            path,
+            key: dotenv_key,
+        } => ConnectionProfileValueRefDto::new_dotenv(
+            profile_id.to_string(),
+            key.to_string(),
+            path.clone(),
+            dotenv_key.clone(),
+        ),
+        ValueRef::File { path, json_key } => ConnectionProfileValueRefDto::new_file(
+            profile_id.to_string(),
+            key.to_string(),
+            path.clone(),
+            json_key.clone(),
+        ),
         ValueRef::Secret {
             provider,
             locator,
@@ -936,6 +997,7 @@ pub fn save_ssh_tunnels(
             passphrase_secret_ref: None,
             password_secret_ref: None,
             save_secret: tunnel.save_secret,
+            ssh_config_host: tunnel.config.ssh_config_host.clone(),
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1080,18 +1142,55 @@ fn load_general_settings(
         confirm_dangerous_queries: dto.confirm_dangerous_queries != 0,
         dangerous_requires_where: dto.dangerous_requires_where != 0,
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
-        workspace_inspector_width_px: None,
+        workspace_inspector_width_px: inspector_width_from_storage(
+            dto.workspace_inspector_width_px,
+        ),
         schema_snapshot_retention: dto.schema_snapshot_retention as usize,
         object_preview_size_limit_mib: dto.object_preview_size_limit_mib as u64,
         language: language_setting_from_storage(&dto.language),
         key_value_size_limit_mib: dto.key_value_size_limit_mib as u64,
         vim_mode: dto.vim_mode != 0,
+        table_alias_completion: dto.table_alias_completion != 0,
+        table_alias_use_as: dto.table_alias_use_as != 0,
         editor_row_limit: usize::try_from(dto.editor_row_limit)
             .ok()
             .filter(|value| *value > 0)
             .unwrap_or(10_000),
         vim_leader: dto.vim_leader,
+        ui_font_family: GeneralSettings::normalize_font_family(dto.ui_font_family),
+        ui_font_size: font_size_from_storage(
+            dto.ui_font_size,
+            GeneralSettings::DEFAULT_UI_FONT_SIZE,
+        ),
+        editor_font_family: GeneralSettings::normalize_font_family(dto.editor_font_family),
+        editor_font_size: font_size_from_storage(
+            dto.editor_font_size,
+            GeneralSettings::DEFAULT_EDITOR_FONT_SIZE,
+        ),
+        grid_font_family: GeneralSettings::normalize_font_family(dto.grid_font_family),
+        grid_font_size: font_size_from_storage(
+            dto.grid_font_size,
+            GeneralSettings::DEFAULT_GRID_FONT_SIZE,
+        ),
+        toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
+            .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
+        grid_fk_labels: dto.grid_fk_labels != 0,
+        scrollbar_visibility: scrollbar_visibility_from_storage(&dto.scrollbar_visibility),
     }
+}
+
+/// Converts a stored inspector width to the `f32` the settings carry. A
+/// width that is not a positive finite `f32` falls back to the default.
+fn inspector_width_from_storage(width: Option<f64>) -> Option<f32> {
+    width
+        .map(|width| width as f32)
+        .filter(|width| width.is_finite() && *width > 0.0)
+}
+
+/// Converts a stored font size to the clamped `f32` the settings carry.
+/// Values beyond `f32` range become infinite and fall back to `default`.
+fn font_size_from_storage(size: f64, default: f32) -> f32 {
+    GeneralSettings::clamp_font_size(size as f32, default)
 }
 
 fn general_settings_theme_to_storage(theme: dbflux_core::ThemeSetting) -> &'static str {
@@ -1130,6 +1229,26 @@ fn app_style_from_storage(style: &str) -> dbflux_core::AppStyle {
     match style {
         "compact" => dbflux_core::AppStyle::Compact,
         _ => dbflux_core::AppStyle::Default,
+    }
+}
+
+fn scrollbar_visibility_to_storage(visibility: dbflux_core::ScrollbarVisibility) -> &'static str {
+    match visibility {
+        dbflux_core::ScrollbarVisibility::WhileScrolling => "while_scrolling",
+        dbflux_core::ScrollbarVisibility::OnHover => "on_hover",
+        dbflux_core::ScrollbarVisibility::Always => "always",
+    }
+}
+
+/// Maps a storage `scrollbar_visibility` string to `ScrollbarVisibility`.
+///
+/// Unknown values fall back to `WhileScrolling`, the behavior before the
+/// setting existed.
+fn scrollbar_visibility_from_storage(visibility: &str) -> dbflux_core::ScrollbarVisibility {
+    match visibility {
+        "on_hover" => dbflux_core::ScrollbarVisibility::OnHover,
+        "always" => dbflux_core::ScrollbarVisibility::Always,
+        _ => dbflux_core::ScrollbarVisibility::WhileScrolling,
     }
 }
 
@@ -1299,6 +1418,7 @@ fn rpc_service_kind_to_storage(kind: RpcServiceKind) -> &'static str {
     match kind {
         RpcServiceKind::Driver => "driver",
         RpcServiceKind::AuthProvider => "auth_provider",
+        RpcServiceKind::SecretProvider => "secret_provider",
     }
 }
 
@@ -1520,6 +1640,15 @@ fn load_hook_bindings_from_dtos(
     result
 }
 
+/// `load_profiles` has no error channel, so a stored value reference that cannot be
+/// rebuilt is skipped while the rest of the profile still loads. The warning keeps that
+/// skip visible; it names the field but never a stored value.
+fn warn_dropped_value_ref(profile_id: &str, ref_key: &str, kind: &str, missing: &str) {
+    log::warn!(
+        "Skipping {kind} value reference for field '{ref_key}' of connection profile {profile_id}: the stored row has no {missing}"
+    );
+}
+
 fn load_profiles(
     repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
 ) -> Vec<ConnectionProfile> {
@@ -1569,17 +1698,41 @@ fn load_profiles(
                                 key: vr.env_key.unwrap_or(vr.ref_value),
                             }
                         }
+                        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Dotenv => {
+                            let Some(key) = vr.env_key else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "dotenv", "key");
+                                return None;
+                            };
+                            ValueRef::Dotenv {
+                                path: vr.ref_value,
+                                key,
+                            }
+                        }
+                        dbflux_storage::repositories::connection_profile_value_refs::RefKind::File => {
+                            ValueRef::File {
+                                path: vr.ref_value,
+                                json_key: vr.ref_json_key,
+                            }
+                        }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
+                            let Some(provider) = vr.ref_provider else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "secret", "provider");
+                                return None;
+                            };
                             ValueRef::Secret {
                                 locator: vr.secret_locator.unwrap_or(vr.ref_value),
-                                provider: vr.ref_provider?,
+                                provider,
                                 json_key: vr.ref_json_key,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Param => {
+                            let Some(provider) = vr.ref_provider else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "parameter", "provider");
+                                return None;
+                            };
                             ValueRef::Parameter {
                                 name: vr.param_name.unwrap_or(vr.ref_value),
-                                provider: vr.ref_provider?,
+                                provider,
                                 json_key: vr.ref_json_key,
                             }
                         }
@@ -1707,11 +1860,13 @@ fn load_profiles(
                 value_refs: value_refs_map,
                 access_kind,
                 mcp_governance,
-                read_only_flag: false,
+                read_only_flag: dto.read_only,
                 environment: dto
                     .environment
                     .as_deref()
                     .and_then(dbflux_core::ConnectionEnvironment::from_id),
+                navigator_view: dbflux_core::NavigatorView::from_storage_str(&dto.navigator_view),
+                show_all_databases: dto.show_all_databases,
             })
         })
         .collect()
@@ -1828,6 +1983,7 @@ fn load_ssh_tunnels(
                     port: dto.port as u16,
                     user: dto.user,
                     auth_method,
+                    ssh_config_host: dto.ssh_config_host,
                 };
                 Some(SshTunnelProfile {
                     id,
@@ -2336,6 +2492,169 @@ mod tests {
     }
 
     #[test]
+    fn profile_sidebar_options_round_trip_and_default_to_advanced_with_all_databases() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut simple = ConnectionProfile::new("simple", DbConfig::default_postgres());
+        simple.navigator_view = dbflux_core::NavigatorView::Simple;
+        simple.show_all_databases = false;
+        let mut compact = ConnectionProfile::new("compact", DbConfig::default_postgres());
+        compact.navigator_view = dbflux_core::NavigatorView::Compact;
+        let unset = ConnectionProfile::new("unset", DbConfig::default_postgres());
+
+        save_profiles(&runtime, &[simple.clone(), compact.clone(), unset.clone()])
+            .expect("save profiles with navigator view");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let find = |id| {
+            loaded
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .expect("reloaded profile")
+        };
+
+        assert_eq!(
+            find(simple.id).navigator_view,
+            dbflux_core::NavigatorView::Simple
+        );
+        assert_eq!(
+            find(compact.id).navigator_view,
+            dbflux_core::NavigatorView::Compact
+        );
+        assert_eq!(
+            find(unset.id).navigator_view,
+            dbflux_core::NavigatorView::Advanced
+        );
+        assert!(!find(simple.id).show_all_databases);
+        assert!(find(unset.id).show_all_databases);
+    }
+
+    #[test]
+    fn profile_read_only_flag_round_trips_and_defaults_to_writable() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut locked = ConnectionProfile::new("locked", DbConfig::default_postgres());
+        locked.read_only_flag = true;
+        let writable = ConnectionProfile::new("writable", DbConfig::default_postgres());
+
+        save_profiles(&runtime, &[locked.clone(), writable.clone()])
+            .expect("save profiles with read-only flag");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let find = |id| {
+            loaded
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .expect("reloaded profile")
+        };
+
+        assert!(find(locked.id).read_only_flag);
+        assert!(!find(writable.id).read_only_flag);
+    }
+
+    #[test]
+    fn env_and_dotenv_value_refs_round_trip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::dotenv("~/.config/dbflux/prod.env", "DB_PASSWORD"),
+        );
+        profile
+            .value_refs
+            .insert("user".to_string(), dbflux_core::ValueRef::env("DB_USER"));
+
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save sourced profile");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        assert!(matches!(
+            reloaded.value_refs.get("password"),
+            Some(dbflux_core::ValueRef::Dotenv { path, key })
+                if path == "~/.config/dbflux/prod.env" && key == "DB_PASSWORD"
+        ));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"
+        ));
+    }
+
+    #[test]
+    fn file_value_refs_round_trip_with_and_without_a_json_key() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("file-sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::file("/run/user/1000/credentials/db-password", None),
+        );
+        profile.value_refs.insert(
+            "user".to_string(),
+            dbflux_core::ValueRef::file("~/.config/dbflux/db.json", Some("user".to_string())),
+        );
+
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save file profile");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        assert!(matches!(
+            reloaded.value_refs.get("password"),
+            Some(dbflux_core::ValueRef::File { path, json_key: None })
+                if path == "/run/user/1000/credentials/db-password"
+        ));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::File { path, json_key: Some(json_key) })
+                if path == "~/.config/dbflux/db.json" && json_key == "user"
+        ));
+    }
+
+    #[test]
+    fn dotenv_value_ref_without_a_key_is_skipped_and_the_profile_still_loads() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::dotenv("~/.config/dbflux/prod.env", "DB_PASSWORD"),
+        );
+        profile
+            .value_refs
+            .insert("user".to_string(), dbflux_core::ValueRef::env("DB_USER"));
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save sourced profile");
+
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+        let updated = conn
+            .execute(
+                "UPDATE cfg_connection_profile_value_refs SET env_key = NULL WHERE profile_id = ?1 AND ref_key = 'password'",
+                [profile.id.to_string()],
+            )
+            .expect("corrupt the dotenv row");
+        assert_eq!(updated, 1);
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("profile still loads");
+
+        assert!(!reloaded.value_refs.contains_key("password"));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"
+        ));
+    }
+
+    #[test]
     fn profile_hook_with_empty_command_round_trips_as_command_not_dropped() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
         let mut profile = ConnectionProfile::new("empty-command", DbConfig::default_postgres());
@@ -2470,6 +2789,18 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
 
@@ -2558,6 +2889,18 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
         runtime
@@ -2682,6 +3025,86 @@ mod tests {
     }
 
     #[test]
+    fn inspector_width_round_trips_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert_eq!(loaded.general_settings.workspace_inspector_width_px, None);
+
+        let settings = GeneralSettings {
+            workspace_inspector_width_px: Some(420.5),
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save inspector width");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.workspace_inspector_width_px,
+            Some(420.5)
+        );
+
+        let settings = GeneralSettings {
+            workspace_inspector_width_px: None,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("clear inspector width");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.workspace_inspector_width_px, None);
+    }
+
+    #[test]
+    fn inspector_width_from_storage_rejects_unusable_widths() {
+        assert_eq!(super::inspector_width_from_storage(None), None);
+        assert_eq!(super::inspector_width_from_storage(Some(0.0)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(-5.0)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(f64::NAN)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(f64::MAX)), None);
+        assert_eq!(
+            super::inspector_width_from_storage(Some(420.5)),
+            Some(420.5)
+        );
+    }
+
+    #[test]
+    fn scrollbar_visibility_round_trips_through_save_and_load() {
+        use dbflux_core::ScrollbarVisibility;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert_eq!(
+            loaded.general_settings.scrollbar_visibility,
+            ScrollbarVisibility::WhileScrolling
+        );
+
+        for (visibility, stored) in [
+            (ScrollbarVisibility::OnHover, "on_hover"),
+            (ScrollbarVisibility::Always, "always"),
+            (ScrollbarVisibility::WhileScrolling, "while_scrolling"),
+        ] {
+            let settings = GeneralSettings {
+                scrollbar_visibility: visibility,
+                ..Default::default()
+            };
+            super::save_general_settings(&runtime, &settings).expect("save visibility");
+
+            let dto = runtime
+                .general_settings()
+                .get()
+                .expect("load saved dto")
+                .expect("general settings row");
+            assert_eq!(dto.scrollbar_visibility, stored);
+
+            let loaded = load_config(&runtime).expect("load configuration");
+            assert_eq!(loaded.general_settings.scrollbar_visibility, visibility);
+        }
+
+        assert_eq!(
+            super::scrollbar_visibility_from_storage("unknown"),
+            ScrollbarVisibility::WhileScrolling
+        );
+    }
+
+    #[test]
     fn app_style_round_trips_through_save_and_load() {
         use dbflux_core::AppStyle;
 
@@ -2754,6 +3177,119 @@ mod tests {
     }
 
     #[test]
+    fn fonts_default_to_bundled_and_round_trip_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.ui_font_family, None);
+        assert_eq!(loaded.general_settings.ui_font_size, 13.0);
+        assert_eq!(loaded.general_settings.editor_font_family, None);
+        assert_eq!(loaded.general_settings.editor_font_size, 13.0);
+        assert_eq!(loaded.general_settings.grid_font_family, None);
+        assert_eq!(loaded.general_settings.grid_font_size, 12.5);
+
+        let settings = GeneralSettings {
+            ui_font_family: Some("Inter".to_string()),
+            ui_font_size: 15.0,
+            editor_font_family: Some("JetBrains Mono".to_string()),
+            editor_font_size: 18.0,
+            grid_font_family: Some("Fira Code".to_string()),
+            grid_font_size: 14.5,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save font settings");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.ui_font_family.as_deref(),
+            Some("Inter")
+        );
+        assert_eq!(loaded.general_settings.ui_font_size, 15.0);
+        assert_eq!(
+            loaded.general_settings.editor_font_family.as_deref(),
+            Some("JetBrains Mono")
+        );
+        assert_eq!(loaded.general_settings.editor_font_size, 18.0);
+        assert_eq!(
+            loaded.general_settings.grid_font_family.as_deref(),
+            Some("Fira Code")
+        );
+        assert_eq!(loaded.general_settings.grid_font_size, 14.5);
+    }
+
+    #[test]
+    fn toast_auto_dismiss_defaults_to_eight_and_round_trips_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.toast_auto_dismiss_secs, 8);
+
+        let settings = GeneralSettings {
+            toast_auto_dismiss_secs: 0,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save toast timeout");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.toast_auto_dismiss_secs, 0,
+            "zero means the stack never closes a toast on its own"
+        );
+    }
+
+    #[test]
+    fn table_alias_settings_default_on_without_as_and_round_trip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(loaded.general_settings.table_alias_completion);
+        assert!(!loaded.general_settings.table_alias_use_as);
+
+        let settings = GeneralSettings {
+            table_alias_completion: false,
+            table_alias_use_as: true,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save table alias settings");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(!loaded.general_settings.table_alias_completion);
+        assert!(loaded.general_settings.table_alias_use_as);
+    }
+
+    #[test]
+    fn out_of_range_font_sizes_and_blank_families_are_normalized_on_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut dto = runtime
+            .general_settings()
+            .get()
+            .expect("load dto")
+            .expect("general settings row");
+        dto.ui_font_family = Some("   ".to_string());
+        dto.ui_font_size = 2.0;
+        dto.editor_font_family = Some("  JetBrains Mono  ".to_string());
+        dto.editor_font_size = 99.0;
+        dto.grid_font_family = Some(String::new());
+        dto.grid_font_size = f64::INFINITY;
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("upsert out-of-range fonts");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.ui_font_family, None);
+        assert_eq!(loaded.general_settings.ui_font_size, 8.0);
+        assert_eq!(
+            loaded.general_settings.editor_font_family.as_deref(),
+            Some("JetBrains Mono")
+        );
+        assert_eq!(loaded.general_settings.editor_font_size, 32.0);
+        assert_eq!(loaded.general_settings.grid_font_family, None);
+        assert_eq!(loaded.general_settings.grid_font_size, 12.5);
+    }
+
+    #[test]
     fn unknown_style_string_in_db_falls_back_to_default() {
         use dbflux_core::AppStyle;
 
@@ -2784,6 +3320,18 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
         runtime
@@ -2813,6 +3361,7 @@ mod tests {
                 auth_method: SshAuthMethod::PrivateKey {
                     key_path: Some("/tmp/bastion-key".into()),
                 },
+                ssh_config_host: None,
             },
             save_secret: false,
         };
@@ -2891,6 +3440,39 @@ mod tests {
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].socket_id, "legacy-socket");
         assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn save_services_persists_secret_provider_kind_for_roundtrip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let services = vec![ServiceConfig {
+            socket_id: "secret-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-secret-host".to_string()),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::SecretProvider,
+            api_contract: None,
+        }];
+
+        save_services(&runtime, &services).expect("save services");
+
+        let dto = runtime
+            .services()
+            .get("secret-socket")
+            .expect("load service dto")
+            .expect("service row");
+
+        assert_eq!(dto.service_kind, "secret_provider");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::SecretProvider);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
+        );
     }
 
     #[test]

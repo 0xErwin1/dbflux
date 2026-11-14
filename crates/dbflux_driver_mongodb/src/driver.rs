@@ -24,16 +24,15 @@ use dbflux_core::{
     DriverLimits, DriverMetadata, ExecutionSourceContext, FieldExportTransform, FieldInfo,
     FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, InstanceCatalog, KeyValueConnection, LanguageService, MutationCapabilities,
-    OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationalConnection, Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
-    SchemaSampleAccumulator, SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
-    TransactionCapabilities, TransferFamily, Value, ViewInfo, WhereOperator, field, field_password,
-    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked,
-    with_default,
+    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSampleAccumulator,
+    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TransactionCapabilities,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use mongodb::action::Action;
 use mongodb::options::ClientOptions;
 use mongodb::sync::{Client, Database};
@@ -121,7 +120,9 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
             | DriverCapabilities::CHART_AUTHORING.bits()
-            | DriverCapabilities::SCRIPT_EXECUTION.bits(),
+            | DriverCapabilities::SCRIPT_EXECUTION.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),
@@ -204,7 +205,9 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         default_isolation_level: None,
         supports_savepoints: false,
         supports_nested_transactions: false,
-        supports_read_only: false,
+        // Honoured by checking every operation against a Read ceiling before
+        // it is sent; see `effective_ceiling`.
+        supports_read_only: true,
         supports_deferrable: false,
     }),
     limits: Some(DriverLimits {
@@ -737,33 +740,9 @@ impl MongoDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        log::info!(
-            "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port,
-            db_host,
-            db_port
-        );
-
-        let phase_start = Instant::now();
-        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        log::info!(
-            "[CONNECT] SSH session phase completed in {:.2}ms",
-            phase_start.elapsed().as_secs_f64() * 1000.0
-        );
-
-        log::info!("[SSH] Setting up tunnel to {}:{}", db_host, db_port);
-        let phase_start = Instant::now();
-
-        let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel { tunnel, ssh_host } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port = tunnel.local_port();
-
-        log::info!(
-            "[SSH] Tunnel ready on 127.0.0.1:{} in {:.2}ms",
-            local_port,
-            phase_start.elapsed().as_secs_f64() * 1000.0
-        );
 
         log::info!("[DB] Connecting to MongoDB via tunnel");
         let phase_start = Instant::now();
@@ -794,7 +773,7 @@ impl MongoDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             db_host,
             db_port,
-            tunnel_config.host
+            ssh_host
         );
 
         Ok(Box::new(MongoConnection {
@@ -913,7 +892,9 @@ pub(crate) fn mongo_ssl_mode_to_uri_params(
     match mode {
         "" | "off" => Ok(String::new()),
         "on" => Ok(
-            "&tls=true&tlsAllowInvalidCertificates=true&tlsAllowInvalidHostnames=true".to_string(),
+            // The rustls backend rejects tlsAllowInvalidHostnames; with rustls,
+            // tlsAllowInvalidCertificates already skips the hostname check.
+            "&tls=true&tlsAllowInvalidCertificates=true".to_string(),
         ),
         "verify" => {
             let mut params = String::from("&tls=true");
@@ -1029,7 +1010,11 @@ fn build_mongodb_uri(
     uri.push_str(host);
     uri.push(':');
     uri.push_str(&port.to_string());
-    uri.push_str("/?appName=dbflux");
+    // The form takes a single host, so connect to exactly that server (as
+    // Compass does). Without directConnection the driver follows the replica
+    // set's advertised member hosts; behind an SSH tunnel those name the remote
+    // side (e.g. 127.0.0.1:27017) and resolve to the local machine instead.
+    uri.push_str("/?appName=dbflux&directConnection=true");
 
     // Add authSource if specified, or default to "admin" when user is provided
     if let Some(auth_db) = auth_database {
@@ -1847,11 +1832,11 @@ impl MongoConnection {
     /// serialized into `metadata_extra` under `script_operations` /
     /// `script_failure` for `execution.rs`'s audit fan-out to consume.
     ///
-    /// `req.confirmed_ceiling` is the governance ceiling authorised by the
-    /// caller (the editor's one-time confirmation, or the MCP policy
-    /// decision); `None` defaults to `Read` — an omitted ceiling refuses a
-    /// destructive op, it never permits one (see
-    /// `QueryRequest::confirmed_ceiling`'s invariant).
+    /// Every dispatched operation is checked against `effective_ceiling(req)`
+    /// before it is sent: the governance ceiling authorised by the caller
+    /// (the editor's one-time confirmation, or the MCP policy decision),
+    /// `Read` when it is omitted, and at most `Read` when the request
+    /// requires read-only enforcement.
     fn execute_script(
         &self,
         req: &QueryRequest,
@@ -1865,10 +1850,13 @@ impl MongoConnection {
             .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
         let db = client.database(db_name);
 
-        let host = crate::script_host::MongoScriptHost::new(client, &db, self.cancelled.clone());
-        let ceiling = req
-            .confirmed_ceiling
-            .unwrap_or(dbflux_core::ExecutionClassification::Read);
+        let host = crate::script_host::MongoScriptHost::new(
+            client,
+            &db,
+            self.cancelled.clone(),
+            req.read_only.is_required(),
+        );
+        let ceiling = effective_ceiling(req);
 
         let config = dbflux_js::ScriptRunConfig {
             source: req.sql.clone(),
@@ -1887,19 +1875,17 @@ impl MongoConnection {
             outcome.ledger.len()
         );
 
+        let mut budget = RowBudget::new(req.limit);
         let mut statement_results: Vec<QueryResult> = outcome
             .statements
             .iter()
-            .map(|stmt| {
-                let internal = documents_to_json_result(&stmt.documents);
-                let mut qr = QueryResult::json(internal.columns, internal.rows, query_time);
-                let mut metadata_extra = HashMap::new();
-                metadata_extra.insert(
-                    "script_statement_index".to_string(),
-                    serde_json::json!(stmt.index),
-                );
-                qr.metadata_extra = Some(metadata_extra);
-                qr
+            .map(|statement| {
+                let returns_rows = outcome
+                    .ledger
+                    .iter()
+                    .find(|entry| entry.index == statement.index)
+                    .is_some_and(|entry| script_method_returns_rows(&entry.method));
+                script_statement_result(statement, &mut budget, returns_rows, query_time)
             })
             .collect();
 
@@ -1931,6 +1917,146 @@ impl MongoConnection {
         primary.metadata_extra = Some(metadata_extra);
 
         Ok(primary)
+    }
+}
+
+/// The classification ceiling a request runs under.
+///
+/// `confirmed_ceiling` is the ceiling the caller authorised, and an omitted
+/// one defaults to `Read`, so it refuses a write rather than permitting one
+/// (see `QueryRequest::confirmed_ceiling`). A request that requires
+/// read-only enforcement runs under at most `Read`: a higher ceiling is
+/// lowered to `Read`, a lower one (`Metadata`) is kept.
+///
+/// This is how the driver honours `ReadOnlyEnforcement::Required`. MongoDB
+/// has no read-only session mode, so the guarantee comes from the closed set
+/// of operations `execute` can send: every one is classified before it is
+/// sent (the script engine per dispatched statement, the single-statement
+/// path by `ensure_operation_within_ceiling`), anything the parsers do not
+/// recognise is refused, and the driver-owned instance metric and inspector
+/// requests only run fixed `serverStatus` and `$currentOp` reads.
+fn effective_ceiling(req: &QueryRequest) -> dbflux_core::ExecutionClassification {
+    use dbflux_core::ExecutionClassification;
+
+    let confirmed = req
+        .confirmed_ceiling
+        .unwrap_or(ExecutionClassification::Read);
+
+    let exceeds_read = !dbflux_core::ceiling_permits(ExecutionClassification::Read, confirmed);
+    if req.read_only.is_required() && exceeds_read {
+        return ExecutionClassification::Read;
+    }
+
+    confirmed
+}
+
+/// Refuses a single-statement operation whose classification exceeds
+/// `ceiling`, before anything is sent to the server.
+fn ensure_operation_within_ceiling(
+    operation: &MongoOperation,
+    ceiling: dbflux_core::ExecutionClassification,
+) -> Result<(), DbError> {
+    let classification = mongo_operation_classification(operation);
+
+    if dbflux_core::ceiling_permits(ceiling, classification) {
+        return Ok(());
+    }
+
+    Err(DbError::query_failed(format!(
+        "MongoDB: the operation is classified {classification:?}, which exceeds the {ceiling:?} \
+         ceiling of this read-only request; nothing was sent to the server"
+    )))
+}
+
+/// Governance classification of a single-statement operation, from what it
+/// does rather than from the query text. Mirrors
+/// `ScriptMethod::classification`: an arbitrary command is rated as the worst
+/// case because its effect depends on a document the driver does not
+/// interpret, and an `aggregate` with a `$out` or `$merge` stage is a write.
+fn mongo_operation_classification(
+    operation: &MongoOperation,
+) -> dbflux_core::ExecutionClassification {
+    use dbflux_core::ExecutionClassification;
+
+    match operation {
+        MongoOperation::Find { .. } => ExecutionClassification::Read,
+        MongoOperation::Aggregate { pipeline } => {
+            if pipeline.iter().any(document_contains_output_stage) {
+                ExecutionClassification::Write
+            } else {
+                ExecutionClassification::Read
+            }
+        }
+        MongoOperation::Count { .. }
+        | MongoOperation::GetName
+        | MongoOperation::GetCollectionNames
+        | MongoOperation::GetCollectionInfos
+        | MongoOperation::DbStats
+        | MongoOperation::ServerStatus
+        | MongoOperation::Version
+        | MongoOperation::HostInfo
+        | MongoOperation::CurrentOp => ExecutionClassification::Metadata,
+        MongoOperation::InsertOne { .. }
+        | MongoOperation::InsertMany { .. }
+        | MongoOperation::UpdateOne { .. }
+        | MongoOperation::UpdateMany { .. }
+        | MongoOperation::ReplaceOne { .. } => ExecutionClassification::Write,
+        MongoOperation::DeleteOne { .. }
+        | MongoOperation::DeleteMany { .. }
+        | MongoOperation::Drop
+        | MongoOperation::DropDatabase => ExecutionClassification::Destructive,
+        MongoOperation::CreateCollection { .. } => ExecutionClassification::AdminSafe,
+        MongoOperation::RunCommand { .. } | MongoOperation::AdminCommand { .. } => {
+            ExecutionClassification::AdminDestructive
+        }
+    }
+}
+
+/// Aggregation stages that write their output to a collection.
+const OUTPUT_STAGES: &[&str] = &["$out", "$merge"];
+
+/// The aggregation stage that opens a change stream.
+const CHANGE_STREAM_STAGES: &[&str] = &["$changeStream"];
+
+/// True when `document` holds a `$out` or `$merge` key at any depth, which
+/// covers the sub-pipelines of `$facet`, `$lookup` and `$unionWith`.
+fn document_contains_output_stage(document: &Document) -> bool {
+    document_contains_key(document, OUTPUT_STAGES)
+}
+
+/// Refuses an `aggregate` that opens a change stream, for a request that
+/// requires read-only enforcement.
+///
+/// A change stream is a read, but it never ends: it would hold the
+/// connection's client lock for as long as the server keeps the cursor open,
+/// so an unattended read must not start one. `$changeStream` is detected at
+/// any depth, like the output stages.
+pub(crate) fn ensure_no_change_stream(pipeline: &[Document]) -> Result<(), DbError> {
+    let opens_change_stream = pipeline
+        .iter()
+        .any(|stage| document_contains_key(stage, CHANGE_STREAM_STAGES));
+
+    if opens_change_stream {
+        return Err(DbError::query_failed(
+            "MongoDB: a read-only request cannot open a change stream ($changeStream), \
+             because it never ends; nothing was sent to the server",
+        ));
+    }
+
+    Ok(())
+}
+
+fn document_contains_key(document: &Document, keys: &[&str]) -> bool {
+    document
+        .iter()
+        .any(|(key, value)| keys.contains(&key.as_str()) || bson_contains_key(value, keys))
+}
+
+fn bson_contains_key(value: &Bson, keys: &[&str]) -> bool {
+    match value {
+        Bson::Document(document) => document_contains_key(document, keys),
+        Bson::Array(items) => items.iter().any(|item| bson_contains_key(item, keys)),
+        _ => false,
     }
 }
 
@@ -1970,6 +2096,37 @@ fn script_ledger_to_json(ledger: &[dbflux_js::ScriptLedgerEntry]) -> Vec<serde_j
             })
         })
         .collect()
+}
+
+/// Builds the result set of one script statement. Only statements that read
+/// documents (`returns_rows`) spend the request row budget; counts, write
+/// acknowledgements and command replies are kept whole, as in the
+/// single-statement path.
+fn script_statement_result(
+    statement: &dbflux_js::ScriptStatementResult,
+    budget: &mut RowBudget,
+    returns_rows: bool,
+    query_time: std::time::Duration,
+) -> QueryResult {
+    let (kept, truncated) = if returns_rows {
+        budget.admit(statement.documents.len())
+    } else {
+        (statement.documents.len(), false)
+    };
+    // Cut before conversion: the columns are the union of every converted
+    // document's keys, so a dropped document must not reach it.
+    let internal = documents_to_json_result(statement.documents.get(..kept).unwrap_or_default());
+    let mut result = QueryResult::json(internal.columns, internal.rows, query_time);
+    let mut metadata_extra = HashMap::new();
+    metadata_extra.insert(
+        "script_statement_index".to_string(),
+        serde_json::json!(statement.index),
+    );
+    result.metadata_extra = Some(metadata_extra);
+    // The flag lives in `metadata_extra`, so it is set after the map is
+    // replaced or the replacement would erase it.
+    result.set_rows_truncated(truncated);
+    result
 }
 
 /// Converts one statement's JSON documents into the tabular shape the UI's
@@ -2079,6 +2236,17 @@ fn json_to_value(value: &serde_json::Value) -> Value {
 }
 
 impl Connection for MongoConnection {
+    /// Every collection holds documents and can also be shown as a grid.
+    fn collection_facets(
+        &self,
+        _collection: &dbflux_core::CollectionRef,
+    ) -> Vec<dbflux_core::ObjectFacet> {
+        vec![
+            dbflux_core::ObjectFacet::Document,
+            dbflux_core::ObjectFacet::Tabular,
+        ]
+    }
+
     fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
     }
@@ -2129,13 +2297,11 @@ impl Connection for MongoConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "MongoDB execute cannot enforce a requested row limit or statement timeout"
-                    .to_string(),
+                "MongoDB execute cannot enforce a requested statement timeout".to_string(),
             ));
         }
-
         self.cancelled.store(false, Ordering::SeqCst);
 
         if let Some(source) = req
@@ -2143,6 +2309,19 @@ impl Connection for MongoConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
         {
+            if req.limit.is_some()
+                && matches!(
+                    source,
+                    ExecutionSourceContext::InstanceMetricQuery { .. }
+                        | ExecutionSourceContext::InstanceInspectorQuery { .. }
+                )
+            {
+                return Err(DbError::NotSupported(
+                    "MongoDB instance metric and inspector queries cannot enforce a requested row limit"
+                        .to_string(),
+                ));
+            }
+
             match source {
                 ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
                     let client = self.client.lock().map_err(|_| {
@@ -2188,6 +2367,14 @@ impl Connection for MongoConnection {
         // script engine instead of a parse failure to report.
         match crate::query_parser::parse_query(&req.sql) {
             Ok(query) => {
+                if req.read_only.is_required() {
+                    ensure_operation_within_ceiling(&query.operation, effective_ceiling(req))?;
+
+                    if let MongoOperation::Aggregate { pipeline } = &query.operation {
+                        ensure_no_change_stream(pipeline)?;
+                    }
+                }
+
                 let db_name = query
                     .database
                     .as_ref()
@@ -2197,7 +2384,16 @@ impl Connection for MongoConnection {
 
                 let db = client.database(db_name);
 
-                let result = execute_mongo_query(&client, &db, &query, self.cancelled.clone())?;
+                let mut budget = RowBudget::new(req.limit);
+                let mut result =
+                    execute_mongo_query(&client, &db, &query, self.cancelled.clone(), &mut budget)?;
+                // Find and Aggregate spend the budget before their columns are
+                // built. Collection listings have fixed columns, so they are cut
+                // here. Counts, writes and command replies are not result rows.
+                if operation_lists_collections(&query.operation) {
+                    budget.retain(&mut result.rows);
+                }
+                let truncated = budget.dropped_rows();
 
                 let query_time = start.elapsed();
 
@@ -2209,6 +2405,7 @@ impl Connection for MongoConnection {
 
                 let mut qr = QueryResult::json(result.columns, result.rows, query_time);
                 qr.affected_rows = result.affected_rows;
+                qr.set_rows_truncated(truncated);
                 Ok(qr)
             }
             Err(e) if e.to_string() == crate::query_parser::SCRIPT_UNSUPPORTED_MESSAGE => {
@@ -2357,6 +2554,7 @@ impl Connection for MongoConnection {
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
                     storage_hints: None,
+                    pseudo_columns: Box::default(),
                 }
             })
             .collect();
@@ -2487,6 +2685,7 @@ impl Connection for MongoConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         })
     }
 
@@ -2727,7 +2926,7 @@ impl Connection for MongoConnection {
             .run()
             .map_err(|e| format_mongo_query_error(&e))?;
 
-        let docs = collect_cursor_documents(cursor, &self.cancelled)?;
+        let docs = collect_cursor_documents(cursor, &self.cancelled, None)?;
 
         let internal = documents_to_result(docs)?;
         let query_time = start.elapsed();
@@ -2835,7 +3034,7 @@ impl Connection for MongoConnection {
             .aggregate(pipeline)
             .run()
             .map_err(|e| format_mongo_query_error(&e))?;
-        let documents = collect_cursor_documents(cursor, &self.cancelled)?;
+        let documents = collect_cursor_documents(cursor, &self.cancelled, None)?;
 
         let mut accumulator = SchemaSampleAccumulator::new();
         for document in &documents {
@@ -2889,7 +3088,7 @@ impl Connection for MongoConnection {
             .allow_disk_use(request.allow_disk_use)
             .run()
             .map_err(|e| format_mongo_query_error(&e))?;
-        let mut documents = collect_cursor_documents(cursor, &self.cancelled)?;
+        let mut documents = collect_cursor_documents(cursor, &self.cancelled, None)?;
 
         let truncated = documents.len() > limit;
         documents.truncate(limit);
@@ -3019,73 +3218,9 @@ impl Connection for MongoConnection {
         plan_mongo_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _filter: Option<&Value>,
-        _order_by: &[OrderByColumn],
-        _limit: u32,
-        _offset: u32,
-    ) -> String {
+    fn build_truncate_sql(&self, _table: &str) -> Result<String, DbError> {
         // MongoDB doesn't use SQL - this is for SQL-based drivers
-        "SELECT * FROM table WHERE filter LIMIT offset".to_string()
-    }
-
-    fn build_insert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-    ) -> (String, Vec<Value>) {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        (
-            "INSERT INTO table (columns) VALUES (values)".to_string(),
-            Vec::new(),
-        )
-    }
-
-    fn build_update_sql(
-        &self,
-        _table: &str,
-        _set: &[(String, Value)],
-        _filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        (
-            "UPDATE table SET col=val WHERE filter".to_string(),
-            Vec::new(),
-        )
-    }
-
-    fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        ("DELETE FROM table WHERE filter".to_string(), Vec::new())
-    }
-
-    fn build_upsert_sql(
-        &self,
-        _table: &str,
-        _columns: &[String],
-        _values: &[Value],
-        _conflict_columns: &[String],
-        _update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        (
-            "INSERT INTO table VALUES (vals) ON CONFLICT DO UPDATE".to_string(),
-            Vec::new(),
-        )
-    }
-
-    fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        "SELECT COUNT(*) FROM table".to_string()
-    }
-
-    fn build_truncate_sql(&self, _table: &str) -> String {
-        // MongoDB doesn't use SQL - this is for SQL-based drivers
-        "TRUNCATE TABLE table".to_string()
+        Ok("TRUNCATE TABLE table".to_string())
     }
 
     fn build_drop_index_sql(
@@ -3093,26 +3228,18 @@ impl Connection for MongoConnection {
         _index_name: &str,
         _table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         // MongoDB doesn't use SQL - this is for SQL-based drivers
-        "DROP INDEX index_name".to_string()
+        Ok("DROP INDEX index_name".to_string())
     }
 
-    fn version_query(&self) -> &'static str {
+    fn version_query(&self) -> Result<&'static str, DbError> {
         // MongoDB uses db.version() shell command, not SQL
-        "db.version()"
+        Ok("db.version()")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
         false
-    }
-
-    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
-        // For MongoDB, the Value filter is already in document format
-        // This is used by SQL-based drivers to convert JSON filters to SQL WHERE clauses
-        Err(DbError::NotSupported(
-            "translate_filter is not applicable to MongoDB - it uses document-based filters, not SQL".to_string(),
-        ))
     }
 }
 
@@ -3342,11 +3469,95 @@ struct QueryResultInternal {
     affected_rows: Option<u64>,
 }
 
+/// The `QueryRequest::limit` budget, spent once across every result set a
+/// request produces.
+struct RowBudget {
+    remaining: Option<usize>,
+    dropped_rows: bool,
+}
+
+impl RowBudget {
+    fn new(limit: Option<u32>) -> Self {
+        Self {
+            remaining: limit.map(|limit| limit as usize),
+            dropped_rows: false,
+        }
+    }
+
+    /// Charges `available` rows against the budget and returns how many of
+    /// them to keep and whether any were dropped.
+    fn admit(&mut self, available: usize) -> (usize, bool) {
+        let Some(remaining) = self.remaining.as_mut() else {
+            return (available, false);
+        };
+        let kept = available.min(*remaining);
+        *remaining -= kept;
+        let truncated = kept < available;
+        self.dropped_rows |= truncated;
+        (kept, truncated)
+    }
+
+    /// Whether any `admit` or `retain` call on this budget dropped rows.
+    fn dropped_rows(&self) -> bool {
+        self.dropped_rows
+    }
+
+    /// How many documents to pull from a cursor: one past the remaining
+    /// budget, so `retain` can tell a dropped row from an exact fit.
+    fn collect_cap(&self) -> Option<usize> {
+        self.remaining.map(|remaining| remaining.saturating_add(1))
+    }
+
+    /// Keeps the rows the budget still allows and reports whether any were dropped.
+    fn retain<T>(&mut self, rows: &mut Vec<T>) -> bool {
+        let (kept, truncated) = self.admit(rows.len());
+        rows.truncate(kept);
+        truncated
+    }
+}
+
+/// Converts the documents of a Find or Aggregate cursor, keeping only those
+/// the budget allows.
+fn bounded_documents_to_result(
+    documents: Vec<Document>,
+    budget: &mut RowBudget,
+) -> Result<QueryResultInternal, DbError> {
+    // Cut before conversion: the columns are the union of every converted
+    // document's keys, so a dropped document must not reach it.
+    let mut documents = documents;
+    budget.retain(&mut documents);
+    documents_to_result(documents)
+}
+
+/// Only document reads and collection listings produce result rows, so only
+/// they spend the budget in a script, as in the single-statement path.
+fn script_method_returns_rows(method: &str) -> bool {
+    matches!(
+        dbflux_core::ScriptMethod::from_js_name(method),
+        Some(
+            dbflux_core::ScriptMethod::FindDocuments
+                | dbflux_core::ScriptMethod::AggregateDocuments
+                | dbflux_core::ScriptMethod::ListContainers
+        )
+    )
+}
+
+fn operation_lists_collections(operation: &MongoOperation) -> bool {
+    matches!(
+        operation,
+        MongoOperation::GetCollectionNames | MongoOperation::GetCollectionInfos
+    )
+}
+
 fn collect_cursor_documents(
     cursor: mongodb::sync::Cursor<Document>,
     cancelled: &Arc<AtomicBool>,
+    cap: Option<usize>,
 ) -> Result<Vec<Document>, DbError> {
     let mut documents = Vec::new();
+    if cap == Some(0) {
+        return Ok(documents);
+    }
     for result in cursor {
         if cancelled.load(Ordering::SeqCst) {
             log::info!("[QUERY] MongoDB query cancelled during cursor iteration");
@@ -3354,6 +3565,9 @@ fn collect_cursor_documents(
         }
         let doc = result.map_err(|e| format_mongo_query_error(&e))?;
         documents.push(doc);
+        if cap.is_some_and(|cap| documents.len() >= cap) {
+            break;
+        }
     }
     Ok(documents)
 }
@@ -3363,6 +3577,7 @@ fn execute_mongo_query(
     db: &Database,
     query: &MongoQuery,
     cancelled: Arc<AtomicBool>,
+    budget: &mut RowBudget,
 ) -> Result<QueryResultInternal, DbError> {
     if query.collection.is_none() {
         return execute_db_operation(client, db, &query.operation);
@@ -3391,9 +3606,9 @@ fn execute_mongo_query(
                 .run()
                 .map_err(|e| format_mongo_query_error(&e))?;
 
-            let documents = collect_cursor_documents(cursor, &cancelled)?;
+            let documents = collect_cursor_documents(cursor, &cancelled, budget.collect_cap())?;
 
-            documents_to_result(documents)
+            bounded_documents_to_result(documents, budget)
         }
 
         MongoOperation::Aggregate { pipeline } => {
@@ -3402,9 +3617,9 @@ fn execute_mongo_query(
                 .run()
                 .map_err(|e| format_mongo_query_error(&e))?;
 
-            let documents = collect_cursor_documents(cursor, &cancelled)?;
+            let documents = collect_cursor_documents(cursor, &cancelled, budget.collect_cap())?;
 
-            documents_to_result(documents)
+            bounded_documents_to_result(documents, budget)
         }
 
         MongoOperation::Count { filter } => {
@@ -4341,6 +4556,48 @@ mod tests {
         SemanticRequest, Value, WhereOperator,
     };
 
+    /// The placeholder SQL texts emitted for truncate, drop-index and the
+    /// version probe must stay byte-for-byte identical while the trait
+    /// defaults move to `Result`. The client points at a closed local port;
+    /// building it contacts no server and these builders only format text.
+    #[test]
+    fn truncate_drop_index_and_version_texts_match_the_driver_contract() {
+        let uri = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=200&connectTimeoutMS=200";
+        let client = Client::with_uri_str(uri).expect("client options parse without a server");
+        let connection = MongoConnection {
+            client: Arc::new(Mutex::new(client)),
+            default_database: Some("testdb".to_string()),
+            schema_settings: MongoSchemaSettings {
+                schema_sample_size: 100,
+                show_system_databases: false,
+            },
+            ssh_tunnel: None,
+            connection_uri: uri.to_string(),
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            _tls_pem_guard: None,
+        };
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("users")
+                .expect("the MongoDB placeholder always builds"),
+            "TRUNCATE TABLE table"
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx", Some("users"), false)
+                .expect("the MongoDB placeholder always builds"),
+            "DROP INDEX index_name"
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("the MongoDB version probe is a constant"),
+            "db.version()"
+        );
+    }
+
     #[test]
     fn json_to_bson_reads_extended_json_dates() {
         let document =
@@ -4988,6 +5245,28 @@ mod tests {
     }
 
     #[test]
+    fn build_mongodb_uri_connects_directly_to_the_given_host() {
+        let uri = build_mongodb_uri("127.0.0.1", 40123, None, None, None, "");
+        assert!(uri.contains("directConnection=true"));
+
+        let options = ClientOptions::parse(&uri)
+            .run()
+            .expect("form URI should parse");
+        assert_eq!(options.direct_connection, Some(true));
+    }
+
+    #[test]
+    fn mongo_ssl_mode_on_produces_options_the_driver_accepts() {
+        let params = mongo_ssl_mode_to_uri_params(Some("on"), None, None)
+            .expect("on should map to insecure TLS params");
+        let uri = build_mongodb_uri("127.0.0.1", 27017, None, None, None, &params);
+
+        ClientOptions::parse(&uri)
+            .run()
+            .expect("SSL mode on should produce a URI the driver accepts");
+    }
+
+    #[test]
     fn mongo_ssl_mode_off_returns_empty_params() {
         let params =
             mongo_ssl_mode_to_uri_params(Some("off"), None, None).expect("off should map to empty");
@@ -5007,7 +5286,7 @@ mod tests {
             .expect("on should map to insecure TLS params");
         assert!(params.contains("tls=true"));
         assert!(params.contains("tlsAllowInvalidCertificates=true"));
-        assert!(params.contains("tlsAllowInvalidHostnames=true"));
+        assert!(!params.contains("tlsAllowInvalidHostnames"));
     }
 
     #[test]
@@ -5569,5 +5848,529 @@ mod tests {
         assert!(!skeleton.contains("s3cr3t"));
         assert!(skeleton.starts_with("mongodb+srv://"));
         assert_eq!(secret.expose_secret(), "s3cr3t");
+    }
+
+    mod read_only {
+        use super::*;
+        use dbflux_core::{ExecutionClassification, ReadOnlyEnforcement};
+
+        /// A connection whose client points at a closed local port. Building
+        /// the client contacts no server, and an operation that does reach
+        /// for one fails with a server-selection error after a short timeout,
+        /// so a refusal naming the ceiling proves nothing was sent.
+        fn offline_connection() -> MongoConnection {
+            let uri = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=200&connectTimeoutMS=200";
+            let client = Client::with_uri_str(uri).expect("client options parse without a server");
+
+            MongoConnection {
+                client: Arc::new(Mutex::new(client)),
+                default_database: Some("testdb".to_string()),
+                schema_settings: MongoSchemaSettings {
+                    schema_sample_size: 100,
+                    show_system_databases: false,
+                },
+                ssh_tunnel: None,
+                connection_uri: uri.to_string(),
+                active_query: RwLock::new(None),
+                cancelled: Arc::new(AtomicBool::new(false)),
+                _tls_pem_guard: None,
+            }
+        }
+
+        fn read_only_request(
+            query: &str,
+            ceiling: Option<ExecutionClassification>,
+        ) -> QueryRequest {
+            let request = QueryRequest::new(query).with_read_only(ReadOnlyEnforcement::Required);
+
+            match ceiling {
+                Some(ceiling) => request.with_confirmed_ceiling(ceiling),
+                None => request,
+            }
+        }
+
+        fn is_server_selection_failure(message: &str) -> bool {
+            message.to_ascii_lowercase().contains("server selection")
+        }
+
+        fn assert_refused_by_ceiling(connection: &MongoConnection, request: &QueryRequest) {
+            match connection.execute(request) {
+                Err(DbError::QueryFailed(error)) => {
+                    let message = error.to_string();
+                    assert!(
+                        message.contains("ceiling"),
+                        "{}: expected a ceiling refusal, got {message}",
+                        request.sql
+                    );
+                }
+                other => panic!("{}: expected a ceiling refusal, got {other:?}", request.sql),
+            }
+        }
+
+        /// Runs a script under `Required` and asserts it stopped before any
+        /// operation reached the server: the run reports a failure, no
+        /// dispatched operation succeeded, and the failure is not a
+        /// server-selection error.
+        fn assert_script_stopped_before_the_server(
+            connection: &MongoConnection,
+            request: &QueryRequest,
+        ) -> String {
+            let result = connection
+                .execute(request)
+                .unwrap_or_else(|error| panic!("{}: script must run, got {error:?}", request.sql));
+            let extra = result.metadata_extra.unwrap_or_default();
+
+            let message = extra
+                .get("script_failure")
+                .and_then(|failure| failure["message"].as_str())
+                .unwrap_or_else(|| panic!("{}: the script must stop", request.sql))
+                .to_string();
+            assert!(
+                !is_server_selection_failure(&message),
+                "{}: the operation reached for the server: {message}",
+                request.sql
+            );
+
+            let operations = extra
+                .get("script_operations")
+                .and_then(|operations| operations.as_array())
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                operations
+                    .iter()
+                    .all(|operation| operation["outcome"] != "success"),
+                "{}: no operation may succeed: {operations:?}",
+                request.sql
+            );
+
+            message
+        }
+
+        #[test]
+        fn metadata_declares_read_only_enforcement() {
+            assert!(MONGODB_METADATA.enforces_read_only());
+        }
+
+        #[test]
+        fn required_refuses_single_statement_writes_before_any_server_call() {
+            let connection = offline_connection();
+
+            for query in [
+                r#"db.users.insertOne({"name": "a"})"#,
+                r#"db.users.insertMany([{"name": "a"}])"#,
+                r#"db.users.updateOne({}, {"$set": {"a": 1}})"#,
+                r#"db.users.updateMany({"a": 1}, {"$set": {"a": 2}})"#,
+                r#"db.users.replaceOne({}, {"a": 1})"#,
+                r#"db.users.deleteOne({})"#,
+                r#"db.users.deleteMany({"a": 1})"#,
+                "db.users.drop()",
+                "db.dropDatabase()",
+                r#"db.createCollection("archive")"#,
+                r#"db.runCommand({"ping": 1})"#,
+                r#"db.runCommand({"insert": "users", "documents": [{"a": 1}]})"#,
+                r#"db.runCommand({"findAndModify": "users", "update": {"$set": {"a": 1}}})"#,
+                r#"db.adminCommand({"renameCollection": "testdb.a", "to": "testdb.b"})"#,
+                r#"db.users.aggregate([{"$out": "archive"}])"#,
+                r#"db.users.aggregate([{"$match": {}}, {"$merge": {"into": "archive"}}])"#,
+                r#"db.users.aggregate([{"$facet": {"copy": [{"$merge": "archive"}]}}])"#,
+                r#"db.users.aggregate([{"$lookup": {"from": "o", "pipeline": [{"$out": "archive"}], "as": "x"}}])"#,
+                r#"db.users.aggregate([{"$unionWith": {"coll": "o", "pipeline": [{"$merge": "archive"}]}}])"#,
+                r#"{"collection": "users", "pipeline": [{"$out": "archive"}]}"#,
+                r#"{"collection": "users", "replace": {"filter": {}, "replacement": {"a": 1}}}"#,
+            ] {
+                assert_refused_by_ceiling(
+                    &connection,
+                    &read_only_request(query, Some(ExecutionClassification::Read)),
+                );
+            }
+        }
+
+        #[test]
+        fn required_refuses_unsupported_single_statement_operations_without_a_server_call() {
+            let connection = offline_connection();
+
+            for query in [
+                r#"db.users.findOneAndUpdate({}, {"$set": {"a": 1}})"#,
+                r#"db.users.findOneAndDelete({})"#,
+                r#"db.users.findOneAndReplace({}, {"a": 1})"#,
+                r#"db.users.bulkWrite([{"insertOne": {"document": {"a": 1}}}])"#,
+                r#"db.users.mapReduce("function() {}", "function() {}", {"out": "x"})"#,
+                r#"db.users.renameCollection("archive")"#,
+                r#"db.users.createIndex({"a": 1})"#,
+                r#"db.users.copyTo("archive")"#,
+                r#"db.eval("1")"#,
+                r#"db.getSiblingDB("admin").runCommand({"ping": 1})"#,
+                r#"db.users.find({}).forEach(function (d) {})"#,
+            ] {
+                let request = read_only_request(query, Some(ExecutionClassification::Read));
+                match connection.execute(&request) {
+                    Ok(result) => {
+                        let message = result
+                            .metadata_extra
+                            .as_ref()
+                            .and_then(|extra| extra.get("script_failure"))
+                            .and_then(|failure| failure["message"].as_str())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| panic!("{query}: must not succeed"));
+                        assert!(!is_server_selection_failure(&message), "{query}: {message}");
+                    }
+                    Err(DbError::NotSupported(message)) => {
+                        panic!("{query}: Required must be honoured, got NotSupported({message})")
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        assert!(!is_server_selection_failure(&message), "{query}: {message}");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn required_stops_script_writes_before_any_server_call() {
+            let connection = offline_connection();
+
+            for script in [
+                "var n = 1; db.users.insertOne({name: 'a'});",
+                "var n = 1; db.users.insertMany([{name: 'a'}]);",
+                "var n = 1; db.users.updateOne({}, {$set: {a: 1}});",
+                "var n = 1; db.users.updateMany({}, {$set: {a: 1}});",
+                "var n = 1; db.users.replaceOne({}, {a: 1});",
+                "var n = 1; db.users.deleteOne({});",
+                "var n = 1; db.users.deleteMany({});",
+                "var n = 1; db.users.drop();",
+                "var n = 1; db.dropDatabase();",
+                "var n = 1; db.createCollection('archive');",
+                "var n = 1; db.runCommand({ping: 1});",
+                "var n = 1; db.runCommand({insert: 'users', documents: [{a: 1}]});",
+                "var n = 1; db.getSiblingDB.runCommand({ping: 1});",
+                "var n = 1; db.users.aggregate([{$out: 'archive'}]);",
+                "var n = 1; db.users.aggregate([{$merge: {into: 'archive'}}]);",
+                "var n = 1; db.users.aggregate([{$facet: {copy: [{$merge: 'archive'}]}}]);",
+                "var n = 1; db.users.aggregate([{$lookup: {from: 'o', pipeline: [{$out: 'archive'}], as: 'x'}}]);",
+                "var n = 1; db.users.aggregate([{$unionWith: {coll: 'o', pipeline: [{$merge: 'archive'}]}}]);",
+                "var stage = {}; stage['$mer' + 'ge'] = 'archive'; db.users.aggregate([stage]);",
+                "const m = 'insert' + 'One'; db.users[m]({a: 1});",
+                "var n = 1; db.users.findOneAndUpdate({}, {$set: {a: 1}});",
+                "var n = 1; db.users.findOneAndDelete({});",
+                "var n = 1; db.users.findOneAndReplace({}, {a: 1});",
+                "var n = 1; db.users.bulkWrite([{insertOne: {document: {a: 1}}}]);",
+                "var n = 1; db.users.mapReduce('function() {}', 'function() {}', {out: 'x'});",
+                "var n = 1; db.users.renameCollection('archive');",
+                "var n = 1; db.users.createIndex({a: 1});",
+                "var n = 1; db.users.copyTo('archive');",
+                "var n = 1; db.eval('1');",
+                "var n = 1; db.adminCommand({ping: 1});",
+                "var n = 1; db.getSiblingDB('admin').runCommand({ping: 1});",
+                "var n = 1; new Mongo().getDB('admin');",
+                "var n = 1; load('other.js');",
+                "var n = 1; db.fs.files.insertOne({filename: 'a'});",
+            ] {
+                assert_script_stopped_before_the_server(
+                    &connection,
+                    &read_only_request(script, Some(ExecutionClassification::Read)),
+                );
+            }
+        }
+
+        #[test]
+        fn required_refuses_change_streams_before_any_server_call() {
+            let connection = offline_connection();
+
+            for query in [
+                r#"db.users.aggregate([{"$changeStream": {}}])"#,
+                r#"db.users.aggregate([{"$facet": {"s": [{"$changeStream": {}}]}}])"#,
+                r#"{"collection": "users", "pipeline": [{"$changeStream": {}}]}"#,
+            ] {
+                let request = read_only_request(query, Some(ExecutionClassification::Read));
+                match connection.execute(&request) {
+                    Err(DbError::QueryFailed(error)) => {
+                        assert!(
+                            error.to_string().contains("change stream"),
+                            "{query}: {error}"
+                        );
+                    }
+                    other => panic!("{query}: expected a change stream refusal, got {other:?}"),
+                }
+            }
+
+            for script in [
+                "var n = 1; db.users.aggregate([{$changeStream: {}}]);",
+                "var n = 1; db.users.aggregate([{$unionWith: {coll: 'o', pipeline: [{$changeStream: {}}]}}]);",
+                "var n = 1; db.users.watch();",
+            ] {
+                assert_script_stopped_before_the_server(
+                    &connection,
+                    &read_only_request(script, Some(ExecutionClassification::Read)),
+                );
+            }
+        }
+
+        #[test]
+        fn required_forces_a_read_ceiling_over_a_higher_confirmed_one() {
+            let connection = offline_connection();
+
+            for ceiling in [
+                None,
+                Some(ExecutionClassification::Write),
+                Some(ExecutionClassification::Destructive),
+                Some(ExecutionClassification::AdminDestructive),
+            ] {
+                assert_refused_by_ceiling(
+                    &connection,
+                    &read_only_request(r#"db.users.insertOne({"a": 1})"#, ceiling),
+                );
+
+                let message = assert_script_stopped_before_the_server(
+                    &connection,
+                    &read_only_request("var n = 1; db.users.deleteMany({});", ceiling),
+                );
+                assert!(message.contains("Read ceiling"), "{ceiling:?}: {message}");
+            }
+        }
+
+        #[test]
+        fn required_keeps_a_lower_confirmed_ceiling() {
+            let connection = offline_connection();
+
+            assert_refused_by_ceiling(
+                &connection,
+                &read_only_request(
+                    r#"db.users.find({})"#,
+                    Some(ExecutionClassification::Metadata),
+                ),
+            );
+
+            let message = assert_script_stopped_before_the_server(
+                &connection,
+                &read_only_request(
+                    "var n = 1; db.users.find({});",
+                    Some(ExecutionClassification::Metadata),
+                ),
+            );
+            assert!(message.contains("Metadata ceiling"), "{message}");
+        }
+
+        #[test]
+        fn required_lets_reads_reach_the_server() {
+            let connection = offline_connection();
+
+            for query in [
+                r#"db.users.find({"a": 1})"#,
+                r#"db.users.findOne({})"#,
+                r#"db.users.aggregate([{"$match": {}}, {"$group": {"_id": "$merge"}}])"#,
+                r#"db.users.countDocuments({})"#,
+                "db.getCollectionNames()",
+                "db.stats()",
+                r#"{"collection": "users", "filter": {}}"#,
+            ] {
+                match connection.execute(&read_only_request(
+                    query,
+                    Some(ExecutionClassification::Read),
+                )) {
+                    Err(DbError::NotSupported(message)) => {
+                        panic!("{query}: Required must be honoured, got NotSupported({message})")
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        assert!(
+                            is_server_selection_failure(&message),
+                            "{query}: a read must pass the ceiling and reach for the server: {message}"
+                        );
+                    }
+                    Ok(_) => panic!("{query}: no server is listening, the read cannot succeed"),
+                }
+            }
+
+            for script in [
+                "var n = 1; db.users.find({a: 1});",
+                "var n = 1; db.users.aggregate([{$match: {}}]);",
+                "var n = 1; db.users.countDocuments({});",
+            ] {
+                let result = connection
+                    .execute(&read_only_request(
+                        script,
+                        Some(ExecutionClassification::Read),
+                    ))
+                    .unwrap_or_else(|error| panic!("{script}: must run, got {error:?}"));
+                let message = result
+                    .metadata_extra
+                    .as_ref()
+                    .and_then(|extra| extra.get("script_failure"))
+                    .and_then(|failure| failure["message"].as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                assert!(
+                    is_server_selection_failure(&message),
+                    "{script}: a read must pass the ceiling and reach for the server: {message}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod row_budget_tests {
+    use super::*;
+
+    #[test]
+    fn unlimited_budget_keeps_every_row() {
+        let mut budget = RowBudget::new(None);
+        let mut rows = vec![1, 2, 3];
+        assert!(!budget.retain(&mut rows));
+        assert_eq!(rows, vec![1, 2, 3]);
+        assert_eq!(budget.collect_cap(), None);
+    }
+
+    #[test]
+    fn budget_is_shared_across_result_sets() {
+        let mut budget = RowBudget::new(Some(3));
+        let mut first = vec![1, 2];
+        let mut second = vec![3, 4];
+        let mut third = vec![5];
+        assert!(!budget.retain(&mut first));
+        assert!(budget.retain(&mut second));
+        assert!(budget.retain(&mut third));
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(second, vec![3]);
+        assert!(third.is_empty());
+    }
+
+    #[test]
+    fn exact_fit_is_not_truncated() {
+        let mut budget = RowBudget::new(Some(2));
+        let mut rows = vec![1, 2];
+        assert!(!budget.retain(&mut rows));
+        let mut empty: Vec<i32> = Vec::new();
+        assert!(!budget.retain(&mut empty));
+    }
+
+    #[test]
+    fn zero_budget_drops_every_row_and_flags_only_non_empty_sets() {
+        let mut budget = RowBudget::new(Some(0));
+        let mut rows = vec![1];
+        assert!(budget.retain(&mut rows));
+        assert!(rows.is_empty());
+        let mut empty: Vec<i32> = Vec::new();
+        assert!(!budget.retain(&mut empty));
+    }
+
+    #[test]
+    fn collect_cap_peeks_one_row_past_the_remaining_budget() {
+        let mut budget = RowBudget::new(Some(5));
+        assert_eq!(budget.collect_cap(), Some(6));
+        let mut rows = vec![1, 2];
+        budget.retain(&mut rows);
+        assert_eq!(budget.collect_cap(), Some(4));
+    }
+
+    #[test]
+    fn metadata_declares_request_row_limit() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
+
+    #[test]
+    fn script_statement_result_keeps_the_truncation_flag_beside_its_index() {
+        let statement = dbflux_js::ScriptStatementResult {
+            index: 1,
+            documents: vec![serde_json::json!({"_id": 1}), serde_json::json!({"_id": 2})],
+            counts: Default::default(),
+        };
+        let mut budget = RowBudget::new(Some(1));
+
+        let result =
+            script_statement_result(&statement, &mut budget, true, std::time::Duration::ZERO);
+
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows_truncated());
+        assert_eq!(
+            result
+                .metadata_extra
+                .as_ref()
+                .and_then(|metadata| metadata.get("script_statement_index")),
+            Some(&serde_json::json!(1))
+        );
+    }
+
+    #[test]
+    fn script_scalar_replies_survive_an_exhausted_budget() {
+        let count = dbflux_js::ScriptStatementResult {
+            index: 2,
+            documents: vec![serde_json::json!(42)],
+            counts: Default::default(),
+        };
+        let mut budget = RowBudget::new(Some(0));
+
+        let result = script_statement_result(&count, &mut budget, false, std::time::Duration::ZERO);
+
+        assert_eq!(result.rows.len(), 1);
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn dropped_documents_do_not_add_columns() {
+        let documents = vec![doc! { "_id": 1 }, doc! { "_id": 2, "extra": 1 }];
+        let mut budget = RowBudget::new(Some(1));
+
+        let result =
+            bounded_documents_to_result(documents, &mut budget).expect("documents convert");
+
+        assert_eq!(result.rows.len(), 1);
+        let names: Vec<&str> = result
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["_id"]);
+        assert!(budget.dropped_rows());
+    }
+
+    #[test]
+    fn dropped_script_documents_do_not_add_columns() {
+        let statement = dbflux_js::ScriptStatementResult {
+            index: 0,
+            documents: vec![
+                serde_json::json!({"_id": 1}),
+                serde_json::json!({"_id": 2, "extra": 1}),
+            ],
+            counts: Default::default(),
+        };
+        let mut budget = RowBudget::new(Some(1));
+
+        let result =
+            script_statement_result(&statement, &mut budget, true, std::time::Duration::ZERO);
+
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows_truncated());
+        let names: Vec<&str> = result
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["_id"]);
+    }
+
+    #[test]
+    fn only_script_reads_and_listings_return_rows() {
+        for method in ["find", "aggregate", "getCollectionNames", "listCollections"] {
+            assert!(script_method_returns_rows(method), "{method}");
+        }
+        for method in [
+            "countDocuments",
+            "insertOne",
+            "insertMany",
+            "updateMany",
+            "deleteOne",
+            "runCommand",
+            "stats",
+            "serverStatus",
+            "unknownMethod",
+        ] {
+            assert!(!script_method_returns_rows(method), "{method}");
+        }
     }
 }

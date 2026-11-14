@@ -27,6 +27,7 @@ pub fn window_bounds(cx: &gpui::App) -> gpui::Bounds<gpui::Pixels> {
 }
 pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 
+use crate::ssh_host_picker::{SshHostPicker, SshHostsLoaded};
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_components::components::form_renderer::{self, FormRendererState};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
@@ -37,8 +38,8 @@ use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AuthProfile, AuthSessionState, ConnectionHookBindings, ConnectionMcpPolicyBinding, DbConfig,
-    DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod,
-    SshTunnelProfile, ValueRef,
+    DbDriver, DbKind, DriverCapabilities, DriverFormDef, FormFieldDef, FormFieldKind,
+    GlobalOverrides, LogErr, SshAuthMethod, SshTunnelProfile, ValueRef,
 };
 use dbflux_ui_base::platform;
 use dbflux_ui_base::sso_wizard::SsoWizard;
@@ -108,7 +109,8 @@ fn ssl_mode_from_config(config: &DbConfig) -> Option<String> {
         DbConfig::Postgres { ssl_mode, .. }
         | DbConfig::MySQL { ssl_mode, .. }
         | DbConfig::MongoDB { ssl_mode, .. }
-        | DbConfig::Redis { ssl_mode, .. } => ssl_mode.clone(),
+        | DbConfig::Redis { ssl_mode, .. }
+        | DbConfig::SqlServer { ssl_mode, .. } => ssl_mode.clone(),
         _ => None,
     }
 }
@@ -155,6 +157,9 @@ enum FormFocus {
     SshEnabled,
     SshTunnelSelector,
     SshTunnelClear,
+    /// The shared `~/.ssh/config` host picker of the inline SSH form,
+    /// above the manual host/port/user inputs.
+    SshConfigHost,
     SshEditInSettings,
     SshHost,
     SshPort,
@@ -256,6 +261,9 @@ pub(super) enum MainExtraStop {
     DriverField(Box<FormFieldDef>),
     SslMode,
     SslCert(SslCertSlot),
+    NavigatorView,
+    ShowAllDatabases,
+    ReadOnly,
 }
 
 /// Identifies which SSL certificate slot a file picker writes into.
@@ -290,6 +298,94 @@ struct DriverInfo {
     picker_rank: u16,
 }
 
+const KEYRING_PASSWORD_READ_ERROR: &str =
+    "Could not read the password from the system keyring (it may be locked)";
+
+const KEYRING_SECRETS_READ_ERROR: &str =
+    "Could not read saved secrets from the system keyring (it may be locked)";
+
+type SecretRead = Result<Option<SecretString>, dbflux_core::DbError>;
+
+/// Same contract as `SecretManager::get_password`: a store that is not
+/// available holds no secret (`Ok(None)`), a failing read is an error.
+#[allow(clippy::result_large_err)]
+fn read_saved_secret(
+    secret_store: &std::sync::RwLock<Box<dyn dbflux_core::SecretStore>>,
+    secret_ref: &str,
+) -> SecretRead {
+    let store = secret_store
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if !store.is_available() {
+        return Ok(None);
+    }
+
+    store.get(secret_ref)
+}
+
+/// Everything the edit dialog reads from the keyring when it opens. Each read
+/// is independent, so one failure does not hide what the others returned.
+struct SavedSecrets {
+    password: SecretRead,
+    /// The profile's inline SSH secret; `None` when the profile has no inline tunnel.
+    ssh: Option<SecretRead>,
+    /// The bound tunnel profile's secret; `None` when no tunnel saves one.
+    tunnel: Option<SecretRead>,
+}
+
+#[allow(clippy::result_large_err)]
+fn read_saved_secrets(
+    secret_store: &std::sync::RwLock<Box<dyn dbflux_core::SecretStore>>,
+    profile: &dbflux_core::ConnectionProfile,
+    tunnel: Option<&SshTunnelProfile>,
+) -> SavedSecrets {
+    SavedSecrets {
+        password: read_saved_secret(secret_store, &profile.secret_ref()),
+        ssh: profile
+            .config
+            .ssh_tunnel()
+            .map(|_| read_saved_secret(secret_store, &profile.ssh_secret_ref())),
+        tunnel: tunnel.map(|tunnel| read_saved_secret(secret_store, &tunnel.secret_ref())),
+    }
+}
+
+/// A form action postponed until the keyring read completes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DeferredAction {
+    Save,
+    TestConnection,
+}
+
+impl DeferredAction {
+    /// Save outranks Test Connection: a Test requested after a Save must not
+    /// cancel it, while a Save requested after a Test replaces it.
+    fn merge(pending: Option<Self>, requested: Self) -> Self {
+        match (pending, requested) {
+            (Some(Self::Save), Self::TestConnection) => Self::Save,
+            (_, requested) => requested,
+        }
+    }
+}
+
+/// What the form knows about the password the keyring holds for the profile
+/// being edited.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum StoredPassword {
+    /// The keyring read is still running on the background executor, so an
+    /// empty password field says nothing yet, and saving must not delete the
+    /// saved entry.
+    Loading,
+    /// The keyring answered: the password field shows what it holds, if anything.
+    #[default]
+    Known,
+    /// The form never showed the saved entry: the keyring refused the read,
+    /// or its result was discarded because the field it belonged to changed.
+    /// An empty field says nothing about the entry, and saving must not
+    /// delete it.
+    Unreadable,
+}
+
 /// Driver and credential input widgets for the connection form's main tab.
 struct FormState {
     selected_driver_id: Option<String>,
@@ -299,8 +395,18 @@ struct FormState {
     /// Chip the arrow keys moved the environment row's cursor to, when it
     /// differs from the selected one; cleared by any other command.
     environment_cursor: Option<usize>,
+    /// Sidebar layout chosen in the Main tab; saved on the profile.
+    navigator_view: dbflux_core::NavigatorView,
+    /// Whether the sidebar lists every database, or only the one in the
+    /// Database field; saved on the profile.
+    show_all_databases: bool,
+    /// Whether mutations are blocked for the connection; saved on the profile.
+    read_only: bool,
     form_save_password: bool,
     form_save_ssh_secret: bool,
+    stored_password: StoredPassword,
+    /// Same meaning as `stored_password`, for the profile's inline SSH secret.
+    stored_ssh_secret: StoredPassword,
     input_name: Entity<InputState>,
     /// Filter text for the driver-select picker. Bound to a text input that
     /// is focused on `/` from anywhere within the picker. The query is read
@@ -336,6 +442,15 @@ struct FormState {
     syncing_uri: bool,
 }
 
+/// Manual host/port/user typed into the inline SSH form before an SSH
+/// config alias was picked; restored when the alias is cleared (A7).
+#[derive(Default)]
+struct SshManualValues {
+    host: String,
+    port: String,
+    user: String,
+}
+
 /// SSH tunnel, proxy, and SSM inline connection access widgets.
 struct AccessState {
     ssh_enabled: bool,
@@ -343,6 +458,12 @@ struct AccessState {
     selected_ssh_tunnel_id: Option<Uuid>,
     ssh_tunnel_dropdown: Entity<dbflux_components::controls::Dropdown>,
     ssh_tunnel_uuids: Vec<Uuid>,
+    /// Shared picker of hosts declared in the user's `~/.ssh/config`
+    /// (#837). Applies to the inline SSH form only; a selected saved
+    /// tunnel profile replaces the inline fields.
+    ssh_host_picker: Entity<SshHostPicker>,
+    /// Manual values typed before the active alias, restored on clear.
+    ssh_manual_backup: Option<SshManualValues>,
     input_ssh_host: Entity<InputState>,
     input_ssh_port: Entity<InputState>,
     input_ssh_user: Entity<InputState>,
@@ -430,6 +551,9 @@ struct PendingActions {
     auth_profile_selection: Option<Option<Uuid>>,
     ssm_auth_profile_selection: Option<Option<Uuid>>,
     ssh_tunnel_selection: Option<Uuid>,
+    /// Pending SSH config host picker index, drained into the inline form
+    /// on the next render where a `Window` is available.
+    ssh_config_host_selection: Option<usize>,
     ssh_key_path: Option<String>,
     file_path: Option<String>,
     /// Pending cert-file path drained into `ssl_ca_cert_input` on next render.
@@ -452,6 +576,17 @@ pub struct ConnectionManagerWindow {
     /// grid navigation steps by it.
     driver_grid_columns: usize,
     editing_profile_id: Option<uuid::Uuid>,
+    /// The pending keyring read of the edited profile's secrets; dropping it
+    /// with the window cancels the apply step.
+    secrets_read_task: Option<Task<()>>,
+    /// Save or Test Connection requested while the keyring read was pending.
+    /// Both would otherwise evaluate a form that is still `Loading`; the
+    /// request runs once the read has been applied.
+    deferred_after_secrets_read: Option<DeferredAction>,
+    /// Secret inputs the user edited while the keyring read was pending. A
+    /// cleared input looks untouched, so emptiness alone cannot tell "never
+    /// typed" from "typed and deleted".
+    inputs_edited_during_read: HashSet<EntityId>,
 
     validation_errors: Vec<String>,
     test_status: TestStatus,
@@ -483,12 +618,44 @@ pub struct ConnectionManagerWindow {
     pending: PendingActions,
 }
 
+fn value_source_selector(
+    id_prefix: &'static str,
+    secret_providers: &[(String, String)],
+    window: &mut Window,
+    cx: &mut Context<ConnectionManagerWindow>,
+) -> Entity<ValueSourceSelector> {
+    cx.new(|cx| {
+        let mut selector = ValueSourceSelector::new(id_prefix, window, cx);
+        selector.set_external_secret_providers(secret_providers.to_vec(), cx);
+        selector
+    })
+}
+
 impl ConnectionManagerWindow {
+    fn sync_secret_providers(&mut self, cx: &mut Context<Self>) {
+        let secret_providers = self.app_state.read(cx).secret_providers();
+
+        for selector in [
+            &self.form.host_value_source_selector,
+            &self.form.database_value_source_selector,
+            &self.form.user_value_source_selector,
+            &self.form.password_value_source_selector,
+            &self.access.ssm_instance_id_value_source_selector,
+            &self.access.ssm_region_value_source_selector,
+            &self.access.ssm_remote_port_value_source_selector,
+        ] {
+            selector.update(cx, |selector, cx| {
+                selector.set_external_secret_providers(secret_providers.clone(), cx);
+            });
+        }
+    }
+
     pub fn new(
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let secret_providers = app_state.read(cx).secret_providers();
         let available_drivers: Vec<DriverInfo> = app_state
             .read(cx)
             .drivers()
@@ -525,13 +692,13 @@ impl ConnectionManagerWindow {
                 .masked(true)
         });
         let host_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-host", window, cx));
+            value_source_selector("cm-host", &secret_providers, window, cx);
         let database_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-database", window, cx));
+            value_source_selector("cm-database", &secret_providers, window, cx);
         let user_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-user", window, cx));
+            value_source_selector("cm-user", &secret_providers, window, cx);
         let password_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-password", window, cx));
+            value_source_selector("cm-password", &secret_providers, window, cx);
 
         let input_ssh_host =
             cx.new(|cx| InputState::new(window, cx).placeholder("bastion.example.com"));
@@ -579,6 +746,8 @@ impl ConnectionManagerWindow {
                 "connection_manager.placeholder.select_ssh_tunnel"
             ))
         });
+        let ssh_host_picker = SshHostPicker::load_default(cx);
+        let ssh_config_host_dropdown = ssh_host_picker.read(cx).dropdown().clone();
         let proxy_dropdown = cx.new(|_cx| {
             Dropdown::new("proxy-dropdown").placeholder(dbflux_i18n::t!(
                 "connection_manager.placeholder.select_proxy"
@@ -597,17 +766,17 @@ impl ConnectionManagerWindow {
         let input_ssm_instance_id =
             cx.new(|cx| InputState::new(window, cx).placeholder("i-0123456789abcdef0"));
         let ssm_instance_id_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-ssm-instance-id", window, cx));
+            value_source_selector("cm-ssm-instance-id", &secret_providers, window, cx);
         let input_ssm_region = cx.new(|cx| InputState::new(window, cx).placeholder("us-east-1"));
         let ssm_region_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-ssm-region", window, cx));
+            value_source_selector("cm-ssm-region", &secret_providers, window, cx);
         let input_ssm_remote_port = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("5432")
                 .default_value("5432")
         });
         let ssm_remote_port_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-ssm-remote-port", window, cx));
+            value_source_selector("cm-ssm-remote-port", &secret_providers, window, cx);
         let ssm_auth_profile_dropdown = cx.new(|_cx| {
             Dropdown::new("ssm-auth-profile-dropdown").placeholder(dbflux_i18n::t!(
                 "connection_manager.placeholder.use_connection_auth_profile"
@@ -707,6 +876,22 @@ impl ConnectionManagerWindow {
             },
         );
 
+        let ssh_config_host_picker_sub = cx.subscribe(
+            &ssh_host_picker,
+            |_this, _picker, _: &SshHostsLoaded, cx| {
+                // The config hosts arrived off the foreground thread; the
+                // inline form re-renders with them.
+                cx.notify();
+            },
+        );
+
+        let ssh_config_host_dropdown_sub = cx.subscribe(
+            &ssh_config_host_dropdown,
+            |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                this.handle_ssh_config_host_dropdown_selection(event, cx);
+            },
+        );
+
         let proxy_dropdown_subscription = cx.subscribe(
             &proxy_dropdown,
             |this, _dropdown, event: &DropdownSelectionChanged, cx| {
@@ -795,7 +980,7 @@ impl ConnectionManagerWindow {
             cx.subscribe_in(
                 input,
                 window,
-                |this, _, event: &InputEvent, window, cx| match event {
+                |this, input, event: &InputEvent, window, cx| match event {
                     InputEvent::PressEnter {
                         secondary: false, ..
                     } => {
@@ -805,6 +990,9 @@ impl ConnectionManagerWindow {
                     InputEvent::Blur => {
                         this.exit_edit_mode_on_blur(window, cx);
                     }
+                    InputEvent::Change => {
+                        this.note_edit_during_secrets_read(input.entity_id());
+                    }
                     _ => {}
                 },
             )
@@ -813,7 +1001,7 @@ impl ConnectionManagerWindow {
         let password_change_sub = cx.subscribe_in(
             &input_password,
             window,
-            |this, _, event: &InputEvent, window, cx| match event {
+            |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
@@ -824,6 +1012,7 @@ impl ConnectionManagerWindow {
                     this.exit_edit_mode_on_blur(window, cx);
                 }
                 InputEvent::Change => {
+                    this.note_edit_during_secrets_read(input.entity_id());
                     this.handle_field_change("password", window, cx);
                 }
                 _ => {}
@@ -865,6 +1054,8 @@ impl ConnectionManagerWindow {
             import_panel_sub,
             driver_filter_focus_sub,
             dropdown_subscription,
+            ssh_config_host_picker_sub,
+            ssh_config_host_dropdown_sub,
             proxy_dropdown_subscription,
             auth_profile_dropdown_sub,
             access_method_dropdown_sub,
@@ -905,6 +1096,9 @@ impl ConnectionManagerWindow {
             available_drivers,
             driver_grid_columns: render_driver_select::DEFAULT_GRID_COLUMNS,
             editing_profile_id: None,
+            secrets_read_task: None,
+            deferred_after_secrets_read: None,
+            inputs_edited_during_read: HashSet::new(),
             validation_errors: Vec::new(),
             test_status: TestStatus::None,
             test_error: None,
@@ -923,8 +1117,13 @@ impl ConnectionManagerWindow {
                 selected_driver: None,
                 environment: None,
                 environment_cursor: None,
+                navigator_view: dbflux_core::NavigatorView::Advanced,
+                show_all_databases: true,
+                read_only: false,
                 form_save_password: true,
                 form_save_ssh_secret: true,
+                stored_password: StoredPassword::Known,
+                stored_ssh_secret: StoredPassword::Known,
                 input_name,
                 driver_filter_input,
                 driver_filter_focused: false,
@@ -951,6 +1150,8 @@ impl ConnectionManagerWindow {
                 selected_ssh_tunnel_id: None,
                 ssh_tunnel_dropdown,
                 ssh_tunnel_uuids: Vec::new(),
+                ssh_host_picker,
+                ssh_manual_backup: None,
                 input_ssh_host,
                 input_ssh_port,
                 input_ssh_user,
@@ -1072,6 +1273,9 @@ impl ConnectionManagerWindow {
         instance.form.selected_driver_id = Some(profile.driver_id());
         instance.form.form_save_password = profile.save_password;
         instance.form.environment = profile.environment();
+        instance.form.navigator_view = profile.navigator_view;
+        instance.form.show_all_databases = profile.show_all_databases;
+        instance.form.read_only = profile.read_only_flag;
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
@@ -1128,6 +1332,13 @@ impl ConnectionManagerWindow {
                     ssl_client_cert_path.clone().unwrap_or_default(),
                     ssl_client_key_path.clone().unwrap_or_default(),
                 ),
+                DbConfig::SqlServer {
+                    ssl_root_cert_path, ..
+                } => (
+                    ssl_root_cert_path.clone().unwrap_or_default(),
+                    String::new(),
+                    String::new(),
+                ),
                 _ => (String::new(), String::new(), String::new()),
             };
 
@@ -1151,13 +1362,6 @@ impl ConnectionManagerWindow {
         instance.form.input_name.update(cx, |state, cx| {
             state.set_value(&profile.name, window, cx);
         });
-
-        if let Some(password) = app_state.read(cx).get_password(profile) {
-            let password = password.expose_secret().to_string();
-            instance.form.input_password.update(cx, |state, cx| {
-                state.set_value(password.clone(), window, cx);
-            });
-        }
 
         instance.load_settings_tab(
             profile.settings_overrides.as_ref(),
@@ -1206,6 +1410,7 @@ impl ConnectionManagerWindow {
                 .get_or_insert(*proxy_profile_id);
         }
 
+        let mut bound_tunnel: Option<SshTunnelProfile> = None;
         if let Some(AccessKind::Ssh {
             ssh_tunnel_profile_id,
         }) = &profile.access_kind
@@ -1221,8 +1426,10 @@ impl ConnectionManagerWindow {
                 .cloned();
 
             if let Some(tunnel) = selected_tunnel {
-                let secret = app_state.read(cx).get_ssh_tunnel_secret(&tunnel);
-                instance.apply_ssh_tunnel(&tunnel, secret, window, cx);
+                instance.apply_ssh_tunnel(&tunnel, None, window, cx);
+                if tunnel.save_secret {
+                    bound_tunnel = Some(tunnel);
+                }
             }
         }
 
@@ -1271,6 +1478,15 @@ impl ConnectionManagerWindow {
                 state.set_value(&ssh.user, window, cx);
             });
 
+            // The saved alias, not the cleared manual fields, is the source
+            // of the target (A7): the picker shows it and the manual inputs
+            // stay as the profile stores them — empty while aliased.
+            instance.access.ssh_manual_backup = None;
+            let saved_alias = ssh.ssh_config_host.clone();
+            instance.access.ssh_host_picker.update(cx, |picker, cx| {
+                picker.set_selected_alias(saved_alias.as_deref(), cx);
+            });
+
             match &ssh.auth_method {
                 dbflux_core::SshAuthMethod::PrivateKey { key_path } => {
                     instance.access.ssh_auth_method = SshAuthSelection::PrivateKey;
@@ -1285,27 +1501,9 @@ impl ConnectionManagerWindow {
                     instance.access.ssh_auth_method = SshAuthSelection::Password;
                 }
             }
-
-            if let Some(ssh_secret) = app_state.read(cx).get_ssh_password(profile) {
-                let ssh_secret = ssh_secret.expose_secret().to_string();
-                match instance.access.ssh_auth_method {
-                    SshAuthSelection::PrivateKey => {
-                        instance
-                            .access
-                            .input_ssh_key_passphrase
-                            .update(cx, |state, cx| {
-                                state.set_value(ssh_secret.clone(), window, cx);
-                            });
-                    }
-                    SshAuthSelection::Password => {
-                        instance.access.input_ssh_password.update(cx, |state, cx| {
-                            state.set_value(ssh_secret.clone(), window, cx);
-                        });
-                    }
-                }
-                instance.form.form_save_ssh_secret = true;
-            }
         }
+
+        instance.start_secrets_read(profile, bound_tunnel, window, cx);
 
         instance.load_value_source_selectors(profile, window, cx);
         instance.sync_access_tab_mode_from_state();
@@ -1322,6 +1520,11 @@ impl ConnectionManagerWindow {
         self.access.ssh_enabled = false;
         self.access.ssh_auth_method = SshAuthSelection::PrivateKey;
         self.form.form_save_ssh_secret = true;
+        // A fresh form starts manual: no referenced SSH config alias.
+        self.access.ssh_manual_backup = None;
+        self.access
+            .ssh_host_picker
+            .update(cx, |picker, cx| picker.set_selected_alias(None, cx));
         self.active_tab = ActiveTab::Main;
         self.validation_errors.clear();
         self.test_status = TestStatus::None;
@@ -1503,6 +1706,255 @@ impl ConnectionManagerWindow {
         }
 
         values
+    }
+
+    /// Reads the saved password and SSH secrets off the UI thread, because a
+    /// locked keyring can block the call. Until it completes the form is
+    /// `Loading`, which keeps saving from deleting an entry the form has not
+    /// seen.
+    fn start_secrets_read(
+        &mut self,
+        profile: &dbflux_core::ConnectionProfile,
+        tunnel: Option<SshTunnelProfile>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.form.stored_password = StoredPassword::Loading;
+        self.inputs_edited_during_read.clear();
+        let read_auth_method = self.access.ssh_auth_method;
+        if profile.config.ssh_tunnel().is_some() {
+            self.form.stored_ssh_secret = StoredPassword::Loading;
+        }
+
+        let secret_store = self.app_state.read(cx).secret_store();
+        let profile = profile.clone();
+
+        let read = cx.background_executor().spawn({
+            let profile = profile.clone();
+            let tunnel = tunnel.clone();
+            async move { read_saved_secrets(&secret_store, &profile, tunnel.as_ref()) }
+        });
+
+        self.secrets_read_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let secrets = read.await;
+
+            this.update_in(cx, |this, window, cx| {
+                this.apply_secrets_read(
+                    &profile,
+                    tunnel.as_ref(),
+                    secrets,
+                    read_auth_method,
+                    window,
+                    cx,
+                );
+            })
+            .log_err();
+        }));
+    }
+
+    fn apply_secrets_read(
+        &mut self,
+        profile: &dbflux_core::ConnectionProfile,
+        tunnel: Option<&SshTunnelProfile>,
+        secrets: SavedSecrets,
+        read_auth_method: SshAuthSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.secrets_read_task = None;
+
+        let mut failures: Vec<(&str, dbflux_core::DbError)> = Vec::new();
+
+        match secrets.password {
+            Ok(password) => {
+                self.form.stored_password = StoredPassword::Known;
+
+                // A password that lives behind another source (env, file, ...)
+                // must never land in that source's input, where it would be
+                // saved as the variable name or path.
+                let password_source_is_literal = self
+                    .form
+                    .password_value_source_selector
+                    .read(cx)
+                    .is_literal(cx);
+                let input_is_untouched = self.form.input_password.read(cx).value().is_empty()
+                    && !self
+                        .inputs_edited_during_read
+                        .contains(&self.form.input_password.entity_id());
+                if let Some(password) = password
+                    && password_source_is_literal
+                    && input_is_untouched
+                {
+                    let password = password.expose_secret().to_string();
+                    self.form.input_password.update(cx, |state, cx| {
+                        state.set_value(password, window, cx);
+                    });
+                    // `set_value` emits no Change, so the URI would keep
+                    // showing the connection without its password.
+                    self.sync_fields_to_uri(window, cx);
+                }
+            }
+            Err(error) => {
+                // Unreadable either way, so saving cannot delete an entry the
+                // form never saw; only a profile whose password lives in the
+                // keyring has a failure worth reporting.
+                self.form.stored_password = StoredPassword::Unreadable;
+                if dbflux_core::password_lives_in_keyring(profile) {
+                    failures.push(("password", error));
+                } else {
+                    log::warn!(
+                        "Keyring read failed for profile {}, whose password does not live in \
+                         the keyring: {error}",
+                        profile.id
+                    );
+                }
+            }
+        }
+
+        if let Some(result) = secrets.ssh {
+            match result {
+                Ok(secret) if self.access.ssh_auth_method != read_auth_method => {
+                    // The secret belongs to the method that was selected when
+                    // the read started; filling another method's input would
+                    // misplace it. The form never shows the entry, so it stays
+                    // as protected from deletion as an unreadable one.
+                    drop(secret);
+                    self.form.stored_ssh_secret = StoredPassword::Unreadable;
+                }
+                Ok(secret) => {
+                    self.form.stored_ssh_secret = StoredPassword::Known;
+                    if let Some(secret) = secret
+                        && self.fill_empty_ssh_secret_input(read_auth_method, &secret, window, cx)
+                    {
+                        self.form.form_save_ssh_secret = true;
+                    }
+                }
+                Err(error) => {
+                    self.form.stored_ssh_secret = StoredPassword::Unreadable;
+                    failures.push(("SSH secret", error));
+                }
+            }
+        }
+
+        if let (Some(result), Some(tunnel)) = (secrets.tunnel, tunnel) {
+            match result {
+                Ok(secret) => {
+                    // The user may have picked another tunnel while the read ran.
+                    if let Some(secret) = secret
+                        && self.access.selected_ssh_tunnel_id == Some(tunnel.id)
+                    {
+                        let auth_selection = match tunnel.config.auth_method {
+                            SshAuthMethod::PrivateKey { .. } => SshAuthSelection::PrivateKey,
+                            SshAuthMethod::Password => SshAuthSelection::Password,
+                        };
+                        if self.fill_empty_ssh_secret_input(auth_selection, &secret, window, cx) {
+                            self.form.form_save_ssh_secret = tunnel.save_secret;
+                        }
+                    }
+                }
+                Err(error) => failures.push(("SSH tunnel secret", error)),
+            }
+        }
+
+        self.report_secrets_read_failures(failures, cx);
+        self.inputs_edited_during_read.clear();
+        cx.notify();
+
+        match self.deferred_after_secrets_read.take() {
+            Some(DeferredAction::Save) => self.save_profile(window, cx),
+            Some(DeferredAction::TestConnection) => self.test_connection(window, cx),
+            None => {}
+        }
+    }
+
+    fn note_edit_during_secrets_read(&mut self, input: EntityId) {
+        if self.secrets_read_task.is_some() {
+            self.inputs_edited_during_read.insert(input);
+        }
+    }
+
+    /// Records `action` and returns true while the keyring read is pending,
+    /// so the caller must stop: running it now would evaluate `Loading`.
+    pub(super) fn defer_until_secrets_read(&mut self, action: DeferredAction) -> bool {
+        if self.secrets_read_task.is_none() {
+            return false;
+        }
+
+        self.deferred_after_secrets_read = Some(DeferredAction::merge(
+            self.deferred_after_secrets_read,
+            action,
+        ));
+        true
+    }
+
+    /// Fills the SSH secret input for `auth_selection` unless the user typed
+    /// into it first. Returns whether it filled the input.
+    fn fill_empty_ssh_secret_input(
+        &mut self,
+        auth_selection: SshAuthSelection,
+        secret: &SecretString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let input = match auth_selection {
+            SshAuthSelection::PrivateKey => &self.access.input_ssh_key_passphrase,
+            SshAuthSelection::Password => &self.access.input_ssh_password,
+        };
+
+        if !input.read(cx).value().is_empty()
+            || self.inputs_edited_during_read.contains(&input.entity_id())
+        {
+            return false;
+        }
+
+        let value = secret.expose_secret().to_string();
+        input.update(cx, |state, cx| {
+            state.set_value(value, window, cx);
+        });
+        true
+    }
+
+    /// One report for the whole open, however many secrets failed. Only the
+    /// failed secrets' names and the error text go in the cause, never a value.
+    fn report_secrets_read_failures(
+        &self,
+        failures: Vec<(&str, dbflux_core::DbError)>,
+        cx: &mut Context<Self>,
+    ) {
+        if failures.is_empty() {
+            return;
+        }
+
+        let only_password = failures.iter().all(|(name, _)| *name == "password");
+        let summary = if only_password {
+            KEYRING_PASSWORD_READ_ERROR
+        } else {
+            KEYRING_SECRETS_READ_ERROR
+        };
+        let cause = failures
+            .iter()
+            .map(|(name, error)| format!("{name}: {error}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        report_error(
+            UserFacingError::new(ErrorKind::Storage, summary).with_cause(cause),
+            cx,
+        );
+    }
+
+    /// Placeholder for the password input. An unreadable keyring says so,
+    /// because an empty field would otherwise read as "no password saved".
+    fn password_placeholder(&self, password_source_is_literal: bool, cx: &Context<Self>) -> String {
+        if password_source_is_literal && self.form.stored_password == StoredPassword::Unreadable {
+            return dbflux_i18n::t!("connection_manager.placeholder.password_unreadable");
+        }
+
+        self.form
+            .password_value_source_selector
+            .read(cx)
+            .source_placeholder(cx)
+            .unwrap_or_else(|| self.secret_field_label(cx))
     }
 
     /// Label of the canonical secret input for the selected driver.
@@ -1871,28 +2323,35 @@ impl ConnectionManagerWindow {
 
     /// The Main-tab controls after the named fields, in the order they are
     /// drawn: the driver's own fields, then the SSL mode and the certificate
-    /// pickers the selected mode shows.
+    /// pickers the selected mode shows, then the navigator view of a driver
+    /// with schemas.
     pub(super) fn main_extra_stops(&self) -> Vec<MainExtraStop> {
         let Some(driver) = self.form.selected_driver.as_ref() else {
             return Vec::new();
         };
 
         let form_def = driver.form_definition();
-        let mut stops: Vec<MainExtraStop> = form_def
-            .main_tab()
-            .map(|tab| {
-                tab.sections
-                    .iter()
-                    .flat_map(|section| section.fields.iter())
-                    .filter(|field| {
-                        field.id != "password"
-                            && Self::field_id_to_focus(&field.id, false).is_none()
-                            && !matches!(field.kind, FormFieldKind::DynamicSelect { .. })
-                    })
-                    .map(|field| MainExtraStop::DriverField(Box::new(field.clone())))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut stops: Vec<MainExtraStop> = Vec::new();
+        if Self::shows_show_all_databases(driver.as_ref()) {
+            stops.push(MainExtraStop::ShowAllDatabases);
+        }
+        stops.extend(
+            form_def
+                .main_tab()
+                .map(|tab| {
+                    tab.sections
+                        .iter()
+                        .flat_map(|section| section.fields.iter())
+                        .filter(|field| {
+                            field.id != "password"
+                                && Self::field_id_to_focus(&field.id, false).is_none()
+                                && !matches!(field.kind, FormFieldKind::DynamicSelect { .. })
+                        })
+                        .map(|field| MainExtraStop::DriverField(Box::new(field.clone())))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        );
 
         let metadata = driver.metadata();
         if metadata.ssl_modes.is_some() {
@@ -1912,7 +2371,52 @@ impl ConnectionManagerWindow {
             }
         }
 
+        if Self::shows_navigator_view(driver.as_ref()) {
+            stops.push(MainExtraStop::NavigatorView);
+        }
+
+        stops.push(MainExtraStop::ReadOnly);
+
         stops
+    }
+
+    /// The navigator view only changes the layout of schemas, so it shows
+    /// for drivers that have them.
+    pub(super) fn shows_navigator_view(driver: &dyn DbDriver) -> bool {
+        driver
+            .metadata()
+            .capabilities
+            .contains(DriverCapabilities::SCHEMAS)
+    }
+
+    /// "Show all databases" sits next to the Database field of a driver
+    /// whose server holds several databases.
+    pub(super) fn shows_show_all_databases(driver: &dyn DbDriver) -> bool {
+        driver
+            .metadata()
+            .capabilities
+            .contains(DriverCapabilities::MULTIPLE_DATABASES)
+            && driver.form_definition().main_tab().is_some_and(|tab| {
+                tab.sections
+                    .iter()
+                    .flat_map(|section| section.fields.iter())
+                    .any(|field| field.id == "database" && field.kind == FormFieldKind::Text)
+            })
+    }
+
+    /// The ring stop of the "Show all databases" checkbox.
+    fn main_extra_focus_for_show_all_databases(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::ShowAllDatabases))
+    }
+
+    /// The ring stop of the read-only checkbox.
+    fn main_extra_focus_for_read_only(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::ReadOnly))
+    }
+
+    /// The ring stop of the navigator view control.
+    fn main_extra_focus_for_navigator_view(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::NavigatorView))
     }
 
     /// The ring stop of the Main-tab driver field `field_id` when it has no
@@ -3270,6 +3774,8 @@ impl ConnectionManagerWindow {
     }
 
     fn handle_app_state_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_secret_providers(cx);
+
         let current_profiles = self.app_state.read(cx).list_auth_profiles();
         let current_ids = current_profiles
             .iter()
@@ -3625,6 +4131,91 @@ impl ConnectionManagerWindow {
         }
     }
 
+    pub(super) fn handle_ssh_config_host_dropdown_selection(
+        &mut self,
+        event: &DropdownSelectionChanged,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending.ssh_config_host_selection = Some(event.index);
+        cx.notify();
+    }
+
+    /// The alias of the `~/.ssh/config` host the inline form references,
+    /// if any.
+    pub(super) fn ssh_config_alias(&self, cx: &App) -> Option<String> {
+        self.access
+            .ssh_host_picker
+            .read(cx)
+            .selected_alias()
+            .map(str::to_string)
+    }
+
+    /// Maps the picker dropdown's selection to the inline form: index 0 is
+    /// the manual entry, any other index stores its alias.
+    pub(super) fn apply_ssh_config_host_index(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let alias = self.access.ssh_host_picker.read(cx).alias_at(index);
+        self.set_ssh_config_host(alias.as_deref(), window, cx);
+    }
+
+    /// Applies an SSH config host selection to the inline form. Picking an
+    /// alias backs up and clears the manual host/port/user inputs (A7);
+    /// choosing the manual entry restores them exactly.
+    pub(super) fn set_ssh_config_host(
+        &mut self,
+        alias: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_active = self
+            .access
+            .ssh_host_picker
+            .read(cx)
+            .selected_alias()
+            .is_some();
+        let is_active = alias.is_some();
+
+        if is_active && !was_active {
+            self.access.ssh_manual_backup = Some(SshManualValues {
+                host: self.access.input_ssh_host.read(cx).value().to_string(),
+                port: self.access.input_ssh_port.read(cx).value().to_string(),
+                user: self.access.input_ssh_user.read(cx).value().to_string(),
+            });
+        }
+
+        if is_active {
+            self.access.input_ssh_host.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+            self.access.input_ssh_port.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+            self.access.input_ssh_user.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+        } else if was_active {
+            let backup = self.access.ssh_manual_backup.take().unwrap_or_default();
+            self.access.input_ssh_host.update(cx, |state, cx| {
+                state.set_value(backup.host, window, cx);
+            });
+            self.access.input_ssh_port.update(cx, |state, cx| {
+                state.set_value(backup.port, window, cx);
+            });
+            self.access.input_ssh_user.update(cx, |state, cx| {
+                state.set_value(backup.user, window, cx);
+            });
+        }
+
+        self.access
+            .ssh_host_picker
+            .update(cx, |picker, cx| picker.set_selected_alias(alias, cx));
+        cx.notify();
+    }
+
     pub(super) fn apply_ssh_tunnel(
         &mut self,
         tunnel: &SshTunnelProfile,
@@ -3643,6 +4234,14 @@ impl ConnectionManagerWindow {
         });
         self.access.input_ssh_user.update(cx, |state, cx| {
             state.set_value(&tunnel.config.user, window, cx);
+        });
+
+        // An aliased saved tunnel shows its alias in the picker; the manual
+        // inputs keep the profile's (empty) values (A7).
+        self.access.ssh_manual_backup = None;
+        let saved_alias = tunnel.config.ssh_config_host.clone();
+        self.access.ssh_host_picker.update(cx, |picker, cx| {
+            picker.set_selected_alias(saved_alias.as_deref(), cx)
         });
 
         match &tunnel.config.auth_method {
@@ -3707,6 +4306,13 @@ impl ConnectionManagerWindow {
             state.set_value("", window, cx);
         });
 
+        // Clearing the tunnel selection also clears any referenced alias:
+        // the inline form starts manual again.
+        self.access.ssh_manual_backup = None;
+        self.access
+            .ssh_host_picker
+            .update(cx, |picker, cx| picker.set_selected_alias(None, cx));
+
         self.access.ssh_auth_method = SshAuthSelection::PrivateKey;
         self.form.form_save_ssh_secret = true;
         self.ssh_test_status = TestStatus::None;
@@ -3719,7 +4325,12 @@ impl ConnectionManagerWindow {
             return;
         };
 
-        let name = format!("{}@{}", config.user, config.host);
+        // With an alias the manual host and user are empty (A7): the
+        // profile is named after the alias instead of an empty "@" pair.
+        let name = match &config.ssh_config_host {
+            Some(alias) => alias.clone(),
+            None => format!("{}@{}", config.user, config.host),
+        };
         let secret = self.get_ssh_secret(cx);
 
         let tunnel = SshTunnelProfile {
@@ -3821,31 +4432,9 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn browse_ssh_key(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let this = cx.entity().clone();
-
-        let start_dir = dirs::home_dir().map(|h| h.join(".ssh")).unwrap_or_default();
-
-        let task = cx.background_executor().spawn(async move {
-            let dialog = rfd::FileDialog::new()
-                .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
-                .set_directory(&start_dir);
-
-            dialog.pick_file()
+        browse_ssh_key_into(cx, |this, path| {
+            this.pending.ssh_key_path = Some(path);
         });
-
-        cx.spawn(async move |_this, cx| {
-            let path = task.await;
-
-            if let Some(path) = path {
-                cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        this.pending.ssh_key_path = Some(path.to_string_lossy().to_string());
-                        cx.notify();
-                    });
-                });
-            }
-        })
-        .detach();
     }
 
     /// Open a native file picker filtered to common cert/key extensions and write the
@@ -3858,8 +4447,6 @@ impl ConnectionManagerWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let this = cx.entity().clone();
-
         let title = match slot {
             SslCertSlot::CaCert => dbflux_i18n::t!("connection_manager.select_ca_cert"),
             SslCertSlot::ClientCert => dbflux_i18n::t!("connection_manager.select_client_cert"),
@@ -3873,46 +4460,29 @@ impl ConnectionManagerWindow {
             .or_else(dirs::home_dir)
             .unwrap_or_default();
 
-        let task = cx.background_executor().spawn(async move {
-            let dialog = rfd::FileDialog::new()
-                .set_title(title)
-                .set_directory(&start_dir)
-                .add_filter(
-                    dbflux_i18n::t!("connection_manager.filter_certificates"),
-                    &["pem", "crt", "cer", "key", "der"],
-                )
-                .add_filter(
-                    dbflux_i18n::t!("connection_manager.filter_all_files"),
-                    &["*"],
-                );
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title(title)
+            .set_directory(&start_dir)
+            .add_filter(
+                dbflux_i18n::t!("connection_manager.filter_certificates"),
+                &["pem", "crt", "cer", "key", "der"],
+            )
+            .add_filter(
+                dbflux_i18n::t!("connection_manager.filter_all_files"),
+                &["*"],
+            );
 
-            dialog.pick_file()
-        });
-
-        cx.spawn(async move |_this, cx| {
-            let path = task.await;
-
-            if let Some(path) = path {
-                cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        let path_str = path.to_string_lossy().to_string();
-                        match slot {
-                            SslCertSlot::CaCert => {
-                                this.pending.ssl_ca_cert_path = Some(path_str);
-                            }
-                            SslCertSlot::ClientCert => {
-                                this.pending.ssl_client_cert_path = Some(path_str);
-                            }
-                            SslCertSlot::ClientKey => {
-                                this.pending.ssl_client_key_path = Some(path_str);
-                            }
-                        }
-                        cx.notify();
-                    });
-                });
+        pick_file_into(dialog, cx, move |this, path| match slot {
+            SslCertSlot::CaCert => {
+                this.pending.ssl_ca_cert_path = Some(path);
             }
-        })
-        .detach();
+            SslCertSlot::ClientCert => {
+                this.pending.ssl_client_cert_path = Some(path);
+            }
+            SslCertSlot::ClientKey => {
+                this.pending.ssl_client_key_path = Some(path);
+            }
+        });
     }
 
     /// Clear the value of an SSL cert input.
@@ -3934,8 +4504,6 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn browse_file_path(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let this = cx.entity().clone();
-
         let current_value = self
             .form
             .driver_inputs
@@ -3952,26 +4520,13 @@ impl ConnectionManagerWindow {
             .or_else(dirs::home_dir)
             .unwrap_or_default();
 
-        let task = cx.background_executor().spawn(async move {
-            let dialog = rfd::FileDialog::new()
-                .set_title(dbflux_i18n::t!("connection_manager.select_database_file"))
-                .set_directory(&start_dir);
-            dialog.pick_file()
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title(dbflux_i18n::t!("connection_manager.select_database_file"))
+            .set_directory(&start_dir);
+
+        pick_file_into(dialog, cx, |this, path| {
+            this.pending.file_path = Some(path);
         });
-
-        cx.spawn(async move |_this, cx| {
-            let path = task.await;
-
-            if let Some(path) = path {
-                cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        this.pending.file_path = Some(path.to_string_lossy().to_string());
-                        cx.notify();
-                    });
-                });
-            }
-        })
-        .detach();
     }
 
     // -----------------------------------------------------------------
@@ -4120,6 +4675,61 @@ impl ConnectionManagerWindow {
 pub struct DismissEvent;
 
 impl EventEmitter<DismissEvent> for ConnectionManagerWindow {}
+
+/// Opens the SSH private key picker, starting in `~/.ssh`, and hands the picked
+/// path to `apply` on the entity that asked.
+pub(crate) fn browse_ssh_key_into<T: 'static>(
+    cx: &mut Context<T>,
+    apply: impl FnOnce(&mut T, String) + 'static,
+) {
+    let start_dir = dirs::home_dir()
+        .map(|home| home.join(".ssh"))
+        .unwrap_or_default();
+
+    let dialog = rfd::AsyncFileDialog::new()
+        .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
+        .set_directory(&start_dir);
+
+    pick_file_into(dialog, cx, apply);
+}
+
+/// Shows `dialog` through the shared native picker resolver and hands the
+/// picked path to `apply` on the entity that asked, then re-renders it.
+///
+/// A cancelled picker, or one that returns after the entity was dropped,
+/// changes nothing. A host without a native picker gets the resolver's error
+/// toast.
+fn pick_file_into<T: 'static>(
+    dialog: rfd::AsyncFileDialog,
+    cx: &mut Context<T>,
+    apply: impl FnOnce(&mut T, String) + 'static,
+) {
+    cx.spawn(async move |this, cx| {
+        let picked = dbflux_ui_base::file_dialog::pick_existing_file(cx, async move {
+            dialog
+                .pick_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        })
+        .await;
+
+        let Some(path) = picked else {
+            return;
+        };
+
+        let Some(entity) = this.upgrade() else {
+            return;
+        };
+
+        cx.update(|cx| {
+            entity.update(cx, |this, cx| {
+                apply(this, path.to_string_lossy().to_string());
+                cx.notify();
+            });
+        });
+    })
+    .detach();
+}
 
 #[cfg(test)]
 mod tests {
@@ -4382,6 +4992,7 @@ mod tests {
     const CONNECTION_MANAGER_PLACEHOLDER_KEYS: &[&str] = &[
         "connection_manager.placeholder.connection_name",
         "connection_manager.placeholder.password",
+        "connection_manager.placeholder.password_unreadable",
         "connection_manager.placeholder.key_passphrase_optional",
         "connection_manager.placeholder.ssh_password",
         "connection_manager.placeholder.ca_cert_path",
@@ -4624,7 +5235,7 @@ mod keyboard_coverage_tests {
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{AppContext as _, TestAppContext, VisualTestContext};
 
-    fn open_manager(
+    pub(super) fn open_manager(
         cx: &mut TestAppContext,
     ) -> (
         gpui::Entity<ConnectionManagerWindow>,
@@ -4749,26 +5360,109 @@ mod keyboard_coverage_tests {
         window.run_until_parked();
         check(window, "test-connection");
 
-        for (expected, tab, mode) in [
+        for (expected, tab, mode, ssh_enabled) in [
             (
                 "access-method-dropdown",
                 ActiveTab::Access,
                 AccessTabMode::Direct,
+                false,
             ),
-            ("ssh-enabled", ActiveTab::Access, AccessTabMode::Ssh),
-            ("tab-access", ActiveTab::Access, AccessTabMode::Proxy),
-            ("conn-pre-hook", ActiveTab::Settings, AccessTabMode::Direct),
-            ("tab-mcp", ActiveTab::Mcp, AccessTabMode::Direct),
+            ("ssh-enabled", ActiveTab::Access, AccessTabMode::Ssh, true),
+            (
+                "ssh-config-host-picker",
+                ActiveTab::Access,
+                AccessTabMode::Ssh,
+                true,
+            ),
+            ("tab-access", ActiveTab::Access, AccessTabMode::Proxy, false),
+            (
+                "conn-pre-hook",
+                ActiveTab::Settings,
+                AccessTabMode::Direct,
+                false,
+            ),
+            ("tab-mcp", ActiveTab::Mcp, AccessTabMode::Direct, false),
         ] {
             window.update(|_, cx| {
                 manager.update(cx, |manager, cx| {
                     manager.active_tab = tab;
                     manager.access.access_tab_mode = mode;
+                    manager.access.ssh_enabled = ssh_enabled;
                     cx.notify();
                 })
             });
             window.run_until_parked();
             check(window, expected);
         }
+    }
+}
+
+/// The names the Connection Manager announces. A row that pairs a checkbox
+/// with a value control names the checkbox after what it overrides, because
+/// the value control beside it already carries the plain field label.
+#[cfg(test)]
+mod accessible_name_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::keyboard_coverage_tests::open_manager;
+    use super::{ActiveTab, ConnectionManagerWindow};
+    use dbflux_components::accessibility::accessible_name;
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+
+    fn open_settings_tab(
+        cx: &mut TestAppContext,
+    ) -> (Entity<ConnectionManagerWindow>, &mut VisualTestContext) {
+        let (manager, window) = open_manager(cx);
+        window.update(|window, cx| {
+            manager.update(cx, |manager, cx| {
+                manager.select_driver("postgres", window, cx)
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            manager.update(cx, |manager, cx| {
+                manager.active_tab = ActiveTab::Settings;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        (manager, window)
+    }
+
+    fn override_name(field: &str) -> String {
+        dbflux_i18n::t!("settings.general.override_field", field = field)
+    }
+
+    /// The refresh policy and refresh interval rows each hold a checkbox and a
+    /// value control the user can act on separately, so the checkbox says it
+    /// overrides the field instead of repeating the field label.
+    #[gpui::test]
+    fn the_override_checkboxes_are_named_after_what_they_override(cx: &mut TestAppContext) {
+        let (_manager, window) = open_settings_tab(cx);
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+
+        let template = dbflux_i18n::t!("settings.general.override_field");
+        assert!(
+            template.contains("%{field}"),
+            "the catalogue must carry the override name template, got {template}"
+        );
+
+        let policy = dbflux_i18n::t!("connection_manager.overrides.refresh_policy");
+        let interval = dbflux_i18n::t!("connection_manager.overrides.refresh_interval");
+
+        assert_eq!(
+            accessible_name(&frame, "conn-override-refresh-policy"),
+            Some(override_name(&policy)),
+            "the checkbox that enables the refresh policy override"
+        );
+        assert_eq!(
+            accessible_name(&frame, "conn-override-refresh-interval"),
+            Some(override_name(&interval)),
+            "the checkbox that enables the refresh interval override"
+        );
     }
 }

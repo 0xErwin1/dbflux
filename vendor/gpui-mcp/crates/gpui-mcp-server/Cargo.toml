@@ -8,9 +8,10 @@ license = "Apache-2.0"
 repository = "https://github.com/themixednuts/gpui-mcp"
 homepage = "https://github.com/themixednuts/gpui-mcp"
 publish = false
-# `tests/disabled_state.rs` and `tests/region_capture.rs` drive upstream's
-# `examples/demo` application, which is not vendored, so only the self-contained
-# test target is built. See vendor/gpui-mcp/VENDOR.md.
+# `tests/disabled_state.rs`, `tests/region_capture.rs`, `tests/frame_cost.rs` and
+# `tests/chat_and_annotations.rs` drive upstream's `examples/demo` application,
+# which is not vendored, so only the self-contained test targets are built. See
+# vendor/gpui-mcp/VENDOR.md.
 autotests = false
 
 [[bin]]
@@ -21,6 +22,10 @@ doc = false
 [[test]]
 name = "cache_hints"
 path = "tests/cache_hints.rs"
+
+[[test]]
+name = "tasks_and_messages"
+path = "tests/tasks_and_messages.rs"
 
 [dependencies]
 anyhow = "1.0.100"

@@ -106,6 +106,7 @@ pub(crate) fn table_details(
         presentation: CollectionPresentation::DataGrid,
         child_items: None,
         storage_hints: Some(storage_hints),
+        pseudo_columns: Box::default(),
     })
 }
 
@@ -139,6 +140,7 @@ fn shallow_table(database: &str, name: &str) -> TableInfo {
         presentation: CollectionPresentation::DataGrid,
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 

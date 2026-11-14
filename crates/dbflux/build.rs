@@ -27,6 +27,11 @@ fn main() {
     let script = out_dir.join("dbflux.rc");
     let resource = ResourceScript::new(&icon, &version, identity).render();
 
+    #[expect(
+        clippy::panic,
+        reason = "build scripts signal failure by aborting: an unwritable \
+                  resource script must fail the build, not be skipped"
+    )]
     if let Err(error) = std::fs::write(&script, resource) {
         panic!("failed to write {}: {error}", script.display());
     }
@@ -38,6 +43,13 @@ fn main() {
     drop(script);
 }
 
+/// Reads a Cargo-provided environment variable.
+#[expect(
+    clippy::panic,
+    reason = "Cargo always sets the queried variables for build scripts, so a \
+              missing one means a broken build environment that must abort the \
+              build"
+)]
 fn env_var(name: &str) -> String {
     match env::var(name) {
         Ok(value) => value,
@@ -51,6 +63,11 @@ fn env_var(name: &str) -> String {
 /// or compilation fails. An executable that silently shipped without its icon
 /// and version block would be the worse outcome.
 #[cfg(windows)]
+#[expect(
+    clippy::panic,
+    reason = "missing application icon or failed resource compilation are fatal \
+              Windows build errors; preserve their existing diagnostics"
+)]
 fn embed(script: &Path, icon: &Path) {
     if !icon.is_file() {
         panic!("application icon not found at {}", icon.display());

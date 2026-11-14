@@ -54,12 +54,15 @@ fn table(name: &str) -> TableInfo {
         presentation: dbflux_core::CollectionPresentation::default(),
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 
 /// Opens a diagram of two tables as the window's root view, with keyboard
 /// focus on the diagram viewport.
-fn focused_diagram(cx: &mut TestAppContext) -> (Entity<SchemaVizDocument>, &mut VisualTestContext) {
+pub(super) fn focused_diagram(
+    cx: &mut TestAppContext,
+) -> (Entity<SchemaVizDocument>, &mut VisualTestContext) {
     cx.update(gpui_component::init);
     cx.update(theme::init);
     cx.update(init_keymap);
@@ -268,9 +271,8 @@ fn the_context_menu_lists_the_toolbar_view_controls(cx: &mut TestAppContext) {
     );
 
     window.simulate_keystrokes("m j j j j j j j j enter");
-    assert_eq!(
+    assert!(
         window.update(|_, cx| document.read(cx).show_indexes),
-        true,
         "Show indexes flips the Indexes toggle"
     );
 }

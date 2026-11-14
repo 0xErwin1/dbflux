@@ -11,6 +11,10 @@ use dbflux_core::observability::types::{
     EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
 };
 
+#[expect(
+    clippy::expect_used,
+    reason = "non-#[test] fixture helper: stale-file cleanup and service init failures must abort the test run with context"
+)]
 fn service_for_test(name: &str) -> AuditService {
     let path = temp_sqlite_path(name);
 

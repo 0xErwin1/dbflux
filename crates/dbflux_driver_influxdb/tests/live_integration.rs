@@ -19,7 +19,7 @@
 use dbflux_core::{
     CollectionBrowseRequest, CollectionRef, ColumnKind, Connection, ConnectionProfile, DbConfig,
     DbDriver, DbError, ExecutionContext, ExecutionSourceContext, InfluxVersion, Pagination,
-    QueryLanguage, QueryRequest, QueryResult,
+    QueryLanguage, QueryRequest, QueryResult, SchemaLoadingStrategy, Value,
 };
 use dbflux_driver_influxdb::InfluxDriver;
 use dbflux_test_support::containers;
@@ -29,7 +29,7 @@ use std::time::Duration;
 // Test helpers
 // ---------------------------------------------------------------------------
 
-fn make_v2_profile(endpoint: &str, bucket: &str, org: &str) -> ConnectionProfile {
+fn make_v2_profile(endpoint: &str, bucket: Option<&str>, org: &str) -> ConnectionProfile {
     ConnectionProfile::new_with_driver(
         "influxdb-v2-test",
         dbflux_core::DbKind::InfluxDB,
@@ -38,7 +38,7 @@ fn make_v2_profile(endpoint: &str, bucket: &str, org: &str) -> ConnectionProfile
             version: InfluxVersion::V2,
             url: endpoint.to_string(),
             org: Some(org.to_string()),
-            default_bucket: Some(bucket.to_string()),
+            default_bucket: bucket.map(str::to_string),
             retention_policy: None,
             user: None,
             request_timeout_seconds: None,
@@ -70,7 +70,18 @@ fn connect_v2(
     token: &str,
 ) -> Result<Box<dyn Connection>, DbError> {
     let driver = InfluxDriver::new();
-    let profile = make_v2_profile(endpoint, bucket, org);
+    let profile = make_v2_profile(endpoint, Some(bucket), org);
+    let secret = dbflux_core::secrecy::SecretString::new(token.to_string().into());
+    driver.connect_with_secrets(&profile, Some(&secret), None)
+}
+
+fn connect_v2_without_default_bucket(
+    endpoint: &str,
+    org: &str,
+    token: &str,
+) -> Result<Box<dyn Connection>, DbError> {
+    let driver = InfluxDriver::new();
+    let profile = make_v2_profile(endpoint, None, org);
     let secret = dbflux_core::secrecy::SecretString::new(token.to_string().into());
     driver.connect_with_secrets(&profile, Some(&secret), None)
 }
@@ -151,33 +162,82 @@ fn write_v1_line_protocol(endpoint: &str, database: &str, lines: &str) -> Result
     }
 }
 
-/// Write line-protocol data to InfluxDB v1, creating the database first.
+/// `/query` answers 200 even when the statement fails, with the error inside
+/// the JSON body, so the status alone does not prove the database exists. A
+/// write sent before the server lists it fails with "database not found".
 fn setup_v1_database(endpoint: &str, database: &str) -> Result<(), DbError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
-        .map_err(|e| DbError::connection_failed(e.to_string()))?;
+        .map_err(|error| DbError::connection_failed(error.to_string()))?;
 
+    v1_statement(&client, endpoint, &format!("CREATE DATABASE {database}"))?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = v1_statement(&client, endpoint, "SHOW DATABASES")?;
+        if v1_lists_database(&listed, database) {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(DbError::query_failed(format!(
+                "database {database} was created but is not listed: {listed}"
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn v1_statement(
+    client: &reqwest::blocking::Client,
+    endpoint: &str,
+    statement: &str,
+) -> Result<serde_json::Value, DbError> {
     let url = format!(
         "{}/query?q={}",
         endpoint.trim_end_matches('/'),
-        urlencoding::encode(&format!("CREATE DATABASE {database}")),
+        urlencoding::encode(statement),
     );
 
     let resp = client
         .post(&url)
         .send()
-        .map_err(|e| DbError::connection_failed(e.to_string()))?;
-
-    if resp.status().as_u16() < 300 {
-        Ok(())
-    } else {
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        Err(DbError::query_failed(format!(
-            "CREATE DATABASE failed: HTTP {status}: {body}"
-        )))
+        .map_err(|error| DbError::connection_failed(error.to_string()))?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .text()
+        .map_err(|error| DbError::connection_failed(error.to_string()))?;
+    if status >= 300 {
+        return Err(DbError::query_failed(format!(
+            "{statement} failed: HTTP {status}: {body}"
+        )));
     }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+        DbError::query_failed(format!("{statement}: invalid JSON {body}: {error}"))
+    })?;
+    let statement_error = parsed["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find_map(|result| result["error"].as_str());
+    if let Some(error) = statement_error {
+        return Err(DbError::query_failed(format!(
+            "{statement} failed: {error}"
+        )));
+    }
+
+    Ok(parsed)
+}
+
+fn v1_lists_database(show_databases: &serde_json::Value, database: &str) -> bool {
+    show_databases["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|result| result["series"].as_array().into_iter().flatten())
+        .flat_map(|series| series["values"].as_array().into_iter().flatten())
+        .any(|row| row[0].as_str() == Some(database))
 }
 
 /// Build a query request with an explicit collection window (triggers time injection).
@@ -824,6 +884,75 @@ fn v1_measurement_browse_runs_the_query_it_describes() -> Result<(), DbError> {
             "the browse must honour the page size"
         );
         assert_chartable(&result);
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Per-bucket measurement listing: any bucket expands, not only the profile
+// default, and browsed timestamps arrive as datetimes rather than epoch values.
+// ---------------------------------------------------------------------------
+
+fn measurement_names(conn: &dyn Connection, database: &str) -> Result<Vec<String>, DbError> {
+    Ok(conn
+        .schema_for_database(database)?
+        .tables
+        .into_iter()
+        .map(|table| table.name)
+        .collect())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v2_bucket_lists_measurements_without_a_default_bucket() -> Result<(), DbError> {
+    containers::with_influxdb_v2(|cfg| {
+        let lines = generate_metric_points(5);
+        write_v2_line_protocol(&cfg.endpoint, &cfg.token, &cfg.org, &cfg.bucket, &lines)?;
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        let conn = connect_v2_without_default_bucket(&cfg.endpoint, &cfg.org, &cfg.token)?;
+
+        assert_eq!(
+            conn.schema_loading_strategy(),
+            SchemaLoadingStrategy::LazyPerDatabase
+        );
+        assert_eq!(measurement_names(conn.as_ref(), &cfg.bucket)?, ["metric"]);
+
+        let result = conn.browse_collection(&browse_first_page(&cfg.bucket))?;
+        let time_index = result
+            .columns
+            .iter()
+            .position(|column| column.name == "time")
+            .expect("browse result carries a time column");
+        assert!(
+            result
+                .rows
+                .iter()
+                .all(|row| matches!(row[time_index], Value::DateTime(_))),
+            "time values must be datetimes, not epoch integers: {:?}",
+            result.rows.first()
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v1_database_other_than_the_default_lists_its_measurements() -> Result<(), DbError> {
+    containers::with_influxdb_v1(|cfg| {
+        setup_v1_database(&cfg.endpoint, "primary")?;
+        setup_v1_database(&cfg.endpoint, "secondary")?;
+        write_v1_line_protocol(&cfg.endpoint, "secondary", &generate_metric_points(5))?;
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        let conn = connect_v1(&cfg.endpoint, "primary")?;
+
+        assert_eq!(measurement_names(conn.as_ref(), "secondary")?, ["metric"]);
+        assert!(measurement_names(conn.as_ref(), "primary")?.is_empty());
 
         Ok(())
     })

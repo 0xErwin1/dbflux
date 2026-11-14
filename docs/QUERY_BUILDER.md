@@ -94,7 +94,7 @@ and the actor context:
 | Policy | Effect |
 |--------|--------|
 | Allowed | The mutation can run. |
-| Read-only | Execution is blocked (for example, a read-only profile). |
+| Read-only | Execution is blocked: the profile has **Read-only** switched on in the Connection Manager, or the server rejects writes. |
 | Approval required | The mutation must be approved before it runs. |
 
 **Execution mode.** The **Execution** section offers three modes, with a default

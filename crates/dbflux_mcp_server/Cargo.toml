@@ -23,6 +23,7 @@ dynamodb = ["dbflux_driver_dynamodb"]
 redshift = ["dbflux_driver_redshift"]
 clickhouse = ["dbflux_driver_clickhouse"]
 turso = ["dbflux_driver_turso"]
+duckdb = ["dbflux_driver_duckdb"]
 aws = ["dbflux_aws", "dbflux_ssm"]
 
 [dependencies]
@@ -46,6 +47,7 @@ dbflux_driver_dynamodb = { workspace = true, optional = true }
 dbflux_driver_redshift = { workspace = true, optional = true }
 dbflux_driver_clickhouse = { workspace = true, optional = true }
 dbflux_driver_turso = { workspace = true, optional = true }
+dbflux_driver_duckdb = { workspace = true, optional = true }
 dbflux_aws = { workspace = true, optional = true }
 dbflux_ssm = { workspace = true, optional = true }
 
@@ -58,7 +60,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 # Async runtime
-tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "sync", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "sync", "macros", "time"] }
 
 # Utilities
 uuid = { workspace = true }
@@ -88,3 +90,6 @@ tempfile = "3.10"
 
 # Async test runtime
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
+
+[lints]
+workspace = true

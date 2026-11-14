@@ -8,8 +8,8 @@
 use super::metadata::CachedKeyMetadata;
 use super::parsing::parse_database_name;
 use dbflux_core::{
-    DbError, KeyGetRequest, KeyMetadataRequest, KeyScanRequest, KeyType, KeyValueApi,
-    KeyValueFeatures, TaskKind,
+    CancelToken, DbError, KeyGetRequest, KeyMetadataRequest, KeyScanPage, KeyScanRequest, KeyType,
+    KeyValueApi, KeyValueFeatures, TaskKind,
 };
 use gpui::*;
 use std::time::Instant;
@@ -72,6 +72,30 @@ fn fetch_key_total(api: &dyn KeyValueApi, keyspace: Option<u32>) -> Option<u64> 
             None
         }
     }
+}
+
+/// Reads one key page and, for the first page, the keyspace total. A cancel
+/// observed after the page skips the total, which is one more server call.
+#[allow(clippy::result_large_err)]
+fn scan_page_with_total(
+    api: &dyn KeyValueApi,
+    request: &KeyScanRequest,
+    is_first_page: bool,
+    cancel: &CancelToken,
+) -> Result<(KeyScanPage, Option<u64>), DbError> {
+    let page = api.scan_keys_with_cancel(request, cancel)?;
+
+    if cancel.is_cancelled() {
+        return Err(DbError::Cancelled);
+    }
+
+    let key_total = if is_first_page {
+        fetch_key_total(api, request.keyspace)
+    } else {
+        None
+    };
+
+    Ok((page, key_total))
 }
 
 impl super::KeyValueDocument {
@@ -230,24 +254,29 @@ impl super::KeyValueDocument {
         cx.spawn(async move |_this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    let api = connection.key_value_api().ok_or_else(|| {
-                        DbError::NotSupported("Key-value API unavailable".to_string())
-                    })?;
-                    let page = api.scan_keys(&request)?;
-                    let key_total = if is_first_page {
-                        fetch_key_total(api, request.keyspace)
-                    } else {
-                        None
-                    };
+                .spawn({
+                    let cancel_token = cancel_token.clone();
+                    async move {
+                        let api = connection.key_value_api().ok_or_else(|| {
+                            DbError::NotSupported("Key-value API unavailable".to_string())
+                        })?;
 
-                    Ok::<_, DbError>((page, key_total))
+                        scan_page_with_total(api, &request, is_first_page, &cancel_token)
+                    }
                 })
                 .await;
 
             cx.update(|cx| {
                 entity.update(cx, |this, cx| {
-                    if cancel_token.is_cancelled() || this.scan_generation != generation {
+                    if this.scan_generation != generation {
+                        return;
+                    }
+
+                    // Escape or the tasks panel stopped this scan without
+                    // starting another, so a running search ends here too.
+                    if cancel_token.is_cancelled() {
+                        this.scan_mode = ScanMode::Page;
+                        cx.notify();
                         return;
                     }
 
@@ -544,10 +573,12 @@ impl super::KeyValueDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScanMode, fetch_key_total, key_scan_pattern, should_continue_scan};
+    use super::{
+        ScanMode, fetch_key_total, key_scan_pattern, scan_page_with_total, should_continue_scan,
+    };
     use dbflux_core::{
-        DbError, KeyDeleteRequest, KeyExistsRequest, KeyGetRequest, KeyGetResult, KeyScanPage,
-        KeyScanRequest, KeySetRequest, KeyValueApi,
+        CancelToken, DbError, KeyDeleteRequest, KeyExistsRequest, KeyGetRequest, KeyGetResult,
+        KeyScanPage, KeyScanRequest, KeySetRequest, KeyValueApi,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -611,6 +642,80 @@ mod tests {
                 "not used by fetch_key_total".to_string(),
             ))
         }
+    }
+
+    /// Returns one empty page per scan and, when `cancel_during_scan` is set,
+    /// cancels that token while the page is being read.
+    struct CancellingScan {
+        cancel_during_scan: Option<CancelToken>,
+        count_calls: AtomicUsize,
+    }
+
+    impl KeyValueApi for CancellingScan {
+        fn key_count(&self, _keyspace: Option<u32>) -> Result<u64, DbError> {
+            self.count_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(7)
+        }
+
+        fn scan_keys(&self, _request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
+            if let Some(token) = &self.cancel_during_scan {
+                token.cancel();
+            }
+
+            Ok(KeyScanPage {
+                entries: Vec::new(),
+                next_cursor: None,
+                scanned_keys: None,
+            })
+        }
+
+        fn get_key(&self, _request: &KeyGetRequest) -> Result<KeyGetResult, DbError> {
+            Err(DbError::NotSupported("not used by scans".to_string()))
+        }
+
+        fn set_key(&self, _request: &KeySetRequest) -> Result<(), DbError> {
+            Err(DbError::NotSupported("not used by scans".to_string()))
+        }
+
+        fn delete_key(&self, _request: &KeyDeleteRequest) -> Result<bool, DbError> {
+            Err(DbError::NotSupported("not used by scans".to_string()))
+        }
+
+        fn exists_key(&self, _request: &KeyExistsRequest) -> Result<bool, DbError> {
+            Err(DbError::NotSupported("not used by scans".to_string()))
+        }
+    }
+
+    #[test]
+    fn a_scan_cancelled_mid_page_skips_the_key_total() {
+        let token = CancelToken::new();
+        let api = CancellingScan {
+            cancel_during_scan: Some(token.clone()),
+            count_calls: AtomicUsize::new(0),
+        };
+
+        let result = scan_page_with_total(&api, &KeyScanRequest::new(10), true, &token);
+
+        assert!(matches!(result, Err(DbError::Cancelled)));
+        assert_eq!(api.count_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_first_page_reads_the_key_total_and_later_pages_do_not() {
+        let api = CancellingScan {
+            cancel_during_scan: None,
+            count_calls: AtomicUsize::new(0),
+        };
+        let token = CancelToken::new();
+
+        let first =
+            scan_page_with_total(&api, &KeyScanRequest::new(10), true, &token).expect("first page");
+        let later = scan_page_with_total(&api, &KeyScanRequest::new(10), false, &token)
+            .expect("later page");
+
+        assert_eq!(first.1, Some(7));
+        assert_eq!(later.1, None);
+        assert_eq!(api.count_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

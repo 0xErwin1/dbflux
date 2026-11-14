@@ -20,10 +20,10 @@ use crate::app_state_entity::AppStateEntity;
 
 // The architecture scan reads this file directly; the parent module's test gate is not visible there.
 #[cfg(test)]
-pub static TEST_FORM: std::sync::LazyLock<DriverFormDef> =
+pub(crate) static TEST_FORM: std::sync::LazyLock<DriverFormDef> =
     std::sync::LazyLock::new(|| DriverFormDef { tabs: vec![] });
 
-pub fn driver_metadata(id: &str) -> DriverMetadata {
+pub(crate) fn driver_metadata(id: &str) -> DriverMetadata {
     DriverMetadata {
         id: id.to_string(),
         display_name: "TestTree".to_string(),
@@ -51,7 +51,7 @@ pub fn driver_metadata(id: &str) -> DriverMetadata {
     }
 }
 
-pub fn table(schema: Option<&str>, name: &str) -> TableInfo {
+pub(crate) fn table(schema: Option<&str>, name: &str) -> TableInfo {
     TableInfo {
         name: name.to_string(),
         schema: schema.map(str::to_string),
@@ -63,17 +63,18 @@ pub fn table(schema: Option<&str>, name: &str) -> TableInfo {
         presentation: dbflux_core::CollectionPresentation::default(),
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 
-pub fn loaded_details(schema: Option<&str>, name: &str) -> TableInfo {
+pub(crate) fn loaded_details(schema: Option<&str>, name: &str) -> TableInfo {
     TableInfo {
         columns: Some(Vec::new()),
         ..table(schema, name)
     }
 }
 
-pub fn db_schema(name: &str, tables: Vec<TableInfo>) -> dbflux_core::DbSchemaInfo {
+pub(crate) fn db_schema(name: &str, tables: Vec<TableInfo>) -> dbflux_core::DbSchemaInfo {
     dbflux_core::DbSchemaInfo {
         name: name.to_string(),
         tables,
@@ -82,7 +83,7 @@ pub fn db_schema(name: &str, tables: Vec<TableInfo>) -> dbflux_core::DbSchemaInf
     }
 }
 
-pub fn relational_schema(
+pub(crate) fn relational_schema(
     databases: Vec<DatabaseInfo>,
     current: Option<&str>,
     schemas: Vec<dbflux_core::DbSchemaInfo>,
@@ -97,10 +98,13 @@ pub fn relational_schema(
     })
 }
 
+/// Result of `table_details`, keyed by `(database, schema, table)`.
+type TableDetailsCache = HashMap<(String, Option<String>, String), TableInfo>;
+
 /// A controllable fake connection backing the coordinator tests. All driver
 // work is served from injected maps; call counters let tests assert
 /// deduplicated execution.
-pub struct FakeTreeConnection {
+pub(crate) struct FakeTreeConnection {
     pub metadata: DriverMetadata,
     pub kind: DbKind,
     pub strategy: SchemaLoadingStrategy,
@@ -111,14 +115,14 @@ pub struct FakeTreeConnection {
     /// Databases whose next `schema_for_database` call fails once.
     pub schema_failures: Mutex<HashMap<String, usize>>,
     /// Result of `table_details`, keyed by `(database, schema, table)`.
-    pub details: Mutex<HashMap<(String, Option<String>, String), TableInfo>>,
+    pub details: Mutex<TableDetailsCache>,
     pub list_calls: AtomicUsize,
     pub schema_calls: Mutex<Vec<String>>,
     pub details_calls: AtomicUsize,
 }
 
 impl FakeTreeConnection {
-    pub fn new(strategy: SchemaLoadingStrategy) -> Arc<Self> {
+    pub(crate) fn new(strategy: SchemaLoadingStrategy) -> Arc<Self> {
         Arc::new(Self {
             metadata: driver_metadata("test-tree-conn"),
             kind: DbKind::Postgres,
@@ -133,15 +137,15 @@ impl FakeTreeConnection {
         })
     }
 
-    pub fn list_calls(&self) -> usize {
+    pub(crate) fn list_calls(&self) -> usize {
         self.list_calls.load(Ordering::SeqCst)
     }
 
-    pub fn schema_calls(&self) -> Vec<String> {
+    pub(crate) fn schema_calls(&self) -> Vec<String> {
         self.schema_calls.lock().expect("schema calls").clone()
     }
 
-    pub fn details_calls(&self) -> usize {
+    pub(crate) fn details_calls(&self) -> usize {
         self.details_calls.load(Ordering::SeqCst)
     }
 }
@@ -183,11 +187,19 @@ impl Connection for FakeTreeConnection {
         &dbflux_core::DefaultSqlDialect
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test double: its own fixture mutexes keep the panic-on-poison policy, so a poisoned lock fails the test loudly"
+    )]
     fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
         self.list_calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.databases.lock().expect("databases").clone())
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test double: its own fixture mutexes keep the panic-on-poison policy, so a poisoned lock fails the test loudly"
+    )]
     fn schema_for_database(&self, database: &str) -> Result<dbflux_core::DbSchemaInfo, DbError> {
         self.schema_calls
             .lock()
@@ -217,6 +229,10 @@ impl Connection for FakeTreeConnection {
             })
     }
 
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test double: its own fixture mutexes keep the panic-on-poison policy, so a poisoned lock fails the test loudly"
+    )]
     fn table_details(
         &self,
         database: &str,
@@ -243,13 +259,13 @@ impl Connection for FakeTreeConnection {
 
 /// A per-database connection as real ConnectionPerDatabase drivers produce:
 /// bound to one database and always labelled with it.
-pub struct BoundTestConnection {
+pub(crate) struct BoundTestConnection {
     metadata: DriverMetadata,
     bound_database: String,
 }
 
 impl BoundTestConnection {
-    pub fn new(bound_database: &str) -> Box<Self> {
+    pub(crate) fn new(bound_database: &str) -> Box<Self> {
         Box::new(Self {
             metadata: driver_metadata("test-tree-conn"),
             bound_database: bound_database.to_string(),
@@ -320,14 +336,14 @@ impl Connection for BoundTestConnection {
 
 /// Test driver producing [`BoundTestConnection`]s for the guarded
 /// per-database install path.
-pub struct InstallTestDriver {
+pub(crate) struct InstallTestDriver {
     metadata: DriverMetadata,
     pub connect_calls: AtomicUsize,
     fail_connect: AtomicBool,
 }
 
 impl InstallTestDriver {
-    pub fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             metadata: driver_metadata("test-tree-conn"),
             connect_calls: AtomicUsize::new(0),
@@ -335,11 +351,11 @@ impl InstallTestDriver {
         })
     }
 
-    pub fn connect_calls(&self) -> usize {
+    pub(crate) fn connect_calls(&self) -> usize {
         self.connect_calls.load(Ordering::SeqCst)
     }
 
-    pub fn set_fail_connect(&self, fail: bool) {
+    pub(crate) fn set_fail_connect(&self, fail: bool) {
         self.fail_connect.store(fail, Ordering::SeqCst);
     }
 }
@@ -406,10 +422,10 @@ impl dbflux_core::DbDriver for InstallTestDriver {
     }
 }
 
-pub const DRIVER_KEY: &str = "builtin:test-tree-driver";
+pub(crate) const DRIVER_KEY: &str = "builtin:test-tree-driver";
 
 /// Builds a real `AppStateEntity` over in-memory storage.
-pub fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+pub(crate) fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
     cx.update(|cx| {
         cx.new(|_| {
             AppStateEntity::new_with_storage_runtime(
@@ -423,7 +439,7 @@ pub fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
 
 /// Connects `profile_id`'s profile through the same seam production uses,
 /// returning the profile id.
-pub fn connect_profile(
+pub(crate) fn connect_profile(
     state: &Entity<AppStateEntity>,
     cx: &mut TestAppContext,
     profile_id: Uuid,

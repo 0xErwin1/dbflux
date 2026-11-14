@@ -29,11 +29,12 @@ use dbflux_core::observability::{
     EventRecord, EventSeverity, EventSourceId,
 };
 use dbflux_core::{
-    DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic,
-    EditorLanguageProfile, ExecutionContext, ExecutionSourceContext, HistoryEntry, OutputReceiver,
-    QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaDriftDetected,
-    SchemaLoadingStrategy, TaskTarget, ValidationResult, check_schema_drift,
+    Connection, DangerousAction, DangerousQueryKind, DbError,
+    DiagnosticSeverity as CoreDiagnosticSeverity, DriftOutcome, DriverCapabilities,
+    EditorDiagnostic as CoreEditorDiagnostic, EditorLanguageProfile, ExecutionContext,
+    ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
+    ReadOnlyEnforcement, RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget,
+    ValidationResult, check_schema_drift,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -45,7 +46,7 @@ use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
 };
 use gpui_component::input::EditorState as GpuiEditorState;
-use gpui_component::resizable::{resizable_panel, v_resizable};
+use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertTextFormat, Position as LspPosition, Range as LspRange, TextEdit,
@@ -62,6 +63,8 @@ use uuid::Uuid;
 mod code_actions;
 mod comment;
 mod completion;
+#[cfg(test)]
+mod completion_tests;
 mod context_bar;
 mod diagnostics;
 mod execution;
@@ -70,16 +73,16 @@ mod file_ops;
 mod file_persistence;
 mod focus;
 mod live_output;
-pub mod pane;
+pub(crate) mod pane;
 mod render;
 mod statements;
 mod vim;
 
 use code_actions::SqlCodeActionProvider;
-use completion::QueryCompletionProvider;
-use execution_session::ExecutionSessionBinding;
+pub(crate) use completion::QueryCompletionProvider;
+pub(crate) use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
-pub use vim::VimMode;
+pub(crate) use vim::VimMode;
 
 pub(crate) use execution::evaluate_dangerous_with_effective_settings;
 
@@ -94,21 +97,106 @@ pub(super) struct ResultTab {
     title: String,
     grid: Entity<DataGridPanel>,
     result_panel: Entity<ResultPanel>,
+    /// Where the tab's result came from, so its footer actions run the
+    /// query there even after the document moved on.
+    origin: Option<ResultOrigin>,
     _subscription: Subscription,
 }
 
 /// Internal layout of the document.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum SqlQueryLayout {
+pub(crate) enum SqlQueryLayout {
     #[default]
     Split,
     EditorOnly,
     ResultsOnly,
 }
 
+/// Where the results sit in the split: below the editor, or beside it on
+/// the right for wide screens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum ResultsPosition {
+    #[default]
+    Bottom,
+    Right,
+}
+
+/// UI state key holding the position the last toggle chose, which new query
+/// tabs open with.
+const RESULTS_POSITION_KEY: &str = "query_results_position";
+
+impl ResultsPosition {
+    fn toggled(self) -> Self {
+        match self {
+            Self::Bottom => Self::Right,
+            Self::Right => Self::Bottom,
+        }
+    }
+
+    fn hide_icon(self) -> AppIcon {
+        match self {
+            Self::Bottom => AppIcon::PanelBottomClose,
+            Self::Right => AppIcon::PanelRightClose,
+        }
+    }
+
+    fn show_icon(self) -> AppIcon {
+        match self {
+            Self::Bottom => AppIcon::PanelBottomOpen,
+            Self::Right => AppIcon::PanelRightOpen,
+        }
+    }
+
+    /// The label and icon of the toggle, naming the position it moves to.
+    fn toggle_label_and_icon(self) -> (String, AppIcon) {
+        match self {
+            Self::Bottom => (
+                dbflux_i18n::t!("document.code.toolbar.results_right"),
+                AppIcon::PanelRight,
+            ),
+            Self::Right => (
+                dbflux_i18n::t!("document.code.toolbar.results_bottom"),
+                AppIcon::PanelBottom,
+            ),
+        }
+    }
+
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::Bottom => "\"bottom\"",
+            Self::Right => "\"right\"",
+        }
+    }
+
+    fn load(app_state: &AppStateEntity) -> Self {
+        match app_state
+            .storage_runtime()
+            .ui_state()
+            .get(RESULTS_POSITION_KEY)
+        {
+            Ok(Some(value)) if value == Self::Right.storage_value() => Self::Right,
+            Ok(_) => Self::Bottom,
+            Err(error) => {
+                log::warn!("Could not read the saved results position: {error}");
+                Self::Bottom
+            }
+        }
+    }
+
+    fn save(self, app_state: &AppStateEntity) {
+        if let Err(error) = app_state
+            .storage_runtime()
+            .ui_state()
+            .set(RESULTS_POSITION_KEY, self.storage_value())
+        {
+            log::error!("Could not save the results position: {error}");
+        }
+    }
+}
+
 /// Where focus is within the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum SqlQueryFocus {
+pub(crate) enum SqlQueryFocus {
     #[default]
     Editor,
     Results,
@@ -207,12 +295,33 @@ fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(
 /// Caps an editor query at `editor_row_limit` rows unless the request already
 /// carries its own limit, which wins even when it is zero. A limit beyond
 /// `u32::MAX` saturates because `QueryRequest::limit` is a `u32`.
-fn apply_editor_row_limit(mut request: QueryRequest, editor_row_limit: usize) -> QueryRequest {
-    if request.limit.is_none() {
+///
+/// `None` leaves the request as it is: the connection cannot enforce a row
+/// budget, and a driver that cannot enforce one refuses the whole request
+/// instead of running it unbounded (see [`enforces_request_row_limit`]).
+fn apply_editor_row_limit(
+    mut request: QueryRequest,
+    editor_row_limit: Option<usize>,
+) -> QueryRequest {
+    if let (Some(editor_row_limit), None) = (editor_row_limit, request.limit) {
         request.limit = Some(u32::try_from(editor_row_limit).unwrap_or(u32::MAX));
     }
 
     request
+}
+
+/// Whether `connection` enforces [`QueryRequest::limit`] itself: it stops
+/// reading rows at the cap and marks the result truncated, instead of refusing
+/// a request that carries one.
+///
+/// A request goes out with the editor row limit only when this holds. The limit
+/// is a budget the driver has to enforce, so sending it to a driver that cannot
+/// enforce it turns the query away without running anything; the native console
+/// gates its commands on the same flag.
+pub(crate) fn enforces_request_row_limit(connection: &dyn Connection) -> bool {
+    connection
+        .metadata()
+        .supports(DriverCapabilities::REQUEST_ROW_LIMIT)
 }
 
 fn query_request_for_execution(
@@ -220,7 +329,7 @@ fn query_request_for_execution(
     active_database: Option<String>,
     exec_ctx: &ExecutionContext,
     query_language: QueryLanguage,
-    editor_row_limit: usize,
+    editor_row_limit: Option<usize>,
 ) -> QueryRequest {
     let window = match &exec_ctx.source {
         Some(ExecutionSourceContext::CollectionWindow {
@@ -381,6 +490,24 @@ pub(super) struct Execution {
     /// Byte offset in the buffer where the text of the latest run starts,
     /// used to name the statement lines behind each result.
     pub(super) query_origin: Option<usize>,
+    /// A result tab's Load all rows request. The next execution takes it, and
+    /// drops the row limit and replaces that tab only when it runs the same
+    /// query.
+    pub(super) load_all_rows: Option<LoadAllRows>,
+}
+
+pub(super) struct LoadAllRows {
+    pub(super) query: String,
+    pub(super) grid: gpui::EntityId,
+    pub(super) origin: ResultOrigin,
+}
+
+/// The connection, database and execution context a query result came from.
+#[derive(Clone)]
+pub(super) struct ResultOrigin {
+    connection_id: Uuid,
+    context: ExecutionSessionContext,
+    exec_ctx: ExecutionContext,
 }
 
 /// The result-tab collection and its selection cursor.
@@ -403,6 +530,8 @@ pub(super) struct PendingActions {
     result: Option<PendingQueryResult>,
     set_query: Option<HistoryQuerySelected>,
     auto_refresh: bool,
+    /// A result tab asked to load every row of its query.
+    load_all_rows: Option<gpui::EntityId>,
     history_focus_restore: bool,
     drift_query: Option<PendingDriftQuery>,
     source_input_values: Option<(String, String)>,
@@ -416,9 +545,16 @@ pub(super) struct PendingActions {
     error: Option<String>,
 }
 
+#[derive(Clone)]
 struct ExecutionSessionContext {
     root: Arc<dyn dbflux_core::Connection>,
     database: Option<String>,
+}
+
+impl ExecutionSessionContext {
+    fn same_as(&self, other: &Self) -> bool {
+        self.database == other.database && Arc::ptr_eq(&self.root, &other.root)
+    }
 }
 
 pub struct CodeDocument {
@@ -457,6 +593,7 @@ pub struct CodeDocument {
 
     // Layout/focus
     layout: SqlQueryLayout,
+    results_position: ResultsPosition,
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
     /// Keyboard focus for the multi-statement script confirmation.
@@ -510,6 +647,12 @@ struct PendingQueryResult {
     /// Whether this execution is a script (vs a database query).
     /// Determines the audit event category and whether connection context is required.
     is_script: bool,
+    /// The read-only enforcement the execution requested.
+    read_only: ReadOnlyEnforcement,
+    /// The result tab a Load all rows run replaces, whichever tab is active.
+    result_grid: Option<gpui::EntityId>,
+    /// Where the query ran; `None` for a script.
+    origin: Option<ResultOrigin>,
 }
 
 pub(super) struct ActiveQueryTask {
@@ -539,12 +682,26 @@ struct PendingDangerousQuery {
 /// Pending confirmation for running a whole multi-statement script.
 ///
 /// Raised when the user runs without a selection, the buffer holds more than
-/// one statement, and the driver advertises `MULTI_STATEMENT`.
+/// one statement, and the driver advertises `MULTI_STATEMENT`, or when the
+/// statement under the cursor only opens or ends a transaction.
 struct PendingScriptConfirm {
     origin: ExecutionOrigin,
     query: String,
     in_new_tab: bool,
     statement_count: usize,
+    /// The transaction boundary under the cursor that a cursor run would have
+    /// executed alone; the confirmation offers to run just that statement.
+    cursor_statement: Option<CursorStatement>,
+}
+
+/// A statement of the buffer a run without a selection would execute.
+struct CursorStatement {
+    text: String,
+    origin: usize,
+    line: usize,
+    /// Whether the confirmation may offer the whole script: false on a
+    /// driver that cannot run a batch, where only this statement can run.
+    offers_script: bool,
 }
 
 /// Action resolved by the schema-drift modal.
@@ -569,11 +726,12 @@ struct PendingDriftQuery {
     /// after "Refresh & re-run". Each entry is `(TableKey, TableInfo)`, where
     /// `TableKey` is `(database, schema, table)`.
     cache_updates: Vec<(dbflux_core::TableKey, dbflux_core::TableInfo)>,
+    read_only: ReadOnlyEnforcement,
 }
 
 /// Record of a query execution.
 #[derive(Clone)]
-pub struct ExecutionRecord {
+pub(crate) struct ExecutionRecord {
     pub id: Uuid,
     pub started_at: Instant,
     pub finished_at: Option<Instant>,
@@ -672,11 +830,15 @@ impl CodeDocument {
         };
 
         let input_state = cx.new(|cx| {
-            GpuiEditorState::new(window, cx)
+            let mut state = GpuiEditorState::new(window, cx)
                 .language(editor_mode)
                 .line_number(true)
                 .soft_wrap(false)
-                .placeholder(placeholder)
+                .placeholder(placeholder);
+            // The menu sizes itself to its longest item; allow database identifiers
+            // more room than the component's 320 px default, while keeping a cap.
+            state.lsp_mut().completion_menu.max_width = px(640.);
+            state
         });
 
         let completion_query_generation = Rc::new(std::cell::Cell::new(0u64));
@@ -864,6 +1026,9 @@ impl CodeDocument {
             Dropdown::new("sql-auto-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
+                .aria_label(dbflux_i18n::t!(
+                    "document.code.toolbar.auto_refresh_interval"
+                ))
                 .chevron_trigger(ButtonVariant::Secondary)
         });
 
@@ -930,6 +1095,7 @@ impl CodeDocument {
                 app_state.clone(),
                 connection_id,
                 exec_ctx.database.clone(),
+                exec_ctx.schema.clone(),
                 completion_query_generation.clone(),
             ));
 
@@ -1009,6 +1175,7 @@ impl CodeDocument {
         );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.invalidate_execution_session_if_context_changed(cx);
+            this.sync_external_query_cancellation(cx);
             this.sync_context_dropdowns(cx);
             this.try_fetch_pending_routine_definition(cx);
             this.sync_vim_setting(cx);
@@ -1017,6 +1184,7 @@ impl CodeDocument {
         let refresh_policy = default_refresh;
 
         let vim = dbflux_components::vim::VimBinding::new(input_state.clone(), window, cx);
+        let results_position = ResultsPosition::load(app_state.read(cx));
 
         let mut document = Self {
             id: doc_id,
@@ -1080,6 +1248,7 @@ impl CodeDocument {
                 _live_output_drain: None,
                 active_query_task: None,
                 query_origin: None,
+                load_all_rows: None,
             },
             execution_session: ExecutionSessionBinding::new(),
             execution_session_context: None,
@@ -1094,6 +1263,7 @@ impl CodeDocument {
                 _history_subscriptions: vec![query_selected_sub, history_closed_sub],
             },
             layout: SqlQueryLayout::EditorOnly,
+            results_position,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             script_confirm_focus: ModalFocus::new(cx),
@@ -1139,8 +1309,20 @@ impl CodeDocument {
         document
     }
 
+    /// Whether the query an auto-refresh would run may run unattended: it is a
+    /// single read, checked on exactly the text that runs (the selection when
+    /// there is one), and the connection's driver enforces read-only
+    /// execution for it.
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
-        dbflux_core::is_safe_read_query(&self.editor.input_state.read(cx).value())
+        let (query, _from_selection) = self.auto_refresh_query(cx);
+
+        self.connection_enforces_read_only(cx) && dbflux_core::is_safe_read_query(&query)
+    }
+
+    fn connection_enforces_read_only(&self, cx: &App) -> bool {
+        self.connection_id
+            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+            .is_some_and(|connected| connected.connection.metadata().enforces_read_only())
     }
 
     /// Returns the full editor content trimmed, or `None` when blank.
@@ -1419,27 +1601,29 @@ impl CodeDocument {
             return;
         };
 
-        let current = self.connection_id.and_then(|connection_id| {
-            let app_state = self.app_state.read(cx);
-            let connected = app_state.connections().get(&connection_id)?;
-            let database = self
-                .source
-                .exec_ctx
-                .database
-                .clone()
-                .or_else(|| connected.active_database.clone());
-            connected
-                .resolve_connection_for_execution(database.as_deref())
-                .ok()
-                .map(|root| (root, database))
-        });
-        let unchanged = current.is_some_and(|(root, database)| {
-            database == bound.database && Arc::ptr_eq(&bound.root, &root)
-        });
+        let unchanged = self
+            .current_execution_context(cx)
+            .is_some_and(|current| current.same_as(bound));
 
         if !unchanged {
             self.invalidate_execution_session(cx);
         }
+    }
+
+    /// The connection and database the next query would run on.
+    fn current_execution_context(&self, cx: &App) -> Option<ExecutionSessionContext> {
+        let app_state = self.app_state.read(cx);
+        let connected = app_state.connections().get(&self.connection_id?)?;
+        let database = self
+            .source
+            .exec_ctx
+            .database
+            .clone()
+            .or_else(|| connected.active_database.clone());
+        connected
+            .resolve_connection_for_execution(database.as_deref())
+            .ok()
+            .map(|root| ExecutionSessionContext { root, database })
     }
 
     /// Invalidates before detached background cleanup; no document entity is retained.
@@ -1766,12 +1950,20 @@ impl CodeDocument {
             return true;
         }
 
+        // Always land in the text: FocusUp from it would move into the context bar.
+        if cmd == Command::FocusEditor {
+            self.reveal_editor(cx);
+            self.exit_context_bar(window, cx);
+            return true;
+        }
+
         // When focused on results, delegate to active DataGridPanel
         if self.focus_mode == SqlQueryFocus::Results
             && let Some(grid) = self.active_result_grid()
         {
             // Special handling for FocusUp to exit results
             if cmd == Command::FocusUp {
+                self.reveal_editor(cx);
                 self.focus_mode = SqlQueryFocus::Editor;
                 self.editor
                     .input_state
@@ -1843,6 +2035,10 @@ impl CodeDocument {
             }
             Command::ToggleResults | Command::TogglePanel => {
                 self.toggle_maximize_results(cx);
+                true
+            }
+            Command::ToggleResultsPosition => {
+                self.toggle_results_position(cx);
                 true
             }
 
@@ -1959,26 +2155,7 @@ impl CodeDocument {
         // Build details_json from the query text and any driver-provided extra fields.
         // The extra fields let drivers surface structured context (e.g., language, version,
         // injected window) without requiring driver-id branching here.
-        let details = {
-            let mut obj = serde_json::Map::new();
-            if let Some(q) = query {
-                obj.insert(
-                    "query".to_string(),
-                    serde_json::Value::String(q.to_string()),
-                );
-            }
-            if let Some(extra) = metadata_extra {
-                for (key, value) in extra {
-                    obj.insert(key.clone(), value.clone());
-                }
-            }
-            if !obj.is_empty() {
-                Some(serde_json::Value::Object(obj).to_string())
-            } else {
-                None
-            }
-        };
-        event.details_json = details;
+        event.details_json = audit_details_json(query, metadata_extra);
 
         if let Some(duration) = duration_ms {
             event.duration_ms = Some(duration);
@@ -2156,7 +2333,8 @@ mod language_binding_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        CodeDocument, LanguageBinding, diff_stats_from_pair, source_input_values_from_context,
+        CodeDocument, LanguageBinding, SqlQueryFocus, diff_stats_from_pair,
+        source_input_values_from_context,
     };
     use crate::handle::DocumentEvent;
     use dbflux_app::keymap::Command;
@@ -2165,7 +2343,7 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use dbflux_ui_base::{AppStateEntity, SaveTargetOutcome, SaveTargetProvider};
-    use gpui::{AppContext, TestAppContext};
+    use gpui::{AppContext, Focusable, TestAppContext};
     use gpui_component::Root;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -3765,6 +3943,75 @@ mod tests {
         assert_eq!(icon.0, dbflux_components::icons::AppIcon::Database);
     }
 
+    /// Focus editor lands in the query text, from the context bar or from the text itself.
+    #[gpui::test]
+    fn focus_editor_lands_in_the_text_not_the_context_bar(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        // Stepping up from the text moves into the context bar.
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.dispatch_command(Command::FocusUp, window, cx);
+            })
+        });
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).focus_mode),
+            SqlQueryFocus::ContextBar
+        );
+
+        // Focus editor brings the keyboard back to the text from there...
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                assert!(doc.dispatch_command(Command::FocusEditor, window, cx));
+            })
+        });
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).focus_mode),
+            SqlQueryFocus::Editor
+        );
+
+        // ...and keeps it there when it is already in the text.
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                assert!(doc.dispatch_command(Command::FocusEditor, window, cx));
+            })
+        });
+        let (mode, text_focused) = window.update(|window, cx| {
+            let doc = doc.read(cx);
+            (
+                doc.focus_mode,
+                doc.editor
+                    .input_state
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window),
+            )
+        });
+        assert_eq!(mode, SqlQueryFocus::Editor);
+        assert!(text_focused, "the query text has the keyboard");
+    }
+
     /// An editor's history opens as a side panel for the workspace instead
     /// of a modal over the document, and leaves the keyboard to the editor
     /// until focus moves into it.
@@ -3826,5 +4073,70 @@ mod tests {
         });
 
         assert!(panel_ids(window).is_empty());
+    }
+}
+
+/// `details_json` of an editor audit event: the query text and the
+/// driver-provided extra fields, without the server notices, which are user
+/// output rather than audit context and can carry row values.
+fn audit_details_json(
+    query: Option<&str>,
+    metadata_extra: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> Option<String> {
+    let mut details = serde_json::Map::new();
+    if let Some(query) = query {
+        details.insert(
+            "query".to_string(),
+            serde_json::Value::String(query.to_string()),
+        );
+    }
+    if let Some(extra) = metadata_extra {
+        for (key, value) in extra {
+            if key == dbflux_core::SERVER_NOTICES_METADATA_KEY {
+                continue;
+            }
+            details.insert(key.clone(), value.clone());
+        }
+    }
+
+    (!details.is_empty()).then(|| serde_json::Value::Object(details).to_string())
+}
+
+#[cfg(test)]
+mod audit_details_tests {
+    use super::audit_details_json;
+    use dbflux_core::{QueryResult, ServerNotice};
+    use std::time::Duration;
+
+    #[test]
+    fn server_notices_stay_out_of_the_audit_details() {
+        let mut result = QueryResult::table(Vec::new(), Vec::new(), Some(0), Duration::ZERO);
+        result.set_server_notices([ServerNotice {
+            severity: "NOTICE".to_string(),
+            message: "row 42 belongs to alice".to_string(),
+        }]);
+        result.set_rows_truncated(true);
+
+        let details = audit_details_json(Some("COMMIT"), result.metadata_extra.as_ref())
+            .expect("details with the query");
+        let details: serde_json::Value = serde_json::from_str(&details).expect("details are JSON");
+
+        assert_eq!(details["query"], "COMMIT");
+        assert!(
+            details
+                .get(dbflux_core::SERVER_NOTICES_METADATA_KEY)
+                .is_none()
+        );
+        assert!(!details.to_string().contains("alice"));
+        assert_eq!(
+            details.as_object().map(|object| object.len()),
+            Some(2),
+            "the other driver fields are kept"
+        );
+    }
+
+    #[test]
+    fn no_query_and_no_extra_fields_leave_no_details() {
+        assert_eq!(audit_details_json(None, None), None);
     }
 }

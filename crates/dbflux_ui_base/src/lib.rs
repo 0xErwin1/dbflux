@@ -11,6 +11,7 @@ pub mod async_ext;
 pub mod dashboard_manager;
 pub mod file_dialog;
 pub mod hook_phase_runner;
+pub mod interface_size;
 #[cfg(any(test, feature = "test-support"))]
 pub mod keyboard_coverage;
 pub mod keymap;
@@ -23,12 +24,14 @@ pub mod saved_chart_manager;
 pub mod saved_document_query_manager;
 pub mod saved_query_manager;
 pub mod schema_snapshot_manager;
+pub mod settings_writer;
 pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
 pub mod ui_automation;
 pub mod updates;
 pub mod user_error;
+pub mod window_state;
 
 mod style_guardrails;
 

@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: Migrate data, now a document tab · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Migrate, AI, notifications, secrets, row \"Migrate data, now a document tab · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-migrate-mapping.html",
+      "title": "Migrate data tab: table mapping",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-migrate-run.html",
+      "title": "Migrate data tab: running",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

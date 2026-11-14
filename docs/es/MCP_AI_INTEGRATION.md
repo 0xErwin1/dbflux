@@ -85,6 +85,8 @@ hayas creado en la GUI de DBFlux, en **Settings → MCP → Clients**.
 **Nota**: si compilaste DBFlux sin el feature `mcp` (`--no-default-features`),
 el servidor MCP no estará disponible.
 
+El servidor carga los hooks de conexión en línea y las vinculaciones de hooks reutilizables desde la base de datos compartida. Ejecuta PreConnect y PostConnect al establecer una conexión, y PreDisconnect y PostDisconnect al desconectar una conexión abierta. Los resultados de los hooks se registran en el registro de auditoría. Un hook PreConnect independiente debe emitir su señal de preparación configurada; después de esa señal, el servidor espera el endpoint solo para perfiles directos. Los perfiles con pipeline o túnel SSH omiten esa espera porque el pipeline o el túnel resuelve su endpoint. El servidor MCP independiente no incluye un ejecutor de hooks Lua; un hook Lua habilitado devuelve un error que identifica su fase y el hook en lugar de omitirse.
+
 ## 3. Modelo de governance (conceptos centrales)
 
 Toda solicitud de IA se hace cumplir a través de todas estas capas, en orden:
@@ -113,15 +115,15 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Grupo           | Tool ID                   | Clase                                  | Qué hace                                                                                                             |
 | --------------- | ------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | Connection      | `list_connections`        | metadata                               | Enumera todas las conexiones de base de datos configuradas                                                           |
-| Connection      | `connect`                 | metadata                               | Abre una sesión contra una conexión configurada                                                                      |
+| Connection      | `connect`                 | metadata                               | Abre una sesión contra una conexión configurada. La respuesta informa `current_database` y las `databases` disponibles en el servidor cuando el driver tiene bases de datos; las demás herramientas aceptan un parámetro `database` para apuntar a otra |
 | Connection      | `disconnect`              | metadata                               | Cierra una sesión abierta                                                                                            |
 | Connection      | `get_connection_info`     | metadata                               | Obtiene las capabilities del driver y los metadatos de la conexión                                                   |
 | Schema          | `list_databases`          | metadata                               | Lista todas las bases de datos accesibles en una conexión                                                            |
 | Schema          | `list_schemas`            | metadata                               | Lista los schemas dentro de una base de datos                                                                        |
-| Schema          | `list_tables`             | metadata                               | Lista tablas y vistas dentro de un schema                                                                            |
-| Schema          | `list_collections`        | metadata                               | Lista colecciones de MongoDB                                                                                         |
+| Schema          | `list_tables`             | metadata                               | Lista tablas y vistas dentro de un schema. Con `names_only: true` devuelve los nombres como strings en lugar de un objeto por entrada |
+| Schema          | `list_collections`        | metadata                               | Lista colecciones de MongoDB. Acepta `names_only` igual que `list_tables`                                            |
 | Schema          | `describe_object`         | metadata                               | Obtiene las definiciones de columnas/campos e índices de una tabla                                                   |
-| Read            | `select_data`             | read                                   | Ejecuta un SELECT estructurado contra una tabla o colección. Los `joins` no soportados se rechazan explícitamente    |
+| Read            | `select_data`             | read                                   | Ejecuta un SELECT estructurado contra una tabla o colección. Los `joins` con otras tablas se ejecutan en drivers que declaran soporte de joins; los documentales, clave-valor y demás drivers que no lo declaran devuelven un error explícito. La condición `on` solo acepta comparaciones entre columnas unidas por `AND`. Con joins se rechazan una tabla calificada con esquema en conexiones que descartan el esquema (SQLite, Turso), `$ilike` en drivers que no lo declaran y una dirección de `order_by` distinta de `asc` o `desc`. SQL Server también ejecuta los joins, con su límite de filas generado como `OFFSET … FETCH`; las pruebas de joins se ejecutan en SQLite |
 | Read            | `count_records`           | read                                   | Devuelve un conteo de filas/documentos para un target                                                                |
 | Read            | `aggregate_data`          | read                                   | Ejecuta un pipeline de agregación de solo lectura                                                                    |
 | Read            | `explain_query`           | read                                   | Muestra el plan de ejecución de la query sin ejecutar la mutación objetivo                                           |
@@ -138,12 +140,12 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | DDL             | `create_type`             | admin                                  | Crea un tipo definido por el usuario                                                                                 |
 | DDL Destructive | `drop_table`              | admin_destructive                      | Elimina una tabla                                                                                                    |
 | DDL Destructive | `drop_database`           | admin_destructive                      | Elimina una base de datos                                                                                            |
-| Scripts         | `list_scripts`            | metadata                               | Lista los scripts guardados en el directorio de scripts                                                              |
+| Scripts         | `list_scripts`            | metadata                               | Lista los scripts guardados en el directorio de scripts (las carpetas externas no se exponen)                        |
 | Scripts         | `get_script`              | read                                   | Obtiene el source de un script guardado específico                                                                   |
 | Scripts         | `create_script`           | write                                  | Guarda un nuevo script en el directorio de scripts                                                                   |
 | Scripts         | `update_script`           | write                                  | Sobrescribe un script guardado existente                                                                             |
 | Scripts         | `delete_script`           | admin                                  | Elimina permanentemente un script                                                                                    |
-| Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado contra una conexión. La clasificación se deriva del cuerpo del script                     |
+| Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado de consultas de base de datos contra una conexión. La clasificación se deriva del cuerpo del script. Los scripts Lua, Python y Bash se rechazan (ver más abajo) |
 | Aprobación      | `request_execution`       | admin                                  | Encola una llamada para que la apruebe una persona. Una vez aprobada, llama a la tool con los mismos argumentos para ejecutarla una vez |
 | Aprobación      | `list_pending_executions` | read                                   | Muestra todas las ejecuciones pendientes de aprobación                                                               |
 | Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente específica. Una rechazada devuelve `status: "rejected"` y el motivo |
@@ -152,6 +154,12 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Auditoría       | `query_audit_logs`        | read                                   | Busca y filtra el audit trail                                                                                        |
 | Auditoría       | `get_audit_entry`         | read                                   | Obtiene una entrada específica del audit log por ID                                                                  |
 | Auditoría       | `export_audit_logs`       | read                                   | Descarga entradas del audit log como CSV o JSON                                                                      |
+
+Cuando el driver hace fallar una llamada a `select_data`, `count_records`, `aggregate_data` o `describe_object` y la tabla o colección no figura en los metadatos de esquema de la base de datos o del esquema consultado, el error indica dónde se buscó el nombre y lista los nombres listados más parecidos. Dice "is not listed" (no figura), porque la tabla puede no existir o la conexión puede no tener acceso a ella. Si la llamada no pasó `database` y el servidor lista más de una base de datos, el error agrega que la tabla puede estar en otra. Para tablas, no para colecciones, `count_records`, `aggregate_data` y `select_data` donde no se revisa antes de ejecutarse (ver abajo) hacen lo mismo con una columna nombrada en `where` u `order_by`. Una sugerencia solo incluye los nombres que el cliente tiene permitido listar: los nombres de tablas requieren `list_tables`, los de columnas requieren `describe_object` y los datos de bases de datos requieren `list_databases`. El texto de error del driver se conserva al final. La búsqueda solo se ejecuta después de que el driver hace fallar la llamada, y los drivers que no exponen estos metadatos devuelven el error original.
+
+`select_data`, en cambio, revisa sus columnas antes de ejecutarse en los motores que leen un identificador entre comillas desconocido como un texto: SQLite y Turso, donde una columna mal escrita no devuelve filas en lugar de un error. En una tabla relacional, y en toda llamada con `joins`, cada nombre de `columns`, `where` u `order_by` sin calificar o calificado con su tabla se compara con los metadatos de columnas de la tabla, sean cuales sean sus caracteres, y solo las letras ASCII se igualan sin distinguir mayúsculas, como hace SQLite. Una columna que no figura se rechaza con la misma sugerencia, seguida de "The query was not run.", y no se ejecuta nada. Los nombres de tablas y vistas se resuelven sin distinguir mayúsculas ASCII, y cuentan como listadas las columnas generadas, las columnas ocultas de las tablas virtuales y `rowid`, `oid` y `_rowid_` donde el motor los acepta. Sin `describe_object` el rechazo no nombra ninguna otra columna. La revisión se omite, y la llamada se ejecuta como antes, cuando el driver no tiene metadatos de columnas para la tabla, y no se revisan las rutas anidadas ni los nombres calificados con otra tabla, porque el motor los rechaza. Cuesta una consulta de columnas por cada tabla de la que la llamada nombra una columna. PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse y Redshift fallan ante una columna desconocida, así que sus llamadas se ejecutan sin revisión y un fallo recibe la sugerencia descrita arriba.
+
+Una pseudocolumna que el driver declara para la tabla, como `rowid` de SQLite, `_rowid` de MySQL o `ctid` y `xmin` de PostgreSQL, cuenta como listada y nunca se sugiere. Una llamada sin `joins` cuyo `columns` nombra una se ejecuta como un SELECT generado, igual que un join, así que el valor se devuelve: PostgreSQL devuelve `ctid` como un texto del tipo `(0,1)` y sus otras columnas de sistema como enteros. Ese SELECT acepta menos que una llamada normal: solo los operadores de `where` que acepta un join, identificadores ASCII simples, cada columna una vez y `asc` o `desc` como dirección de orden. En los motores que no se revisan antes de ejecutar, encontrar la pseudocolumna cuesta una consulta de columnas, que solo se hace cuando una entrada de `columns` falta en las filas que leyó la llamada.
 
 Tools diferidas (rechazadas explícitamente en tiempo de solicitud en v1):
 
@@ -226,6 +234,66 @@ Los clientes MCP nunca pueden aprobar ni rechazar: `approve_execution` y
 `reject_execution` se deniegan por MCP diga lo que diga la policy, con el código
 de error `self_approval_forbidden`, y cada intento se audita. Solo una persona
 resuelve las ejecuciones pendientes, en la UI de DBFlux.
+
+### Los scripts de lectura se ejecutan en solo lectura
+
+`execute_script` deriva su clase del cuerpo del script. Un script clasificado
+`read` o `metadata` se ejecuta con aplicación de solo lectura: el driver lo
+ejecuta en una sesión donde la propia base de datos rechaza la modificación de
+datos (en MongoDB y Redis la rechaza DBFlux, como muestra la tabla), y la llamada se gobierna y se audita como `read` o `metadata`.
+
+| Driver               | Cómo la sesión queda en solo lectura                                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL, Redshift | `BEGIN READ ONLY`, revertida al terminar                                                                                                                                                                |
+| MySQL, MariaDB       | `START TRANSACTION READ ONLY`, revertida al terminar. Un script con un comentario ejecutable (`/*! */`, `/*M! */`) o `INTO`, o que se ejecuta cuando puede haber una transacción o un bloqueo de `LOCK TABLES` abierto, no se ejecuta en solo lectura y se gobierna como `write` |
+| SQLite               | `PRAGMA query_only`                                                                                                                                                                                     |
+| ClickHouse           | El ajuste por petición `readonly = 2`                                                                                                                                                                   |
+| MongoDB              | MongoDB no tiene sesión de solo lectura, así que DBFlux la aplica por operación: cada operación se clasifica antes de enviarse y se rechaza por encima de la clase del script (`read` o `metadata`), incluidos `runCommand`, `adminCommand` y un `aggregate` con una etapa `$out` o `$merge`. Se rechazan los change streams y las operaciones que DBFlux no reconoce |
+| Redis                | Redis no tiene sesión de solo lectura, así que DBFlux compara el único comando que envía el script con los flags que el servidor informa para él en `COMMAND INFO`, antes de enviarlo. El comando solo se ejecuta si el servidor lo marca `readonly` (o es `PING`, `ECHO`, `TIME` o `INFO`) y no informa ningún flag que indique un efecto secundario, como `write`, `admin`, `blocking`, `pubsub` o `may_replicate`. Los comandos con subcomandos, como `CONFIG` u `OBJECT`, se juzgan por el subcomando, lo que requiere Redis 7 o posterior. Se rechazan las transacciones, `SELECT`, las suscripciones, todos los comandos de script (`EVAL`, `EVALSHA`, `FCALL` y sus formas `_RO`), `PFCOUNT`, los comandos de módulos, los comandos que el servidor no describe y `SRANDMEMBER`, `HRANDFIELD` o `ZRANDMEMBER` con un conteo negativo. Esto protege los datos, no la disponibilidad: las lecturas costosas como `KEYS *` se siguen ejecutando, y DBFlux no fija ningún tiempo máximo de lectura en Redis |
+
+SQL Server, Turso, los drivers externos por IPC, DynamoDB, CloudWatch e
+InfluxDB no pueden aplicar solo lectura, ni tampoco las conexiones a Redis
+Cluster ni los servidores Redis que no responden a `COMMAND INFO`. En esas conexiones, y en
+cualquier conexión cuya sesión ya tenga una transacción abierta, el script se
+gobierna como `write`: se aplica la decisión de la policy para `write` (Allow,
+Ask o Deny), y el audit registra `write`.
+
+La base de datos detiene la modificación de datos en la sesión, salvo en las
+tablas temporales, que una transacción de solo lectura en PostgreSQL y MySQL
+todavía puede modificar, y no detiene las funciones con efectos externos, como `dblink_exec`, `COPY ... TO PROGRAM`,
+`lo_export`, `pg_terminate_backend` y los advisory locks en PostgreSQL, o
+`GET_LOCK` y las funciones definidas por el usuario en MySQL. Para un cliente
+MCP de solo lectura, las credenciales de base de datos con privilegios mínimos
+siguen siendo el límite real.
+
+El auto-refresh del editor usa la misma aplicación. En una conexión cuyo driver
+no puede aplicar solo lectura, el auto-refresh vuelve a Manual.
+
+### Scripts que `execute_script` no puede ejecutar
+
+`execute_script` solo ejecuta scripts escritos en un lenguaje de consultas de
+base de datos. Un script Lua, Python o Bash guardado aparece en `list_scripts` y
+se puede leer con `get_script`, pero `execute_script` lo rechaza con "Script
+language not supported for execution (only database queries)" y no se ejecuta
+nada. Ejecute esos scripts desde el editor de DBFlux.
+
+### Los ajustes de seguridad del editor no se aplican
+
+Los ajustes de consultas peligrosas (**Confirm dangerous queries**, **Require
+WHERE for DELETE/UPDATE** y **Always require preview**) pertenecen al editor de
+DBFlux. El servidor MCP no los lee, ni en el nivel General, ni como override por
+driver, ni como override por conexión. Una llamada MCP solo está controlada por
+las policies y el flujo de aprobación descritos arriba: para que las sentencias
+destructivas esperen a una persona, configure la decisión de la policy para
+`destructive` (o `admin_destructive`) como Ask o Deny.
+
+### Conexiones de solo lectura
+
+Cuando el perfil de una conexión tiene **Solo lectura** activado en el Connection Manager, toda llamada por encima de la clase `read` en esa conexión se deniega con el código de error `connection_read_only`. La comprobación se hace antes de las políticas, así que ninguna política, rol ni aprobación puede permitir la llamada: `request_execution` se deniega, y una llamada aprobada antes de activar el ajuste se deniega cuando se repite. Cada denegación queda registrada como un evento de auditoría `mcp_authorize` con resultado `failure`.
+
+`execute_script` gobierna un script de lectura como `write` en un driver que no puede imponer solo lectura, como se describe arriba, así que en una conexión de solo lectura con ese driver también se deniega. `select_data`, `count_records` y las demás herramientas de lectura se siguen ejecutando.
+
+El servidor MCP lee el ajuste de `dbflux.db` en cada llamada, así que un cambio hecho en la GUI se aplica a la siguiente llamada sin reiniciar el servidor. Si el servidor no puede leer el archivo, trata la conexión como de solo lectura.
 
 ## 6. Policies y roles integrados
 
@@ -402,6 +470,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     },
     now_epoch_ms(),
@@ -465,6 +534,11 @@ Para evitar contaminar las máquinas de desarrollo durante los tests:
   (Connection Manager → pestaña MCP).
 - O define `mcp_enabled_by_default: true` en la configuración si quieres que
   todas las conexiones estén habilitadas.
+
+### Solicitud denegada porque la conexión es de solo lectura
+
+- El perfil de la conexión tiene **Solo lectura** activado (Connection Manager → pestaña Main → Seguridad). En ella solo se ejecutan llamadas `metadata` y `read`, digan lo que digan las políticas.
+- Desactiva el ajuste para volver a permitir escrituras. La siguiente llamada ve el cambio.
 
 ### Policy denegada
 

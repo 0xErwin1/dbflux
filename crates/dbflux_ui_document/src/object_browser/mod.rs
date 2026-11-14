@@ -93,8 +93,8 @@ pub enum ListingRow {
 }
 
 /// Object browser opened for a single bucket under an object-storage
-/// connection (routed from `BucketsTableDocument`'s Enter-on-row and the
-/// sidebar's `OpenObjectStoreBucket` event).
+/// connection (routed from `BucketsTableDocument`'s Enter-on-row and from
+/// sidebar root section items that present an object browser).
 ///
 /// The tree/pagination state lives in `tree: ObjectTree` (`tree.rs`, a pure
 /// data model); this entity owns the GPUI plumbing — background loading via
@@ -1564,6 +1564,78 @@ mod tests {
 
         cx.update(|cx| {
             assert_eq!(doc.read(cx).preview_key_for_test(), None);
+        });
+    }
+
+    /// A CSV or TSV object opens as a paged table, so its preview offers the
+    /// editor tab even when the object is over the preview size limit. Any
+    /// other object over the limit never decoded into a buffer and offers
+    /// nothing.
+    #[gpui::test]
+    fn a_delimited_object_over_the_preview_limit_still_offers_the_editor_tab(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let doc = new_test_entity(cx);
+        let over_the_limit = 1024 * 1024 * 1024;
+
+        for key in ["data/big.csv", "data/BIG.TSV", "data/big.txt"] {
+            cx.update(|cx| {
+                doc.update(cx, |doc, cx| {
+                    doc.open_preview(key.to_string(), cx);
+                    doc.apply_metadata_for_test(object_metadata(key, over_the_limit, None), cx);
+                });
+            });
+
+            cx.update(|cx| {
+                let gate = match doc.read(cx).metadata_for_test() {
+                    Some(ObjectMetadataState::Loaded { gate, .. }) => gate.clone(),
+                    other => panic!("expected loaded metadata, got {other:?}"),
+                };
+                assert!(
+                    matches!(gate, PreviewGate::TooLarge { .. }),
+                    "{key} is over the limit"
+                );
+
+                assert_eq!(
+                    doc.read(cx).offers_open_in_editor(key),
+                    key != "data/big.txt",
+                    "{key}"
+                );
+            });
+        }
+    }
+
+    /// Activating a CSV row keeps showing it in the preview pane; only
+    /// "Open in editor" opens it in its own tab.
+    #[gpui::test]
+    fn activating_a_csv_row_previews_it_without_opening_a_tab(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.apply_page_for_test("", page(&[], &["cities.csv"]));
+            doc.select_node(ObjectTreeNodeId::Object("cities.csv".to_string()), cx);
+            doc.activate_selected(window, cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert_eq!(doc.preview_key_for_test(), Some("cities.csv"));
+            assert_eq!(doc.take_pending_open_object_editor(), None);
+        });
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.execute_menu_action(
+                context_menu::ObjectMenuAction::OpenInEditor,
+                ObjectTreeNodeId::Object("cities.csv".to_string()),
+                window,
+                cx,
+            );
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert_eq!(
+                doc.take_pending_open_object_editor().as_deref(),
+                Some("cities.csv")
+            );
         });
     }
 

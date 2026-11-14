@@ -14,6 +14,7 @@ use dbflux_core::{
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
 use postgres::config::SslMode;
+use postgres::fallible_iterator::FallibleIterator;
 use postgres::types::{FromSql, Type};
 use postgres::{CancelToken, Client, Config, NoTls};
 use postgres_native_tls::MakeTlsConnector;
@@ -59,16 +60,23 @@ pub(crate) struct RedshiftConnectParams<'a> {
 /// direct/form connect path and the URI connect path.
 ///
 /// Redshift follows PostgreSQL's `sslmode` semantics. The six libpq values
-/// collapse into four connection behaviors: `disable` skips TLS entirely;
+/// collapse into five connection behaviors: `disable` skips TLS entirely;
 /// `allow`/`prefer` attempt TLS and fall back to plaintext; `require` mandates
-/// TLS without certificate validation; and `verify-ca`/`verify-full` mandate
-/// TLS with certificate validation.
+/// TLS without certificate validation; `verify-ca` mandates TLS and validates
+/// the certificate chain; and `verify-full` also validates the hostname.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RedshiftSslMode {
     Disable,
     Prefer,
     Require,
-    Verify,
+    VerifyCa,
+    VerifyFull,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TlsVerification {
+    pub chain: bool,
+    pub hostname: bool,
 }
 
 impl RedshiftSslMode {
@@ -78,20 +86,42 @@ impl RedshiftSslMode {
         match value.to_ascii_lowercase().as_str() {
             "disable" => RedshiftSslMode::Disable,
             "require" => RedshiftSslMode::Require,
-            "verify-ca" | "verify-full" => RedshiftSslMode::Verify,
+            "verify-ca" => RedshiftSslMode::VerifyCa,
+            "verify-full" => RedshiftSslMode::VerifyFull,
             // "allow" | "prefer" and any unrecognized value.
             _ => RedshiftSslMode::Prefer,
         }
     }
 
-    /// Maps to the protocol-level `postgres::Config` ssl mode. `Verify` mandates
-    /// TLS at the protocol level (`Require`) and defers certificate validation
-    /// to the native-tls connector built in [`connect_with_ssl_mode`].
+    /// Maps to the protocol-level `postgres::Config` ssl mode. The verify modes
+    /// mandate TLS at the protocol level (`Require`) and defer certificate
+    /// validation to the native-tls connector built in [`connect_with_ssl_mode`].
     pub(crate) fn config_ssl_mode(self) -> SslMode {
         match self {
             RedshiftSslMode::Disable => SslMode::Disable,
             RedshiftSslMode::Prefer => SslMode::Prefer,
-            RedshiftSslMode::Require | RedshiftSslMode::Verify => SslMode::Require,
+            RedshiftSslMode::Require | RedshiftSslMode::VerifyCa | RedshiftSslMode::VerifyFull => {
+                SslMode::Require
+            }
+        }
+    }
+
+    pub(crate) fn tls_verification(self) -> TlsVerification {
+        match self {
+            RedshiftSslMode::Disable | RedshiftSslMode::Prefer | RedshiftSslMode::Require => {
+                TlsVerification {
+                    chain: false,
+                    hostname: false,
+                }
+            }
+            RedshiftSslMode::VerifyCa => TlsVerification {
+                chain: true,
+                hostname: false,
+            },
+            RedshiftSslMode::VerifyFull => TlsVerification {
+                chain: true,
+                hostname: true,
+            },
         }
     }
 }
@@ -124,8 +154,9 @@ fn build_base_config(params: &RedshiftConnectParams, ssl_mode: RedshiftSslMode) 
 ///
 /// Shared by the direct/form path and the URI path so the per-mode certificate
 /// policy lives in exactly one place: `disable` connects without TLS;
-/// `require`/`prefer` accept invalid certificates; `verify-ca`/`verify-full`
-/// validate them; and `prefer` (like libpq) retries in plaintext when the TLS
+/// `require`/`prefer` accept invalid certificates; `verify-ca` validates the
+/// chain; `verify-full` also validates the hostname; and `prefer` (like libpq)
+/// retries in plaintext when the TLS
 /// attempt fails. `map_err` lets each caller attach its own connection-error
 /// context (host/port for the direct path, sanitized URI for the URI path).
 pub(crate) fn connect_with_ssl_mode(
@@ -134,47 +165,37 @@ pub(crate) fn connect_with_ssl_mode(
     tls_certs: &RedshiftTlsCerts,
     map_err: impl Fn(&postgres::Error) -> DbError,
 ) -> Result<Client, DbError> {
-    match ssl_mode {
-        RedshiftSslMode::Disable => config.connect(NoTls).map_err(|e| map_err(&e)),
+    if ssl_mode == RedshiftSslMode::Disable {
+        return config.connect(NoTls).map_err(|e| map_err(&e));
+    }
 
-        RedshiftSslMode::Verify => {
-            let connector = build_tls_connector(false, tls_certs)?;
-            config
-                .connect(MakeTlsConnector::new(connector))
-                .map_err(|e| map_err(&e))
-        }
+    let connector = build_tls_connector(ssl_mode.tls_verification(), tls_certs)?;
 
-        RedshiftSslMode::Require => {
-            let connector = build_tls_connector(true, tls_certs)?;
-            config
-                .connect(MakeTlsConnector::new(connector))
-                .map_err(|e| map_err(&e))
+    match config.connect(MakeTlsConnector::new(connector)) {
+        Ok(client) => Ok(client),
+        Err(_) if ssl_mode == RedshiftSslMode::Prefer => {
+            config.connect(NoTls).map_err(|e| map_err(&e))
         }
-
-        RedshiftSslMode::Prefer => {
-            let connector = build_tls_connector(true, tls_certs)?;
-            match config.connect(MakeTlsConnector::new(connector)) {
-                Ok(client) => Ok(client),
-                Err(_) => config.connect(NoTls).map_err(|e| map_err(&e)),
-            }
-        }
+        Err(e) => Err(map_err(&e)),
     }
 }
 
 /// Builds the native-tls connector for a TLS-enabled Redshift connection.
 ///
-/// `accept_invalid_certs` keeps the existing per-mode validation policy
-/// (`require` accepts, `verify-*` validates) untouched. On top of it, a pinned
-/// private CA is added when [`RedshiftTlsCerts::root_cert_path`] is set, and a
+/// `verification` carries the per-mode validation policy (`require` accepts
+/// any certificate, `verify-ca` skips only the hostname check). On top of it,
+/// a pinned private CA is added when [`RedshiftTlsCerts::root_cert_path`] is set, and a
 /// client identity for mutual TLS is applied when both client cert and key
 /// paths are set. Loading a cert never weakens validation: the root CA is
 /// *added* to the trust store, not substituted for validation.
 fn build_tls_connector(
-    accept_invalid_certs: bool,
+    verification: TlsVerification,
     tls_certs: &RedshiftTlsCerts,
 ) -> Result<TlsConnector, DbError> {
     let mut builder = TlsConnector::builder();
-    builder.danger_accept_invalid_certs(accept_invalid_certs);
+    builder
+        .danger_accept_invalid_certs(!verification.chain)
+        .danger_accept_invalid_hostnames(!verification.hostname);
 
     if let Some(path) = tls_certs.root_cert_path.as_deref() {
         builder.add_root_certificate(load_root_certificate(path)?);
@@ -330,6 +351,122 @@ fn ensure_read_only(sql: &str) -> Result<(), DbError> {
         _ => Err(DbError::NotSupported(
             "Amazon Redshift connections are read-only in DBFlux; only SELECT/EXPLAIN/SHOW statements are supported".to_string(),
         )),
+    }
+}
+
+fn map_statement_error(error: &postgres::Error) -> DbError {
+    if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+        DbError::Cancelled
+    } else {
+        format_redshift_query_error(error)
+    }
+}
+
+/// Rows one statement produced, already converted, and whether the request's
+/// row budget dropped any of them.
+struct StatementRows {
+    columns: Vec<ColumnMeta>,
+    rows: Vec<Row>,
+    truncated: bool,
+}
+
+/// Pulls every item from `next_item`, retaining items only while
+/// `remaining_rows` lasts and deducting the items it retains. `None` means no
+/// budget, so every item is retained.
+///
+/// The source is always drained to the end, so the statement completes on the
+/// server before the session is reused. The returned flag is `true` only when
+/// this source produced items the budget could not retain.
+fn retain_within_budget<Item, Retained, Error>(
+    mut next_item: impl FnMut() -> Result<Option<Item>, Error>,
+    remaining_rows: &mut Option<usize>,
+    mut convert: impl FnMut(Item) -> Retained,
+) -> Result<(Vec<Retained>, bool), Error> {
+    let mut retained = Vec::new();
+    let mut truncated = false;
+
+    while let Some(item) = next_item()? {
+        match remaining_rows {
+            Some(0) => truncated = true,
+            Some(remaining) => {
+                *remaining -= 1;
+                retained.push(convert(item));
+            }
+            None => retained.push(convert(item)),
+        }
+    }
+
+    Ok((retained, truncated))
+}
+
+/// Prepares and streams one statement, retaining rows only within
+/// `remaining_rows`.
+fn run_statement(
+    client: &mut postgres::Client,
+    sql: &str,
+    remaining_rows: &mut Option<usize>,
+) -> Result<StatementRows, DbError> {
+    let statement = client
+        .prepare(sql)
+        .map_err(|error| map_statement_error(&error))?;
+
+    let columns: Vec<ColumnMeta> = statement
+        .columns()
+        .iter()
+        .map(|col| ColumnMeta {
+            name: col.name().to_string(),
+            type_name: col.type_().name().to_string(),
+            kind: redshift_oid_to_kind(col.type_().oid()),
+            nullable: true,
+            is_primary_key: false,
+        })
+        .collect();
+
+    let mut stream = client
+        .query_raw(&statement, std::iter::empty::<i32>())
+        .map_err(|error| map_statement_error(&error))?;
+
+    let column_count = columns.len();
+    let (rows, truncated) = retain_within_budget(
+        || stream.next().map_err(|error| map_statement_error(&error)),
+        remaining_rows,
+        |row| {
+            (0..column_count)
+                .map(|index| redshift_value_to_value(&row, index))
+                .collect()
+        },
+    )?;
+
+    Ok(StatementRows {
+        columns,
+        rows,
+        truncated,
+    })
+}
+
+/// Runs one statement inside `BEGIN READ ONLY` and always rolls it back, so
+/// the server refuses any write the local read-only check missed.
+///
+/// No user transaction can be open on this session: [`ensure_read_only`]
+/// refuses `BEGIN`, `START TRANSACTION` and every other statement that is not
+/// a read, so nothing the driver ran before left a block open.
+fn run_read_only_statement(
+    client: &mut postgres::Client,
+    sql: &str,
+    remaining_rows: &mut Option<usize>,
+) -> Result<StatementRows, DbError> {
+    client
+        .batch_execute("BEGIN READ ONLY")
+        .map_err(|error| format_redshift_query_error(&error))?;
+
+    let outcome = run_statement(client, sql, remaining_rows);
+
+    match client.batch_execute("ROLLBACK") {
+        Ok(()) => outcome,
+        Err(error) => {
+            log::warn!("[QUERY] ROLLBACK of a read-only Redshift request failed: {error}");
+            outcome.and(Err(format_redshift_query_error(&error)))
+        }
     }
 }
 
@@ -539,18 +676,38 @@ pub struct RedshiftConnection {
     #[allow(dead_code)]
     pub(crate) ssh_tunnel: Option<SshTunnel>,
     pub(crate) cancel_token: CancelToken,
-    pub(crate) active_query: RwLock<Option<Uuid>>,
+    pub(crate) active_query: Arc<RwLock<Option<Uuid>>>,
     pub(crate) cancelled: Arc<AtomicBool>,
 }
 
 struct RedshiftCancelHandle {
+    active_query: Arc<RwLock<Option<Uuid>>>,
     cancel_token: CancelToken,
     cancelled: Arc<AtomicBool>,
+}
+
+/// Reports whether `execute` is currently running a cancellable query.
+///
+/// The server applies a cancel request to whatever statement is executing
+/// when it arrives, so a cancel is only sent while the marker is set. Other
+/// calls that hold the client mutex, such as `ping` or schema loads, never
+/// set it and are therefore never cancelled.
+fn has_active_query(active_query: &RwLock<Option<Uuid>>) -> Result<bool, DbError> {
+    let active = active_query
+        .read()
+        .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
+
+    Ok(active.is_some())
 }
 
 impl QueryCancelHandle for RedshiftCancelHandle {
     fn cancel(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
+
+        if !has_active_query(&self.active_query)? {
+            log::debug!("[CANCEL] No Redshift query is running, no cancel request sent");
+            return Ok(());
+        }
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel Redshift query: {e}");
@@ -613,9 +770,9 @@ impl Connection for RedshiftConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "Redshift cannot enforce a requested row limit or statement timeout before execution"
+                "Redshift cannot enforce a requested statement timeout before execution"
                     .to_string(),
             ));
         }
@@ -626,59 +783,36 @@ impl Connection for RedshiftConnection {
 
         let start = Instant::now();
         let query_id = Uuid::new_v4();
-        let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
         let mut client = match self.client.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        let stmt = client.prepare(&req.sql).map_err(|e| {
-            if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
-                DbError::Cancelled
-            } else {
-                format_redshift_query_error(&e)
-            }
-        })?;
+        // Declared after `client` so it drops first: the marker must be cleared
+        // before the connection is released, or a cancel arriving in between
+        // would land on the next statement run on this connection.
+        let active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
-        let columns: Vec<ColumnMeta> = stmt
-            .columns()
-            .iter()
-            .map(|col| ColumnMeta {
-                name: col.name().to_string(),
-                type_name: col.type_().name().to_string(),
-                kind: redshift_oid_to_kind(col.type_().oid()),
-                nullable: true,
-                is_primary_key: false,
-            })
-            .collect();
+        let mut remaining_rows = req.limit.map(|limit| limit as usize);
 
-        let rows = client.query(&stmt, &[]).map_err(|e| {
-            if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
-                DbError::Cancelled
-            } else {
-                format_redshift_query_error(&e)
-            }
-        })?;
+        let statement_rows = if req.read_only.is_required() {
+            run_read_only_statement(&mut client, &req.sql, &mut remaining_rows)?
+        } else {
+            run_statement(&mut client, &req.sql, &mut remaining_rows)?
+        };
 
+        drop(active_query_guard);
         drop(client);
 
-        let result_rows: Vec<Row> = rows
-            .iter()
-            .take(req.limit.unwrap_or(u32::MAX) as usize)
-            .map(|row| {
-                (0..columns.len())
-                    .map(|i| redshift_value_to_value(row, i))
-                    .collect()
-            })
-            .collect();
-
-        Ok(QueryResult::table(
-            columns,
-            result_rows,
+        let mut result = QueryResult::table(
+            statement_rows.columns,
+            statement_rows.rows,
             None,
             start.elapsed(),
-        ))
+        );
+        result.set_rows_truncated(statement_rows.truncated);
+        Ok(result)
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {
@@ -704,16 +838,10 @@ impl Connection for RedshiftConnection {
     fn cancel_active(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
 
-        let active = self
-            .active_query
-            .read()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
-
-        if active.is_none() {
+        if !has_active_query(&self.active_query)? {
+            log::debug!("[CANCEL] No Redshift query is running, no cancel request sent");
             return Ok(());
         }
-
-        drop(active);
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel Redshift query: {e}");
@@ -723,6 +851,7 @@ impl Connection for RedshiftConnection {
 
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(RedshiftCancelHandle {
+            active_query: self.active_query.clone(),
             cancel_token: self.cancel_token.clone(),
             cancelled: self.cancelled.clone(),
         })
@@ -779,6 +908,23 @@ impl Connection for RedshiftConnection {
     /// constraints, so those feature flags stay unset.
     fn schema_features(&self) -> SchemaFeatures {
         SchemaFeatures::FOREIGN_KEYS | SchemaFeatures::UNIQUE_CONSTRAINTS
+    }
+
+    fn table_view_features(&self) -> dbflux_core::TableViewFeatures {
+        dbflux_core::TableViewFeatures::COLUMN_PROFILE
+            | dbflux_core::TableViewFeatures::COLUMN_PROJECTION
+    }
+
+    fn table_profile(
+        &self,
+        table: &dbflux_core::TableRef,
+    ) -> Result<dbflux_core::TableProfile, DbError> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
+
+        crate::table_views::table_profile(&mut client, table)
     }
 
     fn kind(&self) -> DbKind {
@@ -955,12 +1101,138 @@ fn redshift_value_to_value(row: &postgres::Row, idx: usize) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        RedshiftConnectParams, RedshiftSslMode, RedshiftTlsCerts, build_base_config,
-        ensure_read_only, load_client_identity, load_root_certificate,
+        RedshiftConnectParams, RedshiftSslMode, RedshiftTlsCerts, TlsVerification,
+        build_base_config, ensure_read_only, load_client_identity, load_root_certificate,
     };
     use dbflux_core::DbError;
     use postgres::config::SslMode;
+    use std::sync::RwLock;
     use std::time::Duration;
+    use uuid::Uuid;
+
+    fn drain_into_budget(
+        produced: Vec<u32>,
+        remaining_rows: &mut Option<usize>,
+    ) -> (Vec<u32>, bool) {
+        let mut source = produced.into_iter();
+        super::retain_within_budget(
+            || Ok::<_, DbError>(source.next()),
+            remaining_rows,
+            |value| value,
+        )
+        .expect("infallible source")
+    }
+
+    #[test]
+    fn bounded_collection_retains_everything_within_the_budget() {
+        let mut remaining = Some(5);
+
+        let (rows, truncated) = drain_into_budget(vec![1, 2, 3], &mut remaining);
+
+        assert_eq!(rows, vec![1, 2, 3]);
+        assert!(!truncated);
+        assert_eq!(remaining, Some(2));
+    }
+
+    #[test]
+    fn bounded_collection_exactly_at_budget_is_not_truncated() {
+        let mut remaining = Some(3);
+
+        let (rows, truncated) = drain_into_budget(vec![1, 2, 3], &mut remaining);
+
+        assert_eq!(rows, vec![1, 2, 3]);
+        assert!(!truncated);
+        assert_eq!(remaining, Some(0));
+    }
+
+    #[test]
+    fn bounded_collection_drops_rows_past_the_budget_and_flags_truncation() {
+        let mut remaining = Some(2);
+
+        let (rows, truncated) = drain_into_budget(vec![1, 2, 3, 4], &mut remaining);
+
+        assert_eq!(rows, vec![1, 2]);
+        assert!(truncated);
+        assert_eq!(remaining, Some(0));
+    }
+
+    #[test]
+    fn bounded_collection_budget_is_shared_across_result_sets() {
+        let mut remaining = Some(3);
+
+        let (first, first_truncated) = drain_into_budget(vec![1, 2], &mut remaining);
+        let (second, second_truncated) = drain_into_budget(vec![3, 4], &mut remaining);
+        let (third, third_truncated) = drain_into_budget(vec![], &mut remaining);
+
+        assert_eq!(first, vec![1, 2]);
+        assert!(!first_truncated);
+        assert_eq!(second, vec![3]);
+        assert!(second_truncated);
+        assert!(third.is_empty());
+        assert!(!third_truncated);
+    }
+
+    #[test]
+    fn bounded_collection_with_zero_limit_retains_nothing() {
+        let mut remaining = Some(0);
+
+        let (rows, truncated) = drain_into_budget(vec![1], &mut remaining);
+        assert!(rows.is_empty());
+        assert!(truncated);
+
+        let (empty, empty_truncated) = drain_into_budget(vec![], &mut remaining);
+        assert!(empty.is_empty());
+        assert!(!empty_truncated);
+    }
+
+    #[test]
+    fn unbounded_collection_retains_every_row() {
+        let mut remaining = None;
+
+        let (rows, truncated) = drain_into_budget(vec![1, 2, 3], &mut remaining);
+
+        assert_eq!(rows, vec![1, 2, 3]);
+        assert!(!truncated);
+        assert_eq!(remaining, None);
+    }
+
+    #[test]
+    fn bounded_collection_propagates_source_errors() {
+        let mut remaining = Some(1);
+        let outcome = super::retain_within_budget(
+            || Err::<Option<u32>, _>(DbError::Cancelled),
+            &mut remaining,
+            |value| value,
+        );
+
+        assert!(matches!(outcome, Err(DbError::Cancelled)));
+    }
+
+    #[test]
+    fn has_active_query_reports_false_when_nothing_is_running() {
+        let marker = RwLock::new(None);
+
+        assert!(!super::has_active_query(&marker).expect("read marker"));
+    }
+
+    #[test]
+    fn has_active_query_reports_true_while_a_query_is_marked() {
+        let marker = RwLock::new(Some(Uuid::new_v4()));
+
+        assert!(super::has_active_query(&marker).expect("read marker"));
+    }
+
+    #[test]
+    fn active_query_guard_marks_the_query_and_clears_it_on_drop() {
+        let marker = RwLock::new(None);
+        let query_id = Uuid::new_v4();
+
+        let guard = super::ActiveQueryGuard::activate(&marker, query_id).expect("activate");
+        assert_eq!(*marker.read().expect("read marker"), Some(query_id));
+
+        drop(guard);
+        assert_eq!(*marker.read().expect("read marker"), None);
+    }
 
     /// A real self-signed EC certificate (P-256) in PEM form, paired with
     /// [`TEST_CLIENT_KEY_PEM`]. It only needs to be a structurally valid
@@ -995,16 +1267,54 @@ mod tests {
         assert_eq!(RedshiftSslMode::parse("allow"), RedshiftSslMode::Prefer);
         assert_eq!(RedshiftSslMode::parse("prefer"), RedshiftSslMode::Prefer);
         assert_eq!(RedshiftSslMode::parse("require"), RedshiftSslMode::Require);
-        assert_eq!(RedshiftSslMode::parse("verify-ca"), RedshiftSslMode::Verify);
+        assert_eq!(
+            RedshiftSslMode::parse("verify-ca"),
+            RedshiftSslMode::VerifyCa
+        );
         assert_eq!(
             RedshiftSslMode::parse("verify-full"),
-            RedshiftSslMode::Verify
+            RedshiftSslMode::VerifyFull
         );
 
         // Case-insensitive, and unknown/empty fall back to prefer.
         assert_eq!(RedshiftSslMode::parse("REQUIRE"), RedshiftSslMode::Require);
         assert_eq!(RedshiftSslMode::parse("bogus"), RedshiftSslMode::Prefer);
         assert_eq!(RedshiftSslMode::parse(""), RedshiftSslMode::Prefer);
+    }
+
+    #[test]
+    fn verify_ca_checks_the_chain_but_not_the_hostname() {
+        assert_eq!(
+            RedshiftSslMode::VerifyCa.tls_verification(),
+            TlsVerification {
+                chain: true,
+                hostname: false
+            }
+        );
+        assert_eq!(
+            RedshiftSslMode::VerifyFull.tls_verification(),
+            TlsVerification {
+                chain: true,
+                hostname: true
+            }
+        );
+        for mode in [RedshiftSslMode::Prefer, RedshiftSslMode::Require] {
+            assert_eq!(
+                mode.tls_verification(),
+                TlsVerification {
+                    chain: false,
+                    hostname: false
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn verify_ca_mandates_tls_at_the_protocol_level() {
+        assert_eq!(
+            RedshiftSslMode::VerifyCa.config_ssl_mode(),
+            SslMode::Require
+        );
     }
 
     #[test]

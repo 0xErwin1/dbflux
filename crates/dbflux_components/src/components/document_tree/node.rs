@@ -1,50 +1,9 @@
+pub use bolt::components::document_tree::NodeId;
+use bolt::components::document_tree::ValueTypeClass;
 use dbflux_core::Value;
 use dbflux_core::chrono::{DateTime, NaiveDate, Utc};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-
-/// Unique identifier for a tree node.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct NodeId {
-    /// Path from root to this node (e.g., ["0", "address", "city"]).
-    pub path: Vec<String>,
-}
-
-impl NodeId {
-    pub fn root(doc_index: usize) -> Self {
-        Self {
-            path: vec![doc_index.to_string()],
-        }
-    }
-
-    pub fn child(&self, key: &str) -> Self {
-        let mut path = self.path.clone();
-        path.push(key.to_string());
-        Self { path }
-    }
-
-    pub fn parent(&self) -> Option<Self> {
-        if self.path.len() <= 1 {
-            return None;
-        }
-        let mut path = self.path.clone();
-        path.pop();
-        Some(Self { path })
-    }
-
-    pub fn depth(&self) -> usize {
-        self.path.len().saturating_sub(1)
-    }
-
-    pub fn is_root(&self) -> bool {
-        self.path.len() == 1
-    }
-
-    /// Returns the document index for root nodes.
-    pub fn doc_index(&self) -> Option<usize> {
-        self.path.first().and_then(|s| s.parse().ok())
-    }
-}
 
 /// Value stored in a tree node.
 #[derive(Debug, Clone)]
@@ -113,6 +72,27 @@ impl NodeValue {
             },
             NodeValue::Document(_) => "object",
             NodeValue::Array(_) => "array",
+        }
+    }
+
+    /// The coarse class the row painter paints this value with: the value's
+    /// type colors follow it (`bolt::document_tree::value_type_color`).
+    pub fn type_class(&self) -> ValueTypeClass {
+        match self {
+            NodeValue::Scalar(v) => match v {
+                Value::Null => ValueTypeClass::Null,
+                Value::Bool(_) => ValueTypeClass::Boolean,
+                Value::Int(_) => ValueTypeClass::Integer,
+                Value::Float(_) | Value::Decimal(_) => ValueTypeClass::Float,
+                Value::Text(_) => ValueTypeClass::Text,
+                Value::ObjectId(_) => ValueTypeClass::ObjectId,
+                Value::DateTime(_) | Value::Date(_) | Value::Time(_) => ValueTypeClass::Temporal,
+                Value::Bytes(_) => ValueTypeClass::Bytes,
+                Value::Json(_) => ValueTypeClass::Json,
+                Value::Unsupported(_) => ValueTypeClass::Other,
+                Value::Document(_) | Value::Array(_) => unreachable!(),
+            },
+            NodeValue::Document(_) | NodeValue::Array(_) => ValueTypeClass::Container,
         }
     }
 }
@@ -191,7 +171,7 @@ impl TreeNode {
 }
 
 /// The fields of a document in `order` first, then every other field by key.
-pub fn ordered_fields<'a>(
+pub(super) fn ordered_fields<'a>(
     fields: &'a BTreeMap<String, Value>,
     order: Option<&[String]>,
 ) -> Vec<(&'a String, &'a Value)> {
@@ -211,7 +191,7 @@ pub fn ordered_fields<'a>(
 /// Up to `limit` fields that identify a document at a glance: the first short
 /// text or integer fields in document order, `_id` excluded. Rendered as
 /// `{ sku: "CAT-00335", name: "Walnut lamp 335" }`.
-pub fn identifying_summary(
+pub(super) fn identifying_summary(
     fields: &BTreeMap<String, Value>,
     order: Option<&[String]>,
     limit: usize,

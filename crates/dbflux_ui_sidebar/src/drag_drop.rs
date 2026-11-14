@@ -203,6 +203,11 @@ impl Sidebar {
                     state.connection_tree().root_nodes()
                 };
                 let pos = siblings.iter().position(|n| n.id == target_node_id);
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "`p` is a `position()` result over `siblings` and the \
+                              `p > 0` arm keeps `p - 1` below `siblings.len()`"
+                )]
                 let after_id = pos.and_then(|p| {
                     if p > 0 {
                         Some(siblings[p - 1].id)

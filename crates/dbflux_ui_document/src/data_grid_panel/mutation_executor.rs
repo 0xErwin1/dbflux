@@ -25,7 +25,7 @@ pub enum ExecutionMode {
 /// Carries the suggested mode plus a human-readable reason string for the UI label.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
-pub struct SuggestedMode {
+pub(crate) struct SuggestedMode {
     pub mode: ExecutionMode,
     pub reason: &'static str,
 }
@@ -33,7 +33,7 @@ pub struct SuggestedMode {
 /// The estimated row count at the time mode selection runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub enum RowEstimate {
+pub(crate) enum RowEstimate {
     /// The count query returned a definite result.
     Known(u64),
     /// The count could not be obtained (timeout or error); treat as worst-case.
@@ -52,7 +52,7 @@ pub enum RowEstimate {
 /// 5. count ≤ 50,000 AND TRANSACTIONS → SingleTransaction.
 /// 6. Fallback → DirectAutocommit.
 #[allow(dead_code)]
-pub fn auto_suggest_mode(
+pub(crate) fn auto_suggest_mode(
     capabilities: DriverCapabilities,
     has_pk: bool,
     estimate: RowEstimate,
@@ -127,7 +127,7 @@ pub enum CountState {
 /// The query is run on a detached thread so the deadline is enforced via
 /// `std::sync::mpsc::Receiver::recv_timeout`.
 #[allow(dead_code)]
-pub fn count_with_deadline(
+pub(crate) fn count_with_deadline(
     connection: Arc<dyn Connection>,
     sql: String,
     params: Vec<Value>,
@@ -231,7 +231,7 @@ impl MutationExecOptions {
 /// Outcome of a completed mutation execution.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
-pub enum MutationOutcome {
+pub(crate) enum MutationOutcome {
     Success { rows_affected: u64 },
     Failed { error: String },
     Cancelled { rows_affected: u64 },
@@ -239,7 +239,7 @@ pub enum MutationOutcome {
 
 /// Error type for `MutationExecutor::run_single_tx`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExecutorError {
+pub(crate) enum ExecutorError {
     Generation(String),
     Transaction(String),
 }
@@ -264,7 +264,7 @@ impl std::error::Error for ExecutorError {}
 /// When the driver imposes a low parameter limit that forces the effective chunk
 /// size below the spec floor of 1000, the floor is relaxed automatically. A
 /// `Toast::warning` (not info) is emitted by the caller when this occurs.
-pub fn compute_effective_chunk_size(
+pub(crate) fn compute_effective_chunk_size(
     requested: u32,
     max_params: u32,
     filter_param_count: u32,
@@ -291,7 +291,7 @@ pub fn compute_effective_chunk_size(
 ///
 /// `AssignmentValue::Null`, `Default`, and `Expression` produce no bound
 /// parameters — only `Literal` and `Param` variants bind placeholder slots.
-pub fn count_assignment_params(assignments: &[dbflux_core::Assignment]) -> u32 {
+pub(crate) fn count_assignment_params(assignments: &[dbflux_core::Assignment]) -> u32 {
     use dbflux_core::AssignmentValue;
     assignments
         .iter()
@@ -309,7 +309,7 @@ pub fn count_assignment_params(assignments: &[dbflux_core::Assignment]) -> u32 {
 /// All fields are `Arc`-wrapped so the executor can be sent to a background thread.
 /// The `QueryGenerator` is derived from `connection.query_generator()` at execution time;
 /// no separate generator field is needed because the connection already owns one.
-pub struct MutationDeps {
+pub(crate) struct MutationDeps {
     pub connection: Arc<dyn Connection>,
     pub event_sink: Option<Arc<dyn EventSink>>,
     #[allow(dead_code)]
@@ -320,14 +320,18 @@ pub struct MutationDeps {
 ///
 /// Constructed per run by `DataGridPanel::on_mutation_run_requested`.
 /// Each execution method is synchronous and intended to run on a background thread.
-pub struct MutationExecutor {
+pub(crate) struct MutationExecutor {
     spec: VisualMutationSpec,
     opts: MutationExecOptions,
     deps: MutationDeps,
 }
 
 impl MutationExecutor {
-    pub fn new(spec: VisualMutationSpec, opts: MutationExecOptions, deps: MutationDeps) -> Self {
+    pub(crate) fn new(
+        spec: VisualMutationSpec,
+        opts: MutationExecOptions,
+        deps: MutationDeps,
+    ) -> Self {
         Self { spec, opts, deps }
     }
 
@@ -342,7 +346,7 @@ impl MutationExecutor {
     /// `Success`, `Failed`, or `Cancelled` depending on outcome.
     ///
     /// Returns the outcome after the transaction is committed or rolled back.
-    pub fn run_single_tx(
+    pub(crate) fn run_single_tx(
         &self,
         cancel: &crate::task_runner::MutationCancelHandle,
     ) -> Result<MutationOutcome, ExecutorError> {
@@ -526,7 +530,7 @@ impl MutationExecutor {
     ///
     /// Used when the driver does not support transactions (`DirectAutocommit` mode).
     /// Emits the same audit events as `run_single_tx` but without BEGIN/COMMIT.
-    pub fn run_direct(
+    pub(crate) fn run_direct(
         &self,
         cancel: &crate::task_runner::MutationCancelHandle,
     ) -> Result<MutationOutcome, ExecutorError> {
@@ -660,7 +664,7 @@ impl MutationExecutor {
     ///
     /// `pk_cols` are the primary key column names of the target table.
     /// `cancel` is checked between chunks — flip it to abort after the current chunk.
-    pub fn run_chunked_tx(
+    pub(crate) fn run_chunked_tx(
         &self,
         pk_cols: &[&str],
         cancel: &crate::task_runner::MutationCancelHandle,
@@ -1253,6 +1257,10 @@ mod tests {
                 Ok(())
             }
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+            )]
             fn execute(
                 &self,
                 req: &dbflux_core::QueryRequest,
@@ -1434,6 +1442,10 @@ mod tests {
         }
 
         impl EventSink for FakeEventSink {
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+            )]
             fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
                 let mut records = self.records.lock().unwrap();
                 records.push(event.clone());
@@ -1905,6 +1917,10 @@ mod tests {
                 fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                     Ok(())
                 }
+                #[expect(
+                    clippy::unwrap_in_result,
+                    reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+                )]
                 fn execute(
                     &self,
                     req: &dbflux_core::QueryRequest,
@@ -2062,6 +2078,10 @@ mod tests {
                 fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                     Ok(())
                 }
+                #[expect(
+                    clippy::unwrap_in_result,
+                    reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+                )]
                 fn execute(
                     &self,
                     req: &dbflux_core::QueryRequest,
@@ -2165,6 +2185,10 @@ mod tests {
                 fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                     Ok(())
                 }
+                #[expect(
+                    clippy::unwrap_in_result,
+                    reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+                )]
                 fn execute(
                     &self,
                     req: &dbflux_core::QueryRequest,
@@ -2295,6 +2319,10 @@ mod tests {
                 fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                     Ok(())
                 }
+                #[expect(
+                    clippy::unwrap_in_result,
+                    reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+                )]
                 fn execute(
                     &self,
                     req: &dbflux_core::QueryRequest,
@@ -2493,6 +2521,10 @@ mod tests {
                 Ok(())
             }
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+            )]
             fn execute(
                 &self,
                 req: &dbflux_core::QueryRequest,
@@ -2561,6 +2593,10 @@ mod tests {
         }
 
         impl EventSink for FakeEventSink {
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+            )]
             fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
                 self.records.lock().unwrap().push(event.clone());
                 Ok(event)
@@ -2794,6 +2830,10 @@ mod tests {
                 fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                     Ok(())
                 }
+                #[expect(
+                    clippy::unwrap_in_result,
+                    reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+                )]
                 fn execute(
                     &self,
                     req: &dbflux_core::QueryRequest,
@@ -3539,6 +3579,10 @@ mod tests {
                 Ok(())
             }
 
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+            )]
             fn execute(
                 &self,
                 req: &dbflux_core::QueryRequest,
@@ -3972,6 +4016,10 @@ mod tests {
                 fn close(&mut self) -> Result<(), dbflux_core::DbError> {
                     Ok(())
                 }
+                #[expect(
+                    clippy::unwrap_in_result,
+                    reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+                )]
                 fn execute(
                     &self,
                     req: &dbflux_core::QueryRequest,
@@ -4101,6 +4149,10 @@ mod tests {
             }
 
             impl EventSink for TimestampCollector {
+                #[expect(
+                    clippy::unwrap_in_result,
+                    reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+                )]
                 fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
                     self.timestamps.lock().unwrap().push(event.ts_ms);
                     Ok(event)

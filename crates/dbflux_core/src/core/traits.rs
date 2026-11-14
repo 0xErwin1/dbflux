@@ -30,7 +30,6 @@ use crate::{
         ZSetRangePage, ZSetRangeRequest,
     },
     query::generator::QueryGenerator,
-    query::table_browser::OrderByColumn,
     render_semantic_filter_sql,
 };
 
@@ -418,6 +417,17 @@ pub trait DbDriver: Send + Sync {
         None
     }
 
+    /// Build a config targeting a specific cloud region, when supported.
+    ///
+    /// Drivers whose connections reach one region can override this to return
+    /// an updated config, which is what lets the user move a live connection to
+    /// another region without editing the profile. Drivers without a region
+    /// should return `None`, so a region switch is refused instead of silently
+    /// connecting to the same place.
+    fn with_region(&self, _config: &DbConfig, _region: &str) -> Option<DbConfig> {
+        None
+    }
+
     /// Whether this database type requires authentication.
     ///
     /// Default implementation checks for the AUTHENTICATION capability.
@@ -533,6 +543,25 @@ pub trait DbDriver: Send + Sync {
 pub trait KeyValueApi: Send + Sync {
     /// Scan keys with cursor-based pagination.
     fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError>;
+
+    /// Scan one key page, stopping with `DbError::Cancelled` once `cancel`
+    /// is set.
+    ///
+    /// Drivers that fill a page from several server round trips override this
+    /// to check the token between them. The default can only refuse a token
+    /// that is already cancelled, so an in-flight `scan_keys` call still runs
+    /// to completion.
+    fn scan_keys_with_cancel(
+        &self,
+        request: &KeyScanRequest,
+        cancel: &crate::CancelToken,
+    ) -> Result<KeyScanPage, DbError> {
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
+
+        self.scan_keys(request)
+    }
 
     /// Get key value plus metadata.
     fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError>;
@@ -959,6 +988,46 @@ pub trait ObjectStoreConnection: Send + Sync {
     /// this trait does not enforce a size limit itself.
     fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, DbError>;
 
+    /// Fetch the bytes of an object that fall inside `range`, a half-open
+    /// byte range (`start` inclusive, `end` exclusive).
+    ///
+    /// The range is clamped to the object's length: a range that runs past
+    /// the end returns the available tail, and a range that starts at or past
+    /// the end returns an empty vector. An empty range (`start >= end`)
+    /// returns an empty vector without fetching anything.
+    ///
+    /// The default implementation downloads the whole object through
+    /// `get_object` and slices it, so every call costs a full download.
+    /// Drivers whose backend supports ranged reads should override it.
+    fn get_object_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        range: std::ops::Range<u64>,
+    ) -> Result<Vec<u8>, DbError> {
+        if range.start >= range.end {
+            return Ok(Vec::new());
+        }
+
+        let body = self.get_object(bucket, key)?;
+        let length = body.len();
+
+        let start = usize::try_from(range.start).map_or(length, |start| start.min(length));
+        let end = usize::try_from(range.end).map_or(length, |end| end.min(length));
+
+        Ok(body.get(start..end).map(<[u8]>::to_vec).unwrap_or_default())
+    }
+
+    /// Whether `get_object_range` fetches only the requested bytes.
+    ///
+    /// A store that returns false serves `get_object_range` by downloading
+    /// the whole object on every call, which is what the default
+    /// implementation does. A driver that overrides `get_object_range` with
+    /// a ranged request returns true.
+    fn supports_range_reads(&self) -> bool {
+        false
+    }
+
     /// Stream an object's body straight to `dest` on disk, never buffering
     /// the whole object in memory. Used for Download and Open-externally —
     /// the only two transfers that move an object's bytes off the network,
@@ -1219,6 +1288,22 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Paradigm facets of a table whose details are loaded.
+    ///
+    /// The default is tabular only. A driver adds facets it can derive from
+    /// the table's columns, such as a vector column.
+    fn object_facets(&self, _table: &TableInfo) -> Vec<crate::ObjectFacet> {
+        vec![crate::ObjectFacet::Tabular]
+    }
+
+    /// Paradigm facets of a collection.
+    ///
+    /// The default is tabular only. A driver whose collections hold documents
+    /// or time-indexed rows declares so here, per collection.
+    fn collection_facets(&self, _collection: &crate::CollectionRef) -> Vec<crate::ObjectFacet> {
+        vec![crate::ObjectFacet::Tabular]
+    }
+
     /// Fetch columns and indexes for a table.
     fn table_details(
         &self,
@@ -1271,6 +1356,29 @@ pub trait Connection: Send + Sync {
     /// Returns the currently active database, if any.
     fn active_database(&self) -> Option<String> {
         None
+    }
+
+    /// Returns the cloud region this connection reaches, if it reaches one.
+    ///
+    /// Drivers that advertise `DriverCapabilities::REGION_SWITCH` report the
+    /// region they connected with, which is also the value a region switch
+    /// starts from. Drivers without a region keep the `None` default.
+    fn current_region(&self) -> Option<String> {
+        None
+    }
+
+    /// Lists the cloud regions this connection can be moved to.
+    ///
+    /// Drivers that advertise `DriverCapabilities::REGION_SWITCH` ask the
+    /// provider for its regions with this connection's credentials, so a
+    /// caller sees exactly the regions this connection can reach. A driver
+    /// without a region inherits the default and reports `NotSupported` rather
+    /// than an empty list, because an empty list reads as "there is nowhere to
+    /// go" while the truth is "this connection has no regions".
+    fn available_regions(&self) -> Result<Vec<String>, DbError> {
+        Err(DbError::NotSupported(
+            "region listing not supported".to_string(),
+        ))
     }
 
     /// Returns the database kind for this connection.
@@ -1432,6 +1540,34 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Fetch multiple rows from a table by primary-key matches in one batch.
+    ///
+    /// Returns the rows whose `pk_column` value appears in `values`, with no
+    /// guarantee of ordering. `projection` limits the fetched columns to the
+    /// given list; `None` fetches full rows, matching `fetch_row_by_pk`.
+    ///
+    /// The default loops over `fetch_row_by_pk`, skipping misses (`Ok(None)`)
+    /// and propagating the first error, and ignores `projection`; drivers that
+    /// can batch or project natively override it. Non-relational drivers that
+    /// don't override `fetch_row_by_pk` keep returning `NotSupported`.
+    fn fetch_rows_by_pks(
+        &self,
+        database: &str,
+        schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[Value],
+        _projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, Value>>, DbError> {
+        let mut rows = Vec::with_capacity(values.len());
+        for value in values {
+            if let Some(row) = self.fetch_row_by_pk(database, schema, table, pk_column, value)? {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
     // =========================================================================
     // Browse Operations (semantic queries, no raw SQL/JSON from UI)
     // =========================================================================
@@ -1443,7 +1579,8 @@ pub trait Connection: Send + Sync {
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
         let sql = if let Some(filter) = request.semantic_filter.as_ref() {
             let mut sql = format!(
-                "SELECT * FROM {}",
+                "SELECT {} FROM {}",
+                request.select_list_with(self.dialect()),
                 request.table.quoted_with(self.dialect())
             );
 
@@ -1567,6 +1704,68 @@ pub trait Connection: Send + Sync {
     /// `DocumentFeatures::VISUAL_BUILDER`.
     fn document_query_codec(&self) -> Option<&dyn crate::DocumentQueryCodec> {
         None
+    }
+
+    // =========================================================================
+    // Table views (Columns, Partitions, read estimate)
+    // =========================================================================
+
+    /// The table views this connection fills beyond the data grid. The default
+    /// fills none; drivers report the seams below they implement.
+    fn table_view_features(&self) -> crate::TableViewFeatures {
+        crate::TableViewFeatures::empty()
+    }
+
+    /// Per-column storage facts of `table`, read from metadata only: catalogs,
+    /// planner statistics or storage information. It must never read table
+    /// rows, because the UI calls it when the table opens. Connections that
+    /// implement it report `TableViewFeatures::COLUMN_PROFILE`.
+    fn table_profile(&self, _table: &crate::TableRef) -> Result<crate::TableProfile, DbError> {
+        Err(DbError::NotSupported(
+            "Column profiles are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The partitions of `table`, read from metadata only. Connections that
+    /// implement it report `TableViewFeatures::PARTITIONS`.
+    fn table_partitions(
+        &self,
+        _table: &crate::TableRef,
+    ) -> Result<crate::TablePartitions, DbError> {
+        Err(DbError::NotSupported(
+            "Table partitions are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// What `request` would read, worked out without reading table rows.
+    /// `profile` is the table's metadata profile, used to put bytes on the
+    /// columns the request reads. Connections that implement it report
+    /// `TableViewFeatures::READ_ESTIMATE`.
+    fn estimate_table_read(
+        &self,
+        _request: &TableBrowseRequest,
+        _profile: &crate::TableProfile,
+    ) -> Result<crate::ReadEstimate, DbError> {
+        Err(DbError::NotSupported(
+            "Read estimates are not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Null counts, distinct counts, ranges and top values of `columns`,
+    /// computed from at most `row_limit` rows of `table`, with the limit
+    /// inside the query the driver runs. This reads table data, so the UI
+    /// runs it only on an explicit action. The returned profile's source is
+    /// [`crate::ProfileSource::Sample`] with the rows actually read.
+    /// Connections that implement it report `TableViewFeatures::SAMPLE_PROFILE`.
+    fn sample_table_profile(
+        &self,
+        _table: &crate::TableRef,
+        _columns: &[String],
+        _row_limit: u64,
+    ) -> Result<crate::TableProfile, DbError> {
+        Err(DbError::NotSupported(
+            "Sample profiles are not supported by this driver".to_string(),
+        ))
     }
 
     /// Count documents matching a filter, allowing the driver to answer from
@@ -1818,6 +2017,35 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Returns the sidebar root sections this connection declares.
+    ///
+    /// Drivers that implement `RootSectionSource` override this and advertise
+    /// `DriverCapabilities::ROOT_SECTIONS`; the rest inherit `None`.
+    fn root_section_source(
+        &self,
+    ) -> Option<&dyn crate::connection::root_section::RootSectionSource> {
+        None
+    }
+
+    /// Returns the secret stores this connection exposes, in display order.
+    ///
+    /// Drivers that implement `SecretStoreSource` override this. Drivers without
+    /// secret stores inherit the empty default and MUST NOT advertise
+    /// `DriverCapabilities::SECRET_STORE`.
+    fn secret_stores(&self) -> Vec<&dyn crate::connection::secret_store::SecretStoreSource> {
+        Vec::new()
+    }
+
+    /// Returns the store whose descriptor id is `store_id`.
+    fn secret_store(
+        &self,
+        store_id: &str,
+    ) -> Option<&dyn crate::connection::secret_store::SecretStoreSource> {
+        self.secret_stores()
+            .into_iter()
+            .find(|store| store.descriptor().id == store_id)
+    }
+
     /// Returns the language service for this connection.
     ///
     /// Provides validation and dangerous-query detection for the connection's
@@ -1883,128 +2111,21 @@ pub trait Connection: Send + Sync {
     // SQL Building Methods
     // =========================================================================
 
-    /// Build a SELECT query with optional filtering, ordering, and pagination.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to query
-    /// * `columns` - The columns to select
-    /// * `filter` - Optional WHERE clause expression
-    /// * `order_by` - Columns to order by
-    /// * `limit` - Maximum number of rows to return
-    /// * `offset` - Number of rows to skip
-    ///
-    /// # Returns
-    /// A SQL string for the SELECT query
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let _ = (table, columns, filter, order_by, limit, offset);
-        unimplemented!("build_select_sql not implemented for this driver")
-    }
-
-    /// Build an INSERT query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to insert into
-    /// * `columns` - The columns to insert
-    /// * `values` - The values to insert
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let _ = (table, columns, values);
-        unimplemented!("build_insert_sql not implemented for this driver")
-    }
-
-    /// Build an UPDATE query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to update
-    /// * `set` - Column/value pairs to set
-    /// * `filter` - Optional WHERE clause expression
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let _ = (table, set, filter);
-        unimplemented!("build_update_sql not implemented for this driver")
-    }
-
-    /// Build a DELETE query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to delete from
-    /// * `filter` - Optional WHERE clause expression
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let _ = (table, filter);
-        unimplemented!("build_delete_sql not implemented for this driver")
-    }
-
-    /// Build an UPSERT (INSERT ON CONFLICT) query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name
-    /// * `columns` - The columns to insert/update
-    /// * `values` - The values
-    /// * `conflict_columns` - Columns that define uniqueness for conflict detection
-    /// * `update_columns` - Columns to update on conflict
-    ///
-    /// # Returns
-    /// A tuple of (SQL string, parameter values)
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let _ = (table, columns, values, conflict_columns, update_columns);
-        unimplemented!("build_upsert_sql not implemented for this driver")
-    }
-
-    /// Build a COUNT query.
-    ///
-    /// # Arguments
-    /// * `table` - The table name to count
-    /// * `filter` - Optional WHERE clause expression
-    ///
-    /// # Returns
-    /// A SQL string for the COUNT query
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let _ = (table, filter);
-        unimplemented!("build_count_sql not implemented for this driver")
-    }
-
     /// Build a TRUNCATE TABLE statement.
     ///
     /// # Arguments
     /// * `table` - The table name to truncate
     ///
     /// # Returns
-    /// A SQL string for TRUNCATE TABLE
-    fn build_truncate_sql(&self, table: &str) -> String {
+    /// A SQL string for TRUNCATE TABLE.
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no implementation.
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let _ = table;
-        unimplemented!("build_truncate_sql not implemented for this driver")
+        Err(DbError::NotSupported(
+            "build_truncate_sql not implemented for this driver".to_string(),
+        ))
     }
 
     /// Build a DROP INDEX statement.
@@ -2015,20 +2136,30 @@ pub trait Connection: Send + Sync {
     /// * `if_exists` - Whether to add IF EXISTS clause
     ///
     /// # Returns
-    /// A SQL string for DROP INDEX
+    /// A SQL string for DROP INDEX.
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no implementation.
     fn build_drop_index_sql(
         &self,
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let _ = (index_name, table_name, if_exists);
-        unimplemented!("build_drop_index_sql not implemented for this driver")
+        Err(DbError::NotSupported(
+            "build_drop_index_sql not implemented for this driver".to_string(),
+        ))
     }
 
     /// Returns the SQL query to get the server version.
-    fn version_query(&self) -> &'static str {
-        unimplemented!("version_query not implemented for this driver")
+    ///
+    /// # Errors
+    /// Returns [`DbError::NotSupported`] when the driver has no version query.
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Err(DbError::NotSupported(
+            "version_query not implemented for this driver".to_string(),
+        ))
     }
 
     /// Returns whether this driver supports transactional DDL.
@@ -2111,21 +2242,6 @@ pub trait Connection: Send + Sync {
     /// caches (e.g., MongoDB) can override this.
     fn refresh_database_schema(&self, _database: &str) -> Result<(), DbError> {
         Ok(())
-    }
-
-    /// Translate a Value filter expression to a SQL WHERE clause string.
-    ///
-    /// This is used to convert JSON-based filter expressions to SQL syntax.
-    ///
-    /// # Arguments
-    /// * `filter` - The filter expression as a Value
-    ///
-    /// # Returns
-    /// A SQL WHERE clause string
-    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
-        Err(DbError::NotSupported(
-            "translate_filter not implemented for this driver".to_string(),
-        ))
     }
 }
 
@@ -2211,12 +2327,47 @@ pub trait ConnectionExt {
 mod tests {
     use super::*;
     use crate::{DbError, DbKind, DriverMetadata, QueryRequest, QueryResult, SchemaSnapshot};
+    use std::collections::HashMap;
+
+    #[test]
+    fn object_facets_default_to_tabular() {
+        let table = TableInfo {
+            name: "items".to_string(),
+            schema: None,
+            columns: Some(Vec::new()),
+            pseudo_columns: Box::default(),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: crate::CollectionPresentation::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+
+        assert_eq!(
+            StubConnection.object_facets(&table),
+            vec![crate::ObjectFacet::Tabular]
+        );
+    }
+
+    #[test]
+    fn collection_facets_default_to_tabular() {
+        assert_eq!(
+            StubConnection.collection_facets(&crate::CollectionRef::new("app", "events")),
+            vec![crate::ObjectFacet::Tabular]
+        );
+    }
 
     /// Minimal Connection stub that only implements the required methods and
     /// relies on default impls for everything else.
     struct StubConnection;
 
     impl Connection for StubConnection {
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
         fn metadata(&self) -> &DriverMetadata {
             unimplemented!("StubConnection::metadata not needed for this test")
         }
@@ -2249,8 +2400,82 @@ mod tests {
             SchemaLoadingStrategy::SingleDatabase
         }
 
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
         fn dialect(&self) -> &dyn crate::sql::dialect::SqlDialect {
             unimplemented!("StubConnection::dialect not needed for this test")
+        }
+    }
+
+    /// Connection stub with scripted `fetch_row_by_pk` outcomes per integer
+    /// primary key, used to exercise the `fetch_rows_by_pks` default loop.
+    /// `rows` maps a pk to `Some(row)` (hit) or `None` (miss); a pk listed in
+    /// `fail_on` makes its lookup fail.
+    struct BatchPkStub {
+        rows: HashMap<i64, Option<HashMap<String, Value>>>,
+        fail_on: Vec<i64>,
+    }
+
+    impl Connection for BatchPkStub {
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
+        fn metadata(&self) -> &DriverMetadata {
+            unimplemented!("BatchPkStub::metadata not needed for this test")
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
+        fn dialect(&self) -> &dyn crate::sql::dialect::SqlDialect {
+            unimplemented!("BatchPkStub::dialect not needed for this test")
+        }
+
+        fn fetch_row_by_pk(
+            &self,
+            _database: &str,
+            _schema: &str,
+            _table: &str,
+            _pk_column: &str,
+            pk_value: &Value,
+        ) -> Result<Option<HashMap<String, Value>>, DbError> {
+            match pk_value {
+                Value::Int(id) if self.fail_on.contains(id) => Err(DbError::Timeout),
+                Value::Int(id) => Ok(self.rows.get(id).cloned().unwrap_or(None)),
+                _ => Ok(None),
+            }
         }
     }
 
@@ -2280,6 +2505,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let metadata = crate::TableCreationMetadata {
             schema: None,
@@ -2331,6 +2557,91 @@ mod tests {
         assert!(
             matches!(result, Err(DbError::NotSupported(_))),
             "default impl must return NotSupported, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn fetch_rows_by_pks_default_collects_hits_and_skips_misses() {
+        let row = |id: i64, name: &str| {
+            HashMap::from([
+                ("id".to_string(), Value::Int(id)),
+                ("name".to_string(), Value::Text(name.to_string())),
+            ])
+        };
+        let conn = BatchPkStub {
+            rows: HashMap::from([
+                (1, Some(row(1, "alice"))),
+                (3, None), // explicit miss
+            ]),
+            fail_on: Vec::new(),
+        };
+
+        // pk 2 is absent from the map, exercising the implicit miss path too.
+        let result = conn.fetch_rows_by_pks(
+            "db",
+            "public",
+            "users",
+            "id",
+            &[Value::Int(1), Value::Int(2), Value::Int(3)],
+            None,
+        );
+
+        assert!(
+            matches!(&result, Ok(rows) if rows.len() == 1
+                && rows[0].get("id") == Some(&Value::Int(1))),
+            "default must collect hits and skip misses, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn fetch_rows_by_pks_default_propagates_first_error() {
+        let conn = BatchPkStub {
+            rows: HashMap::new(),
+            fail_on: vec![2],
+        };
+
+        let result = conn.fetch_rows_by_pks(
+            "db",
+            "public",
+            "users",
+            "id",
+            &[Value::Int(1), Value::Int(2), Value::Int(3)],
+            None,
+        );
+
+        assert!(
+            matches!(result, Err(DbError::Timeout)),
+            "default must propagate the first fetch_row_by_pk error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn fetch_rows_by_pks_default_ignores_projection() {
+        let row = HashMap::from([
+            ("id".to_string(), Value::Int(7)),
+            ("name".to_string(), Value::Text("bob".to_string())),
+        ]);
+        let conn = BatchPkStub {
+            rows: HashMap::from([(7, Some(row))]),
+            fail_on: Vec::new(),
+        };
+
+        let result = conn.fetch_rows_by_pks(
+            "db",
+            "public",
+            "users",
+            "id",
+            &[Value::Int(7)],
+            Some(&["id".to_string()]),
+        );
+
+        assert!(
+            matches!(&result, Ok(rows) if rows.len() == 1
+                && rows[0].contains_key("id") && rows[0].contains_key("name")),
+            "default delegates to fetch_row_by_pk and must not filter columns, got: {:?}",
             result
         );
     }
@@ -2431,6 +2742,32 @@ mod tests {
         fn exists_key(&self, _request: &KeyExistsRequest) -> Result<bool, DbError> {
             Err(DbError::NotSupported("stub".to_string()))
         }
+    }
+
+    #[test]
+    fn scan_keys_with_cancel_default_refuses_a_cancelled_token_before_scanning() {
+        let token = crate::CancelToken::new();
+        token.cancel();
+
+        let result = StubKeyValue.scan_keys_with_cancel(&KeyScanRequest::new(10), &token);
+
+        assert!(
+            matches!(result, Err(DbError::Cancelled)),
+            "a cancelled token must stop the scan before the driver call, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn scan_keys_with_cancel_default_delegates_to_scan_keys_while_not_cancelled() {
+        let result = StubKeyValue
+            .scan_keys_with_cancel(&KeyScanRequest::new(10), &crate::CancelToken::new());
+
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "a live token must reach scan_keys, got: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -2626,7 +2963,27 @@ mod tests {
 
     /// Minimal `ObjectStoreConnection` stub exercising object-safety (usable
     /// as `&dyn ObjectStoreConnection`) rather than any real S3 behavior.
-    struct StubObjectStore;
+    /// `get_object` serves `body` for every key and counts its calls, so
+    /// tests can tell a default method that fetched from one that did not.
+    #[derive(Default)]
+    struct StubObjectStore {
+        body: Vec<u8>,
+        get_object_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl StubObjectStore {
+        fn with_body(body: &[u8]) -> Self {
+            Self {
+                body: body.to_vec(),
+                ..Self::default()
+            }
+        }
+
+        fn get_object_calls(&self) -> usize {
+            self.get_object_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
 
     impl ObjectStoreConnection for StubObjectStore {
         fn list_buckets(&self) -> Result<Vec<BucketInfo>, DbError> {
@@ -2659,7 +3016,10 @@ mod tests {
         }
 
         fn get_object(&self, _bucket: &str, _key: &str) -> Result<Vec<u8>, DbError> {
-            Ok(Vec::new())
+            self.get_object_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+            Ok(self.body.clone())
         }
 
         fn download_object(
@@ -2769,10 +3129,79 @@ mod tests {
 
     #[test]
     fn object_store_connection_is_object_safe_and_callable() {
-        let store: &dyn ObjectStoreConnection = &StubObjectStore;
+        let stub = StubObjectStore::default();
+        let store: &dyn ObjectStoreConnection = &stub;
         let buckets = store.list_buckets().expect("list_buckets");
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].name, "my-bucket");
+    }
+
+    #[test]
+    fn default_object_store_does_not_report_range_reads() {
+        let stub = StubObjectStore::default();
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        assert!(!store.supports_range_reads());
+    }
+
+    #[test]
+    fn get_object_range_default_returns_the_same_bytes_as_a_slice_of_the_full_read() {
+        let stub = StubObjectStore::with_body(b"0123456789");
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        let full = store.get_object("bucket", "key").expect("get_object");
+        let window = store
+            .get_object_range("bucket", "key", 3..7)
+            .expect("get_object_range");
+
+        assert_eq!(window, full[3..7]);
+        assert_eq!(window, b"3456");
+    }
+
+    #[test]
+    fn get_object_range_default_clamps_a_range_running_past_the_end_to_the_tail() {
+        let stub = StubObjectStore::with_body(b"0123456789");
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        let tail = store
+            .get_object_range("bucket", "key", 7..1_000)
+            .expect("get_object_range");
+
+        assert_eq!(tail, b"789");
+    }
+
+    #[test]
+    fn get_object_range_default_returns_empty_when_the_range_starts_at_or_past_the_end() {
+        let stub = StubObjectStore::with_body(b"0123456789");
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        let at_end = store
+            .get_object_range("bucket", "key", 10..20)
+            .expect("get_object_range at end");
+        let past_end = store
+            .get_object_range("bucket", "key", 50..u64::MAX)
+            .expect("get_object_range past end");
+
+        assert!(at_end.is_empty());
+        assert!(past_end.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn get_object_range_default_returns_empty_for_an_empty_range_without_fetching() {
+        let stub = StubObjectStore::with_body(b"0123456789");
+        let store: &dyn ObjectStoreConnection = &stub;
+
+        let empty = store
+            .get_object_range("bucket", "key", 4..4)
+            .expect("get_object_range empty");
+        let inverted = store
+            .get_object_range("bucket", "key", 6..2)
+            .expect("get_object_range inverted");
+
+        assert!(empty.is_empty());
+        assert!(inverted.is_empty());
+        assert_eq!(stub.get_object_calls(), 0);
     }
 
     /// Connection stub whose `ConnectionExt` impl relies entirely on defaults,
@@ -2862,6 +3291,10 @@ mod tests {
     }
 
     impl Connection for RecordingConnection {
+        #[expect(
+            clippy::unimplemented,
+            reason = "test stub: this Connection method is never called by the tests using this stub"
+        )]
         fn metadata(&self) -> &DriverMetadata {
             unimplemented!("RecordingConnection::metadata not needed for this test")
         }

@@ -24,7 +24,71 @@ from the rail collapses the sidebar.
 - `/` focuses the sidebar search/filter.
 - `Enter` opens the selected item (for example, a table opens a data grid).
 - `r` refreshes the schema; `d` disconnects the active connection.
-- `m` opens the context menu for the selected item.
+- `m` opens the context menu for the selected item. On a column or a
+  collection field, the menu copies its name.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/schema-browser/tree-dark.webp">
+  <img src="images/schema-browser/tree-light.webp" alt="The sidebar schema tree of a PostgreSQL connection, with a table expanded to its columns, indexes and constraints">
+</picture>
+
+## Simple and advanced layout
+
+Each connection to a database with schemas has a **Navigator view** in the
+Main tab of the connection manager:
+
+- **Advanced** (the default) — each schema groups its tables and views in
+  **Tables** and **Views** folders, next to its types, indexes, foreign keys
+  and, where the driver supports them, routines.
+- **Compact** — the tree hides intermediate folders: the connection lists its
+  databases, each database its schemas, and each schema its tables, views,
+  routines and data types directly. Tables still expand to their columns,
+  indexes, foreign keys and constraints, so the schema-level Indexes and
+  Foreign Keys folders are left out. Instance Overview, Instance Metrics and
+  Instance Inspectors are grouped under one **Instance** folder. Nothing that
+  Advanced shows becomes unreachable.
+- **Simple** — only databases, their schemas, and each schema's tables and
+  views, as DBeaver's simple view does. Routines, data types, dashboards and
+  the instance views are hidden; switch to Compact or Advanced to reach them.
+  Tables still expand to their columns, indexes and constraints.
+
+The layout changes as soon as you save the connection, also while it is open.
+
+Next to the **Database** field, **Show all databases** decides which databases
+the tree lists for a server that holds several. It is on by default, and the
+tree lists every database. Turn it off to list only the database typed in the
+field. If the field is empty, or names a database the server does not list,
+every database is still shown.
+
+## External scripts folders
+
+The Scripts view can list scripts that live outside DBFlux's own scripts
+folder, such as a repository of SQL files shared across projects, without
+copying them. Choose **Add external folder** from the `+` menu of the Scripts
+view, or run **Add external scripts folder…** from the command palette, and
+pick the folder.
+
+- The folder appears below your own scripts, with its name as the label. Only
+  files the editor opens (`.sql`, `.js`, `.redis`, `.lua`, `.py`, `.sh` and the
+  other script types) are listed. Subfolders that hold only other files are
+  hidden; empty ones are shown, so a folder you just created stays visible.
+  Symbolic links that lead out of the folder are not listed, and nothing is
+  written through them.
+- Scripts open and save in place, so the files stay in sync with the folder.
+  Creating, renaming and deleting files and subfolders inside it works as in
+  your own scripts folder. Moving a file between two different folders is
+  refused.
+- DBFlux does not watch the folder. Press `r` on the folder, or choose
+  **Refresh** from its menu, to pick up files added or changed outside DBFlux.
+  The folders are also scanned in the background each time DBFlux starts.
+- If the folder is moved, deleted, unmounted or cannot be read, it stays in the
+  list marked **unavailable** until it comes back or you remove it. Its menu
+  says why it could not be read.
+- **Remove from sidebar** (`x`) only forgets the folder. Its files are never
+  touched, and the folder itself cannot be renamed, moved or deleted from
+  DBFlux.
+- External folders are not shared with AI clients: the MCP script tools only
+  see DBFlux's own scripts folder.
 
 ## Lazy loading
 
@@ -58,17 +122,22 @@ Relational connections whose driver reports foreign-key support (for example
 PostgreSQL, MySQL/MariaDB, SQLite, and SQL Server) can draw tables and their
 foreign keys as a diagram. Open it from the sidebar context menu:
 
-- **View Schema Diagram** on a loaded database draws every table in it, up to
+- **View schema diagram** on a loaded database draws every table in it, up to
   100. A larger database shows the notice "Showing first 100 tables — the
   schema has more."
-- **View Relationships** on a table draws that table, the tables it references,
+- **View relationships** on a table draws that table, the tables it references,
   and the tables that reference it.
 
 The diagram opens in its own tab, and opening the same diagram again switches to
 that tab. Loading runs as a background task ("Schema diagram: _database_") that
-you can cancel from the Tasks panel. Each table lists its columns with `PK`,
-`FK`, and `NN` (not null) badges, and lines connect each foreign key to the
-table it references.
+you can cancel from the Tasks panel. Each table lists its columns, with a key
+icon on primary-key columns and a link icon on foreign-key columns, and lines
+connect each foreign key to the table it references.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/schema-browser/diagram-dark.webp">
+  <img src="images/schema-browser/diagram-light.webp" alt="The schema diagram of a PostgreSQL database, with four tables and lines from each foreign key to the table it references">
+</picture>
 
 | Toolbar control | What it does |
 |---|---|
@@ -76,7 +145,7 @@ table it references.
 | **Reset** | Returns to 100% zoom and the starting position. |
 | **Arrange** | Discards the positions of tables you moved and recomputes the layout. |
 | **Fit** | Zooms and pans so every table is visible. |
-| Layout dropdown | **Left to right** (default) places tables that hold foreign keys on the left and the tables they reference on the right. **Snowflake** puts one table in the center and its direct neighbors in a circle around it: the chosen table for **View Relationships**, the most connected table for a database diagram. **Compact** packs tables into a tight grid sorted by name. Changing the layout also discards moved tables and fits the diagram into view. |
+| Layout dropdown | **Left to right** (default) places tables that hold foreign keys on the left and the tables they reference on the right. **Snowflake** puts one table in the center and its direct neighbors in a circle around it: the chosen table for **View relationships**, the most connected table for a database diagram. **Compact** packs tables into a tight grid sorted by name. Changing the layout also discards moved tables and fits the diagram into view. |
 | **Export** | **Copy as DBML** or **Copy as SQL** copies the tables shown in the diagram to the clipboard. The SQL is `CREATE TABLE` statements plus `ALTER TABLE ... ADD CONSTRAINT` for the foreign keys. |
 | _N_ tables · _M_ relations | How many tables and foreign keys the diagram shows. |
 | **Types** / **Indexes** | Show column types (on by default) / an index list under each table (off by default). |

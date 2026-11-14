@@ -5,30 +5,8 @@ use dbflux_core::{DatabaseCategory, PipelineState, RelationKind, SchemaObjectKin
 
 /// Translated label for a schema-tree container folder, e.g. `"Tables (12)"`.
 pub(crate) fn container_folder_label(category: DatabaseCategory, count: usize) -> String {
-    match category {
-        DatabaseCategory::Relational => {
-            dbflux_i18n::t!("sidebar.tree.container.relational", count = count)
-        }
-        DatabaseCategory::Document => {
-            dbflux_i18n::t!("sidebar.tree.container.document", count = count)
-        }
-        DatabaseCategory::KeyValue => {
-            dbflux_i18n::t!("sidebar.tree.container.key_value", count = count)
-        }
-        DatabaseCategory::Graph => dbflux_i18n::t!("sidebar.tree.container.graph", count = count),
-        DatabaseCategory::TimeSeries => {
-            dbflux_i18n::t!("sidebar.tree.container.time_series", count = count)
-        }
-        DatabaseCategory::WideColumn => {
-            dbflux_i18n::t!("sidebar.tree.container.wide_column", count = count)
-        }
-        DatabaseCategory::LogStream => {
-            dbflux_i18n::t!("sidebar.tree.container.log_stream", count = count)
-        }
-        DatabaseCategory::ObjectStorage => {
-            dbflux_i18n::t!("sidebar.tree.container.object_storage", count = count)
-        }
-    }
+    let key = dbflux_components::category::category_presentation(category).container_label_key;
+    dbflux_i18n::t!(key, count = count)
 }
 
 /// Translated page indicator for the collection child picker, e.g.
@@ -338,6 +316,12 @@ pub(crate) fn instance_metrics_folder_label() -> String {
     dbflux_i18n::t!("sidebar.tree.folder.instance_metrics")
 }
 
+/// Translated label for the folder that holds the instance views in the
+/// Simple navigator view.
+pub(crate) fn instance_folder_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.instance")
+}
+
 /// Translated label for the Instance Inspectors sidebar folder.
 pub(crate) fn instance_inspectors_folder_label() -> String {
     dbflux_i18n::t!("sidebar.tree.folder.instance_inspectors")
@@ -607,6 +591,44 @@ pub(crate) fn script_files_filter_label() -> String {
     dbflux_i18n::t!("sidebar.dialog.script_files_filter")
 }
 
+/// Translated toast reported when a script create, rename, move, delete or
+/// import the user triggered fails.
+pub(crate) fn script_operation_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.script_operation_failed", error = error)
+}
+
+/// Translated title for the folder picker that registers an external scripts
+/// folder.
+pub(crate) fn add_external_folder_dialog_title() -> String {
+    dbflux_i18n::t!("sidebar.dialog.add_external_folder_title")
+}
+
+/// Translated toast reported when an external scripts folder cannot be added.
+pub(crate) fn add_external_folder_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.add_external_folder_failed", error = error)
+}
+
+/// Translated toast reported when an external scripts folder cannot be
+/// unregistered.
+pub(crate) fn remove_external_folder_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.remove_external_folder_failed", error = error)
+}
+
+/// Sidebar label of an external scripts folder that has not been scanned yet.
+pub(crate) fn scripts_root_scanning_label(label: &str) -> String {
+    dbflux_i18n::t!("sidebar.tree.scripts_root_scanning", label = label)
+}
+
+/// Menu line naming why an external scripts folder could not be read.
+pub(crate) fn scripts_root_unavailable_reason_label(reason: &str) -> String {
+    dbflux_i18n::t!("sidebar.menu.unavailable_reason", reason = reason)
+}
+
+/// Sidebar label of an external scripts folder that could not be read.
+pub(crate) fn scripts_root_unavailable_label(label: &str) -> String {
+    dbflux_i18n::t!("sidebar.tree.scripts_root_unavailable", label = label)
+}
+
 /// Translated warning shown when an Export/Migrate Tables action skipped
 /// tables outside the active profile/database, e.g. `"3 tables outside the
 /// active profile/database were skipped"`.
@@ -664,15 +686,34 @@ pub(crate) fn routines_load_failed_label(error: &str) -> String {
     dbflux_i18n::t!("sidebar.toast.load_failed.routines", error = error)
 }
 
-/// Translated task-panel label for a background bucket listing, e.g.
-/// `"Listing buckets: prod-db"`.
-pub(crate) fn listing_buckets_task_label(name: &str) -> String {
-    dbflux_i18n::t!("sidebar.task.listing_buckets", name = name)
+/// Translated task-panel label for a background listing of a driver-declared
+/// root section, e.g. `"Listing Buckets: prod-s3"`.
+pub(crate) fn listing_root_section_task_label(section: &str, name: &str) -> String {
+    dbflux_i18n::t!(
+        "sidebar.task.listing_root_section",
+        section = section,
+        name = name
+    )
 }
 
-/// Translated task-failure detail reported when listing buckets fails.
-pub(crate) fn list_buckets_failed_label(error: &str) -> String {
-    dbflux_i18n::t!("sidebar.toast.list_buckets_failed", error = error)
+/// Translated task-failure detail reported when listing a root section fails.
+pub(crate) fn list_root_section_failed_label(section: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "sidebar.toast.list_root_section_failed",
+        section = section,
+        error = error
+    )
+}
+
+/// Translated task-panel label for a background listing of a secret store's
+/// path tree, e.g. `"Listing secret paths: prod-aws"`.
+pub(crate) fn listing_secret_paths_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.listing_secret_paths", name = name)
+}
+
+/// Translated task-failure detail reported when listing secret paths fails.
+pub(crate) fn list_secret_paths_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.list_secret_paths_failed", error = error)
 }
 
 /// Translated toast reported when SQL/query code generation fails.
@@ -773,26 +814,24 @@ pub(crate) fn pipeline_stage_label(state: &PipelineState) -> Option<String> {
 mod tests {
     use dbflux_core::DatabaseCategory;
 
-    const ALL_CATEGORIES: [DatabaseCategory; 8] = [
+    const ALL_CATEGORIES: [DatabaseCategory; 7] = [
         DatabaseCategory::Relational,
         DatabaseCategory::Document,
         DatabaseCategory::KeyValue,
-        DatabaseCategory::Graph,
         DatabaseCategory::TimeSeries,
-        DatabaseCategory::WideColumn,
         DatabaseCategory::LogStream,
         DatabaseCategory::ObjectStorage,
+        DatabaseCategory::SecretStore,
     ];
 
-    const CONTAINER_KEYS: [&str; 8] = [
+    const CONTAINER_KEYS: [&str; 7] = [
         "sidebar.tree.container.relational",
         "sidebar.tree.container.document",
         "sidebar.tree.container.key_value",
-        "sidebar.tree.container.graph",
         "sidebar.tree.container.time_series",
-        "sidebar.tree.container.wide_column",
         "sidebar.tree.container.log_stream",
         "sidebar.tree.container.object_storage",
+        "sidebar.tree.container.secret_store",
     ];
 
     const SLICE_KEYS: [&str; 10] = [
@@ -1616,6 +1655,39 @@ mod tests {
         "sidebar.toast.schema_snapshot_failed",
     ];
 
+    const SCRIPT_ROOT_KEYS: [&str; 13] = [
+        "sidebar.menu.unavailable_reason",
+        "sidebar.toast.script_operation_failed",
+        "sidebar.status.external_folders",
+        "sidebar.status.unavailable_folders",
+        "sidebar.dialog.add_external_folder_title",
+        "sidebar.overlay.add_external_folder",
+        "sidebar.menu.remove_external_folder",
+        "sidebar.menu.refresh_scripts",
+        "sidebar.toast.add_external_folder_failed",
+        "sidebar.toast.remove_external_folder_failed",
+        "sidebar.tree.scripts_root_scanning",
+        "sidebar.tree.scripts_root_unavailable",
+        "sidebar.overlay.import_file",
+    ];
+
+    #[test]
+    fn script_root_keys_resolve_in_both_locales() {
+        for key in SCRIPT_ROOT_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+            }
+        }
+    }
+
+    #[test]
+    fn script_root_status_labels_keep_the_folder_label() {
+        assert!(super::scripts_root_scanning_label("shared-sql").contains("shared-sql"));
+        assert!(super::scripts_root_unavailable_label("shared-sql").contains("shared-sql"));
+    }
+
     #[test]
     fn d2_keys_resolve_in_both_locales() {
         for key in D2_KEYS {
@@ -1792,7 +1864,7 @@ mod tests {
         );
     }
 
-    const E1_KEYS: [&str; 22] = [
+    const E1_KEYS: [&str; 37] = [
         "sidebar.error.cannot_load_schema_types",
         "sidebar.error.cannot_load_schema_indexes",
         "sidebar.error.cannot_load_schema_foreign_keys",
@@ -1801,8 +1873,23 @@ mod tests {
         "sidebar.toast.load_failed.indexes",
         "sidebar.toast.load_failed.foreign_keys",
         "sidebar.toast.load_failed.routines",
-        "sidebar.task.listing_buckets",
-        "sidebar.toast.list_buckets_failed",
+        "sidebar.task.listing_root_section",
+        "sidebar.toast.list_root_section_failed",
+        "sidebar.toast.root_section_action_failed",
+        "sidebar.toast.root_section_action_audit_failed",
+        "sidebar.toast.root_section_action_connection_changed",
+        "sidebar.toast.root_section_action_refused.read_only",
+        "sidebar.toast.root_section_action_refused.read_only_profile",
+        "sidebar.toast.root_section_action_refused.read_only_server",
+        "sidebar.toast.root_section_action_refused.approval_unavailable",
+        "sidebar.toast.root_section_invalid_id",
+        "sidebar.tree.status.error_retry",
+        "sidebar.tree.status.load_more",
+        "sidebar.root_section.confirm_message",
+        "sidebar.root_section.action.delete_bucket",
+        "sidebar.root_section.action.delete_bucket_description",
+        "sidebar.task.listing_secret_paths",
+        "sidebar.toast.list_secret_paths_failed",
         "sidebar.toast.code_generation_failed",
         "sidebar.toast.loading_event_streams",
         "sidebar.task.loading_database_schema",
@@ -1875,14 +1962,10 @@ mod tests {
     }
 
     #[test]
-    fn listing_buckets_task_label_includes_the_profile_name() {
-        let label = super::listing_buckets_task_label("prod-db");
+    fn listing_root_section_task_label_includes_the_section_and_profile_name() {
+        let label = super::listing_root_section_task_label("Buckets", "prod-db");
 
-        assert!(label.contains("prod-db"));
-        assert_eq!(
-            label,
-            dbflux_i18n::t!("sidebar.task.listing_buckets", name = "prod-db")
-        );
+        assert_eq!(label, "Listing Buckets: prod-db");
     }
 
     #[test]

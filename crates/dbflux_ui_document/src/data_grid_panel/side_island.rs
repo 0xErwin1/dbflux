@@ -33,17 +33,18 @@ pub(crate) enum IslandScroll {
 }
 
 /// Distance one line step scrolls a list without a line height of its own.
-const SCROLL_LINE: Pixels = Heights::ROW_COMPACT;
+const SCROLL_LINE: Rems = Heights::ROW_COMPACT;
 
 /// Moves `handle` by `step`, kept between the top and the end of the content.
-pub(crate) fn scroll_by(handle: &ScrollHandle, step: IslandScroll) {
+pub(crate) fn scroll_by(handle: &ScrollHandle, step: IslandScroll, cx: &App) {
+    let line = dbflux_components::fonts::ui_px(cx, SCROLL_LINE);
     let offset = handle.offset();
     let max_scroll = handle.max_offset().y.max(Pixels::ZERO);
-    let page = (handle.bounds().size.height - SCROLL_LINE).max(SCROLL_LINE);
+    let page = (handle.bounds().size.height - line).max(line);
 
     let target = match step {
-        IslandScroll::LineUp => offset.y + SCROLL_LINE,
-        IslandScroll::LineDown => offset.y - SCROLL_LINE,
+        IslandScroll::LineUp => offset.y + line,
+        IslandScroll::LineDown => offset.y - line,
         IslandScroll::PageUp => offset.y + page,
         IslandScroll::PageDown => offset.y - page,
         IslandScroll::Top => Pixels::ZERO,

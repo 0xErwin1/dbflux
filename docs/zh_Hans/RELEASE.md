@@ -103,16 +103,39 @@ git push origin vX.Y.Z[-suffix.N]
 
 ## 制品身份与签名
 
-有三样彼此独立的东西承载"这是谁构建的"这一信号，它们互不重叠：
+不同层面承载"这是谁构建的"这一信号：
 
 | 层 | 覆盖内容 | Secret | 缺失时 |
 |----|----------|--------|--------|
 | GPG 分离签名（`.asc`）和 `.sha256` | 下载的文件本身 | `GPG_PRIVATE_KEY`、`GPG_PASSPHRASE` | 构建失败。每个 release 都必须签名。 |
 | 构建来源证明（provenance attestation） | 产出该制品的 workflow 运行和 commit | 无（无密钥 OIDC） | 始终开启。 |
 | `.app` 上的 macOS 代码签名 | 钥匙串和 Gatekeeper 所看到的应用身份 | `MACOS_CERTIFICATE_P12`、`MACOS_CERTIFICATE_PASSWORD` | bundle 以 ad-hoc 方式签名并给出警告。 |
+| Windows Authenticode（稳定版和 RC） | 便携 ZIP 和安装程序中的 `dbflux.exe`，以及安装程序可执行文件 | `SIGNPATH_API_TOKEN` | 稳定版和 RC 的 Windows 构建失败；nightly 不请求 Authenticode 签名。 |
 
-Windows 可执行文件和安装程序都没有 Authenticode 签名，因此首次运行时
-SmartScreen 会发出警告。这需要来自 CA 的证书，另行跟踪。
+### Windows 代码签名
+
+稳定版和 RC 的 Windows 构建使用 [SignPath](https://docs.signpath.io/trusted-build-systems/github)，
+组织 ID 为 `963ebe33-9db3-4a84-9eea-f726ca65dd9c`，项目为 `dbflux`，策略为
+`release-signing`。将具有提交权限的 token 保存为仓库 Actions secret
+`SIGNPATH_API_TOKEN`。默认制品配置必须接受单个 PE 文件
+（`<pe-file><authenticode-sign /></pe-file>`）；在 SignPath 门户中配置
+SignPath Foundation 要求的产品和版本限制。
+
+在 SignPath Foundation 将生产证书导入 `release-signing` 之前，该 job 的
+`SIGNPATH_SIGNING_POLICY` 为 `test-signing`，使用项目的自签名测试证书签名。
+Windows 不信任该证书，因此这些构建仍会显示未知发布者警告；验证步骤仅对该策略
+和该证书接受不受信任的结果。生产证书生效后，将该变量改为 `release-signing`。
+
+workflow 提交两个请求：先签署 `dbflux.exe`，再签署包含该已签名应用的
+安装程序可执行文件。每个请求最多等待一小时，供人工在 SignPath 中批准。
+token 缺失、请求被拒绝、超时、签名无效或时间戳缺失都会导致构建失败；
+不会发布未签名的稳定版或 RC 替代制品。GPG 签名和 SHA256 校验和覆盖最终已签名
+的软件包。发布步骤仅选择平台制品，排除中间上传的未签名文件。
+
+nightly 保留现有 GPG 签名及校验和，不使用 Authenticode 签名，因为它在无人值守时构建，没有人可以批准。
+此流程不会对 Inno Setup 卸载程序进行 Authenticode 签名。有效签名可以识别
+发布者，但不保证 SmartScreen 不再显示任何信誉警告。发布签名要求使用
+官方仓库和 GitHub 托管 runner；不支持 `act`。
 
 ### macOS 代码签名
 
@@ -156,6 +179,29 @@ scripts/branding/generate-icons.sh
 PNG、各渠道目录中的应用内 PNG 与组合标识 `wordmark.svg`，以及
 `web/public/brand/` 中的网站副本。缺少 `rsvg-convert`、`icotool`、`png2icns`
 或带 `fonttools` 与 `uharfbuzz` 的 Python 时，脚本会在 Nix shell 中重新运行自身。
+
+### AppImage 外部更新信息
+
+stable 和 nightly 的 AppImage 会内嵌外部更新信息，并随构建生成 `.zsync`
+sidecar，与最终签名的镜像一同发布。stable 通过 GitHub 的 `latest` release
+解析，nightly 通过滚动的 `nightly` tag 解析；每个渠道只通告自己的 tag，
+因此更新不会把安装迁移到其他渠道。RC 发布不内嵌更新信息，保持手动更新。
+sidecar 与内嵌字符串由 appimagetool（`-u`）在构建时生成，并由 `build.yml`
+以 fail-closed 方式验证；更新由 AppImageUpdate 之类的外部工具执行——
+DBFlux 自身不会自更新。
+
+### 固定的下载文件名
+
+`.deb` 和 `.rpm` 包的文件名带有版本号（`dbflux_0.8.5_linux_amd64.deb`、
+`dbflux-0.8.5-1.x86_64.rpm`），因此 `releases/latest/download/` 链接无法指向它们。
+`build.yml` 还会发布逐字节相同、名为 `dbflux-linux-<arch>.deb` 和
+`dbflux-linux-<arch>.rpm` 的副本，各自带有 `.asc` 和 `.sha256`，
+[安装](INSTALL.md) 链接的正是这些文件名。
+
+发布之前，`release.yml` 和 `nightly.yml` 会对下载的制品运行
+`scripts/check_release_links.py`。文档、其翻译或网站安装区块中的
+`releases/latest/download/` 链接若指向本次发布不包含的文件，任务会失败，
+而不是发布一个 404 链接。
 
 ## 切出流程：`main` → `release/vX.Y`
 
@@ -257,6 +303,8 @@ rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全�
 
 AUR 的 `PKGBUILD` 位于**外部 AUR 仓库**，而非本仓库。它仅在稳定版标签时更新。
 
+Homebrew cask 位于外部 tap `0xErwin1/homebrew-dbflux`。对于已发布的稳定版标签，`homebrew-tap` 作业会自动更新它；请确认该作业已成功（见 [Homebrew tap](#homebrew-tap)）。
+
 ## nightly 工作机制
 
 `.github/workflows/nightly.yml` 每天 UTC 时间 03:17 运行：
@@ -270,7 +318,7 @@ AUR 的 `PKGBUILD` 位于**外部 AUR 仓库**，而非本仓库。它仅在稳�
 
 `nightly` 标签会被强制推送，发布内容在每次运行时被替换。只有官方仓库（`0xErwin1/dbflux`）会执行该定时任务。
 
-**当 `main` 没有推进时跳过。** 定时运行会先将当前 `main` HEAD 与上一个 nightly 所基于的提交（`git rev-parse nightly^`，即被固定提交的第一个父提交）进行比较。若两者相同，则整次运行直接跳过：不重新构建、不移动标签、不会对发布造成无意义变动。这避免了用一个新的、不可复现的哈希重新发布一份完全相同的构建，从而不必要地破坏 Nix 的固定引用。手动触发的 `workflow_dispatch` 运行始终会构建，即使没有新提交。
+**当 `main` 没有推进时跳过。** 定时运行会先将当前 `main` HEAD 与上一个 nightly 所基于的提交（`git rev-parse nightly^`，即被固定提交的第一个父提交）进行比较。若两者相同，则整次运行直接跳过：不重新构建、不移动标签、不会对发布造成无意义变动。这避免了用一个新的、不可复现的哈希重新发布一份完全相同的构建，从而不必要地破坏 Nix 的固定引用。若自上一个 nightly 以来改动的所有路径（`git diff nightly^..HEAD`）都只是文档或站点内容（`web/`、`*.md`、`.github/workflows/web.yml`），也会跳过：标签不会移动，因此下一个 nightly 的变更日志仍会涵盖这些提交。手动触发的 `workflow_dispatch` 运行始终会构建，即使没有新提交。
 
 ### Nix nightly 包
 
@@ -314,11 +362,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## 下游渠道
 
-| 标签类型（GitHub Release）   | AUR       | Nix flake（本仓库）                              | nixpkgs（未来） |
-|------------------------------|-----------|--------------------------------------------------|-----------------|
-| nightly（预发布）            | 跳过      | 自动固定——nightly 引用上的 `#dbflux-nightly`    | 跳过            |
-| `-rc.N`（预发布）            | 跳过      | 更新发布分支与 `main` 的 `release-info`          | 跳过            |
-| 稳定版 `vX.Y.Z`（已发布）    | 更新并推送 | 更新发布分支与 `main` 的 `release-info`          | 更新并发起 PR   |
+| 标签类型（GitHub Release）   | AUR       | Nix flake（本仓库）                              | nixpkgs（未来） | Homebrew tap |
+|------------------------------|-----------|--------------------------------------------------|-----------------|-------------------------|
+| nightly（预发布）            | 跳过      | 自动固定——nightly 引用上的 `#dbflux-nightly`    | 跳过            | 跳过 |
+| `-rc.N`（预发布）            | 跳过      | 更新发布分支与 `main` 的 `release-info`          | 跳过            | 跳过 |
+| 稳定版 `vX.Y.Z`（已发布）    | 更新并推送 | 更新发布分支与 `main` 的 `release-info`          | 更新并发起 PR   | 自动——`homebrew-tap` 作业 |
 
 ### AUR
 
@@ -359,6 +407,28 @@ nix build .#dbflux-bin --no-link --print-out-paths
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 ```
 
+### Homebrew tap
+
+`.github/workflows/release.yml` 中的 `homebrew-tap` 作业在发布作业之后运行，且仅针对已发布的稳定版标签（RC、nightly 与草稿从不运行）。它下载该 release 的四个 `.sha256` 文件（两个 macOS DMG 与两个 Linux tarball），用 `scripts/homebrew_cask.py` 生成 `Casks/dbflux.rb`，并推送到 [`0xErwin1/homebrew-dbflux`](https://github.com/0xErwin1/homebrew-dbflux)。
+
+| 情况 | 行为 |
+|------|------|
+| 缺少 `HOMEBREW_TAP_TOKEN` | 作业给出警告并跳过；tap 保留之前的版本。 |
+| 令牌过期或被撤销 | 作业失败。续期令牌、更新 secret，然后重新运行作业或手动更新 cask。 |
+| 标签早于 tap 中的版本（旧产品线上的补丁） | cask 保持不变并给出警告。tap 绝不回退。 |
+
+`HOMEBREW_TAP_TOKEN` 是一个 fine-grained 个人访问令牌，权限为 **Contents: read and write**，仅限 `0xErwin1/homebrew-dbflux`。
+
+作业失败后如需手动更新 cask，将该 release 的四个 `.sha256` 文件下载到同一目录，然后运行：
+
+```bash
+python3 scripts/homebrew_cask.py --version X.Y.Z \
+  --checksums <包含四个 .sha256 文件的目录> \
+  --output <tap 检出目录>/Casks/dbflux.rb
+```
+
+在 tap 检出目录中提交并推送该变更。
+
 ### nixpkgs（未来）
 
 尚未合入上游。一旦合入，只有稳定版标签会向 `NixOS/nixpkgs` 提交 PR。PR 标题规范：`dbflux: A -> B`。
@@ -388,7 +458,7 @@ cargo test --workspace
 
 `scripts/lint.py` 只覆盖 `crates/` 下的第一方 crate，从不对 `vendor/` 下的第三方 crate 执行 lint 或重新格式化。
 
-这些快速套件不涵盖驱动实时集成测试：各驱动专属的套件分别基于容器、本地文件或需要凭据的 Redshift 集群，记录在 [tests/driver-live/README.md](../../tests/driver-live/README.md)。在为 rc 或 stable 打标签之前请先运行它们。CI 以相同的套件作为发布门槛 —— `release.yml` 调用 `tests.yml`，且 `Create Release` 作业会等待它完成 —— 但这些套件验证的是源代码，而非构建出的制品，nightly 构建不以测试为门槛（`nightly.yml` 直接调用 `build.yml`）。
+这些快速套件不涵盖驱动实时集成测试：各驱动专属的套件分别基于容器、本地文件或需要凭据的 Redshift 集群，记录在 [tests/driver-live/README.md](../../tests/driver-live/README.md)。在为 rc 或 stable 打标签之前请先运行它们。CI 在发布时不运行任何套件：`release.yml` 在不调用 `tests.yml` 或 `style.yml` 的情况下构建并发布，依赖已在拉取请求上运行过的检查。`main` 不会重新运行全部检查：`tests.yml` 和 `style.yml` 仅在 Rust 工具链或依赖清单变化时于推送到 `main` 时运行，另外每周会对 `main` 定时运行一次。包括 nightly 在内，没有任何发布渠道以测试为门槛（`nightly.yml` 直接调用 `build.yml`）。
 
 ## 相关文件
 

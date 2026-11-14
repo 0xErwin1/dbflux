@@ -26,36 +26,27 @@ pub fn classify_sql_transaction_control(sql: &str) -> TransactionControl {
         Err(()) => return TransactionControl::Unsupported,
     };
 
-    let mut statement_count = 0;
-    let mut statement = Vec::new();
-    let mut current_statement = Vec::new();
+    let statements: Vec<&[Token<'_>]> = tokens
+        .split(|token| *token == Token::Semicolon)
+        .filter(|statement| !statement.is_empty())
+        .collect();
 
-    for token in tokens {
-        if token == Token::Semicolon {
-            if !current_statement.is_empty() {
-                statement_count += 1;
-                if statement_count == 1 {
-                    statement = current_statement;
-                }
-                current_statement = Vec::new();
+    match statements.as_slice() {
+        [] => TransactionControl::Unsupported,
+        [statement] => classify_statement(statement),
+        // A batch runs as is when none of its statements controls the
+        // transaction; one that does cannot be tracked statement by statement.
+        batch => {
+            if batch
+                .iter()
+                .all(|statement| classify_statement(statement) == TransactionControl::NotControl)
+            {
+                TransactionControl::NotControl
+            } else {
+                TransactionControl::Unsupported
             }
-        } else {
-            current_statement.push(token);
         }
     }
-
-    if !current_statement.is_empty() {
-        statement_count += 1;
-        if statement_count == 1 {
-            statement = current_statement;
-        }
-    }
-
-    if statement_count != 1 {
-        return TransactionControl::Unsupported;
-    }
-
-    classify_statement(&statement)
 }
 
 fn classify_statement(tokens: &[Token<'_>]) -> TransactionControl {
@@ -287,7 +278,8 @@ mod tests {
             "END",
             "SET TRANSACTION READ ONLY",
             "BEGIN; COMMIT",
-            "SELECT 1; SELECT 2",
+            "SELECT 1; COMMIT",
+            "CREATE TABLE t (id INT); SET threads = 2",
             "BEGIN trailing",
             "BEGIN 'quoted tail'",
             "BEGIN $tag$quoted tail$tag$",
@@ -324,6 +316,8 @@ mod tests {
             "ROLLBACKING",
             "BE/* split */GIN",
             "SELECT 1; -- a trailing comment",
+            "SELECT 1; SELECT 2",
+            "CREATE TABLE t (id INT); INSERT INTO t VALUES (1); SELECT 'COMMIT'",
         ] {
             assert_eq!(
                 classify_sql_transaction_control(sql),

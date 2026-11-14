@@ -36,6 +36,15 @@ pub enum OrderResult {
 /// produced it), so this function assumes table names are unique across the
 /// supplied `tables` slice. Self-referencing foreign keys (a table
 /// referencing itself) are ignored as ordering edges.
+///
+/// Bounds proof: `children`/`in_degree` are sized `node_count == tables.len()`
+/// and every node index (`parent`, `child`, `node`, `i`) originates from
+/// `0..node_count` — either the `(index, table)` enumeration or the map values
+/// built from it — and `ordered_indices`/`remaining` are subsets of that range.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "children/in_degree are sized node_count and every node index descends from the 0..node_count enumeration of tables; ordered_indices and remaining are subsets of 0..node_count"
+)]
 pub fn topological_order(tables: &[TableRef], fks: &[SchemaForeignKeyInfo]) -> OrderResult {
     let node_count = tables.len();
 
@@ -139,6 +148,17 @@ pub fn topological_order(tables: &[TableRef], fks: &[SchemaForeignKeyInfo]) -> O
 /// Every node in `nodes` appears in exactly one returned component (Tarjan
 /// partitions its whole input), including trivial single-node components
 /// with no self-loop.
+///
+/// Bounds proof: `children[v]` is indexed only by node ids from `nodes`, a
+/// subset of `0..children.len()`; `indices[&v]` is written at `strongconnect`
+/// entry, so `lowlink[&v]`/`indices[&v]` reads and the `indices[&w]` read
+/// behind `on_stack.contains(&w)` (which implies `w` was pushed and therefore
+/// indexed) and the `lowlink[&w]` read after `strongconnect(w)` returns all
+/// reference previously inserted keys.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "children[v] only with v from nodes ⊆ 0..children.len(); lowlink/indices reads reference keys inserted at strongconnect entry (v), after the recursive call returns (w), or behind on_stack.contains(&w) which implies w was indexed and pushed"
+)]
 fn tarjan_scc(nodes: &[usize], children: &[Vec<usize>]) -> Vec<Vec<usize>> {
     struct State<'a> {
         children: &'a [Vec<usize>],

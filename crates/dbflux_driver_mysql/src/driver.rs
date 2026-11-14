@@ -17,20 +17,19 @@ use dbflux_core::{
     ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
     ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
     IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field, field_password,
-    field_required, field_use_uri, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked,
-    when_unchecked, with_default,
+    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
+    SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use mysql::prelude::*;
 use mysql::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 
@@ -45,6 +44,8 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
@@ -70,6 +71,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: false,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -208,6 +210,8 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
@@ -232,6 +236,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: false,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -1330,6 +1335,7 @@ impl MysqlDriver {
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
+                table_locks_possible: false,
             }),
             ssh_catalog_tunnel: None,
             ssh_query_tunnel: None,
@@ -1369,9 +1375,12 @@ impl MysqlDriver {
                     log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
                     (ssl_opts, c)
                 }
+                Err(ssl_err) if !is_tls_negotiation_failure(&ssl_err) => {
+                    return Err(format_mysql_error(&ssl_err, host, port));
+                }
                 Err(ssl_err) => {
                     log::info!(
-                        "[SSL] SSL connection failed ({}), falling back to non-SSL",
+                        "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
                         ssl_err
                     );
                     let no_ssl_opts = build_mysql_opts(
@@ -1411,6 +1420,7 @@ impl MysqlDriver {
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
+                table_locks_possible: false,
             }),
             ssh_catalog_tunnel: None,
             ssh_query_tunnel: None,
@@ -1436,19 +1446,14 @@ impl MysqlDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
-        log::info!(
-            "[SSH] Starting dual tunnels to {}:{} via {}@{}:{}",
-            db_host,
-            db_port,
-            tunnel_config.user,
-            tunnel_config.host,
-            tunnel_config.port
-        );
+        log::info!("[SSH] Starting dual tunnels to {}:{}", db_host, db_port);
 
         // === Tunnel 1: Catalog connection ===
         log::info!("[SSH] Creating catalog tunnel (session 1/2)");
-        let session1 = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        let tunnel1 = SshTunnel::start(session1, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel {
+            tunnel: tunnel1,
+            ssh_host,
+        } = dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port1 = tunnel1.local_port();
         log::info!("[SSH] Catalog tunnel on local port {}", local_port1);
         let ssh_catalog_tunnel = Arc::new(std::sync::Mutex::new(tunnel1));
@@ -1470,8 +1475,14 @@ impl MysqlDriver {
                     log::info!("[SSL] Catalog connection established with SSL");
                     ("PREFERRED", c)
                 }
+                Err(ssl_err) if !is_tls_negotiation_failure(&ssl_err) => {
+                    return Err(format_mysql_error(&ssl_err, "127.0.0.1", local_port1));
+                }
                 Err(ssl_err) => {
-                    log::info!("[SSL] SSL failed ({}), falling back to non-SSL", ssl_err);
+                    log::info!(
+                        "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
+                        ssl_err
+                    );
                     let no_ssl_opts = build_mysql_opts(
                         "127.0.0.1",
                         local_port1,
@@ -1504,8 +1515,9 @@ impl MysqlDriver {
 
         // === Tunnel 2: Query connection ===
         log::info!("[SSH] Creating query tunnel (session 2/2)");
-        let session2 = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        let tunnel2 = SshTunnel::start(session2, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel {
+            tunnel: tunnel2, ..
+        } = dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port2 = tunnel2.local_port();
         log::info!("[SSH] Query tunnel on local port {}", local_port2);
         let ssh_query_tunnel = Arc::new(std::sync::Mutex::new(tunnel2));
@@ -1539,7 +1551,7 @@ impl MysqlDriver {
             total_start.elapsed().as_secs_f64() * 1000.0,
             db_host,
             db_port,
-            tunnel_config.host
+            ssh_host
         );
 
         let initial_database = initial_database_from_opts(&query_opts);
@@ -1548,6 +1560,7 @@ impl MysqlDriver {
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
+                table_locks_possible: false,
             }),
             ssh_catalog_tunnel: Some(ssh_catalog_tunnel),
             ssh_query_tunnel: Some(ssh_query_tunnel),
@@ -1754,6 +1767,9 @@ fn inject_password_into_mysql_uri(base_uri: &str, password: Option<&str>) -> Str
 struct QueryConnState {
     conn: Conn,
     current_database: Option<String>,
+    /// Whether a statement this driver ran may have left `LOCK TABLES` (or a
+    /// global read lock) held on the session. See [`table_locks_after`].
+    table_locks_possible: bool,
 }
 
 pub struct MysqlConnection {
@@ -1854,7 +1870,8 @@ fn plan_mysql_table_browse(
 ) -> Result<SemanticPlan, DbError> {
     let sql = if let Some(filter) = request.semantic_filter.as_ref() {
         let mut sql = format!(
-            "SELECT * FROM {}",
+            "SELECT {} FROM {}",
+            request.select_list_with(&MYSQL_DIALECT),
             request.table.quoted_with(&MYSQL_DIALECT)
         );
         let where_clause = render_semantic_filter_sql(filter, &MYSQL_DIALECT)?;
@@ -2112,6 +2129,11 @@ impl Connection for MysqlConnection {
             }
         }
 
+        req.refuse_read_only_for_instance_catalog("MySQL/MariaDB")?;
+        if req.read_only.is_required() {
+            ensure_read_only_statements(&QueryLanguage::Sql.split_statements(&req.sql))?;
+        }
+
         self.cancelled.store(false, Ordering::SeqCst);
 
         if let Some(source) = req
@@ -2169,6 +2191,23 @@ impl Connection for MysqlConnection {
 
         let statements = QueryLanguage::Sql.split_statements(&req.sql);
 
+        if req.read_only.is_required() {
+            if state.table_locks_possible {
+                return Err(DbError::NotSupported(
+                    "MySQL/MariaDB: read-only execution cannot run while this session may hold LOCK TABLES locks, which START TRANSACTION would release; run UNLOCK TABLES first. The request was rejected before execution".to_string(),
+                ));
+            }
+
+            return mysql_execute_read_only(
+                &mut state.conn,
+                &req.sql,
+                &statements,
+                start,
+                &self.cancelled,
+                req.limit,
+            );
+        }
+
         let in_transaction_before = if statements
             .iter()
             .any(|statement| may_open_transaction(statement))
@@ -2189,6 +2228,9 @@ impl Connection for MysqlConnection {
         } else {
             mysql_execute_request(&mut state.conn, &req.sql, start, &self.cancelled, req.limit)
         };
+
+        state.table_locks_possible =
+            table_locks_after(state.table_locks_possible, &statements, result.is_ok());
 
         result.map_err(|error| {
             settle_failed_transaction(&mut state.conn, in_transaction_before, error)
@@ -2278,6 +2320,7 @@ impl Connection for MysqlConnection {
         let indexes = fetch_indexes(&mut conn, database, table)?;
         let foreign_keys = fetch_foreign_keys(&mut conn, database, table)?;
         let constraints = fetch_constraints(&mut conn, database, table)?;
+        let pseudo_columns = rowid_pseudo_columns(self.kind, &columns, &indexes);
 
         log::info!(
             "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -2300,6 +2343,7 @@ impl Connection for MysqlConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns,
         })
     }
 
@@ -2382,6 +2426,78 @@ impl Connection for MysqlConnection {
             .collect();
 
         Ok(Some(map))
+    }
+
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values. Honors `projection`; an empty projection list
+    /// falls back to `*` rather than emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        database: &str,
+        _schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[dbflux_core::Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let select_list = match projection {
+            Some(columns) if !columns.is_empty() => columns
+                .iter()
+                .map(|column| MYSQL_DIALECT.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => "*".to_string(),
+        };
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let literals = chunk
+                .iter()
+                .map(|value| MYSQL_DIALECT.value_to_literal(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {} FROM {}.{} WHERE {} IN ({})",
+                select_list,
+                MYSQL_DIALECT.quote_identifier(database),
+                MYSQL_DIALECT.quote_identifier(table),
+                MYSQL_DIALECT.quote_identifier(pk_column),
+                literals,
+            );
+
+            let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(col, val)| (col.name.clone(), val))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
+    }
+
+    fn fetch_dependents(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        fetch_dependents(&mut conn, database, table)
     }
 
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
@@ -2812,188 +2928,8 @@ impl Connection for MysqlConnection {
         plan_mysql_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| MYSQL_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        if let Some(f) = filter {
-            let (where_clause, _filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        if !order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&MYSQL_DIALECT), dir)
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
-        sql
-    }
-
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| MYSQL_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            quoted_table, cols, placeholders_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-
-        let set_parts: Vec<String> = set
-            .iter()
-            .map(|(col, _)| format!("{} = ?", MYSQL_DIALECT.quote_identifier(col)))
-            .collect();
-        let set_str = set_parts.join(", ");
-
-        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
-        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
-
-        if let Some(f) = filter {
-            let (where_clause, filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            params.extend(filter_params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let mut sql = format!("DELETE FROM {}", quoted_table);
-        let mut params = Vec::new();
-
-        if let Some(f) = filter {
-            let (where_clause, filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            params.extend(filter_params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| MYSQL_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let _conflict_cols = conflict_columns
-            .iter()
-            .map(|c| MYSQL_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let update_parts: Vec<String> = update_columns
-            .iter()
-            .map(|col| {
-                format!(
-                    "{} = VALUES({})",
-                    MYSQL_DIALECT.quote_identifier(col),
-                    MYSQL_DIALECT.quote_identifier(col)
-                )
-            })
-            .collect();
-        let update_str = update_parts.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}",
-            quoted_table, cols, placeholders_str, update_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
-
-        if let Some(f) = filter {
-            let (where_clause, _filter_params) = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        sql
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = MYSQL_DIALECT.quote_identifier(table);
-        format!("TRUNCATE TABLE {}", quoted_table)
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
+        Ok(truncate_table_statement(table))
     }
 
     fn build_drop_index_sql(
@@ -3001,31 +2937,73 @@ impl Connection for MysqlConnection {
         index_name: &str,
         table_name: Option<&str>,
         _if_exists: bool,
-    ) -> String {
-        let quoted_index = MYSQL_DIALECT.quote_identifier(index_name);
-        let quoted_table = table_name.map(|t| MYSQL_DIALECT.quote_identifier(t));
-
-        if let Some(table) = quoted_table {
-            format!("DROP INDEX {} ON {}", quoted_index, table)
-        } else {
-            format!("DROP INDEX {} ", quoted_index)
-        }
+    ) -> Result<String, DbError> {
+        Ok(drop_index_statement(index_name, table_name))
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT VERSION()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok(VERSION_QUERY)
     }
 
     fn supports_transactional_ddl(&self) -> bool {
         false
     }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        Ok(translate_filter_to_sql(filter).0)
-    }
 }
 
 impl RelationalConnection for MysqlConnection {}
+
+/// SQL text of `build_truncate_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn truncate_table_statement(table: &str) -> String {
+    let quoted_table = MYSQL_DIALECT.quote_identifier(table);
+    format!("TRUNCATE TABLE {}", quoted_table)
+}
+
+/// SQL text of `build_drop_index_sql`, kept as a pure function so the exact
+/// generated statement is testable without a live server.
+fn drop_index_statement(index_name: &str, table_name: Option<&str>) -> String {
+    let quoted_index = MYSQL_DIALECT.quote_identifier(index_name);
+    let quoted_table = table_name.map(|t| MYSQL_DIALECT.quote_identifier(t));
+
+    if let Some(table) = quoted_table {
+        format!("DROP INDEX {} ON {}", quoted_index, table)
+    } else {
+        format!("DROP INDEX {} ", quoted_index)
+    }
+}
+
+/// SQL text of `version_query`, kept as a constant so the exact query is
+/// testable without a live server.
+const VERSION_QUERY: &str = "SELECT VERSION()";
+
+#[cfg(test)]
+mod sql_statement_tests {
+    use super::*;
+
+    #[test]
+    fn truncate_table_statement_matches_the_driver_contract() {
+        assert_eq!(truncate_table_statement("users"), "TRUNCATE TABLE `users`");
+    }
+
+    #[test]
+    fn drop_index_statement_matches_the_driver_contract() {
+        assert_eq!(
+            drop_index_statement("idx_users_email", Some("users")),
+            "DROP INDEX `idx_users_email` ON `users`"
+        );
+        // The historical statement keeps its trailing space when no table is
+        // given; it is preserved byte-for-byte.
+        assert_eq!(
+            drop_index_statement("idx_users_email", None),
+            "DROP INDEX `idx_users_email` "
+        );
+    }
+
+    #[test]
+    fn version_query_is_the_mysql_version_select() {
+        assert_eq!(VERSION_QUERY, "SELECT VERSION()");
+    }
+}
 
 impl ConnectionExt for MysqlConnection {
     fn as_relational(&self) -> Option<&dyn RelationalConnection> {
@@ -3082,6 +3060,211 @@ fn mysql_execute_request(
     match limit {
         Some(limit) => mysql_execute_bounded(conn, sql, &[], start, cancelled, limit),
         None => mysql_execute_one_statement(conn, sql, start, cancelled),
+    }
+}
+
+/// Leading keywords of the statements a read-only request may contain.
+///
+/// None of them can commit the transaction or write outside it: DDL, `LOCK`,
+/// `SET autocommit`, transaction control and `CALL` (a procedure may `COMMIT`)
+/// all end MySQL's read-only transaction or bypass it, so they are refused
+/// instead of being left for the server, which would run them read-write.
+/// Data changes inside an accepted statement, such as a CTE `DELETE` or
+/// `EXPLAIN ANALYZE DELETE`, are refused by the server itself.
+const READ_ONLY_LEADING_KEYWORDS: &[&str] = &[
+    "SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "TABLE", "VALUES", "HELP",
+];
+
+/// Refuses a read-only request containing a statement that could end the
+/// read-only transaction or write outside it, before anything runs.
+fn ensure_read_only_statements(statements: &[String]) -> Result<(), DbError> {
+    for statement in statements {
+        if has_executable_comment(statement) {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: a read-only request cannot contain executable comments (/*! ... */ or /*M! ... */), which the server runs as SQL; the request was rejected before execution".to_string(),
+            ));
+        }
+
+        let stripped = dbflux_core::strip_leading_comments(statement).trim_start();
+        let first_word = stripped
+            .split(|character: char| !character.is_ascii_alphabetic())
+            .next()
+            .unwrap_or_default()
+            .to_ascii_uppercase();
+
+        let allowed =
+            stripped.starts_with('(') || READ_ONLY_LEADING_KEYWORDS.contains(&first_word.as_str());
+        if !allowed {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: a read-only request may only contain SELECT, WITH, SHOW, DESCRIBE, EXPLAIN, TABLE or VALUES statements; the request was rejected before execution".to_string(),
+            ));
+        }
+
+        if contains_into_word(statement) {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: a read-only request cannot contain INTO, because SELECT ... INTO OUTFILE or DUMPFILE writes a file on the server, which a read-only transaction does not prevent; the request was rejected before execution".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Whether `statement` contains a MySQL `/*! ... */` or MariaDB `/*M! ... */`
+/// comment, whose content the server executes.
+///
+/// The raw text is searched, string literals included: a false match only
+/// refuses the request, while missing one would let hidden SQL run.
+fn has_executable_comment(statement: &str) -> bool {
+    let upper = statement.to_ascii_uppercase();
+    upper.contains("/*!") || upper.contains("/*M!")
+}
+
+/// Whether the word `INTO` appears anywhere in `statement`.
+///
+/// Quotes, escapes and comments are deliberately ignored. Where a string
+/// ends depends on `ANSI_QUOTES` and `NO_BACKSLASH_ESCAPES`, and `--` only
+/// starts a comment when whitespace follows, so any span could be SQL the
+/// server runs. Refusing every `INTO` covers `INTO OUTFILE` and `INTO
+/// DUMPFILE` in all of them, at the cost of refusing `INTO @variable` and the
+/// word inside literals.
+fn contains_into_word(statement: &str) -> bool {
+    contains_word(statement, "INTO")
+}
+
+/// Whether `word` appears in `statement` as a whole identifier-like token,
+/// ignoring case, quotes and comments.
+fn contains_word(statement: &str, word: &str) -> bool {
+    statement
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '_' || character == '$')
+        })
+        .any(|token| token.eq_ignore_ascii_case(word))
+}
+
+/// Whether the session may hold table locks after running `statements`.
+///
+/// `START TRANSACTION` releases `LOCK TABLES` locks and the session state is
+/// not visible to the client, so the driver tracks the statements it runs on
+/// this connection. A statement that may take such a lock marks the session
+/// whether or not the request succeeded; only a plain `UNLOCK TABLES` in a
+/// request that succeeded clears the mark. Unknown prepared statements and
+/// executable comments that mention `LOCK` mark it too.
+fn table_locks_after(previous: bool, statements: &[String], succeeded: bool) -> bool {
+    let mut possible = previous;
+
+    for statement in statements {
+        if may_take_table_locks(statement) {
+            possible = true;
+        } else if succeeded && is_plain_unlock_tables(statement) {
+            possible = false;
+        }
+    }
+
+    possible
+}
+
+fn may_take_table_locks(statement: &str) -> bool {
+    let stripped = dbflux_core::strip_leading_comments(statement).trim_start();
+    let first_word = stripped
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+
+    match first_word.as_str() {
+        "LOCK" | "EXECUTE" => true,
+        "FLUSH" | "PREPARE" => contains_word(statement, "LOCK"),
+        _ => has_executable_comment(statement) && contains_word(statement, "LOCK"),
+    }
+}
+
+fn is_plain_unlock_tables(statement: &str) -> bool {
+    if has_executable_comment(statement) {
+        return false;
+    }
+
+    let stripped = dbflux_core::strip_leading_comments(statement);
+    let words: Vec<String> = stripped
+        .trim()
+        .trim_end_matches(';')
+        .split_whitespace()
+        .map(str::to_ascii_uppercase)
+        .collect();
+
+    matches!(
+        words.as_slice(),
+        [unlock, tables] if unlock == "UNLOCK" && (tables == "TABLES" || tables == "TABLE")
+    )
+}
+
+fn open_transaction_refusal() -> DbError {
+    DbError::NotSupported(
+        "MySQL/MariaDB: read-only execution cannot run inside an open transaction; end it with COMMIT or ROLLBACK first. The request was rejected before execution".to_string(),
+    )
+}
+
+/// Interprets the result of `SET TRANSACTION READ ONLY`, run to prove that no
+/// transaction is open.
+///
+/// MySQL and MariaDB refuse `SET TRANSACTION` without `GLOBAL` or `SESSION`
+/// with error 1568 while a transaction is active, including one that
+/// `autocommit = 0` opened implicitly, so only an accepted statement proves
+/// the session is outside one. Any other failure leaves the state unknown,
+/// and the request is refused as well.
+fn set_transaction_probe_verdict(result: Result<(), mysql::Error>) -> Result<(), DbError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(mysql::Error::MySqlError(server_error))
+            if server_error.code == mysql::ServerError::ER_CANT_CHANGE_TX_ISOLATION as u16 =>
+        {
+            Err(open_transaction_refusal())
+        }
+        Err(error) => Err(DbError::NotSupported(format!(
+            "MySQL/MariaDB: read-only execution could not confirm that no transaction is open ({error}); the request was rejected before execution"
+        ))),
+    }
+}
+
+/// Runs a request that requires read-only enforcement inside `START
+/// TRANSACTION READ ONLY` and always rolls it back.
+///
+/// `START TRANSACTION` implicitly commits a transaction that is already open,
+/// so the request is refused unless the server proves the session is outside
+/// one. `@@in_transaction` (MariaDB) is checked when it is readable; the proof
+/// is `SET TRANSACTION READ ONLY`, which the server refuses inside a
+/// transaction, and whose one-shot access mode the `START TRANSACTION READ
+/// ONLY` that follows consumes. `performance_schema` is not trusted here: with
+/// its transaction instrumentation off it reports no transaction.
+fn mysql_execute_read_only(
+    conn: &mut Conn,
+    sql: &str,
+    statements: &[String],
+    start: Instant,
+    cancelled: &AtomicBool,
+    limit: Option<u32>,
+) -> Result<QueryResult, DbError> {
+    if matches!(read_in_transaction_variable(conn), Ok(true)) {
+        return Err(open_transaction_refusal());
+    }
+
+    set_transaction_probe_verdict(conn.query_drop("SET TRANSACTION READ ONLY"))?;
+
+    conn.query_drop("START TRANSACTION READ ONLY")
+        .map_err(|error| format_mysql_query_error(&error))?;
+
+    let outcome = if statements.len() > 1 {
+        mysql_execute_script(conn, statements, start, cancelled, limit)
+    } else {
+        mysql_execute_request(conn, sql, start, cancelled, limit)
+    };
+
+    match conn.query_drop("ROLLBACK") {
+        Ok(()) => outcome,
+        Err(error) => {
+            log::warn!("[TRANSACTION] ROLLBACK of a read-only request failed: {error}");
+            outcome.and(Err(format_mysql_query_error(&error)))
+        }
     }
 }
 
@@ -3630,6 +3813,20 @@ fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Va
         }
     }
 
+    // DECIMAL arrives as its exact text. The integer and float fallbacks below
+    // would round it, so keep the text as the PostgreSQL driver does for NUMERIC.
+    if matches!(
+        col_type,
+        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL
+    ) && let Some(val) = row.get_opt::<Option<String>, _>(idx)
+    {
+        match val {
+            Ok(Some(v)) => return Value::Decimal(v),
+            Ok(None) => return Value::Null,
+            Err(_) => {}
+        }
+    }
+
     // Try signed integer (covers most integer types)
     if let Some(val) = row.get_opt::<Option<i64>, _>(idx) {
         match val {
@@ -3806,6 +4003,7 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         })
         .collect())
 }
@@ -3897,7 +4095,8 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
 
     for row in rows {
         let key_name: String = row.get("Key_name").unwrap_or_default();
-        let column_name: String = row.get("Column_name").unwrap_or_default();
+        let column_name: Option<String> = row.get("Column_name").flatten();
+        let expression: Option<String> = row.get("Expression").flatten();
         let non_unique: i32 = row.get("Non_unique").unwrap_or(1);
 
         let entry = indexes_map
@@ -3909,7 +4108,9 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
                 is_primary: false,
             });
 
-        entry.columns.push(column_name);
+        if let Some(key_part) = index_key_part_label(column_name, expression) {
+            entry.columns.push(key_part);
+        }
     }
 
     // Mark PRIMARY as primary
@@ -3918,6 +4119,85 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
     }
 
     Ok(indexes_map.into_values().collect())
+}
+
+/// `_rowid` when the table's key makes it valid, otherwise nothing.
+///
+/// MySQL resolves `_rowid` to a primary key made of one integer column, or,
+/// without a primary key, to the first `UNIQUE NOT NULL` index when that index
+/// is one integer column
+/// (<https://dev.mysql.com/doc/refman/8.4/en/create-index.html>). `SHOW INDEX`
+/// loses which unique index comes first, so without a primary key `_rowid` is
+/// declared only when every `UNIQUE NOT NULL` index is one integer column.
+///
+/// MariaDB documents `_rowid` only as the primary key
+/// (<https://mariadb.com/docs/server/reference/sql-functions/pseudo-columns/_rowid>),
+/// so it gets the primary-key rule alone.
+fn rowid_pseudo_columns(
+    kind: DbKind,
+    columns: &[ColumnInfo],
+    indexes: &[IndexInfo],
+) -> Box<[String]> {
+    let column = |name: &str| columns.iter().find(|column| column.name == name);
+
+    let is_integer_column = |name: &str| {
+        column(name).is_some_and(|column| {
+            let base = column
+                .type_name
+                .split(['(', ' '])
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+
+            matches!(
+                base.as_str(),
+                "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint"
+            )
+        })
+    };
+
+    let is_single_integer = |index: &IndexInfo| match index.columns.as_slice() {
+        [only] => is_integer_column(only),
+        _ => false,
+    };
+
+    let valid = match indexes.iter().find(|index| index.is_primary) {
+        Some(primary) => is_single_integer(primary),
+        None if kind == DbKind::MariaDB => false,
+        None => {
+            let unique: Vec<&IndexInfo> = indexes.iter().filter(|index| index.is_unique).collect();
+
+            let every_part_is_a_column = unique
+                .iter()
+                .all(|index| index.columns.iter().all(|part| column(part).is_some()));
+
+            let not_null: Vec<&IndexInfo> = unique
+                .into_iter()
+                .filter(|index| {
+                    index
+                        .columns
+                        .iter()
+                        .all(|part| column(part).is_some_and(|column| !column.nullable))
+                })
+                .collect();
+
+            every_part_is_a_column
+                && !not_null.is_empty()
+                && not_null.iter().all(|index| is_single_integer(index))
+        }
+    };
+
+    if valid {
+        Box::new(["_rowid".to_string()])
+    } else {
+        Box::default()
+    }
+}
+
+/// A functional key part (MySQL 8.0.13+) has a NULL column name and carries its
+/// definition in `Expression`; it is shown parenthesised, as MySQL writes it in DDL.
+fn index_key_part_label(column_name: Option<String>, expression: Option<String>) -> Option<String> {
+    column_name.or_else(|| expression.map(|expression| format!("({})", expression)))
 }
 
 // Code generators
@@ -4000,70 +4280,64 @@ fn fetch_foreign_keys(
     Ok(builder.build_sorted())
 }
 
-/// Translate a Value filter expression to a SQL WHERE clause string for MySQL.
-/// Returns (SQL string with ? placeholders, parameter values).
-fn translate_filter_to_sql(filter: &Value) -> (String, Vec<Value>) {
-    match filter {
-        Value::Document(doc) => {
-            let mut parts = Vec::new();
-            let mut params = Vec::new();
-            for (key, value) in doc {
-                let quoted_col = MYSQL_DIALECT.quote_identifier(key);
-                match value {
-                    Value::Null => {
-                        parts.push(format!("{} IS NULL", quoted_col));
-                    }
-                    _ => {
-                        parts.push(format!("{} = ?", quoted_col));
-                        params.push(value.clone());
-                    }
-                }
-            }
-            if parts.is_empty() {
-                (String::new(), Vec::new())
-            } else {
-                (parts.join(" AND "), params)
-            }
-        }
-        Value::Text(s) => {
-            // Treat a plain text filter as a raw SQL expression (for advanced users)
-            // WARNING: This is intentionally allowed for power users but is a SQL injection risk
-            // if the filter comes from untrusted input. The caller must validate.
-            (s.clone(), Vec::new())
-        }
-        _ => (String::new(), Vec::new()),
-    }
-}
+/// `CHECK_CONSTRAINTS` exists only from MySQL 8.0.16 and MariaDB 10.2.22
+/// (10.3.10 in the 10.3 series). Older MySQL parses `CHECK` but never stores
+/// it; older MariaDB stores it and lists it in `TABLE_CONSTRAINTS`, but has no
+/// table to read its clause from.
+const CONSTRAINTS_QUERY: &str = r"
+    SELECT
+        tc.CONSTRAINT_NAME,
+        tc.CONSTRAINT_TYPE,
+        GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION) as COLUMNS,
+        cc.CHECK_CLAUSE
+    FROM information_schema.TABLE_CONSTRAINTS tc
+    LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
+        ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+        AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+        AND tc.TABLE_NAME = kcu.TABLE_NAME
+    LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
+        ON tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+        AND tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
+    WHERE tc.TABLE_SCHEMA = ?
+        AND tc.TABLE_NAME = ?
+        AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
+    GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
+    ORDER BY tc.CONSTRAINT_NAME
+";
+
+const CONSTRAINTS_WITHOUT_CHECK_CLAUSE_QUERY: &str = r"
+    SELECT
+        tc.CONSTRAINT_NAME,
+        tc.CONSTRAINT_TYPE,
+        GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION) as COLUMNS,
+        NULL as CHECK_CLAUSE
+    FROM information_schema.TABLE_CONSTRAINTS tc
+    LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
+        ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+        AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+        AND tc.TABLE_NAME = kcu.TABLE_NAME
+    WHERE tc.TABLE_SCHEMA = ?
+        AND tc.TABLE_NAME = ?
+        AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
+    GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE
+    ORDER BY tc.CONSTRAINT_NAME
+";
 
 fn fetch_constraints(
     conn: &mut Conn,
     database: &str,
     table: &str,
 ) -> Result<Vec<ConstraintInfo>, DbError> {
-    let query = r"
-        SELECT
-            tc.CONSTRAINT_NAME,
-            tc.CONSTRAINT_TYPE,
-            GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION) as COLUMNS,
-            cc.CHECK_CLAUSE
-        FROM information_schema.TABLE_CONSTRAINTS tc
-        LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
-            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
-            AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
-            AND tc.TABLE_NAME = kcu.TABLE_NAME
-        LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
-            ON tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
-            AND tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
-        WHERE tc.TABLE_SCHEMA = ?
-            AND tc.TABLE_NAME = ?
-            AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
-        GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
-        ORDER BY tc.CONSTRAINT_NAME
-    ";
-
-    let rows: Vec<mysql::Row> = conn
-        .exec(query, (database, table))
-        .map_err(|e| format_mysql_query_error(&e))?;
+    let rows: Vec<mysql::Row> = match conn.exec(CONSTRAINTS_QUERY, (database, table)) {
+        Ok(rows) => rows,
+        Err(mysql::Error::MySqlError(server_error))
+            if server_error.code == mysql::ServerError::ER_UNKNOWN_TABLE as u16 =>
+        {
+            conn.exec(CONSTRAINTS_WITHOUT_CHECK_CLAUSE_QUERY, (database, table))
+                .map_err(|e| format_mysql_query_error(&e))?
+        }
+        Err(e) => return Err(format_mysql_query_error(&e)),
+    };
 
     Ok(rows
         .into_iter()
@@ -4284,80 +4558,93 @@ fn mysql_routine_type_to_kind(routine_type: &str) -> RoutineKind {
 }
 
 // =============================================================================
-// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// Dependents introspection
 // =============================================================================
-//
-// Wiring note: `table_details()` on the `RelationalConnection` trait returns
-// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
-// layer would need to call `fetch_dependents` in the same background task that
-// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
-// That wiring is deferred to a follow-up slice once the fetch task pattern is
-// extended to return both `TableInfo` and `Vec<RelationRef>`.
 
 /// Fetch objects that depend on `database.table` from a live MySQL/MariaDB connection.
 ///
 /// Covers:
-///  - Views depending on the table via `information_schema.VIEW_TABLE_USAGE`.
+///  - Views that read the table. MySQL 8.0.13+ reports them in
+///    `information_schema.VIEW_TABLE_USAGE`; MariaDB has no such table, so the
+///    stored view definitions, which always name tables as `` `db`.`table` ``,
+///    are searched instead.
 ///  - Tables with a foreign key referencing this table via `information_schema.KEY_COLUMN_USAGE`.
 ///
-/// Note: MySQL does not support materialized views or user-defined triggers on arbitrary tables
-/// in the same way PostgreSQL does; triggers are not included here.
+/// Triggers are not included.
 pub fn fetch_dependents(
     conn: &mut Conn,
     database: &str,
     table: &str,
 ) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
-    use dbflux_core::{DbError, RelationKind, RelationRef};
+    use dbflux_core::DbError;
     use mysql::prelude::Queryable;
 
-    let mut deps: Vec<RelationRef> = Vec::new();
+    let view_rows: Vec<(String, String)> = match conn.exec(
+        "SELECT DISTINCT VIEW_SCHEMA, VIEW_NAME
+         FROM information_schema.VIEW_TABLE_USAGE
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME   = ?
+         ORDER BY VIEW_SCHEMA, VIEW_NAME",
+        (database, table),
+    ) {
+        Ok(rows) => rows,
+        Err(mysql::Error::MySqlError(server_error))
+            if server_error.code == mysql::ServerError::ER_UNKNOWN_TABLE as u16 =>
+        {
+            conn.exec(
+                "SELECT TABLE_SCHEMA, TABLE_NAME
+                 FROM information_schema.VIEWS
+                 WHERE LOCATE(CONCAT('`', ?, '`.`', ?, '`'), VIEW_DEFINITION) > 0
+                 ORDER BY TABLE_SCHEMA, TABLE_NAME",
+                (database, table),
+            )
+            .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?
+        }
+        Err(e) => {
+            return Err(DbError::QueryFailed(
+                format!("fetch_dependents views: {}", e).into(),
+            ));
+        }
+    };
 
-    // Views that use this table
-    let view_rows: Vec<(String, String)> = conn
-        .exec(
-            "SELECT TABLE_SCHEMA, TABLE_NAME
-             FROM information_schema.VIEW_TABLE_USAGE
-             WHERE VIEW_TABLE_SCHEMA = ?
-               AND VIEW_TABLE_NAME   = ?",
-            (database, table),
-        )
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
-
-    for (view_schema, view_name) in view_rows {
-        deps.push(RelationRef {
-            kind: RelationKind::View,
-            qualified_name: format!("{}.{}", view_schema, view_name),
-        });
-    }
-
-    // FK child tables
     let fk_rows: Vec<(String, String)> = conn
         .exec(
-            "SELECT DISTINCT kcu.TABLE_SCHEMA, kcu.TABLE_NAME
-             FROM information_schema.KEY_COLUMN_USAGE kcu
-             JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
-               ON rc.CONSTRAINT_NAME   = kcu.CONSTRAINT_NAME
-              AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
-             WHERE rc.REFERENCED_TABLE_NAME = ?
-               AND kcu.REFERENCED_TABLE_SCHEMA = ?",
-            (table, database),
+            "SELECT DISTINCT TABLE_SCHEMA, TABLE_NAME
+             FROM information_schema.KEY_COLUMN_USAGE
+             WHERE REFERENCED_TABLE_SCHEMA = ?
+               AND REFERENCED_TABLE_NAME   = ?
+             ORDER BY TABLE_SCHEMA, TABLE_NAME",
+            (database, table),
         )
         .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
 
-    for (child_schema, child_table) in fk_rows {
-        let qualified = format!("{}.{}", child_schema, child_table);
-        if !deps
-            .iter()
-            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == qualified)
-        {
-            deps.push(RelationRef {
-                kind: RelationKind::ForeignKeyChild,
-                qualified_name: qualified,
-            });
+    Ok(dependents_from_rows(view_rows, fk_rows))
+}
+
+/// Map `(schema, name)` rows of dependent views and foreign-key child tables
+/// to relation references, dropping duplicates.
+fn dependents_from_rows(
+    view_rows: Vec<(String, String)>,
+    fk_rows: Vec<(String, String)>,
+) -> Vec<dbflux_core::RelationRef> {
+    use dbflux_core::{RelationKind, RelationRef};
+
+    let views = view_rows.into_iter().map(|row| (RelationKind::View, row));
+    let children = fk_rows
+        .into_iter()
+        .map(|row| (RelationKind::ForeignKeyChild, row));
+
+    let mut dependents: Vec<RelationRef> = Vec::new();
+    for (kind, (schema, name)) in views.chain(children) {
+        let dependent = RelationRef {
+            kind,
+            qualified_name: format!("{}.{}", schema, name),
+        };
+        if !dependents.contains(&dependent) {
+            dependents.push(dependent);
         }
     }
-
-    Ok(deps)
+    dependents
 }
 
 /// Verdict for a single `SHOW GRANTS` line.
@@ -4520,12 +4807,14 @@ fn resolve_write_privilege(
 
 #[cfg(test)]
 mod tests {
+    use super::rowid_pseudo_columns;
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
         MysqlSslPaths, build_mysql_opts, classify_mysql_grant_line, classify_mysql_grants,
-        initial_database_from_opts, inject_password_into_mysql_uri, may_open_transaction,
-        mysql_routine_type_to_kind, mysql_text_literal, normalize_mysql_tcp_host,
-        plan_mysql_semantic_request, resolve_write_privilege,
+        dependents_from_rows, index_key_part_label, initial_database_from_opts,
+        inject_password_into_mysql_uri, may_open_transaction, mysql_routine_type_to_kind,
+        mysql_text_literal, normalize_mysql_tcp_host, plan_mysql_semantic_request,
+        resolve_write_privilege,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
@@ -4534,6 +4823,100 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value, WritePrivilege,
     };
     use mysql::{Conn, Opts, OptsBuilder};
+
+    #[test]
+    fn dependents_from_rows_lists_views_then_deduplicated_foreign_key_children() {
+        let pair = |schema: &str, name: &str| (schema.to_string(), name.to_string());
+        let dependents = dependents_from_rows(
+            vec![pair("shop", "orders_view")],
+            vec![pair("shop", "order_items"), pair("shop", "order_items")],
+        );
+
+        assert_eq!(
+            dependents,
+            vec![
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::View,
+                    qualified_name: "shop.orders_view".to_string(),
+                },
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::ForeignKeyChild,
+                    qualified_name: "shop.order_items".to_string(),
+                },
+            ]
+        );
+    }
+
+    fn rowid_column(name: &str, type_name: &str, nullable: bool) -> dbflux_core::ColumnInfo {
+        dbflux_core::ColumnInfo {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            nullable,
+            is_primary_key: false,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    fn rowid_index(name: &str, columns: &[&str], primary: bool) -> dbflux_core::IndexInfo {
+        dbflux_core::IndexInfo {
+            name: name.to_string(),
+            columns: columns.iter().map(|column| column.to_string()).collect(),
+            is_unique: true,
+            is_primary: primary,
+        }
+    }
+
+    /// `_rowid` conditions from
+    /// <https://dev.mysql.com/doc/refman/8.4/en/create-index.html> and
+    /// <https://mariadb.com/docs/server/reference/sql-functions/pseudo-columns/_rowid>.
+    #[test]
+    fn rowid_is_declared_only_for_a_single_integer_key() {
+        let columns = [
+            rowid_column("id", "bigint unsigned", false),
+            rowid_column("code", "int(11)", false),
+            rowid_column("slug", "varchar(32)", false),
+            rowid_column("maybe", "int", true),
+        ];
+        let rowid = |kind: DbKind, indexes: &[dbflux_core::IndexInfo]| {
+            rowid_pseudo_columns(kind, &columns, indexes)
+        };
+        let declared: Box<[String]> = Box::new(["_rowid".to_string()]);
+
+        let integer_primary = [rowid_index("PRIMARY", &["id"], true)];
+        assert_eq!(rowid(DbKind::MySQL, &integer_primary), declared);
+        assert_eq!(rowid(DbKind::MariaDB, &integer_primary), declared);
+
+        let text_primary = [
+            rowid_index("PRIMARY", &["slug"], true),
+            rowid_index("u_code", &["code"], false),
+        ];
+        assert!(rowid(DbKind::MySQL, &text_primary).is_empty());
+
+        let composite_primary = [rowid_index("PRIMARY", &["id", "code"], true)];
+        assert!(rowid(DbKind::MySQL, &composite_primary).is_empty());
+
+        let integer_unique = [rowid_index("u_code", &["code"], false)];
+        assert_eq!(rowid(DbKind::MySQL, &integer_unique), declared);
+        assert!(rowid(DbKind::MariaDB, &integer_unique).is_empty());
+
+        let mixed_unique = [
+            rowid_index("u_slug", &["slug"], false),
+            rowid_index("u_code", &["code"], false),
+        ];
+        assert!(rowid(DbKind::MySQL, &mixed_unique).is_empty());
+
+        let nullable_unique = [rowid_index("u_maybe", &["maybe"], false)];
+        assert!(rowid(DbKind::MySQL, &nullable_unique).is_empty());
+
+        let functional_unique = [
+            rowid_index("u_code", &["code"], false),
+            rowid_index("u_lower", &["(lower(`slug`))"], false),
+        ];
+        assert!(rowid(DbKind::MySQL, &functional_unique).is_empty());
+
+        assert!(rowid(DbKind::MySQL, &[]).is_empty());
+    }
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -4561,6 +4944,7 @@ mod tests {
                 query_conn: Mutex::new(QueryConnState {
                     conn: query_conn,
                     current_database: Some("testdb".to_string()),
+                    table_locks_possible: false,
                 }),
                 ssh_catalog_tunnel: None,
                 ssh_query_tunnel: None,
@@ -4641,6 +5025,19 @@ mod tests {
             dialect.qualified_table(Some("main"), "user`table"),
             "`main`.`user``table`"
         );
+    }
+
+    #[test]
+    fn index_key_part_label_uses_expression_for_functional_key_part() {
+        assert_eq!(
+            index_key_part_label(None, Some("lower(`email`)".to_string())),
+            Some("(lower(`email`))".to_string())
+        );
+        assert_eq!(
+            index_key_part_label(Some("email".to_string()), None),
+            Some("email".to_string())
+        );
+        assert_eq!(index_key_part_label(None, None), None);
     }
 
     #[test]
@@ -5457,3 +5854,201 @@ mod picker_tests {
         assert_eq!(mariadb.picker_hint(), ":3306");
     }
 }
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::{ensure_read_only_statements, set_transaction_probe_verdict, table_locks_after};
+    use dbflux_core::{DbError, QueryLanguage};
+
+    fn server_error(code: u16) -> mysql::Error {
+        mysql::Error::MySqlError(mysql::MySqlError {
+            state: "25001".to_string(),
+            message: "server error".to_string(),
+            code,
+        })
+    }
+
+    fn statements(sql: &str) -> Vec<String> {
+        QueryLanguage::Sql.split_statements(sql)
+    }
+
+    #[test]
+    fn only_an_accepted_set_transaction_proves_no_transaction_is_open() {
+        assert!(set_transaction_probe_verdict(Ok(())).is_ok());
+
+        let open = set_transaction_probe_verdict(Err(server_error(1568)));
+        assert!(
+            matches!(open, Err(DbError::NotSupported(ref message)) if message.contains("open transaction")),
+            "{open:?}"
+        );
+
+        let unknown = set_transaction_probe_verdict(Err(server_error(1064)));
+        assert!(
+            matches!(unknown, Err(DbError::NotSupported(_))),
+            "{unknown:?}"
+        );
+    }
+
+    #[test]
+    fn statements_that_may_take_table_locks_mark_the_session() {
+        for sql in [
+            "LOCK TABLES t READ",
+            "lock table t write",
+            "/*!40000 LOCK TABLES t WRITE */",
+            "FLUSH TABLES WITH READ LOCK",
+            "UNLOCK TABLES; LOCK TABLES t READ",
+        ] {
+            assert!(table_locks_after(false, &statements(sql), true), "{sql}");
+            assert!(
+                table_locks_after(false, &statements(sql), false),
+                "{sql} failed"
+            );
+        }
+
+        assert!(!table_locks_after(false, &statements("SELECT 1"), true));
+        assert!(!table_locks_after(
+            false,
+            &statements("SELECT * FROM t LOCK IN SHARE MODE"),
+            true
+        ));
+        assert!(table_locks_after(false, &statements("EXECUTE stmt"), true));
+        assert!(table_locks_after(
+            false,
+            &statements("PREPARE stmt FROM 'LOCK TABLES t READ'"),
+            true
+        ));
+        assert!(table_locks_after(true, &statements("SELECT 1"), true));
+    }
+
+    #[test]
+    fn only_a_successful_plain_unlock_clears_the_mark() {
+        assert!(!table_locks_after(true, &statements("UNLOCK TABLES"), true));
+        assert!(!table_locks_after(true, &statements("unlock table"), true));
+        assert!(!table_locks_after(
+            false,
+            &statements("LOCK TABLES t READ; SELECT 1; UNLOCK TABLES"),
+            true
+        ));
+
+        assert!(table_locks_after(true, &statements("UNLOCK TABLES"), false));
+        assert!(table_locks_after(
+            true,
+            &statements("/*!UNLOCK TABLES*/"),
+            true
+        ));
+        assert!(table_locks_after(
+            true,
+            &statements("UNLOCK TABLES t"),
+            true
+        ));
+    }
+
+    fn check(sql: &str) -> Result<(), DbError> {
+        ensure_read_only_statements(&QueryLanguage::Sql.split_statements(sql))
+    }
+
+    #[test]
+    fn read_only_requests_accept_statements_that_cannot_end_the_transaction() {
+        for sql in [
+            "SELECT 1",
+            "  -- note\n select * from t",
+            "WITH d AS (SELECT id FROM t) DELETE FROM t WHERE id IN (SELECT id FROM d)",
+            "SHOW TABLES",
+            "DESCRIBE t",
+            "DESC t",
+            "EXPLAIN ANALYZE DELETE FROM t",
+            "TABLE t",
+            "VALUES ROW(1)",
+            "(SELECT 1) UNION (SELECT 2)",
+            "SELECT 1; SELECT 2",
+            "SELECT intox, into_count FROM t",
+            "SELECT /* plain comment */ 1",
+        ] {
+            assert!(
+                check(sql).is_ok(),
+                "{sql} must reach the read-only transaction"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_requests_refuse_statements_that_could_end_the_transaction() {
+        for sql in [
+            "COMMIT; DELETE FROM t",
+            "BEGIN",
+            "START TRANSACTION",
+            "SET autocommit = 1",
+            "CREATE TABLE t2 (id INT)",
+            "DROP TABLE t",
+            "LOCK TABLES t WRITE",
+            "CALL cleanup()",
+            "DELETE FROM t",
+            "SELECT 1; TRUNCATE t",
+            "SELECT * FROM t INTO OUTFILE '/tmp/out.csv'",
+            "SELECT * FROM t INTO DUMPFILE '/tmp/out.bin'",
+        ] {
+            assert!(
+                matches!(check(sql), Err(DbError::NotSupported(_))),
+                "{sql} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_requests_refuse_executable_comments_anywhere() {
+        for sql in [
+            "/*!CREATE TABLE stolen AS*/ SELECT * FROM users",
+            "/*!50000 CREATE TABLE stolen AS */ SELECT * FROM users",
+            "/*M!CREATE OR REPLACE TABLE orders AS*/ SELECT 1",
+            "/*M!100100 CREATE OR REPLACE TABLE orders AS*/ SELECT 1",
+            "SELECT 1 /*!, (SELECT 1) */",
+            "SELECT 1; /*!CREATE TABLE stolen AS*/ SELECT 2",
+        ] {
+            assert!(
+                matches!(check(sql), Err(DbError::NotSupported(_))),
+                "{sql} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_requests_refuse_into_wherever_it_could_be_a_keyword() {
+        for sql in [
+            "SELECT 1 INTO @total",
+            "SELECT 1 /*! INTO OUTFILE '/tmp/out.csv' */",
+            "SELECT --1 INTO OUTFILE '/tmp/out.csv'",
+            "SELECT \"a\\\" INTO OUTFILE '/tmp/out.csv' -- \"",
+            "SELECT 'a\\' INTO OUTFILE '/tmp/out.csv' -- '",
+            "SELECT 'INTO OUTFILE' AS text",
+            "SELECT 1 iNtO DUMPFILE '/tmp/out.bin'",
+        ] {
+            assert!(
+                matches!(check(sql), Err(DbError::NotSupported(_))),
+                "{sql} must be refused"
+            );
+        }
+    }
+}
+
+/// Whether a failed `PREFERRED` attempt failed while setting up TLS, the
+/// only case where the MySQL client retries without it: the server does not
+/// offer TLS, or the handshake itself failed. A server error (wrong password,
+/// unknown database, missing privilege) or a network error is the real
+/// failure, and a plaintext retry would only hide it.
+///
+/// `mysql::Error::TlsError` is not a negotiation failure: the client raises it
+/// while building its own TLS configuration (root certificate, client
+/// identity), and retrying in plaintext would send the password unencrypted.
+fn is_tls_negotiation_failure(error: &mysql::Error) -> bool {
+    match error {
+        mysql::Error::DriverError(mysql::DriverError::TlsNotSupported) => true,
+        // rustls reports a failed handshake through the stream as an I/O error.
+        mysql::Error::IoError(io_error) => io_error
+            .get_ref()
+            .is_some_and(|inner| inner.is::<rustls::Error>()),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod preferred_fallback_tests;

@@ -26,11 +26,14 @@ pub struct Editor {
     tab_index: isize,
     role: RoleOverride,
     aria_label: Option<SharedString>,
+    redacted: bool,
 
     /// An optional context menu builder to allow a custom context menu.
     ///
     /// If set, this overrides the built-in context menu.
     context_menu_builder: Option<Rc<dyn Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu>>,
+
+    paste_handler: Option<Rc<dyn Fn(&gpui::ClipboardItem, &mut Window, &mut App) -> bool>>,
 }
 
 impl Editor {
@@ -46,7 +49,9 @@ impl Editor {
             tab_index: 0,
             role: RoleOverride::default(),
             aria_label: None,
+            redacted: false,
             context_menu_builder: None,
+            paste_handler: None,
         }
     }
 
@@ -95,15 +100,39 @@ impl Editor {
         self
     }
 
+    /// Mark the editor as carrying a secret: rendered-frame observers redact
+    /// it and the text never reaches the accessibility tree. See
+    /// [`Input::redacted`].
+    pub fn redacted(mut self, redacted: bool) -> Self {
+        self.redacted = redacted;
+        self
+    }
+
     /// Replace the built-in context menu shown on right-click.
     ///
     /// The closure receives an empty menu and returns the one to show, so it
-    /// decides entirely what appears — the default items are not added.
+    /// decides entirely what appears — the default items are not added. It
+    /// shows only while the state's context menu is enabled, which is the
+    /// default.
     pub fn context_menu(
         mut self,
         f: impl Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu + 'static,
     ) -> Self {
         self.context_menu_builder = Some(Rc::new(f));
+        self
+    }
+
+    /// Intercept paste payloads (images, files) before the default text insertion.
+    ///
+    /// `true` consumes the paste so nothing is inserted, `false` falls through
+    /// to `clipboard.text()`. Copied files arrive as `ExternalPaths` through
+    /// the same hook. On web the clipboard reads `None`; image paste needs
+    /// async clipboard access and is out of scope.
+    pub fn on_paste(
+        mut self,
+        handler: impl Fn(&gpui::ClipboardItem, &mut Window, &mut App) -> bool + 'static,
+    ) -> Self {
+        self.paste_handler = Some(Rc::new(handler));
         self
     }
 }
@@ -133,8 +162,12 @@ impl RenderOnce for Editor {
             .role(self.role)
             .when_some(self.height, |this, height| this.h(height))
             .when_some(self.aria_label, |this, label| this.aria_label(label))
+            .redacted(self.redacted)
             .when_some(self.context_menu_builder, |this, build| {
                 this.context_menu(move |menu, window, cx| build(menu, window, cx))
+            })
+            .when_some(self.paste_handler, |this, handler| {
+                this.on_paste(move |item, window, cx| handler(item, window, cx))
             })
             .refine_style(&self.style)
     }
@@ -375,6 +408,27 @@ mod tests {
                 state.replace_text_in_range(None, "!", window, cx);
                 assert_eq!(state.text().to_string(), "/*x*/!");
             });
+        });
+    }
+
+    #[gpui::test]
+    fn test_on_paste_builder(cx: &mut TestAppContext) {
+        use gpui::{AppContext as _, Render};
+
+        struct PasteProbe;
+        impl Render for PasteProbe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+            }
+        }
+
+        cx.update(crate::init);
+        let _ = cx.add_window_view(|window, cx| {
+            let state = cx.new(|cx| EditorState::new(window, cx));
+            assert!(Editor::new(&state).paste_handler.is_none());
+            let editor = Editor::new(&state).on_paste(|_, _, _| true);
+            assert!(editor.paste_handler.is_some());
+            PasteProbe
         });
     }
 }

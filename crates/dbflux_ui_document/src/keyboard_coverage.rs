@@ -50,6 +50,10 @@ pub(crate) const CODE_EDITOR_CHROME: SurfaceRegistry = SurfaceRegistry {
             "hide-results-panel",
             KeyboardPath::Command(Command::ToggleEditor),
         ),
+        (
+            "toggle-results-position",
+            KeyboardPath::Menu("results-position"),
+        ),
         // The mode bar of the results (Data, JSON, Chart): Shift+T shows the
         // next view, and the grid's Toolbar submenu lists them.
         (
@@ -76,9 +80,16 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
-        // The table menu of the column carries Order ascending / descending.
+        // The table menu of the column carries Copy column name, Order
+        // ascending / descending and the Filter entries.
         (
             "header-col-*",
+            KeyboardPath::Command(Command::OpenContextMenu),
+        ),
+        // The header menu's entries are the table menu's, for the active
+        // cell's column (`m`).
+        (
+            "column-menu-action-*",
             KeyboardPath::Command(Command::OpenContextMenu),
         ),
         // Every row of the table menu and its submenus.
@@ -108,6 +119,20 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ("open-builder-btn", KeyboardPath::Menu("open-builder")),
         ("builder-notice-edit", KeyboardPath::Menu("open-builder")),
         ("builder-notice-reset", KeyboardPath::Menu("reset-builder")),
+        (
+            "nearest-neighbors-distance",
+            KeyboardPath::Menu("nearest-neighbors-distance"),
+        ),
+        (
+            "nearest-neighbors-clear",
+            KeyboardPath::Menu("nearest-neighbors-clear"),
+        ),
+        (
+            "nearest-neighbors-column.dropdown-trigger",
+            KeyboardPath::Menu("nearest-neighbors-column"),
+        ),
+        ("footer-count-rows", KeyboardPath::Menu("count-rows")),
+        ("footer-load-all-rows", KeyboardPath::Menu("load-all-rows")),
         ("toggle-maximize", KeyboardPath::Menu("maximize")),
         ("hide-panel", KeyboardPath::Menu("hide")),
         ("undo-btn", KeyboardPath::Command(Command::Undo)),
@@ -135,6 +160,12 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ResultsDeleteRow),
         ),
         ("row-inspector-pin", KeyboardPath::Menu("pin-row-inspector")),
+        // The REFERENCES entries of the row inspector: a Toolbar entry of
+        // the table menu.
+        (
+            "row-inspector-reference-*",
+            KeyboardPath::Menu("go-to-referenced-row"),
+        ),
         // The value panel's buttons are Toolbar entries of the table menu,
         // which `m` also opens from inside the panel.
         ("value-panel-format-*", KeyboardPath::Menu("value-format-*")),
@@ -182,6 +213,50 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         (
             "collection-builder-toggle",
             KeyboardPath::Menu("open-builder"),
+        ),
+        // The Data / Columns / Partitions views of a table whose connection
+        // offers them.
+        (
+            "segmented-table-view-*",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+        // The column picker of a table's Data view.
+        (
+            "column-projection-trigger",
+            KeyboardPath::Menu("column-picker"),
+        ),
+        (
+            "column-projection-row-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        ("column-projection-select-all", KeyboardPath::TabStop),
+        ("column-projection-select-none", KeyboardPath::TabStop),
+        ("column-projection-apply", KeyboardPath::TabStop),
+        // The Columns view of a table.
+        (
+            "column-profile-eye-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "column-profile-sort",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "column-profile-filter",
+            KeyboardPath::Command(Command::FocusSearch),
+        ),
+        (
+            "column-profile-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "column-profile-sample",
+            KeyboardPath::Menu("sample-profile"),
+        ),
+        // The Partitions view of a table.
+        (
+            "partition-list-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
         ),
     ],
 };
@@ -465,10 +540,6 @@ pub(crate) const KEY_VALUE: SurfaceRegistry = SurfaceRegistry {
         ("kv-rename-key", KeyboardPath::Command(Command::Rename)),
         ("kv-delete-key", KeyboardPath::Command(Command::Delete)),
         (
-            "kv-console-header",
-            KeyboardPath::Command(Command::ToggleConsole),
-        ),
-        (
             "refresh-action",
             KeyboardPath::Command(Command::RefreshSchema),
         ),
@@ -491,6 +562,34 @@ pub(crate) const KEY_VALUE: SurfaceRegistry = SurfaceRegistry {
         ("seg-ctl-item-json", KeyboardPath::Menu("ViewAs(*")),
         ("seg-ctl-item-hex", KeyboardPath::Menu("ViewAs(*")),
         ("seg-ctl-item-msgpack", KeyboardPath::Menu("ViewAs(*")),
+    ],
+};
+
+/// The native command console docked under a document (`crate::console`).
+/// Ctrl+` toggles it (bound globally, and on the key-value document itself);
+/// with the document focused, Enter runs a command waiting for confirmation
+/// and Escape drops it, as the Run anyway and Cancel buttons do.
+pub(crate) const NATIVE_CONSOLE: SurfaceRegistry = SurfaceRegistry {
+    name: "native console",
+    contexts: &[
+        ContextId::KeyValue,
+        ContextId::Global,
+        ContextId::Results,
+        ContextId::TextInput,
+    ],
+    entries: &[
+        (
+            "native-console-header",
+            KeyboardPath::Command(Command::ToggleConsole),
+        ),
+        (
+            "native-console-run-anyway",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "native-console-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
     ],
 };
 
@@ -556,6 +655,336 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// A secret tab: the ids only the tab draws. The sections of the secret are
+/// the ones of the listing's details pane, so a test composes this registry
+/// with [`SECRET_STORE`].
+pub(crate) const SECRET_DOCUMENT: SurfaceRegistry = SurfaceRegistry {
+    name: "secret document",
+    contexts: &[ContextId::Results, ContextId::Modal],
+    entries: &[
+        (
+            "secret-document-copy-arn",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-document-details-copy-arn",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-document-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "secret-document-retry",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "secret-document-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-document-close",
+            KeyboardPath::Menu("secret-document-close"),
+        ),
+    ],
+};
+
+/// A secret store tab: its listing and details pane. The pane actions (`m`)
+/// list Retrieve value, the copy actions, Close details, Hide all, the error actions, Load
+/// next page, Refresh and, on a hierarchical store, the path mode and Up; on
+/// a region-capable driver also the region picker and the retry of a failed
+/// region listing.
+pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
+    name: "secret store",
+    contexts: &[ContextId::Results, ContextId::ContextMenu, ContextId::Modal],
+    entries: &[
+        ("secret-row-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "secret-path-row-*",
+            KeyboardPath::Command(Command::SelectNext),
+        ),
+        (
+            "secret-load-more",
+            KeyboardPath::Command(Command::ResultsNextPage),
+        ),
+        (
+            "secret-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        // The region picker of a driver that can switch regions. The
+        // clickable element is the dropdown's trigger, named by the path
+        // suffix (`secret-region.dropdown-trigger`); the pane actions list an
+        // entry that opens it.
+        ("secret-region.*", KeyboardPath::Menu("secret-region")),
+        (
+            "secret-path-crumb-*",
+            KeyboardPath::Command(Command::ColumnLeft),
+        ),
+        (
+            "segmented-secret-path-mode-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        (
+            "segmented-secret-value-view-*",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "secret-retrieve-value",
+            KeyboardPath::Command(Command::ToggleValuePanel),
+        ),
+        (
+            "secret-value-copy-all",
+            KeyboardPath::Command(Command::ResultsCopyRow),
+        ),
+        (
+            "secret-value-copy-error",
+            KeyboardPath::Menu("secret-copy-error"),
+        ),
+        (
+            "secret-value-view-in-audit",
+            KeyboardPath::Menu("secret-view-in-audit"),
+        ),
+        (
+            "secret-value-hide-all",
+            KeyboardPath::Menu("secret-hide-all"),
+        ),
+        (
+            "secret-value-reveal-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        // The editor of a plaintext value: Edit value opens it from the
+        // pane actions, Save and Discard are its own entries while it is
+        // open (Save also answers the SaveQuery command in the dispatch).
+        ("secret-value-edit", KeyboardPath::Menu("secret-edit-value")),
+        // The details pane's header: Copy name and Close are pane actions.
+        (
+            "secret-details-copy-name",
+            KeyboardPath::Menu("secret-copy-name"),
+        ),
+        (
+            "secret-details-close",
+            KeyboardPath::Menu("secret-details-close"),
+        ),
+        // The pane's resize gutter takes focus and steps with the arrow keys.
+        ("secret-details-grip", KeyboardPath::TabStop),
+        // Open in tab, from the pane header and the row menu: the pane
+        // action of the same id is the keyboard path of both.
+        (
+            "secret-details-expand",
+            KeyboardPath::Menu("secret-open-in-tab"),
+        ),
+        (
+            "secret-menu-open-in-tab-*",
+            KeyboardPath::Menu("secret-open-in-tab"),
+        ),
+        (
+            "secret-value-editor-save",
+            KeyboardPath::Menu("secret-editor-save"),
+        ),
+        // The Formatted / Raw switch of a JSON value. The editor holds the
+        // keyboard like a text buffer, so no bare key is bound there; the
+        // pane action of the same name is its keyboard path.
+        (
+            "segmented-secret-editor-mode-*",
+            KeyboardPath::Menu("secret-editor-mode"),
+        ),
+        // Find opens the editor component's find panel; Ctrl+F does the same
+        // while the text has focus.
+        (
+            "secret-value-editor-find",
+            KeyboardPath::Menu("secret-editor-find"),
+        ),
+        (
+            "secret-value-editor-discard",
+            KeyboardPath::Menu("secret-editor-discard"),
+        ),
+        // The version history: each row retrieves its version, and Back to
+        // current replaces a historical value; both are pane actions.
+        (
+            "secret-version-row-*",
+            KeyboardPath::Menu("secret-version-retrieve-*"),
+        ),
+        (
+            "secret-version-back-to-current",
+            KeyboardPath::Menu("secret-version-current"),
+        ),
+        // Roll back is a button on every earlier version, and the `b` key
+        // opens the same confirmation for the most recent one; each button
+        // also has a pane action.
+        (
+            "secret-version-rollback-*",
+            KeyboardPath::Menu("secret-version-rollback-*"),
+        ),
+        // The dialogs the write actions open: Enter confirms and Escape
+        // cancels, from wherever the keyboard is inside the dialog.
+        (
+            "secret-rollback-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rollback-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "secret-delete-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-delete-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        // The recovery window of a scheduled deletion: each choice is a
+        // button of the dialog, which keeps Tab inside it.
+        ("secret-delete-window-*", KeyboardPath::TabStop),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
+        // Delete is the `x` key on the selected secret, from the pane header
+        // and the bottom bar alike; the row menu's entry runs the same
+        // command. Edit value in the bar and Restore are pane actions.
+        (
+            "secret-details-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-action-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-action-edit-value",
+            KeyboardPath::Menu("secret-edit-value"),
+        ),
+        ("secret-restore", KeyboardPath::Menu("secret-restore")),
+        // Rotate now (the bar, the Rotation section, the row menu) and Edit
+        // rotation are pane actions; the dialog's controls answer Enter and
+        // Escape, and the checkbox is a stop of the dialog.
+        (
+            "secret-action-rotate-now",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-rotation-rotate-now",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-rotation-edit",
+            KeyboardPath::Menu("secret-edit-rotation"),
+        ),
+        (
+            "secret-rotation-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rotation-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("secret-rotation-enabled", KeyboardPath::TabStop),
+        (
+            "secret-rotate-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rotate-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        // Edit tags (the Tags section and the row menu) and Edit description
+        // (the Details section, or the bottom bar) are pane actions; each
+        // dialog's buttons answer Enter and Escape, and its row controls are
+        // stops of the dialog.
+        // New secret / New parameter is a pane action; its dialog's buttons
+        // answer Enter and Escape, and the choices and tag rows are stops of
+        // the dialog.
+        ("secret-new", KeyboardPath::Menu("secret-new")),
+        (
+            "secret-create-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-create-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("secret-create-type-*", KeyboardPath::TabStop),
+        ("secret-create-tier-*", KeyboardPath::TabStop),
+        ("secret-create-tag-add", KeyboardPath::TabStop),
+        ("secret-create-tag-remove-*", KeyboardPath::TabStop),
+        ("secret-tags-edit", KeyboardPath::Menu("secret-edit-tags")),
+        (
+            "secret-details-edit",
+            KeyboardPath::Menu("secret-edit-description"),
+        ),
+        (
+            "secret-action-edit-description",
+            KeyboardPath::Menu("secret-edit-description"),
+        ),
+        (
+            "secret-tags-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        ("secret-tags-cancel", KeyboardPath::Command(Command::Cancel)),
+        ("secret-tags-add", KeyboardPath::TabStop),
+        ("secret-tags-remove-*", KeyboardPath::TabStop),
+        (
+            "secret-description-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-description-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "secret-value-copy-*",
+            KeyboardPath::MouseOnly(
+                "copies one field of the value; the copy key copies the whole value",
+            ),
+        ),
+        // The entries of a row's right-click menu, each under its per-action
+        // id: the copies the pane actions `m` reaches (Copy name has no
+        // chord of its own; Copy ARN does, Ctrl+C on the selection), and the
+        // entries the toolbar keys retrieve and refresh.
+        (
+            "secret-menu-retrieve-value-*",
+            KeyboardPath::Command(Command::ToggleValuePanel),
+        ),
+        // The row menu's Edit value entry, dispatched to the editor the
+        // details pane opens; the pane action of the same id is its second
+        // keyboard path.
+        (
+            "secret-menu-edit-value-*",
+            KeyboardPath::Menu("secret-edit-value"),
+        ),
+        (
+            "secret-menu-delete-*",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-menu-edit-tags-*",
+            KeyboardPath::Menu("secret-edit-tags"),
+        ),
+        (
+            "secret-menu-rotate-now-*",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-menu-restore-*",
+            KeyboardPath::Menu("secret-restore"),
+        ),
+        (
+            "secret-menu-copy-name-*",
+            KeyboardPath::Menu("secret-copy-name"),
+        ),
+        (
+            "secret-menu-copy-arn-*",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-menu-copy-path-*",
+            KeyboardPath::Menu("secret-copy-path"),
+        ),
+        (
+            "secret-menu-refresh-*",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+    ],
+};
+
 /// An object editor tab. Its pane actions (`m`, once Escape leaves the
 /// text) list Save, Discard, Find, the interpretation, Reload and Load
 /// anyway.
@@ -579,6 +1008,264 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
             "object-editor-find",
             KeyboardPath::Menu("object-editor-find"),
         ),
+    ],
+};
+
+/// A delimited file tab: the dialect toolbar, the table of the records
+/// loaded so far, the control that loads the next page (`]`), the reload
+/// (`f5`), the edit controls, and its dialogs. The pane actions list the
+/// toolbar, insert above, add and rename a column, discard, the cancel of a
+/// running load of the rest, and reload: each select entry opens its list
+/// with the keyboard on it. Save is the table's save key. The rows stay in
+/// file order, so the document does not sort and a column header click has
+/// no action for a key to reach. The column prompt and the offer to load the
+/// rest confirm with Enter and close with Escape, and the modal cell editor
+/// saves with its save key and closes with Escape. `t` switches between the
+/// table and the text view and `Shift+T` between raw and aligned text, in
+/// the tab's context: in the text view, Escape first takes the keyboard out
+/// of the text editor, whose context is `TextInput`.
+pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
+    name: "delimited file",
+    contexts: &[
+        ContextId::Results,
+        ContextId::DataTable,
+        ContextId::TextInput,
+        ContextId::Modal,
+        ContextId::CellEditorModal,
+    ],
+    entries: &[
+        ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "segmented-delimited-view-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        // The Columns view of the file.
+        (
+            "column-profile-sort",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "column-profile-filter",
+            KeyboardPath::Command(Command::FocusSearch),
+        ),
+        (
+            "column-profile-full-scan",
+            KeyboardPath::Menu("delimited-profile-full-scan"),
+        ),
+        (
+            "segmented-delimited-text-mode-*",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "header-col-*",
+            KeyboardPath::MouseOnly(
+                "a header click has no action in this document: rows stay in file order, \
+                 and renaming the column is in the pane actions menu",
+            ),
+        ),
+        (
+            "delimited-load-more",
+            KeyboardPath::Command(Command::ResultsNextPage),
+        ),
+        (
+            "delimited-delimiter.*",
+            KeyboardPath::Menu("delimited-delimiter"),
+        ),
+        ("delimited-quote.*", KeyboardPath::Menu("delimited-quote")),
+        (
+            "delimited-encoding.*",
+            KeyboardPath::Menu("delimited-encoding"),
+        ),
+        ("delimited-header", KeyboardPath::Menu("delimited-header")),
+        (
+            "delimited-dialect-reset",
+            KeyboardPath::Menu("delimited-dialect-reset"),
+        ),
+        ("delimited-save", KeyboardPath::Command(Command::SaveRow)),
+        ("delimited-discard", KeyboardPath::Menu("delimited-discard")),
+        (
+            "delimited-insert-above",
+            KeyboardPath::Menu("delimited-insert-above"),
+        ),
+        (
+            "delimited-reload",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "delimited-add-column",
+            KeyboardPath::Menu("delimited-add-column"),
+        ),
+        (
+            "delimited-load-rest-cancel",
+            KeyboardPath::Menu("delimited-load-rest-cancel"),
+        ),
+        (
+            "delimited-column-name-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "delimited-column-name-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "delimited-load-rest-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "delimited-load-rest-dismiss",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "cell-editor-save",
+            KeyboardPath::Command(Command::SaveQuery),
+        ),
+        ("cell-editor-cancel", KeyboardPath::Command(Command::Cancel)),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
+    ],
+};
+
+/// A Parquet file tab: the read-only table of the rows loaded so far, the
+/// control that loads the next window (`]`) and the reload (`f5`). The rows
+/// stay in file order, so the document does not sort and a column header
+/// click has no action for a key to reach.
+///
+/// `t` switches between Data and Columns. In Data, `f` opens the column
+/// picker with the keyboard on its list (`Dropdown`): Space toggles the
+/// highlighted column, Enter applies, Escape discards and Tab reaches the
+/// search, Select all, Select none and Apply. In Columns, Space toggles the
+/// eye of the row under the cursor, `Shift+T` cycles the sort and `/` (or
+/// `f`) focuses the filter.
+///
+/// An object read whole is downloaded after a prompt (`Modal`): Enter
+/// downloads and Escape declines.
+pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
+    name: "parquet file",
+    contexts: &[
+        ContextId::Results,
+        ContextId::DataTable,
+        ContextId::Dropdown,
+        ContextId::Modal,
+    ],
+    entries: &[
+        ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "header-col-*",
+            KeyboardPath::MouseOnly(
+                "a header click has no action in this document: rows stay in file order",
+            ),
+        ),
+        (
+            "parquet-load-more",
+            KeyboardPath::Command(Command::ResultsNextPage),
+        ),
+        (
+            "parquet-reload",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "segmented-parquet-view-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        (
+            "column-projection-trigger",
+            KeyboardPath::Command(Command::FocusToolbar),
+        ),
+        (
+            "column-projection-row-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        ("column-projection-select-all", KeyboardPath::TabStop),
+        ("column-projection-select-none", KeyboardPath::TabStop),
+        ("column-projection-apply", KeyboardPath::TabStop),
+        (
+            "column-profile-eye-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "column-profile-sort",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "column-profile-filter",
+            KeyboardPath::Command(Command::FocusSearch),
+        ),
+        (
+            "parquet-download-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "parquet-download-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
+    ],
+};
+
+/// The spreadsheet document: the table of the shown sheet, the sheet tabs
+/// and the edit bar. Alt+L and Alt+H (`NextResultTab`, `PrevResultTab`) step
+/// through the worksheets; a chart sheet's tab takes no click. Append row is
+/// the table's add-row key (`a a`) and a pane action, and Save is the table's
+/// save key.
+///
+/// For xls, Save as .xlsx is the table's save key (`SaveRow`) and a pane
+/// action; its prompt (`Modal`) goes on with Enter and cancels with Escape.
+///
+/// An object read whole is downloaded after a prompt (`Modal`): Enter
+/// downloads and Escape declines.
+///
+/// `t` switches between the table and the read-only text of the sheet, in
+/// the tab's context: in the text view, Escape first takes the keyboard out
+/// of the text editor, whose context is `TextInput`.
+pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
+    name: "spreadsheet file",
+    contexts: &[
+        ContextId::Results,
+        ContextId::DataTable,
+        ContextId::TextInput,
+        ContextId::Modal,
+    ],
+    entries: &[
+        ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "segmented-spreadsheet-view-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        (
+            "header-col-*",
+            KeyboardPath::MouseOnly(
+                "a header click has no action in this document: rows stay in sheet order",
+            ),
+        ),
+        (
+            "spreadsheet-sheet-*",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+        (
+            "spreadsheet-append-row",
+            KeyboardPath::Command(Command::ResultsAddRow),
+        ),
+        ("spreadsheet-save", KeyboardPath::Command(Command::SaveRow)),
+        (
+            "spreadsheet-save-as",
+            KeyboardPath::Command(Command::SaveRow),
+        ),
+        (
+            "spreadsheet-save-as-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "spreadsheet-save-as-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "spreadsheet-download-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "spreadsheet-download-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
     ],
 };
 

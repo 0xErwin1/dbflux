@@ -56,6 +56,10 @@ pub struct DetachedHookScope {
 
 impl DetachedHookScope {
     fn register(&self, task_id: TaskId) {
+        #[expect(
+            clippy::expect_used,
+            reason = "retains the existing panic-on-poison policy for the detached-scope task registry"
+        )]
         self.task_ids
             .lock()
             .expect("detached hook scope poisoned")
@@ -63,6 +67,10 @@ impl DetachedHookScope {
     }
 
     fn unregister(&self, task_id: TaskId) {
+        #[expect(
+            clippy::expect_used,
+            reason = "retains the existing panic-on-poison policy for the detached-scope task registry"
+        )]
         self.task_ids
             .lock()
             .expect("detached hook scope poisoned")
@@ -98,6 +106,10 @@ impl DetachedHookScope {
 
     #[cfg_attr(test, allow(dead_code))]
     fn task_ids(&self) -> Vec<TaskId> {
+        #[expect(
+            clippy::expect_used,
+            reason = "retains the existing panic-on-poison policy for the detached-scope task registry"
+        )]
         self.task_ids
             .lock()
             .expect("detached hook scope poisoned")
@@ -824,9 +836,10 @@ where
 
             if readiness_error.is_none()
                 && phase == HookPhase::PreConnect
-                && let (Some(host), Some(port)) = (context.host.clone(), context.port)
+                && let Some((host, port)) = context.pre_connect_probe_endpoint()
                 && let Err(state) =
-                    wait_for_hook_endpoint_ready(host, port, parent_cancel.as_ref(), cx).await
+                    wait_for_hook_endpoint_ready(host.to_string(), port, parent_cancel.as_ref(), cx)
+                        .await
             {
                 readiness_error = Some(state);
             }
@@ -1003,6 +1016,10 @@ mod tests {
             _detached: Option<&DetachedProcessSender>,
         ) -> Result<HookResult, String> {
             let command = hook.display_command();
+            #[expect(
+                clippy::unwrap_in_result,
+                reason = "test double: the recording mutex keeps the panic-on-poison policy, so a poisoned lock fails the test loudly"
+            )]
             self.invocations
                 .lock()
                 .expect("test executor poisoned")
@@ -1057,6 +1074,7 @@ mod tests {
             port: None,
             database: None,
             phase: Some(HookPhase::PreConnect),
+            dials_configured_endpoint: false,
         }
     }
 

@@ -1,10 +1,11 @@
 use super::{
-    DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState, PendingRequery,
-    ResultViewMode, TableReload, ToolbarFocus,
+    DataGridEvent, DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState,
+    PendingRequery, QueryInput, ReferencedRowTarget, ResultViewMode, TableReload, ToolbarFocus,
+    row_inspector,
 };
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::{Direction, Edge, SortState as TableSortState};
-use dbflux_core::{OrderByColumn, Pagination, SortDirection};
+use dbflux_core::{OrderByColumn, Pagination, SortDirection, TableRef};
 use gpui::*;
 use std::cmp::Ordering;
 
@@ -80,6 +81,12 @@ impl DataGridPanel {
             return;
         }
 
+        // Neighbor rows are not a page of the table: ordering them by a
+        // column would read the table instead.
+        if self.nearest_neighbors.is_some() {
+            return;
+        }
+
         let col_name = self
             .result
             .columns
@@ -146,6 +153,17 @@ impl DataGridPanel {
         }
     }
 
+    // current is the enumerate() index over original_order, which
+    // apply_local_sort builds and apply_result_search filters in step with
+    // result.rows. The order and the sort state are reset wherever the rows
+    // are replaced, including the document-grid rebuild paths, so a refresh returning fewer rows can no longer leave
+    // current past rows.len(); only the restore path was exposed to that. The
+    // original value is only a sort key and can exceed rows.len() after a
+    // search.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "current indexes original_order, which apply_local_sort builds and apply_result_search filters in step with result.rows; the order and sort state are reset wherever the rows are replaced"
+    )]
     pub(super) fn handle_sort_clear(&mut self, cx: &mut Context<Self>) {
         if self.server_sort_blocked(cx) {
             return;
@@ -252,6 +270,12 @@ impl DataGridPanel {
 
         // Sort using indices for tracking
         let mut indices: Vec<usize> = (0..self.result.rows.len()).collect();
+        // a and b come from indices, a permutation of 0..rows.len(), so both
+        // row indexings stay in bounds.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "a and b come from indices, a permutation of 0..result.rows.len()"
+        )]
         indices.sort_by(|&a, &b| {
             let val_a = self.result.rows[a].get(col_ix);
             let val_b = self.result.rows[b].get(col_ix);
@@ -269,14 +293,29 @@ impl DataGridPanel {
             }
         });
 
-        // Reorder rows according to sorted indices
+        // Reorder rows according to sorted indices. i comes from indices, a
+        // permutation of 0..rows.len().
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "i comes from indices, a permutation of 0..result.rows.len()"
+        )]
         let sorted_rows: Vec<_> = indices
             .iter()
             .map(|&i| self.result.rows[i].clone())
             .collect();
         self.result.rows = sorted_rows;
 
-        // Update original_row_order to map new order -> original
+        // Update original_row_order to map new order -> original.
+        // orig[i] indexes original_row_order, which apply_local_sort builds in
+        // step with result.rows. The order and the sort state are reset
+        // wherever the rows are replaced, including the document-grid rebuild
+        // paths, so orig always indexes an order built in step with the
+        // current rows; only a refresh returning more rows could have overrun
+        // orig here, while fewer rows affected the restore path.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "orig indexes original_row_order, which apply_local_sort builds in step with result.rows; the order and sort state are reset wherever the rows are replaced"
+        )]
         if let Some(ref mut orig) = self.grid_table.original_row_order {
             *orig = indices.iter().map(|&i| orig[i]).collect();
         }
@@ -578,6 +617,20 @@ impl DataGridPanel {
         }
     }
 
+    pub(super) fn query_input_focused(&mut self, input: QueryInput, cx: &mut Context<Self>) {
+        self.focus.focused_query_input = Some(input);
+        cx.notify();
+    }
+
+    /// Clears the field only if it still holds the keyboard: moving between
+    /// two fields can deliver the new field's focus before the old one's blur.
+    pub(super) fn query_input_blurred(&mut self, input: QueryInput, cx: &mut Context<Self>) {
+        if self.focus.focused_query_input == Some(input) {
+            self.focus.focused_query_input = None;
+            cx.notify();
+        }
+    }
+
     pub fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.focus.switching_input {
             self.focus.switching_input = false;
@@ -658,6 +711,21 @@ impl DataGridPanel {
             && self.step_collection_tab(cmd == Command::NextResultTab, cx)
         {
             return true;
+        }
+
+        // The same keys move between a table's Data, Columns and Partitions
+        // views when its connection offers them.
+        if matches!(cmd, Command::NextResultTab | Command::PrevResultTab)
+            && self.step_table_tab(cmd == Command::NextResultTab, window, cx)
+        {
+            if !self.focus_table_view(window, cx) {
+                self.focus_table(window, cx);
+            }
+            return true;
+        }
+
+        if let Some(handled) = self.dispatch_table_view_command(cmd, window, cx) {
+            return handled;
         }
 
         if let Some(handled) = self.dispatch_side_island_command(cmd, window, cx) {
@@ -770,6 +838,14 @@ impl DataGridPanel {
                         return true;
                     }
                 }
+
+                // Esc leaves similar rows for the table page, as the bar's
+                // "Back to table" says.
+                if self.neighbor_bar_search().is_some() {
+                    self.clear_nearest_neighbors(window, cx);
+                    return true;
+                }
+
                 false
             }
             Command::SelectNext | Command::FocusDown => {
@@ -863,7 +939,100 @@ impl DataGridPanel {
                 self.toggle_row_inspector(cx);
                 true
             }
+            Command::FindSimilarRows => self.find_similar_rows(cx),
             _ => false,
         }
+    }
+
+    // === Referenced-row navigation ===
+
+    /// Whether an applied builder spec owns this panel's next refresh: the
+    /// equality a referenced row writes would land in the hidden filter
+    /// input while the builder query reruns unchanged. The workspace keeps
+    /// such a tab's query and opens the referenced row in a tab of its own.
+    pub(crate) fn builder_query_applied(&self) -> bool {
+        self.builder.visual_select.is_some()
+    }
+
+    /// Maps an outgoing FK reference to the row the workspace should open.
+    /// `None` unless the panel browses a table, since the connection and
+    /// database the target lives in come from that source — and for an
+    /// incoming reference, whose columns run the other way.
+    pub(super) fn reference_target(
+        &self,
+        reference: &row_inspector::FkReference,
+    ) -> Option<ReferencedRowTarget> {
+        if !matches!(reference.kind, row_inspector::ReferenceKind::Outgoing) {
+            return None;
+        }
+
+        let DataSource::Table {
+            profile_id,
+            database,
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+
+        let table = match &reference.target_schema {
+            Some(schema) => TableRef::with_schema(schema.clone(), reference.target_table.clone()),
+            None => TableRef::new(reference.target_table.clone()),
+        };
+
+        Some(ReferencedRowTarget {
+            profile_id: *profile_id,
+            database: database.clone(),
+            table,
+            key_column: reference.target_pk.clone(),
+            key_value: reference.value.clone(),
+        })
+    }
+
+    /// The referenced-row target for a cell whose column is a single-column
+    /// foreign key and whose value is not null; `None` for every other cell.
+    /// `row` is a visual row of the table, so pending inserts shift the base
+    /// row it resolves to.
+    pub(super) fn fk_target_for_cell(
+        &self,
+        row: usize,
+        col: usize,
+        cx: &App,
+    ) -> Option<ReferencedRowTarget> {
+        let column_name = self.result.columns.get(col)?.name.clone();
+
+        let foreign_keys = self
+            .table_details_for(cx)?
+            .foreign_keys
+            .as_deref()
+            .unwrap_or(&[]);
+
+        let foreign_key = foreign_keys
+            .iter()
+            .find(|fk| matches!(fk.columns.as_slice(), [local] if *local == column_name))?;
+        let key_column = foreign_key.referenced_columns.first()?.clone();
+
+        let key_value = self
+            .resolve_cell_value(row, col, cx)
+            .filter(|value| !value.is_null())?;
+
+        self.reference_target(&row_inspector::FkReference {
+            column: column_name,
+            target_schema: foreign_key.referenced_schema.clone(),
+            target_table: foreign_key.referenced_table.clone(),
+            target_pk: key_column,
+            value: key_value,
+            display_label: None,
+            kind: row_inspector::ReferenceKind::Outgoing,
+        })
+    }
+
+    /// Emits the request to open the row `target` points at.
+    pub(super) fn navigate_to_reference(
+        &mut self,
+        target: ReferencedRowTarget,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(DataGridEvent::OpenReferencedRow { target });
     }
 }

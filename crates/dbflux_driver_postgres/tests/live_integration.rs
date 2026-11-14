@@ -8,10 +8,11 @@
 
 use dbflux_core::{
     CollectionRef, ColumnAssignment, ConnectionProfile, DbConfig, DbDriver, DbError,
-    DescribeRequest, ExplainRequest, MutationRequest, OrderByColumn, Pagination, QueryRequest,
-    RecordIdentity, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy, SemanticFilter,
-    SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableBrowseRequest, TableCountRequest,
-    TableRef, TransactionStateNote, Value, WhereOperator,
+    DescribeRequest, ExplainRequest, MutationRequest, NearestNeighborRequest, ObjectFacet,
+    OrderByColumn, Pagination, QueryRequest, ReadOnlyEnforcement, RecordIdentity, RowDelete,
+    RowInsert, RowPatch, SchemaLoadingStrategy, SemanticFilter, SemanticRequest, SqlUpdateRequest,
+    SqlUpsertRequest, TableBrowseRequest, TableCountRequest, TableRef, TransactionStateNote, Value,
+    VectorDistance, VectorFacet, WhereOperator,
 };
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
@@ -489,6 +490,118 @@ fn postgres_pgvector_text_matches_server_output_and_crud_returning() -> Result<(
 }
 
 #[test]
+#[ignore = "requires Docker daemon and the pinned pgvector PostgreSQL 16 image"]
+fn postgres_vector_column_finds_nearest_neighbors() -> Result<(), DbError> {
+    containers::with_pgvector_postgres_16_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new("CREATE EXTENSION vector"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE embeddings (id INTEGER PRIMARY KEY, label TEXT, embedding vector(3))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO embeddings VALUES
+                (1, 'anchor', '[1,0,0]'),
+                (2, 'far', '[2,0,0]'),
+                (3, 'farthest', '[0,3,0]'),
+                (4, 'near', '[1,0.5,0]')",
+        ))?;
+
+        let details = connection.table_details("postgres", Some("public"), "embeddings")?;
+        assert_eq!(
+            connection.object_facets(&details),
+            vec![
+                ObjectFacet::Tabular,
+                ObjectFacet::Vector(VectorFacet {
+                    column: "embedding".to_string(),
+                    dimension: Some(3),
+                }),
+            ]
+        );
+
+        let anchor = connection.execute(&QueryRequest::new(
+            "SELECT embedding FROM embeddings WHERE id = 1",
+        ))?;
+        let generated = connection
+            .query_generator()
+            .expect("PostgreSQL has a query generator")
+            .generate_nearest_neighbors(&NearestNeighborRequest {
+                table: TableRef::with_schema("public", "embeddings"),
+                database: Some("postgres".to_string()),
+                column: "embedding".to_string(),
+                anchor: anchor.rows[0][0].clone(),
+                distance: VectorDistance::L2,
+                limit: 10,
+                exclude_primary_key: vec![("id".to_string(), Value::Int(1))],
+            })
+            .expect("nearest-neighbor SQL renders");
+
+        let result = connection.execute(&QueryRequest::new(generated.text))?;
+        let id_index = result.columns.iter().position(|c| c.name == "id").unwrap();
+        let distance_index = result
+            .columns
+            .iter()
+            .position(|c| c.name == "nearest_distance")
+            .expect("the result carries a nearest_distance column");
+
+        let ids: Vec<Value> = result
+            .rows
+            .iter()
+            .map(|row| row[id_index].clone())
+            .collect();
+        assert_eq!(ids, vec![Value::Int(4), Value::Int(2), Value::Int(3)]);
+
+        let distances: Vec<f64> = result
+            .rows
+            .iter()
+            .map(|row| match &row[distance_index] {
+                Value::Float(distance) => *distance,
+                other => panic!("distance is not a float: {other:?}"),
+            })
+            .collect();
+        let expected = [0.5, 1.0, 10f64.sqrt()];
+        for (actual, expected) in distances.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+        }
+
+        // A table with its own `distance` column must still order by the
+        // computed distance without an ambiguity error.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE scored (id INT PRIMARY KEY, distance REAL, embedding vector(3))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO scored VALUES (1, 9, '[1,0,0]'), (2, 8, '[2,0,0]'), (3, 7, NULL)",
+        ))?;
+        let generated = connection
+            .query_generator()
+            .expect("PostgreSQL has a query generator")
+            .generate_nearest_neighbors(&NearestNeighborRequest {
+                table: TableRef::with_schema("public", "scored"),
+                database: Some("postgres".to_string()),
+                column: "embedding".to_string(),
+                anchor: Value::Text("[1,0,0]".to_string()),
+                distance: VectorDistance::L2,
+                limit: 10,
+                exclude_primary_key: vec![("id".to_string(), Value::Int(1))],
+            })
+            .expect("nearest-neighbor SQL renders");
+        let scored = connection.execute(&QueryRequest::new(generated.text))?;
+        assert_eq!(
+            scored.rows.len(),
+            1,
+            "the NULL vector row is not a neighbor"
+        );
+        let names: Vec<&str> = scored.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["id", "distance", "embedding", "nearest_distance"]
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
 #[ignore = "requires Docker daemon"]
 fn postgres_text_search_text_matches_server_output() -> Result<(), DbError> {
     containers::with_postgres_url(|uri| {
@@ -882,6 +995,51 @@ fn postgres_cancel_query() -> Result<(), DbError> {
         let cancel_handle = connection.cancel_handle();
         let cancel_result = cancel_handle.cancel();
         assert!(cancel_result.is_ok());
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_idle_cancel_does_not_cancel_the_next_query() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.cancel_active()?;
+        connection.cancel_handle().cancel()?;
+
+        let result = connection.execute(&QueryRequest::new("SELECT pg_sleep(0.5)"));
+        assert!(
+            result.is_ok(),
+            "an idle cancel must not reach the next statement: {result:?}"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_cancel_active_cancels_a_running_query() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let connection = &*connection;
+
+        let query_result = std::thread::scope(|scope| {
+            let running_query =
+                scope.spawn(|| connection.execute(&QueryRequest::new("SELECT pg_sleep(10)")));
+
+            std::thread::sleep(Duration::from_millis(300));
+            connection.cancel_active()?;
+
+            Ok::<_, DbError>(running_query.join().expect("query thread panicked"))
+        })?;
+
+        assert!(
+            matches!(query_result, Err(DbError::Cancelled)),
+            "the running query must be cancelled: {query_result:?}"
+        );
 
         Ok(())
     })
@@ -1389,6 +1547,82 @@ fn postgres_query_safety_limit_below_exact_and_over_retains_and_flags() -> Resul
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_stops_reading_at_the_limit() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        // Row 1000 divides by zero, so the query only succeeds when the
+        // server stops producing rows before it.
+        let sql = "SELECT 1 / (g - 1000) AS v FROM generate_series(1, 2000) g";
+        let limited = connection.execute(&QueryRequest::new(sql).with_limit(10))?;
+        assert_eq!(limited.rows.len(), 10);
+        assert!(limited.rows_truncated());
+
+        connection
+            .execute(&QueryRequest::new(sql).with_limit(5000))
+            .expect_err("reading past row 1000 must fail");
+        connection.execute(&QueryRequest::new("SELECT 1").with_limit(10))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_call_of_a_committing_procedure_runs() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_call_log (id INTEGER)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE PROCEDURE safety_commit(OUT inserted INTEGER) LANGUAGE plpgsql AS $$ \
+             BEGIN INSERT INTO safety_call_log VALUES (1); COMMIT; inserted := 1; END $$",
+        ))?;
+
+        let called =
+            connection.execute(&QueryRequest::new("CALL safety_commit(NULL)").with_limit(10))?;
+        assert_eq!(called.rows.len(), 1);
+        assert!(!called.rows_truncated());
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_call_log"))?
+                .rows[0][0],
+            Value::Int(1)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_leaves_an_open_transaction_open() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_open_block (id INTEGER PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO safety_open_block SELECT g FROM generate_series(1, 5) g",
+        ))?;
+
+        let inside = connection
+            .execute(&QueryRequest::new("SELECT id FROM safety_open_block").with_limit(2))?;
+        assert_eq!(inside.rows.len(), 2);
+        assert!(inside.rows_truncated());
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_open_block"))?
+                .rows[0][0],
+            Value::Int(0)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn postgres_query_safety_zero_limit_retains_nothing_only_when_rows_exist() -> Result<(), DbError> {
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;
@@ -1432,29 +1666,6 @@ fn postgres_query_safety_returning_above_cap_completes_effects_and_truncates() -
                 ))?
                 .rows[0][0],
             Value::Int(5)
-        );
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires Docker daemon"]
-fn postgres_query_safety_late_stream_error_propagates_after_cap_reached() -> Result<(), DbError> {
-    containers::with_postgres_url(|uri| {
-        let (connection, _) = connect_postgres(uri)?;
-        let result = connection.execute(
-            &QueryRequest::new("SELECT g, 1 / (g - 3) FROM generate_series(1, 10) g").with_limit(2),
-        );
-        assert!(
-            matches!(result, Err(DbError::QueryFailed(_))),
-            "late division error must propagate: {result:?}"
-        );
-        assert_eq!(
-            connection
-                .execute(&QueryRequest::new("SELECT 1"))?
-                .rows
-                .len(),
-            1
         );
         Ok(())
     })
@@ -2364,6 +2575,224 @@ fn postgres_query_safety_invalid_single_statement_with_trailing_nested_comment_r
             matches!(result, Err(DbError::SyntaxError(_))),
             "invalid single statement must report PostgreSQL query failure: {result:?}"
         );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Read-only enforcement
+// ---------------------------------------------------------------------------
+
+fn read_only_request(sql: &str) -> QueryRequest {
+    QueryRequest::new(sql).with_read_only(ReadOnlyEnforcement::Required)
+}
+
+fn read_only_fixture(connection: &dyn dbflux_core::Connection) -> Result<(), DbError> {
+    connection.execute(&QueryRequest::new(
+        "DROP TABLE IF EXISTS read_only_items; \
+         CREATE TABLE read_only_items (id INT PRIMARY KEY); \
+         INSERT INTO read_only_items VALUES (1);",
+    ))?;
+    Ok(())
+}
+
+fn read_only_item_count(connection: &dyn dbflux_core::Connection) -> Result<String, DbError> {
+    let result = connection.execute(&QueryRequest::new(
+        "SELECT COUNT(*)::text FROM read_only_items",
+    ))?;
+    match result.rows.first().and_then(|row| row.first()) {
+        Some(Value::Text(count)) => Ok(count.clone()),
+        other => panic!("expected a text count, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_read_only_requests_cannot_write() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        read_only_fixture(connection.as_ref())?;
+
+        for sql in [
+            "WITH doomed AS (DELETE FROM read_only_items RETURNING *) SELECT * FROM doomed",
+            "EXPLAIN ANALYZE DELETE FROM read_only_items",
+            "SET TRANSACTION READ WRITE; DELETE FROM read_only_items",
+            "SELECT 1; DELETE FROM read_only_items",
+        ] {
+            let error = connection
+                .execute(&read_only_request(sql))
+                .expect_err("a write must fail under read-only enforcement");
+            assert_eq!(
+                error_code(&error),
+                if sql.starts_with("SET TRANSACTION") {
+                    Some("25001")
+                } else {
+                    Some("25006")
+                },
+                "{sql}: {error}"
+            );
+            assert_eq!(read_only_item_count(connection.as_ref())?, "1", "{sql}");
+        }
+
+        let bounded = connection
+            .execute(&read_only_request("SELECT 1; DELETE FROM read_only_items").with_limit(10));
+        assert!(bounded.is_err(), "bounded write must fail, got {bounded:?}");
+        assert_eq!(read_only_item_count(connection.as_ref())?, "1");
+
+        let refused = connection.execute(&read_only_request("COMMIT; DELETE FROM read_only_items"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+        assert_eq!(read_only_item_count(connection.as_ref())?, "1");
+
+        let read = connection.execute(&read_only_request(
+            "SELECT id FROM read_only_items; SELECT 2 AS two",
+        ))?;
+        assert_eq!(read.rows.len(), 1);
+        assert_eq!(read.additional_results.len(), 1);
+
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+        assert_eq!(read_only_item_count(connection.as_ref())?, "0");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_read_only_requests_are_refused_inside_an_open_transaction() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        read_only_fixture(connection.as_ref())?;
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(&QueryRequest::new("DELETE FROM read_only_items"))?;
+
+        let refused = connection.execute(&read_only_request("SELECT 1"));
+        assert!(
+            matches!(refused, Err(DbError::NotSupported(_))),
+            "{refused:?}"
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(read_only_item_count(connection.as_ref())?, "1");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_server_notices_travel_with_the_result() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let commit = connection.execute(&QueryRequest::new("COMMIT"))?;
+        let notices = commit.server_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].severity, "WARNING");
+        assert!(
+            notices[0].message.contains("no transaction in progress"),
+            "{notices:?}"
+        );
+
+        let raise = "DO $$ BEGIN RAISE NOTICE 'hello'; END $$";
+        for request in [
+            QueryRequest::new(raise),
+            QueryRequest::new(raise).with_limit(10),
+        ] {
+            let notices = connection.execute(&request)?.server_notices();
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert_eq!(notices[0].severity, "NOTICE");
+            assert_eq!(notices[0].message, "hello");
+        }
+
+        let batch = connection.execute(&QueryRequest::new(format!("SELECT 1; {raise}")))?;
+        let notices = batch.server_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].message, "hello");
+
+        let bounded_batch =
+            connection.execute(&QueryRequest::new(format!("SELECT 1; {raise}")).with_limit(10))?;
+        assert_eq!(bounded_batch.server_notices().len(), 1);
+
+        let plain = connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert!(plain.server_notices().is_empty());
+        assert!(
+            connection
+                .execute(&QueryRequest::new("SELECT 1").with_limit(10))?
+                .server_notices()
+                .is_empty()
+        );
+
+        // The driver's own block handling around a user transaction raises
+        // no notice of its own.
+        connection.execute(&QueryRequest::new("CREATE TEMP TABLE device (id int)"))?;
+        let script =
+            "BEGIN;\nUPDATE device SET id = 1 WHERE id = 0;\nSELECT id FROM device;\nCOMMIT;";
+        for request in [
+            QueryRequest::new(script),
+            QueryRequest::new(script).with_limit(10),
+        ] {
+            let notices = connection.execute(&request)?.server_notices();
+            assert!(notices.is_empty(), "{notices:?}");
+        }
+
+        // A user `BEGIN` after earlier statements of a row-limited batch joins
+        // the block the driver opened for them, as PostgreSQL's implicit block
+        // does for the same script sent at once: no driver-made warning.
+        for script in [
+            "SELECT 1; BEGIN; SELECT 2; COMMIT",
+            "SELECT 1; START TRANSACTION; SELECT 2; COMMIT",
+        ] {
+            let notices = connection
+                .execute(&QueryRequest::new(script).with_limit(10))?
+                .server_notices();
+            assert!(notices.is_empty(), "{script}: {notices:?}");
+        }
+
+        // The adopted `BEGIN` reports what the same script sent at once does.
+        let limited = connection
+            .execute(&QueryRequest::new("SELECT 1; BEGIN; SELECT 2; COMMIT").with_limit(10))?;
+        let unlimited =
+            connection.execute(&QueryRequest::new("SELECT 1; BEGIN; SELECT 2; COMMIT"))?;
+        assert_eq!(limited.additional_results[0].affected_rows, Some(0));
+        assert_eq!(
+            limited.additional_results[0].affected_rows,
+            unlimited.additional_results[0].affected_rows
+        );
+
+        // The block the user `BEGIN` adopted stays open until the user's
+        // `COMMIT`: rows written before it commit with it.
+        connection.execute(
+            &QueryRequest::new(
+                "INSERT INTO device VALUES (7); BEGIN; INSERT INTO device VALUES (8); ROLLBACK",
+            )
+            .with_limit(10),
+        )?;
+        let kept = connection.execute(&QueryRequest::new(
+            "SELECT count(*) FROM device WHERE id IN (7, 8)",
+        ))?;
+        assert_eq!(
+            kept.rows[0][0],
+            Value::Int(0),
+            "the ROLLBACK undid both rows"
+        );
+
+        // A notice flood keeps a bounded number of notices.
+        let flood = connection.execute(&QueryRequest::new(
+            "DO $$ BEGIN FOR i IN 1..500 LOOP RAISE NOTICE 'n%', i; END LOOP; END $$",
+        ))?;
+        let notices = flood.server_notices();
+        assert_eq!(notices.len(), 101, "100 kept plus one that counts the rest");
+        assert_eq!(notices[0].message, "n1");
+        assert!(notices[100].message.contains("400"), "{:?}", notices[100]);
+
+        connection.schema()?;
+        let after_refresh = connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert!(after_refresh.server_notices().is_empty());
+
         Ok(())
     })
 }

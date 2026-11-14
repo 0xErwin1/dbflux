@@ -33,7 +33,9 @@
 //! - `DBFLUX_TEST_REDSHIFT_SUPER_TABLE` / `DBFLUX_TEST_REDSHIFT_SUPER_COLUMN` — a table/column of type SUPER or VARBYTE
 
 use dbflux_core::secrecy::SecretString;
-use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, DbError, QueryRequest};
+use dbflux_core::{
+    ConnectionProfile, DbConfig, DbDriver, DbError, QueryRequest, ReadOnlyEnforcement,
+};
 use dbflux_driver_redshift::RedshiftDriver;
 use dbflux_test_support::containers::{retry_db_operation, with_trust_postgres_port};
 use std::time::Duration;
@@ -65,15 +67,31 @@ fn redshift_query_safety_refuses_protected_requests_before_prepare() -> Result<(
             Ok(connection)
         })?;
 
-        for limit in [Some(0), Some(1)] {
-            let mut request = QueryRequest::new("SELECT 42");
-            request.limit = limit;
-            let result = connection.execute(&request);
-            assert!(
-                matches!(result, Err(DbError::NotSupported(_))),
-                "limit {limit:?}: expected early NotSupported, got {result:?}"
-            );
-        }
+        let series = "SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3";
+
+        let mut capped = QueryRequest::new(series);
+        capped.limit = Some(2);
+        let capped_result = connection.execute(&capped)?;
+        assert_eq!(capped_result.rows.len(), 2);
+        assert!(capped_result.rows_truncated());
+
+        let mut exact = QueryRequest::new(series);
+        exact.limit = Some(3);
+        let exact_result = connection.execute(&exact)?;
+        assert_eq!(exact_result.rows.len(), 3);
+        assert!(!exact_result.rows_truncated());
+
+        let mut zero = QueryRequest::new("SELECT 42");
+        zero.limit = Some(0);
+        let zero_result = connection.execute(&zero)?;
+        assert!(zero_result.rows.is_empty());
+        assert!(zero_result.rows_truncated());
+
+        let mut user_limited = QueryRequest::new(format!("SELECT * FROM ({series}) AS s LIMIT 1"));
+        user_limited.limit = Some(5);
+        let user_limited_result = connection.execute(&user_limited)?;
+        assert_eq!(user_limited_result.rows.len(), 1);
+        assert!(!user_limited_result.rows_truncated());
 
         let mut timed = QueryRequest::new("SELECT 42");
         timed.statement_timeout = Some(Duration::from_secs(1));
@@ -82,10 +100,10 @@ fn redshift_query_safety_refuses_protected_requests_before_prepare() -> Result<(
             Err(DbError::NotSupported(_))
         ));
 
-        let mut invalid = QueryRequest::new("SELECT FROM");
-        invalid.limit = Some(1);
+        let mut write = QueryRequest::new("DELETE FROM missing_table");
+        write.limit = Some(1);
         assert!(matches!(
-            connection.execute(&invalid),
+            connection.execute(&write),
             Err(DbError::NotSupported(_))
         ));
 
@@ -511,4 +529,94 @@ fn redshift_live_probe_write_privilege_stays_unknown() {
         dbflux_core::WritePrivilege::Unknown,
         "RedshiftConnection must keep the default WritePrivilege::Unknown probe"
     );
+}
+
+fn read_only_request(sql: &str) -> QueryRequest {
+    QueryRequest::new(sql).with_read_only(ReadOnlyEnforcement::Required)
+}
+
+fn single_text(result: &dbflux_core::QueryResult) -> String {
+    match result.rows.first().and_then(|row| row.first()) {
+        Some(dbflux_core::Value::Text(text)) => text.clone(),
+        other => panic!("expected one text value, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires a disposable PostgreSQL 16 container (wire-compatible read-only transaction)"]
+fn redshift_read_only_requests_run_in_a_read_only_transaction() -> Result<(), DbError> {
+    with_trust_postgres_port(|port| {
+        let profile = ConnectionProfile::new(
+            "redshift-protocol-compatibility",
+            DbConfig::Redshift {
+                use_uri: false,
+                uri: None,
+                host: "127.0.0.1".to_string(),
+                port,
+                user: "testuser".to_string(),
+                database: "testdb".to_string(),
+                ssl_mode: Some("disable".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+        let connection = retry_db_operation(Duration::from_secs(30), || -> Result<_, DbError> {
+            let connection = RedshiftDriver::new().connect_with_secrets(&profile, None, None)?;
+            connection.ping()?;
+            Ok(connection)
+        })?;
+
+        let inside = connection.execute(&read_only_request(
+            "SELECT current_setting('transaction_read_only')",
+        ))?;
+        assert_eq!(single_text(&inside), "on");
+
+        let after = connection.execute(&QueryRequest::new(
+            "SELECT current_setting('transaction_read_only')",
+        ))?;
+        assert_eq!(single_text(&after), "off", "the read-only block was closed");
+
+        for sql in [
+            "WITH doomed AS (DELETE FROM items RETURNING *) SELECT * FROM doomed",
+            "EXPLAIN ANALYZE DELETE FROM items",
+        ] {
+            let outcome = connection.execute(&read_only_request(sql));
+            assert!(
+                matches!(outcome, Err(DbError::NotSupported(_))),
+                "{sql}: expected the local read-only refusal, got {outcome:?}"
+            );
+        }
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real Amazon Redshift cluster; see module docs for required env vars"]
+fn redshift_live_read_only_request_runs_and_writes_are_refused() -> Result<(), DbError> {
+    let env = LiveRedshiftEnv::from_env();
+    let profile = env.profile_with_ssl_mode("require");
+    let connection = RedshiftDriver::new().connect_with_secrets(
+        &profile,
+        Some(&SecretString::from(env.password.clone())),
+        None,
+    )?;
+
+    let result = connection.execute(&read_only_request("SELECT 1"))?;
+    assert_eq!(result.rows.len(), 1);
+
+    for sql in [
+        "WITH doomed AS (DELETE FROM items RETURNING *) SELECT * FROM doomed",
+        "EXPLAIN ANALYZE DELETE FROM items",
+    ] {
+        assert!(
+            connection.execute(&read_only_request(sql)).is_err(),
+            "{sql}"
+        );
+    }
+
+    Ok(())
 }

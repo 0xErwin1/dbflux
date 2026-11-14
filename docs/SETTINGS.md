@@ -28,13 +28,63 @@ Integration](MCP_AI_INTEGRATION.md).
 
 ## General
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/settings/general-dark.webp">
+  <img src="images/settings/general-light.webp" alt="The Settings window on the General section, showing the appearance, editor and startup settings">
+</picture>
+
+Save applies the changes at once and writes them to the DBFlux database
+(`dbflux.db`, or `dbflux-nightly.db` on a Nightly build without
+**Use the stable database**) in the background, so a slow or busy database never freezes the window. The success
+message appears once they are on disk. If the write fails, an error says so and
+the changes stay applied until DBFlux quits; save again to keep them.
+
 ### Appearance
 
 | Setting | Options | Default |
 |---------|---------|---------|
-| **Theme** | Dark, Mirage, Light | Dark |
-| **Style** | Default, Compact | Default |
+| **Theme** | Follow system, Dark, Light | Dark |
+| **Density** | Default, Compact | Default |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 | **Language** | System, then every language with a shipped translation catalog | System |
+| **Interface font** | Default (Archivo), or any installed font | Default |
+| **Interface font size** | 8 to 32 px, decimals allowed | 13 |
+| **Editor font** | Default (JetBrains Mono), or any installed font | Default |
+| **Editor font size** | 8 to 32 px, decimals allowed | 13 |
+| **Data grid font** | Same as editor, or any installed font | Same as editor |
+| **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
+
+**Show scrollbars** decides when the scrollbars of every window appear: only
+while the content scrolls, while the pointer is over a scrollable area, or all
+the time. It applies to every open window as soon as you save.
+
+The horizontal scrollbar of the data grid is the exception: it is always
+shown, because it is driven by a separate scroller that never receives wheel
+events and would otherwise stay hidden.
+
+Font changes apply to every open window as soon as you save; no restart is
+needed. The editor font also sets the monospace text in the interface
+(metadata, key hints, console), and a custom interface font also replaces the
+expanded display face of section labels. What each size controls:
+
+- **Interface font size** scales all interface text, rows, controls and icons.
+- **Editor font size** sets the code editor text and line height, and the
+  console text.
+- **Data grid font size** sets cell text, row and header height, and the
+  automatic column widths. Columns you resized by hand keep their width.
+
+`Ctrl+=` / `Cmd+=` and `Ctrl+-` / `Cmd+-` change all three sizes at once by
+1 px each, keeping their relative sizes, and `Ctrl+0` / `Cmd+0` restores the
+defaults. They work in the workspace window, are also in the command palette,
+and can be rebound in [Keybindings](#keybindings). A size
+already at 8 or 32 px stays there while the others keep moving. The new sizes
+are saved like any other setting, so these fields show them and they survive a
+restart.
+
+The font lists have a search field, since a system can have hundreds of fonts.
+A saved font that is no longer installed stays selected, marked
+"(not installed)", and DBFlux draws with the default until it is installed
+again; the data grid falls back to the editor font.
 
 The language list is derived from DBFlux's shipped translation catalogs: English
 appears first, followed by the remaining languages in deterministic order and
@@ -51,13 +101,21 @@ converted crate by crate and stays in English for now.
 |---------|---------|--------------|
 | **Vim mode in editors** | Off | Modal editing in every multi-line editor (code editor, object editor, JSON dialogs, value panel, collection JSON view and pipeline; motions only in read-only viewers): Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See [Vim mode](KEYBOARD.md#vim-mode-opt-in) in the keyboard reference. |
 | **Leader key** | Space | The key that starts Vim's leader sequences in Normal and Visual modes, such as the leader then `a` for the pane actions: Space, comma or backslash. Applies to open editors when you save, and leader bindings you changed in **Keybindings** follow it. |
+| **Add an alias to table completions** | On | Accepting a table, view or CTE from SQL completion after `FROM` or `JOIN` inserts it with an alias built from the initials of its name: `access_control` becomes `access_control ac`, `public.order_items` becomes `public.order_items oi`. An alias already used in the statement, a reserved word or the name of a known table gets a number (`ac2`). No alias is added when one already follows the cursor, or after `INSERT INTO`. The target of `UPDATE` and `DELETE FROM` is aliased only on databases that accept it there: PostgreSQL and DuckDB, and SQLite and Turso with `AS`. |
+| **Write the alias with AS** | Off | Inserts `access_control AS ac` instead of `access_control ac`. |
+
+### Data grid
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
 
 ### Startup & session
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
 | **Restore session on startup** | On | Reopen the tabs you had open last time. |
-| **Reopen last connections** | Off | Reconnect to the connections that were active. |
+| **Reopen last connections** | Off | Reconnect at startup to the connections that were open when you last quit, and to the ones your restored tabs use. Works whether or not the session is restored. |
 | **Default focus** | Sidebar | Where focus lands on launch (Sidebar or the last tab). |
 | **Max history entries** | 1000 | Query-history cap (minimum 10). |
 | **Auto-save interval (ms)** | 2000 | How often open editors auto-save (minimum 500). A script backed by a file is written to that file; unsaved untitled content is kept in the sessions folder. |
@@ -68,9 +126,26 @@ converted crate by crate and stays in English for now.
 |---------|---------|--------------|
 | **Default refresh policy** | Manual | Manual or Interval auto-refresh for data views. |
 | **Default refresh interval (seconds)** | 5 | Interval used when the policy is Interval (minimum 1). |
-| **Max concurrent background tasks** | 8 | Cap on simultaneous background work (minimum 1). |
+| **Max concurrent background tasks** | 8 | Cap on connection and schema tasks (minimum 1). Running connects, disconnects, connection hooks, database switches, schema loads, refreshes and drops, and key-value scans count toward it. At the cap, a new connect, database switch, schema or table-detail load, or key-value page is refused with a notice until a running task finishes; it is not queued. Queries, data-grid loads, exports, dashboards and mutations neither count nor are limited. |
 | **Pause auto-refresh on error** | On | Stop auto-refreshing a view after it errors. |
 | **Auto-refresh only if tab is visible** | Off | Skip refreshing tabs you're not looking at. |
+
+### Notifications
+
+| Setting | Options | Default |
+|---------|---------|---------|
+| **Toast timeout** | 4 seconds, 8 seconds, 15 seconds, Keep until dismissed | 8 seconds |
+
+**Toast timeout** sets how long a toast stays before it closes on its own.
+Success and Info toasts close after it, and Warning toasts after twice it. An
+Error toast, and a toast with an action button or a progress bar, stays until
+you dismiss it. **Keep until dismissed** turns automatic closing off for every
+toast. Pointing at a toast holds its timer, which resumes when the pointer
+leaves.
+
+Toasts stack in the top-right corner of the document area. At most four are
+shown at once; older ones fold into an *N more* entry that expands them or
+dismisses them together.
 
 ### Execution safety (dangerous-query confirmation)
 
@@ -89,18 +164,32 @@ apply to SQL `DELETE`/`DROP`/`TRUNCATE`, MongoDB `deleteMany`/`drop`, Redis
 query editor returns. It is a separate execution-safety setting, not one of the
 three dangerous-query controls above. It accepts any whole number from 1 upward
 and cannot be set to zero or turned off: saving any other value shows an error
-and keeps the previous limit. DBFlux sends the limit to the driver with every
-editor query instead of adding a `LIMIT` to the query text, and shows a warning
-when a result left rows out. In a script with several statements the limit is
-one budget shared by all of its result sets, and every statement still runs.
+and keeps the previous limit. DBFlux sends the limit to the driver instead of
+adding a `LIMIT` to the query text. When a result left
+rows out, its footer reads "First 10,000 rows loaded" instead of the row count.
+For a single statement that only reads, the footer then offers **Count rows**,
+which runs the statement inside `SELECT COUNT(*)` without fetching its rows and
+shows "10,000/52,310 rows loaded" (SQL connections only), and **Load all
+rows**, which runs the statement again without the limit in the same result
+tab. Both are also in the table menu (`m`). In a script with several statements
+the limit is one budget shared by all of its result sets, and every statement
+still runs.
 
-Drivers that cannot enforce a row limit refuse the query before running it
-rather than ignore the cap. Editor queries therefore fail with an "Operation
-not supported" error on MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift,
-CloudWatch, external RPC drivers, and DynamoDB writes (PartiQL
-`INSERT`/`UPDATE`/`DELETE` and put, update, and delete commands). Changing the
-limit does not change this. The limit adds no timeout and does not apply to
-Lua, Python, or Bash scripts, connection hooks, or metrics.
+The limit reaches only a driver whose `execute` enforces it: PostgreSQL,
+MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
+ClickHouse, Redshift, CloudWatch and DynamoDB. Some of them still read the
+whole response before cutting it, and Redis bounds only replies shown as a
+table; each driver's page lists its limits. External RPC drivers receive the
+limit when DBFlux and the driver both speak driver RPC 1.6 or newer and the
+driver declares `REQUEST_ROW_LIMIT`; any other external driver gets no limit at
+all and the query runs uncapped. A result that carried
+no limit shows its full row count, because
+nothing was left out, and its footer offers neither Count rows nor Load all
+rows; put a `LIMIT` or a `.limit()` in the statement when the result may be
+large. The limit adds no timeout and does not apply to Lua, Python, or Bash
+scripts, connection hooks, or metrics. The [console](CONSOLE.md) sends the same
+limit to drivers that can enforce it and runs its commands without one on the
+others.
 
 ### Storage (Nightly builds only)
 
@@ -206,6 +295,11 @@ context filter. A context that inherits from another (the Editor inherits from
 Global) also lists the inherited bindings it does not shadow. The full default
 keymap is documented in [Keyboard Reference](KEYBOARD.md).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/settings/keybindings-dark.webp">
+  <img src="images/settings/keybindings-light.webp" alt="The Keybindings section of the Settings window, listing the global shortcuts with a pencil to change each one">
+</picture>
+
 **Changing a shortcut.** Press the pencil on a binding, or select it and press
 `Enter`, then press the new keys. A shortcut can be one key with its modifiers
 or a sequence of up to four, such as `g g` or `Ctrl+K Ctrl+S`: press them one
@@ -233,7 +327,7 @@ The names are the context names shown by the context filter (`Global`,
 `Sidebar`, `Editor`, `Results`, `DataTable`, `Input`, `Modal`, …), the window
 names `Workspace`, `SettingsWindow` and `ConnectionManagerWindow`, and the
 panel names `ActivityRail`, `CommandSearch`, `SidebarPanel`, `CodeEditor`,
-`ResultPanel`, `RowInspector`, `KeyValueConsole`, `DocumentQueryBar`,
+`ResultPanel`, `RowInspector`, `KeyValueConsole`, `NativeConsole`, `DocumentQueryBar`,
 `DocumentSchema`, `DocumentAggregate`, `DashboardsPanel` and `SettingsSection`. The values are
 `vim_mode` (`normal`, `insert`, `replace`, `visual`, `visual_line`,
 `visual_block`, present only with Vim editing on), `language` (`sql`, `mongo`,

@@ -227,6 +227,10 @@ mod tests {
             }
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: a poisoned saved-trees mutex means an earlier test step already panicked; failing loudly is the poison contract"
+        )]
         fn save(&self, tree: &ConnectionTree) -> Result<(), DbError> {
             self.saved_trees
                 .lock()
@@ -272,6 +276,10 @@ mod tests {
             })
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: a poisoned saved-trees mutex means an earlier test step already panicked; failing loudly is the poison contract"
+        )]
         fn save(&self, tree: &ConnectionTree) -> Result<(), DbError> {
             self.saved_trees
                 .lock()

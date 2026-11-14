@@ -1225,6 +1225,11 @@ impl ImportConnectionsPanel {
                 .ghost()
                 .icon(eye_icon)
                 .icon_only()
+                .aria_label(if self.show_passphrase {
+                    dbflux_i18n::t!("connection_manager.import.field.hide_passphrase")
+                } else {
+                    dbflux_i18n::t!("connection_manager.import.field.show_passphrase")
+                })
                 .on_click({
                     let entity = cx.entity().clone();
                     move |_event, _window, cx| {
@@ -2156,6 +2161,8 @@ mod tests {
         "connection_manager.import.field.bundle_file",
         "connection_manager.import.field.bundle_encrypted",
         "connection_manager.import.field.passphrase",
+        "connection_manager.import.field.show_passphrase",
+        "connection_manager.import.field.hide_passphrase",
         "connection_manager.import.hint.no_native_picker",
         "connection_manager.import.hint.external_refs",
         "connection_manager.import.hint.external_refs_body",

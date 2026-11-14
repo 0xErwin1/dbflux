@@ -1,3 +1,8 @@
+pub mod column_facts;
+pub mod column_profile_view;
+pub mod column_projection;
+pub mod partition_list_view;
+pub mod read_estimate_bar;
 // Component modules relocated from dbflux_ui.
 pub mod data_table;
 pub mod document_tree;
@@ -6,7 +11,9 @@ pub mod form_navigation;
 pub mod form_renderer;
 pub mod json_editor_view;
 pub mod multi_select;
-pub mod tree_nav;
+// Moved to `bolt`; re-exported as the module at its old path so every
+// `components::tree_nav` path keeps compiling.
+pub use bolt::components::tree_nav;
 pub mod value_format;
 pub mod value_source_selector;
 

@@ -4,20 +4,20 @@ use uuid::Uuid;
 use super::ParseSchemaNodeIdError;
 use super::SchemaNodeId;
 use super::{
-    P_BASE_TYPE, P_BUCKET, P_BUCKETS_FOLDER, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER,
-    P_COLL_INDEX, P_COLLECTION, P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE,
-    P_COLLECTIONS_FOLDER, P_COLUMN, P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT,
-    P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE, P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE,
-    P_DATABASES_FOLDER, P_DB_IDX_FOLDER, P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER,
-    P_EMPTY_DATABASES_FOLDER, P_ENUM_VALUE, P_FK, P_FK_FOLDER, P_INDEX, P_INDEXES_FOLDER,
-    P_INST_INSPECTOR_LEAF, P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF, P_INST_METRICS_FOLDER,
-    P_INST_OVERVIEW_LEAF, P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER, P_METRICS_FOLDER,
-    P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM, P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE,
-    P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA,
-    P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER,
-    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_STORAGE_HINT_ITEM,
-    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
-    P_VIEWS_FOLDER,
+    P_BASE_TYPE, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER, P_COLL_INDEX, P_COLLECTION,
+    P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE, P_COLLECTIONS_FOLDER, P_COLUMN,
+    P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT, P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE,
+    P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE, P_DATABASES_FOLDER, P_DB_IDX_FOLDER,
+    P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER, P_EMPTY_DATABASES_FOLDER, P_ENUM_VALUE, P_FK,
+    P_FK_FOLDER, P_INDEX, P_INDEXES_FOLDER, P_INST_FOLDER, P_INST_INSPECTOR_LEAF,
+    P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF, P_INST_METRICS_FOLDER, P_INST_OVERVIEW_LEAF,
+    P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER, P_METRICS_FOLDER, P_PLACEHOLDER, P_PROFILE,
+    P_REMOTE_DASHBOARD_ITEM, P_REMOTE_DASHBOARDS_FOLDER, P_ROOT_SECTION, P_ROOT_SECTION_ITEM,
+    P_ROOT_SECTION_MORE, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM,
+    P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING,
+    P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER,
+    P_SCRIPTS_ROOT, P_SECRET_PATH, P_SECRET_STORE, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER,
+    P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
 };
 
 impl FromStr for SchemaNodeId {
@@ -29,11 +29,9 @@ impl FromStr for SchemaNodeId {
         };
 
         let parts: Vec<&str> = s.splitn(6, '|').collect();
-        if parts.is_empty() {
+        let Some((&prefix, rest)) = parts.split_first() else {
             return Err(err());
-        }
-
-        let prefix = parts[0];
+        };
 
         // Handle single-token variants first
         if prefix == P_SCRIPTS_FOLDER && parts.len() == 1 {
@@ -42,7 +40,7 @@ impl FromStr for SchemaNodeId {
 
         // ScriptsFolder with path — path may contain pipes, rejoin everything after prefix
         if prefix == P_SCRIPTS_FOLDER && parts.len() >= 2 {
-            let path = parts[1..].join("|");
+            let path = rest.join("|");
             return Ok(Self::ScriptsFolder { path: Some(path) });
         }
 
@@ -92,6 +90,8 @@ impl FromStr for SchemaNodeId {
 
             P_SCRIPT_FILE => parse_script_file(&parts, err),
 
+            P_SCRIPTS_ROOT => parse_scripts_root(&parts, err),
+
             P_ROUTINES_FOLDER | P_ROUTINES_LOADING | P_ROUTINE => {
                 parse_routine_variants(prefix, &parts, err)
             }
@@ -112,8 +112,13 @@ impl FromStr for SchemaNodeId {
             | P_INST_INSPECTORS_FOLDER
             | P_INST_INSPECTOR_LEAF
             | P_INST_OVERVIEW_LEAF
-            | P_BUCKET
-            | P_BUCKETS_FOLDER => parse_instance_variants(prefix, &parts, err),
+            | P_INST_FOLDER => parse_instance_variants(prefix, &parts, err),
+
+            P_ROOT_SECTION | P_ROOT_SECTION_ITEM | P_ROOT_SECTION_MORE => {
+                parse_root_section_variants(prefix, &parts, err)
+            }
+
+            P_SECRET_STORE | P_SECRET_PATH => parse_secret_store_variants(prefix, &parts, err),
 
             _ => Err(err()),
         }
@@ -666,11 +671,23 @@ fn parse_script_file(
     err: impl Fn() -> ParseSchemaNodeIdError,
 ) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
     // Path may contain pipe characters, so rejoin everything after the prefix
-    let path = parts[1..].join("|");
+    let path = parts.get(1..).unwrap_or_default().join("|");
     if path.is_empty() {
         return Err(err());
     }
     Ok(SchemaNodeId::ScriptFile { path })
+}
+
+fn parse_scripts_root(
+    parts: &[&str],
+    err: impl Fn() -> ParseSchemaNodeIdError,
+) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
+    // Path may contain pipe characters, so rejoin everything after the prefix
+    let path = parts.get(1..).unwrap_or_default().join("|");
+    if path.is_empty() {
+        return Err(err());
+    }
+    Ok(SchemaNodeId::ScriptsRoot { path })
 }
 
 fn parse_routine_variants(
@@ -850,15 +867,82 @@ fn parse_instance_variants(
             Ok(SchemaNodeId::InstanceOverviewLeaf { profile_id })
         }
 
-        P_BUCKET => {
+        P_INST_FOLDER => {
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
-            let name = parts.get(2).ok_or_else(err)?.to_string();
-            Ok(SchemaNodeId::Bucket { profile_id, name })
+            Ok(SchemaNodeId::InstanceFolder { profile_id })
         }
 
-        P_BUCKETS_FOLDER => {
-            let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
-            Ok(SchemaNodeId::BucketsFolder { profile_id })
+        _ => Err(err()),
+    }
+}
+
+fn parse_root_section_variants(
+    prefix: &str,
+    parts: &[&str],
+    err: impl Fn() -> ParseSchemaNodeIdError + Copy,
+) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
+    let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+    let section_id = parts.get(2).ok_or_else(err)?.to_string();
+
+    match prefix {
+        P_ROOT_SECTION => Ok(SchemaNodeId::RootSection {
+            profile_id,
+            section_id,
+        }),
+
+        P_ROOT_SECTION_MORE => Ok(SchemaNodeId::RootSectionLoadMore {
+            profile_id,
+            section_id,
+        }),
+
+        P_ROOT_SECTION_ITEM => {
+            // An item id may hold the separator, so everything after the
+            // section id is the item id.
+            let item_id = parts
+                .get(3..)
+                .filter(|rest| !rest.is_empty())
+                .ok_or_else(err)?
+                .join("|");
+
+            Ok(SchemaNodeId::RootSectionItem {
+                profile_id,
+                section_id,
+                item_id,
+            })
+        }
+
+        _ => Err(err()),
+    }
+}
+
+fn parse_secret_store_variants(
+    prefix: &str,
+    parts: &[&str],
+    err: impl Fn() -> ParseSchemaNodeIdError + Copy,
+) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
+    let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+    let store_id = parts.get(2).ok_or_else(err)?.to_string();
+
+    match prefix {
+        P_SECRET_STORE => Ok(SchemaNodeId::SecretStore {
+            profile_id,
+            store_id,
+        }),
+
+        P_SECRET_PATH => {
+            // A path may hold the separator, so everything after the store id
+            // is the path.
+            let path = parts
+                .get(3..)
+                .filter(|rest| !rest.is_empty())
+                .ok_or_else(err)?
+                .join("|");
+
+            Ok(SchemaNodeId::SecretPath {
+                profile_id,
+                store_id,
+                path,
+            })
         }
 
         _ => Err(err()),

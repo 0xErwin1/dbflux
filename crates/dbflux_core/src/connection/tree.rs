@@ -308,16 +308,17 @@ impl ConnectionTree {
                 Some(first_index - SORT_INDEX_GAP)
             }
             Some(after) => {
-                let after_pos = siblings.iter().position(|n| n.id == after)?;
-                let after_index = siblings[after_pos].sort_index;
+                let (after_pos, after_node) = siblings
+                    .iter()
+                    .enumerate()
+                    .find(|(_, node)| node.id == after)?;
+                let after_index = after_node.sort_index;
 
-                if after_pos + 1 < siblings.len() {
+                match siblings.get(after_pos + 1) {
                     // Insert between after_id and the next sibling
-                    let next_index = siblings[after_pos + 1].sort_index;
-                    Some((after_index + next_index) / 2)
-                } else {
+                    Some(next) => Some((after_index + next.sort_index) / 2),
                     // Insert at the end
-                    Some(after_index + SORT_INDEX_GAP)
+                    None => Some(after_index + SORT_INDEX_GAP),
                 }
             }
         }

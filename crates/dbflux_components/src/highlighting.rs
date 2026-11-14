@@ -4,9 +4,11 @@
 //! grammars, but DBFlux only ever opens the editor with the modes
 //! `QueryLanguage::editor_mode()` can return, plus `json` for the document
 //! tree, cell editor, document preview, and dashboard import modals.
-//! Registering those individually with `LanguageRegistry::register` keeps
-//! the release binary from linking grammars nothing in the app requests.
+//! Registering those individually through `bolt::syntax` keeps the release
+//! binary from linking grammars nothing in the app requests.
 
+use bolt::syntax::{Grammar, bundled};
+#[cfg(test)]
 use gpui_component::highlighter::{LanguageConfig, LanguageRegistry};
 
 /// Every language name the code editor is asked to highlight: the modes
@@ -27,79 +29,22 @@ const REGISTERED_LANGUAGES: &[&str] = &[
 /// before any `InputState::code_editor(...)` call — call alongside
 /// `gpui_component::init`.
 pub fn register_languages() {
-    let registry = LanguageRegistry::singleton();
-
-    registry.register(
-        "sql",
-        &LanguageConfig::new(
-            "sql",
-            tree_sitter::Language::new(tree_sitter_sequel::LANGUAGE),
-            vec![],
-            tree_sitter_sequel::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
-        "javascript",
-        &LanguageConfig::new(
-            "javascript",
-            tree_sitter::Language::new(tree_sitter_javascript::LANGUAGE),
-            vec![],
-            tree_sitter_javascript::HIGHLIGHT_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
+    Grammar::new("sql", tree_sitter_sequel::LANGUAGE, sql_highlights_query()).register();
+    Grammar::new(
         "cypher",
-        &LanguageConfig::new(
-            "cypher",
-            tree_sitter::Language::new(tree_sitter_cypher::LANGUAGE),
-            vec![],
-            tree_sitter_cypher::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
+        tree_sitter_cypher::LANGUAGE,
+        tree_sitter_cypher::HIGHLIGHTS_QUERY,
+    )
+    .register();
+    Grammar::new(
         "lua",
-        &LanguageConfig::new(
-            "lua",
-            tree_sitter::Language::new(tree_sitter_lua::LANGUAGE),
-            vec![],
-            tree_sitter_lua::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
-        "python",
-        &LanguageConfig::new(
-            "python",
-            tree_sitter::Language::new(tree_sitter_python::LANGUAGE),
-            vec![],
-            tree_sitter_python::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
-        "bash",
-        &LanguageConfig::new(
-            "bash",
-            tree_sitter::Language::new(tree_sitter_bash::LANGUAGE),
-            vec![],
-            tree_sitter_bash::HIGHLIGHT_QUERY,
-            "",
-            "",
-        ),
-    );
+        tree_sitter_lua::LANGUAGE,
+        tree_sitter_lua::HIGHLIGHTS_QUERY,
+    )
+    .register();
+    for grammar in [bundled::javascript(), bundled::python(), bundled::bash()] {
+        grammar.register();
+    }
 
     // Empty highlight query: parses with the JSON grammar but emits no
     // highlight spans, matching gpui-component's own `Language::Plain`,
@@ -107,16 +52,79 @@ pub fn register_languages() {
     // longer enable. Registered under both names because the object-store
     // text editor's unknown-extension fallback (`object_text::editor_language`)
     // resolves to "text", while `QueryLanguage::editor_mode()` uses "plaintext".
-    let plaintext = LanguageConfig::new(
-        "plaintext",
-        tree_sitter::Language::new(tree_sitter_json::LANGUAGE),
-        vec![],
-        "",
-        "",
-        "",
-    );
-    registry.register("plaintext", &plaintext);
-    registry.register("text", &plaintext);
+    let plaintext = Grammar::new("plaintext", tree_sitter_json::LANGUAGE, "");
+    plaintext.register();
+    plaintext.register_as("text");
+}
+
+/// SQL captures that correct the grammar's own query. They come first
+/// because the first capture of a node wins, and each falls back to an
+/// existing role (`keyword.conditional` to `keyword`).
+const SQL_HIGHLIGHT_FIXES: &str = r#"
+; The grammar's number patterns use Lua `%d`, which a regex never matches,
+; so numbers fell through to the string capture. This covers every numeric
+; form the grammar's `_integer` and `_decimal_number` accept.
+((literal) @number
+  (#match? @number "^[-+]?(0[xX][0-9A-Fa-f_]+|0[oO][0-7_]+|0[bB][01_]+|([0-9][0-9_]*[.]?[0-9_]*|[.][0-9][0-9_]*)([eE][-+]?[0-9][0-9_]*)?)$"))
+; `conditional` has no style, so these had no color.
+[
+  (keyword_case)
+  (keyword_when)
+  (keyword_then)
+  (keyword_else)
+] @keyword.conditional
+; The grammar captures these as `type.qualifier`, which falls back to the
+; type color.
+[
+ (keyword_restrict)
+ (keyword_unbounded)
+ (keyword_unique)
+ (keyword_cascade)
+ (keyword_delayed)
+ (keyword_high_priority)
+ (keyword_low_priority)
+ (keyword_ignore)
+ (keyword_nothing)
+ (keyword_check)
+ (keyword_option)
+ (keyword_local)
+ (keyword_cascaded)
+ (keyword_wait)
+ (keyword_nowait)
+ (keyword_metadata)
+ (keyword_incremental)
+ (keyword_bin_pack)
+ (keyword_noscan)
+ (keyword_stats)
+ (keyword_statistics)
+ (keyword_maxvalue)
+ (keyword_minvalue)
+] @keyword.modifier
+"#;
+
+/// SQL captures finer than the grammar's own query: schemas, columns, table
+/// aliases and column aliases get roles of their own. Each falls back to the
+/// role it had before in a theme without that slot (`variable.alias` to
+/// `variable`).
+const SQL_HIGHLIGHT_ROLES: &str = r#"
+(object_reference schema: (identifier) @namespace)
+(object_reference database: (identifier) @namespace)
+(field (object_reference name: (identifier) @type.alias))
+(relation alias: (identifier) @variable.alias)
+(term alias: (identifier) @variable.column_alias)
+(field name: (identifier) @field)
+; A common table expression is named like a table; its column list
+; (`argument:`) is not the name.
+(cte . (identifier) @type)
+; Bare column lists such as `JOIN … USING (id)` and `INSERT INTO t (id)`.
+(column (identifier) @field)
+"#;
+
+fn sql_highlights_query() -> String {
+    format!(
+        "{SQL_HIGHLIGHT_ROLES}\n{SQL_HIGHLIGHT_FIXES}\n{}",
+        tree_sitter_sequel::HIGHLIGHTS_QUERY
+    )
 }
 
 #[cfg(test)]
@@ -168,5 +176,194 @@ mod tests {
             QueryLanguage::Bash,
             QueryLanguage::Custom("custom".to_string()),
         ]
+    }
+    /// Each grammar registers the same configuration it had before the
+    /// registrations moved onto `bolt::syntax`.
+    #[test]
+    fn registrations_keep_their_grammar_and_queries() {
+        register_languages();
+        let registry = LanguageRegistry::singleton();
+        fn config(
+            name: &str,
+            language: impl Into<bolt::syntax::tree_sitter::Language>,
+            highlights: &str,
+        ) -> LanguageConfig {
+            LanguageConfig::new(
+                name.to_string(),
+                language.into(),
+                vec![],
+                highlights,
+                "",
+                "",
+            )
+        }
+
+        let expected = [
+            (
+                "sql",
+                config("sql", tree_sitter_sequel::LANGUAGE, &sql_highlights_query()),
+            ),
+            (
+                "javascript",
+                config(
+                    "javascript",
+                    tree_sitter_javascript::LANGUAGE,
+                    tree_sitter_javascript::HIGHLIGHT_QUERY,
+                ),
+            ),
+            (
+                "cypher",
+                config(
+                    "cypher",
+                    tree_sitter_cypher::LANGUAGE,
+                    tree_sitter_cypher::HIGHLIGHTS_QUERY,
+                ),
+            ),
+            (
+                "lua",
+                config(
+                    "lua",
+                    tree_sitter_lua::LANGUAGE,
+                    tree_sitter_lua::HIGHLIGHTS_QUERY,
+                ),
+            ),
+            (
+                "python",
+                config(
+                    "python",
+                    tree_sitter_python::LANGUAGE,
+                    tree_sitter_python::HIGHLIGHTS_QUERY,
+                ),
+            ),
+            (
+                "bash",
+                config(
+                    "bash",
+                    tree_sitter_bash::LANGUAGE,
+                    tree_sitter_bash::HIGHLIGHT_QUERY,
+                ),
+            ),
+            (
+                "plaintext",
+                config("plaintext", tree_sitter_json::LANGUAGE, ""),
+            ),
+            ("text", config("plaintext", tree_sitter_json::LANGUAGE, "")),
+        ];
+        for (name, config) in expected {
+            assert_eq!(registry.language(name), Some(config), "{name}");
+        }
+    }
+
+    /// Highlight roles of each token in `source`, by capture name.
+    fn sql_roles(source: &str) -> Vec<(String, String)> {
+        use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
+
+        let names = [
+            "keyword",
+            "function",
+            "type",
+            "type.alias",
+            "namespace",
+            "field",
+            "variable",
+            "variable.alias",
+            "variable.column_alias",
+            "string",
+            "number",
+            "operator",
+            "punctuation.delimiter",
+            "punctuation.bracket",
+            "attribute",
+            "comment",
+        ];
+        let mut syntax = serde_json::Map::new();
+        for (index, name) in names.iter().enumerate() {
+            syntax.insert(
+                name.to_string(),
+                serde_json::json!({ "color": format!("#0000{:02x}", index + 1) }),
+            );
+        }
+        let theme: HighlightTheme = serde_json::from_value(serde_json::json!({
+            "name": "probe",
+            "appearance": "dark",
+            "style": { "syntax": syntax },
+        }))
+        .expect("probe theme");
+
+        register_languages();
+        let rope = gpui_component::Rope::from(source);
+        let mut highlighter = SyntaxHighlighter::new("sql");
+        highlighter.update(None, &rope, None);
+
+        highlighter
+            .styles(&(0..source.len()), &theme)
+            .into_iter()
+            .filter_map(|(range, style)| {
+                let color = style.color?;
+                let index = names.iter().position(|name| {
+                    theme.style.syntax.style(name).and_then(|style| style.color) == Some(color)
+                })?;
+                let text = source[range].trim().to_string();
+                (!text.is_empty()).then(|| (text, names[index].to_string()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sql_numbers_and_keywords_take_their_roles() {
+        let roles = sql_roles(
+            "SELECT 1, 1.5, 1e3, 1_000, 0xFF, 0o77, 0b1010, '7' FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
+             CREATE TABLE u (id integer UNIQUE REFERENCES t ON DELETE CASCADE);",
+        );
+        let role_of = |text: &str| {
+            roles
+                .iter()
+                .find(|(token, _)| token == text)
+                .map(|(_, role)| role.as_str())
+        };
+
+        for number in ["1", "1.5", "1e3", "1_000", "0xFF", "0o77", "0b1010"] {
+            assert_eq!(role_of(number), Some("number"), "{number}");
+        }
+        assert_eq!(role_of("'7'"), Some("string"));
+        for keyword in ["CASE", "WHEN", "THEN", "ELSE", "UNIQUE", "CASCADE"] {
+            assert_eq!(role_of(keyword), Some("keyword"), "{keyword}");
+        }
+    }
+
+    #[test]
+    fn sql_captures_give_each_identifier_its_role() {
+        let roles = sql_roles("SELECT d.id, count(*) AS total FROM raw.driver d WHERE d.n = 1;");
+        let role_of = |text: &str| {
+            roles
+                .iter()
+                .find(|(token, _)| token == text)
+                .map(|(_, role)| role.as_str())
+        };
+
+        assert_eq!(role_of("raw"), Some("namespace"));
+        assert_eq!(role_of("driver"), Some("type"));
+        assert_eq!(role_of("d"), Some("type.alias"));
+        assert_eq!(role_of("id"), Some("field"));
+        assert_eq!(role_of("total"), Some("variable.column_alias"));
+        assert_eq!(role_of("count"), Some("function"));
+
+        let roles = sql_roles(
+            "WITH recent AS (SELECT 1) SELECT * FROM recent r JOIN raw.driver d USING (group_id);",
+        );
+        let role_of = |text: &str| {
+            roles
+                .iter()
+                .find(|(token, _)| token == text)
+                .map(|(_, role)| role.as_str())
+        };
+        assert_eq!(role_of("recent"), Some("type"), "{roles:?}");
+        assert_eq!(role_of("group_id"), Some("field"), "{roles:?}");
+        assert!(
+            roles
+                .iter()
+                .any(|(token, role)| token == "d" && role == "variable.alias"),
+            "the alias declared after the table is a table alias: {roles:?}"
+        );
     }
 }

@@ -162,6 +162,15 @@ impl Workspace {
                 }
 
                 let app_state = self.app_state.clone();
+                #[expect(
+                    clippy::expect_used,
+                    reason = "`from_saved` returns `Err` only for `Collection` \
+                              sources (the `Collection` arm of its `match \
+                              &saved.source` in chart_document/mod.rs), and a \
+                              `Collection` source never reaches this arm: the \
+                              outer `match` above routes it to \
+                              `open_collection_document` and returns"
+                )]
                 let doc = cx.new(|cx| {
                     // from_saved is guaranteed Ok for Query and Metric sources (validated above).
                     crate::ui::document::ChartDocument::from_saved(&chart, app_state, window, cx)
@@ -389,6 +398,17 @@ impl Workspace {
                             ) =>
                             {
                                 let app_state_inner = app_state.clone();
+                                #[expect(
+                                    clippy::expect_used,
+                                    reason = "the match guard above admits the Query, \
+                                              Metric and InstanceMetric sources, \
+                                              and `from_saved` returns `Err` only \
+                                              for the Collection source (the \
+                                              `Collection` arm of its `match \
+                                              &saved.source` in \
+                                              chart_document/mod.rs), so \
+                                              `from_saved` returns `Ok` here"
+                                )]
                                 let panel_entity = cx.new(|cx| {
                                     let mut doc = crate::ui::document::ChartDocument::from_saved(
                                         &saved_chart,
@@ -911,6 +931,15 @@ impl Workspace {
                     );
 
                     let app_state_inner = app_state.clone();
+                    #[expect(
+                        clippy::expect_used,
+                        reason = "`saved_chart` was constructed by \
+                                  `SavedChart::new_metric` just above, so its \
+                                  source is the Metric variant, and `from_saved` \
+                                  returns `Err` only for the Collection source \
+                                  (the `Collection` arm of its `match \
+                                  &saved.source` in chart_document/mod.rs)"
+                    )]
                     let panel_entity = cx.new(|cx| {
                         let mut chart =
                             ChartDocument::from_saved(&saved_chart, app_state_inner, window, cx)
@@ -954,43 +983,6 @@ impl Workspace {
             mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
         self.set_focus(FocusTarget::Document, window, cx);
-    }
-
-    /// Reconnects to profiles referenced by restored session documents.
-    pub(in crate::ui::views::workspace) fn reopen_last_connections(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        let profile_ids: std::collections::HashSet<uuid::Uuid> = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .filter_map(|doc| doc.meta_snapshot(cx).connection_id)
-            .collect();
-
-        if profile_ids.is_empty() {
-            return;
-        }
-
-        let already_connected = self
-            .app_state
-            .read(cx)
-            .connections()
-            .keys()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        let sidebar = self.sidebar.clone();
-
-        for profile_id in profile_ids {
-            if already_connected.contains(&profile_id) {
-                continue;
-            }
-
-            sidebar.update(cx, |sidebar, cx| {
-                sidebar.connect_to_profile(profile_id, cx);
-            });
-        }
     }
 
     // --- Phase P stubs: dashboard and saved-chart workspace actions ---
@@ -1152,7 +1144,7 @@ impl Workspace {
 
         self.modal_delete_dashboard.update(cx, |modal, cx| {
             modal.open(
-                DeleteDashboardRequest {
+                DeleteConfirmRequest::Dashboard {
                     dashboard_id,
                     dashboard_name,
                 },
@@ -1161,7 +1153,7 @@ impl Workspace {
         });
     }
 
-    /// Called when `ModalDeleteDashboardConfirm` emits `Confirmed`.
+    /// Called when the dashboard delete confirmation emits `Confirmed`.
     ///
     /// Closes the open tab first, then deletes the dashboard row and panels,
     /// then triggers a sidebar rebuild.
@@ -1357,7 +1349,7 @@ impl Workspace {
 
         self.modal_delete_saved_chart.update(cx, |modal, cx| {
             modal.open(
-                DeleteSavedChartRequest {
+                DeleteConfirmRequest::SavedChart {
                     chart_id,
                     chart_name,
                     referencing_dashboards,
@@ -1367,7 +1359,7 @@ impl Workspace {
         });
     }
 
-    /// Called when `ModalDeleteSavedChartConfirm` emits `Confirmed`.
+    /// Called when the saved chart delete confirmation emits `Confirmed`.
     pub(in crate::ui::views::workspace) fn on_delete_saved_chart_confirmed(
         &mut self,
         chart_id: uuid::Uuid,
@@ -1493,12 +1485,14 @@ impl Workspace {
         // Connection> is `Send + Sync`, so we can move it into the
         // background_executor closure and call `metric_catalog()` from there.
         if let Some(connection) = connection_for_catalog {
-            let (task_id, _cancel) = self.app_state.update(cx, |state, _| {
-                state.start_task_for_profile(
+            let task_id = self.app_state.update(cx, |state, _| {
+                let (task_id, _) = state.start_task_for_profile(
                     dbflux_core::TaskKind::LoadSchema,
                     dbflux_i18n::t!("charts.status.loading_namespaces"),
                     Some(profile_id),
-                )
+                );
+                state.tasks_mut().mark_uncancellable(task_id);
+                task_id
             });
             let modal = self.modal_add_panel.clone();
             let app_state = self.app_state.clone();
@@ -1562,12 +1556,14 @@ impl Workspace {
             return;
         };
 
-        let (task_id, _cancel) = self.app_state.update(cx, |state, _| {
-            state.start_task_for_profile(
+        let task_id = self.app_state.update(cx, |state, _| {
+            let (task_id, _) = state.start_task_for_profile(
                 dbflux_core::TaskKind::LoadSchema,
                 charts_loading_metrics_label(&ev.namespace),
                 Some(ev.profile_id),
-            )
+            );
+            state.tasks_mut().mark_uncancellable(task_id);
+            task_id
         });
         let app_state = self.app_state.clone();
         let namespace = ev.namespace.clone();
@@ -1736,6 +1732,12 @@ impl Workspace {
                 // never collide with a single-metric create.
                 match &chart.source {
                     SavedChartSource::Metric { series } if series.len() == 1 => {
+                        #[expect(
+                            clippy::indexing_slicing,
+                            reason = "the match guard `series.len() == 1` bounds the \
+                                      index: the slice holds one element, so \
+                                      index 0 is in bounds"
+                        )]
                         let s = &series[0];
                         s.namespace == namespace
                             && s.metric_name == metric_name

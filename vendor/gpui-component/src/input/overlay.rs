@@ -138,6 +138,12 @@ impl OverlayMode for crate::input::EditorMode {
     fn install_action_handler(state: &Entity<InputBaseState<Self>>, cx: &mut App) {
         let id = state.entity_id();
         state.update(cx, move |state, _| {
+            state.set_completion_selection_reader(move |cx| {
+                cx.try_global::<InputOverlayRegistry<Self>>()
+                    .and_then(|registry| registry.hosts.get(&id))
+                    .and_then(|(_, host)| host.lsp.as_ref())
+                    .and_then(|lsp| lsp.completion.read(cx).selected_item(cx))
+            });
             state.set_overlay_action_handler(move |kind, action, window, cx| {
                 let menus = cx
                     .try_global::<InputOverlayRegistry<Self>>()
@@ -304,6 +310,7 @@ impl<M: OverlayMode> InputOverlayHost<M> {
     fn sync(
         &mut self,
         state: &Entity<InputBaseState<M>>,
+        redacted: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> InputOverlays {
@@ -319,6 +326,10 @@ impl<M: OverlayMode> InputOverlayHost<M> {
             )
         };
 
+        // The search field takes a copy of a selection, so a redacted host
+        // redacts its panel too.
+        self.search.update(cx, |panel, _| panel.set_redacted(redacted));
+        let panel_replace_mode = self.search.read(cx).replace_mode();
         self.search
             .update(cx, |panel, _| panel.sync_session(&search_session));
 
@@ -330,15 +341,15 @@ impl<M: OverlayMode> InputOverlayHost<M> {
             activation_revision,
         };
         if search_signature != self.search_signature {
-            // The panel writes what the user types back into the session, which
-            // lands here as a changed query on the next frame. Re-showing the
-            // panel for that echo would select the field out from under them, so
-            // recognise it: the same open session, moved only by the query the
-            // panel itself already holds.
+            // The panel writes query and replacement-mode changes back into the
+            // session. Re-showing it for that echo would select the query or steal
+            // focus from replacement, so preserve changes the panel already holds.
+            // External mode changes still move focus out of a hidden replace field.
             let was = &self.search_signature;
             let query_echo = search_open
                 && was.open
-                && was.replace_mode == search_signature.replace_mode
+                && (was.replace_mode == search_signature.replace_mode
+                    || panel_replace_mode == search_signature.replace_mode)
                 && was.anchor_offset == search_signature.anchor_offset
                 && was.activation_revision == search_signature.activation_revision
                 && self.search.read(cx).query(cx) == search_session.query;
@@ -394,6 +405,7 @@ impl<M: OverlayMode> InputOverlayHost<M> {
 
 pub(super) fn render_overlays<M: OverlayMode>(
     state: &Entity<InputBaseState<M>>,
+    redacted: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> InputOverlays {
@@ -425,7 +437,7 @@ pub(super) fn render_overlays<M: OverlayMode>(
         .remove(&id)
         .map(|(_, host)| host)
         .unwrap_or_else(|| InputOverlayHost::new(state.clone(), window, cx));
-    let overlays = host.sync(state, window, cx);
+    let overlays = host.sync(state, redacted, window, cx);
     cx.global_mut::<InputOverlayRegistry<M>>()
         .hosts
         .insert(id, (state.downgrade(), host));
@@ -477,7 +489,7 @@ mod tests {
             });
 
             let mut host = InputOverlayHost::new(state.clone(), window, cx);
-            host.sync(&state, window, cx);
+            host.sync(&state, false, window, cx);
 
             let search_input = host.search.read(cx).search_input().clone();
             assert_eq!(search_input.read(cx).value(), "foo");
@@ -491,7 +503,7 @@ mod tests {
             // leave it there — this is the echo guard, and a fix that reshows the
             // panel on every frame would fail here instead of silently annoying.
             search_input.update(cx, |input, cx| input.unselect(window, cx));
-            host.sync(&state, window, cx);
+            host.sync(&state, false, window, cx);
             assert!(
                 search_input.read(cx).selected_range().is_empty(),
                 "an unchanged frame must not touch the field"
@@ -500,7 +512,7 @@ mod tests {
             // The shortcut again, with the session already open and nothing else
             // about it moved.
             state.update(cx, |state, cx| state.open_search(false, cx));
-            host.sync(&state, window, cx);
+            host.sync(&state, false, window, cx);
             assert_eq!(
                 search_input.read(cx).selected_range(),
                 0..3,
@@ -535,7 +547,7 @@ mod tests {
             });
 
             let mut host = InputOverlayHost::new(state.clone(), window, cx);
-            host.sync(&state, window, cx);
+            host.sync(&state, false, window, cx);
 
             state.read_with(cx, |state, _| {
                 assert_eq!(state.search_session().matcher.current_match_index(), 1);
@@ -576,11 +588,11 @@ mod tests {
             });
 
             let mut host = InputOverlayHost::new(state.clone(), window, cx);
-            host.sync(&state, window, cx);
+            host.sync(&state, false, window, cx);
             let after_first = host.lsp.as_ref().unwrap().completion_signature.revision;
 
             // A second pass over untouched content.
-            host.sync(&state, window, cx);
+            host.sync(&state, false, window, cx);
             assert_eq!(
                 host.lsp.as_ref().unwrap().completion_signature.revision,
                 after_first,
@@ -599,7 +611,7 @@ mod tests {
                     cx,
                 );
             });
-            host.sync(&state, window, cx);
+            host.sync(&state, false, window, cx);
             assert_ne!(
                 host.lsp.as_ref().unwrap().completion_signature.revision,
                 after_first,
@@ -621,7 +633,7 @@ mod tests {
         });
         let state = probe.read_with(cx, |probe, _| probe.state.clone());
         cx.update(|window, cx| {
-            assert!(render_overlays(&state, window, cx).is_empty());
+            assert!(render_overlays(&state, false, window, cx).is_empty());
             assert!(state.read(cx).has_overlay_action_handler());
             state.update(cx, |state, cx| {
                 state.set_value("foo bar foo", window, cx);
@@ -660,11 +672,11 @@ mod tests {
             });
 
             let mut host = InputOverlayHost::new(state.clone(), window, cx);
-            let overlays = host.sync(&state, window, cx);
+            let overlays = host.sync(&state, false, window, cx);
             assert!(overlays.search.is_some());
             assert_eq!(overlays.floating.len(), 4);
             assert_eq!(overlays.len(), 5);
-            assert_eq!(render_overlays(&state, window, cx).len(), 5);
+            assert_eq!(render_overlays(&state, false, window, cx).len(), 5);
             assert!(
                 cx.global::<InputOverlayRegistry<crate::input::EditorMode>>()
                     .hosts
@@ -679,8 +691,8 @@ mod tests {
                 state.clear_hover_state(cx);
                 state.clear_diagnostic_popover(cx);
             });
-            assert!(host.sync(&state, window, cx).is_empty());
-            assert!(render_overlays(&state, window, cx).is_empty());
+            assert!(host.sync(&state, false, window, cx).is_empty());
+            assert!(render_overlays(&state, false, window, cx).is_empty());
             assert!(
                 !cx.global::<InputOverlayRegistry<crate::input::EditorMode>>()
                     .hosts
@@ -695,9 +707,9 @@ mod tests {
                     .searchable(true)
             });
             ephemeral.update(cx, |state, cx| state.open_search(false, cx));
-            assert_eq!(render_overlays(&ephemeral, window, cx).len(), 1);
+            assert_eq!(render_overlays(&ephemeral, false, window, cx).len(), 1);
             ephemeral.update(cx, |state, cx| state.close_search(cx));
-            assert!(render_overlays(&ephemeral, window, cx).is_empty());
+            assert!(render_overlays(&ephemeral, false, window, cx).is_empty());
             assert!(
                 !cx.global::<InputOverlayRegistry<crate::input::EditorMode>>()
                     .hosts

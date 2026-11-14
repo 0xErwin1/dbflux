@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: Vector columns: find similar rows · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Tables, files and facets, row \"Vector columns: find similar rows · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-similar-rows.html",
+      "title": "Find similar rows: neighbor bar replaces the filter row",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-similar-rows-menu.html",
+      "title": "Find similar rows: row menu",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-similar-rows-states.html",
+      "title": "Find similar rows: states",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1600
+    }
+  ]
+}

@@ -22,6 +22,14 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
 - Múltiples databases lógicas mediante `SELECT <db>` (`MULTIPLE_DATABASES`). El
   índice de la database activa se rastrea en la conexión.
 - Autenticación con username + password opcionales (`AUTHENTICATION`).
+- Consola de comandos nativa (`NATIVE_CONSOLE`): el navegador de claves acopla
+  una consola, y el menú de una base de datos en la barra lateral abre una en
+  su propia pestaña, que ejecuta un comando a la vez mediante `Connection::execute`
+  contra la database abierta, con la validación y la detección de comandos
+  peligrosos del language service, las filas de auditoría y el historial de
+  consultas que usa el editor. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Reporta su identidad de cliente al servidor vía `CLIENT SETNAME` al conectar
   (`dbflux/<version>`, visible en `CLIENT LIST`); best-effort, ya que algunos
   proveedores managed restringen los comandos `CLIENT`.
@@ -73,7 +81,10 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
     límite de página: el cursor de cada nodo se rastrea de forma
     independiente, y el cursor agregado viaja como un objeto JSON opaco que
     mapea `"<host>:<port>"` a su cursor `SCAN` pendiente. El escaneo completo
-    termina cuando todos los masters reportan cursor 0.
+    termina cuando todos los masters reportan cursor 0. Cancelar un escaneo de
+    claves detiene la página antes de su siguiente round trip de `SCAN`
+    (`KeyValueApi::scan_keys_with_cancel`); un round trip ya enviado termina
+    primero.
   - Total de claves del keyspace (`key_count`): `DBSIZE` sobre la base de datos
     seleccionada; en una conexión Cluster, la suma de `DBSIZE` de todos los
     masters. El explorador de claves lo muestra en su cabecera y como cifra
@@ -195,7 +206,8 @@ evitar exponer direcciones IP y hostnames de clientes.
 
 ## Limitaciones
 
-- `execute()` rechaza cualquier límite de filas solicitado (incluso cero) o tiempo máximo de ejecución con `NotSupported` antes de enviar el comando. Los comandos sin estas protecciones siguen disponibles; el editor predeterminado no puede garantizarlas.
+- `execute()` rechaza un tiempo máximo de ejecución solicitado, y un límite de filas en queries de métricas o inspectores de instancia, con `NotSupported` antes de enviar el comando.
+- El límite de filas del editor solo acota las respuestas que se muestran como tabla (una respuesta array, set o push de valores escalares). Los arrays anidados y las respuestas de tipo map se muestran como texto y no se acotan; la respuesta completa se sigue leyendo del servidor antes de recortarla.
 
 - SQL no está soportado; las queries deben escribirse como comandos Redis.
 
@@ -216,8 +228,32 @@ evitar exponer direcciones IP y hostnames de clientes.
 - Las capacidades DDL están todas deshabilitadas (sin tables, views, indexes,
   schemas) — esto es un almacén clave-valor, no relacional.
 - Las transacciones se anuncian a nivel de capacidad (`supports_transactions:
-  true`) pero sin niveles de aislamiento, savepoints, transacciones anidadas,
-  read-only ni soporte deferrable.
+  true`) pero sin niveles de aislamiento, savepoints, transacciones anidadas
+  ni soporte deferrable.
+- Las peticiones de solo lectura (`ReadOnlyEnforcement::Required`, usadas por
+  los scripts de lectura de MCP y el auto-refresh del editor) las aplica
+  DBFlux, no el servidor. Antes de enviar el comando, el driver pide sus flags
+  al servidor con `COMMAND INFO` y lo rechaza salvo que el servidor lo marque
+  `readonly` (o sea `PING`, `ECHO`, `TIME` o `INFO`) y no informe ningún otro
+  flag, como `write`, `admin`, `blocking`, `pubsub` o `may_replicate`; un flag
+  que el driver no conoce también rechaza el comando. Se rechazan las
+  transacciones, `SELECT`, las suscripciones, `MONITOR`, todos los comandos de
+  script (`EVAL`, `EVALSHA`, `FCALL` y sus formas de solo lectura `EVAL_RO`,
+  `EVALSHA_RO` y `FCALL_RO`), `PFCOUNT` (que reescribe un valor en caché en
+  Redis 6.0 y anteriores), los comandos de módulos y los comandos que el
+  servidor no describe, y también `SRANDMEMBER`, `HRANDFIELD` y `ZRANDMEMBER`
+  con un conteo negativo. El modo de solo lectura protege los datos, no la
+  disponibilidad: las lecturas costosas como `KEYS *` o un `SMEMBERS` o
+  `HGETALL` grande se siguen ejecutando, y DBFlux no fija ningún tiempo máximo
+  de lectura en Redis, así que un comando lento retiene la conexión hasta que
+  el servidor responde. Los comandos con subcomandos, como `CONFIG`,
+  `CLIENT` u `OBJECT`, se juzgan por la entrada propia del subcomando, que
+  solo describen Redis 7 y posteriores, así que en servidores anteriores se
+  rechazan. Las conexiones a Redis Cluster y los servidores que no responden a
+  `COMMAND INFO` rechazan las peticiones de solo lectura con `NotSupported`.
+  En los servidores compatibles (Valkey, KeyDB, DragonflyDB) se confía en los
+  flags que informan. Un usuario ACL de Redis sin permisos de escritura sigue
+  siendo el límite real.
 - Pub/Sub no está expuesto (la capacidad `PUBSUB` no está establecida).
 - El túnel SSH no está disponible cuando el modo URI está habilitado; la ruta
   del túnel solo está conectada para el modo de conexión manual. Combinar un

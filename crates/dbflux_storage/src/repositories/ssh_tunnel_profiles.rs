@@ -45,7 +45,7 @@ impl SshTunnelProfileRepository {
             .prepare(
                 r#"
                 SELECT id, name, host, port, user, auth_method, key_path, passphrase_secret_ref,
-                       password_secret_ref, save_secret, created_at, updated_at
+                       password_secret_ref, save_secret, ssh_config_host, created_at, updated_at
                 FROM cfg_ssh_tunnel_profiles
                 ORDER BY name ASC
                 "#,
@@ -68,8 +68,9 @@ impl SshTunnelProfileRepository {
                     passphrase_secret_ref: row.get(7)?,
                     password_secret_ref: row.get(8)?,
                     save_secret: row.get::<_, i32>(9)? != 0,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
+                    ssh_config_host: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -103,7 +104,7 @@ impl SshTunnelProfileRepository {
             .prepare(
                 r#"
                 SELECT id, name, host, port, user, auth_method, key_path, passphrase_secret_ref,
-                       password_secret_ref, save_secret, created_at, updated_at
+                       password_secret_ref, save_secret, ssh_config_host, created_at, updated_at
                 FROM cfg_ssh_tunnel_profiles
                 WHERE id = ?1
                 "#,
@@ -125,8 +126,9 @@ impl SshTunnelProfileRepository {
                 passphrase_secret_ref: row.get(7)?,
                 password_secret_ref: row.get(8)?,
                 save_secret: row.get::<_, i32>(9)? != 0,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                ssh_config_host: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         });
 
@@ -168,9 +170,9 @@ impl SshTunnelProfileRepository {
             r#"
             INSERT INTO cfg_ssh_tunnel_profiles (
                 id, name, host, port, user, auth_method, key_path, passphrase_secret_ref,
-                password_secret_ref, save_secret, created_at, updated_at
+                password_secret_ref, save_secret, ssh_config_host, created_at, updated_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now')
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'), datetime('now')
             )
             "#,
             params![
@@ -184,6 +186,7 @@ impl SshTunnelProfileRepository {
                 profile.passphrase_secret_ref,
                 profile.password_secret_ref,
                 profile.save_secret as i32,
+                profile.ssh_config_host,
             ],
         )
         .map_err(|source| StorageError::Sqlite {
@@ -245,6 +248,7 @@ impl SshTunnelProfileRepository {
                     passphrase_secret_ref = ?8,
                     password_secret_ref = ?9,
                     save_secret = ?10,
+                    ssh_config_host = ?11,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -259,6 +263,7 @@ impl SshTunnelProfileRepository {
                     profile.passphrase_secret_ref,
                     profile.password_secret_ref,
                     profile.save_secret as i32,
+                    profile.ssh_config_host,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -306,9 +311,9 @@ impl SshTunnelProfileRepository {
             r#"
             INSERT INTO cfg_ssh_tunnel_profiles (
                 id, name, host, port, user, auth_method, key_path, passphrase_secret_ref,
-                password_secret_ref, save_secret, created_at, updated_at
+                password_secret_ref, save_secret, ssh_config_host, created_at, updated_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now')
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'), datetime('now')
             )
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
@@ -320,6 +325,7 @@ impl SshTunnelProfileRepository {
                 passphrase_secret_ref = excluded.passphrase_secret_ref,
                 password_secret_ref = excluded.password_secret_ref,
                 save_secret = excluded.save_secret,
+                ssh_config_host = excluded.ssh_config_host,
                 updated_at = datetime('now')
             "#,
             params![
@@ -333,6 +339,7 @@ impl SshTunnelProfileRepository {
                 profile.passphrase_secret_ref,
                 profile.password_secret_ref,
                 profile.save_secret as i32,
+                profile.ssh_config_host,
             ],
         )
         .map_err(|source| StorageError::Sqlite {
@@ -422,6 +429,10 @@ pub struct SshTunnelProfileDto {
     pub passphrase_secret_ref: Option<String>,
     pub password_secret_ref: Option<String>,
     pub save_secret: bool,
+    /// Alias of a host in the user's SSH config this tunnel references; `None`
+    /// means the manual host, port and user fields are the source of the target.
+    #[serde(default)]
+    pub ssh_config_host: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -440,6 +451,7 @@ impl SshTunnelProfileDto {
             passphrase_secret_ref: None,
             password_secret_ref: None,
             save_secret: true,
+            ssh_config_host: None,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -465,6 +477,7 @@ impl SshTunnelProfileDto {
             passphrase_secret_ref: None,
             password_secret_ref: None,
             save_secret: true,
+            ssh_config_host: None,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -490,6 +503,92 @@ mod tests {
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("dbflux_repo_ssh_{}_{}", name, std::process::id()))
+    }
+
+    #[test]
+    fn ssh_saved_tunnel_alias_roundtrips_through_repository() {
+        let path = temp_db("ssh_alias_roundtrip");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let mut aliased = SshTunnelProfileDto::with_auth_method(
+            Uuid::new_v4(),
+            "Alias Tunnel".to_string(),
+            "bastion.example.com".to_string(),
+            22,
+            "admin".to_string(),
+            "password".to_string(),
+        );
+        aliased.ssh_config_host = Some("web-prod".to_string());
+
+        let plain = SshTunnelProfileDto::with_auth_method(
+            Uuid::new_v4(),
+            "Manual Tunnel".to_string(),
+            "manual.example.com".to_string(),
+            22,
+            "admin".to_string(),
+            "password".to_string(),
+        );
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = SshTunnelProfileRepository::new(Arc::new(conn));
+        repo.insert(&aliased, None).expect("should insert aliased");
+        repo.insert(&plain, None).expect("should insert plain");
+
+        let fetched = repo.all().expect("should fetch");
+        assert_eq!(fetched.len(), 2);
+
+        let aliased_row = fetched
+            .iter()
+            .find(|p| p.name == "Alias Tunnel")
+            .expect("aliased row present");
+        assert_eq!(aliased_row.ssh_config_host.as_deref(), Some("web-prod"));
+
+        let plain_row = fetched
+            .iter()
+            .find(|p| p.name == "Manual Tunnel")
+            .expect("manual row present");
+        assert_eq!(plain_row.ssh_config_host, None);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn ssh_row_inserted_without_alias_column_reads_none() {
+        let path = temp_db("ssh_alias_null_row");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        // Simulate a row written without naming the new column: it must read
+        // back as `None` ("no alias"), not as an empty string or an error.
+        conn.execute(
+            r#"
+            INSERT INTO cfg_ssh_tunnel_profiles (id, name, host, port, user, auth_method)
+            VALUES ('legacy-id', 'Legacy Tunnel', 'legacy.example.com', 22, 'admin', 'password')
+            "#,
+            [],
+        )
+        .expect("legacy row insert");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = SshTunnelProfileRepository::new(Arc::new(conn));
+        let fetched = repo.get("legacy-id").expect("should fetch");
+        let fetched = fetched.expect("legacy row present");
+        assert_eq!(fetched.ssh_config_host, None);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 
     #[test]

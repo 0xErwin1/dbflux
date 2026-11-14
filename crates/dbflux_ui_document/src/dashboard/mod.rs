@@ -21,6 +21,7 @@ use super::instance_inspector::InspectorPanel;
 use super::types::{DocumentId, DocumentState};
 use builder::{DragReorderState, DragResizeState, PanelContextMenu, ResizeAxis};
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::{
     ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged, InputState,
@@ -269,6 +270,7 @@ pub struct DashboardDocument {
     // backgrounded and panels must re-execute on next focus.
     is_backgrounded: bool,
     pending_refresh_on_focus: bool,
+    is_active_tab: bool,
 
     // Focus
     focus_handle: FocusHandle,
@@ -405,12 +407,30 @@ impl DashboardDocument {
                     return;
                 };
 
-                // First pass: stage the new time window on all panels without
-                // triggering their render loop (stage_time_window does not notify).
+                // Preserve the shared panel's provenance: relative presets
+                // stage a sliding window so rolling refreshes keep collecting
+                // visible samples; a Custom selection stages fixed bounds.
+                let display_window = match this.shared_time_range.read(cx).selected_time_range {
+                    Some(TimeRange::Custom) | None => {
+                        crate::chart_document::MetricDisplayWindow::Absolute {
+                            start_ms: start,
+                            end_ms: end,
+                        }
+                    }
+                    Some(_) => crate::chart_document::MetricDisplayWindow::Relative {
+                        span_ms: (end - start).max(0),
+                    },
+                };
+
+                // First pass: stage the new time window on all panels. Staging
+                // reprojects retained samples into the new window immediately,
+                // so a queued, failing, or offline refetch never leaves stale
+                // rows or a stale axis beneath the newly selected label.
+                // Re-execution is still gated by the semaphore below.
                 for slot in &this.panel_slots {
                     if let DashboardPanelSlot::Loaded { panel, .. } = slot {
-                        panel.update(cx, |doc, _cx| {
-                            doc.stage_time_window(start, end);
+                        panel.update(cx, |doc, cx| {
+                            doc.stage_time_window(start, end, display_window, cx);
                         });
                     }
                 }
@@ -420,6 +440,10 @@ impl DashboardDocument {
                 // their render loop), and queues the rest.
                 let slot_count = this.panel_slots.len();
                 for idx in 0..slot_count {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "idx ranges over 0..panel_slots.len(), so it is a valid slot index"
+                    )]
                     if matches!(this.panel_slots[idx], DashboardPanelSlot::Loaded { .. }) {
                         this.request_reexec_for_slot(idx, cx);
                     }
@@ -543,6 +567,7 @@ impl DashboardDocument {
             inflight_reexec_count: 0,
             pending_reexec: VecDeque::new(),
             is_backgrounded: false,
+            is_active_tab: true,
             pending_refresh_on_focus: false,
             focus_handle: cx.focus_handle(),
             focused_panel_index: initial_focused,
@@ -694,7 +719,33 @@ impl DashboardDocument {
 
     pub fn set_refresh_policy(&mut self, _policy: RefreshPolicy, _cx: &mut Context<Self>) {}
 
-    pub fn set_active_tab(&mut self, _active: bool) {}
+    pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.is_active_tab = active;
+        self.sync_panels_active_tab(cx);
+    }
+
+    /// Instance-metric charts and inspectors run refresh timers of their own,
+    /// so a hidden dashboard must hide them too.
+    fn sync_panels_active_tab(&self, cx: &mut Context<Self>) {
+        let active = self.is_active_tab;
+
+        for slot in &self.panel_slots {
+            match slot {
+                DashboardPanelSlot::Loaded { panel, .. } => {
+                    panel.update(cx, |panel, _| panel.set_active_tab(active));
+                }
+                DashboardPanelSlot::Inspector { entity, .. } => {
+                    entity.update(cx, |inspector, _| inspector.set_active_tab(active));
+                }
+                DashboardPanelSlot::Orphan { .. } | DashboardPanelSlot::Divider { .. } => {}
+            }
+        }
+    }
+
+    fn auto_refresh_tick_allowed(&self, cx: &App) -> bool {
+        let settings = self.app_state.read(cx).general_settings();
+        !settings.auto_refresh_only_if_visible || self.is_active_tab
+    }
 
     pub fn change_summary(&self, _cx: &App) -> Option<String> {
         None
@@ -757,6 +808,13 @@ impl DashboardDocument {
     ///   the dashboard reflows without leaving empty bands.
     ///
     /// Row shifts compose across multiple collapsed sections.
+    // other_idx comes from enumerate() over panel_slots and shifts was sized
+    // to panel_slots.len(), so the double indexing on the shift update stays
+    // in bounds; the bound is not re-checked in the loop.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "other_idx comes from enumerate() over panel_slots and shifts has panel_slots.len() entries"
+    )]
     pub(crate) fn collapse_view(&self) -> (HashSet<usize>, Vec<u32>) {
         let mut shifts = vec![0u32; self.panel_slots.len()];
 
@@ -1220,6 +1278,9 @@ impl DashboardDocument {
                                 .connections()
                                 .contains_key(&profile_id)
                         {
+                            return;
+                        }
+                        if !doc.auto_refresh_tick_allowed(cx) {
                             return;
                         }
                         doc.refresh_all_loaded_panels(cx);
@@ -1961,6 +2022,10 @@ impl DashboardDocument {
                     let app_state_inner = self.app_state.clone();
                     let title_override = panel.title_override.clone();
                     let panel_entity = cx.new(|cx| {
+                        #[expect(
+                            clippy::expect_used,
+                            reason = "the match guard admits only Query, Metric and InstanceMetric sources; from_saved returns Err only for Collection sources"
+                        )]
                         let mut doc =
                             ChartDocument::from_saved(&chart, app_state_inner, window, cx).expect(
                                 "Query/Metric/InstanceMetric source validated by match guard",
@@ -2000,6 +2065,10 @@ impl DashboardDocument {
 
             self.panel_slots.push(new_slot);
             appended += 1;
+        }
+
+        if appended > 0 {
+            self.sync_panels_active_tab(cx);
         }
 
         appended
@@ -2776,7 +2845,7 @@ mod tests {
     //
     // These tests exercise `DashboardDocument` as a live GPUI entity inside a
     // window context. Fixture pattern copied from
-    // `data_grid_panel/mod.rs:2079-2120`.
+    // `data_grid_panel::tests` (`isolated_test_app_state`, `init_test_runtime`).
 
     fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> gpui::Entity<AppStateEntity> {
         cx.update(|cx| {
@@ -2837,6 +2906,64 @@ mod tests {
             let dashboard = make_empty_dashboard(app_state, window, cx);
             gpui_component::Root::new(dashboard, window, cx)
         });
+    }
+
+    #[gpui::test]
+    fn hiding_the_dashboard_hides_its_embedded_panels(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let dashboard_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let inspector_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let dashboard_ref = dashboard_holder.clone();
+        let inspector_ref = inspector_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let inspector = cx.new(|cx| {
+                InspectorPanel::new(
+                    Uuid::new_v4(),
+                    "sessions".to_string(),
+                    app_state.clone(),
+                    cx,
+                )
+            });
+            inspector_ref.replace(Some(inspector.clone()));
+
+            let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", None, window, cx));
+            let dashboard = cx.new(|cx| {
+                DashboardDocument::new(
+                    Uuid::nil(),
+                    "Ops".to_string(),
+                    vec![DashboardPanelSlot::Inspector {
+                        entity: inspector,
+                        grid_pos: PanelGridPos {
+                            grid_row: 0,
+                            grid_column: 0,
+                            grid_width: 6,
+                            grid_height: 4,
+                        },
+                        title_override: None,
+                    }],
+                    shared_time_range,
+                    None,
+                    SavedChartRefreshPolicy::Off,
+                    false,
+                    app_state,
+                    cx,
+                )
+            });
+            dashboard_ref.replace(Some(dashboard.clone()));
+            gpui_component::Root::new(dashboard, window, cx)
+        });
+
+        let dashboard = dashboard_holder.borrow().clone().expect("dashboard");
+        let inspector = inspector_holder.borrow().clone().expect("inspector");
+
+        window.update(|_, cx| dashboard.update(cx, |doc, cx| doc.set_active_tab(false, cx)));
+        window.update(|_, cx| assert!(!inspector.read(cx).is_active_tab()));
+
+        window.update(|_, cx| dashboard.update(cx, |doc, cx| doc.set_active_tab(true, cx)));
+        window.update(|_, cx| assert!(inspector.read(cx).is_active_tab()));
     }
 
     /// Q.9 — `start_dashboard_name_edit` sets `editing_dashboard_name = true`

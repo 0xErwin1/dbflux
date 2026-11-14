@@ -1,24 +1,19 @@
 use crate::controls::{GpuiInput as Input, InputEvent, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
-use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
-use crate::typography::AppFonts;
+use crate::tokens::{FontSizes, Heights, Radii, Spacing, ui};
 use crate::vim::{VimBinding, VimHost};
+use bolt::components::document_tree::{DocumentTreeRowHost, DocumentTreeRowView, render_row};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::input::EditorState;
+use std::sync::Arc;
 
 use super::events::{DocumentTreeEvent, TreeDirection};
-use super::node::{NodeId, NodeValue, TreeNode};
+use super::node::{NodeId, TreeNode};
 use super::state::{DocumentTreeState, DocumentViewMode};
-
-/// Height of each row in the tree.
-pub const TREE_ROW_HEIGHT: Pixels = px(26.0);
-
-/// Indentation per depth level.
-const INDENT_WIDTH: Pixels = px(16.0); // guardrail-allow: domain const, tree indentation step
 
 actions!(
     document_tree,
@@ -195,7 +190,7 @@ impl Render for DocumentTree {
                         vim.editor(false)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::MONO)
+                            .font_family(crate::fonts::editor_family(cx))
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),
@@ -354,7 +349,7 @@ impl Render for DocumentTree {
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .font_family(AppFonts::MONO)
+                    .font_family(crate::fonts::grid_family(cx))
                     .when(is_tree_mode, |d| {
                         d.child(
                             uniform_list("document-tree-list", node_count, {
@@ -364,7 +359,6 @@ impl Render for DocumentTree {
                                         state.update(cx, |s, _| s.visible_nodes().to_vec());
 
                                     let cursor = state.read(cx).cursor().cloned();
-                                    let theme = cx.theme().clone();
 
                                     let state_ref = state.read(cx);
 
@@ -397,6 +391,79 @@ impl Render for DocumentTree {
                                     let editing_node = state_ref.editing_node().cloned();
                                     let inline_edit_input = state_ref.inline_edit_input().cloned();
 
+                                    let host = DocumentTreeRowHost {
+                                        chevron_expanded: AppIcon::ChevronDown.into(),
+                                        chevron_collapsed: AppIcon::ChevronRight.into(),
+                                        on_row_click: {
+                                            let state = state.clone();
+                                            Arc::new(
+                                                move |node_id: &NodeId,
+                                                      event: &ClickEvent,
+                                                      window: &mut Window,
+                                                      cx: &mut App| {
+                                                    let click_count = event.click_count();
+                                                    state.update(cx, |s, cx| {
+                                                        s.focus(window, cx);
+
+                                                        if click_count == 1 {
+                                                            // Single click: set cursor to this node
+                                                            s.set_cursor(node_id, cx);
+                                                        } else if click_count == 2 {
+                                                            // Double click: expand/collapse or edit
+                                                            s.execute_node(node_id, window, cx);
+                                                        }
+                                                    });
+                                                },
+                                            )
+                                        },
+                                        on_row_context: {
+                                            let state = state.clone();
+                                            Arc::new(
+                                                move |node_id: &NodeId,
+                                                      event: &MouseDownEvent,
+                                                      window: &mut Window,
+                                                      cx: &mut App| {
+                                                    cx.stop_propagation();
+                                                    let position = event.position;
+                                                    state.update(cx, |s, cx| {
+                                                        s.focus(window, cx);
+                                                        s.set_cursor(node_id, cx);
+                                                        s.request_context_menu(position, cx);
+                                                    });
+                                                },
+                                            )
+                                        },
+                                        on_chevron_click: {
+                                            let state = state.clone();
+                                            Arc::new(
+                                                move |node_id: &NodeId,
+                                                      _event: &ClickEvent,
+                                                      _window: &mut Window,
+                                                      cx: &mut App| {
+                                                    state.update(cx, |s, cx| s.toggle_expand(node_id, cx));
+                                                },
+                                            )
+                                        },
+                                        on_value_click: {
+                                            let state = state.clone();
+                                            Arc::new(
+                                                move |node_id: &NodeId,
+                                                      event: &ClickEvent,
+                                                      window: &mut Window,
+                                                      cx: &mut App| {
+                                                    let click_count = event.click_count();
+                                                    state.update(cx, |s, cx| {
+                                                        if click_count == 1 {
+                                                            s.set_cursor(node_id, cx);
+                                                        } else if click_count == 2 {
+                                                            s.handle_value_click(node_id, window, cx);
+                                                        }
+                                                    });
+                                                },
+                                            )
+                                        },
+                                    };
+
                                     range
                                         .filter_map(|ix| visible_nodes.get(ix).cloned())
                                         .map(|node| {
@@ -410,21 +477,39 @@ impl Render for DocumentTree {
                                                 current_match.as_ref() == Some(&node.id);
                                             let is_editing =
                                                 editing_node.as_ref() == Some(&node.id);
-                                            let state_clone = state.clone();
-                                            let node_id = node.id.clone();
 
-                                            render_tree_row(
-                                                node,
-                                                is_cursor,
-                                                is_expanded,
-                                                is_value_expanded,
-                                                is_search_match,
-                                                is_current_match,
-                                                is_editing,
-                                                inline_edit_input.clone(),
-                                                theme.clone(),
-                                                state_clone,
-                                                node_id,
+                                            let value_text: SharedString =
+                                                if let Some(summary) = node
+                                                    .summary
+                                                    .as_deref()
+                                                    .filter(|_| !is_expanded)
+                                                {
+                                                    summary.to_owned().into()
+                                                } else if is_expanded {
+                                                    node.value.full_preview().to_string().into()
+                                                } else {
+                                                    node.value.preview().to_string().into()
+                                                };
+
+                                            render_row(
+                                                DocumentTreeRowView {
+                                                    id: node.id.clone(),
+                                                    depth: node.depth,
+                                                    key: node.key.to_string().into(),
+                                                    value_text,
+                                                    value_class: node.value.type_class(),
+                                                    type_label: node.value.type_label(),
+                                                    is_expandable: node.is_expandable(),
+                                                    is_expanded,
+                                                    is_value_expanded,
+                                                    is_cursor,
+                                                    is_current_match,
+                                                    is_search_match,
+                                                    is_editing,
+                                                    inline_edit_input: inline_edit_input.clone(),
+                                                },
+                                                &host,
+                                                cx,
                                             )
                                         })
                                         .collect()
@@ -564,287 +649,8 @@ fn render_search_bar(
                         state.update(cx, |s, cx| s.close_search(cx));
                     }
                 })
-                .child(Icon::new(AppIcon::X).size(px(12.0)).muted()), // guardrail-allow: 12px icon size, no ICON_XS token
+                .child(Icon::new(AppIcon::X).size(ui(12.0)).muted()),
         )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_tree_row(
-    node: TreeNode,
-    is_cursor: bool,
-    is_expanded: bool,
-    is_value_expanded: bool,
-    is_search_match: bool,
-    is_current_match: bool,
-    is_editing: bool,
-    inline_edit_input: Option<Entity<InputState>>,
-    theme: gpui_component::Theme,
-    state: Entity<DocumentTreeState>,
-    node_id: NodeId,
-) -> Stateful<Div> {
-    let indent = INDENT_WIDTH * node.depth as f32;
-    let is_expandable = node.is_expandable();
-
-    let chevron_state = state.clone();
-    let chevron_node_id = node_id.clone();
-
-    let row_state = state.clone();
-    let row_node_id = node_id.clone();
-
-    let context_menu_state = state.clone();
-    let context_menu_node_id = node_id.clone();
-
-    let value_state = state.clone();
-    let value_node_id = node_id.clone();
-
-    let selection_color = theme.selection;
-    let secondary_color = theme.secondary;
-    let key_color = ChromeColors::tint(&theme);
-    let muted_color = theme.muted_foreground;
-    let warning_color = theme.warning;
-
-    // Determine background color based on state
-    let bg_color = if is_cursor {
-        selection_color
-    } else if is_current_match {
-        warning_color.opacity(0.4)
-    } else if is_search_match {
-        warning_color.opacity(0.2)
-    } else {
-        Hsla::transparent_black()
-    };
-
-    div()
-        .id(ElementId::Name(
-            format!("tree-row-{:?}", node.id.path).into(),
-        ))
-        .h(TREE_ROW_HEIGHT)
-        .w_full()
-        .flex()
-        .items_center()
-        .pl(indent)
-        .pr(Spacing::SM)
-        .bg(bg_color)
-        .hover(move |d| {
-            d.bg(if is_cursor {
-                selection_color
-            } else if is_current_match {
-                warning_color.opacity(0.5)
-            } else if is_search_match {
-                warning_color.opacity(0.3)
-            } else {
-                secondary_color.opacity(0.5)
-            })
-        })
-        .cursor_pointer()
-        .on_click({
-            move |event, window, cx| {
-                let click_count = event.click_count();
-                row_state.update(cx, |s, cx| {
-                    s.focus(window, cx);
-
-                    if click_count == 1 {
-                        // Single click: set cursor to this node
-                        s.set_cursor(&row_node_id, cx);
-                    } else if click_count == 2 {
-                        // Double click: expand/collapse or edit
-                        s.execute_node(&row_node_id, window, cx);
-                    }
-                });
-            }
-        })
-        .on_mouse_down(MouseButton::Right, {
-            move |event, window, cx| {
-                cx.stop_propagation();
-                let position = event.position;
-                context_menu_state.update(cx, |s, cx| {
-                    s.focus(window, cx);
-                    s.set_cursor(&context_menu_node_id, cx);
-                    s.request_context_menu(position, cx);
-                });
-            }
-        })
-        // Expand/collapse chevron
-        .child(render_chevron(
-            is_expandable,
-            is_expanded,
-            muted_color,
-            chevron_state,
-            chevron_node_id,
-        ))
-        // Key
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .child(Text::body_sm(node.key.to_string()).color(key_color))
-                .child(
-                    Text::caption(":")
-                        .font_size(FontSizes::XS)
-                        .color(muted_color),
-                ),
-        )
-        // Value preview
-        .child(render_value_preview_with_expand(
-            &node.value,
-            node.summary.as_deref().filter(|_| !is_expanded),
-            is_value_expanded,
-            is_editing,
-            inline_edit_input,
-            &theme,
-            value_state,
-            value_node_id,
-        ))
-        // Type badge with type-colored background
-        .child({
-            let type_color = get_type_color(&node.value, &theme);
-            div()
-                .px(Spacing::XS)
-                .rounded(Radii::SM)
-                .bg(type_color.opacity(0.15))
-                .child(
-                    Text::caption(node.value.type_label())
-                        .font_size(FontSizes::XS)
-                        .color(type_color),
-                )
-        })
-}
-
-fn render_chevron(
-    is_expandable: bool,
-    is_expanded: bool,
-    muted_color: Hsla,
-    state: Entity<DocumentTreeState>,
-    node_id: NodeId,
-) -> Stateful<Div> {
-    let chevron = div()
-        .id(ElementId::Name(
-            format!("tree-chevron-{:?}", node_id.path).into(),
-        ))
-        .w(Heights::ICON_SM)
-        .h(Heights::ICON_SM)
-        .flex()
-        .items_center()
-        .justify_center();
-
-    if is_expandable {
-        let icon = if is_expanded {
-            AppIcon::ChevronDown
-        } else {
-            AppIcon::ChevronRight
-        };
-
-        chevron
-            .child(Icon::new(icon).size(px(12.0)).color(muted_color)) // guardrail-allow: 12px icon size, no ICON_XS token
-            .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(move |_, _, cx| {
-                cx.stop_propagation();
-                state.update(cx, |s, cx| s.toggle_expand(&node_id, cx));
-            })
-    } else {
-        chevron
-    }
-}
-
-fn get_type_color(value: &NodeValue, theme: &gpui_component::Theme) -> Hsla {
-    match value {
-        NodeValue::Scalar(v) => match v {
-            dbflux_core::Value::Null => theme.muted_foreground,
-            dbflux_core::Value::Bool(_) => hsla(280.0 / 360.0, 0.6, 0.6, 1.0), // guardrail-allow: JSON type color, no semantic token
-            dbflux_core::Value::Int(_) => hsla(120.0 / 360.0, 0.5, 0.5, 1.0), // guardrail-allow: JSON type color
-            dbflux_core::Value::Float(_) | dbflux_core::Value::Decimal(_) => {
-                hsla(150.0 / 360.0, 0.5, 0.5, 1.0) // guardrail-allow: JSON type color
-            }
-            dbflux_core::Value::Text(_) => hsla(30.0 / 360.0, 0.7, 0.6, 1.0), // guardrail-allow: JSON type color
-            dbflux_core::Value::ObjectId(_) => ChromeColors::tint(theme),
-            dbflux_core::Value::DateTime(_)
-            | dbflux_core::Value::Date(_)
-            | dbflux_core::Value::Time(_) => hsla(200.0 / 360.0, 0.6, 0.5, 1.0), // guardrail-allow: JSON type color
-            dbflux_core::Value::Bytes(_) => theme.warning,
-            dbflux_core::Value::Json(_) => theme.muted_foreground,
-            _ => theme.foreground,
-        },
-        NodeValue::Document(_) | NodeValue::Array(_) => theme.muted_foreground,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_value_preview_with_expand(
-    value: &NodeValue,
-    collapsed_summary: Option<&str>,
-    is_expanded: bool,
-    is_editing: bool,
-    inline_edit_input: Option<Entity<InputState>>,
-    theme: &gpui_component::Theme,
-    state: Entity<DocumentTreeState>,
-    node_id: NodeId,
-) -> Stateful<Div> {
-    let color = get_type_color(value, theme);
-
-    let text = if let Some(summary) = collapsed_summary {
-        summary.to_string()
-    } else if is_expanded {
-        value.full_preview().to_string()
-    } else {
-        value.preview().to_string()
-    };
-
-    let base = div()
-        .id(ElementId::Name(format!("value-{:?}", node_id.path).into()))
-        .flex_1()
-        .overflow_x_hidden()
-        .ml(Spacing::XS)
-        .text_size(FontSizes::SM)
-        .text_color(color);
-
-    if is_editing && let Some(input) = inline_edit_input {
-        return base
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .child(Input::new(&input).small().w_full());
-    }
-
-    let click_state = state.clone();
-    let click_node_id = node_id.clone();
-
-    if is_expanded {
-        base.max_h(px(120.0))
-            .overflow_y_scroll()
-            .cursor_pointer()
-            .child(text)
-            .on_click(move |event, window, cx| {
-                cx.stop_propagation();
-                let click_count = event.click_count();
-
-                click_state.update(cx, |s, cx| {
-                    if click_count == 1 {
-                        s.set_cursor(&click_node_id, cx);
-                    } else if click_count == 2 {
-                        s.handle_value_click(&click_node_id, window, cx);
-                    }
-                });
-            })
-    } else {
-        base.text_ellipsis()
-            .whitespace_nowrap()
-            .cursor_pointer()
-            .child(text)
-            .on_click(move |event, window, cx| {
-                cx.stop_propagation();
-                let click_count = event.click_count();
-
-                state.update(cx, |s, cx| {
-                    if click_count == 1 {
-                        s.set_cursor(&node_id, cx);
-                    } else if click_count == 2 {
-                        s.handle_value_click(&node_id, window, cx);
-                    }
-                });
-            })
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 use dbflux_components::composites::Island;
-use dbflux_components::tokens::{ChromeColors, ShellMetrics};
+use dbflux_components::tokens::{IslandMetrics, ShellMetrics};
 use dbflux_ui_sidebar::Sidebar;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -17,10 +17,21 @@ const COLLAPSED_WIDTH: Pixels = px(0.0);
 const DEFAULT_EXPANDED_WIDTH: Pixels = ShellMetrics::SIDEBAR_WIDTH;
 const MIN_WIDTH: Pixels = px(200.0);
 const MAX_WIDTH: Pixels = px(800.0);
-const GRIP_WIDTH: Pixels = px(7.0);
+/// How far the grip reaches into the island, left of its right edge. The
+/// rest of the grip is the desk gutter between the island and the document.
+const GRIP_INSET: Pixels = px(13.0);
+/// Width of the line drawn at the middle of the gutter while the grip is
+/// hovered or dragged.
+const GRIP_LINE_WIDTH: Pixels = px(2.0);
+
+/// The default width at the current interface size: the sidebar's rows and
+/// header grow with the interface font, so its default width grows with them.
+fn scaled_default_width(cx: &App) -> Pixels {
+    (DEFAULT_EXPANDED_WIDTH * dbflux_components::fonts::ui_scale(cx)).clamp(MIN_WIDTH, MAX_WIDTH)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum SidebarState {
+pub(crate) enum SidebarState {
     #[default]
     Expanded,
     Collapsed,
@@ -37,6 +48,9 @@ pub struct SidebarDock {
     hover_generation: u64,
     width: Pixels,
     last_expanded_width: Pixels,
+    /// Set once the user drags the sidebar; until then its width follows
+    /// the default width at the current interface size.
+    user_resized: bool,
 
     is_resizing: bool,
     resize_start_x: Option<Pixels>,
@@ -46,6 +60,7 @@ pub struct SidebarDock {
 impl SidebarDock {
     pub fn new(sidebar: Entity<Sidebar>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe(&sidebar, |dock, _, cx| dock.dismiss_if_idle(cx));
+        let default_width = scaled_default_width(cx);
         Self {
             sidebar,
             _sidebar_subscription: subscription,
@@ -55,8 +70,9 @@ impl SidebarDock {
             sidebar_focused: false,
             hover_deadline: None,
             hover_generation: 0,
-            width: DEFAULT_EXPANDED_WIDTH,
-            last_expanded_width: DEFAULT_EXPANDED_WIDTH,
+            width: default_width,
+            last_expanded_width: default_width,
+            user_resized: false,
             is_resizing: false,
             resize_start_x: None,
             resize_start_width: None,
@@ -187,6 +203,7 @@ impl SidebarDock {
 
     pub(crate) fn begin_resize(&mut self, position_x: Pixels, cx: &mut Context<Self>) {
         self.is_resizing = true;
+        self.user_resized = true;
         self.resize_start_x = Some(position_x);
         self.resize_start_width = Some(self.width);
         cx.notify();
@@ -232,6 +249,19 @@ impl SidebarDock {
         }
     }
 
+    /// Moves an undragged sidebar to the default width at the current
+    /// interface size, so an interface font change resizes it without a
+    /// restart.
+    fn follow_default_width(&mut self, cx: &App) {
+        if self.user_resized {
+            return;
+        }
+
+        let default_width = scaled_default_width(cx);
+        self.width = default_width;
+        self.last_expanded_width = default_width;
+    }
+
     pub(crate) fn current_width(&self) -> Pixels {
         if self.is_collapsed() {
             COLLAPSED_WIDTH
@@ -243,6 +273,7 @@ impl SidebarDock {
 
 impl Render for SidebarDock {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.follow_default_width(cx);
         let is_collapsed = self.is_collapsed();
 
         let pointer_entity = cx.entity().clone();
@@ -313,6 +344,7 @@ impl Render for SidebarDock {
 
         div()
             .id("sidebar-dock")
+            .debug_selector(|| "sidebar-dock".to_string())
             .relative()
             .h_full()
             .w(self.current_width())
@@ -322,18 +354,16 @@ impl Render for SidebarDock {
             .when_some(resize_listeners, |el, listeners| el.child(listeners))
             .when(!is_collapsed, |el| {
                 el.child(
-                    Island::new()
-                        .size_full()
-                        .child(
-                            div()
-                                .h_full()
-                                .w_full()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .child(self.sidebar.clone()),
-                        )
-                        .child(self.render_grip(window, cx)),
+                    Island::new().size_full().child(
+                        div()
+                            .h_full()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(self.sidebar.clone()),
+                    ),
                 )
+                .child(self.render_grip(window, cx))
             })
     }
 }
@@ -341,17 +371,35 @@ impl Render for SidebarDock {
 impl EventEmitter<SidebarDockEvent> for SidebarDock {}
 
 impl SidebarDock {
+    /// The seam between the sidebar and the document is the handle: it covers
+    /// the island's last `GRIP_INSET` and the desk gutter after it. It hangs
+    /// off the dock rather than the island, because the island clips what it
+    /// paints and hit-tests, and it comes after the island so nothing in the
+    /// sidebar sits above it.
     fn render_grip(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let line_color = cx.theme().accent.opacity(0.6);
+        let line_left = GRIP_INSET + (IslandMetrics::GAP - GRIP_LINE_WIDTH) / 2.0;
+        let dragging = self.is_resizing;
+
         div()
             .id("sidebar-grip")
+            .group("sidebar-grip")
             .absolute()
             .top_0()
             .bottom_0()
-            .right_0()
-            .w(GRIP_WIDTH)
+            .right(-IslandMetrics::GAP)
+            .w(GRIP_INSET + IslandMetrics::GAP)
             .cursor_col_resize()
-            .hover(|el| el.bg(cx.theme().accent.opacity(0.3)))
-            .when(self.is_resizing, |el| el.bg(ChromeColors::tint(cx.theme())))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(line_left)
+                    .w(GRIP_LINE_WIDTH)
+                    .group_hover("sidebar-grip", move |line| line.bg(line_color))
+                    .when(dragging, move |line| line.bg(line_color)),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {

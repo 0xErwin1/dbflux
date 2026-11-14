@@ -15,7 +15,7 @@
 
 ### 계층별 크레이트 맵
 
-종속성은 아래를 향합니다. `dbflux_core`는 다른 모든 크레이트가 기반으로 삼는 종속성 없는 계약 계층이며, UI는 구체적인 드라이버 크레이트에 의존하지 않습니다 ([드라이버/UI 분리](#드라이버-체계) 참조).
+종속성은 아래를 향합니다. `dbflux_core`는 나머지 워크스페이스가 기반으로 삼는 계약 계층이며, 다시 내보내는 실행 분류와 스키마 변경 타입을 위해 `dbflux_policy`라는 좁은 종속성 하나만 가집니다. UI는 구체적인 드라이버 크레이트에 의존하지 않습니다 ([드라이버/UI 분리](#드라이버-체계) 참조).
 
 ```mermaid
 flowchart TB
@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["보조 라이브러리"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["정책 — dbflux_policy"]
+        policy["ExecutionClassification,<br/>스키마 변경 분류"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "일반적인 경계면만" .-> core
@@ -93,7 +98,7 @@ flowchart TB
     start["연결 관리자 / 사이드바에서<br/>연결"] --> prep["AppState::prepare_pipeline_input<br/>(프로바이더 중립 입력)"]
     prep --> pre{{"PreConnect 훅"}}
     pre --> auth["파이프라인: Authenticating<br/>(DynAuthProvider, 예: AWS SSO)"]
-    auth --> values["파이프라인: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    auth --> values["파이프라인: ResolvingValues<br/>(ValueRef → env/dotenv/secret/param/auth)"]
     values --> access["파이프라인: OpeningAccess"]
     access --> tunnel{"액세스 종류?"}
     tunnel -->|직접| connect
@@ -110,7 +115,7 @@ flowchart TB
 - UI: `gpui`, `gpui-component` (Cargo.toml).
 - 데이터베이스: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB), 그리고 `reqwest`를 통한 HTTP (ClickHouse) (Cargo.toml).
 - AWS 인증/통합: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: `interprocess` 로컬 소켓 + `bincode` 메시지 프레이밍 (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
+- IPC/RPC: `interprocess` 로컬 소켓 + `postcard` 메시지 프레이밍 (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `dbflux_ssh`를 통한 `ssh2` (crates/dbflux_ssh/src/lib.rs).
 - 내보내기: `dbflux_export`를 통한 `csv` + `hex` + `base64` + `serde_json` (crates/dbflux_export/src/lib.rs).
 - 직렬화/설정: `serde`, `serde_json`, `dirs` (Cargo.toml).
@@ -225,6 +230,12 @@ crates/
         focus.rs            # 내부 포커스 관리
         live_output.rs      # 문서가 소유한 스트리밍 스크립트 출력 버퍼
         render.rs           # 도구 모음, 편집기, 실시간 출력 렌더링
+      console/              # NativeConsole: 문서 아래에 붙는 재사용 가능한 명령 콘솔
+        mod.rs              # 엔티티, 실행, 감사, 기록 불러오기, 렌더링
+        format.rs           # 위험 명령 게이트, 결과 서식, 불러오기 목록
+      console_document/     # ConsoleDocument: 별도 탭에 있는 네이티브 콘솔
+        mod.rs
+        pane.rs             # ConsoleDocument::into_pane 생성자
       key_value/            # Redis/키-값 전용 문서 탭
         mod.rs              # KeyValueDocument 엔티티
         pane.rs             # KeyValueDocument::into_pane 생성자
@@ -241,8 +252,8 @@ crates/
         mod.rs              # AuditDocument 엔티티
         pane.rs             # AuditDocument::into_pane 생성자
         view.rs             # LogStreamView 경계 구조체
-        render.rs           # 추출된 렌더 코드 (~1300 LOC)
-        commands.rs         # 추출된 명령 디스패치 (~560 LOC)
+        render.rs           # 추출된 렌더 코드
+        commands.rs         # 추출된 명령 디스패치
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -260,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView 엔티티 (dbflux_ui가 재노출)
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -271,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # 연결 트리; 스냅샷의 DatabaseLayout을 순회
   dbflux_ui_windows/        # 설정 창 + 연결 관리자 창
     src/
       ssh_shared.rs         # 공유 SSH 인증 UI 컴포넌트
@@ -304,10 +315,11 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # 프로필별 훅 바인딩
-  dbflux_ui/                # 얇은 통합자 (~13.5k LOC): 여섯 UI 크레이트를 서로 연결
+  dbflux_ui/                # 얇은 통합자: 여섯 UI 크레이트를 서로 연결
     src/                    # 이동된 하위 시스템을 이전 모듈 경로의 shim을 통해 재노출
       lib.rs                # 크레이트 루트; shim 모듈을 통한 재노출
       app.rs                # GPUI 앱 부트스트랩
+      app_menu.rs           # macOS 응용 프로그램 메뉴 막대(정보, 서비스, 가리기, 종료)
       ipc_server.rs         # 앱 제어 IPC 서버 (Focus, OpenScript)
       assets.rs             # 임베디드 SVG 아이콘을 위한 GPUI AssetSource 구현
       platform.rs           # Shim: pub use dbflux_ui_base::platform::*
@@ -426,7 +438,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + 앱/드라이버 프로토콜 상수
     src/protocol.rs         # 단일 인스턴스 앱 제어 메시지
     src/driver_protocol.rs  # 드라이버 RPC 요청/응답 스키마 (DTO + 오류)
-    src/framing.rs          # 길이 접두사 bincode 전송 프레이밍
+    src/framing.rs          # 길이 접두사 postcard 전송 프레이밍
     src/socket.rs           # 크로스 플랫폼 소켓 이름 지정 헬퍼
   dbflux_driver_ipc/        # 외부 RPC 서비스를 위한 DbDriver 어댑터
     src/driver.rs           # IpcDriver + 관리형 호스트 수명 주기
@@ -468,6 +480,9 @@ crates/
     src/driver.rs           # 로그 그룹/스트림 탐색, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 개체 스토리지 드라이버 (DatabaseCategory::ObjectStorage)
     src/driver.rs           # 버킷/개체 탐색, ObjectStoreConnection 구현, presign/copy/versions
+  dbflux_driver_aws_secrets/ # AWS Secrets Manager + Parameter Store 드라이버 (DatabaseCategory::SecretStore)
+    src/secrets_manager/    # ListSecrets/DescribeSecret/GetSecretValue 위의 SecretStoreSource
+    src/parameter_store/    # DescribeParameters/GetParameter 위의 SecretStoreSource, 클라이언트 측 경로 그룹화
   dbflux_aws/               # AWS 인증 공급자 + Secrets Manager/SSM 값 공급자
     src/auth.rs             # AWS SSO/shared/static 공급자 및 SSO 로그인 흐름
     src/config.rs           # ~/.aws/config 파서/캐시 및 프로필 쓰기 반환 헬퍼
@@ -575,11 +590,11 @@ crates/
 
 1. **`Tab`** (`tab_manager.rs`) — 단일 `Pane(Box<PaneHandle>)` 변형을 가진 `#[non_exhaustive]` 열거형입니다. 미래 버전과의 호환성(예: 이후 분리 가능한 창 변형)을 위해 열거형으로 유지됩니다. `TabManager`는 `Vec<Tab>`과 MRU 순서를 보유합니다.
 
-2. **`PaneHandle`** (`pane.rs`) — 기존의 닫힌(closed) `DocumentHandle` 열거형을 대체하는, 클로저를 지우는(closure-erasing) 셸입니다. 각 연산(render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe와 `resolve_close`, `save_for_close`, `flush_for_shutdown`, `is_file_backed_empty` 같은 선택적 헬퍼)은 타입화된 `Entity<T>`를 캡처하는 `Box<dyn Fn>` 클로저입니다. `PaneHandle`은 `!Clone`입니다. 각 문서 타입은 자체 `pane.rs` 파일(모두 `crates/dbflux_ui_document/src/` 아래)에서 `XxxDocument::into_pane(entity, cx) -> PaneHandle`을 제공합니다. 새 문서 타입을 추가해도 `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`는 변경할 필요가 없습니다.
+2. **`PaneHandle`** (`pane.rs`) — 기존의 닫힌(closed) `DocumentHandle` 열거형을 대체하는, 클로저를 지우는(closure-erasing) 셸입니다. 모든 연산은 타입화된 `Entity<T>`를 캡처하는 `Box<dyn Fn>` 클로저입니다: 렌더링과 포커스, 명령 디스패치, 순수 메타데이터 읽기(제목, 닫기 가능 여부, 연결과 활성 컨텍스트, 변경 요약, 새로 고침 정책), 활성 탭과 새로 고침 정책 같은 변경, 중복 제거 일치, 이벤트 구독, 그리고 문서별 선택적 헬퍼(닫기, 저장과 종료 정책, 사이드 패널, 패널 액션, 상태 표시줄 세그먼트)입니다. `PaneHandle`은 `!Clone`입니다. 각 문서 타입은 자체 `pane.rs` 파일(모두 `crates/dbflux_ui_document/src/` 아래)에서 `XxxDocument::into_pane(entity, cx) -> PaneHandle`을 제공합니다. 새 문서 타입을 추가해도 `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`는 변경할 필요가 없습니다.
 
-3. **`DocumentKey`** (`dedup.rs`) — 탭 중복 제거에 사용되는 식별 열거형입니다. 변형: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. 기존 `DocumentHandle`의 `is_*` 메서드를 대체합니다. 호출 지점은 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`를 사용합니다.
+3. **`DocumentKey`** (`dedup.rs`) — 탭 중복 제거에 사용되는 식별 열거형입니다. 변형 목록은 `dedup.rs`를 기준으로 합니다. 기존 `DocumentHandle`의 `is_*` 메서드를 대체합니다. 호출 지점은 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`를 사용합니다.
 
-4. **`DocumentEvent`** (`handle.rs`, 약 30 LOC) — 삭제된 네 개의 문서별 이벤트 열거형을 대체하는 통합 이벤트 열거형입니다. 변형: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
+4. **`DocumentEvent`** (`handle.rs`) — 삭제된 네 개의 문서별 이벤트 열거형을 대체하는 통합 이벤트 열거형입니다. 변형 목록은 `handle.rs`를 기준으로 합니다.
 
 5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — 범용 UI 프레임(chrome) 호스트입니다. `ResultPanel`은 프레임 행을 소유하고 본문 렌더링을 `ViewHandle`(render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode의 7개 클로저)에 위임합니다. 슬롯 시스템(`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`)은 뷰가 임의의 프레임 요소를 기여할 수 있게 합니다. `ResultPanel`은 내장 세그먼트(`available_modes.len() >= 2`일 때 Left/0의 모드 바)와 뷰가 제공한 세그먼트를 병합하고, `(position, index)`로 정렬하여 `flex_wrap` 행으로 렌더링합니다.
 
@@ -596,6 +611,7 @@ crates/
 - `BucketsTableDocument` (`crates/dbflux_ui_document/src/buckets_table/`) — 연결 루트 개체 스토리지 뷰(이름, 리전, 개체 수, 크기, 버저닝, 생성일)이며, `DataGridPanel` 대신 `dbflux_components::data_table`을 재사용합니다. `DocumentKey::ObjectStoreBucketsRoot`로 키가 지정됩니다.
 - `ObjectBrowserDocument` (`crates/dbflux_ui_document/src/object_browser/`) — 페이지 나누기와 지연 트리 탐색, 미리보기, 메타데이터, 업로드, 삭제, 이름 바꾸기, 사전 서명(presign)을 갖춘 분할 트리/미리보기 개체 스토리지 브라우저입니다. `DocumentKey::ObjectBrowser`로 키가 지정됩니다.
 - `ObjectEditorDocument` (`crates/dbflux_ui_document/src/object_editor/`) — S3 텍스트 개체를 위한 독립형 "open in editor" 탭이며, `ObjectBrowserDocument`의 인라인 편집기와 `object_text` 모듈(줄바꿈 감지, 언어 강조, 저장 감사)을 공유합니다. `DocumentKey::ObjectEditor`로 키가 지정됩니다.
+- `SecretStoreDocument` (`crates/dbflux_ui_document/src/secret_store/`) — 하나의 `SecretStoreSource`에 대해 이름 검색이 있는 페이지 나누기 시크릿 목록, 세부 정보 패널, 명시적이고 감사되는 값 조회를 제공합니다. 값은 `secrecy` 타입으로 보관되고 시크릿 입력으로만 그려지므로 UI 자동화 트리에 절대 도달하지 않습니다. `DocumentKey::SecretStore`로 키가 지정됩니다.
 
 **새 문서 타입 추가** (새 모듈 외부에서는 변경이 필요 없습니다):
 1. 엔티티를 담은 `crates/dbflux_ui_document/src/<name>/mod.rs`를 만듭니다.
@@ -637,13 +653,14 @@ crates/
 
 **영속성**: 마이그레이션 `017_qry_saved_queries`는 `qry_*` 테이블 계열(루트 + columns/sorts/joins 하위 테이블, 계단식 FK, `UNIQUE (profile_id, name)`)을 추가하며, `SavedQueryRepo`(`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`)와 인메모리 `SavedQueryManager`(`crates/dbflux_ui_base/src/saved_query_manager.rs`)가 이를 앞단에서 지원합니다. `TableProbe` 접점은 저장된 쿼리를 다른 연결로 가져올 때 드라이버 코드에 들어가지 않고 테이블 존재 여부를 검증합니다.
 
-**문서 쿼리 빌더**: 문서 컬렉션에는 별도의 레일이 있으며, 드라이버 id가 아니라 `DocumentFeatures::VISUAL_BUILDER`와 `Connection::document_query_codec()`이 반환하는 코덱으로 게이트됩니다. `DocumentQuerySpec`(`crates/dbflux_core/src/query/document_query.rs`)은 필터 트리, 유형이 있는 값, 포함/제외 프로젝션, 정렬, 제한, 건너뛰기, 선택적 그룹 단계(`$count` / `$sum` / `$avg`)를 표현합니다. 드라이버는 `DocumentQueryCodec`을 구현해 스펙을 find 칸(`DocumentFindSlots`), 파이프라인, 미리보기 텍스트로 렌더링하고 칸을 다시 스펙으로 파싱합니다. 표현할 수 없는 절은 `UnrepresentableClause`로 반환되므로 UI는 이를 덮어쓰지 않고 동기화 충돌을 표시합니다. UI는 `crates/dbflux_ui_document/src/document_builder/`와 `data_grid_panel/documents/builder.rs`에 있습니다. Find는 칸을 쓰고 `browse_collection`으로 실행하므로 결과는 편집 가능하게 유지되고, Aggregate 모드(`DocumentFeatures::AGGREGATE`로도 게이트됨)는 집계 뷰에서 파이프라인을 실행하며 결과는 읽기 전용입니다. 저장된 문서 쿼리는 마이그레이션 `037_qry_saved_document_queries`(스펙은 JSON으로 저장, `UNIQUE (profile_id, database_name, collection_name, name)`), `DocumentQueryRepo`, `SavedDocumentQueryManager`(`crates/dbflux_ui_base/src/saved_document_query_manager.rs`)를 사용합니다.
+**문서 쿼리 빌더**: 문서 컬렉션에는 별도의 레일이 있으며, 드라이버 id가 아니라 `DocumentFeatures::VISUAL_BUILDER`와 `Connection::document_query_codec()`이 반환하는 코덱으로 게이트됩니다. `DocumentQuerySpec`(`crates/dbflux_core/src/query/document_query.rs`)은 필터 트리, 유형이 있는 값, 포함/제외 프로젝션, 정렬, 제한, 건너뛰기, 선택적 그룹 단계(`$count` / `$sum` / `$avg`)를 표현합니다. 드라이버는 `DocumentQueryCodec`을 구현해 스펙을 find 칸(`DocumentFindSlots`), 파이프라인, 미리보기 텍스트로 렌더링하고 칸을 다시 스펙으로 파싱합니다. 표현할 수 없는 절은 `UnrepresentableClause`로 반환되므로 UI는 이를 덮어쓰지 않고 동기화 충돌을 표시합니다. UI는 `crates/dbflux_ui_document/src/document_builder/`와 `data_grid_panel/documents/builder/mod.rs`에 있습니다. Find는 칸을 쓰고 `browse_collection`으로 실행하므로 결과는 편집 가능하게 유지되고, Aggregate 모드(`DocumentFeatures::AGGREGATE`로도 게이트됨)는 집계 뷰에서 파이프라인을 실행하며 결과는 읽기 전용입니다. 저장된 문서 쿼리는 마이그레이션 `037_qry_saved_document_queries`(스펙은 JSON으로 저장, `UNIQUE (profile_id, database_name, collection_name, name)`), `DocumentQueryRepo`, `SavedDocumentQueryManager`(`crates/dbflux_ui_base/src/saved_document_query_manager.rs`)를 사용합니다.
 
 ### 데이터 시각화
 
 - **데이터 테이블**: `crates/dbflux_components/src/components/data_table/` — 정렬, 선택, phantom scroller 패턴을 통한 가로 스크롤, 키보드 탐색, 열 크기 조정, CRUD 작업이 있는 상황에 맞는 메뉴를 갖춘 사용자 정의 가상화 테이블입니다.
 - **문서 트리**: `crates/dbflux_components/src/components/document_tree/` — 키보드 탐색(j/k/h/l), 검색(Ctrl+F 또는 /), 접을 수 있는 노드, 뷰 모드(Keys Only, Keys+Preview, Full Values)를 갖춘 문서 데이터베이스용 계층적 JSON/BSON 뷰어입니다.
 - **키-값 뷰**: `crates/dbflux_ui_document/src/key_value/` — 타입별 렌더링(String, Hash, List, Set, SortedSet, Stream), 페이지 나누기, 변경, 상황에 맞는 메뉴를 갖춘 Redis 전용 문서 탭입니다. `key_value/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
+- **네이티브 콘솔**: `crates/dbflux_ui_document/src/console/`는 드라이버가 `DriverCapabilities::NATIVE_CONSOLE`을 알리는 연결을 위한 명령 콘솔입니다. `DriverMetadata::native_console()`은 쿼리 언어에서 프롬프트와 예시를 도출합니다. 명령은 드라이버 `LanguageService`의 검증과 위험 명령 감지를 거친 뒤 `Connection::execute`로 실행되고(드라이버가 격리된 세션을 제공하면 편집기의 `ExecutionSessionBinding`을 통해), 확인 후에는 확인된 상한을 함께 가지며, 편집기와 같은 `query_execute` 감사 행을 남기고 공유 쿼리 기록에 들어갑니다. 편집기의 행 제한은 `DriverCapabilities::REQUEST_ROW_LIMIT`을 알리는 드라이버에만 전송됩니다. 입력 자동 완성은 편집기의 `QueryCompletionProvider`를 재사용합니다. 키-값 문서와 테이블 및 컬렉션 `DataDocument`가 이 콘솔을 붙이며, `ConsoleDocument`(`console_document/`, `DocumentKey::Console`)는 사이드바의 데이터베이스 메뉴에서 여는 별도 탭에서 이 콘솔을 호스팅합니다.
 - **스키마 시각화**: `crates/dbflux_schema_viz/`는 `SchemaGraph`(테이블 노드와 외래 키 간선), 레이아웃 알고리즘(LeftRight, Snowflake, Compact), DBML 내보내기, SQL DDL 내보내기를 제공합니다. `crates/dbflux_ui_document/src/schema_viz/mod.rs`의 `SchemaVizDocument`를 통해 사용하며, 도구 모음 드롭다운(Layout, Export), 토스트 피드백, 감사 이벤트, 취소 가능한 백그라운드 작업 로딩을 갖추고 있습니다. `schema_viz/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
 - 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다.
 - 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다.
@@ -672,14 +689,15 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - 컬렉션/컨테이너 아래의 드라이버 소유 하위 리소스는 일반 `CollectionChildInfo` 메타데이터를 통해 게시됩니다. 사이드바는 이름, 필드 타입, 드라이버 ID로부터 드라이버별 하위 항목을 추론해서는 안 됩니다.
 - 루틴(함수, 프로시저, 집계, 창 함수)은 드라이버가 `ROUTINES` 기능을 설정하고 `schema_routines` 접점을 채울 때 스키마별 "Routines" 폴더로 나타납니다. UI는 이 폴더를 일반적으로 렌더링하며 어떤 드라이버도 특별 취급하지 않습니다.
 - 사이드바 독: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs`는 ToggleSidebar 명령(Ctrl+B)이 있는 접을 수 있고 크기 조절 가능한 사이드바를 제공합니다.
+- 연결 트리는 하나의 투영만 순회합니다. `SchemaSnapshot::database_layout`(`crates/dbflux_core/src/schema/listing.rs`)은 각 데이터베이스가 테이블과 뷰를 스키마 아래에 묶는지, 객체를 하나의 `ObjectFolder`(컬렉션 또는 측정값)에 나열하는지, 키스페이스인지를 알려 줍니다. 사이드바(`tree_builder/object_folder.rs`)는 이 설명으로 각 데이터베이스의 내용을 만들고, 컨텍스트 메뉴는 객체의 패싯과 같은 레이아웃을 읽습니다. S3 버킷처럼 드라이버가 연결 루트에 보여 주는 객체 종류는 스냅샷에 없으며, 드라이버의 루트 섹션에서 옵니다(드라이버 시스템 참조).
 - 연결 트리: `crates/dbflux_core/src/connection/tree.rs`는 폴더와 연결을 트리 구조로 모델링하고, `tree_manager.rs`가 인메모리 관리를 담당합니다.
 
 ### 드라이버 체계
 
 - **드라이버 기능**: `crates/dbflux_core/src/driver/capabilities.rs`는 다음을 정의합니다:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage, SecretStore
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (각각 편집기 모드, 자리 표시자, 주석 접두어를 전달합니다)
-  - `DriverCapabilities`: PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC 등의 기능을 위한 `u64` 비트플래그
+  - `DriverCapabilities`: PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC 등의 기능을 위한 `u128` 비트플래그
   - `DriverMetadata`: 정적 드라이버 정보(id, name, category, query_language, capabilities, icon)
 - **드라이버 소유 연결 폼**: 각 `DbDriver`는 `form_definition()`에서 자신의 `&DriverFormDef`를 반환합니다. 폼 정의는 코어가 아닌 드라이버 크레이트(예: `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`)에 있습니다. `DriverFormDef`는 탭 → 섹션 → 필드를 전달하며, `FormFieldKind`는 `Text`, `Password`, `WriteOnly`(시크릿), `FilePath`, `Select`, `DynamicSelect`(런타임에 가져오는 옵션, `depends_on` + `RefreshTrigger`), `AuthProfileRef { provider_id }`를 다룹니다.
 - **오류 포맷팅**: `crates/dbflux_core/src/core/error_formatter.rs`는 상세(detail), 힌트, 열, 테이블, 제약 조건 컨텍스트가 있는 드라이버별 오류 메시지를 위한 `ErrorFormatter` 트레잇을 제공합니다.
@@ -689,10 +707,14 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - **드라이버/UI 분리**: UI와 앱 오케스트레이션 계층은 구체적인 드라이버 ID로 분기하거나 드라이버별 라우팅을 내장해서는 안 됩니다. 코어가 접점을 노출하고 드라이버가 이를 채웁니다.
   - `DriverMetadata`는 폭넓은 적응(`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`)을 담당합니다.
   - `CollectionPresentation`은 컬렉션/컨테이너가 어떻게 열리는지(예: 데이터 그리드 vs 이벤트 스트림) UI에 알려줍니다.
+  - `ObjectFacet`(`crates/dbflux_core/src/schema/facet.rs`)은 하나의 개체가 노출하는 패러다임(`Tabular`, `Document`, `Vector`, `TimeSeries`)을 나타냅니다. `CollectionPresentation`은 어떤 문서가 열릴지 고르고, facet은 데이터 문서 안의 뷰 모드, 게이트, 필터 문구를 고릅니다. `Connection::object_facets`(테이블)와 `Connection::collection_facets`(컬렉션)의 기본값은 `[Tabular]`이며 드라이버가 재정의합니다. PostgreSQL은 `json`/`jsonb` 열에 `Document`, TimescaleDB 하이퍼테이블에 `TimeSeries`, `vector(n)` 열마다 `Vector`를 추가합니다. MongoDB와 DynamoDB는 `[Document, Tabular]`를, InfluxDB는 `time` 위의 `TimeSeries`를 선언합니다. 와이어가 facet을 전달하지 않으므로 RPC 어댑터만 선언된 카테고리에서 facet을 도출합니다(`category_collection_facets`). `TimeSeries`는 행 옆에 시간 열 기준 차트를 열고, 테이블의 `Document`는 JSON 값이 펼쳐진 읽기 전용 문서 트리를 엽니다. 이 열거형은 exhaustive이므로 새 facet은 `DataViewMode::for_facet`(`crates/dbflux_ui_document/src/data_view.rs`)가 처리할 때까지 컴파일되지 않습니다. 최근접 이웃 SQL은 `QueryGenerator::generate_nearest_neighbors`를 통해 드라이버가 소유하며, 기본값은 미지원입니다.
+  - `category_presentation`(`crates/dbflux_components/src/category.rs`)은 카테고리별 대체 아이콘, 톤, 스키마 트리 컨테이너 레이블을 담는 단일 테이블입니다. 새 `DatabaseCategory`는 UI 크레이트마다 match를 두는 대신 여기에 arm 하나를 추가합니다.
+  - `DataStructure::ReservedGraph`와 `ReservedWideColumn`은 postcard 와이어 인덱스 3과 4를, `DatabaseCategory::ReservedGraph`와 `ReservedWideColumn`은 인덱스 3과 5를 차지하여 뒤따르는 변형이 드라이버 RPC 피어에 대해 인덱스를 유지하게 합니다. `crates/dbflux_ipc/tests/driver_wire_roundtrip.rs`가 두 열거형의 인덱스를 고정합니다. 변형을 제거하거나 순서를 바꾸지 마십시오.
   - `CollectionChildInfo`는 드라이버가 UI 휴리스틱 없이 컬렉션/컨테이너 아래에 하위 소스를 게시할 수 있게 합니다.
   - `EventStreamTarget`는 워크스페이스/감사에 드라이버 지원 이벤트 스트림의 일반 식별자를 제공합니다.
   - `SourceContextSpec`는 드라이버가 `dbflux_ui`에 드라이버 이름을 하드코딩하지 않고 추가 쿼리 컨텍스트 컨트롤을 선언할 수 있게 합니다.
   - `Connection::object_store_api()`를 통해 도달하는 `ObjectStoreConnection`(`crates/dbflux_core/src/core/traits.rs`)은 개체 스토리지 접점(버킷/개체 나열, CRUD, presign, 복사, 버전)입니다. `CollectionPresentation::ObjectBrowser`와 `PaneHandle::status_segments()`는 UI가 드라이버 ID로 분기하지 않고 개체 스토리지 문서를 열고 프레임(chrome)을 입힐 수 있게 합니다.
+  - `Connection::root_section_source()`를 통해 도달하고 `DriverCapabilities::ROOT_SECTIONS`로 게이트되는 `RootSectionSource`(`crates/dbflux_core/src/connection/root_section/mod.rs`)는 사이드바에서 연결 루트에 표시되는 객체 종류를 선언합니다. 각 `RootSectionDef`는 안정적인 id, 레이블, 빈 상태 레이블, 폴더용 선택적 `RootSectionPresentation`, 항목이 열리는 `RootItemPresentation`, 연결 행 활성화 시 섹션을 여는지 여부, 항목 액션을 담습니다. `list_items`는 `next_page_token`이 있는 `RootSectionItem`의 `RootSectionPage`를 반환합니다. 노드 id `SchemaNodeId::RootSection`, `RootSectionItem`, `RootSectionLoadMore`는 섹션 id를 담으므로 새 객체 종류에 `SchemaNodeKind` 변형이 필요하지 않습니다. 하나의 범용 렌더러(`crates/dbflux_ui_sidebar/src/root_sections/`)가 폴더를 만들고, 프로필별로 목록을 캐시하며, 요청 시 다음 페이지를 불러옵니다. 선언 또는 첫 페이지 가져오기에 실패하면 다시 시도 행을 표시하며, 빈 결과로 캐시하지 않습니다. 노드 id가 섹션 id를 포함하므로 섹션 id에는 `|`를 넣을 수 없으며, 사이드바는 그런 선언을 거부하고 알립니다. 폴더 또는 항목 프레젠테이션에 `Connection::object_store_api`가 필요한 섹션은 그것이 없는 연결에서 숨겨집니다. 워크스페이스는 선언된 프레젠테이션으로 활성화를 라우팅합니다(`ObjectContainerTable`은 컨테이너 테이블을, `ObjectBrowser`는 개체 브라우저를 엽니다). 레이블은 `LocalizedText`로, 호스트 i18n 카탈로그의 선택적 키와 필수 영어 대체 텍스트로 이루어지며 `dbflux_i18n::try_translate`로 해석됩니다. 각 `RootSectionAction`은 `ExecutionClassification`을 담습니다. `Destructive`, `Admin`, `AdminDestructive`는 확인을 요청하고, 모든 실행은 성공 여부와 관계없이 `Governance` 감사 행을 기록합니다. 액션은 요청된 연결에서만 실행되며, 프로필의 `MutationPolicy`가 `Read`를 넘는 모든 액션을 제한합니다. `ReadOnly`는 이를 거부하고, 승인 흐름이 이 액션들을 지원하기 전까지는 `ApprovalRequired`도 거부합니다. 성공한 액션은 섹션을 다시 나열하고 그 섹션을 표시하는 열린 문서를 다시 불러옵니다. 외부 드라이버는 드라이버 RPC 1.9(`RootSections`, `RootSectionItems`, `ExecuteRootSectionAction`)로 이 seam에 도달합니다. S3가 참조 구현입니다. 항목이 개체 브라우저에서 열리는 하나의 `buckets` 섹션과 `AdminDestructive`로 분류된 Delete bucket 액션을 제공합니다.
   - UI에 새 동작이 필요하면 먼저 일반 코어 추상화를 추가합니다. `dbflux_ui`나 앱 대면 워크플로 코드에 `if driver_id == ...`를 추가하지 않습니다.
 ### 인증 및 접근 파이프라인
 
@@ -853,7 +875,11 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
   - 버킷 탐색(연결 루트의 `BucketsTableDocument`)과 수준별 페이지 나누기가 적용된 개체 탐색(`ObjectBrowserDocument`), 선택적인 페이지 나누기 없는 트리 모드
   - `ObjectStoreConnection` 구현은 업로드, 삭제, 재귀적 접두사/버킷 삭제(일괄 처리된 `DeleteObjects`), 복사, 사전 서명, 버킷 세부 정보/버전 관리, 개체 버전을 다룹니다
   - UI의 전체 CRUD: 업로드, 확인 입력 방식의 재귀 삭제, 엔드포인트별 단계적 기능 저하가 있는 폴더/버킷 만들기, 이름 바꾸기(복사 후 삭제), 사전 서명된 URL
-  - 모든 변경은 `EventCategory::ObjectStorage` 아래로 감사 기록됩니다; 자격 증명과 사전 서명된 URL은 절대 로깅되거나 저장되지 않습니다
+  - 버킷 테이블이나 객체 브라우저에서 수행한 모든 변경은 감사가 활성화된 경우 `EventCategory::ObjectStorage` 아래로 감사 기록됩니다. 감사 기록 쓰기가 실패하면 경고가 로그에 남고 변경은 그대로 유지되며, 대체 기록은 남지 않습니다; 사이드바의 Delete bucket 동작은 루트 섹션 동작이므로 `EventCategory::Governance` 아래로 감사 기록됩니다. 자격 증명과 사전 서명된 URL은 절대 로깅되거나 저장되지 않습니다
+- **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — `aws-sdk-secretsmanager` + `aws-sdk-ssm` 드라이버(`DatabaseCategory::SecretStore`)입니다:
+  - `Connection::secret_stores()`와 공급자 중립적인 `SecretStoreSource` seam(`dbflux_core/src/connection/secret_store/`)으로 두 저장소를 노출하며, `DriverCapabilities::SECRET_STORE`로 게이트됩니다. 저장소별 `SecretStoreCapabilities`가 UI 동작을 게이트합니다
+  - 목록(`ListSecrets`, `DescribeParameters`)은 값을 절대 가져오지 않습니다. Parameter Store 경로는 클라이언트 측에서 직접 항목과 하위 경로로 묶입니다
+  - 값은 명시적인 조회로만 읽히며, 값 없이 `EventCategory::SecretStore` 아래로 감사 기록됩니다. 거부된 `kms:Decrypt`는 `DbError::PermissionDenied`로 매핑됩니다
 
 ### 드라이버 README 정책
 
@@ -862,14 +888,14 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 
 ### 지원 구성 요소
 
-- 토스트 시스템: 성공/정보/경고 토스트에 대해 자동 닫힘(4초)이 있는 `crates/dbflux_ui_base/src/toast.rs` 자체 구현입니다. (`crates/dbflux_ui/src/ui/components/toast.rs`에 심(shim)이 있습니다.)
+- 토스트 시스템: 성공/정보/경고 토스트를 위한 설정 가능한 자동 닫힘을 갖춘 `crates/dbflux_ui_base/src/toast.rs` 자체 구현입니다(기본 8초, 경고 토스트는 그 두 배; Settings > General에서 설정).
 - 터널 인프라: `crates/dbflux_tunnel_core/`는 `TunnelConnector` 트레이트와 `ForwardingConnection<R>` 양방향 포워더를 갖춘 RAII `Tunnel`을 제공합니다.
 - 프록시 터널링: `crates/dbflux_proxy/`는 `TunnelConnector`를 통해 SOCKS5 및 HTTP CONNECT 프록시 터널을 구현합니다.
 - SSH 터널링: `crates/dbflux_ssh/src/lib.rs`는 `TunnelConnector`를 통해 SSH 터널을 구현하며, libssh2 안전성을 위해 모든 작업을 하나의 스레드로 직렬화합니다.
 - 내보내기: `crates/dbflux_export/`는 셰이프 기반 내보내기(CSV, JSON pretty/compact, Text, Binary/Hex/Base64)를 제공합니다. 형식 가용성은 드라이버가 아니라 `QueryResultShape`에 의해 결정됩니다. 각 형식은 자체 모듈(`binary.rs`, `csv.rs`, `json.rs`, `text.rs`)을 갖습니다. 파일 대화 상자 가용성은 `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()`를 통해 런타임에 탐지됩니다(Linux에서는 `PATH`에서 `xdg-desktop-portal`, `zenity`, `kdialog`를 확인); 사용 가능한 백엔드가 없으면 내보내기는 `unique_path_in()` 충돌 방지와 함께 `fallback_export_dir()`(`~/.local/share/dbflux/exports/`)로 폴백합니다. 클립보드 내보내기 경로도 대체 대상으로 사용할 수 있습니다.
 - 테스트 지원: `crates/dbflux_test_support/`는 모든 드라이버에 걸친 라이브 통합 테스트를 위한 Docker 컨테이너 관리와 픽스처를 제공합니다. DynamoDB Local은 통합 테스트와 로컬 검증에만 사용됩니다; 프로덕션 사용은 원격 AWS DynamoDB 엔드포인트를 대상으로 합니다.
 - 아이콘 시스템: `crates/dbflux_components/src/icons/mod.rs`에 정의된 `AppIcon` 열거형; 내장 SVG 바이트와 `ALL_ICONS` 목록은 `crates/dbflux_ui/src/ui/icons/mod.rs`에 그대로 있으며(리소스는 `crates/dbflux_ui/resources/` 아래), `assets.rs`를 통해 로드됩니다.
-- 플랫폼 감지: `crates/dbflux_ui_base/src/platform.rs`는 X11/Wayland 차이를 처리하며, 적절한 창 최소 크기 힌트를 위해 `is_x11()`, `floating_window_kind()`, `apply_window_options()`를 제공합니다. (`crates/dbflux_ui/src/platform.rs`에 심(shim)이 있습니다.)
+- 플랫폼 감지: `crates/dbflux_ui_base/src/platform.rs`는 X11/Wayland 차이를 처리하며, 적절한 창 최소 크기 힌트를 위해 `is_x11()`, 메인 창을 위한 `apply_main_window_options()`, 보조 창을 위한 `floating_window_kind()`와 `apply_window_options()`를 제공합니다. (`crates/dbflux_ui/src/platform.rs`에 심(shim)이 있습니다.)
 
 ### MCP 거버넌스 시스템
 
@@ -962,8 +988,9 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 - ClickHouse: `reqwest`를 사용하는 HTTP(S) 드라이버로, 동적 JSON 디코딩, 데이터베이스/테이블 탐색, 셀프호스티드 ClickHouse와 ClickHouse Cloud를 위한 읽기 중심 SQL 지원을 제공합니다 (crates/dbflux_driver_clickhouse/src/driver.rs).
 - TursoDB: Hrana HTTP 위의 `turso_serverless` 드라이버로, 프로필별 Tokio 브리징, PRAGMA 기반 스키마 탐색, 타입이 지정된 CRUD, 대화형 트랜잭션을 위한 스트림별 실행 세션을 제공합니다 (crates/dbflux_driver_turso/src/connection.rs).
 - Amazon S3: `aws-sdk-s3` 드라이버로, AWS 프로필/SSO 또는 정적 자격 증명, S3 호환 엔드포인트(Cloudflare R2, MinIO)를 위한 엔드포인트 재정의와 경로 스타일 주소 지정, 버킷/개체 CRUD, presigned URL, 복사/버전 지원을 제공합니다 (crates/dbflux_driver_s3/src/driver.rs).
+- AWS Secrets: `aws-sdk-secretsmanager`와 `aws-sdk-ssm` 드라이버로, AWS 프로필/SSO 또는 정적 자격 증명과 엔드포인트 재정의, 페이지 나누기 시크릿 및 파라미터 목록, 세부 정보, 명시적 값 조회를 제공합니다 (crates/dbflux_driver_aws_secrets/src/driver/mod.rs).
 - AWS 인증 스택: `dbflux_aws`는 AWS SSO/공유/정적 인증 제공자, SSO 로그인 오케스트레이션, 계정/역할 탐색, 새로 저장된 인증 프로필을 위한 `~/.aws/config` 프로필 쓰기 되돌리기를 제공합니다.
-- 로컬 IPC/RPC: 앱 제어와 RPC 서비스 통신을 위한 `interprocess` 소켓 + 버전이 지정된 엔벨로프 (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services`는 영속화된 서비스 디스크립터를 탐색하고, `RpcServiceKind::Driver`를 런타임 `DbDriver`로 변환하며, `RpcServiceKind::AuthProvider`를 `RpcAuthProvider`(`DynAuthProvider`를 구현)에 연결합니다. `rpc:<socket_id>` 호환성을 유지합니다. 인증 제공자 IPC 프로토콜은 v1.2입니다: `FetchDynamicOptions` / `DynamicOptions` 변형과 `secret_dependency_opt_in` 매니페스트 플래그를 추가합니다. 인증 토큰은 `dbflux_ipc/src/auth.rs`가 관리합니다.
+- 로컬 IPC/RPC: 앱 제어와 RPC 서비스 통신을 위한 `interprocess` 소켓 + 버전이 지정된 엔벨로프 (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services`는 영속화된 서비스 디스크립터를 탐색하고, `RpcServiceKind::Driver`를 런타임 `DbDriver`로 변환하며, `RpcServiceKind::AuthProvider`를 `RpcAuthProvider`(`DynAuthProvider`를 구현)에, `RpcServiceKind::SecretProvider`를 `RpcSecretProvider`(`DynSecretProvider`를 구현, [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md) 참고)에 연결합니다. `rpc:<socket_id>` 호환성을 유지합니다. 인증 제공자 IPC 프로토콜은 v1.2입니다: `FetchDynamicOptions` / `DynamicOptions` 변형과 `secret_dependency_opt_in` 매니페스트 플래그를 추가합니다. 인증 토큰은 `dbflux_ipc/src/auth.rs`가 관리합니다.
 - 프록시: `dbflux_tunnel_core::Tunnel`을 통한 SOCKS5/HTTP CONNECT 터널 (crates/dbflux_proxy/src/lib.rs).
 - SSH: `dbflux_tunnel_core::Tunnel`을 통한 로컬 TCP 포워딩이 있는 `ssh2` 세션 (crates/dbflux_ssh/src/lib.rs).
 - OS 키링: 비밀번호, SSH 패스프레이즈, 프록시 자격 증명을 위한 선택적 비밀 저장소 (crates/dbflux_core/src/storage/secrets.rs).
@@ -972,13 +999,14 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 ## 구성
 
 - 워크스페이스 설정: `Cargo.toml`은 워크스페이스 멤버와 공유 종속성을 정의합니다.
-- 앱 기능: `crates/dbflux/Cargo.toml`은 `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `lua`, `aws`, `mcp` 기능 플래그를 게이트합니다 (이 브랜치에서 기본 활성화).
+- 앱 기능: `crates/dbflux/Cargo.toml`은 `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `aws_secrets`, `lua`, `aws`, `mcp` 기능 플래그를 게이트합니다 (이 브랜치에서 기본 활성화).
 - 런타임 데이터: 모든 런타임 구성은 `~/.local/share/dbflux/dbflux.db`(단일 SQLite 파일)에 저장됩니다.
   - `cfg_connection_profiles` + 하위 테이블 (인증, 프록시, SSH 바인딩)
   - `cfg_auth_profiles` (제공자에 구애받지 않는 인증 프로필 저장소)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
-  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC 서비스 디스크립터; `cfg_services.service_kind`은 `driver`와 `auth_provider` 중 무엇인지 기록)
+  - `cfg_script_roots` (제자리에서 나열되는 외부 스크립트 폴더. 행을 삭제해도 폴더는 건드리지 않음)
+  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC 서비스 디스크립터; `cfg_services.service_kind`은 `driver`, `auth_provider`, `secret_provider` 중 무엇인지 기록)
   - `cfg_governance_*` 테이블 (역할, 정책, 신뢰할 수 있는 클라이언트)
   - `cfg_drivers` (드라이버별 설정 재정의)
   - `cfg_folders` (연결 트리 조직화)
@@ -995,7 +1023,7 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
   - 가져오기는 멱등적입니다 (`sys_legacy_imports`에서 추적)
 - 세션 데이터 (데이터 디렉터리):
   - `sessions/` 편집기 자동 저장과 복구를 위한 스크래치 및 섀도 파일 (crates/dbflux_storage/src/artifacts.rs).
-  - `scripts/` 사용자 스크립트 폴더 (crates/dbflux_core/src/config/scripts_directory.rs).
+  - `scripts/` 사용자 스크립트 폴더 (crates/dbflux_core/src/config/scripts_directory.rs). `ScriptsDirectory`는 `cfg_script_roots`에 등록된 외부 폴더도 보관합니다. 모든 파일 작업은 하나의 루트 안에서만 이루어지고(외부 루트에서는 확인된 실제 경로 기준이므로 밖으로 나가는 심볼릭 링크는 나열되지도 쓰이지도 않음), 변경은 메모리의 트리만 갱신하며 검색은 UI 스레드 밖에서 실행되고, MCP 스크립트 도구는 `scripts/`만 봅니다.
 - 비밀: 비밀번호는 OS 키링에 저장되고, 참조는 프로필 ID에서 파생됩니다. `HasSecretRef` 트레이트는 SSH 터널과 프록시 비밀 작업을 통합합니다 (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## 빌드 및 배포

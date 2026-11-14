@@ -86,7 +86,7 @@ impl super::KeyValueDocument {
                     KeyValueFocusMode::ValuePanel => KvMenuTarget::Value,
                     _ => KvMenuTarget::Key,
                 };
-                let position = self.keyboard_menu_position(target);
+                let position = self.keyboard_menu_position(target, window);
                 self.open_context_menu(target, position, window, cx);
                 true
             }
@@ -299,7 +299,7 @@ impl super::KeyValueDocument {
                 true
             }
             Command::Cancel => {
-                if self.console.pending.is_some() {
+                if self.console_has_pending(cx) {
                     self.cancel_console_command(cx);
                 } else if self.bulk_actions_open {
                     self.bulk_actions_open = false;
@@ -326,6 +326,12 @@ impl super::KeyValueDocument {
                 true
             }
             Command::Execute => {
+                // In the console's input, Enter already answers through the
+                // input itself.
+                if self.focus_mode != KeyValueFocusMode::TextInput && self.console_has_pending(cx) {
+                    self.confirm_console_command(cx);
+                    return true;
+                }
                 if self.pending_key_delete.is_some() {
                     self.confirm_delete_key(cx);
                     return true;
@@ -398,12 +404,19 @@ impl super::KeyValueDocument {
                 true
             }
             Command::ResultsAddRow => {
+                // Open the dialog here rather than deferring to render: a
+                // modal made visible during this document's render would be
+                // seen by the window root one frame late, when the root has
+                // already computed the key context for the frame, so Tab on
+                // the very next keystroke would fall through to the root.
                 if self.focus_mode == KeyValueFocusMode::ValuePanel && self.is_structured_type() {
                     if let Some(key_type) = self.selected_key_type() {
-                        self.pending_open_add_member_modal = Some(key_type);
+                        self.add_member_modal
+                            .update(cx, |modal, cx| modal.open(key_type, window, cx));
                     }
                 } else {
-                    self.pending_open_new_key_modal = true;
+                    self.new_key_modal
+                        .update(cx, |modal, cx| modal.open(window, cx));
                 }
                 cx.notify();
                 true

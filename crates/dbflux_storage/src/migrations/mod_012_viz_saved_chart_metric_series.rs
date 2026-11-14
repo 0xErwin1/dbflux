@@ -29,7 +29,7 @@ use rusqlite::Transaction;
 
 use crate::migrations::{Migration, MigrationError};
 
-pub struct MigrationImpl;
+pub(crate) struct MigrationImpl;
 
 impl Migration for MigrationImpl {
     fn name(&self) -> &str {
@@ -216,8 +216,8 @@ mod tests {
             .unwrap();
         stmt.query_map([], |row| row.get::<_, String>(1))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .expect("every row reads")
     }
 
     /// Fresh install creates the series table and drops legacy metric columns

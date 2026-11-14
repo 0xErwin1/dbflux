@@ -102,14 +102,14 @@ pub(crate) struct AliasGen {
 }
 
 impl AliasGen {
-    pub fn new(source_table: &str) -> Self {
+    pub(crate) fn new(source_table: &str) -> Self {
         let mut used = HashMap::new();
         used.insert(source_table.to_lowercase(), 1);
         Self { used }
     }
 
     /// Returns the next unique alias for `target_table`.
-    pub fn next_alias(&mut self, target_table: &str) -> String {
+    pub(crate) fn next_alias(&mut self, target_table: &str) -> String {
         let key = target_table.to_lowercase();
         let count = self.used.entry(key).or_insert(0);
         *count += 1;
@@ -130,7 +130,7 @@ impl AliasGen {
 /// `source` provides the base table name, alias, and optional schema.
 /// `fks` is the slice of FK metadata for the current `(database, schema)`.
 /// `dialect` is used for identifier case-normalisation only.
-pub fn resolve(
+pub(crate) fn resolve(
     ast: RelationalFilterAst,
     source: SourceTable,
     fks: &[SchemaForeignKeyInfo],
@@ -211,8 +211,17 @@ impl<'a> ResolveCtx<'a> {
             })),
 
             Lhs::DottedPath { segments } => {
-                let hops = &segments[..segments.len() - 1];
-                let terminal_column = &segments[segments.len() - 1];
+                // The parser only emits `DottedPath` with at least two
+                // segments (a single segment becomes `Lhs::BareColumn`), so
+                // `split_last` always yields the terminal column here.
+                let Some((terminal_column, hops)) = segments.split_last() else {
+                    return Err(ResolveError::Unknown {
+                        segment: String::new(),
+                        from_table: self.source_alias.clone(),
+                        span: pred.span,
+                        partial_spec: self.build_partial_spec_so_far(&self.source_alias),
+                    });
+                };
 
                 let mut current_table = self.source_alias.clone();
                 let mut current_alias = self.source_alias.clone();
@@ -221,6 +230,24 @@ impl<'a> ResolveCtx<'a> {
                     let (fk, next_alias) =
                         self.resolve_hop(segment, &current_table, &current_alias, pred.span)?;
 
+                    // A matched FK with an empty column list cannot produce a
+                    // join condition; report the hop as unknown instead of
+                    // panicking on the first element.
+                    let (from_column, to_column) =
+                        match (fk.columns.first(), fk.referenced_columns.first()) {
+                            (Some(from_column), Some(to_column)) => {
+                                (from_column.clone(), to_column.clone())
+                            }
+                            _ => {
+                                return Err(ResolveError::Unknown {
+                                    segment: segment.to_string(),
+                                    from_table: current_table.clone(),
+                                    span: pred.span,
+                                    partial_spec: self.build_partial_spec_so_far(&current_alias),
+                                });
+                            }
+                        };
+
                     self.joins.push(JoinStep {
                         kind: JoinKind::Inner,
                         from_alias: current_alias.clone(),
@@ -228,8 +255,8 @@ impl<'a> ResolveCtx<'a> {
                         to_table: fk.referenced_table.clone(),
                         to_alias: next_alias.clone(),
                         on: JoinOn::FkPath {
-                            from_column: fk.columns[0].clone(),
-                            to_column: fk.referenced_columns[0].clone(),
+                            from_column,
+                            to_column,
                         },
                     });
 
@@ -281,10 +308,10 @@ impl<'a> ResolveCtx<'a> {
         let s_id_camel = format!("{}id", norm_seg);
 
         for fk in &candidates_for_table {
-            if fk.columns.is_empty() {
+            let Some(first_column) = fk.columns.first() else {
                 continue;
-            }
-            let norm_col = self.dialect.normalize_identifier(&fk.columns[0]);
+            };
+            let norm_col = self.dialect.normalize_identifier(first_column);
             if norm_col == norm_seg || norm_col == s_id || norm_col == s_id_camel {
                 matches.push(fk);
             }
@@ -307,8 +334,8 @@ impl<'a> ResolveCtx<'a> {
         // Deduplicate by FK name (or by columns if name is empty)
         matches.dedup_by_key(|fk| fk.name.clone());
 
-        match matches.len() {
-            0 => {
+        match matches.as_slice() {
+            [] => {
                 let partial_spec = self.build_partial_spec_so_far(current_alias);
                 Err(ResolveError::Unknown {
                     segment: segment.to_string(),
@@ -317,8 +344,8 @@ impl<'a> ResolveCtx<'a> {
                     partial_spec,
                 })
             }
-            1 => {
-                let fk = (*matches[0]).clone();
+            [fk] => {
+                let fk = (**fk).clone();
                 let next_alias = self.aliases.next_alias(&fk.referenced_table);
                 Ok((fk, next_alias))
             }
@@ -547,6 +574,42 @@ mod tests {
             "got: {:?}",
             err
         );
+    }
+
+    #[test]
+    fn resolver_rejects_empty_foreign_key_columns_in_table_name_fallback() {
+        for empty_local_columns in [true, false] {
+            let mut foreign_key = make_fk("posts", "created_by_id", "users", "id");
+            if empty_local_columns {
+                foreign_key.columns.clear();
+            } else {
+                foreign_key.referenced_columns.clear();
+            }
+
+            let ast = parse("user.name = 'Alice'").expect("valid dotted predicate");
+            let error = resolve(
+                ast,
+                make_source("posts"),
+                &[foreign_key],
+                &DefaultSqlDialect,
+            )
+            .expect_err("an incomplete foreign key must not produce a join");
+
+            assert!(
+                matches!(
+                    error,
+                    ResolveError::Unknown {
+                        ref segment,
+                        ref from_table,
+                        ref partial_spec,
+                        ..
+                    } if segment == "user"
+                        && from_table == "posts"
+                        && partial_spec.joins.is_empty()
+                ),
+                "unexpected resolution error: {error:?}"
+            );
+        }
     }
 
     // T17: multi-hop traversal

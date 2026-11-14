@@ -13,23 +13,46 @@ Base de datos relacional open-source avanzada.
 
 - Driver relacional de PostgreSQL con ejecución de queries SQL y descubrimiento
   de schema.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
+  con la validación del editor, la confirmación de queries peligrosas, las
+  filas de auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Soporta schemas, tablas, vistas, índices, foreign keys, constraints CHECK,
   constraints UNIQUE, y tipos personalizados.
 - Expone routines almacenadas (funciones, procedures, agregados, funciones
   window) en el árbol de schema con un visor de definición de solo lectura.
-- Soporta autenticación, SSL, túnel SSH, y modos de conexión URI/manual.
+- Soporta autenticación, SSL, túnel SSH, y modos de conexión URI/manual. Como en libpq, `verify-ca` valida solo la cadena de certificados y `verify-full` además comprueba el nombre del host.
+- Archivos de certificado TLS: los campos de certificado raíz, certificado de cliente y clave de cliente del Connection Manager, o los parámetros URI de libpq `sslrootcert`, `sslcert` y `sslkey` (por ejemplo `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). Con `verify-ca` y `verify-full` el certificado raíz se agrega a las raíces de confianza; los demás modos no validan la cadena y lo ignoran. El certificado y la clave de cliente se presentan para TLS mutuo en todos los modos excepto `disable`. Los archivos son PEM; la clave de cliente debe ser PKCS#8. Un archivo inexistente, ilegible o inválido, o un certificado de cliente sin su clave (o al revés), hace fallar la conexión con un error que nombra el archivo, antes de cualquier intento de conexión. Con `sslmode=disable` los archivos se ignoran.
 - Soporta cancelación de queries a través de los cancel tokens de PostgreSQL.
 - Incluye generación de SQL/código específica de PostgreSQL para CRUD, índices,
   reindex, foreign keys, y operaciones de tipos.
 - Los scripts multi-sentencia (varias sentencias separadas por `;`) se ejecutan
   como un lote vía el simple query protocol, devolviendo un result set por
   sentencia.
+- Los avisos y advertencias del servidor que produce una consulta (por ejemplo `WARNING: there is no transaction in progress` de un `COMMIT` suelto, o `RAISE NOTICE`) se devuelven con su resultado; un lote los adjunta todos al resultado principal y una consulta fallida los descarta. Una consulta conserva sus primeros 100 avisos, seguidos de uno que cuenta el resto.
 - Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
   (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
   de una tabla origen, soporte de `TRUNCATE TABLE`, y un toggle de integridad
   referencial (`SET session_replication_role`) para migraciones seguras con FK.
 - Muestra valores `vector`, `halfvec`, y `sparsevec` de `pgvector`, incluyendo
   arrays unidimensionales verificados, como resultados textuales.
+- Encuentra las filas más cercanas a una fila seleccionada en una tabla con una
+  columna `vector` de `pgvector`, por distancia L2, distancia coseno o producto
+  interno. La consulta nombra la distancia `nearest_distance`
+  (`dbflux_core::NEAREST_DISTANCE_COLUMN`); la grilla la muestra primero, bajo
+  la fila seleccionada, y muestra el producto interno en sí en lugar del
+  producto negativo de pgvector. Las columnas
+  `halfvec` y `sparsevec` no ofrecen la búsqueda.
+- Una tabla con una columna `json` o `jsonb` ofrece una vista Documento junto a
+  la grilla: cada fila se abre como un documento con sus valores JSON
+  expandidos. El árbol es de solo lectura; las ediciones pasan por la grilla.
+- Una hypertable de TimescaleDB se lee como serie temporal: sus detalles llevan
+  una pista de almacenamiento `Hypertable` que nombra la dimensión de tiempo, y
+  la tabla se abre con un gráfico sobre esa columna junto a las filas. En un
+  servidor sin TimescaleDB no cambia nada.
 - Muestra valores `tsvector` y `tsquery` de búsqueda de texto completo,
   incluyendo arrays unidimensionales, en la forma de texto canónica de
   PostgreSQL.
@@ -46,6 +69,16 @@ Base de datos relacional open-source avanzada.
   `DELETE` del rol autenticado sobre las tablas base visibles; una base vacía
   o un fallo en la verificación es inconcluyente y deja intacta la política de
   mutación del perfil.
+- Vistas de tabla (`TableViewFeatures`): la vista Columnas de una tabla muestra
+  las estadísticas del planificador desde `pg_stats` (proporción de nulos,
+  estimación de valores distintos, límites del histograma como rango, valores
+  más comunes con su proporción) y el método de acceso de la tabla, la clave de
+  partición de una tabla particionada, cuándo se actualizaron las estadísticas
+  (último `ANALYZE` o autoanalyze, o "never"), las filas estimadas y
+  `pg_table_size`. Leerlas no lee filas de la tabla. La vista Datos incorpora
+  un selector de columnas que nombra en la query solo las columnas elegidas y
+  mantiene la clave primaria en una tabla editable. Ver [Columnas y
+  particiones](../TABLE_VIEWS.md).
 
 ### Instance Metrics
 
@@ -72,14 +105,14 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   state, wait event, duración)
 - `pg.locks` — locks activos de `pg_locks` unidos con `pg_class`
 
-- Los límites de filas transmiten los resultados, retienen como máximo la cantidad solicitada en todo el pedido e informan por cada result set si omitió filas; la ejecución siempre termina por completo.
+- Los límites de filas transmiten los resultados, retienen como máximo la cantidad solicitada en todo el pedido e informan por cada result set si omitió filas; una sentencia única que devuelve filas deja de leer al alcanzar el límite (ver Limitaciones), y cualquier otra solicitud se ejecuta por completo.
 - Un lote multi-sentencia con límite de filas se ejecuta sentencia por sentencia por la misma ruta tipada de streaming, con un único presupuesto de filas compartido por todo el pedido. Las sentencias posteriores al agotamiento del presupuesto se siguen ejecutando, los result sets conservan el orden sin límite (el primero es el resultado principal) y el lote se detiene en el primer fallo.
 - Un lote con límite de filas conserva los límites de transacción que tiene el mismo script cuando se ejecuta sin límite como una única simple query. Las sentencias fuera de una transacción del usuario se ejecutan dentro de una transacción que el driver abre y confirma, o revierte si hay un fallo, así que un fallo no deja ninguna de ellas aplicada. Un `BEGIN` en el script adopta las sentencias anteriores y un `COMMIT` o `ROLLBACK` la termina, como hace el bloque de transacción implícito de PostgreSQL. Dentro de una transacción de sesión abierta, las sentencias se suman a ella y un fallo la deja abortada.
 - Los tiempos de espera solicitados se rechazan antes de ejecutar.
 
 ## Limitaciones
 
-- El límite de filas restringe la retención, no el trabajo del servidor, el tráfico ni el tiempo; las mutaciones completan todos sus efectos.
+- Una sentencia única con límite de filas que devuelve filas deja de leer al alcanzar el límite: se ejecuta en una transacción que el driver abre y confirma, y obtiene una fila más que el límite mediante un portal, así que el servidor deja de producir filas ahí y el resultado se marca como truncado solo cuando quedan filas. No se informa un error que la sentencia produciría en una fila posterior. Las mutaciones con `RETURNING` completan todos sus efectos. `CALL`, las sentencias dentro de una transacción abierta y los lotes con límite restringen solo la retención, no el trabajo del servidor, el tráfico ni el tiempo. Para detectar una transacción abierta, el driver ejecuta primero `SELECT transaction_timestamp() = statement_timestamp()`, que no produce ningún error.
 - Los límites de filas en métricas e inspectores de instancia se rechazan antes del despacho. Los lotes sin límite conservan su comportamiento previo.
 - Un lote con límite de filas rechaza, antes de ejecutar cualquier sentencia, `PREPARE TRANSACTION`, y un `SAVEPOINT`, `RELEASE`, `ROLLBACK TO` o `COMMIT`/`ROLLBACK` encadenado que sigue a sentencias fuera de una transacción explícita. PostgreSQL los rechaza dentro de su bloque de transacción implícito, mientras que la transacción que abre el driver los aceptaría.
 - Las sentencias que no pueden ejecutarse dentro de un bloque de transacción, como `VACUUM` o `CREATE INDEX CONCURRENTLY`, fallan dentro de un lote con límite de filas con el error propio de PostgreSQL, igual que en un lote sin límite.
@@ -119,6 +152,11 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   momento de la cancelación.
 - La generación de código apunta solo a construcciones de PostgreSQL soportadas;
   los IDs de generador no soportados devuelven `NotSupported`.
+- Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se ejecuta en `BEGIN READ ONLY` y se revierte, y se rechaza dentro de una transacción abierta. PostgreSQL rechaza entonces la modificación de datos en la sesión, salvo en las tablas `TEMPORARY`, que una transacción de solo lectura todavía puede modificar, y no impide las funciones con efectos externos como `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` o los advisory locks; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real. Para detectar una transacción abierta, el driver ejecuta primero una prueba con `SAVEPOINT`, que fuera de una transacción falla con SQLSTATE `25P01` (no hay transacción activa), así que el servidor registra un `ERROR` por cada petición de solo lectura que se ejecuta fuera de una transacción, incluido cada ciclo del auto-refresh del editor.
+- La vista Columnas muestra estimaciones del planificador, tan recientes como
+  el último `ANALYZE`. Una columna sin estadísticas del planificador muestra
+  todos sus datos como desconocidos. No tiene tamaños ni codecs por columna,
+  vista de particiones, estimación de lectura ni perfil de filas.
 
 ## Capacidades de DDL
 

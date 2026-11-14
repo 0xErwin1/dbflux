@@ -50,6 +50,7 @@ impl IntegrationHarness {
                     supports_schemas: true,
                     default_schema: Some("public".to_string()),
                     case_sensitive_identifiers: true,
+                    misreads_unknown_quoted_identifiers: false,
                 },
                 query: QueryCapabilities::default(),
                 ddl: DdlCapabilities::default(),
@@ -86,6 +87,11 @@ impl IntegrationHarness {
     }
 
     fn handshake(&self) -> Vec<&'static str> {
+        #[expect(
+            clippy::expect_used,
+            reason = "test handshake: a transport profile that fails validation must abort \
+                the test loudly"
+        )]
         validate_v1_transport_profile(&BootstrapConfig {
             enabled_transports: vec![self.transport],
         })

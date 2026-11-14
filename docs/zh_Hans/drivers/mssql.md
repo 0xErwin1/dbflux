@@ -14,9 +14,10 @@ Microsoft SQL Server 关系型数据库。
 ## 功能
 
 - 面向 SQL Server / Azure SQL 的关系型驱动程序，支持 SQL 查询执行与 Schema 发现。
+- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL 语句，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 通过 SQL Server 登录账户（用户名 + 密码）认证；URI 模式接受 ADO、JDBC 以及 `sqlserver://user:pass@host:port/db` 形式的连接串。
 - 把 `Application Name` 上报为 `dbflux/<version>`，除非连接串或 URI 已设置了该值 —— 此时始终以用户提供的值为准；`sqlserver://`/`mssql://` URL 方案可用 `applicationname` 查询参数来设置它。
-- 经由 tiberius 的 `EncryptionLevel` 提供 TLS 加密模式（`off`、`on`、`required`）。表单只暴露一个 **SSL Mode** 下拉框，`TrustServerCertificate` 标志会自动推导：`off` —— 不加密（登录包仍由 TDS 加密）；`on` —— 加密，接受自签名证书，最适合使用其自动生成证书的本地/开发用 SQL Server；`required` —— 加密，校验证书链，适用于持有真实 CA 签名证书的服务器（如 Azure SQL 等）。在 URI 模式下，如果需要非常规组合（例如 `?encrypt=required&trust=true`），可用 `?trust=true|false` 显式覆盖推导出的值。
+- 经由 tiberius 的 `EncryptionLevel` 提供 TLS 加密模式（`off`、`on`、`required`）。表单只暴露一个 **SSL Mode** 下拉框，`TrustServerCertificate` 标志会自动推导：`off` —— 不加密（登录包仍由 TDS 加密）；`on` —— 加密，接受自签名证书，最适合使用其自动生成证书的本地/开发用 SQL Server；`required` —— 加密，校验证书链，适用于持有真实 CA 签名证书的服务器（如 Azure SQL 等）。选择 `required` 时会显示 **CA certificate** 路径；设置后将以该 CA 校验证书链（tiberius `trust_cert_ca`），因此由私有或企业 CA 签发证书的服务器无需信任所有证书即可连接；留空则使用系统信任库；`on` 模式会忽略该路径。在 URI 模式下，如果需要非常规组合（例如 `?encrypt=required&trust=true`），可用 `?trust=true|false` 显式覆盖推导出的值。
 - 支持可选的 SQL Server 命名实例（`SQLEXPRESS`、`MSSQLSERVER2019` 等），在连接时通过查询 UDP 1434 上的 SQL Browser 解析（由 tiberius 的 `sql-browser-tokio` feature 启用）。表单的 Instance 字段、URI 模式下 SSMS 风格的 `host\instance` 写法，以及 `?instance=` URI 查询参数，设置的都是 tiberius 配置上的同一个 `instance_name`。
 - 支持 SSH 隧道，以便通过堡垒机连接（仅转发 TCP 的隧道无法进行命名实例查找）。
 - 通过 `USE [database]` 支持按标签页切换数据库；会话状态（`SET` 选项、临时表、事务）在同一连接上的多次 `execute()` 调用之间保持。
@@ -60,6 +61,23 @@ Microsoft SQL Server 关系型数据库。
 - 在被杀掉的会话上抛出的错误（错误码 596 / 233 / 6005）会被翻译成 `DbError::Cancelled`，因此界面显示的是「查询已取消」，而不是传输层的失败。
 - 在现代 SQL Server 上，会话所有者无需 `ALTER ANY CONNECTION` 权限即可 `KILL` 自己的 SPID。在较旧或受限制的登录上，`KILL` 本身可能因权限错误而失败；驱动程序会把该错误呈现给用户。
 
+### 断开的会话
+
+- 每个会话的 socket 都启用了 TCP keepalive（空闲 60 秒后发送第一个探测），
+  这样会切断静默连接的 NAT 网关、防火墙和负载均衡器也会保持会话打开。
+- 如果服务器或网络仍然切断了会话，下一次调用会以 I/O 错误失败（broken pipe、
+  connection reset 或意外的文件结束）。驱动会丢弃已失效的客户端，并像取消之后
+  一样把连接标记为需要重连。
+- 元数据读取（数据库、表、视图、表和视图详情、schema 类型、索引、外键和例程）
+  会打开新会话、恢复当前数据库并重试一次，因此空闲一段时间后打开表无需手动重连。
+- 行编辑（insert、update、delete）、浏览、计数以及行和依赖查询会在执行前先打开新
+  会话，因此在之前的调用检测到会话断开之后无需手动重连即可使用。如果尚未有调用检测到，
+  第一次操作会失败且不会被重放；失败的写入永远不会被重放。恢复过程
+  是串行的，并发调用方共用同一个新会话，而不会互相替换。表示会话已被终止的服务器
+  错误（596、233、6005）与 socket 断开按相同方式处理。
+- 查询批次永远不会重试，因为服务器可能已经执行了它。会显示它的错误，下一次查询
+  或 ping 会打开新会话。
+
 ### Schema 发现
 
 - 数据库（`sys.databases`，隐藏系统数据库）。
@@ -93,7 +111,7 @@ Microsoft SQL Server 关系型数据库。
 
 - `[方括号]` 形式的标识符引用，`]` 需要转义。
 - `N'…'` 形式的 Unicode 字符串字面量；`0x…`（大写）形式的二进制字面量；布尔（`BIT`）值用 `1`/`0` 表示。
-- `OFFSET … ROWS FETCH NEXT … ROWS ONLY` 形式的分页（并回退为 `ORDER BY 1`，使不带 ORDER BY 的 OFFSET 查询不会报错）。
+- `OFFSET … ROWS FETCH NEXT … ROWS ONLY` 形式的分页（并回退为 `ORDER BY (SELECT NULL)`，使不带 ORDER BY 的 OFFSET 查询不会报错，且不按任何列排序）。
 - 不使用 `SELECT TOP N`；OFFSET/FETCH 是规范的分页写法。
 - 有意不生成 `UPSERT`；SQL Server 的 `MERGE` 存在已知缺陷，应当手写。
 
@@ -128,6 +146,8 @@ Microsoft SQL Server 关系型数据库。
 
 ## 限制
 
+- `required` 模式的 CA 证书会替换而非扩展系统信任库，必须恰好包含一个证书，且必须使用 `.pem`、`.crt` 或 `.der` 扩展名（使用 rustls 的 tiberius）。`sqlserver://` URL 没有 CA 证书参数；ADO 与 JDBC 连接字符串则可改用 tiberius 的 `TrustServerCertificateCA=<路径>` 键。请勿将它与 `TrustServerCertificate=true` 组合使用——两个信任设置同时存在时 tiberius 会 panic。
+- 经 SSH 隧道时驱动程序连接的是 `127.0.0.1`，因此 `required` 模式下校验的服务器名也是它：为真实主机名签发的私有 CA 证书会在主机名校验时失败。
 - 忠实的 `CREATE TABLE` 生成（schema diff）对于无法重现其创建语义的表会选择拒绝而不是扁平化：计算列、用户自定义/CLR（及别名）列类型、稀疏列、`FILESTREAM`、`ROWGUIDCOL`、内存优化表、系统版本 temporal 表、非聚集主键、行/页压缩，以及位于非默认文件组上的表。索引（主键除外）、外键和 CHECK/UNIQUE 约束不会随 `CREATE TABLE` 一起传递；需要单独应用。
 - 生成的主键约束名由服务器命名：不会捕获原始约束名，因此 `PK_…` 与源不同。
 - schema diff 从浅表列表中检测整表创建。引用创建元数据会**为每个活动引用表收集**（并从每个携带它的快照行读取），但仅在整表新增（`TableAdded`，即需要在目标侧生成新表）时被**消费**。已存在表的 identity 或主键变更既不会被收集进 diff，也不会被应用，需要手动处理。
@@ -159,3 +179,4 @@ Microsoft SQL Server 关系型数据库。
 - 例程的 `parameter_types` 不会被填充；本实现不查询 `sys.parameters`。
 - SQL Server 在 `sys.objects.type` 分类中没有 `Window` 函数类型；该驱动程序从不产生 `RoutineKind::Window`。
 - 数据传输引擎的迁移路径没有参照完整性开关（未设置 `DriverCapabilities::DISABLE_FK_CHECKS`；`Connection::set_referential_integrity` 返回 `NotSupported`）。SQL Server 是通过 `ALTER TABLE ... NOCHECK CONSTRAINT` 按表禁用外键检查的，这与引擎的单一全局开关不匹配；按表的变体可作为未来的扩展方向。
+- 没有由数据库强制的只读模式：需要该模式的请求会被拒绝，因此 MCP `execute_script` 会把分类为 `Read` 或 `Metadata` 的脚本按写入处理，SQL Server 连接上也无法使用编辑器自动刷新。

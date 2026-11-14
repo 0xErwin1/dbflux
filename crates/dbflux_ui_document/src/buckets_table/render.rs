@@ -34,6 +34,10 @@ const UNKNOWN: &str = "—";
 
 /// Formats a byte count with a binary-prefix unit, one decimal place above
 /// the kibibyte boundary.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "unit starts at 0 and the loop guard stops it before UNITS.len()"
+)]
 pub(crate) fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
 
@@ -315,7 +319,7 @@ impl BucketsTableDocument {
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let column = |width: Option<Pixels>, key: &str| {
+        let column = |width: Option<Rems>, key: &str| {
             let label = dbflux_i18n::t!(key);
             match width {
                 Some(width) => div().w(width).flex_shrink_0().child(label),
@@ -365,7 +369,7 @@ impl BucketsTableDocument {
         let select_name = name.clone();
         let bucket_color = theme.warning;
 
-        let mono_cell = |width: Pixels, value: CellValue, color: Hsla| {
+        let mono_cell = |width: Rems, value: CellValue, color: Hsla| {
             div()
                 .w(width)
                 .flex_shrink_0()
@@ -373,7 +377,7 @@ impl BucketsTableDocument {
                 .items_center()
                 .pr(DocumentMetrics::GAP)
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(DocumentMetrics::TABLE_META_FONT)
                 .child(value.render(color, muted))
         };
@@ -410,7 +414,7 @@ impl BucketsTableDocument {
                     .child(
                         div()
                             .truncate()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_color(ChromeColors::strong(theme))
                             .child(name),
                     ),
@@ -479,7 +483,7 @@ impl BucketsTableDocument {
                     div()
                         .flex()
                         .items_center()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(ObjectStoreMetrics::DETAILS_VALUE_FONT)
                         .child(value.render(strong, muted)),
                 )

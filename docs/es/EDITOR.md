@@ -4,10 +4,16 @@ Abre una nueva pestaña de query con `Ctrl+n` (`Cmd+n` en macOS), o abre un
 archivo de script con `Ctrl+o`. El lenguaje de query del editor (SQL, sintaxis
 de queries de MongoDB, comandos de Redis, etc.) lo determina el driver de la
 conexión activa, que también controla el resaltado de sintaxis y el texto de
-placeholder.
+placeholder. Un archivo `.csv` o `.tsv` se abre como tabla; ver
+[Archivos CSV y TSV](CSV_FILES.md).
 
 Para conexiones SQL, el [Constructor visual de queries](QUERY_BUILDER.md)
 compone queries sin escribir SQL.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/query-result-dark.webp">
+  <img src="../images/editor/query-result-light.webp" alt="Una pestaña de query con una consulta SQL que agrupa los pedidos por país, y su grilla de resultados">
+</picture>
 
 ## Guardar y cerrar pestañas
 
@@ -36,17 +42,44 @@ cerrarlas.
 - `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) — **Run query in new tab**.
 
 Si existe una selección de texto no vacía, solo se ejecuta el texto
-seleccionado. Sin selección, se usa el buffer completo del editor.
+seleccionado. Sin selección y con varias sentencias separadas por `;` en el
+buffer, solo se ejecuta la sentencia bajo el cursor: un cursor después del `;`
+de una sentencia o en las líneas en blanco debajo de ella ejecuta esa sentencia,
+y un cursor por encima de todas las sentencias ejecuta la primera. Para ejecutar
+el buffer completo, selecciona todo (`Ctrl+A`) primero. Un buffer con una sola
+sentencia, o en un lenguaje sin división en sentencias, se ejecuta completo.
+También un buffer con un bloque compuesto, como el cuerpo `BEGIN ... END` de un
+procedimiento o trigger, ya que el `;` dentro de él no termina una sentencia; un
+`BEGIN` que abre una transacción no es un bloque.
+
+Sin selección, cuando la sentencia bajo el cursor solo abre o cierra una
+transacción (`BEGIN`,
+`START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` o `ABORT`) y el buffer contiene
+otras sentencias, el editor pregunta primero: ejecutar todo el script, que es la
+opción predeterminada, o solo esa sentencia. Una conexión cuyo driver no puede
+ejecutar un script completo de una vez ofrece solo esa sentencia. Ejecutado solo, un `BEGIN` deja
+abierta una transacción a la que se suman en silencio las ejecuciones
+posteriores de la misma pestaña, y un `COMMIT` o `ROLLBACK` omite el resto del script
+y como mucho cierra una transacción que dejó abierta una ejecución anterior.
+
+Cada resultado lleva como título las líneas de la sentencia que lo produjo. Una
+sentencia que no devuelve un conjunto de resultados, como `UPDATE` o `COMMIT`,
+muestra **Sentencia ejecutada** y, cuando el driver lo informa, cuántas filas
+afectó, que el pie repite en lugar del recuento de filas. Los avisos y
+advertencias que envía el servidor mientras se ejecuta la sentencia, como el
+`WARNING: there is no transaction in progress` de PostgreSQL tras un `COMMIT`
+fuera de una transacción, se listan debajo de esa línea, o en el pie de un
+resultado con filas. Solo los muestran los drivers que los informan; PostgreSQL
+lo hace.
 
 Cuando la ejecución omite filas efectivamente, el editor muestra una advertencia por consulta y la cuadrícula señala el conjunto de resultados afectado, aunque no se haya conservado ninguna fila. Un resultado que alcanza exactamente el límite sin omitir filas no genera la advertencia. Un límite de filas conservadas solo restringe las filas almacenadas; los límites de bytes y tiempo son controles de ejecución independientes. Esto no implica que el editor tenga un límite de filas predeterminado.
 
 ## Scripts multi-statement
 
-Cuando ejecutas sin selección y el buffer contiene varias sentencias separadas
-por `;`, y el driver activo declara soporte de batch, DBFlux muestra un diálogo
-de confirmación (`Run entire script (N statements)?`) antes de ejecutar. Al
-confirmar, el conjunto de resultados de cada sentencia se renderiza en su propia
-pestaña de resultado.
+Para ejecutar varias sentencias como script, selecciónalas (`Ctrl+A`
+selecciona todo el buffer) y pulsa `Ctrl+Enter`. Cuando el driver activo declara
+soporte de batch, el conjunto de resultados de cada sentencia se renderiza en su
+propia pestaña de resultado.
 
 La división en sentencias es consciente del lenguaje para los lenguajes de la
 familia SQL: los separadores dentro de strings, identificadores, comentarios de
@@ -54,7 +87,12 @@ línea/bloque y los cuerpos dollar-quoted de PostgreSQL no se tratan como límit
 de sentencia. Los lenguajes no SQL siguen siendo de sentencia única. El soporte
 de batch es por driver — entre los drivers SQL integrados, PostgreSQL,
 MySQL/MariaDB, SQLite y Microsoft SQL Server lo soportan. Una selección siempre
-se ejecuta tal cual y nunca dispara la confirmación de script.
+se ejecuta tal cual.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/multi-statement-dark.webp">
+  <img src="../images/editor/multi-statement-light.webp" alt="Una pestaña de query que ejecutó tres sentencias como script, con una pestaña de resultado por sentencia">
+</picture>
 
 ## Confirmación de queries peligrosas
 
@@ -66,6 +104,11 @@ queries peligrosas se puede desactivar, se puede requerir una cláusula `WHERE`
 para `DELETE`/`UPDATE`, y `FLUSHALL`/`FLUSHDB` de Redis se puede deshabilitar
 por completo (en cuyo caso esos comandos quedan bloqueados en lugar de
 confirmados).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/dangerous-query-dark.webp">
+  <img src="../images/editor/dangerous-query-light.webp" alt="La confirmación de query peligrosa para un DELETE sin cláusula WHERE">
+</picture>
 
 ## Scripts (Lua / Python / Bash)
 
@@ -79,8 +122,9 @@ Ver `docs/LUA.md` para el runtime de Lua embebido.
 DBFlux mantiene un historial de las queries completadas y te permite guardar
 queries con nombre.
 
-- `Alt+h` (en el editor), o el botón History de la barra de herramientas, abre y
-  cierra el panel de historial de queries junto al editor.
+- `Alt+h` (en el editor), o el botón History de la barra de acciones en el borde
+  izquierdo del editor, abre y cierra el panel de historial de queries junto al
+  editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** la query actual.
 - `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save file as…**.
 - `Ctrl+p` (`Cmd+p`, en el editor) — abre el explorador de queries guardadas.

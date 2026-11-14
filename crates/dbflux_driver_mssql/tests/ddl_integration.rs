@@ -756,9 +756,9 @@ fn mssql_ddl_create_table_generation_roundtrip_preserves_metadata_fidelity() -> 
     containers::with_mssql_url(|uri| {
         let (source, _) = connect_mssql(uri.clone())?;
 
-        source.execute(&QueryRequest::new(format!(
-            "DROP TABLE IF EXISTS dbo.[generation_source]"
-        )))?;
+        source.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS dbo.[generation_source]",
+        ))?;
         source.execute(&QueryRequest::new(GENERATION_SOURCE_SQL))?;
 
         // Introspect the reference source: table detail with exact type

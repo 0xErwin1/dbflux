@@ -14,22 +14,21 @@ use dbflux_core::{
     CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection,
     ConnectionExt, ConstraintInfo, ConstraintKind, CrudResult, DbError, DbKind, DbSchemaInfo,
     DescribeRequest, DocumentConnection, DriverMetadata, ExecutionSessionFactory, ExplainRequest,
-    ForeignKeyInfo, FormattedError, IndexData, IndexInfo, KeyValueConnection, OrderByColumn,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableInfo,
-    Value, ViewInfo, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_update_template,
+    ForeignKeyInfo, FormattedError, IndexData, IndexInfo, KeyValueConnection, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, SortDirection,
+    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableInfo, Value, ViewInfo,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_update_template,
 };
 use turso_serverless::{
     BatchResult, Builder, Connection as SdkConnection, Database, Value as TursoValue,
 };
 
 use crate::dialect::{
-    TURSO_CODE_GENERATOR, TURSO_DIALECT, collect_filter_values, escape_string,
-    generate_create_table, kind_from_decltype, kind_from_values, quote_ident,
-    translate_filter_to_sql, value_from_turso, value_to_param,
+    TURSO_CODE_GENERATOR, TURSO_DIALECT, escape_string, generate_create_table, kind_from_decltype,
+    kind_from_values, quote_ident, value_from_turso, value_to_param,
 };
 use crate::driver::METADATA;
 use crate::session::TursoSessionFactory;
@@ -148,7 +147,7 @@ impl TursoConnection {
                 "Turso returned no result for statement",
             ));
         };
-        Ok(batch_result_to_query_result(result, None, start))
+        Ok(batch_result_to_query_result(result, &mut None, start))
     }
 
     fn run_batch(
@@ -198,6 +197,7 @@ impl TursoConnection {
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             })
             .collect())
     }
@@ -213,42 +213,52 @@ impl TursoConnection {
             .collect())
     }
 
-    fn get_columns(&self, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
-        let exists = self.run(
-            "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+    /// The rowid names when the server accepts them on `table`: ordinary
+    /// rowid tables and virtual tables whose module has a rowid, such as
+    /// FTS5. A `WITHOUT ROWID` table and a view refuse them. The probe names
+    /// them unquoted, so the double-quoted string fallback cannot apply, and
+    /// `LIMIT 0` returns no rows. A refused probe declares nothing.
+    fn get_pseudo_rowid_columns(&self, table: &str) -> Vec<String> {
+        match self.run_sql(&rowid_probe_sql(table)) {
+            Ok(_) => ROWID_NAMES.iter().map(|name| name.to_string()).collect(),
+            Err(error) => {
+                log::debug!("[SCHEMA] '{table}' has no rowid: {error}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// The stored name of the table or view `table` names. SQLite resolves
+    /// table names with ASCII case folding, which `COLLATE NOCASE` applies.
+    fn resolve_relation_name(&self, table: &str) -> Result<String, DbError> {
+        let resolved = self.run(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') \
+             AND name = ? COLLATE NOCASE",
             vec![TursoValue::Text(table.to_string())],
         )?;
-        if exists.rows.is_empty() {
-            return Err(DbError::ObjectNotFound(
-                format!("Table '{table}' not found").into(),
-            ));
-        }
 
-        // PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
-        let result = self.pragma("table_info", table)?;
-        Ok(result
+        resolved
             .rows
-            .iter()
-            .filter_map(|row| {
-                let name = row.get(1).and_then(|v| value_to_string(v.clone()))?;
-                let type_name = row
-                    .get(2)
-                    .and_then(|v| value_to_string(v.clone()))
-                    .unwrap_or_default();
-                let notnull = row.get(3).and_then(value_to_i64).unwrap_or(1);
-                let pk = row.get(5).and_then(value_to_i64).unwrap_or(0);
-                let default_value = row.get(4).and_then(|v| value_to_string(v.clone()));
-                Some(ColumnInfo {
-                    name,
-                    type_name,
-                    // INTEGER PRIMARY KEY reports notnull=0 but is implicitly NOT NULL.
-                    nullable: notnull == 0 && pk == 0,
-                    is_primary_key: pk > 0,
-                    default_value,
-                    enum_values: None,
-                })
-            })
-            .collect())
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .and_then(value_to_string)
+            .ok_or_else(|| DbError::ObjectNotFound(format!("Table '{table}' not found").into()))
+    }
+
+    fn get_columns(&self, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
+        let resolved = self.resolve_relation_name(table)?;
+
+        Ok(self.read_columns(&resolved)?.0)
+    }
+
+    /// Reads the columns of a table or view through `PRAGMA table_xinfo`:
+    /// the columns `PRAGMA table_info` lists, and the names of hidden and
+    /// generated columns, which the engine also resolves.
+    fn read_columns(&self, table: &str) -> Result<(Vec<ColumnInfo>, Vec<String>), DbError> {
+        let result = self.pragma("table_xinfo", table)?;
+
+        Ok(split_xinfo_rows(&result.rows))
     }
 
     /// PRAGMA index_list columns: seq, name, unique, origin, partial.
@@ -483,6 +493,58 @@ fn value_to_string(value: Value) -> Option<String> {
     }
 }
 
+/// Names SQLite resolves on every rowid table although `PRAGMA table_info`
+/// does not list them: <https://www.sqlite.org/lang_createtable.html#rowid>.
+const ROWID_NAMES: [&str; 3] = ["rowid", "oid", "_rowid_"];
+
+fn rowid_probe_sql(table: &str) -> String {
+    format!(
+        "SELECT {} FROM {} LIMIT 0",
+        ROWID_NAMES.join(", "),
+        crate::dialect::quote_ident(table)
+    )
+}
+
+/// Splits `PRAGMA table_xinfo` rows (cid, name, type, notnull, dflt_value,
+/// pk, hidden) into the columns `PRAGMA table_info` lists, `hidden` 0, and
+/// the names of hidden (1) and generated (2, 3) columns:
+/// <https://www.sqlite.org/pragma.html#pragma_table_xinfo>.
+fn split_xinfo_rows(rows: &[Vec<Value>]) -> (Vec<ColumnInfo>, Vec<String>) {
+    let mut columns = Vec::new();
+    let mut unlisted = Vec::new();
+
+    for row in rows {
+        let Some(name) = row.get(1).and_then(|v| value_to_string(v.clone())) else {
+            continue;
+        };
+
+        if row.get(6).and_then(value_to_i64).unwrap_or(0) != 0 {
+            unlisted.push(name);
+            continue;
+        }
+
+        let type_name = row
+            .get(2)
+            .and_then(|v| value_to_string(v.clone()))
+            .unwrap_or_default();
+        let notnull = row.get(3).and_then(value_to_i64).unwrap_or(1);
+        let pk = row.get(5).and_then(value_to_i64).unwrap_or(0);
+        let default_value = row.get(4).and_then(|v| value_to_string(v.clone()));
+
+        columns.push(ColumnInfo {
+            name,
+            type_name,
+            // INTEGER PRIMARY KEY reports notnull=0 but is implicitly NOT NULL.
+            nullable: notnull == 0 && pk == 0,
+            is_primary_key: pk > 0,
+            default_value,
+            enum_values: None,
+        });
+    }
+
+    (columns, unlisted)
+}
+
 fn value_to_i64(value: &Value) -> Option<i64> {
     match value {
         Value::Int(i) => Some(*i),
@@ -492,18 +554,32 @@ fn value_to_i64(value: &Value) -> Option<i64> {
     }
 }
 
+/// Charges `available` rows against the request-wide budget and returns how
+/// many of them to keep and whether the budget dropped any.
+fn admit_within_budget(available: usize, remaining: &mut Option<usize>) -> (usize, bool) {
+    let Some(budget) = remaining.as_mut() else {
+        return (available, false);
+    };
+    let kept = available.min(*budget);
+    *budget -= kept;
+    (kept, kept < available)
+}
+
 /// Materializes one SDK batch result into a `QueryResult`.
 ///
 /// Row-returning statements report `affected_rows = None` because the server
 /// answers zero for them, which would read as "nothing happened".
 fn batch_result_to_query_result(
     result: BatchResult,
-    limit: Option<u32>,
+    remaining: &mut Option<usize>,
     start: Instant,
 ) -> QueryResult {
-    let mut rows: Vec<Row> = result
+    // Only the rows the budget keeps are converted.
+    let (kept, truncated) = admit_within_budget(result.rows().len(), remaining);
+    let rows: Vec<Row> = result
         .rows()
         .iter()
+        .take(kept)
         .map(|row| {
             (0..row.column_count())
                 .map(|i| {
@@ -514,10 +590,6 @@ fn batch_result_to_query_result(
                 .collect()
         })
         .collect();
-
-    if let Some(limit) = limit {
-        rows.truncate(limit as usize);
-    }
 
     let columns: Vec<ColumnMeta> = result
         .columns()
@@ -548,7 +620,22 @@ fn batch_result_to_query_result(
         None
     };
 
-    QueryResult::table(columns, rows, affected_rows, start.elapsed())
+    let mut query_result = QueryResult::table(columns, rows, affected_rows, start.elapsed());
+    query_result.set_rows_truncated(truncated);
+    query_result
+}
+
+/// Folds a script's per-statement results into the one result `execute`
+/// returns, keeping each set's own truncation flag.
+fn assemble_script_results(result_sets: Vec<QueryResult>, start: Instant) -> QueryResult {
+    let mut result_sets = result_sets.into_iter();
+    let Some(mut primary) = result_sets.next() else {
+        return QueryResult::table(vec![], vec![], Some(0), start.elapsed());
+    };
+    for extra in result_sets {
+        primary.push_additional_result(extra);
+    }
+    primary
 }
 
 // =============================================================================
@@ -583,13 +670,18 @@ impl Connection for TursoConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        if req.limit.is_some() || req.statement_timeout.is_some() {
+        if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
-                "Turso cannot enforce requested row limits or statement timeouts before execution"
-                    .into(),
+                "Turso cannot enforce statement timeouts before execution".into(),
             ));
         }
+        // Not verified against a server: whether `PRAGMA query_only` holds on
+        // a Hrana stream is unknown, so read-only enforcement is refused.
+        req.refuse_read_only_enforcement("Turso")?;
 
+        // The server sends every row of a statement in one response, so the
+        // budget bounds what is retained, not what crosses the wire.
+        let mut remaining = req.limit.map(|limit| limit as usize);
         let start = Instant::now();
         let params = req
             .params
@@ -605,7 +697,7 @@ impl Connection for TursoConnection {
                     "Turso returned no result for statement",
                 ));
             };
-            return Ok(batch_result_to_query_result(result, req.limit, start));
+            return Ok(batch_result_to_query_result(result, &mut remaining, start));
         }
 
         if !params.is_empty() {
@@ -621,17 +713,11 @@ impl Connection for TursoConnection {
             .map(|statement| (statement, Vec::new()))
             .collect();
         let results = self.run_batch(batch)?;
-        let mut result_sets = results
+        let result_sets = results
             .into_iter()
-            .map(|result| batch_result_to_query_result(result, req.limit, start));
-
-        let Some(mut primary) = result_sets.next() else {
-            return Ok(QueryResult::table(vec![], vec![], Some(0), start.elapsed()));
-        };
-        for extra in result_sets {
-            primary.push_additional_result(extra);
-        }
-        Ok(primary)
+            .map(|result| batch_result_to_query_result(result, &mut remaining, start))
+            .collect();
+        Ok(assemble_script_results(result_sets, start))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -672,10 +758,15 @@ impl Connection for TursoConnection {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<TableInfo, DbError> {
-        let columns = self.get_columns(table)?;
-        let indexes = self.get_indexes(table)?;
-        let foreign_keys = self.get_foreign_keys(table)?;
-        let constraints = self.get_constraints(table)?;
+        let resolved = self.resolve_relation_name(table)?;
+        let (columns, unlisted_columns) = self.read_columns(&resolved)?;
+        let indexes = self.get_indexes(&resolved)?;
+        let foreign_keys = self.get_foreign_keys(&resolved)?;
+        let constraints = self.get_constraints(&resolved)?;
+        let pseudo_columns = unlisted_columns
+            .into_iter()
+            .chain(self.get_pseudo_rowid_columns(&resolved))
+            .collect();
 
         Ok(TableInfo {
             name: table.to_string(),
@@ -688,6 +779,7 @@ impl Connection for TursoConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns,
         })
     }
 
@@ -793,6 +885,63 @@ impl Connection for TursoConnection {
                 .map(|(column, value)| (column.name, value))
                 .collect(),
         ))
+    }
+
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values, with the keys bound as parameters. Honors
+    /// `projection`; an empty projection list falls back to `*` rather than
+    /// emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        _database: &str,
+        _schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<HashMap<String, Value>>, DbError> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let select_list = match projection {
+            Some(columns) if !columns.is_empty() => columns
+                .iter()
+                .map(|column| quote_ident(column))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => "*".to_string(),
+        };
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let params = chunk
+                .iter()
+                .map(value_to_param)
+                .collect::<Result<Vec<_>, _>>()?;
+            let sql = format!(
+                "SELECT {} FROM {} WHERE {} IN ({})",
+                select_list,
+                quote_ident(table),
+                quote_ident(pk_column),
+                placeholders,
+            );
+
+            let result = self.run(&sql, params)?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(column, value)| (column.name.clone(), value))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
     }
 
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
@@ -949,165 +1098,8 @@ impl Connection for TursoConnection {
         plan_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| quote_ident(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {cols} FROM {}", quote_ident(table));
-
-        if let Some(where_clause) = filter.map(translate_filter_to_sql)
-            && !where_clause.is_empty()
-        {
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clause);
-        }
-
-        if !order_by.is_empty() {
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {dir}", col.column.quoted_with(&TURSO_DIALECT))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(" ORDER BY ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
-        sql
-    }
-
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let cols = columns
-            .iter()
-            .map(|c| quote_ident(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let placeholders = vec!["?"; values.len()].join(", ");
-        (
-            format!(
-                "INSERT INTO {} ({cols}) VALUES ({placeholders})",
-                quote_ident(table)
-            ),
-            values.to_vec(),
-        )
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let set_str = set
-            .iter()
-            .map(|(col, _)| format!("{} = ?", quote_ident(col)))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let mut sql = format!("UPDATE {} SET {set_str}", quote_ident(table));
-        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let mut sql = format!("DELETE FROM {}", quote_ident(table));
-        let mut params = Vec::new();
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let cols = columns
-            .iter()
-            .map(|c| quote_ident(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let placeholders = vec!["?"; values.len()].join(", ");
-        let conflict_cols = conflict_columns
-            .iter()
-            .map(|c| quote_ident(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let update_str = update_columns
-            .iter()
-            .map(|col| format!("{} = ?", quote_ident(col)))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        (
-            format!(
-                "INSERT INTO {} ({cols}) VALUES ({placeholders}) ON CONFLICT ({conflict_cols}) DO UPDATE SET {update_str}",
-                quote_ident(table)
-            ),
-            values.to_vec(),
-        )
-    }
-
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let mut sql = format!("SELECT COUNT(*) FROM {}", quote_ident(table));
-        if let Some(where_clause) = filter.map(translate_filter_to_sql)
-            && !where_clause.is_empty()
-        {
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clause);
-        }
-        sql
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
-        format!("DELETE FROM {}", quote_ident(table))
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
+        Ok(format!("DELETE FROM {}", quote_ident(table)))
     }
 
     fn build_drop_index_sql(
@@ -1115,24 +1107,20 @@ impl Connection for TursoConnection {
         index_name: &str,
         _table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         if if_exists {
-            format!("DROP INDEX IF EXISTS {}", quote_ident(index_name))
+            Ok(format!("DROP INDEX IF EXISTS {}", quote_ident(index_name)))
         } else {
-            format!("DROP INDEX {}", quote_ident(index_name))
+            Ok(format!("DROP INDEX {}", quote_ident(index_name)))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT sqlite_version()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT sqlite_version()")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
         true
-    }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        Ok(translate_filter_to_sql(filter))
     }
 }
 
@@ -1360,6 +1348,122 @@ mod tests {
     use super::*;
     use turso_serverless::Error as E;
 
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    /// `open_root` performs no I/O against a never-contacted local URL, and
+    /// these builders only format text.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        let builder = turso_serverless::Builder::new_remote("wss://127.0.0.1:1");
+        let connection = TursoConnection::open_root(builder)
+            .expect("open_root performs no I/O against a closed local URL");
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("users")
+                .expect("Turso supports truncate"),
+            "DELETE FROM \"users\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), false)
+                .expect("Turso supports drop index"),
+            "DROP INDEX \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), true)
+                .expect("Turso supports drop index"),
+            "DROP INDEX IF EXISTS \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("Turso has a version query"),
+            "SELECT sqlite_version()"
+        );
+    }
+
+    fn rows(count: i64) -> Vec<Row> {
+        (0..count).map(|index| vec![Value::Int(index)]).collect()
+    }
+
+    fn retain_within_budget(rows: &mut Vec<Row>, remaining: &mut Option<usize>) -> bool {
+        let (kept, truncated) = admit_within_budget(rows.len(), remaining);
+        rows.truncate(kept);
+        truncated
+    }
+
+    #[test]
+    fn row_budget_is_shared_across_result_sets() {
+        let mut remaining = Some(3);
+
+        let mut first = rows(2);
+        assert!(!retain_within_budget(&mut first, &mut remaining));
+        assert_eq!(first.len(), 2);
+
+        let mut second = rows(4);
+        assert!(retain_within_budget(&mut second, &mut remaining));
+        assert_eq!(second, rows(1));
+
+        let mut third = rows(2);
+        assert!(retain_within_budget(&mut third, &mut remaining));
+        assert!(third.is_empty());
+
+        let mut no_rows = Vec::new();
+        assert!(!retain_within_budget(&mut no_rows, &mut remaining));
+    }
+
+    #[test]
+    fn script_assembly_keeps_truncation_flags_on_the_returned_result() {
+        let start = Instant::now();
+        let mut remaining = Some(3);
+        let result_sets = [rows(2), rows(4), rows(1)]
+            .into_iter()
+            .map(|mut result_rows| {
+                let truncated = retain_within_budget(&mut result_rows, &mut remaining);
+                let mut result = QueryResult::table(vec![], result_rows, None, start.elapsed());
+                result.set_rows_truncated(truncated);
+                result
+            })
+            .collect();
+
+        let returned = assemble_script_results(result_sets, start);
+
+        assert!(!returned.rows_truncated());
+        assert_eq!(returned.rows.len(), 2);
+        assert_eq!(returned.additional_results.len(), 2);
+        assert!(returned.additional_results[0].rows_truncated());
+        assert_eq!(returned.additional_results[0].rows.len(), 1);
+        assert!(returned.additional_results[1].rows_truncated());
+        assert!(returned.additional_results[1].rows.is_empty());
+    }
+
+    #[test]
+    fn row_budget_exactly_met_is_not_truncation() {
+        let mut remaining = Some(2);
+        let mut exact = rows(2);
+        assert!(!retain_within_budget(&mut exact, &mut remaining));
+        assert_eq!(exact.len(), 2);
+        assert_eq!(remaining, Some(0));
+    }
+
+    #[test]
+    fn zero_row_budget_drops_every_row() {
+        let mut remaining = Some(0);
+        let mut result_rows = rows(1);
+        assert!(retain_within_budget(&mut result_rows, &mut remaining));
+        assert!(result_rows.is_empty());
+    }
+
+    #[test]
+    fn absent_row_budget_keeps_every_row() {
+        let mut remaining = None;
+        let mut result_rows = rows(5);
+        assert!(!retain_within_budget(&mut result_rows, &mut remaining));
+        assert_eq!(result_rows.len(), 5);
+    }
+
     #[test]
     fn sdk_errors_map_to_ui_facing_variants() {
         assert!(matches!(
@@ -1432,6 +1536,36 @@ mod tests {
             Some("length(b) < 10")
         );
         assert!(extract_check_constraints("CREATE TABLE t (a INT)").is_empty());
+    }
+
+    #[test]
+    fn the_rowid_probe_names_the_rowid_unquoted_and_quotes_the_table() {
+        assert_eq!(
+            rowid_probe_sql("my \"t\""),
+            "SELECT rowid, oid, _rowid_ FROM \"my \"\"t\"\"\" LIMIT 0"
+        );
+    }
+
+    #[test]
+    fn hidden_and_generated_xinfo_rows_are_left_out_of_the_columns() {
+        let row = |name: &str, hidden: i64| {
+            vec![
+                Value::Int(0),
+                Value::Text(name.into()),
+                Value::Text("INTEGER".into()),
+                Value::Int(0),
+                Value::Null,
+                Value::Int(0),
+                Value::Text(hidden.to_string()),
+            ]
+        };
+
+        let (columns, unlisted) =
+            split_xinfo_rows(&[row("a", 0), row("docs", 1), row("g", 2), row("s", 3)]);
+
+        let names: Vec<&str> = columns.iter().map(|column| column.name.as_str()).collect();
+        assert_eq!(names, ["a"]);
+        assert_eq!(unlisted, ["docs", "g", "s"]);
     }
 
     #[test]

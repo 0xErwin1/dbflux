@@ -104,15 +104,39 @@ git push origin vX.Y.Z[-suffix.N]
 
 ## 아티팩트 식별과 서명
 
-"이것을 누가 빌드했는가" 신호를 담는 별개의 세 가지가 있으며, 서로 겹치지 않습니다:
+"이것을 누가 빌드했는가" 신호는 별개의 계층들이 담습니다:
 
 | 계층 | 다루는 것 | 시크릿 | 없을 때 |
 |-------|----------------|--------|--------------|
 | GPG 분리 서명(`.asc`)과 `.sha256` | 다운로드한 파일 | `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` | 빌드가 실패합니다. 모든 릴리스는 서명됩니다. |
 | 빌드 출처 증명(attestation) | 아티팩트를 만든 워크플로 실행과 커밋 | 없음 (키 없는 OIDC) | 항상 켜져 있습니다. |
 | `.app`의 macOS 코드 서명 | 키체인과 Gatekeeper가 보는 애플리케이션 식별 | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` | 번들은 경고와 함께 애드혹 서명됩니다. |
+| Windows Authenticode (stable 및 RC) | 포터블 ZIP과 설치 관리자 안의 `dbflux.exe`, 그리고 설치 실행 파일 자체 | `SIGNPATH_API_TOKEN` | stable 및 RC Windows 빌드가 실패합니다. nightly는 Authenticode 서명을 요청하지 않습니다. |
 
-Windows 실행 파일도 설치 관리자도 Authenticode로 서명되지 않으므로, 첫 실행에서 SmartScreen이 경고합니다. 이는 CA의 인증서가 필요하며 별도로 추적됩니다.
+### Windows 코드 서명
+
+stable 및 RC Windows 빌드는 [SignPath](https://docs.signpath.io/trusted-build-systems/github)를
+조직 `963ebe33-9db3-4a84-9eea-f726ca65dd9c`, 프로젝트 `dbflux`, 정책 `release-signing`으로
+사용합니다. 제출자 토큰을 저장소 Actions 시크릿 `SIGNPATH_API_TOKEN`에 저장하세요. 기본
+아티팩트 구성은 단일 PE 파일(`<pe-file><authenticode-sign /></pe-file>`)을 받아야 하며,
+SignPath Foundation이 요구하는 제품 및 버전 제한은 SignPath 포털에서 구성합니다.
+
+SignPath Foundation이 프로덕션 인증서를 `release-signing`에 가져오기 전까지 job의
+`SIGNPATH_SIGNING_POLICY`는 `test-signing`이며, 프로젝트의 자체 서명 테스트 인증서로 서명합니다.
+Windows는 이 인증서를 신뢰하지 않으므로 해당 빌드는 여전히 알 수 없는 게시자 경고를 표시합니다.
+검증 단계는 그 정책과 그 인증서에 대해서만 신뢰되지 않은 결과를 허용합니다. 프로덕션 인증서가
+유효해지면 변수를 `release-signing`으로 바꾸세요.
+
+워크플로는 두 개의 요청을 제출합니다. 먼저 `dbflux.exe`, 그다음 서명된 애플리케이션으로 빌드한
+설치 실행 파일입니다. 각 요청은 SignPath의 수동 승인을 최대 한 시간까지 기다립니다. 토큰 누락,
+요청 거부, 시간 초과, 유효하지 않은 서명 또는 타임스탬프 누락은 빌드를 실패시키며, 서명되지 않은
+stable 또는 RC 대체본은 게시되지 않습니다. GPG 서명과 SHA256 체크섬은 최종 서명된 패키지를 다룹니다.
+게시는 플랫폼 아티팩트만 선택하며, 중간 단계의 서명되지 않은 업로드는 제외합니다.
+
+nightly는 무인으로 빌드되어 승인할 사람이 없으므로 Authenticode 서명 없이 기존 GPG 서명과 체크섬을 유지합니다. Inno Setup
+제거 프로그램은 이 흐름에서 Authenticode로 서명되지 않습니다. 유효한 서명은 게시자를 식별하지만
+SmartScreen이 모든 평판 경고를 표시하지 않는다는 보장은 아닙니다. 릴리스 서명에는 정식 저장소와
+GitHub 호스팅 러너가 필요하며, `act`에서는 사용할 수 없습니다.
 
 ### macOS 코드 서명
 
@@ -141,6 +165,32 @@ magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
 ```
 
 그 옆의 macOS `.icns` 파일들(`dbflux.icns`, `dbflux-nightly.icns`)은 `libicns`의 `png2icns`로 같은 방식으로 빌드되며, 512와 1024 px 크기를 추가하고, 번들에는 `AppIcon.icns`로 들어갑니다.
+
+### AppImage 외부 업데이트 정보
+
+stable과 nightly AppImage는 외부 업데이트 정보를 내장하고, 생성된 `.zsync`
+sidecar가 최종 서명된 이미지 옆에 함께 게시됩니다. stable은 GitHub의
+`latest` 릴리스로, nightly는 롤링 `nightly` 태그로 해석합니다. 각 채널은
+자신의 태그만 광고하므로 업데이트가 설치를 채널 간에 옮기는 일은 없습니다.
+RC 릴리스는 업데이트 정보를 내장하지 않으며 수동으로 유지됩니다. sidecar와
+내장 문자열은 빌드 시 appimagetool(`-u`)이 생성하고 `build.yml`이
+fail-closed 방식으로 검증합니다. 업데이트는 AppImageUpdate 같은 외부
+도구가 수행하며 DBFlux 자신은 자체 업데이트하지 않습니다.
+
+### 고정된 다운로드 파일 이름
+
+`.deb`와 `.rpm` 패키지는 파일 이름에 버전을 포함하므로
+(`dbflux_0.8.5_linux_amd64.deb`, `dbflux-0.8.5-1.x86_64.rpm`)
+`releases/latest/download/` 링크가 이를 가리킬 수 없습니다. `build.yml`은
+바이트 단위로 동일한 사본을 `dbflux-linux-<arch>.deb`와
+`dbflux-linux-<arch>.rpm`이라는 이름으로 함께 게시하며, 각 사본에는 자체
+`.asc`와 `.sha256`이 있습니다. [설치](INSTALL.md) 문서가 링크하는 이름이
+바로 이것입니다.
+
+게시하기 전에 `release.yml`과 `nightly.yml`은 내려받은 아티팩트를 대상으로
+`scripts/check_release_links.py`를 실행합니다. 문서, 번역 또는 사이트 설치
+섹션의 `releases/latest/download/` 링크가 해당 릴리스에 없는 파일을
+가리키면 404를 게시하는 대신 작업이 실패합니다.
 
 ## 생성 절차: `main` → `release/vX.Y`
 
@@ -244,6 +294,8 @@ RC가 깨끗할 때 `release/vX.Y`에서 수행합니다:
 `web/versions.json`은 릴리스마다 하는 버전 올림에 포함되지 않습니다. 마이너의 생성, 안정 승격, EOL 때 바뀝니다([웹사이트](#웹사이트) 참조).
 
 AUR `PKGBUILD`는 이 리포지토리가 아닌 **외부 AUR 리포지토리**에 있습니다. 안정 태그에만 올립니다.
+
+Homebrew cask는 외부 tap `0xErwin1/homebrew-dbflux`에 있습니다. 게시된 안정 태그에서는 `homebrew-tap` 잡이 자동으로 갱신하므로, 잡이 성공했는지 확인합니다([Homebrew tap](#homebrew-tap) 참조).
 ## 나이틀리 동작 방식
 
 `.github/workflows/nightly.yml`은 매일 03:17 UTC에 실행됩니다:
@@ -257,7 +309,7 @@ AUR `PKGBUILD`는 이 리포지토리가 아닌 **외부 AUR 리포지토리**�
 
 나이틀리 태그는 강제 푸시되고 릴리스는 매 실행마다 교체됩니다. 이 일정은 공식 리포지토리(`0xErwin1/dbflux`)에서만 실행됩니다.
 
-**`main`이 진전되지 않았으면 건너뜁니다.** 정기 실행은 먼저 현재 `main` HEAD를 마지막 나이틀리가 빌드된 커밋(`git rev-parse nightly^`, 고정 커밋의 첫 번째 부모)과 비교합니다. 두 커밋이 같으면 실행 전체를 건너뜁니다: 재빌드도, 태그 이동도, 릴리스 갱신도 없습니다. 이는 재현할 수 없는 새 해시로 동일한 빌드를 다시 게시해 Nix 고정을 불필요하게 깨는 일을 피합니다. 수동 `workflow_dispatch` 실행은 새 커밋이 없더라도 항상 빌드합니다.
+**`main`이 진전되지 않았으면 건너뜁니다.** 정기 실행은 먼저 현재 `main` HEAD를 마지막 나이틀리가 빌드된 커밋(`git rev-parse nightly^`, 고정 커밋의 첫 번째 부모)과 비교합니다. 두 커밋이 같으면 실행 전체를 건너뜁니다: 재빌드도, 태그 이동도, 릴리스 갱신도 없습니다. 이는 재현할 수 없는 새 해시로 동일한 빌드를 다시 게시해 Nix 고정을 불필요하게 깨는 일을 피합니다. 마지막 나이틀리 이후 변경된 모든 경로(`git diff nightly^..HEAD`)가 문서나 사이트 콘텐츠(`web/`, `*.md`, `.github/workflows/web.yml`)뿐인 경우에도 건너뜁니다. 태그가 이동하지 않으므로 다음 나이틀리의 변경 로그가 여전히 그 커밋들을 포함합니다. 수동 `workflow_dispatch` 실행은 새 커밋이 없더라도 항상 빌드합니다.
 
 ### Nix 나이틀리 패키지
 
@@ -301,11 +353,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## 다운스트림 채널
 
-| 태그 종류 (GitHub Release)  | AUR         | Nix flake (이 리포지토리)                    | nixpkgs (향후)   |
-|-----------------------------|-------------|-----------------------------------------------|------------------|
-| nightly (프리릴리스)        | 건너뜀      | 자동 고정 — nightly ref의 `#dbflux-nightly`   | 건너뜀           |
-| `-rc.N` (프리릴리스)        | 건너뜀      | 릴리스 브랜치와 main의 `release-info` 갱신    | 건너뜀           |
-| 안정 `vX.Y.Z` (게시됨)      | 갱신 + 푸시 | 릴리스 브랜치와 main의 `release-info` 갱신    | 갱신 + PR        |
+| 태그 종류 (GitHub Release)  | AUR         | Nix flake (이 리포지토리)                    | nixpkgs (향후)   | Homebrew tap |
+|-----------------------------|-------------|-----------------------------------------------|------------------|-----------------------------|
+| nightly (프리릴리스)        | 건너뜀      | 자동 고정 — nightly ref의 `#dbflux-nightly`   | 건너뜀           | 건너뜀 |
+| `-rc.N` (프리릴리스)        | 건너뜀      | 릴리스 브랜치와 main의 `release-info` 갱신    | 건너뜀           | 건너뜀 |
+| 안정 `vX.Y.Z` (게시됨)      | 갱신 + 푸시 | 릴리스 브랜치와 main의 `release-info` 갱신    | 갱신 + PR        | 자동 — `homebrew-tap` 잡 |
 
 ### AUR
 
@@ -346,6 +398,28 @@ nix build .#dbflux-bin --no-link --print-out-paths
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 ```
 
+### Homebrew tap
+
+`.github/workflows/release.yml`의 `homebrew-tap` 잡은 릴리스 잡 뒤에, 게시된 안정 태그에서만 실행됩니다(RC, 나이틀리, 드래프트에서는 실행되지 않습니다). 릴리스의 `.sha256` 파일 네 개(macOS DMG 두 개와 Linux tarball 두 개)를 내려받아 `scripts/homebrew_cask.py`로 `Casks/dbflux.rb`를 생성하고 [`0xErwin1/homebrew-dbflux`](https://github.com/0xErwin1/homebrew-dbflux)에 푸시합니다.
+
+| 경우 | 동작 |
+|------|------|
+| `HOMEBREW_TAP_TOKEN` 없음 | 잡이 경고를 남기고 건너뜁니다. tap은 이전 버전을 유지합니다. |
+| 토큰 만료 또는 폐기 | 잡이 실패합니다. 토큰을 갱신하고 시크릿을 업데이트한 뒤, 잡을 다시 실행하거나 cask를 수동으로 갱신합니다. |
+| tap의 버전보다 오래된 태그(이전 라인의 패치) | 경고와 함께 cask를 그대로 둡니다. tap은 절대 이전 버전으로 돌아가지 않습니다. |
+
+`HOMEBREW_TAP_TOKEN`은 `0xErwin1/homebrew-dbflux`에만 한정된 **Contents: read and write** 권한의 fine-grained 개인 액세스 토큰입니다.
+
+잡이 실패한 뒤 cask를 수동으로 갱신하려면, 릴리스의 `.sha256` 파일 네 개를 한 디렉터리에 내려받은 다음 실행합니다:
+
+```bash
+python3 scripts/homebrew_cask.py --version X.Y.Z \
+  --checksums <.sha256 파일 네 개가 있는 디렉터리> \
+  --output <tap 체크아웃>/Casks/dbflux.rb
+```
+
+tap 체크아웃에서 변경을 커밋하고 푸시합니다.
+
 ### nixpkgs (향후)
 
 아직 업스트림에 없습니다. 업스트림화되면 안정 태그만 `NixOS/nixpkgs`로 풀 리퀘스트를 받습니다. PR 제목 관례: `dbflux: A -> B`.
@@ -375,7 +449,7 @@ cargo test --workspace
 
 `scripts/lint.py`는 `crates/` 아래의 자체 크레이트만 대상으로 하며, `vendor/` 아래의 서드파티 크레이트는 린트하거나 재포맷하지 않습니다.
 
-이 빠른 스위트들은 드라이버 라이브 통합 테스트를 포괄하지 않습니다. 드라이버별 스위트는 컨테이너, 로컬 파일 또는 자격 증명이 필요한 Redshift 클러스터를 기반으로 하며, [tests/driver-live/README.md](../../tests/driver-live/README.md)에 문서화되어 있습니다. rc나 stable에 태깅하기 전에 실행하세요. CI는 동일한 스위트를 게시 게이트로 사용합니다 — `release.yml`이 `tests.yml`을 호출하고 `Create Release` 잡이 그 완료를 기다립니다 — 하지만 이 스위트들은 빌드된 아티팩트가 아니라 소스 코드를 검증하며, 나이틀리 빌드는 테스트 게이트가 없습니다(`nightly.yml`은 `build.yml`을 직접 호출합니다).
+이 빠른 스위트들은 드라이버 라이브 통합 테스트를 포괄하지 않습니다. 드라이버별 스위트는 컨테이너, 로컬 파일 또는 자격 증명이 필요한 Redshift 클러스터를 기반으로 하며, [tests/driver-live/README.md](../../tests/driver-live/README.md)에 문서화되어 있습니다. rc나 stable에 태깅하기 전에 실행하세요. CI는 릴리스 시점에 어떤 스위트도 실행하지 않습니다. `release.yml`은 `tests.yml`이나 `style.yml`을 호출하지 않고 빌드와 게시를 수행하며, 풀 리퀘스트에서 이미 실행된 검사에 의존합니다. `main`은 모든 검사를 다시 실행하지 않습니다. `tests.yml`과 `style.yml`은 Rust 툴체인이나 의존성 매니페스트가 바뀔 때만 `main` 푸시에서 실행되며, 그 외에 매주 `main`을 대상으로 정기 실행됩니다. 나이틀리를 포함해 어떤 릴리스 채널도 테스트 게이트가 없습니다(`nightly.yml`은 `build.yml`을 직접 호출합니다).
 
 ## 관련 자료
 

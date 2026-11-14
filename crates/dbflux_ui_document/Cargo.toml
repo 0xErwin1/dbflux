@@ -21,16 +21,22 @@ dbflux_app.workspace = true
 dbflux_audit.workspace = true
 dbflux_storage.workspace = true
 dbflux_export.workspace = true
+dbflux_byte_source.workspace = true
+dbflux_delimited.workspace = true
+dbflux_spreadsheet.workspace = true
+dbflux_parquet.workspace = true
 dbflux_i18n.workspace = true
 dbflux_transfer.workspace = true
 dbflux_schema_viz.workspace = true
 petgraph.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+encoding_rs.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 lsp-types = { workspace = true }
+fuzzy-matcher.workspace = true
 anyhow = { workspace = true }
 rfd.workspace = true
 image.workspace = true
@@ -46,12 +52,24 @@ mcp = ["dbflux_mcp", "dbflux_policy", "dbflux_app/mcp", "dbflux_ui_base/mcp"]
 # mismatched feature sets across the workspace.
 lua = ["dbflux_app/lua", "dbflux_ui_base/lua"]
 aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
+# Constructors that let tests in other crates build documents without a
+# connection. Enabled only by dev-dependencies.
+test-support = []
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+dbflux_components = { workspace = true, features = ["test-support"] }
 dbflux_ui_base = { workspace = true, features = ["test-support"] }
 dbflux_driver_mssql = { workspace = true }
 dbflux_driver_mongodb = { workspace = true }
 dbflux_test_support = { workspace = true }
 flate2.workspace = true
 rmp-serde.workspace = true
+parquet.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+rust_xlsxwriter.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true

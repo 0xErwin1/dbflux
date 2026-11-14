@@ -14,6 +14,17 @@ pub enum PlaceholderStyle {
     AtSign,
 }
 
+/// Whether the target table of `UPDATE` and `DELETE FROM` may carry an alias.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MutationTargetAlias {
+    /// No alias on the target (SQL Server rejects `UPDATE t a`).
+    Unsupported,
+    /// `UPDATE t a` and `UPDATE t AS a` are both valid.
+    Accepted,
+    /// Only `UPDATE t AS a` is valid (SQLite).
+    RequiresAs,
+}
+
 /// Database-specific SQL syntax (quoting, escaping, literals).
 pub trait SqlDialect: Send + Sync {
     /// Quote an identifier (table/column name).
@@ -54,6 +65,13 @@ pub trait SqlDialect: Send + Sync {
     /// PostgreSQL supports it natively; SQLite/MySQL require re-query.
     fn supports_returning(&self) -> bool {
         false
+    }
+
+    /// Whether the target table of `UPDATE` and `DELETE FROM` accepts an
+    /// alias, and whether it needs `AS`. Off by default because the syntax
+    /// differs between engines and versions.
+    fn mutation_target_alias(&self) -> MutationTargetAlias {
+        MutationTargetAlias::Unsupported
     }
 
     /// Build the column expression used for value comparisons.
@@ -118,6 +136,30 @@ pub trait SqlDialect: Send + Sync {
             return self.limit_clause(n);
         }
         format!("LIMIT {} OFFSET {}", n, offset)
+    }
+
+    /// Returns the row-limiting tail of a SELECT rendered from a
+    /// `VisualQuerySpec`, or `None` when the statement needs none.
+    ///
+    /// The result is placed after the statement's `ORDER BY`, as its own
+    /// line. `limit` is `None` when the query is unbounded, and
+    /// `has_order_by` tells whether the statement already carries an
+    /// `ORDER BY`, for dialects whose limiting syntax depends on one.
+    ///
+    /// Most dialects use `LIMIT n` and `OFFSET m`. SQL Server (T-SQL)
+    /// overrides this with `OFFSET m ROWS FETCH NEXT n ROWS ONLY`.
+    fn select_limit_offset_clause(
+        &self,
+        limit: Option<u64>,
+        offset: u64,
+        _has_order_by: bool,
+    ) -> Option<String> {
+        match (limit, offset) {
+            (None, 0) => None,
+            (Some(n), 0) => Some(format!("LIMIT {}", n)),
+            (None, o) => Some(format!("OFFSET {}", o)),
+            (Some(n), o) => Some(format!("LIMIT {}\nOFFSET {}", n, o)),
+        }
     }
 
     /// Whether this dialect requires HAVING clauses to repeat the full aggregate
@@ -211,13 +253,17 @@ pub(crate) fn drop_cascade_not_supported() -> DbError {
     )
 }
 
+/// Shared so every double-quoting dialect escapes identifiers the same way.
+pub fn quote_double_quoted_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// Default SQL dialect using ANSI SQL conventions (double-quote identifiers).
 pub struct DefaultSqlDialect;
 
 impl SqlDialect for DefaultSqlDialect {
     fn quote_identifier(&self, name: &str) -> String {
-        let escaped = name.replace('"', "\"\"");
-        format!("\"{}\"", escaped)
+        quote_double_quoted_identifier(name)
     }
 
     fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
@@ -338,6 +384,27 @@ impl SqlDialect for DefaultSqlDialect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn double_quoted_identifier_wraps_plain_name() {
+        assert_eq!(quote_double_quoted_identifier("users"), "\"users\"");
+    }
+
+    #[test]
+    fn double_quoted_identifier_doubles_embedded_quotes() {
+        assert_eq!(
+            quote_double_quoted_identifier("we\"ird\""),
+            "\"we\"\"ird\"\"\""
+        );
+    }
+
+    #[test]
+    fn default_dialect_quotes_through_shared_function() {
+        assert_eq!(
+            DefaultSqlDialect.quote_identifier("a\"b"),
+            quote_double_quoted_identifier("a\"b")
+        );
+    }
 
     struct NopDialect;
 

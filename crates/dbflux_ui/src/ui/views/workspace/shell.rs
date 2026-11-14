@@ -6,18 +6,17 @@ use crate::ui::document::DocumentIcon;
 use dbflux_components::composites::{ActivityRail, CommandSearch, ListRow, RailEntry};
 use dbflux_components::primitives::{Chamfer, Icon, Kbd, Text};
 use dbflux_components::tokens::{ChamferCut, ShellMetrics};
-use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap};
 use dbflux_ui_base::platform;
 
 /// Identifiers of the rail entries, passed back by the rail on click.
 pub(super) mod rail_ids {
-    pub const CONNECTIONS: &str = "connections";
-    pub const SCRIPTS: &str = "scripts";
-    pub const DASHBOARDS: &str = "dashboards";
-    pub const APPROVALS: &str = "approvals";
-    pub const AUDIT: &str = "audit";
-    pub const SETTINGS: &str = "settings";
+    pub(crate) const CONNECTIONS: &str = "connections";
+    pub(crate) const SCRIPTS: &str = "scripts";
+    pub(crate) const DASHBOARDS: &str = "dashboards";
+    pub(crate) const APPROVALS: &str = "approvals";
+    pub(crate) const AUDIT: &str = "audit";
+    pub(crate) const SETTINGS: &str = "settings";
 }
 
 /// What the rail reflects: which sidebar view is on screen (`None` while the
@@ -178,7 +177,7 @@ pub(super) enum RecentAge {
 impl RecentAge {
     /// Age of a file opened at `opened_at`, both in Unix seconds. A time in
     /// the future (clock change) counts as just now.
-    pub fn between(now: i64, opened_at: i64) -> Self {
+    pub(crate) fn between(now: i64, opened_at: i64) -> Self {
         let elapsed = now.saturating_sub(opened_at).max(0);
 
         match elapsed {
@@ -190,7 +189,7 @@ impl RecentAge {
         }
     }
 
-    pub fn label(self) -> String {
+    pub(crate) fn label(self) -> String {
         match self {
             Self::JustNow => dbflux_i18n::t!("workspace.recent.just_now"),
             Self::Minutes(count) => dbflux_i18n::t!("workspace.recent.minutes_ago", count = count),
@@ -412,7 +411,7 @@ impl Workspace {
                     .gap(ShellMetrics::EMPTY_TITLE_GAP)
                     .child(
                         div()
-                            .font_family(AppFonts::DISPLAY)
+                            .font_family(dbflux_components::fonts::display_family(cx))
                             .font_weight(FontWeight::BLACK)
                             .text_size(ShellMetrics::EMPTY_TITLE_FONT)
                             .text_color(dbflux_components::tokens::ChromeColors::strong(theme))
@@ -425,6 +424,9 @@ impl Workspace {
 
         let start_card = self.render_start_card(cx);
         let has_recent = !recent.is_empty();
+        let lone_card_width = (dbflux_components::fonts::ui_px(cx, ShellMetrics::EMPTY_WIDTH)
+            - ShellMetrics::EMPTY_HEAD_GAP)
+            / 2.0;
 
         let cards = div()
             .flex()
@@ -433,9 +435,7 @@ impl Workspace {
             .child(
                 div()
                     .when(has_recent, |card| card.flex_1())
-                    .when(!has_recent, |card| {
-                        card.w((ShellMetrics::EMPTY_WIDTH - ShellMetrics::EMPTY_HEAD_GAP) / 2.0)
-                    })
+                    .when(!has_recent, |card| card.w(lone_card_width))
                     .child(start_card),
             )
             .when(has_recent, |cards| {
@@ -564,7 +564,7 @@ impl Workspace {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(ShellMetrics::RECENT_META_FONT)
                             .text_color(muted)
                             .child(row.folder),

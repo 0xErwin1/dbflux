@@ -1,9 +1,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
-    Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, InteractiveElement, IntoElement,
-    ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
+    Anchor, AnyElement, App, Background, Bounds, ClickEvent, Edges, ElementId, Entity, EntityId,
+    InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div, point,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_base::spring;
 use rust_i18n::t;
@@ -121,6 +122,10 @@ impl TabBar {
     }
 
     /// Track the scroll of the TabBar.
+    ///
+    /// Clicking a tab scrolls it into view along with part of the next tab,
+    /// but changing the selection, the tabs or the layout does not. Use the
+    /// tracked [`ScrollHandle`] to request an explicit reveal when needed.
     pub fn track_scroll(mut self, scroll_handle: &ScrollHandle) -> Self {
         self.scroll_handle = Some(scroll_handle.clone());
         self
@@ -182,7 +187,6 @@ impl TabBar {
     fn render_indicator(
         &self,
         bounds_rc: &Option<Rc<RefCell<TabIndicatorBounds>>>,
-        inset: Pixels,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<(AnyElement, u64)> {
@@ -246,7 +250,7 @@ impl TabBar {
             .absolute()
             .top_0()
             .bottom_0()
-            .left(left + inset)
+            .left(left)
             .w(width)
             .map(|el| match variant {
                 TabVariant::Segmented => el.flex().items_center().child(
@@ -303,9 +307,17 @@ impl TabBar {
             return;
         }
 
+        // The indicator is nested in the first tab wrapper, so its position is
+        // relative to that wrapper rather than the scroll container.
+        let first_tab_origin = bounds
+            .tabs
+            .first()
+            .map(|tab| tab.origin.x)
+            .unwrap_or(container.origin.x);
+
         if prev_ix != selected_ix {
             if let Some(to_b) = bounds.tabs.get(selected_ix) {
-                let left = to_b.origin.x - container.origin.x;
+                let left = to_b.origin.x - first_tab_origin;
                 let width = to_b.size.width;
                 // Only a switch away from a tab that still exists restarts the
                 // tabs' own epoch-keyed transitions.
@@ -322,7 +334,7 @@ impl TabBar {
         }
 
         if let Some(to_b) = bounds.tabs.get(selected_ix) {
-            let left = to_b.origin.x - container.origin.x;
+            let left = to_b.origin.x - first_tab_origin;
             let width = to_b.size.width;
             let (to_left, to_width, epoch) = *anim_params.read(cx);
 
@@ -414,10 +426,33 @@ impl RenderOnce for TabBar {
             None
         };
 
+        // Without a tracked handle the bar still needs one to reveal a clicked tab.
+        let scroll_handle = self.scroll_handle.clone().unwrap_or_else(|| {
+            window
+                .use_keyed_state(format!("{}-scroll", self.id), cx, |_, _| {
+                    ScrollHandle::new()
+                })
+                .read(cx)
+                .clone()
+        });
+        let reveal = TabReveal {
+            spring_id: format!("{}-reveal", self.id).into(),
+            target: window.use_keyed_state(format!("{}-reveal", self.id), cx, |_, _| None),
+            scroll_handle: scroll_handle.clone(),
+            view: window.current_view(),
+            peek: match self.size {
+                Size::XSmall | Size::Small => px(24.),
+                Size::Large => px(40.),
+                _ => px(32.),
+            },
+            num_tabs,
+        };
+        reveal.advance(window, cx);
+
         let padding_x = paddings.left;
-        let indicator = self.render_indicator(&bounds_rc, padding_x, window, cx);
+        let indicator = self.render_indicator(&bounds_rc, window, cx);
         let indicator_epoch = indicator.as_ref().map(|(_, epoch)| *epoch).unwrap_or(0);
-        let indicator_element = indicator.map(|(el, _)| el);
+        let mut indicator_element = indicator.map(|(el, _)| el);
         let indicator_ready = indicator_element.is_some();
 
         let has_suffix_or_menu = self.suffix.is_some() || self.menu;
@@ -440,22 +475,56 @@ impl RenderOnce for TabBar {
             tab.indicator_active = has_indicator;
             tab.indicator_ready = indicator_ready;
             tab.indicator_epoch = indicator_epoch;
-            let tab = tab
+            let mut tab = tab
                 .when_some(selected_index, |tab, selected_index| {
                     tab.selected(selected_index == ix)
                 })
-                .when_some(self.on_click.clone(), move |tab, on_click| {
-                    tab.on_click(move |_, window, cx| on_click(&ix, window, cx))
+                .map(|mut tab| {
+                    // The bar's callback replaces the tab's own.
+                    let on_click: Option<TabClickHandler> = match self.on_click.clone() {
+                        Some(on_click) => {
+                            Some(Rc::new(move |_, window, cx| on_click(&ix, window, cx)))
+                        }
+                        None => tab.on_click.take(),
+                    };
+                    tab.on_click = on_click.map(|on_click| {
+                        let reveal = reveal.clone();
+                        Rc::new(
+                            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                reveal.reveal(ix, cx);
+                                on_click(event, window, cx)
+                            },
+                        ) as TabClickHandler
+                    });
+                    tab
                 });
+            // The wrapper below is the flex item the bar lays out, so a tab's
+            // own `flex_grow` / `flex_basis` (e.g. `flex_1()`) must size it.
+            let flex_grow = tab.style().flex_grow;
+            let flex_basis = tab.style().flex_basis;
 
             rendered_tabs.push(if let Some(ref rc) = bounds_rc {
                 let rc = rc.clone();
+                // `tabs-inner` is tracked by `ScrollHandle`, which indexes its
+                // direct children. Keep the indicator inside the first tab so
+                // only logical tabs occupy those indices.
                 div()
                     .flex_shrink_0()
+                    .map(|mut this| {
+                        this.style().flex_grow = flex_grow;
+                        this.style().flex_basis = flex_basis;
+                        this
+                    })
                     .on_prepaint(move |bounds, _, _| {
                         if let Some(slot) = rc.borrow_mut().tabs.get_mut(ix) {
                             *slot = bounds;
                         }
+                    })
+                    .relative()
+                    .when(ix == 0, |this| {
+                        this.when_some(indicator_element.take(), |this, indicator| {
+                            this.child(indicator)
+                        })
                     })
                     .child(tab)
                     .into_any_element()
@@ -493,27 +562,30 @@ impl RenderOnce for TabBar {
                 h_flex()
                     .id("tabs")
                     .flex_1()
+                    .min_w_0()
                     .mx(-padding_x)
                     .px(padding_x)
                     .overflow_x_hidden()
+                    // `on_prepaint` adds a canvas child. Keep that helper on
+                    // the non-scrolling wrapper so it cannot shift tab indices.
+                    .when_some(bounds_rc.clone(), |this, rc| {
+                        this.on_prepaint(move |bounds, _, _| {
+                            rc.borrow_mut().container = bounds;
+                        })
+                    })
                     .child(
                         h_flex()
                             .id("tabs-inner")
-                            .mx(-padding_x)
-                            .px(padding_x)
+                            // Fill the bar so tabs can grow into the free space;
+                            // as a scroll container it still shrinks below its content.
+                            .flex_1()
+                            // Keep the scroll viewport inside the wrapper padding so
+                            // explicit reveals leave space at both ends of the bar.
                             .relative()
                             .gap(gap)
                             .overflow_x_scroll()
                             .lock_scroll_axis()
-                            .when_some(self.scroll_handle, |this, scroll_handle| {
-                                this.track_scroll(&scroll_handle)
-                            })
-                            .when_some(bounds_rc.clone(), |this, rc| {
-                                this.on_prepaint(move |bounds, _, _| {
-                                    rc.borrow_mut().container = bounds;
-                                })
-                            })
-                            .when_some(indicator_element, |this, ind| this.child(ind))
+                            .track_scroll(&scroll_handle)
                             .children(rendered_tabs)
                             .when(has_suffix_or_menu, |this| this.child(self.last_empty_space)),
                     ),
@@ -538,7 +610,9 @@ impl RenderOnce for TabBar {
                                     base.checked(selected_index == Some(ix))
                                         .disabled(*disabled)
                                         .when_some(on_click.clone(), |this, on_click| {
+                                            let reveal = reveal.clone();
                                             this.on_click(move |_, window, cx| {
+                                                reveal.reveal(ix, cx);
                                                 on_click(&ix, window, cx)
                                             })
                                         }),
@@ -551,6 +625,128 @@ impl RenderOnce for TabBar {
                 )
             })
             .when_some(self.suffix, |this, suffix| this.child(suffix))
+    }
+}
+
+type TabClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// Scrolls a clicked tab into view, the way an `NSScrollView` reveals a
+/// clicked row, and leaves part of the tab beyond it showing so the strip
+/// visibly continues. Only a click starts this; selection, tab and layout
+/// changes leave the offset where the user put it.
+#[derive(Clone)]
+struct TabReveal {
+    spring_id: SharedString,
+    /// The offset a reveal is travelling to, while one is.
+    target: Entity<Option<RevealTarget>>,
+    scroll_handle: ScrollHandle,
+    view: EntityId,
+    /// How much of the neighbouring tab stays visible.
+    peek: Pixels,
+    num_tabs: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RevealTarget {
+    to: Pixels,
+    /// The offset the previous frame set, `None` before the first frame.
+    last: Option<Pixels>,
+}
+
+impl TabReveal {
+    fn reveal(&self, ix: usize, cx: &mut App) {
+        let Some(to) = self.offset_revealing(ix) else {
+            return;
+        };
+        let running = self.target.read(cx).is_some();
+        if !running && to == self.scroll_handle.offset().x {
+            return;
+        }
+        self.target.update(cx, |target, _| match target {
+            // Retargeting keeps the spring's velocity.
+            Some(target) => target.to = to,
+            None => *target = Some(RevealTarget { to, last: None }),
+        });
+        cx.notify(self.view);
+    }
+
+    /// The horizontal offset that shows tab `ix` and `peek` of each neighbour,
+    /// moving as little as possible. The tab itself wins on a narrow bar.
+    fn offset_revealing(&self, ix: usize) -> Option<Pixels> {
+        let handle = &self.scroll_handle;
+        let viewport = handle.bounds();
+        let tab = handle.bounds_for_item(ix)?;
+        let max = handle.max_offset().x;
+        // Child bounds are laid out unscrolled: content at x is on screen at
+        // x + offset, so the visible content spans `viewport - offset`.
+        let want_left = match ix.checked_sub(1).and_then(|ix| handle.bounds_for_item(ix)) {
+            Some(prev) => (prev.right() - self.peek).max(prev.left()),
+            None => viewport.left(),
+        };
+        let want_right = match (ix + 1 < self.num_tabs)
+            .then(|| handle.bounds_for_item(ix + 1))
+            .flatten()
+        {
+            Some(next) => (next.left() + self.peek).min(next.right()),
+            None => viewport.right() + max,
+        };
+
+        let mut offset = handle.offset().x;
+        let show_left = |offset: &mut Pixels, left: Pixels| {
+            if left < viewport.left() - *offset {
+                *offset = viewport.left() - left;
+            }
+        };
+        let show_right = |offset: &mut Pixels, right: Pixels| {
+            if right > viewport.right() - *offset {
+                *offset = viewport.right() - right;
+            }
+        };
+        // Whichever is applied last wins: the neighbour the click heads
+        // toward over the one behind it, and the tab over both.
+        if tab.center().x + offset > viewport.center().x {
+            show_left(&mut offset, want_left);
+            show_right(&mut offset, want_right);
+        } else {
+            show_right(&mut offset, want_right);
+            show_left(&mut offset, want_left);
+        }
+        show_right(&mut offset, tab.right());
+        show_left(&mut offset, tab.left());
+        Some(offset.min(px(0.)).max(-max))
+    }
+
+    /// Steps a running reveal by one frame.
+    fn advance(&self, window: &mut Window, cx: &mut App) {
+        let Some(target) = *self.target.read(cx) else {
+            return;
+        };
+        let offset = self.scroll_handle.offset();
+        // A wheel or trackpad scroll since the last frame hands the strip back.
+        if target.last.is_some_and(|last| last != offset.x) {
+            self.target.update(cx, |target, _| *target = None);
+            return;
+        }
+
+        let policy = cx.theme().motion_tokens().spring_move;
+        if target.last.is_none() {
+            // Start from where the strip is, not where a previous reveal ended.
+            spring(
+                self.spring_id.clone(),
+                offset.x,
+                policy.with_travel(false),
+                window,
+                cx,
+            );
+        }
+        let x = spring(self.spring_id.clone(), target.to, policy, window, cx);
+        self.scroll_handle.set_offset(point(x, offset.y));
+        self.target.update(cx, |state, _| {
+            *state = (x != target.to).then_some(RevealTarget {
+                last: Some(x),
+                ..target
+            })
+        });
     }
 }
 
@@ -668,5 +864,531 @@ mod tests {
         assert!(prefix.size.width > px(0.));
         assert!(child.size.width > px(0.));
         assert!(suffix.size.width > px(0.));
+    }
+
+    struct ScrollHarness {
+        scroll_handle: ScrollHandle,
+    }
+
+    struct DynamicScrollHarness {
+        scroll_handle: ScrollHandle,
+        menu: bool,
+        size: Size,
+        tabs: usize,
+        selected_index: usize,
+    }
+
+    struct ManualScrollHarness {
+        scroll_handle: ScrollHandle,
+        tabs: usize,
+        selected_index: usize,
+        label: &'static str,
+        top: Pixels,
+    }
+
+    impl ScrollHarness {
+        fn tabs() -> impl Iterator<Item = Tab> {
+            (0..5).map(|ix| {
+                Tab::new()
+                    .w(px(60.))
+                    .label(format!("Tab {ix}"))
+                    .debug_selector(move || format!("tab-{ix}"))
+            })
+        }
+    }
+
+    impl Render for ScrollHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(100.)).child(
+                TabBar::new("scrolling-tabs")
+                    .w_full()
+                    .segmented()
+                    .menu(true)
+                    .track_scroll(&self.scroll_handle)
+                    .selected_index(4)
+                    .children(Self::tabs()),
+            )
+        }
+    }
+
+    impl DynamicScrollHarness {
+        fn tabs(&self) -> impl Iterator<Item = Tab> {
+            (0..self.tabs).map(|ix| {
+                Tab::new()
+                    .w(px(60.))
+                    .label(format!("Tab {ix}"))
+                    .debug_selector(move || format!("dynamic-tab-{ix}"))
+            })
+        }
+    }
+
+    impl Render for DynamicScrollHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(100.))
+                .debug_selector(|| "dynamic-bar".into())
+                .child(
+                    TabBar::new("dynamic-scrolling-tabs")
+                        .with_size(self.size)
+                        .w_full()
+                        .segmented()
+                        .menu(self.menu)
+                        .track_scroll(&self.scroll_handle)
+                        .selected_index(self.selected_index)
+                        .children(self.tabs()),
+                )
+        }
+    }
+
+    impl ManualScrollHarness {
+        fn tabs(&self) -> impl Iterator<Item = Tab> {
+            let width = if self.label == "old" {
+                px(60.)
+            } else {
+                px(120.)
+            };
+            let label = self.label;
+            (0..self.tabs).map(move |ix| {
+                Tab::new()
+                    .w(width)
+                    .label(format!("Tab {ix} {label}"))
+                    .debug_selector(move || format!("manual-tab-{ix}"))
+            })
+        }
+    }
+
+    impl Render for ManualScrollHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(160.)).h(px(40.)).child(
+                div().relative().top(self.top).w_full().child(
+                    TabBar::new("manual-scrolling-tabs")
+                        .w_full()
+                        .segmented()
+                        .menu(true)
+                        .track_scroll(&self.scroll_handle)
+                        .selected_index(self.selected_index)
+                        .children(self.tabs()),
+                ),
+            )
+        }
+    }
+
+    fn draw(cx: &mut gpui::VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    #[gpui::test]
+    fn scrolling_to_a_tab_uses_logical_tab_indices(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let scroll_handle = ScrollHandle::new();
+        let (_, cx) = cx.add_window_view({
+            let scroll_handle = scroll_handle.clone();
+            move |_, _| ScrollHarness { scroll_handle }
+        });
+
+        draw(cx);
+        draw(cx);
+        assert_eq!(scroll_handle.offset().x, px(0.));
+        scroll_handle.scroll_to_item(4);
+        draw(cx);
+        draw(cx);
+
+        let viewport = scroll_handle.bounds();
+        let last_tab = cx.debug_bounds("tab-4").unwrap();
+        assert!(
+            last_tab.left() >= viewport.left(),
+            "last tab {last_tab:?} is left of viewport {viewport:?}, offset {:?}",
+            scroll_handle.offset()
+        );
+        assert!(
+            last_tab.right() <= viewport.right(),
+            "last tab {last_tab:?} is right of viewport {viewport:?}, offset {:?}",
+            scroll_handle.offset()
+        );
+        assert_eq!(scroll_handle.children_count(), 6);
+    }
+
+    #[gpui::test]
+    fn scrolling_to_a_new_tab_preserves_the_explicit_target(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let scroll_handle = ScrollHandle::new();
+        let (view, cx) = cx.add_window_view({
+            let scroll_handle = scroll_handle.clone();
+            move |_, _| DynamicScrollHarness {
+                scroll_handle,
+                menu: true,
+                size: Size::default(),
+                tabs: 4,
+                selected_index: 3,
+            }
+        });
+
+        draw(cx);
+        draw(cx);
+
+        view.update(cx, |view, cx| {
+            view.tabs = 5;
+            view.selected_index = 4;
+            view.scroll_handle.scroll_to_item(4);
+            cx.notify();
+        });
+        draw(cx);
+
+        let viewport = scroll_handle.bounds();
+        let last_tab = cx.debug_bounds("dynamic-tab-4").unwrap();
+        assert!(last_tab.left() >= viewport.left());
+        assert!(last_tab.right() <= viewport.right());
+        assert_eq!(scroll_handle.children_count(), 6);
+    }
+
+    #[gpui::test]
+    fn scrolling_to_a_new_tab_preserves_bar_padding(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        for (size, padding) in [
+            (Size::XSmall, px(2.)),
+            (Size::Small, px(3.)),
+            (Size::Medium, px(4.)),
+            (Size::Large, px(4.)),
+        ] {
+            let scroll_handle = ScrollHandle::new();
+            let (view, cx) = cx.add_window_view({
+                let scroll_handle = scroll_handle.clone();
+                move |_, _| DynamicScrollHarness {
+                    scroll_handle,
+                    menu: false,
+                    size,
+                    tabs: 4,
+                    selected_index: 0,
+                }
+            });
+            draw(cx);
+            draw(cx);
+            view.update(cx, |view, cx| {
+                view.tabs = 5;
+                view.scroll_handle.scroll_to_item(4);
+                cx.notify();
+            });
+            draw(cx);
+            draw(cx);
+            let bar = cx.debug_bounds("dynamic-bar").unwrap();
+            let last_tab = cx.debug_bounds("dynamic-tab-4").unwrap();
+            assert_eq!(
+                bar.right() - last_tab.right(),
+                padding,
+                "right padding for {size:?}"
+            );
+            scroll_handle.scroll_to_item(0);
+            draw(cx);
+            draw(cx);
+            let first_tab = cx.debug_bounds("dynamic-tab-0").unwrap();
+            assert_eq!(
+                first_tab.left() - bar.left(),
+                padding,
+                "left padding for {size:?}"
+            );
+            assert_eq!(scroll_handle.children_count(), 5);
+        }
+    }
+
+    #[gpui::test]
+    fn closing_an_unselected_trailing_tab_preserves_manual_scrolling(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let scroll_handle = ScrollHandle::new();
+        let (view, cx) = cx.add_window_view({
+            let scroll_handle = scroll_handle.clone();
+            move |_, _| ManualScrollHarness {
+                scroll_handle,
+                tabs: 6,
+                selected_index: 0,
+                label: "old",
+                top: px(0.),
+            }
+        });
+
+        draw(cx);
+        scroll_handle.set_offset(gpui::point(px(-100.), px(0.)));
+        draw(cx);
+        assert_eq!(scroll_handle.offset().x, px(-100.));
+
+        view.update(cx, |view, cx| {
+            view.tabs = 5;
+            cx.notify();
+        });
+        draw(cx);
+
+        assert_eq!(scroll_handle.offset().x, px(-100.));
+    }
+
+    #[gpui::test]
+    fn changing_selection_does_not_move_manual_scrolling(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let scroll_handle = ScrollHandle::new();
+        let (view, cx) = cx.add_window_view({
+            let scroll_handle = scroll_handle.clone();
+            move |_, _| ManualScrollHarness {
+                scroll_handle,
+                tabs: 6,
+                selected_index: 0,
+                label: "old",
+                top: px(0.),
+            }
+        });
+
+        draw(cx);
+        scroll_handle.set_offset(gpui::point(px(-100.), px(0.)));
+        draw(cx);
+
+        view.update(cx, |view, cx| {
+            view.selected_index = 5;
+            cx.notify();
+        });
+        draw(cx);
+
+        assert_eq!(scroll_handle.offset().x, px(-100.));
+    }
+
+    #[gpui::test]
+    fn changing_tab_labels_does_not_move_manual_scrolling(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let scroll_handle = ScrollHandle::new();
+        let (view, cx) = cx.add_window_view({
+            let scroll_handle = scroll_handle.clone();
+            move |_, _| ManualScrollHarness {
+                scroll_handle,
+                tabs: 6,
+                selected_index: 0,
+                label: "old",
+                top: px(0.),
+            }
+        });
+
+        draw(cx);
+        scroll_handle.set_offset(gpui::point(px(-100.), px(0.)));
+        draw(cx);
+
+        view.update(cx, |view, cx| {
+            view.label = "new";
+            cx.notify();
+        });
+        draw(cx);
+
+        assert_eq!(scroll_handle.offset().x, px(-100.));
+    }
+
+    #[gpui::test]
+    fn moving_the_tab_bar_preserves_manual_scrolling(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let scroll_handle = ScrollHandle::new();
+        let (view, cx) = cx.add_window_view({
+            let scroll_handle = scroll_handle.clone();
+            move |_, _| ManualScrollHarness {
+                scroll_handle,
+                tabs: 6,
+                selected_index: 0,
+                label: "old",
+                top: px(0.),
+            }
+        });
+
+        draw(cx);
+        scroll_handle.set_offset(gpui::point(px(-100.), px(0.)));
+        draw(cx);
+        assert_eq!(scroll_handle.offset().x, px(-100.));
+        let viewport_size = scroll_handle.bounds().size;
+
+        view.update(cx, |view, cx| {
+            view.top = px(20.);
+            cx.notify();
+        });
+        draw(cx);
+
+        assert_eq!(scroll_handle.bounds().size, viewport_size);
+        assert_eq!(scroll_handle.offset().x, px(-100.));
+    }
+
+    struct FlexHarness {
+        variant: TabVariant,
+    }
+
+    impl Render for FlexHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(200.))
+                .debug_selector(|| "flex-bar".into())
+                .child(
+                    TabBar::new("flex-tabs")
+                        .w_full()
+                        .with_variant(self.variant)
+                        .selected_index(0)
+                        .child(
+                            Tab::new()
+                                .flex_1()
+                                .label("A")
+                                .debug_selector(|| "flex-tab-0".into()),
+                        )
+                        .child(
+                            Tab::new()
+                                .flex_1()
+                                .label("B")
+                                .debug_selector(|| "flex-tab-1".into()),
+                        ),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn flex_tabs_share_the_available_width(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        for variant in [
+            TabVariant::Tab,
+            TabVariant::Outline,
+            TabVariant::Segmented,
+            TabVariant::Pill,
+            TabVariant::Underline,
+        ] {
+            let (_, cx) = cx.add_window_view(move |_, _| FlexHarness { variant });
+            draw(cx);
+            draw(cx);
+
+            let bar = cx.debug_bounds("flex-bar").unwrap();
+            let first = cx.debug_bounds("flex-tab-0").unwrap();
+            let second = cx.debug_bounds("flex-tab-1").unwrap();
+            assert_eq!(first.size.width, second.size.width, "{variant:?}");
+            // Only the bar's own padding may remain on either side.
+            assert_eq!(
+                first.left() - bar.left(),
+                bar.right() - second.right(),
+                "{variant:?}"
+            );
+            assert!(
+                bar.right() - second.right() <= px(4.),
+                "{variant:?}: tabs end at {:?} but the bar ends at {:?}",
+                second.right(),
+                bar.right()
+            );
+        }
+    }
+
+    struct ClickRevealHarness {
+        group_handler: bool,
+        scroll_handle: Option<ScrollHandle>,
+    }
+
+    impl Render for ClickRevealHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // Neither callback notifies.
+            div()
+                .w(px(100.))
+                .debug_selector(|| "click-bar".into())
+                .child(
+                    TabBar::new("click-reveal-tabs")
+                        .w_full()
+                        .when_some(self.scroll_handle.as_ref(), |tabs, handle| {
+                            tabs.track_scroll(handle)
+                        })
+                        .children((0..5).map(|ix| {
+                            Tab::new()
+                                .w(px(60.))
+                                .label(format!("Tab {ix}"))
+                                .debug_selector(move || format!("click-tab-{ix}"))
+                                .on_click(|_, _, _| {})
+                        }))
+                        .when(self.group_handler, |tabs| tabs.on_click(|_, _, _| {})),
+                )
+        }
+    }
+
+    fn click_reveal_harness(
+        cx: &mut TestAppContext,
+        group_handler: bool,
+        scroll_handle: Option<ScrollHandle>,
+        reduce_motion: bool,
+    ) -> &mut gpui::VisualTestContext {
+        cx.update(|cx| {
+            crate::theme::init(cx);
+            cx.set_reduce_motion(reduce_motion);
+        });
+        let (_, cx) = cx.add_window_view(move |_, _| ClickRevealHarness {
+            group_handler,
+            scroll_handle,
+        });
+        draw(cx);
+        cx
+    }
+
+    fn next_frame(cx: &mut gpui::VisualTestContext) {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        draw(cx);
+    }
+
+    #[gpui::test]
+    fn clicking_a_clipped_tab_reveals_it_and_part_of_the_next(cx: &mut TestAppContext) {
+        for group_handler in [false, true] {
+            let cx = click_reveal_harness(cx, group_handler, None, true);
+            let bar = cx.debug_bounds("click-bar").unwrap();
+            let tab = cx.debug_bounds("click-tab-1").unwrap();
+            assert!(tab.right() > bar.right(), "tab 1 starts clipped");
+
+            cx.simulate_click(tab.center(), Modifiers::default());
+            draw(cx);
+
+            let tab = cx.debug_bounds("click-tab-1").unwrap();
+            let next = cx.debug_bounds("click-tab-2").unwrap();
+            assert!(tab.left() >= bar.left() && tab.right() <= bar.right());
+            assert_eq!(bar.right() - next.left(), px(32.), "group: {group_handler}");
+        }
+    }
+
+    #[gpui::test]
+    fn clicking_the_last_tab_reveals_the_end_of_the_bar(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+        let cx = click_reveal_harness(cx, true, Some(scroll_handle.clone()), true);
+        scroll_handle.set_offset(gpui::point(px(-160.), px(0.)));
+        draw(cx);
+
+        let tab = cx.debug_bounds("click-tab-4").unwrap();
+        cx.simulate_click(
+            tab.origin + gpui::point(px(10.), px(10.)),
+            Modifiers::default(),
+        );
+        draw(cx);
+
+        assert_eq!(scroll_handle.offset().x, -scroll_handle.max_offset().x);
+    }
+
+    #[gpui::test]
+    fn reveal_animates_and_yields_to_manual_scrolling(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+        let cx = click_reveal_harness(cx, true, Some(scroll_handle.clone()), false);
+
+        let tab = cx.debug_bounds("click-tab-1").unwrap();
+        cx.simulate_click(tab.center(), Modifiers::default());
+        draw(cx);
+        next_frame(cx);
+        let moving = scroll_handle.offset().x;
+        assert!(
+            moving < px(0.) && moving > px(-52.),
+            "mid-flight at {moving:?}"
+        );
+
+        // The user scrolls while the reveal is still travelling.
+        scroll_handle.set_offset(gpui::point(px(-10.), px(0.)));
+        for _ in 0..30 {
+            next_frame(cx);
+        }
+        assert_eq!(scroll_handle.offset().x, px(-10.));
+
+        // A new click travels all the way.
+        cx.simulate_click(
+            tab.center() - gpui::point(px(10.), px(0.)),
+            Modifiers::default(),
+        );
+        for _ in 0..60 {
+            next_frame(cx);
+        }
+        assert_eq!(scroll_handle.offset().x, px(-52.));
     }
 }

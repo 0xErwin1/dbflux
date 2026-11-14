@@ -337,8 +337,11 @@ impl GovernanceSettingsRepository {
                 path: "dbflux.db".into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
 
         let mut result = Vec::new();
         for (id, governance_id, policy_id) in policy_rows {

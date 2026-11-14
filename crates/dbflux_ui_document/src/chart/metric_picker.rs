@@ -158,6 +158,10 @@ impl MetricPickerState {
     /// `ensure_dimensions_loaded` which peeks the shared cache (typically warm
     /// because the sidebar already expanded the namespace folder) and transitions
     /// to `Loaded` on a cache hit or `Loading` on a miss.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "DEFAULT_PERIOD_IDX (1) and DEFAULT_STATISTIC_IDX (0) index the const preset tables, which have four and five entries"
+    )]
     pub fn new_pre_populated(
         profile_id: Uuid,
         app_state: Entity<AppStateEntity>,

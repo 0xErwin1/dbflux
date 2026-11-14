@@ -44,6 +44,23 @@ pub enum CloseDisposition {
     KeepOpen,
 }
 
+/// What quitting the application means for a document's pending edits,
+/// decided by the document before the quit starts.
+///
+/// A pane reports it through [`PaneHandle::quit_disposition`]; panes that do
+/// not report one count as [`QuitDisposition::Clean`], which keeps the quit
+/// behaviour every other document had.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuitDisposition {
+    /// Nothing is pending: quitting loses nothing.
+    Clean,
+    /// The shutdown flush saves the pending edits without asking.
+    SavedOnQuit,
+    /// The pending edits cannot be saved safely while quitting, so the user
+    /// decides whether to save or drop them before the quit starts.
+    NeedsDecision,
+}
+
 /// An empty script tab whose backing file may be deleted as the tab closes.
 ///
 /// Reports what the document knows without reading anything: the file it owns and
@@ -236,6 +253,15 @@ pub struct PaneHandle {
     /// running. `None` for documents with no persistence path.
     pub flush_for_shutdown: Option<Box<dyn Fn(&mut App) -> bool>>,
 
+    /// Commits input the document still holds in an open editor, such as a
+    /// value typed into a grid cell before Enter, so the pending changes that
+    /// a close or a shutdown reads include it.
+    ///
+    /// Returns `false` when some input could not be committed, and a close must
+    /// then keep the document open. `None` for documents that hold no such
+    /// input.
+    pub commit_pending_input: Option<Box<dyn Fn(&mut App) -> bool>>,
+
     // --- Mutations (&mut App) ---
     set_active_tab: Box<dyn Fn(bool, &mut App)>,
     set_refresh_policy: Box<dyn Fn(RefreshPolicy, &mut App)>,
@@ -324,6 +350,16 @@ pub struct PaneHandle {
     pub take_pending_open_object_editor:
         Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
 
+    /// Drains an open-this-secret-in-its-own-tab intent, same convention as
+    /// `take_pending_open_bucket`. Only `SecretStoreDocument` populates it.
+    pub take_pending_open_secret:
+        Option<Box<dyn Fn(&mut App) -> Option<crate::secret_store::SecretOpenRequest>>>,
+
+    /// Opens `path` of a hierarchical secret store in its existing tab, so a
+    /// path activated in the sidebar navigates the store's one tab. Only
+    /// `SecretStoreDocument` populates it.
+    pub navigate_secret_path: Option<Box<dyn Fn(Option<String>, &mut App)>>,
+
     /// Returns the side panels the document currently shows, drawn by the
     /// workspace as islands beside the document island. `None` for documents
     /// that never show one.
@@ -364,6 +400,32 @@ pub struct PaneHandle {
     /// so its policy never applies; the workspace consults this through
     /// [`PaneHandle::has_close_policy`] rather than reading the field directly.
     pub decides_own_close: Option<Box<dyn Fn(&App) -> bool>>,
+
+    /// Reports what quitting means for the document's pending edits (see
+    /// [`QuitDisposition`]). `None` for documents that do not take part in
+    /// the quit check.
+    pub quit_disposition: Option<Box<dyn Fn(&App) -> QuitDisposition>>,
+
+    /// Saves the document for a quit the user confirmed, without closing its
+    /// tab, and reports the outcome through `DocumentEvent::SaveFinished`.
+    /// Returns whether a save started. `None` for documents without one.
+    pub save_for_quit: Option<Box<dyn Fn(&mut Window, &mut App) -> bool>>,
+
+    /// Drops the document's pending edits for a quit the user confirmed
+    /// without saving them, so the shutdown flush does not write them.
+    pub discard_for_quit: Option<Box<dyn Fn(&mut App)>>,
+
+    /// Positions a table document on one record from outside the document:
+    /// replaces its filter with an equality on `column = value` and reloads
+    /// (foreign-key navigation). `None` for documents that are not
+    /// table-backed.
+    pub apply_table_filter: Option<Box<dyn Fn(&str, &dbflux_core::Value, &mut Window, &mut App)>>,
+
+    /// Reports whether an applied query-builder spec owns the document's
+    /// query composition, so the equality [`PaneHandle::apply_table_filter`]
+    /// writes would be ignored. `None` for documents that are not
+    /// table-backed.
+    pub has_applied_builder_query: Option<Box<dyn Fn(&App) -> bool>>,
 }
 
 impl PaneHandle {
@@ -407,6 +469,7 @@ impl PaneHandle {
             refresh_policy,
             flush_auto_save,
             flush_for_shutdown: None,
+            commit_pending_input: None,
             set_active_tab,
             set_refresh_policy,
             matches_dedup_key,
@@ -426,6 +489,8 @@ impl PaneHandle {
             tab_tooltip: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
+            take_pending_open_secret: None,
+            navigate_secret_path: None,
             side_panels: None,
             pane_actions: None,
             on_close: None,
@@ -433,6 +498,11 @@ impl PaneHandle {
             apply_for_close: None,
             resolve_close: None,
             decides_own_close: None,
+            quit_disposition: None,
+            save_for_quit: None,
+            discard_for_quit: None,
+            apply_table_filter: None,
+            has_applied_builder_query: None,
         }
     }
 
@@ -513,6 +583,18 @@ impl PaneHandle {
             .as_ref()
             .map(|flush| flush(cx))
             .unwrap_or(false)
+    }
+
+    /// Commits input the document still holds in an open editor.
+    ///
+    /// Called before a close decides whether to ask about pending changes, and
+    /// before a shutdown flush. Returns `false` when some input could not be
+    /// committed, so a close must keep the document open. A pane that holds no
+    /// such input returns `true` and changes nothing.
+    pub fn commit_pending_input(&self, cx: &mut App) -> bool {
+        self.commit_pending_input
+            .as_ref()
+            .is_none_or(|commit| commit(cx))
     }
 
     /// Notifies the document that it became (or stopped being) the active tab.
@@ -611,6 +693,54 @@ impl PaneHandle {
             Some(resolve) => resolve(window, cx),
             None => CloseDisposition::CloseNow,
         }
+    }
+
+    /// What quitting means for the document's pending edits. A pane that
+    /// does not take part in the quit check reports
+    /// [`QuitDisposition::Clean`].
+    pub fn quit_disposition(&self, cx: &App) -> QuitDisposition {
+        self.quit_disposition
+            .as_ref()
+            .map_or(QuitDisposition::Clean, |disposition| disposition(cx))
+    }
+
+    /// Starts the save of a quit the user confirmed. Returns `false` when the
+    /// document has no such save, or could not start one.
+    pub fn save_for_quit(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.save_for_quit
+            .as_ref()
+            .is_some_and(|save| save(window, cx))
+    }
+
+    /// Drops the pending edits for a quit the user confirmed without saving.
+    pub fn discard_for_quit(&self, cx: &mut App) {
+        if let Some(discard) = self.discard_for_quit.as_ref() {
+            discard(cx);
+        }
+    }
+
+    /// Positions the document's table on one record: replaces its filter with
+    /// an equality on `column = value` and reloads. A pane that does not
+    /// support it does nothing.
+    pub fn apply_table_filter(
+        &self,
+        column: &str,
+        value: &dbflux_core::Value,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(apply) = self.apply_table_filter.as_ref() {
+            apply(column, value, window, cx);
+        }
+    }
+
+    /// Whether an applied builder query owns the document's refresh, so the
+    /// equality `apply_table_filter` writes would be ignored. A pane without
+    /// the helper never reports one.
+    pub fn has_applied_builder_query(&self, cx: &App) -> bool {
+        self.has_applied_builder_query
+            .as_ref()
+            .is_some_and(|has| has(cx))
     }
 
     /// Returns the document's contributed status-bar segments.

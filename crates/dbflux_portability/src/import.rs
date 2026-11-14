@@ -152,7 +152,13 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
 
     // Conflict detection for SSH tunnels.
     for ssh in &parsed.bundle.ssh_tunnels {
-        if let Some(existing_id) = ssh_conflict(&ssh.host, ssh.port, &ssh.user, dest) {
+        if let Some(existing_id) = ssh_conflict(
+            &ssh.host,
+            ssh.port,
+            &ssh.user,
+            ssh.ssh_config_host.as_deref(),
+            dest,
+        ) {
             let existing_name = dest
                 .ssh_tunnels
                 .iter()
@@ -485,6 +491,7 @@ pub fn apply(
                 port: ssh_entry.port,
                 user: ssh_entry.user.clone(),
                 auth_method,
+                ssh_config_host: ssh_entry.ssh_config_host.clone(),
             },
             save_secret: false,
         });
@@ -1068,6 +1075,7 @@ mod tests {
             host: "bastion.example.com".to_string(),
             port: 22,
             user: "ec2-user".to_string(),
+            ssh_config_host: None,
             auth_method: SshAuthMethodKind::Password,
             key_embedded: false,
             required_refs: vec![],
@@ -1130,6 +1138,15 @@ mod tests {
     }
 
     fn make_dest_ssh(host: &str, port: u16, user: &str) -> SshTunnelProfile {
+        make_dest_ssh_with_alias(host, port, user, None)
+    }
+
+    fn make_dest_ssh_with_alias(
+        host: &str,
+        port: u16,
+        user: &str,
+        alias: Option<&str>,
+    ) -> SshTunnelProfile {
         SshTunnelProfile::new(
             "ExistingTunnel",
             SshTunnelConfig {
@@ -1137,6 +1154,7 @@ mod tests {
                 port,
                 user: user.to_string(),
                 auth_method: SshAuthMethod::Password,
+                ssh_config_host: alias.map(str::to_string),
             },
         )
     }
@@ -1327,6 +1345,37 @@ encryption = "none"
         assert!(parse(&bytes).is_ok());
     }
 
+    #[test]
+    fn apply_preserves_ssh_alias_and_defaults_missing_alias_to_none() {
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        let mut aliased = make_ssh_entry("ssh-alias-1");
+        aliased.ssh_config_host = Some("web-prod".to_string());
+        bundle.ssh_tunnels.push(aliased);
+        bundle.ssh_tunnels.push(make_ssh_entry("ssh-plain-1"));
+
+        let bytes = bundle_bytes(&bundle);
+        let parsed = parse(&bytes).expect("parse bundle");
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let actions = apply(&parsed, &import_plan, &ResolutionChoices::default()).expect("apply");
+
+        assert_eq!(actions.ssh_tunnels.len(), 2);
+
+        let aliased: Vec<_> = actions
+            .ssh_tunnels
+            .iter()
+            .filter(|t| t.config.ssh_config_host.as_deref() == Some("web-prod"))
+            .collect();
+        assert_eq!(aliased.len(), 1, "exactly one tunnel keeps the alias");
+
+        let plain: Vec<_> = actions
+            .ssh_tunnels
+            .iter()
+            .filter(|t| t.config.ssh_config_host.is_none())
+            .collect();
+        assert_eq!(plain.len(), 1, "exactly one tunnel has no alias");
+    }
+
     // -----------------------------------------------------------------------
     // plan() tests (T3.3)
     // -----------------------------------------------------------------------
@@ -1355,6 +1404,92 @@ encryption = "none"
         let conflict = import_plan.conflicts.first().expect("conflict");
         assert_eq!(conflict.bundle_local_id, "ssh-local-1");
         assert_eq!(conflict.existing_id, dest_ssh.id);
+    }
+
+    #[test]
+    fn plan_and_apply_aliased_tunnel_reuses_matching_alias() {
+        // An aliased tunnel stores an empty host and user with port 22, so the
+        // alias is part of its identity. A destination tunnel with the same
+        // alias is the same endpoint and Reuse binds to it.
+        let local_id = "ssh-alias-reuse";
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        let mut entry = make_ssh_entry(local_id);
+        entry.host = String::new();
+        entry.user = String::new();
+        entry.ssh_config_host = Some("web-prod".to_string());
+        bundle.ssh_tunnels.push(entry);
+
+        let dest_ssh = make_dest_ssh_with_alias("", 22, "", Some("web-prod"));
+        let dest_ssh_id = dest_ssh.id;
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![&dest_ssh],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let import_plan = plan(&parsed, &dest);
+        assert_eq!(import_plan.conflicts.len(), 1);
+        assert_eq!(
+            import_plan.conflicts.first().expect("conflict").existing_id,
+            dest_ssh_id,
+            "the conflict must name the destination tunnel, not a different one"
+        );
+
+        let mut choices = ResolutionChoices::default();
+        choices
+            .conflict_choices
+            .insert(local_id.to_string(), ConflictChoice::Reuse);
+
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+        assert!(
+            actions.ssh_tunnels.is_empty(),
+            "Reuse must bind to the destination tunnel, not create a new one"
+        );
+    }
+
+    #[test]
+    fn plan_aliased_tunnel_with_different_alias_creates_new() {
+        // Same empty host/user/port but a different alias: the tunnels dial
+        // different endpoints, so this is not a conflict and the import must
+        // create a new tunnel instead of binding to the destination's alias.
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        let mut entry = make_ssh_entry("ssh-alias-new");
+        entry.host = String::new();
+        entry.user = String::new();
+        entry.ssh_config_host = Some("web-prod".to_string());
+        bundle.ssh_tunnels.push(entry);
+
+        let dest_ssh = make_dest_ssh_with_alias("", 22, "", Some("web-staging"));
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![&dest_ssh],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let import_plan = plan(&parsed, &dest);
+        assert!(
+            import_plan.conflicts.is_empty(),
+            "different aliases must not be reported as a conflict"
+        );
+
+        let actions = apply(&parsed, &import_plan, &ResolutionChoices::default()).expect("apply");
+        assert_eq!(actions.ssh_tunnels.len(), 1);
+        let tunnel = actions.ssh_tunnels.first().expect("tunnel");
+        assert_eq!(tunnel.config.ssh_config_host.as_deref(), Some("web-prod"));
     }
 
     #[test]

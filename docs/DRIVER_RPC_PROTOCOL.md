@@ -2,10 +2,11 @@
 
 This document defines how DBFlux discovers, launches, and talks to RPC services over local IPC.
 
-DBFlux now activates two runtime service families:
+DBFlux now activates three runtime service families:
 
 - `RpcServiceKind::Driver` -> runtime database drivers
 - `RpcServiceKind::AuthProvider` -> runtime auth-provider registries in the app and MCP server
+- `RpcServiceKind::SecretProvider` -> runtime secret providers in every connection's value resolver; see [Secret Provider RPC Protocol](SECRET_PROVIDER_RPC_PROTOCOL.md)
 
 ## Source of truth
 
@@ -47,7 +48,7 @@ DBFlux uses local sockets via `interprocess`:
 Messages are framed as:
 
 - 4-byte little-endian length (`u32`)
-- bincode payload
+- postcard payload
 
 Maximum message size: `16 MiB`.
 
@@ -76,7 +77,7 @@ Notes:
 
 DBFlux connects and sends `Hello` first.
 
-The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are additive and are negotiated deterministically within that major line.
+The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are negotiated deterministically within that major line. Minor versions up to v1.7 are additive; v1.8 is a wire-format fix that changes how some existing payloads are encoded, and every shape that decoded before is byte-identical (see **Wire-format fix** below). v1.9 is additive again.
 
 Client request:
 
@@ -91,6 +92,10 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
         ProtocolVersion::new(1, 5),
+        ProtocolVersion::new(1, 6),
+        ProtocolVersion::new(1, 7),
+        ProtocolVersion::new(1, 8),
+        ProtocolVersion::new(1, 9),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -179,6 +184,54 @@ Unlike the v1.3 fields above, this operation is not additive on the wire: frames
 `KvKeyCount { keyspace }` asks for the number of keys in a keyspace (`None` means the session's current one) and answers `KvKeyCountResult { count }`. The host dispatches the request to the connection's `KeyValueApi::key_count` seam; a driver that does not implement it answers with the trait's `NotSupported` default, which reaches the client as `UnsupportedMethod`.
 
 Both variants are appended after the last v1.4 variant of their enum, for the wire-index reason described above. The client gates locally in the same way: `IpcConnection::key_count` returns `DbError::NotSupported` without sending anything when the negotiated minor is below 1.5. The key browser treats that error as "no total" and shows only the page count.
+
+### Request row limit (v1.6+)
+
+`Execute` and `ExecuteWithHandle` may carry `QueryRequestDto::limit`, the editor row limit. A host answers them with `ExecuteResultWithTruncation { result, rows_truncated }` and `ExecuteWithHandleResultWithTruncation { handle_id, result, rows_truncated }` instead of `ExecuteResult` and `ExecuteWithHandleResult`, because `QueryResultDto` has no room for the flag. `rows_truncated` is `true` only when the driver dropped rows to honour the limit.
+
+Both response variants are appended after `KvKeyCountResult`, for the wire-index reason described above. A host sends them for execute calls only on sessions that negotiated v1.6 exactly; v1.7 replaces them with the result-set responses below, and older sessions keep the v1.5 responses. See **Protected execution** below for which requests carry a limit.
+
+### Result sets (v1.7+)
+
+A statement batch or a stored procedure can return several result sets, and each of them can omit rows on its own. From v1.7 a host answers with every result set instead of only the first one:
+
+| Request | v1.7 response |
+| --- | --- |
+| `Execute` | `ExecuteResultSets { results }` |
+| `ExecuteWithHandle` | `ExecuteWithHandleResultSets { handle_id, results }` |
+| `BrowseTable`, `BrowseCollection`, `Explain`, `DescribeTable` | `BrowseResultSets { results }` |
+
+`results` is a `QueryResultSetsDto { primary, additional }`. Each entry is a `ResultSetDto { result, rows_truncated }`: `primary` is the first result set and `additional` holds the rest in the order the driver returned them. `rows_truncated` is `true` only when the driver dropped rows from that result set, so a driver that never caps rows always sends `false`.
+
+The three variants are appended after `ExecuteWithHandleResultWithTruncation`, for the wire-index reason described above. A host sends them only on sessions that negotiated v1.7 or newer. A v1.6 session keeps `ExecuteResultWithTruncation`, `ExecuteWithHandleResultWithTruncation` and `BrowseResult`, and an older session keeps the v1.5 responses; on those sessions only the primary result set crosses the wire. The client accepts every variant whatever the negotiated version, so a host never needs to know which client build it talks to.
+
+### Wire-format fix (v1.8)
+
+v1.8 adds no request or response variant. It changes how some existing payloads are encoded, so that every payload the protocol defines can be decoded with postcard:
+
+| Payload | v1.8 encoding |
+| --- | --- |
+| JSON documents: the `filter`, `projection` and `sort` of `BrowseCollection` (`CollectionBrowseRequestDto`), the `filter` of `CountCollection` (`CollectionCountRequestDto`), the filter and update of `UpdateDocument` (`DocumentUpdateDto`), the documents of `InsertDocument` (`DocumentInsertDto`), the filter of `DeleteDocument` (`DocumentDeleteDto`), and the `metadata_extra` values of `CrudResult` (`CrudResultDto`) | JSON text: a postcard string holding the serialized JSON, parsed back at the protocol boundary |
+| Optional and list fields that used to carry `skip_serializing_if`, such as `semantic_filter` and `columns` on browse and count requests, `enum_values` on `ColumnInfo`, `metadata_extra` on `CrudResult`, `type_name` on `ColumnAssignment`, `source` on `ExecutionContext` and `icon` on `FormSection` | always encoded, as `None` or an empty list when unset |
+| `IndexData` | externally tagged: the variant index, then the list of indexes |
+
+A raw `serde_json::Value` could be written but never read back, because it deserializes only through `deserialize_any`, which postcard does not support. A skipped field shortened the frame while the decoder still read it, so every later field shifted. An internally tagged `IndexData` could not be encoded at all, so `TableDetails` and `GenerateCode` failed for any table with indexes.
+
+The encoding is not gated by the negotiated version. A shape that decoded before v1.8 is byte-identical in v1.8; only shapes that no peer could decode change their bytes, so peers on older minors keep working.
+
+### Root sections (v1.9+)
+
+A driver can declare sections shown at the root of its connection in the sidebar, such as S3 buckets. The payloads are the `dbflux_core` root section types, carried as they are:
+
+| Request | Response |
+| --- | --- |
+| `RootSections` | `RootSections { sections }`, a `Vec<RootSectionDef>` in display order |
+| `RootSectionItems { section_id, page_token }` | `RootSectionPage { page }`; `page_token` is `None` for the first page and the previous page's `next_page_token` afterwards |
+| `ExecuteRootSectionAction { section_id, item_id, action_id }` | `RootSectionActionDone` |
+
+The host dispatches the three requests to the connection's `Connection::root_section_source`. A driver without a source answers `UnsupportedMethod` (`Driver does not declare root sections`), and a driver error answers as any other `Error`. A host refuses the requests on a session that negotiated an older minor with `VersionMismatch` (`root section requests require driver RPC protocol 1.9 or newer`), without calling the driver.
+
+The six variants are appended after the last v1.8 variant of their enum, for the wire-index reason described above. The client exposes root sections only when the session negotiated v1.9 or newer and the driver metadata declares `DriverCapabilities::ROOT_SECTIONS`; otherwise `IpcConnection` clears that capability and sends nothing. `IpcConnection` fetches the declaration once per connection and caches it; a failed fetch is returned as an error and not cached, so the host shows it with a retry row and asks again from there. A section id must not contain `|`; the host rejects and reports such a declaration. The host hides a section whose presentation opens an object-store document on a connection without `object_store_api`. `IpcConnection` has none, because no object-store RPC exists yet, and both presentations shipped so far (`ObjectContainerTable` and `ObjectBrowser`) are of that kind, so an external driver's sections stay hidden until a presentation without that need ships. Every `RootSectionAction` carries its `ExecutionClassification`, so the host confirms and audits actions the same way for external drivers as for built-in ones.
 
 ## Auth-provider RPC contract
 
@@ -280,13 +333,14 @@ The service should parse `profile_json`, expect `DbConfig::External`, and valida
 | `OpenSession` → `SessionOpened` | open connection/session |
 | `CloseSession` → `SessionClosed` | close session |
 | `Ping` → `Pong` | liveness |
-| `Execute` → `ExecuteResult` | query execution |
+| `Execute` → `ExecuteResult` (`ExecuteResultSets` from v1.7) | query execution |
 | `Schema` → `Schema` | schema snapshot |
 | `ListDatabases` → `Databases` | database list |
+| `RootSections` → `RootSections`, `RootSectionItems` → `RootSectionPage`, `ExecuteRootSectionAction` → `RootSectionActionDone` (v1.9+) | sidebar root sections |
 
 The protocol also supports browse, CRUD, key-value, and code generation operations. See `crates/dbflux_ipc/src/driver_protocol.rs` for the full enum set.
 
-**Protected execution:** no negotiated capability lets an external driver certify that it enforces a row limit or a statement timeout, so protected queries are refused. `IpcConnection` rejects `Execute` and `ExecuteWithHandle` with `NotSupported` before sending the RPC when `QueryRequest.limit` is `Some(n)` (including `Some(0)`) or `statement_timeout` is `Some(...)`. Host session dispatch independently rejects the same requests with `UnsupportedMethod` before invoking the plugin connection. Requests with both options `None` still run, and browse and CRUD operations are unaffected.
+**Protected execution:** on a session that negotiated v1.6 or newer, a driver whose metadata declares `DriverCapabilities::REQUEST_ROW_LIMIT` receives `QueryRequestDto::limit`. It must either enforce the limit while it collects rows, counting it once across all result sets, and set `rows_truncated` only when rows were dropped, or refuse the request before running anything. The host session refuses a limited request with `UnsupportedMethod` when the driver does not declare the capability. Below v1.6 the client never sends a limit: `IpcConnection` does not advertise `REQUEST_ROW_LIMIT` and rejects `Execute` and `ExecuteWithHandle` with `NotSupported` before sending the RPC when `QueryRequest.limit` is `Some(n)` (including `Some(0)`). On every version the client refuses a `statement_timeout` or read-only enforcement the same way, and the host refuses a `statement_timeout`. Below v1.7 only the primary result set crosses the wire, so additional result sets and their flags are dropped; from v1.7 every result set crosses with its own flag (see **Result sets** above). The client trusts the driver's declaration: a driver that declares `REQUEST_ROW_LIMIT` and ignores the limit returns uncapped rows marked as not truncated. Browse and CRUD operations are unaffected.
 
 ## Audit emission from drivers (v1.2+)
 

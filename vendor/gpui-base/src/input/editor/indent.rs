@@ -201,6 +201,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if M::handle_context_menu_action(self, Box::new(IndentInline), window, cx) {
+            return;
+        }
         // First, try to accept inline completion if present
         if M::accept_inline_completion(self, window, cx) {
             return;
@@ -218,6 +221,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if M::handle_context_menu_action(self, Box::new(OutdentInline), window, cx) {
+            return;
+        }
         self.outdent(false, window, cx);
     }
 

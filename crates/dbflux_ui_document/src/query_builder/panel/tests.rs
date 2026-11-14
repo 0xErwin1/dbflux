@@ -18,7 +18,7 @@ use dbflux_core::{
 
 // ---- helpers -----------------------------------------------------------
 
-fn test_source() -> SourceTable {
+pub(crate) fn test_source() -> SourceTable {
     SourceTable {
         schema: Some("public".to_string()),
         table: "users".to_string(),
@@ -26,7 +26,7 @@ fn test_source() -> SourceTable {
     }
 }
 
-fn make_spec(source: SourceTable) -> VisualQuerySpec {
+pub(crate) fn make_spec(source: SourceTable) -> VisualQuerySpec {
     VisualQuerySpec {
         source,
         projection: Projection::All,
@@ -50,7 +50,7 @@ fn no_op_preview(_spec: &VisualQuerySpec) -> String {
 /// GPUI handle fields (`focus_handle`, `data_grid`) are set to `None`.
 /// Tests MUST only call the `t_*` helpers defined below, which route
 /// through `rebuild_spec_pure()` and never touch those handles.
-fn make_panel(spec: VisualQuerySpec) -> QueryBuilderPanel {
+pub(crate) fn make_panel(spec: VisualQuerySpec) -> QueryBuilderPanel {
     let projection_rows = Vec::new();
     let join_rows: Vec<JoinRow> = spec
         .joins

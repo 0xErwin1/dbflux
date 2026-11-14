@@ -9,14 +9,14 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Label;
 use dbflux_components::primitives::{
     Badge, BadgeTone, Chamfer, FilePicker, Icon as AppIconElement, SegmentedControl, SegmentedItem,
-    Text, environment_label, focus_underline, status_diamond,
+    Text, environment_badge_tone, environment_label, focus_underline, status_diamond,
 };
 use dbflux_components::tokens::ChamferCut;
 #[cfg(feature = "mcp")]
 use dbflux_components::tokens::Spacing;
 use dbflux_components::tokens::{ChromeColors, Widths};
-use dbflux_core::ConnectionEnvironment;
 use dbflux_core::FormFieldKind;
+use dbflux_core::{ConnectionEnvironment, NavigatorView};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -192,7 +192,124 @@ impl ConnectionManagerWindow {
             sections.push(transport_section);
         }
 
+        if self
+            .form
+            .selected_driver
+            .as_deref()
+            .is_some_and(Self::shows_navigator_view)
+        {
+            sections.push(self.render_navigator_section(cx));
+        }
+
+        sections.push(self.render_safety_section(cx));
+
         sections
+    }
+
+    /// Safety section of the Main tab: the read-only toggle that blocks
+    /// mutations on the connection.
+    fn render_safety_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
+        let focused = show_focus && self.main_extra_focus_for_read_only() == Some(self.form_focus);
+
+        let checkbox = layout::cursor_ring(
+            focused,
+            Checkbox::new("cm-read-only")
+                .checked(self.form.read_only)
+                .aria_label(dbflux_i18n::t!("connection_manager.field.read_only"))
+                .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                    this.form.read_only = *checked;
+                    window.focus(&this.focus_handle, cx);
+                    cx.notify();
+                })),
+            cx,
+        );
+
+        let row = Self::field_row_cm(
+            dbflux_i18n::t!("connection_manager.field.read_only"),
+            false,
+            div()
+                .flex()
+                .items_center()
+                .child(checkbox)
+                .child(div().flex_1()),
+            Some(dbflux_i18n::t!("connection_manager.field.read_only_help")),
+            cx,
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("connection_manager.section.safety"),
+                Some(AppIcon::Lock.into()),
+                cx,
+            ))
+            .child(row)
+            .into_any_element()
+    }
+
+    /// Navigator section of the Main tab: how the sidebar lays out the
+    /// connection's schemas.
+    fn render_navigator_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity().clone();
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
+        let focused =
+            show_focus && self.main_extra_focus_for_navigator_view() == Some(self.form_focus);
+
+        let items = vec![
+            SegmentedItem::new(
+                NavigatorView::Advanced.as_str(),
+                dbflux_i18n::t!("connection_manager.navigator_view.option.advanced"),
+            ),
+            SegmentedItem::new(
+                NavigatorView::Compact.as_str(),
+                dbflux_i18n::t!("connection_manager.navigator_view.option.compact"),
+            ),
+            SegmentedItem::new(
+                NavigatorView::Simple.as_str(),
+                dbflux_i18n::t!("connection_manager.navigator_view.option.simple"),
+            ),
+        ];
+
+        let control = SegmentedControl::new(
+            items,
+            self.form.navigator_view.as_str(),
+            move |selected: &SharedString, _window, cx| {
+                let view = NavigatorView::from_storage_str(selected);
+                entity.update(cx, |this, cx| {
+                    this.form.navigator_view = view;
+                    cx.notify();
+                });
+            },
+        )
+        .group("navigator-view")
+        .focused(focused);
+
+        let row = Self::field_row_cm(
+            dbflux_i18n::t!("connection_manager.navigator_view.label"),
+            false,
+            div()
+                .flex()
+                .items_center()
+                .child(control)
+                .child(div().flex_1()),
+            Some(dbflux_i18n::t!("connection_manager.navigator_view.help")),
+            cx,
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("connection_manager.section.navigator"),
+                Some(AppIcon::Layers.into()),
+                cx,
+            ))
+            .child(row)
+            .into_any_element()
     }
 
     /// Environment row of the Main tab (P1ConnForm): one chip per
@@ -250,7 +367,7 @@ impl ConnectionManagerWindow {
             Some(environment) => (
                 environment_label(environment),
                 environment.as_str(),
-                BadgeTone::for_environment(environment).text_color(theme),
+                environment_badge_tone(environment).text_color(theme),
             ),
             None => (
                 dbflux_i18n::t!("connection_manager.environment.none"),
@@ -515,9 +632,9 @@ impl ConnectionManagerWindow {
                     .child(
                         Checkbox::new("conn-override-refresh-policy")
                             .checked(self.settings_tab.conn_override_refresh_policy)
-                            .aria_label(dbflux_i18n::t!(
+                            .aria_label(crate::labels::override_control_name(&dbflux_i18n::t!(
                                 "connection_manager.overrides.refresh_policy"
-                            ))
+                            )))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.settings_tab.conn_override_refresh_policy = *checked;
                                 cx.notify();
@@ -567,7 +684,9 @@ impl ConnectionManagerWindow {
                     .child(
                         Checkbox::new("conn-override-refresh-interval")
                             .checked(self.settings_tab.conn_override_refresh_interval)
-                            .aria_label(refresh_interval_label.clone())
+                            .aria_label(crate::labels::override_control_name(
+                                &refresh_interval_label,
+                            ))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.settings_tab.conn_override_refresh_interval = *checked;
                                 cx.notify();

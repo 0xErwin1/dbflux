@@ -28,9 +28,12 @@ on:
         required: false
       MACOS_CERTIFICATE_PASSWORD:
         required: false
+      # Required at runtime only for stable and RC Windows releases.
+      SIGNPATH_API_TOKEN:
+        required: false
 
 env:
-  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws"
+  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
 
 permissions:
   contents: read
@@ -100,21 +103,15 @@ jobs:
             sudo apt-get install -y libfuse2t64
           fi
 
-          sudo apt-get install -y gettext imagemagick
+          # zsync provides zsyncmake, which appimagetool shells out to when -u
+          # update information is passed. appimagetool runs on this runner (with
+          # APPIMAGE_EXTRACT_AND_RUN=1), not inside the ubuntu:22.04 compile
+          # container, so the dependency belongs here; upstream treats a missing
+          # zsyncmake as a warning, so we install it explicitly and fail closed
+          # on verification below instead.
+          sudo apt-get install -y zsync
 
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
-        with:
-          prefix-key: "v0-rust"
-          shared-key: linux-${{ matrix.arch }}
-          cache-targets: true
-          cache-on-failure: true
-          # A release runs on a tag ref, and a cache saved there is scoped to
-          # that tag: no later run can read it, yet it still counts toward the
-          # repository's 10 GB limit and evicts the caches main relies on.
-          # Only the nightly, which runs on main, writes; releases restore from
-          # main through the shared-key fallback.
-          save-if: ${{ inputs.channel == 'nightly' }}
+          sudo apt-get install -y gettext imagemagick
 
       - name: Stamp workspace version
         env:
@@ -174,7 +171,14 @@ jobs:
           ) &
           SAMPLER_PID=$!
 
-          cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
+          # Native runners provide Docker, but their newer libc must not leak
+          # into the release binary or the bundled dependency closure.
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            -v "$HOME/.cargo:/rust/cargo" -v "$HOME/.rustup:/rust/rustup" \
+            -e CARGO_HOME=/rust/cargo -e RUSTUP_HOME=/rust/rustup -e FEATURES \
+            ubuntu:22.04 bash scripts/appimage-build.sh ${{ matrix.target }}
+          sudo chown -R "$(id -u):$(id -g)" target AppDir "$HOME/.cargo" "$HOME/.rustup"
 
           kill "$SAMPLER_PID"
 
@@ -189,6 +193,9 @@ jobs:
 
           free -h
           cat "$SAMPLES"
+
+      - name: Check packaging and release script contracts
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Create package
         run: |
@@ -268,19 +275,81 @@ jobs:
           cp LICENSE-MIT AppDir/usr/share/licenses/dbflux/
           cp LICENSE-APACHE AppDir/usr/share/licenses/dbflux/
 
-          ln -sf usr/bin/dbflux AppDir/AppRun
           ln -sf "usr/share/applications/$APP_ID.desktop" "AppDir/$APP_ID.desktop"
           ln -sf "usr/share/icons/hicolor/scalable/apps/$APP_ID.svg" "AppDir/$APP_ID.svg"
 
-          APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$VERSION" ./appimagetool-${{ env.APPIMAGE_ARCH }}.AppImage AppDir
+          # External AppImage updates: stable and nightly embed a zsync update
+          # source; RC releases embed nothing and stay manual. appimagetool has
+          # no UPDATE_INFORMATION env support, so the info is passed as an
+          # argument, and only when non-empty (a bare -u '' is not accepted).
+          UPDATE_INFO=$(bash scripts/appimage-update-info.sh "${{ inputs.channel }}" "${{ matrix.rpm_arch }}")
+          tool_args=(AppDir "dbflux-${{ matrix.rpm_arch }}.AppImage")
+          if [ -n "$UPDATE_INFO" ]; then
+            tool_args=(-u "$UPDATE_INFO" "${tool_args[@]}")
+          fi
 
-          APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" ! -name "appimagetool-*.AppImage" | head -n 1)
-          if [ -z "$APPIMAGE_FILE" ]; then
-            echo "AppImage output not found"
+          # appimagetool 1.9.1 generates the .zsync sidecar next to the image
+          # (only when zsyncmake is on PATH, hence the apt install above) and
+          # defaults its target URL to the relative basename of the destination,
+          # which is exactly this same-arch image.
+          APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$VERSION" ./appimagetool-${{ env.APPIMAGE_ARCH }}.AppImage \
+            "${tool_args[@]}"
+
+      - name: Verify AppImage update metadata
+        run: |
+          set -euo pipefail
+          IMAGE="dbflux-${{ matrix.rpm_arch }}.AppImage"
+          ZSYNC="${IMAGE}.zsync"
+          INFO=$(bash scripts/appimage-update-info.sh "${{ inputs.channel }}" "${{ matrix.rpm_arch }}")
+
+          # The image's own runtime prints the embedded string; the flag is
+          # handled before any payload launch. Querying the appimagetool
+          # runtime instead would report the tool, not this image.
+          EMBEDDED=$(./"$IMAGE" --appimage-updateinformation)
+
+          if [ "${{ inputs.channel }}" = "rc" ]; then
+            if [ -n "$EMBEDDED" ]; then
+              echo "::error::RC AppImage must not embed update information, found: $EMBEDDED"
+              exit 1
+            fi
+            # The sidecar is not expected on RC; do not assume or require it.
+            exit 0
+          fi
+
+          if [ ! -s "$ZSYNC" ]; then
+            echo "::error::Expected zsync sidecar $ZSYNC is missing or empty."
+            exit 1
+          fi
+          if [ "$EMBEDDED" != "$INFO" ]; then
+            echo "::error::Embedded update information does not match the expected update information."
+            echo "  expected: $INFO"
+            echo "  embedded: $EMBEDDED"
             exit 1
           fi
 
-          mv "$APPIMAGE_FILE" dbflux-linux-${{ matrix.arch }}.AppImage
+          # zsync 0.6.2 control file: 'zsync:' is the protocol header, 'URL:'
+          # carries the target (appimagetool passes the relative basename of
+          # the destination, i.e. this same-arch image) and 'Length:' its size.
+          grep -q "^zsync: " "$ZSYNC" || {
+            echo "::error::$ZSYNC is not a zsync control file."; exit 1; }
+          grep -Fqx "URL: $IMAGE" "$ZSYNC" || {
+            echo "::error::$ZSYNC does not target the relative image URL $IMAGE."; exit 1; }
+          grep -Fqx "Filename: $IMAGE" "$ZSYNC" || {
+            echo "::error::$ZSYNC does not name $IMAGE as its target."; exit 1; }
+          ZSYNC_LENGTH=$(sed -n 's/^Length: //p' "$ZSYNC" | head -n 1)
+          ACTUAL_LENGTH=$(stat -c %s "$IMAGE")
+          if [ -z "$ZSYNC_LENGTH" ] || [ "${ZSYNC_LENGTH#0x}" != "$ZSYNC_LENGTH" ]; then
+            echo "::error::$ZSYNC has no parsable Length: header."; exit 1
+          fi
+          if [ "$((ZSYNC_LENGTH))" -ne "$ACTUAL_LENGTH" ]; then
+            echo "::error::$ZSYNC Length ($ZSYNC_LENGTH) does not match $IMAGE size ($ACTUAL_LENGTH)."
+            exit 1
+          fi
+
+      - name: Verify produced AppImage on Ubuntu 22.04
+        run: |
+          docker run --rm -v "$PWD:/work:ro" -w /work ubuntu:22.04 \
+            bash scripts/appimage-verify.sh /work/dbflux-${{ matrix.rpm_arch }}.AppImage
 
       - name: Generate PNG icons
         run: |
@@ -363,35 +432,59 @@ jobs:
       - name: Sign artifacts
         run: |
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz
-          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage
+          gpg --armor --detach-sign dbflux-${{ matrix.rpm_arch }}.AppImage
           gpg --armor --detach-sign *.deb
           gpg --armor --detach-sign *.rpm
 
       - name: Generate checksums
         run: |
           sha256sum dbflux-linux-${{ matrix.arch }}.tar.gz > dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
-          sha256sum dbflux-linux-${{ matrix.arch }}.AppImage > dbflux-linux-${{ matrix.arch }}.AppImage.sha256
+          sha256sum dbflux-${{ matrix.rpm_arch }}.AppImage > dbflux-${{ matrix.rpm_arch }}.AppImage.sha256
           sha256sum *.deb > dbflux_${{ matrix.arch }}.deb.sha256
           sha256sum *.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
 
+      - name: Add stable names for the Linux packages
+        # The .deb and .rpm names carry the version, so a
+        # releases/latest/download/ link to them can never resolve. Publish
+        # byte-identical copies under fixed names, which docs/INSTALL.md links
+        # to. They are made after signing and checksumming so the versioned
+        # packages' .sha256 files keep a single entry; the detached signature
+        # does not depend on the file name, so it is copied as is.
+        run: |
+          for extension in deb rpm; do
+            packages=(*."$extension")
+            if [ "${#packages[@]}" -ne 1 ] || [ ! -f "${packages[0]}" ]; then
+              echo "::error::Expected exactly one .$extension package, found: ${packages[*]}"
+              exit 1
+            fi
+
+            stable_name="dbflux-linux-${{ matrix.arch }}.$extension"
+            cp "${packages[0]}" "$stable_name"
+            cp "${packages[0]}.asc" "$stable_name.asc"
+            sha256sum "$stable_name" > "$stable_name.sha256"
+          done
+
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
             dbflux-linux-${{ matrix.arch }}.tar.gz
             dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
             dbflux-linux-${{ matrix.arch }}.tar.gz.asc
-            dbflux-linux-${{ matrix.arch }}.AppImage
-            dbflux-linux-${{ matrix.arch }}.AppImage.sha256
-            dbflux-linux-${{ matrix.arch }}.AppImage.asc
+            dbflux-${{ matrix.rpm_arch }}.AppImage
+            dbflux-${{ matrix.rpm_arch }}.AppImage.sha256
+            dbflux-${{ matrix.rpm_arch }}.AppImage.asc
+            dbflux-${{ matrix.rpm_arch }}.AppImage.zsync
             *.deb
             *.deb.asc
             dbflux_${{ matrix.arch }}.deb.sha256
+            dbflux-linux-${{ matrix.arch }}.deb.sha256
             *.rpm
             *.rpm.asc
             dbflux_${{ matrix.arch }}.rpm.sha256
+            dbflux-linux-${{ matrix.arch }}.rpm.sha256
           retention-days: 90
 
       - name: (act) Store artifacts locally
@@ -401,15 +494,22 @@ jobs:
           cp dbflux-linux-${{ matrix.arch }}.tar.gz /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.tar.gz.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.tar.gz.asc /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux-linux-${{ matrix.arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux-linux-${{ matrix.arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux-linux-${{ matrix.arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-${{ matrix.rpm_arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-${{ matrix.rpm_arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-${{ matrix.rpm_arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          # RC ships no sidecar; stable/nightly sidecars are fail-closed by the
+          # verify step, so this conditional cannot mask a missing output.
+          if [ "${{ inputs.channel }}" != "rc" ]; then
+            cp dbflux-${{ matrix.rpm_arch }}.AppImage.zsync /tmp/artifacts/linux-${{ matrix.arch }}/
+          fi
           cp *.deb /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.rpm /tmp/artifacts/linux-${{ matrix.arch }}/
           cp *.rpm.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.rpm.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.rpm.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
 
   build-macos:
     name: Build macOS ${{ matrix.arch }}
@@ -425,10 +525,10 @@ jobs:
           # x86_64 is a trivial same-OS cross (universal SDK, shared linker),
           # so this cuts the Intel build from ~1h to the arm64 build's time.
           - arch: amd64
-            runs_on: macos-14
+            runs_on: macos-15
             target: x86_64-apple-darwin
           - arch: arm64
-            runs_on: macos-14
+            runs_on: macos-15
             target: aarch64-apple-darwin
 
     steps:
@@ -465,20 +565,6 @@ jobs:
         # Apple Silicon runner. Add it to the pinned toolchain. No-op for the
         # native arm64 target.
         run: rustup target add ${{ matrix.target }}
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
-        with:
-          prefix-key: "v0-rust"
-          shared-key: macos-${{ matrix.arch }}
-          cache-targets: true
-          cache-on-failure: true
-          # A release runs on a tag ref, and a cache saved there is scoped to
-          # that tag: no later run can read it, yet it still counts toward the
-          # repository's 10 GB limit and evicts the caches main relies on.
-          # Only the nightly, which runs on main, writes; releases restore from
-          # main through the shared-key fallback.
-          save-if: ${{ inputs.channel == 'nightly' }}
 
       - name: Stamp workspace version
         env:
@@ -554,7 +640,7 @@ jobs:
 
       - name: Upload build timings
         if: always() && env.ACT != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: cargo-timings-macos-${{ matrix.arch }}
           path: target/cargo-timings/
@@ -680,7 +766,7 @@ jobs:
 
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: macos-${{ matrix.arch }}
           path: |
@@ -700,11 +786,47 @@ jobs:
   build-windows:
     name: Build Windows amd64
     runs-on: windows-latest
-    timeout-minutes: 60
+    # A cold release build takes 40-60 minutes on the hosted runner, and each
+    # of the two SignPath requests may wait up to one hour for manual approval.
+    timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read  # SignPath reads the uploaded unsigned artifact through the Actions API
+    env:
+      # test-signing uses SignPath's self-signed test certificate. Switch to
+      # release-signing once SignPath Foundation imports the production
+      # certificate into that policy.
+      SIGNPATH_SIGNING_POLICY: test-signing
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check Windows signing prerequisites
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          $isStable = $env:CHANNEL -eq 'stable' -and $env:RELEASE_VERSION -match '^[0-9]+\.[0-9]+\.[0-9]+$' -and $env:IS_PRERELEASE -ne 'true'
+          $isReleaseCandidate = $env:CHANNEL -eq 'rc' -and $env:RELEASE_VERSION -match '^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'
+          if (-not ($isStable -or $isReleaseCandidate)) {
+            throw 'SignPath release-signing is only available for stable and release-candidate versions.'
+          }
+          if ($env:ACT -eq 'true') {
+            throw 'Windows release signing requires a GitHub-hosted workflow; act cannot sign releases.'
+          }
+          if ($env:GITHUB_REPOSITORY -ne '0xErwin1/dbflux') {
+            throw 'Windows release signing is restricted to the canonical repository.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNPATH_API_TOKEN)) {
+            throw 'SIGNPATH_API_TOKEN is required for stable and release-candidate Windows builds.'
+          }
 
       - name: Resolve channel identity
         shell: pwsh
@@ -735,6 +857,12 @@ jobs:
           # repository's 10 GB limit and evicts the caches main relies on.
           # Only the nightly, which runs on main, writes; releases restore from
           # main through the shared-key fallback.
+          #
+          # Windows is the only release build that caches. The Linux and macOS
+          # builds finish cold well inside their timeout, and with their caches
+          # the total exceeded the 10 GB limit: every nightly cache was evicted
+          # before the next nightly could read it, and the CI caches in
+          # tests.yml went with them.
           save-if: ${{ inputs.channel == 'nightly' }}
 
       - name: Stamp workspace version
@@ -761,6 +889,48 @@ jobs:
         # No --locked: the version stamp above mutates Cargo.toml; see the Linux build
         # step for the full rationale.
         run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
+
+      # The default SignPath configuration has a pe-file root, not a zip-file.
+      # Raw uploads use the file's name as the artifact name, regardless of name.
+      - name: Upload unsigned Windows executable
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        id: unsigned-executable
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          path: target/x86_64-pc-windows-msvc/release/dbflux.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign Windows executable
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: '963ebe33-9db3-4a84-9eea-f726ca65dd9c'
+          project-slug: dbflux
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY }}
+          github-artifact-id: ${{ steps.unsigned-executable.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-executable
+          skip-decompress: true
+
+      - name: Verify signed Windows executable
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -FilePath signed-executable/dbflux.exe
+          $trusted = $signature.Status -eq 'Valid'
+          # The test certificate is self-signed, so Windows reports an untrusted
+          # root; accept that only for the test policy and its own certificate.
+          $testSigned = $env:SIGNPATH_SIGNING_POLICY -eq 'test-signing' -and
+            $signature.Status -in @('UnknownError', 'NotTrusted') -and
+            $signature.SignerCertificate.Subject -eq "CN=Test certificate for 'DBFlux [OSS]'"
+          if (-not ($trusted -or $testSigned) -or $null -eq $signature.TimeStamperCertificate) {
+            throw "Signed executable must have a valid, timestamped Authenticode signature: $($signature.Status) $($signature.StatusMessage)"
+          }
+          Copy-Item signed-executable/dbflux.exe target/x86_64-pc-windows-msvc/release/dbflux.exe -Force
 
       # The same committed icon the build script embeds into dbflux.exe, so the
       # executable, the portable zip and the installer shortcuts agree.
@@ -798,6 +968,46 @@ jobs:
       - name: Move installer
         run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
 
+      - name: Upload unsigned Windows installer
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        id: unsigned-installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          path: dbflux-windows-amd64-setup.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign Windows installer
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: '963ebe33-9db3-4a84-9eea-f726ca65dd9c'
+          project-slug: dbflux
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY }}
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-installer
+          skip-decompress: true
+
+      - name: Verify signed Windows installer
+        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -FilePath signed-installer/dbflux-windows-amd64-setup.exe
+          $trusted = $signature.Status -eq 'Valid'
+          # The test certificate is self-signed, so Windows reports an untrusted
+          # root; accept that only for the test policy and its own certificate.
+          $testSigned = $env:SIGNPATH_SIGNING_POLICY -eq 'test-signing' -and
+            $signature.Status -in @('UnknownError', 'NotTrusted') -and
+            $signature.SignerCertificate.Subject -eq "CN=Test certificate for 'DBFlux [OSS]'"
+          if (-not ($trusted -or $testSigned) -or $null -eq $signature.TimeStamperCertificate) {
+            throw "Signed installer must have a valid, timestamped Authenticode signature: $($signature.Status) $($signature.StatusMessage)"
+          }
+          Copy-Item signed-installer/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
+
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0
         with:
@@ -819,7 +1029,7 @@ jobs:
 
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-amd64
           path: |

@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-use dbflux_core::observability::{EventRecord, EventSink as CoreEventSink, EventSinkError};
+use dbflux_core::observability::{
+    EventActorType, EventRecord, EventSink as CoreEventSink, EventSinkError, EventSourceId,
+};
 use dbflux_storage::error::RepositoryError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -124,6 +126,7 @@ pub struct AuditService {
 
 const DEFAULT_MAX_DETAIL_BYTES: usize = 65_536;
 const UNKNOWN_ACTOR_ID: &str = "unknown";
+const LOCAL_ACTOR_ID: &str = "local";
 
 impl AuditService {
     pub fn new(store: SqliteAuditStore) -> Self {
@@ -460,7 +463,7 @@ impl AuditService {
                     )));
                 }
             }
-            EventCategory::ObjectStorage => {
+            EventCategory::ObjectStorage | EventCategory::SecretStore => {
                 if !Self::has_required_text(event.connection_id.as_deref()) {
                     return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
                         "connection_id",
@@ -521,7 +524,16 @@ impl AuditService {
         mut event: EventRecord,
     ) -> Result<EventRecord, AuditError> {
         if event.actor_id.is_none() {
-            event.actor_id = Some(UNKNOWN_ACTOR_ID.to_string());
+            let is_local_user =
+                event.actor_type == EventActorType::User && event.source_id == EventSourceId::Local;
+
+            let actor_id = if is_local_user {
+                LOCAL_ACTOR_ID
+            } else {
+                UNKNOWN_ACTOR_ID
+            };
+
+            event.actor_id = Some(actor_id.to_string());
         }
 
         if !self.capture_query_text() {
@@ -935,6 +947,10 @@ pub fn temp_sqlite_path(file_name: &str) -> PathBuf {
     path
 }
 
+#[expect(
+    clippy::panic,
+    reason = "documented hard-failure contract of `temp_sqlite_path` (# Panics): a leftover temp path that cannot be removed must abort, not be silently ignored"
+)]
 fn remove_leftover_temp_path(path: &Path) {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -1004,6 +1020,52 @@ mod tests {
         };
 
         service.record(event).expect("record should succeed");
+    }
+
+    fn make_actorless_event(origin: dbflux_core::observability::EventOrigin) -> EventRecord {
+        use dbflux_core::observability::{EventCategory, EventOutcome, EventSeverity};
+
+        EventRecord::new(
+            1_000,
+            EventSeverity::Info,
+            EventCategory::System,
+            EventOutcome::Success,
+        )
+        .with_action("test_action")
+        .with_summary("test")
+        .with_origin(origin)
+    }
+
+    #[test]
+    fn local_user_event_without_actor_id_is_stored_as_local() {
+        let service = make_service("local_user_actor");
+
+        let stored = service
+            .record(make_actorless_event(
+                dbflux_core::observability::EventOrigin::local(),
+            ))
+            .expect("record should succeed");
+
+        assert_eq!(stored.actor_id.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn non_local_events_without_actor_id_keep_unknown_actor() {
+        use dbflux_core::observability::EventOrigin;
+
+        let service = make_service("non_local_actor");
+
+        for origin in [
+            EventOrigin::mcp(),
+            EventOrigin::system(),
+            EventOrigin::hook(),
+        ] {
+            let stored = service
+                .record(make_actorless_event(origin))
+                .expect("record should succeed");
+
+            assert_eq!(stored.actor_id.as_deref(), Some(UNKNOWN_ACTOR_ID));
+        }
     }
 
     // T-SVC-01: wide schema — bucket_ms column + one Integer column per distinct group value.
@@ -1407,6 +1469,37 @@ mod tests {
             ),
             "expected MissingRequiredField(object_id), got {result:?}"
         );
+    }
+
+    #[test]
+    fn test_validate_event_requires_the_secret_store_object_fields() {
+        let mut event = base_object_storage_event();
+        event.category = dbflux_core::observability::EventCategory::SecretStore;
+        event.action = "secret_value_retrieved".to_string();
+        event.object_type = Some("secrets-manager".to_string());
+        event.object_id = Some("prod/db".to_string());
+
+        AuditService::validate_event(&event)
+            .expect("SecretStore events with connection_id/object_type/object_id must pass");
+
+        for field in ["connection_id", "object_type", "object_id"] {
+            let mut missing = event.clone();
+            match field {
+                "connection_id" => missing.connection_id = None,
+                "object_type" => missing.object_type = None,
+                _ => missing.object_id = None,
+            }
+
+            let result = AuditService::validate_event(&missing);
+            assert!(
+                matches!(
+                    result,
+                    Err(AuditError::EventSink(EventSinkError::MissingRequiredField(name)))
+                        if name == field
+                ),
+                "expected MissingRequiredField({field}), got {result:?}"
+            );
+        }
     }
 
     // W1: build_truncated_envelope must never return a string longer than max_bytes.

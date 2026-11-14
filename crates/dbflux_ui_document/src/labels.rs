@@ -139,12 +139,69 @@ pub(crate) fn export_format_label(format: dbflux_export::ExportFormat) -> String
 ///
 /// Uses the singular catalog bucket only for exactly one row; every other
 /// count, including zero, uses the plural bucket.
+/// Rows a statement without a result set changed: "3 rows affected".
+pub(crate) fn affected_rows_label(count: u64) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.data.grid.status.affected_rows.one", count = count)
+    } else {
+        dbflux_i18n::t!(
+            "document.data.grid.status.affected_rows.many",
+            count = grouped_count(count)
+        )
+    }
+}
+
 pub(crate) fn row_count_label(count: usize) -> String {
     if count == 1 {
         dbflux_i18n::t!("document.data.grid.status.rows.one", count = count)
     } else {
-        dbflux_i18n::t!("document.data.grid.status.rows.many", count = count)
+        dbflux_i18n::t!(
+            "document.data.grid.status.rows.many",
+            count = grouped_count(count as u64)
+        )
     }
+}
+
+/// Footer row count of similar rows: the neighbors shown, out of the
+/// table's rows when they are counted.
+pub(crate) fn nearest_rows_label(count: usize, total: Option<u64>) -> String {
+    match total {
+        Some(total) => dbflux_i18n::t!(
+            "document.data.grid.nearest.rows.of_total",
+            count = grouped_count(count as u64),
+            total = grouped_count(total)
+        ),
+        None => dbflux_i18n::t!(
+            "document.data.grid.nearest.rows.count",
+            count = grouped_count(count as u64)
+        ),
+    }
+}
+
+/// Footer row count of a result the row limit cut short.
+pub(crate) fn limited_row_count_label(count: usize) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.status.limited_rows.first",
+        count = grouped_count(count as u64)
+    )
+}
+
+/// Footer row count of a result the row limit cut short, once its rows have
+/// been counted.
+pub(crate) fn limited_row_count_of_total_label(loaded: usize, total: u64) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.status.limited_rows.of_total",
+        loaded = grouped_count(loaded as u64),
+        total = grouped_count(total)
+    )
+}
+
+pub(crate) fn count_rows_label() -> String {
+    dbflux_i18n::t!("document.data.grid.status.limited_rows.count")
+}
+
+pub(crate) fn load_all_rows_label() -> String {
+    dbflux_i18n::t!("document.data.grid.status.limited_rows.load_all")
 }
 
 /// Label for the status bar's pending-change pill, with the count
@@ -344,6 +401,7 @@ pub(crate) fn chart_rail_why_text(numeric_columns: usize, timestamp_columns: usi
 
 /// Item kind affected by a bulk delete, selecting the plural noun used in
 /// the completion toast and the partial-failure catalog buckets.
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum MutationItemKind {
     Row,
     Document,
@@ -410,6 +468,21 @@ pub(crate) fn partial_delete_label(
     };
 
     dbflux_i18n::t!(key, done = done, total = total, error = error)
+}
+
+/// Warning for a batch delete that left out items whose identity could not be
+/// read, with the deleted and skipped counts interpolated.
+pub(crate) fn bulk_delete_unidentified_label(
+    kind: MutationItemKind,
+    done: usize,
+    skipped: usize,
+) -> String {
+    let key = match kind {
+        MutationItemKind::Row => "document.data.mutation.toast.unidentified_delete.row",
+        MutationItemKind::Document => "document.data.mutation.toast.unidentified_delete.document",
+    };
+
+    dbflux_i18n::t!(key, done = done, skipped = skipped)
 }
 
 /// Toast text for a batch delete that completed in full, with the number of
@@ -1049,6 +1122,7 @@ pub(crate) fn audit_category_label(category: dbflux_core::EventCategory) -> Stri
         EventCategory::ObjectStorage => {
             dbflux_i18n::t!("document.audit.category.object_storage")
         }
+        EventCategory::SecretStore => dbflux_i18n::t!("document.audit.category.secret_store"),
     }
 }
 
@@ -2282,6 +2356,116 @@ pub(crate) fn context_menu_export_exported_toast(path: &str) -> String {
     )
 }
 
+/// Toast text after the loaded rows of a result were written to a file.
+pub(crate) fn context_menu_export_exported_rows_toast(count: usize, path: &str) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.data.context_menu.export.toast.exported_rows.one",
+            path = path
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.context_menu.export.toast.exported_rows.many",
+            count = count,
+            path = path
+        )
+    }
+}
+
+/// Toast text after the loaded rows were written to the fallback directory
+/// because no native file picker was available.
+pub(crate) fn context_menu_export_native_picker_fallback_rows_toast(
+    count: usize,
+    path: &str,
+) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.data.context_menu.export.toast.native_picker_fallback_rows.one",
+            path = path
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.context_menu.export.toast.native_picker_fallback_rows.many",
+            count = count,
+            path = path
+        )
+    }
+}
+
+/// Toast text after the loaded rows of a result were copied to the clipboard.
+pub(crate) fn context_menu_clipboard_copied_rows_toast(
+    count: usize,
+    format: &str,
+    bytes: usize,
+) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.data.context_menu.clipboard.toast.copied_rows.one",
+            format = format,
+            bytes = bytes
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.context_menu.clipboard.toast.copied_rows.many",
+            count = count,
+            format = format,
+            bytes = bytes
+        )
+    }
+}
+
+/// Tasks panel label of an "Export all rows" run.
+pub(crate) fn export_all_rows_task_label(table: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.export.all.task", table = table)
+}
+
+/// Toast text after every row of a table was written to a file.
+pub(crate) fn export_all_rows_exported_toast(count: u64, path: &str) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.data.grid.export.all.toast.exported.one",
+            path = path
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.grid.export.all.toast.exported.many",
+            count = count,
+            path = path
+        )
+    }
+}
+
+/// Toast text after an "Export all rows" run was cancelled part way.
+pub(crate) fn export_all_rows_cancelled_toast(path: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.export.all.toast.cancelled", path = path)
+}
+
+/// Warning after an "Export all rows" run whose later pages had fields the
+/// first page, and so the file's header, did not.
+pub(crate) fn export_all_rows_dropped_columns_warning(columns: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.export.all.toast.dropped_columns",
+        columns = columns
+    )
+}
+
+/// Error text when an "Export all rows" run fails.
+pub(crate) fn export_all_rows_failed_error(error: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.export.all.error.failed", error = error)
+}
+
+/// Label of a streaming format in the "Export all rows" section.
+pub(crate) fn export_all_format_label(format: dbflux_transfer::FileFormat) -> String {
+    match format {
+        dbflux_transfer::FileFormat::Csv => {
+            dbflux_i18n::t!("document.data.grid.export.format.csv")
+        }
+        dbflux_transfer::FileFormat::Json => {
+            dbflux_i18n::t!("document.data.grid.export.format.json_lines")
+        }
+    }
+}
+
 /// Error text when writing the export file fails.
 pub(crate) fn context_menu_export_failed_error(error: &str) -> String {
     dbflux_i18n::t!(
@@ -2791,6 +2975,890 @@ pub(crate) fn schema_inspector_foreign_keys(count: usize) -> String {
     }
 }
 
+/// Notice shown in a delimited file tab while its first page is read.
+pub(crate) fn delimited_loading_label(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.loading", name = file_name)
+}
+
+/// Summary of the error reported when a delimited file cannot be opened.
+pub(crate) fn delimited_open_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.open_failed", name = file_name)
+}
+
+/// Summary of the error reported when a further page of a delimited file
+/// cannot be loaded.
+pub(crate) fn delimited_load_more_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.load_more_failed",
+        name = file_name
+    )
+}
+
+/// Warning shown when decoding a delimited file replaced malformed byte
+/// sequences, with the encoding the file was read in. `is_chosen` says
+/// whether the user picked that encoding or detection resolved it, which is
+/// the one the warning blames.
+pub(crate) fn delimited_malformed_text_warning(encoding: &str, is_chosen: bool) -> String {
+    if is_chosen {
+        dbflux_i18n::t!(
+            "document.delimited.warning.malformed_text_chosen",
+            encoding = encoding
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.delimited.warning.malformed_text",
+            encoding = encoding
+        )
+    }
+}
+
+/// Warning shown when the reader refuses the detected delimiter in the
+/// file's encoding and the file is read with another one.
+pub(crate) fn delimited_unreadable_delimiter_warning(
+    detected: u8,
+    encoding: &str,
+    in_use: u8,
+) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.warning.detected_delimiter_unreadable",
+        detected = delimited_byte_name(detected),
+        encoding = encoding,
+        delimiter = delimited_byte_name(in_use)
+    )
+}
+
+/// Summary of the error reported when a delimited file cannot be read again
+/// under another dialect.
+pub(crate) fn delimited_reread_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.reread_failed", name = file_name)
+}
+
+/// Summary of a delimited file tab's unsaved changes, for its dirty-dot
+/// tooltip and the unsaved-changes dialog.
+pub(crate) fn delimited_unsaved_summary(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.unsaved_summary", name = file_name)
+}
+
+/// Summary of the error reported when a save of a delimited file did not
+/// write it.
+pub(crate) fn delimited_save_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.save_failed", name = file_name)
+}
+
+/// Summary of the error reported when an edit of the text of a delimited
+/// file cannot be applied to its rows.
+pub(crate) fn delimited_text_apply_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.text_apply_failed",
+        name = file_name
+    )
+}
+
+/// Summary of the error reported when a row cannot be added to a delimited
+/// file.
+pub(crate) fn delimited_add_row_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.add_row_failed", name = file_name)
+}
+
+/// Summary of the error reported when a value from the modal cell editor of
+/// a delimited file was not applied.
+pub(crate) fn delimited_edit_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.edit_failed", name = file_name)
+}
+
+/// Summary of the error reported when a column cannot be added to a
+/// delimited file.
+pub(crate) fn delimited_add_column_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.add_column_failed",
+        name = file_name
+    )
+}
+
+/// Summary of the error reported when a column of a delimited file cannot be
+/// renamed.
+pub(crate) fn delimited_rename_column_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.rename_column_failed",
+        name = file_name
+    )
+}
+
+/// The note of the add-column prompt of a delimited file without a header
+/// row: the name is not written, and the column shows as `column_name`.
+pub(crate) fn delimited_no_header_column_note(column_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.column.no_header_note",
+        name = column_name
+    )
+}
+
+/// The body of the offer to load the rest of a delimited file of
+/// `size_bytes` bytes, of which `loaded` records are loaded.
+pub(crate) fn delimited_load_rest_body(loaded: usize, size_bytes: u64) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.load_rest.body",
+        loaded = loaded,
+        size = crate::buckets_table::format_bytes(size_bytes)
+    )
+}
+
+/// Summary of the warning reported when a delimited file was saved and its
+/// new version could not be read.
+pub(crate) fn delimited_saved_version_unknown_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.error.saved_version_unknown",
+        name = file_name
+    )
+}
+
+/// Summary of the error reported when a delimited file was saved and could
+/// not be opened again.
+pub(crate) fn delimited_reopen_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.delimited.error.reopen_failed", name = file_name)
+}
+
+/// Why the bytes of a file could not be read, with `cause`, the file
+/// system's or the driver's own message.
+pub(crate) fn file_read_failed_cause(cause: &dyn std::fmt::Display) -> String {
+    dbflux_i18n::t!("document.file.error.storage.read", cause = cause)
+}
+
+/// Notice shown while a Parquet file is opened.
+pub(crate) fn parquet_loading_label(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.loading", name = file_name)
+}
+
+/// Summary of the error reported when a Parquet file cannot be opened.
+pub(crate) fn parquet_open_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.error.open_failed", name = file_name)
+}
+
+/// Summary of the error reported when a further window of a Parquet file
+/// cannot be read.
+pub(crate) fn parquet_load_more_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.error.load_more_failed", name = file_name)
+}
+
+/// Title of the notice shown for a Parquet file without rows.
+pub(crate) fn parquet_empty_title(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.empty.title", name = file_name)
+}
+
+/// The rows of a Parquet file loaded so far against its total.
+pub(crate) fn parquet_row_count_status(loaded: u64, total: u64) -> String {
+    if loaded >= total {
+        if total == 1 {
+            dbflux_i18n::t!("document.parquet.status.rows.all.one", count = total)
+        } else {
+            dbflux_i18n::t!("document.parquet.status.rows.all.many", count = total)
+        }
+    } else {
+        dbflux_i18n::t!(
+            "document.parquet.status.rows.of_total",
+            loaded = loaded,
+            total = total
+        )
+    }
+}
+
+/// The summary of a Parquet file in its header: its columns, its rows, its
+/// size on disk, which the footer may not know, and for an object whether
+/// it is read by range or from a copy downloaded whole.
+pub(crate) fn parquet_summary(
+    columns: usize,
+    rows: u64,
+    compressed_bytes: Option<u64>,
+    reads: Option<crate::file_source::ObjectReads>,
+) -> String {
+    let columns = if columns == 1 {
+        dbflux_i18n::t!("document.parquet.summary.columns.one", count = columns)
+    } else {
+        dbflux_i18n::t!("document.parquet.summary.columns.many", count = columns)
+    };
+
+    let rows = if rows == 1 {
+        dbflux_i18n::t!("document.parquet.summary.rows.one", count = rows)
+    } else {
+        dbflux_i18n::t!("document.parquet.summary.rows.many", count = rows)
+    };
+
+    let size = dbflux_components::components::column_facts::format_optional_bytes(compressed_bytes);
+
+    match reads {
+        Some(reads) => format!(
+            "{columns} · {rows} · {size} · {}",
+            parquet_object_reads_label(reads)
+        ),
+        None => format!("{columns} · {rows} · {size}"),
+    }
+}
+
+/// How the bytes of a Parquet object are read, for its summary.
+pub(crate) fn parquet_object_reads_label(reads: crate::file_source::ObjectReads) -> String {
+    match reads {
+        crate::file_source::ObjectReads::ByRange => {
+            dbflux_i18n::t!("document.parquet.summary.read_by_range")
+        }
+        crate::file_source::ObjectReads::Downloaded => {
+            dbflux_i18n::t!("document.parquet.summary.downloaded_whole")
+        }
+    }
+}
+
+/// What the prompt before a whole download of a Parquet object asks: the
+/// object's name and size, and that all of it is downloaded once.
+pub(crate) fn parquet_download_body(file_name: &str, size_bytes: u64) -> String {
+    dbflux_i18n::t!(
+        "document.parquet.download.body",
+        name = file_name,
+        size = dbflux_components::components::column_facts::format_bytes(size_bytes)
+    )
+}
+
+/// What the prompt asks when a reload found a downloaded Parquet object
+/// changed: its new size, and that all of it is downloaded again.
+pub(crate) fn parquet_download_changed_body(file_name: &str, size_bytes: u64) -> String {
+    dbflux_i18n::t!(
+        "document.parquet.download.body_changed",
+        name = file_name,
+        size = dbflux_components::components::column_facts::format_bytes(size_bytes)
+    )
+}
+
+/// The notice of a reload that found a downloaded Parquet object unchanged.
+pub(crate) fn parquet_download_unchanged(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.download.unchanged", name = file_name)
+}
+
+/// The summary of the error shown when the chosen columns of a Parquet file
+/// could not be read.
+pub(crate) fn parquet_projection_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.parquet.error.projection_failed", name = file_name)
+}
+
+/// The columns of a Parquet file shown against all of its columns.
+pub(crate) fn parquet_column_count_status(shown: usize, total: usize) -> String {
+    dbflux_i18n::t!(
+        "document.parquet.status.columns",
+        shown = shown,
+        total = total
+    )
+}
+
+/// What the user is told about a failure of the Parquet reader.
+///
+/// Every failure has its own translated message, naming the codec, the
+/// column and the sizes involved. A file that is not Parquet or does not
+/// decode is followed, on its own line, by the reader's own text.
+pub(crate) fn parquet_error_cause(error: &dbflux_parquet::ParquetError) -> String {
+    use dbflux_components::components::column_facts::format_bytes;
+    use dbflux_parquet::ParquetError;
+
+    match error {
+        ParquetError::Source(source) => file_read_failed_cause(source),
+
+        ParquetError::ShortRead { .. } => {
+            dbflux_i18n::t!("document.parquet.error.short_read")
+        }
+
+        ParquetError::NotParquet { reason } => with_technical_detail(
+            dbflux_i18n::t!("document.parquet.error.not_parquet"),
+            reason,
+        ),
+
+        ParquetError::FooterTooLarge { length, limit } => dbflux_i18n::t!(
+            "document.parquet.error.footer_too_large",
+            size = format_bytes(*length),
+            limit = format_bytes(*limit)
+        ),
+
+        ParquetError::UnsupportedCodec { codec, column } => dbflux_i18n::t!(
+            "document.parquet.error.unsupported_codec",
+            column = column,
+            codec = codec
+        ),
+
+        ParquetError::Encrypted => dbflux_i18n::t!("document.parquet.error.encrypted"),
+
+        ParquetError::Malformed { message } => {
+            with_technical_detail(dbflux_i18n::t!("document.parquet.error.malformed"), message)
+        }
+
+        ParquetError::UnindexedChunkTooLarge {
+            column,
+            size,
+            limit,
+        } => dbflux_i18n::t!(
+            "document.parquet.error.unindexed_chunk_too_large",
+            column = column,
+            size = format_bytes(*size),
+            limit = format_bytes(*limit)
+        ),
+
+        ParquetError::NoColumnsSelected => {
+            dbflux_i18n::t!("document.parquet.error.no_columns_selected")
+        }
+
+        ParquetError::ColumnOutOfRange {
+            index,
+            column_count,
+        } => dbflux_i18n::t!(
+            "document.parquet.error.column_out_of_range",
+            index = index,
+            count = column_count
+        ),
+    }
+}
+
+/// Notice shown while a spreadsheet is opened.
+pub(crate) fn spreadsheet_loading_label(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.loading", name = file_name)
+}
+
+/// Summary of the error reported when a save of a spreadsheet did not
+/// replace the file.
+pub(crate) fn spreadsheet_save_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.error.save_failed", name = file_name)
+}
+
+/// Summary of a spreadsheet's unsaved edits, for the tab's dirty-dot
+/// tooltip and the unsaved-changes dialog.
+pub(crate) fn spreadsheet_unsaved_summary(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.unsaved_summary", name = file_name)
+}
+
+/// The warning shown while pending edits replace formula cells with values.
+pub(crate) fn spreadsheet_formula_warning(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.spreadsheet.formula_warning.one", count = count)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.formula_warning.many", count = count)
+    }
+}
+
+/// The note below a spreadsheet's text view when the text holds only the
+/// first `shown` of the sheet's `total` rows.
+pub(crate) fn spreadsheet_text_cut(shown: usize, total: usize) -> String {
+    if total == 1 {
+        dbflux_i18n::t!(
+            "document.spreadsheet.text.cut.one",
+            shown = shown,
+            total = total
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.spreadsheet.text.cut.many",
+            shown = shown,
+            total = total
+        )
+    }
+}
+
+/// Notice shown while one sheet of a spreadsheet is read.
+pub(crate) fn spreadsheet_reading_sheet_label(sheet: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.reading_sheet", sheet = sheet)
+}
+
+/// Summary of the error reported when a spreadsheet cannot be opened.
+pub(crate) fn spreadsheet_open_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.error.open_failed", name = file_name)
+}
+
+/// Summary of the error reported when one sheet of a spreadsheet cannot be
+/// read.
+pub(crate) fn spreadsheet_sheet_failed_message(file_name: &str, sheet: &str) -> String {
+    dbflux_i18n::t!(
+        "document.spreadsheet.error.sheet_failed",
+        name = file_name,
+        sheet = sheet
+    )
+}
+
+/// Title of the notice shown for a sheet without values.
+pub(crate) fn spreadsheet_empty_sheet_title(sheet: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.empty.title", sheet = sheet)
+}
+
+/// Title of the notice shown for a workbook with no worksheet to show.
+pub(crate) fn spreadsheet_no_worksheet_title(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.no_worksheet.title", name = file_name)
+}
+
+/// The legend a formula cell without a cached result shows in place of its
+/// value.
+pub(crate) fn spreadsheet_formula_pending() -> String {
+    dbflux_i18n::t!("document.spreadsheet.formula_pending")
+}
+
+/// The summary of a spreadsheet in its header: its sheet count, the shown
+/// sheet's rows and columns, and that the whole sheet is in memory. Without
+/// a shown sheet only the sheet count is given.
+pub(crate) fn spreadsheet_summary(sheet_count: usize, shown: Option<(usize, usize)>) -> String {
+    let sheets = if sheet_count == 1 {
+        dbflux_i18n::t!(
+            "document.spreadsheet.summary.sheets.one",
+            count = sheet_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.spreadsheet.summary.sheets.many",
+            count = sheet_count
+        )
+    };
+
+    let Some((rows, columns)) = shown else {
+        return sheets;
+    };
+
+    let rows = if rows == 1 {
+        dbflux_i18n::t!("document.spreadsheet.summary.rows.one", count = rows)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.summary.rows.many", count = rows)
+    };
+
+    let columns = if columns == 1 {
+        dbflux_i18n::t!("document.spreadsheet.summary.columns.one", count = columns)
+    } else {
+        dbflux_i18n::t!("document.spreadsheet.summary.columns.many", count = columns)
+    };
+
+    format!(
+        "{sheets} · {rows} × {columns} · {}",
+        dbflux_i18n::t!("document.spreadsheet.summary.in_memory")
+    )
+}
+
+/// What the user is told about a failure of the spreadsheet reader.
+///
+/// `sheet` names the sheet being read, which the size limit error does not
+/// carry. A file that is not a workbook or does not decode is followed, on
+/// its own line, by the reader's own text.
+pub(crate) fn spreadsheet_error_cause(
+    error: &dbflux_spreadsheet::SpreadsheetError,
+    sheet: Option<&str>,
+) -> String {
+    use dbflux_spreadsheet::SpreadsheetError;
+
+    match error {
+        SpreadsheetError::Source(source) => file_read_failed_cause(source),
+
+        SpreadsheetError::NotASpreadsheet { reason } => with_technical_detail(
+            dbflux_i18n::t!("document.spreadsheet.error.not_a_spreadsheet"),
+            reason,
+        ),
+
+        SpreadsheetError::Encrypted => dbflux_i18n::t!("document.spreadsheet.error.encrypted"),
+
+        SpreadsheetError::ChartSheet { name } => {
+            dbflux_i18n::t!("document.spreadsheet.error.chart_sheet", sheet = name)
+        }
+
+        SpreadsheetError::SheetOutOfRange { index, sheet_count } => dbflux_i18n::t!(
+            "document.spreadsheet.error.sheet_out_of_range",
+            index = index + 1,
+            count = sheet_count
+        ),
+
+        SpreadsheetError::SheetTooLarge {
+            rows,
+            columns,
+            limit,
+        } => dbflux_i18n::t!(
+            "document.spreadsheet.error.sheet_too_large",
+            sheet = sheet.unwrap_or_default(),
+            rows = rows,
+            columns = columns,
+            cells = rows.saturating_mul(*columns),
+            limit = limit
+        ),
+
+        SpreadsheetError::Malformed { message } => with_technical_detail(
+            dbflux_i18n::t!("document.spreadsheet.error.malformed"),
+            message,
+        ),
+    }
+}
+
+/// What the user is told about a failure of the delimited reader.
+///
+/// A refused dialect is told with what the user can change. Any other
+/// failure is a translated message followed, on its own line, by the
+/// reader's own text, which carries the byte offsets.
+pub(crate) fn delimited_read_error_cause(error: &dbflux_delimited::ReadError) -> String {
+    use dbflux_delimited::ReadError;
+
+    match error {
+        ReadError::Source(source) => file_read_failed_cause(source),
+
+        ReadError::UnexpectedReadLength { .. } => with_technical_detail(
+            dbflux_i18n::t!("document.delimited.error.read.unexpected_length"),
+            error,
+        ),
+
+        ReadError::UnsupportedDialect { .. }
+        | ReadError::LineBreakInDialect { .. }
+        | ReadError::QuoteEqualsDelimiter { .. } => {
+            delimited_refused_dialect_cause(error).unwrap_or_else(|| error.to_string())
+        }
+    }
+}
+
+/// What the user is told about a save the delimited writer refused.
+///
+/// The message is translated and says what the user can change. The
+/// writer's own text, which names the record or the bytes involved, follows
+/// on its own line.
+pub(crate) fn delimited_write_error_cause(error: &dbflux_delimited::WriteError) -> String {
+    use dbflux_delimited::WriteError;
+
+    let message = match error {
+        WriteError::Source(source) => return file_read_failed_cause(source),
+
+        WriteError::Read(error) => return delimited_read_error_cause(error),
+
+        WriteError::Sink(source) => {
+            return dbflux_i18n::t!("document.delimited.error.write.sink", cause = source);
+        }
+
+        WriteError::SourceChanged { .. }
+        | WriteError::RangeOutsideSource { .. }
+        | WriteError::NotARecord { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.records_moved")
+        }
+
+        WriteError::OverlappingEdits { .. }
+        | WriteError::DuplicateEdit { .. }
+        | WriteError::ReplacedAndDeleted { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.conflicting_edits")
+        }
+
+        WriteError::UnencodableCharacter {
+            character,
+            encoding,
+            ..
+        } => dbflux_i18n::t!(
+            "document.delimited.error.write.unencodable",
+            character = format!("{character:?}"),
+            encoding = encoding
+        ),
+
+        WriteError::UnquotableField { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.unquotable")
+        }
+
+        WriteError::LeadingByteOrderMark { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.leading_byte_order_mark")
+        }
+
+        WriteError::FusedLineBreak { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.fused_line_break")
+        }
+
+        WriteError::TruncatedCodeUnit { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.truncated_code_unit")
+        }
+
+        WriteError::UnclosedQuote { .. } => {
+            dbflux_i18n::t!("document.delimited.error.write.unclosed_quote")
+        }
+    };
+
+    with_technical_detail(message, error)
+}
+
+/// Why a save could not produce the edited file, in the user's words, for
+/// the writer of any format.
+pub(crate) fn write_failure_cause(failure: &crate::file_source::WriteFailure) -> String {
+    use crate::file_source::WriteFailure;
+
+    match failure {
+        WriteFailure::Delimited(error) => delimited_write_error_cause(error),
+        WriteFailure::Spreadsheet(error) => spreadsheet_write_error_cause(error),
+    }
+}
+
+/// Why the spreadsheet patcher refused or failed a save, in the user's
+/// words, followed by the patcher's own text. A refusal of an edit names the
+/// sheet and the cell.
+pub(crate) fn spreadsheet_write_error_cause(error: &dbflux_spreadsheet::SheetWriteError) -> String {
+    use dbflux_spreadsheet::SheetWriteError;
+
+    let key = spreadsheet_write_error_key(error);
+
+    let message = match error {
+        SheetWriteError::Source(source) => return file_read_failed_cause(source),
+
+        SheetWriteError::Sink(source) => return dbflux_i18n::t!(key, cause = source),
+
+        SheetWriteError::Malformed { .. } | SheetWriteError::SheetOutOfRange { .. } => {
+            dbflux_i18n::t!(key)
+        }
+
+        SheetWriteError::NotAWorksheet { sheet } => dbflux_i18n::t!(key, sheet = sheet),
+
+        SheetWriteError::CellOutOfRange { sheet, row, column } => dbflux_i18n::t!(
+            key,
+            sheet = sheet,
+            row = row.saturating_add(1),
+            column = column.saturating_add(1)
+        ),
+
+        SheetWriteError::TextTooLong {
+            sheet,
+            cell,
+            length,
+        } => dbflux_i18n::t!(key, sheet = sheet, cell = cell, length = length),
+
+        SheetWriteError::InvalidCharacter {
+            sheet,
+            cell,
+            character,
+        } => dbflux_i18n::t!(
+            key,
+            sheet = sheet,
+            cell = cell,
+            character = format!("U+{:04X}", u32::from(*character))
+        ),
+
+        SheetWriteError::NonFiniteNumber { sheet, cell, value } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell, value = value)
+        }
+
+        SheetWriteError::DateOutOfRange { sheet, cell, date } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell, date = date)
+        }
+
+        SheetWriteError::CoveredCell { sheet, cell } => {
+            dbflux_i18n::t!(key, sheet = sheet, cell = cell)
+        }
+
+        SheetWriteError::SharedFormulaMaster { sheet, cell, range }
+        | SheetWriteError::InsideFormulaRange {
+            sheet, cell, range, ..
+        } => dbflux_i18n::t!(key, sheet = sheet, cell = cell, range = range),
+    };
+
+    with_technical_detail(message, error)
+}
+
+/// The catalog key of the message [`spreadsheet_write_error_cause`] shows
+/// for `error`.
+fn spreadsheet_write_error_key(error: &dbflux_spreadsheet::SheetWriteError) -> &'static str {
+    use dbflux_spreadsheet::SheetWriteError;
+
+    match error {
+        SheetWriteError::Source(_) => "document.file.error.storage.read",
+        SheetWriteError::Sink(_) => "document.delimited.error.write.sink",
+        SheetWriteError::Malformed { .. } => "document.spreadsheet.error.write.malformed",
+        SheetWriteError::SheetOutOfRange { .. } => {
+            "document.spreadsheet.error.write.sheet_out_of_range"
+        }
+        SheetWriteError::NotAWorksheet { .. } => "document.spreadsheet.error.write.not_a_worksheet",
+        SheetWriteError::CellOutOfRange { .. } => {
+            "document.spreadsheet.error.write.cell_out_of_range"
+        }
+        SheetWriteError::TextTooLong { .. } => "document.spreadsheet.error.write.text_too_long",
+        SheetWriteError::InvalidCharacter { .. } => {
+            "document.spreadsheet.error.write.invalid_character"
+        }
+        SheetWriteError::NonFiniteNumber { .. } => {
+            "document.spreadsheet.error.write.non_finite_number"
+        }
+        SheetWriteError::DateOutOfRange { .. } => {
+            "document.spreadsheet.error.write.date_out_of_range"
+        }
+        SheetWriteError::CoveredCell { .. } => "document.spreadsheet.error.write.covered_cell",
+        SheetWriteError::SharedFormulaMaster { .. } => {
+            "document.spreadsheet.error.write.shared_formula_master"
+        }
+        SheetWriteError::InsideFormulaRange { .. } => {
+            "document.spreadsheet.error.write.inside_formula_range"
+        }
+    }
+}
+
+/// What the Save as .xlsx prompt says before anything is written: that the
+/// values of every sheet go into a new file, what that file does not keep,
+/// and that `file_name` is not changed. `chart_sheets` names the sheets that
+/// are left out, and `object` adds that the new file is written to this
+/// computer only.
+pub(crate) fn spreadsheet_save_as_body(
+    file_name: &str,
+    chart_sheets: &[String],
+    object: bool,
+) -> String {
+    let mut body = dbflux_i18n::t!("document.spreadsheet.save_as.body", name = file_name);
+
+    if !chart_sheets.is_empty() {
+        body.push(' ');
+        body.push_str(&dbflux_i18n::t!(
+            "document.spreadsheet.save_as.chart_sheets",
+            sheets = chart_sheets.join(", ")
+        ));
+    }
+
+    if object {
+        body.push(' ');
+        body.push_str(&dbflux_i18n::t!("document.spreadsheet.save_as.object"));
+    }
+
+    body
+}
+
+/// Summary of the error reported when Save as .xlsx wrote no new file.
+pub(crate) fn spreadsheet_save_as_failed_message(file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.spreadsheet.save_as.error.failed",
+        name = file_name
+    )
+}
+
+/// The toast shown once Save as .xlsx wrote the new file `file_name`.
+pub(crate) fn spreadsheet_save_as_saved_message(file_name: &str) -> String {
+    dbflux_i18n::t!("document.spreadsheet.save_as.saved", name = file_name)
+}
+
+/// Why the values of a workbook could not be written into a new xlsx file,
+/// in the user's words, followed by the writer's own text.
+pub(crate) fn spreadsheet_values_write_error_cause(
+    error: &dbflux_spreadsheet::ValuesWriteError,
+) -> String {
+    use dbflux_spreadsheet::ValuesWriteError;
+
+    let message = match error {
+        ValuesWriteError::Read { sheet, source } => {
+            return spreadsheet_error_cause(source, Some(sheet));
+        }
+
+        ValuesWriteError::Sheet { sheet, .. } => {
+            dbflux_i18n::t!("document.spreadsheet.save_as.error.sheet", sheet = sheet)
+        }
+
+        ValuesWriteError::Cell { sheet, cell, .. } => dbflux_i18n::t!(
+            "document.spreadsheet.save_as.error.cell",
+            sheet = sheet,
+            cell = cell
+        ),
+
+        ValuesWriteError::Write { .. } => {
+            dbflux_i18n::t!("document.spreadsheet.save_as.error.write")
+        }
+    };
+
+    with_technical_detail(message, error)
+}
+
+/// `message` followed, on its own line, by `detail`, the untranslated text
+/// of the library error it explains.
+fn with_technical_detail(message: String, detail: &dyn std::fmt::Display) -> String {
+    format!("{message}\n{detail}")
+}
+
+/// Why the reader refuses a dialect, with what the user can change. `None`
+/// for an error that is not a refusal of the dialect.
+pub(crate) fn delimited_refused_dialect_cause(
+    error: &dbflux_delimited::ReadError,
+) -> Option<String> {
+    use dbflux_delimited::ReadError;
+
+    match error {
+        ReadError::UnsupportedDialect { encoding, byte } => Some(dbflux_i18n::t!(
+            "document.delimited.error.refused.unsupported",
+            encoding = encoding,
+            character = delimited_byte_name(*byte)
+        )),
+
+        ReadError::LineBreakInDialect { .. } => Some(dbflux_i18n::t!(
+            "document.delimited.error.refused.line_break"
+        )),
+
+        ReadError::QuoteEqualsDelimiter { byte } => Some(dbflux_i18n::t!(
+            "document.delimited.error.refused.quote_equals_delimiter",
+            character = delimited_byte_name(*byte)
+        )),
+
+        _ => None,
+    }
+}
+
+/// The name of a delimiter or quote byte of a delimited file.
+///
+/// The four delimiters detection chooses between have a translated name. Any
+/// other byte is shown as its character when it is printable ASCII and as a
+/// hexadecimal byte otherwise.
+pub(crate) fn delimited_byte_name(byte: u8) -> String {
+    match byte {
+        b',' => dbflux_i18n::t!("document.delimited.delimiter.comma"),
+        b'\t' => dbflux_i18n::t!("document.delimited.delimiter.tab"),
+        b';' => dbflux_i18n::t!("document.delimited.delimiter.semicolon"),
+        b'|' => dbflux_i18n::t!("document.delimited.delimiter.pipe"),
+        byte if byte.is_ascii_graphic() => char::from(byte).to_string(),
+        byte => format!("0x{byte:02X}"),
+    }
+}
+
+/// The name of the quote of a delimited file, or of a file without quoting.
+pub(crate) fn delimited_quote_name(quote: Option<u8>) -> String {
+    match quote {
+        Some(b'"') => dbflux_i18n::t!("document.delimited.quote.double"),
+        Some(b'\'') => dbflux_i18n::t!("document.delimited.quote.single"),
+        Some(byte) => delimited_byte_name(byte),
+        None => dbflux_i18n::t!("document.delimited.quote.none"),
+    }
+}
+
+/// `value` marked as the one dialect detection resolved.
+pub(crate) fn delimited_detected_label(value: &str) -> String {
+    dbflux_i18n::t!("document.delimited.toolbar.detected", value = value)
+}
+
+/// Status-line item naming the field delimiter of a delimited file.
+pub(crate) fn delimited_delimiter_status(delimiter: u8) -> String {
+    dbflux_i18n::t!(
+        "document.delimited.status.delimiter",
+        delimiter = delimited_byte_name(delimiter)
+    )
+}
+
+/// Status-line item naming the text encoding of a delimited file.
+pub(crate) fn delimited_encoding_status(encoding: &str) -> String {
+    dbflux_i18n::t!("document.delimited.status.encoding", encoding = encoding)
+}
+
+/// Status-line item counting the loaded records of a delimited file against
+/// what the reader knows about the whole file.
+///
+/// A total is shown only when the reader reached the end of the file. Until
+/// then the reader's count is how far it scanned, not the size of the file,
+/// so only the loaded count is shown.
+pub(crate) fn delimited_record_count_status(
+    loaded: usize,
+    record_count: dbflux_delimited::RecordCount,
+) -> String {
+    use dbflux_delimited::RecordCount;
+
+    match record_count {
+        RecordCount::Total(total) if total == loaded as u64 => {
+            if loaded == 1 {
+                dbflux_i18n::t!("document.delimited.status.records.all.one", count = loaded)
+            } else {
+                dbflux_i18n::t!("document.delimited.status.records.all.many", count = loaded)
+            }
+        }
+
+        RecordCount::Total(total) => dbflux_i18n::t!(
+            "document.delimited.status.records.of_total",
+            loaded = loaded,
+            total = total
+        ),
+
+        RecordCount::IndexedSoFar(_) => {
+            dbflux_i18n::t!("document.delimited.status.records.partial", loaded = loaded)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
@@ -2951,10 +4019,23 @@ mod tests {
     }
 
     #[test]
+    fn limited_row_count_labels() {
+        assert_eq!(
+            super::limited_row_count_label(10_000),
+            "First 10,000 rows loaded"
+        );
+        assert_eq!(
+            super::limited_row_count_of_total_label(10_000, 52_310),
+            "10,000/52,310 rows loaded"
+        );
+    }
+
+    #[test]
     fn row_count_label_one_many() {
         assert_eq!(row_count_label(1), "1 row");
         assert_eq!(row_count_label(2), "2 rows");
         assert_eq!(row_count_label(0), "0 rows");
+        assert_eq!(row_count_label(25_000), "25,000 rows");
     }
 
     #[test]
@@ -3056,18 +4137,12 @@ mod tests {
             "document.data.chart_dock.configure.reset",
             "document.data.chart_dock.stats.rebuilding",
             "document.data.chart_dock.stats.no_stats",
-            "document.data.chart_dock.stats.unavailable",
             "document.data.chart_dock.stats.title",
             "document.data.chart_dock.stats.window.title",
             "document.data.chart_dock.stats.window.start",
             "document.data.chart_dock.stats.window.end",
             "document.data.chart_dock.stats.window.span",
             "document.data.chart_dock.stats.window.points",
-            "document.data.chart_dock.stats.source.title",
-            "document.data.chart_dock.stats.source.measurement",
-            "document.data.chart_dock.stats.source.field",
-            "document.data.chart_dock.stats.source.host",
-            "document.data.chart_dock.stats.source.region",
         ];
 
         for key in keys {
@@ -3332,7 +4407,7 @@ mod tests {
             "document.code.toolbar.checking",
             "document.code.toolbar.run",
             "document.code.toolbar.last_run",
-            "document.code.toolbar.new_tab",
+            "document.code.toolbar.run_in_new_tab",
             "document.code.toolbar.read_only",
             "document.code.toolbar.saved",
             "document.code.toolbar.save",
@@ -3358,6 +4433,10 @@ mod tests {
             "document.code.script_confirm.message.many",
             "document.code.script_confirm.cancel",
             "document.code.script_confirm.run",
+            "document.code.script_confirm.run_statement",
+            "document.code.script_confirm.transaction.title",
+            "document.code.script_confirm.transaction.message",
+            "document.code.script_confirm.transaction.message_statement_only",
         ];
 
         for key in keys {
@@ -4028,6 +5107,7 @@ mod tests {
         EventCategory::Mcp,
         EventCategory::Governance,
         EventCategory::ObjectStorage,
+        EventCategory::SecretStore,
     ];
 
     const ALL_EVENT_OUTCOMES: &[EventOutcome] = &[
@@ -4068,6 +5148,7 @@ mod tests {
             EventCategory::Mcp => "document.audit.category.mcp",
             EventCategory::Governance => "document.audit.category.governance",
             EventCategory::ObjectStorage => "document.audit.category.object_storage",
+            EventCategory::SecretStore => "document.audit.category.secret_store",
         }
     }
 
@@ -4405,6 +5486,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let create = TableLevelAction::Create(Box::new(table_info), None);
         let drop = TableLevelAction::Drop(TableRef {
@@ -7065,5 +8147,507 @@ mod tests {
 
         assert!(value.contains('4') && value.contains('2'));
         assert!(value.contains("1.0 MiB"));
+    }
+
+    #[test]
+    fn delimited_delimiter_status_names_the_delimiter() {
+        use super::delimited_delimiter_status;
+
+        assert_eq!(delimited_delimiter_status(b','), "Delimiter: Comma");
+        assert_eq!(delimited_delimiter_status(b'\t'), "Delimiter: Tab");
+        assert_eq!(delimited_delimiter_status(b';'), "Delimiter: Semicolon");
+        assert_eq!(delimited_delimiter_status(b'|'), "Delimiter: Pipe");
+        assert_eq!(delimited_delimiter_status(b'^'), "Delimiter: ^");
+        assert_eq!(delimited_delimiter_status(0x1F), "Delimiter: 0x1F");
+    }
+
+    #[test]
+    fn delimited_record_count_status_shows_a_total_only_when_it_is_known() {
+        use super::delimited_record_count_status;
+        use dbflux_delimited::RecordCount;
+
+        assert_eq!(
+            delimited_record_count_status(1, RecordCount::Total(1)),
+            "1 record"
+        );
+        assert_eq!(
+            delimited_record_count_status(0, RecordCount::Total(0)),
+            "0 records"
+        );
+        assert_eq!(
+            delimited_record_count_status(500, RecordCount::Total(1200)),
+            "500 of 1200 records loaded"
+        );
+
+        let partial = delimited_record_count_status(500, RecordCount::IndexedSoFar(900));
+        assert_eq!(partial, "500 records loaded, more in the file");
+        assert!(!partial.contains("900"));
+    }
+
+    #[test]
+    fn delimited_messages_interpolate_their_arguments() {
+        use super::{
+            delimited_encoding_status, delimited_loading_label, delimited_malformed_text_warning,
+            delimited_open_failed_message,
+        };
+
+        assert_eq!(delimited_encoding_status("UTF-8"), "Encoding: UTF-8");
+        assert!(delimited_loading_label("cities.csv").contains("cities.csv"));
+        assert_eq!(
+            delimited_open_failed_message("cities.csv"),
+            "Could not open cities.csv"
+        );
+        assert!(delimited_malformed_text_warning("UTF-8", false).contains("UTF-8"));
+    }
+
+    /// The `%{name}` placeholders of a catalog value, sorted.
+    fn delimited_placeholders(text: &str) -> Vec<&str> {
+        let mut placeholders: Vec<&str> = text
+            .match_indices("%{")
+            .filter_map(|(start, _)| {
+                let end = text[start..].find('}')?;
+                Some(&text[start..=start + end])
+            })
+            .collect();
+
+        placeholders.sort_unstable();
+        placeholders
+    }
+
+    /// Asserts that every key in `keys` resolves in each shipped catalog, is
+    /// translated rather than the English fallback, and keeps the English
+    /// placeholders.
+    fn assert_translated_in_every_locale(keys: &[&str]) {
+        for &key in keys {
+            let english = dbflux_i18n::translate_in("en", key);
+            assert_ne!(english, key, "key {key} did not resolve in en");
+
+            for locale in ["es", "ko", "pt_BR", "zh_Hans"] {
+                let text = dbflux_i18n::translate_in(locale, key);
+
+                assert_ne!(
+                    text,
+                    format!("{locale}.{key}"),
+                    "key {key} missing in {locale}"
+                );
+                assert_ne!(text, english, "key {key} falls back to English in {locale}");
+                assert_eq!(
+                    delimited_placeholders(&text),
+                    delimited_placeholders(&english),
+                    "key {key} has other placeholders in {locale}"
+                );
+            }
+        }
+    }
+
+    /// Every key of the file storage layer's errors and warnings is
+    /// translated in each shipped catalog.
+    #[test]
+    fn file_storage_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.file.error.source_changed",
+            "document.file.error.storage.read",
+            "document.file.error.storage.local_io",
+            "document.file.error.storage.temporary_file",
+            "document.file.error.storage.object_store",
+            "document.file.error.storage.read_only_file",
+            "document.file.warning.cannot_save_in_place",
+        ]);
+    }
+
+    /// Every key of the Parquet document is translated in each shipped
+    /// catalog.
+    #[test]
+    fn parquet_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.parquet.loading",
+            "document.parquet.empty.title",
+            "document.parquet.empty.description",
+            "document.parquet.action.reload",
+            "document.parquet.footer.load_more",
+            "document.parquet.footer.loading_more",
+            "document.parquet.footer.source_changed",
+            "document.parquet.header.nulls",
+            "document.parquet.status.rows.all.one",
+            "document.parquet.status.rows.all.many",
+            "document.parquet.status.rows.of_total",
+            "document.parquet.status.columns",
+            "document.parquet.view.data",
+            "document.parquet.view.columns",
+            "document.parquet.summary.columns.one",
+            "document.parquet.summary.columns.many",
+            "document.parquet.summary.rows.one",
+            "document.parquet.summary.rows.many",
+            "document.parquet.error.projection_failed",
+            "document.parquet.error.open_failed",
+            "document.parquet.error.load_more_failed",
+            "document.parquet.error.source_changed",
+            "document.parquet.summary.read_by_range",
+            "document.parquet.summary.downloaded_whole",
+            "document.parquet.download.title",
+            "document.parquet.download.body",
+            "document.parquet.download.body_changed",
+            "document.parquet.download.confirm",
+            "document.parquet.download.cancel",
+            "document.parquet.download.unchanged",
+            "document.parquet.error.short_read",
+            "document.parquet.error.not_parquet",
+            "document.parquet.error.footer_too_large",
+            "document.parquet.error.unsupported_codec",
+            "document.parquet.error.encrypted",
+            "document.parquet.error.malformed",
+            "document.parquet.error.unindexed_chunk_too_large",
+            "document.parquet.error.no_columns_selected",
+            "document.parquet.error.column_out_of_range",
+            "scripts.dialog.filter.parquet",
+        ]);
+    }
+
+    #[test]
+    fn parquet_error_causes_name_the_codec_and_the_column() {
+        use dbflux_parquet::ParquetError;
+
+        let codec = super::parquet_error_cause(&ParquetError::UnsupportedCodec {
+            codec: "BROTLI".to_string(),
+            column: "payload".to_string(),
+        });
+        assert!(codec.contains("BROTLI"), "{codec}");
+        assert!(codec.contains("payload"), "{codec}");
+
+        let unindexed = super::parquet_error_cause(&ParquetError::UnindexedChunkTooLarge {
+            column: "events".to_string(),
+            size: 100 * 1024 * 1024,
+            limit: 64 * 1024 * 1024,
+        });
+        assert!(unindexed.contains("events"), "{unindexed}");
+        assert!(unindexed.contains("100 MiB"), "{unindexed}");
+        assert!(unindexed.contains("64 MiB"), "{unindexed}");
+    }
+
+    #[test]
+    fn parquet_row_count_status_shows_the_total() {
+        use super::parquet_row_count_status;
+
+        assert_eq!(parquet_row_count_status(1, 1), "1 row");
+        assert_eq!(parquet_row_count_status(1200, 1200), "1200 rows");
+        assert_eq!(
+            parquet_row_count_status(500, 1200),
+            "500 of 1200 rows loaded"
+        );
+    }
+
+    /// Every key of the delimited document's reader, writer and page errors
+    /// is translated in each shipped catalog.
+    #[test]
+    fn delimited_error_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.delimited.error.read.unexpected_length",
+            "document.delimited.error.write.sink",
+            "document.delimited.error.write.records_moved",
+            "document.delimited.error.write.conflicting_edits",
+            "document.delimited.error.write.unencodable",
+            "document.delimited.error.write.unquotable",
+            "document.delimited.error.write.leading_byte_order_mark",
+            "document.delimited.error.write.fused_line_break",
+            "document.delimited.error.write.truncated_code_unit",
+            "document.delimited.error.write.unclosed_quote",
+            "document.delimited.error.page.out_of_order",
+            "document.delimited.error.page.no_header",
+            "document.delimited.error.page.column_out_of_range",
+        ]);
+    }
+
+    /// One error of every kind the spreadsheet patcher reports.
+    fn every_spreadsheet_write_error() -> Vec<dbflux_spreadsheet::SheetWriteError> {
+        use dbflux_spreadsheet::{FormulaRangeKind, SheetWriteError};
+
+        let sheet = || "Totals".to_string();
+        let cell = || "C7".to_string();
+
+        vec![
+            SheetWriteError::Source(dbflux_byte_source::SourceError::new("disk gone")),
+            SheetWriteError::Sink(std::io::Error::other("disk full")),
+            SheetWriteError::Malformed {
+                message: "no workbook part".to_string(),
+            },
+            SheetWriteError::SheetOutOfRange {
+                index: 4,
+                sheet_count: 2,
+            },
+            SheetWriteError::NotAWorksheet { sheet: sheet() },
+            SheetWriteError::CellOutOfRange {
+                sheet: sheet(),
+                row: 1_048_576,
+                column: 2,
+            },
+            SheetWriteError::TextTooLong {
+                sheet: sheet(),
+                cell: cell(),
+                length: 40_000,
+            },
+            SheetWriteError::InvalidCharacter {
+                sheet: sheet(),
+                cell: cell(),
+                character: '\u{1}',
+            },
+            SheetWriteError::NonFiniteNumber {
+                sheet: sheet(),
+                cell: cell(),
+                value: f64::NAN,
+            },
+            SheetWriteError::DateOutOfRange {
+                sheet: sheet(),
+                cell: cell(),
+                date: chrono::NaiveDate::from_ymd_opt(1800, 1, 1)
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .expect("a valid date"),
+            },
+            SheetWriteError::CoveredCell {
+                sheet: sheet(),
+                cell: cell(),
+            },
+            SheetWriteError::SharedFormulaMaster {
+                sheet: sheet(),
+                cell: cell(),
+                range: "C7:C20".to_string(),
+            },
+            SheetWriteError::InsideFormulaRange {
+                sheet: sheet(),
+                cell: cell(),
+                range: "C7:D9".to_string(),
+                kind: FormulaRangeKind::Array,
+            },
+        ]
+    }
+
+    /// The message of every spreadsheet write error is translated in each
+    /// shipped catalog, and a refusal of one cell names the sheet and the
+    /// cell.
+    #[test]
+    fn spreadsheet_write_errors_resolve_in_every_locale() {
+        use crate::file_source::WriteFailure;
+        use dbflux_spreadsheet::SheetWriteError;
+
+        for error in every_spreadsheet_write_error() {
+            assert_translated_in_every_locale(&[super::spreadsheet_write_error_key(&error)]);
+
+            let names_a_cell = !matches!(
+                error,
+                SheetWriteError::Source(_)
+                    | SheetWriteError::Sink(_)
+                    | SheetWriteError::Malformed { .. }
+                    | SheetWriteError::SheetOutOfRange { .. }
+                    | SheetWriteError::NotAWorksheet { .. }
+                    | SheetWriteError::CellOutOfRange { .. }
+            );
+
+            let cause = super::write_failure_cause(&WriteFailure::Spreadsheet(error));
+
+            assert!(!cause.contains("document."), "{cause}");
+
+            if names_a_cell {
+                let (message, _) = cause.split_once('\n').expect("a message and its detail");
+
+                assert!(message.contains("Totals"), "{message}");
+                assert!(message.contains("C7"), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn spreadsheet_document_keys_resolve_in_every_locale() {
+        assert_translated_in_every_locale(&[
+            "document.spreadsheet.loading",
+            "document.spreadsheet.reading_sheet",
+            "document.spreadsheet.empty.title",
+            "document.spreadsheet.empty.description",
+            "document.spreadsheet.no_worksheet.title",
+            "document.spreadsheet.no_worksheet.description",
+            "document.spreadsheet.summary.sheets.one",
+            "document.spreadsheet.summary.sheets.many",
+            "document.spreadsheet.summary.rows.one",
+            "document.spreadsheet.summary.rows.many",
+            "document.spreadsheet.summary.columns.one",
+            "document.spreadsheet.summary.columns.many",
+            "document.spreadsheet.summary.in_memory",
+            "document.spreadsheet.unsaved_summary",
+            "document.spreadsheet.formula_warning.one",
+            "document.spreadsheet.formula_warning.many",
+            "document.spreadsheet.read_only.xls",
+            "document.spreadsheet.action.append_row",
+            "document.spreadsheet.action.save",
+            "document.spreadsheet.action.saving",
+            "document.spreadsheet.error.save_failed",
+            "document.spreadsheet.error.rows_only_at_end",
+            "document.spreadsheet.error.save_while_reading",
+            "document.spreadsheet.error.input.a1_reference",
+            "document.spreadsheet.tab.hidden",
+            "document.spreadsheet.tab.chart",
+            "document.spreadsheet.tab.chart_tooltip",
+            "document.spreadsheet.formula.no_selection",
+            "document.spreadsheet.formula.none",
+            "document.spreadsheet.formula.unavailable",
+            "document.spreadsheet.view.table",
+            "document.spreadsheet.view.text",
+            "document.spreadsheet.text.building",
+            "document.spreadsheet.text.cut.one",
+            "document.spreadsheet.text.cut.many",
+            "document.spreadsheet.text.render_failed",
+            "document.spreadsheet.error.open_failed",
+            "document.spreadsheet.error.sheet_failed",
+            "document.spreadsheet.error.not_a_spreadsheet",
+            "document.spreadsheet.error.encrypted",
+            "document.spreadsheet.error.chart_sheet",
+            "document.spreadsheet.error.sheet_out_of_range",
+            "document.spreadsheet.error.sheet_too_large",
+            "document.spreadsheet.error.malformed",
+            "document.spreadsheet.save_as.action",
+            "document.spreadsheet.save_as.title",
+            "document.spreadsheet.save_as.body",
+            "document.spreadsheet.save_as.chart_sheets",
+            "document.spreadsheet.save_as.object",
+            "document.spreadsheet.save_as.confirm",
+            "document.spreadsheet.save_as.cancel",
+            "document.spreadsheet.save_as.dialog_title",
+            "document.spreadsheet.save_as.dialog_title_object",
+            "document.spreadsheet.save_as.dialog_filter",
+            "document.spreadsheet.save_as.saved",
+            "document.spreadsheet.save_as.error.failed",
+            "document.spreadsheet.save_as.error.replaces_source",
+            "document.spreadsheet.save_as.error.dialog_unavailable",
+            "document.spreadsheet.save_as.error.sheet",
+            "document.spreadsheet.save_as.error.cell",
+            "document.spreadsheet.save_as.error.write",
+            "scripts.dialog.filter.spreadsheet",
+        ]);
+    }
+
+    /// A refusal of the writer is told in the user's words, with the
+    /// writer's own text after it, and a refused dialect only in the user's
+    /// words.
+    #[test]
+    fn delimited_library_errors_are_translated_with_their_detail() {
+        use super::{delimited_read_error_cause, delimited_write_error_cause};
+        use dbflux_delimited::{ReadError, WriteError};
+
+        let truncated = WriteError::TruncatedCodeUnit { source_length: 7 };
+        let cause = delimited_write_error_cause(&truncated);
+
+        let (message, detail) = cause.split_once('\n').expect("a message and its detail");
+        assert_eq!(
+            message,
+            dbflux_i18n::t!("document.delimited.error.write.truncated_code_unit")
+        );
+        assert_eq!(detail, truncated.to_string());
+
+        let refused = ReadError::QuoteEqualsDelimiter { byte: b',' };
+        assert_eq!(
+            delimited_read_error_cause(&refused),
+            "The quote and the delimiter are both Comma. Choose a different character for one of them."
+        );
+
+        let unencodable = WriteError::UnencodableCharacter {
+            record: dbflux_delimited::EditLocation::Inserted(0),
+            character: 'é',
+            encoding: "Shift_JIS",
+        };
+        assert!(
+            delimited_write_error_cause(&unencodable)
+                .starts_with("A value contains 'é', which Shift_JIS cannot represent.")
+        );
+    }
+
+    #[test]
+    fn context_menu_export_exported_rows_toast_states_the_loaded_row_count() {
+        assert_eq!(
+            super::context_menu_export_exported_rows_toast(1, "/tmp/users.csv"),
+            "Exported 1 loaded row to /tmp/users.csv"
+        );
+        assert_eq!(
+            super::context_menu_export_exported_rows_toast(100, "/tmp/users.csv"),
+            "Exported 100 loaded rows to /tmp/users.csv"
+        );
+    }
+
+    #[test]
+    fn context_menu_export_native_picker_fallback_rows_toast_states_the_loaded_row_count() {
+        let value = super::context_menu_export_native_picker_fallback_rows_toast(
+            42,
+            "/tmp/fallback/users.csv",
+        );
+
+        assert!(
+            value.starts_with(
+                "Native file picker unavailable — exported 42 loaded rows to /tmp/fallback/users.csv instead."
+            ),
+            "got {value:?}"
+        );
+    }
+
+    #[test]
+    fn context_menu_clipboard_copied_rows_toast_states_the_loaded_row_count() {
+        assert_eq!(
+            super::context_menu_clipboard_copied_rows_toast(1, "CSV", 12),
+            "Copied 1 loaded row as CSV (12 bytes) to clipboard"
+        );
+        assert_eq!(
+            super::context_menu_clipboard_copied_rows_toast(100, "CSV", 4096),
+            "Copied 100 loaded rows as CSV (4096 bytes) to clipboard"
+        );
+    }
+
+    #[test]
+    fn export_menu_headers_say_they_write_the_loaded_rows() {
+        assert_eq!(
+            dbflux_i18n::t!("document.data.grid.export.save_as_file"),
+            "Save loaded rows as file"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard"),
+            "Copy loaded rows to clipboard"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("document.data.grid.export.export_all_rows"),
+            "Export all rows to file"
+        );
+    }
+
+    #[test]
+    fn export_all_rows_labels_state_the_table_count_and_path() {
+        assert_eq!(
+            super::export_all_rows_task_label("public.users"),
+            "Export all rows of public.users"
+        );
+        assert_eq!(
+            super::export_all_rows_exported_toast(1, "/tmp/users.csv"),
+            "Exported 1 row to /tmp/users.csv"
+        );
+        assert_eq!(
+            super::export_all_rows_exported_toast(2_345, "/tmp/users.csv"),
+            "Exported all 2345 rows to /tmp/users.csv"
+        );
+        assert_eq!(
+            super::export_all_rows_cancelled_toast("/tmp/users.csv"),
+            "Export cancelled — /tmp/users.csv holds only the rows written before it stopped"
+        );
+        assert_eq!(
+            super::export_all_rows_dropped_columns_warning("email, phone"),
+            "Fields that first appear after the first page are not in the file: email, phone"
+        );
+        assert_eq!(
+            super::export_all_rows_failed_error("disk full"),
+            "Export of all rows failed: disk full"
+        );
+    }
+
+    #[test]
+    fn export_all_format_label_names_each_streaming_format() {
+        use dbflux_transfer::FileFormat;
+
+        assert_eq!(super::export_all_format_label(FileFormat::Csv), "CSV");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Json),
+            "JSON (one object per line)"
+        );
     }
 }

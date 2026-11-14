@@ -3,6 +3,11 @@
 A key-value database opens as a key browser: the key list on the left, the
 value of the selected key on the right, and a command console underneath.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/key-value/browser-dark.webp">
+  <img src="images/key-value/browser-light.webp" alt="The key browser of a Redis database, with keys grouped into folders and the fields of a selected hash">
+</picture>
+
 - **Key list.** Keys load a page at a time; **Load more** (`Ctrl+J`) continues
   the scan and the footer reads "Loaded N of total" against the database's key
   count. **Tree** groups keys into folders by the connection's namespace
@@ -15,7 +20,9 @@ value of the selected key on the right, and a command console underneath.
   matches anywhere in the key. The type filter (All, String, Hash, List, Set,
   ZSet, Stream, JSON) runs on the server, so it covers the whole keyspace. A
   filtered search keeps scanning until it has a page of matches; **Stop** ends
-  it and **Search whole keyspace** reads to the end.
+  it and **Search whole keyspace** reads to the end. `Escape` or **Cancel task**
+  in the Tasks panel also stops a running scan: Redis stops between `SCAN`
+  round trips, other drivers before the next page.
 - **Expiry.** Click the TTL in the value header, or press `t`, to set an
   expiry: **Never**, **In** a duration (`1h`, `24h`, `7d`, `30d`, or any
   `1h30m`-style value) or **At** a local date and time. The absolute expiry
@@ -31,15 +38,21 @@ value of the selected key on the right, and a command console underneath.
   newest or oldest first, with one column per field and the consumer groups
   beside them: readers, pending entries, last delivered ID, and **Claim** to
   move pending entries to another reader.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/key-value/sorted-set-dark.webp">
+  <img src="images/key-value/sorted-set-light.webp" alt="A Redis sorted set in the key browser, ranked by score with a bar relative to the top score">
+</picture>
+
 - **Bulk delete.** **Bulk actions → Delete keys matching the pattern** scans the
   whole database for the current pattern and type, lists the first matches with
   the total, and asks you to type the pattern back. **Export keys first** saves
   the keys and their values to a JSON Lines file. Keys are deleted in batches
   with `UNLINK` and the deletion is recorded in the audit log.
 - **Console.** `` Ctrl+` `` opens a console that runs commands against the open
-  database and keeps a history (`Up`/`Down`). Dangerous commands go through the
-  same confirmation as the editor (see
-  [Dangerous-query confirmation](EDITOR.md#dangerous-query-confirmation)).
+  database, with the editor's confirmation for dangerous commands, audit rows,
+  the query history on `Up`/`Down` and command completion. See
+  [Console](CONSOLE.md).
 
 In the sidebar, each database of a key-value connection shows its key count,
 and databases with no keys fold into a single "N empty databases" row.

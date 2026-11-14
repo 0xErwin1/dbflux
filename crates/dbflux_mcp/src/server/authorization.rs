@@ -18,6 +18,10 @@ pub struct AuthorizationRequest {
     pub tool_id: String,
     pub classification: ExecutionClassification,
     pub mcp_enabled_for_connection: bool,
+    /// Whether the connection's profile is set to read-only. When `true`,
+    /// every classification above `Read` is denied before policies are
+    /// evaluated, so neither a policy nor an approval can allow it.
+    pub read_only_connection: bool,
     /// Correlation ID that links the authorization event with the execution event.
     /// Generated once at the start of a request and shared across both events.
     pub correlation_id: Option<String>,
@@ -38,6 +42,12 @@ pub const HUMAN_ONLY_APPROVAL_TOOLS: &[&str] = &["approve_execution", "reject_ex
 const SELF_APPROVAL_FORBIDDEN_REASON: &str = "MCP clients cannot approve or reject pending executions; a person resolves them in DBFlux (Pending Approvals)";
 
 const APPROVAL_REQUIRED_REASON: &str = "classification requires approval by policy";
+
+/// Deny code returned for a call above `Read` on a connection whose profile
+/// is set to read-only.
+pub const READ_ONLY_CONNECTION_CODE: &str = "connection_read_only";
+
+const READ_ONLY_CONNECTION_REASON: &str = "the connection profile is set to read-only in DBFlux; only metadata and read operations are allowed";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizationOutcome {
@@ -194,6 +204,44 @@ pub fn authorize_request_with_approval(
             allowed: false,
             deny_code: Some("connection_not_mcp_enabled"),
             deny_reason: Some(reason),
+            correlation_id: Some(correlation_id),
+            actor_id: request.identity.client_id.clone(),
+            pending_execution_id: None,
+            approved_execution_id: None,
+        });
+    }
+
+    let mutates = !matches!(
+        request.classification,
+        ExecutionClassification::Metadata | ExecutionClassification::Read
+    );
+
+    if request.read_only_connection && mutates {
+        let event = build_authorization_event(
+            created_at_epoch_ms,
+            severity,
+            &request.identity.client_id,
+            &request.connection_id,
+            &request.tool_id,
+            request.classification,
+            EventOutcome::Failure,
+            &correlation_id,
+            origin,
+        )
+        .with_error(READ_ONLY_CONNECTION_CODE, READ_ONLY_CONNECTION_REASON)
+        .with_details_json(
+            serde_json::json!({
+                "classification": format!("{:?}", request.classification),
+            })
+            .to_string(),
+        );
+
+        audit_service.record(event)?;
+
+        return Ok(AuthorizationOutcome {
+            allowed: false,
+            deny_code: Some(READ_ONLY_CONNECTION_CODE),
+            deny_reason: Some(READ_ONLY_CONNECTION_REASON.to_string()),
             correlation_id: Some(correlation_id),
             actor_id: request.identity.client_id.clone(),
             pending_execution_id: None,

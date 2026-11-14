@@ -19,10 +19,11 @@ pub(super) enum PickerSection {
     Relational,
     Document,
     KeyValue,
-    WideColumn,
     TimeSeriesAndLogs,
-    Graph,
     ObjectStorage,
+    SecretStore,
+    /// Categories with no section of their own (the reserved wire slots).
+    Other,
 }
 
 /// Display order of the picker sections.
@@ -30,10 +31,10 @@ const SECTION_ORDER: &[PickerSection] = &[
     PickerSection::Relational,
     PickerSection::Document,
     PickerSection::KeyValue,
-    PickerSection::WideColumn,
     PickerSection::TimeSeriesAndLogs,
-    PickerSection::Graph,
     PickerSection::ObjectStorage,
+    PickerSection::SecretStore,
+    PickerSection::Other,
 ];
 
 impl PickerSection {
@@ -42,10 +43,10 @@ impl PickerSection {
             DatabaseCategory::Relational => Self::Relational,
             DatabaseCategory::Document => Self::Document,
             DatabaseCategory::KeyValue => Self::KeyValue,
-            DatabaseCategory::WideColumn => Self::WideColumn,
             DatabaseCategory::TimeSeries | DatabaseCategory::LogStream => Self::TimeSeriesAndLogs,
-            DatabaseCategory::Graph => Self::Graph,
             DatabaseCategory::ObjectStorage => Self::ObjectStorage,
+            DatabaseCategory::SecretStore => Self::SecretStore,
+            DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => Self::Other,
         }
     }
 
@@ -54,10 +55,10 @@ impl PickerSection {
             Self::Relational => "relational",
             Self::Document => "document",
             Self::KeyValue => "key_value",
-            Self::WideColumn => "wide_column",
             Self::TimeSeriesAndLogs => "time_series_and_logs",
-            Self::Graph => "graph",
             Self::ObjectStorage => "object_storage",
+            Self::SecretStore => "secret_store",
+            Self::Other => "other",
         };
 
         dbflux_i18n::t!(&format!("connection_manager.driver_select.section.{key}"))
@@ -520,6 +521,18 @@ pub(super) enum GridDirection {
 ///   to that section's last card.
 ///
 /// Empty sections are skipped. With no cards the result is 0.
+///
+/// Indexing contract: `section_sizes` is filtered to positive sizes and the
+/// function returns early when the total is 0, so `sections` is non-empty and
+/// `current` is clamped below `total`. Section indices come from `locate_card`
+/// results or from modulo arithmetic over `sections.len()`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "after the zero-total early return `sections` is non-empty and \
+              holds only positive sizes; `current` is clamped below the total \
+              and every section index is a `locate_card` return value or an \
+              in-range modulo of one"
+)]
 pub(super) fn move_grid_focus(
     section_sizes: &[usize],
     columns: usize,
@@ -585,6 +598,16 @@ pub(super) fn move_grid_focus(
 
 /// Flat index of the card at `row`/`column` of `section`, clamped to the
 /// section's last card when that row is shorter than `column`.
+///
+/// Called only by `move_grid_focus`, whose contract (see above) bounds every
+/// `section` argument within `sections`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the only caller, `move_grid_focus`, passes section indices from \
+              `locate_card` outputs or in-range modulo arithmetic over its \
+              non-empty `sections`, so both the `..section` prefix and \
+              `sections[section]` are in bounds"
+)]
 fn card_at(sections: &[usize], columns: usize, section: usize, row: usize, column: usize) -> usize {
     let section_start: usize = sections[..section].iter().sum();
     let offset = (row * columns + column).min(sections[section] - 1);
@@ -594,6 +617,13 @@ fn card_at(sections: &[usize], columns: usize, section: usize, row: usize, colum
 /// Section index and offset within that section of flat card `index`.
 /// `sections` must be non-empty, hold only non-zero sizes, and sum past
 /// `index`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "the doc contract requires a non-empty `sections`; the fallback \
+              arm therefore indexes the last section, and callers \
+              (`move_grid_focus`) guarantee non-emptiness by returning early \
+              when the total is 0"
+)]
 fn locate_card(sections: &[usize], index: usize) -> (usize, usize) {
     let mut start = 0;
     for (section, size) in sections.iter().enumerate() {
@@ -637,11 +667,12 @@ mod category_order_tests {
             DatabaseCategory::Relational,
             DatabaseCategory::Document,
             DatabaseCategory::KeyValue,
-            DatabaseCategory::Graph,
+            DatabaseCategory::ReservedGraph,
             DatabaseCategory::TimeSeries,
-            DatabaseCategory::WideColumn,
+            DatabaseCategory::ReservedWideColumn,
             DatabaseCategory::LogStream,
             DatabaseCategory::ObjectStorage,
+            DatabaseCategory::SecretStore,
         ];
 
         let drivers: Vec<DriverInfo> = categories.iter().map(|c| driver_of(*c)).collect();

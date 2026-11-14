@@ -436,6 +436,10 @@ mod tests {
             None
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn generate_bulk_insert(
             &self,
             _schema: Option<&str>,
@@ -540,6 +544,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.executed_sql.lock().unwrap().push(req.sql.clone());
             Ok(QueryResult::empty())
@@ -569,6 +577,10 @@ mod tests {
             self.generator.as_ref().map(|g| g as &dyn QueryGenerator)
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn insert_row(&self, insert: &RowInsert) -> Result<dbflux_core::CrudResult, DbError> {
             if self.insert_row_should_fail {
                 return Err(DbError::NotSupported(
@@ -1245,6 +1257,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.executed_sql.lock().unwrap().push(req.sql.clone());
             Ok(QueryResult::empty())

@@ -418,6 +418,89 @@ mod tests {
         }
     }
 
+    mod layout {
+        use super::{open_document, open_sql_document};
+        use dbflux_components::tokens::EditorMetrics;
+        use dbflux_core::QueryLanguage;
+
+        /// The actions sit in a 32 px column on the editor's left edge, on
+        /// the same row as the editor text and below the context bar, so the
+        /// context bar is the only row above the editor.
+        #[gpui::test]
+        fn the_editor_actions_sit_in_a_strip_left_of_the_editor(cx: &mut gpui::TestAppContext) {
+            let (_document, window) = open_sql_document(cx);
+
+            let context_bar = window
+                .debug_bounds("exec-context-bar")
+                .expect("the context bar is drawn");
+            let strip = window
+                .debug_bounds("editor-action-strip")
+                .expect("the action strip is drawn");
+            let editor = window
+                .debug_bounds("code-editor-area")
+                .expect("the editor is drawn");
+
+            assert_eq!(strip.size.width, EditorMetrics::ACTION_STRIP_WIDTH);
+            assert_eq!(strip.origin.y, editor.origin.y);
+            assert_eq!(strip.origin.y, context_bar.bottom());
+            assert!(
+                strip.right() <= editor.origin.x,
+                "the strip ends where the editor text starts: {strip:?} {editor:?}"
+            );
+        }
+
+        /// A script editor keeps the strip: Run, Save, History and Chart work
+        /// there too.
+        #[gpui::test]
+        fn a_script_editor_has_the_action_strip(cx: &mut gpui::TestAppContext) {
+            let (_document, window) = open_document(cx, QueryLanguage::Python);
+
+            assert!(window.debug_bounds("editor-action-strip").is_some());
+        }
+
+        #[gpui::test]
+        fn a_read_only_editor_has_no_action_strip(cx: &mut gpui::TestAppContext) {
+            let (document, window) = open_sql_document(cx);
+
+            window.update(|_, cx| {
+                document.update(cx, |document, cx| {
+                    document.read_only = true;
+                    cx.notify();
+                });
+            });
+            window.run_until_parked();
+
+            assert!(window.debug_bounds("editor-action-strip").is_none());
+            assert!(window.debug_bounds("code-editor-area").is_some());
+        }
+
+        /// The statement count moved from the toolbar row into the context
+        /// bar.
+        #[gpui::test]
+        fn the_statement_count_sits_in_the_context_bar(cx: &mut gpui::TestAppContext) {
+            let (document, window) = open_sql_document(cx);
+
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| {
+                    document.set_content("SELECT 1;\nSELECT 2;", window, cx);
+                });
+            });
+            window.run_until_parked();
+
+            let context_bar = window
+                .debug_bounds("exec-context-bar")
+                .expect("the context bar is drawn");
+            let summary = window
+                .debug_bounds("context-run-summary")
+                .expect("a SQL buffer with statements shows their count");
+
+            assert!(
+                context_bar.contains(&summary.origin) && summary.bottom() <= context_bar.bottom(),
+                "the count is inside the context bar: {summary:?} {context_bar:?}"
+            );
+        }
+    }
+
     #[gpui::test]
     fn the_pane_actions_list_every_sql_toolbar_button(cx: &mut TestAppContext) {
         let (document, window) = open_sql_document(cx);
@@ -434,8 +517,6 @@ mod tests {
                 "history",
                 "explain",
                 "chart",
-                "refresh",
-                "auto-refresh",
             ]
         );
 
@@ -449,7 +530,6 @@ mod tests {
         assert_eq!(command("run-in-new-tab"), Some(Command::RunQueryInNewTab));
         assert_eq!(command("save"), Some(Command::SaveQuery));
         assert_eq!(command("history"), Some(Command::ToggleHistoryDropdown));
-        assert_eq!(command("refresh"), Some(Command::RunQuery));
 
         let format = actions.iter().find(|action| action.id == "format");
         assert!(
@@ -462,49 +542,6 @@ mod tests {
             run.is_some_and(|action| action.shortcut.is_some()),
             "an entry with a key binding shows its keys"
         );
-    }
-
-    #[gpui::test]
-    fn the_auto_refresh_entry_hands_the_keyboard_to_its_dropdown(cx: &mut TestAppContext) {
-        let (document, window) = open_sql_document(cx);
-
-        let document_focus = document.clone();
-        window.update(|window, cx| {
-            document_focus.update(cx, |document, cx| {
-                document.focus_handle.focus(window, cx);
-            });
-        });
-        window.run_until_parked();
-
-        let auto_refresh = actions(&document, window)
-            .into_iter()
-            .find(|action| action.id == "auto-refresh")
-            .expect("an auto-refresh entry");
-        let PaneActionRun::Callback(open_interval) = auto_refresh.run else {
-            panic!("the auto-refresh entry runs a callback");
-        };
-
-        window.update(|window, cx| open_interval(window, cx));
-        window.run_until_parked();
-
-        let dropdown = window.update(|_, cx| document.read(cx).refresh.refresh_dropdown.clone());
-        let (open, focused) = window.update(|window, cx| {
-            let dropdown = dropdown.read(cx);
-            (dropdown.is_open(), dropdown.is_focused(window))
-        });
-        assert!(open && focused, "the interval dropdown opens with focus");
-
-        window.simulate_keystrokes("j escape");
-        window.run_until_parked();
-
-        let (open, document_focused) = window.update(|window, cx| {
-            (
-                dropdown.read(cx).is_open(),
-                document.read(cx).focus_handle.is_focused(window),
-            )
-        });
-        assert!(!open, "Escape closes the interval list");
-        assert!(document_focused, "focus returns to the editor pane");
     }
 
     /// Enter on the target list of the context bar opens it with keyboard

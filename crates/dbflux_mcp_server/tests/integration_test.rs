@@ -8,6 +8,12 @@ use tokio::io::DuplexStream;
 
 /// Helper to create a test server with in-memory transport
 #[allow(dead_code)]
+#[expect(
+    clippy::todo,
+    reason = "deliberately unfinished legacy fixture: this helper still calls todo!, and its \
+        tests remain ignored; the server itself can already be constructed and served without \
+        refactoring run_mcp_server"
+)]
 async fn create_test_server() -> (Box<dyn std::any::Any>, DuplexStream) {
     // Create bidirectional in-memory stream
     let (_client_stream, _server_stream) = tokio::io::duplex(8192);
@@ -82,6 +88,11 @@ async fn test_governance_authorization() {
 
 /// Helper to create a minimal ServerState for testing
 #[allow(dead_code)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test fixture: failing to create the temp dir or open the audit database \
+        must abort the test"
+)]
 fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
     use dbflux_mcp::{McpRuntime, TrustedClientDto, builtin_policies, builtin_roles};
     use std::sync::Arc;
@@ -121,15 +132,18 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
         auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
         driver_registry: Arc::new(std::collections::HashMap::new()),
         auth_provider_registry: Arc::new(std::collections::HashMap::new()),
+        secret_provider_registry: Arc::new(std::collections::HashMap::new()),
         driver_settings: Arc::new(std::collections::HashMap::new()),
         connection_cache: Arc::new(RwLock::new(
             dbflux_mcp_server::connection_cache::ConnectionCache::new(),
         )),
-        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        detached_processes: Arc::new(dbflux_mcp_server::state::DetachedProcessRegistry::new()),
         secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(
             dbflux_core::NoopSecretStore,
         ))),
         mcp_enabled_by_default: true,
+        profile_store_path: None,
     }
 }
 

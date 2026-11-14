@@ -132,24 +132,36 @@ pub fn run_export(
         let report = match result {
             Ok(report) => report,
             Err(e) => {
-                table_statuses[index].status = TableTransferStatus::Failed {
-                    error: e.to_string(),
-                };
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "table_statuses is built one-to-one from `tables`, which this loop enumerates; its length never changes"
+                )]
+                {
+                    table_statuses[index].status = TableTransferStatus::Failed {
+                        error: e.to_string(),
+                    };
+                }
                 break;
             }
         };
 
         let was_cancelled = report.outcome == TransferOutcome::Cancelled;
         warnings.extend(report.warnings);
-        table_statuses[index].status = if was_cancelled {
-            TableTransferStatus::Cancelled {
-                rows: report.rows_transferred,
-            }
-        } else {
-            TableTransferStatus::Completed {
-                rows: report.rows_transferred,
-            }
-        };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "table_statuses is built one-to-one from `tables`, which this loop enumerates; its length never changes"
+        )]
+        {
+            table_statuses[index].status = if was_cancelled {
+                TableTransferStatus::Cancelled {
+                    rows: report.rows_transferred,
+                }
+            } else {
+                TableTransferStatus::Completed {
+                    rows: report.rows_transferred,
+                }
+            };
+        }
 
         manifest_tables.push(ManifestTable {
             schema: table.schema.clone(),
@@ -248,6 +260,10 @@ mod tests {
     }
 
     impl Connection for FakeConnection {
+        #[expect(
+            clippy::unimplemented,
+            reason = "test mock: export tests never read connection metadata"
+        )]
         fn metadata(&self) -> &DriverMetadata {
             unimplemented!("not needed for export tests")
         }
@@ -260,6 +276,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test mock: a poisoned page mutex means the test itself is broken; unwrap is the intended failure path"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             if let Some(name) = &self.fail_for_table
                 && req.sql.contains(name.as_str())

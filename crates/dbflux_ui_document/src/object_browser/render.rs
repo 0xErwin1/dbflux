@@ -22,7 +22,7 @@ use dbflux_components::primitives::{
     Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Icon, SegmentedControl, SegmentedItem,
 };
 use dbflux_components::tokens::{
-    ChamferCut, ChromeColors, DocumentMetrics, Fields, ObjectStoreMetrics, SyntaxColors,
+    ChamferCut, ChromeColors, DocumentMetrics, Fields, ObjectStoreMetrics, SyntaxColors, ui,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::chrono::{DateTime, Utc};
@@ -35,9 +35,9 @@ const SIZE_WIDTH: Pixels = px(100.0);
 const CLASS_WIDTH: Pixels = px(130.0);
 const MODIFIED_WIDTH: Pixels = px(140.0);
 /// Width of the filter field in the header.
-const FILTER_WIDTH: Pixels = px(240.0);
+const FILTER_WIDTH: Rems = ui(240.0);
 /// Height of the "Load more" row.
-const LOAD_MORE_HEIGHT: Pixels = px(38.0);
+const LOAD_MORE_HEIGHT: Rems = ui(38.0);
 
 /// Indentation applied per tree-mode depth level. Matches the connections
 /// sidebar so both trees read at the same rhythm.
@@ -46,7 +46,7 @@ const TREE_INDENT: Pixels = px(14.0);
 /// Width of the disclosure-chevron slot, reserved on every tree-mode row —
 /// including object rows, which have nothing to disclose — so names stay
 /// aligned within a level. Same slot the sidebar reserves.
-const CHEVRON_SLOT: Pixels = px(14.0);
+const CHEVRON_SLOT: Rems = ui(14.0);
 
 const UNKNOWN: &str = "—";
 
@@ -93,7 +93,9 @@ pub(crate) fn object_icon(display_name: &str) -> AppIcon {
     match extension.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "avif" => AppIcon::Image,
         "json" | "yaml" | "yml" | "toml" | "xml" | "ndjson" => AppIcon::Braces,
-        "csv" | "tsv" | "parquet" | "xlsx" | "avro" | "orc" => AppIcon::FileSpreadsheet,
+        "csv" | "tsv" | "parquet" | "xlsx" | "xlsm" | "xls" | "ods" | "avro" | "orc" => {
+            AppIcon::FileSpreadsheet
+        }
         "txt" | "md" | "log" | "text" => AppIcon::ScrollText,
         "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "rb" | "php" | "c" | "cpp"
         | "h" | "sh" | "sql" | "html" | "css" => AppIcon::FileCode,
@@ -167,7 +169,7 @@ impl ObjectBrowserDocument {
             .px(Fields::PADDING_X)
             .overflow_hidden()
             .whitespace_nowrap()
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(Fields::TEXT)
             .text_color(muted)
             .child(
@@ -571,7 +573,7 @@ impl ObjectBrowserDocument {
                     .child(
                         div()
                             .truncate()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(ObjectStoreMetrics::OBJECT_NAME_FONT)
                             .text_color(strong)
                             .child(name_label),
@@ -581,7 +583,7 @@ impl ObjectBrowserDocument {
                 div()
                     .w(SIZE_WIDTH)
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(DocumentMetrics::TABLE_META_FONT)
                     .text_color(muted)
                     .child(size_label),
@@ -1018,6 +1020,9 @@ mod tests {
         assert_eq!(object_icon("photo.PNG"), AppIcon::Image);
         assert_eq!(object_icon("config.yaml"), AppIcon::Braces);
         assert_eq!(object_icon("export.csv"), AppIcon::FileSpreadsheet);
+        assert_eq!(object_icon("legacy.xls"), AppIcon::FileSpreadsheet);
+        assert_eq!(object_icon("macros.XLSM"), AppIcon::FileSpreadsheet);
+        assert_eq!(object_icon("budget.ods"), AppIcon::FileSpreadsheet);
         assert_eq!(object_icon("notes.md"), AppIcon::ScrollText);
         assert_eq!(object_icon("main.rs"), AppIcon::FileCode);
         assert_eq!(object_icon("backup"), AppIcon::File);

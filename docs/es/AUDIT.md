@@ -60,7 +60,8 @@ con estos campos:
 | `Governance`    | `governance`     | Resultados de evaluación de policy                                                                                 |
 | `Config`        | `config`         | Cambios de profile, modificaciones de settings                                                                     |
 | `System`        | `system`         | Arranque de la aplicación, panics, migraciones                                                                     |
-| `ObjectStorage` | `object_storage` | Eventos de CRUD/mutación de object storage (upload, delete, presign, rename, create bucket/folder, save-back edit) |
+| `ObjectStorage` | `object_storage` | Eventos de CRUD/mutación de object storage (upload, download, delete, presign, rename, create bucket/folder, save-back edit) |
+| `SecretStore` | `secret_store` | Lecturas de valores de secretos (`secret_value_retrieved`, `secret_value_retrieve_failed`); el valor nunca se registra |
 
 ### Tipos de actor
 
@@ -86,6 +87,7 @@ La validación la aplica `AuditService::validate_event()` antes de almacenar:
 | `Mcp`                  | `actor_id`, `object_id` (nombre de la tool)                             |
 | `Config`               | `object_type`, `object_id`                                              |
 | `ObjectStorage`        | `connection_id`, `object_type`, `object_id`                             |
+| `SecretStore`          | `connection_id`, `object_type` (id del almacén), `object_id` (nombre del secreto) |
 | `Governance`, `System` | Sin campos adicionales                                                  |
 
 ## Privacidad y redacción
@@ -111,6 +113,11 @@ configuración de governance.
 El visor de audit es el único lugar para revisar todo lo que DBFlux registró:
 queries, conexiones, hooks, scripts, cambios de configuración y decisiones de
 governance de AI/MCP.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/viewer-dark.webp">
+  <img src="../images/audit/viewer-light.webp" alt="El visor de audit con eventos de conexión, de queries, de configuración y de arranque bajo su barra de filtros">
+</picture>
 
 ### Abrirlo
 
@@ -146,6 +153,7 @@ Las categorías de un vistazo:
 | **Governance** | Decisiones de policy.                            |
 | **Config**     | Cambios de profile y settings.                   |
 | **System**     | Arranque, migraciones y eventos de log internos. |
+| **Object Storage** | Creación y borrado de buckets, y subidas, descargas, renombrados y borrados de objetos, carpetas nuevas, URL prefirmadas y ediciones guardadas. |
 
 ### Filtrar
 
@@ -196,6 +204,11 @@ con el uso salvo que se purgue; vive en el mismo `dbflux.db` que todo lo demás
 ([Data & Privacy](PRIVACY.md#auditoría-y-privacidad)).
 
 ## Ver los audit events
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/event-details-dark.webp">
+  <img src="../images/audit/event-details-light.webp" alt="Un evento de audit expandido con su acción, actor, conexión, decisión y la huella de la query">
+</picture>
 
 ### En la UI de DBFlux
 
@@ -542,6 +555,8 @@ La forma del evento de tracing:
 | `kind`           | `ErrorKind` como string (`storage`, `network`, `auth`, `hook`, `driver`, `user`, `config`) |
 | `correlation_id` | UUID v7 que vincula el toast con el audit record                                           |
 | `message`        | El resumen legible por humanos mostrado en el toast                                        |
+| `cause`          | El texto del error subyacente mostrado en el bloque de código del toast. Se omite cuando el error no tiene causa. Se guarda en `details_json` |
+| `suggested_action` | La sugerencia mostrada en el cuerpo del toast. Se omite cuando no está definida. Se guarda en `details_json` |
 
 El campo `correlation_id` lo extrae `AuditFieldVisitor` hacia
 `EventRecord.correlation_id`. Nótese que el visitor enruta tanto `record_str`

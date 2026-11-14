@@ -22,15 +22,15 @@ use dbflux_components::composites::wizard_progress_fraction;
 use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::{AppIcon, DriverIconTone};
 use dbflux_components::primitives::{
-    Badge, BadgeTone, Chamfer, Icon, Spinner, Status, StatusIndicator, Text, environment_label,
+    Badge, Chamfer, Icon, Spinner, Status, StatusIndicator, Text, environment_badge_tone,
+    environment_label,
 };
 use dbflux_components::tokens::{
     ChamferCut, ChromeColors, MigrateRunMetrics, ModalMetrics, Spacing,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{
-    CancelToken, Connection, LogErr, OrderResult, TableRef, TaskId, TaskKind, TaskStatus,
-    TaskTarget,
+    CancelToken, Connection, LogErr, OrderResult, TableRef, TaskId, TaskKind, TaskTarget,
 };
 use dbflux_transfer::TableMappingMode;
 use dbflux_transfer::TableTransferStatus;
@@ -49,6 +49,7 @@ use crate::migrate_wizard::column_mapping::TableMigrationConfig;
 use crate::migrate_wizard::phases::{ReorderState, RunState};
 use crate::migrate_wizard::{build_migration_options, build_migration_table_plans};
 use crate::pane::PaneAction;
+use crate::progress_forwarding::spawn_task_progress_forwarder;
 use dbflux_core::keymap_types::{Command, ContextId};
 
 /// Outcome of resolving the FK load order on the `Options` → `Confirm`
@@ -592,53 +593,20 @@ impl ConfirmRunPhase {
     }
 
     fn spawn_progress_ticker(&self, task_id: TaskId, cx: &mut Context<Self>) {
-        let ticker_app_state = self.app_state.clone();
         let ticker_progress = Arc::clone(&self.progress);
 
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(150))
-                    .await;
-
-                let still_running = cx.update(|cx| {
-                    ticker_app_state.update(cx, |state, cx| {
-                        let Some(snapshot) = state.tasks().get(task_id) else {
-                            return false;
-                        };
-                        if snapshot.status != TaskStatus::Running {
-                            return false;
-                        }
-
-                        let progress = ticker_progress
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .current;
-                        if let Some(total) = progress.estimated_total
-                            && total > 0
-                        {
-                            let fraction =
-                                (progress.rows_done as f32 / total as f32).clamp(0.0, 1.0);
-                            state.tasks_mut().update_progress(task_id, fraction);
-                            cx.notify();
-                        }
-
-                        true
-                    })
-                });
-
-                if !still_running {
-                    break;
-                }
-
-                // Re-render the phase every tick so the elapsed timer, the
-                // progress bar, and the per-table live status advance while the
-                // run is in flight (the app-state notify above only refreshes
-                // the tasks panel, not this modal).
-                this.update(cx, |_this, cx| cx.notify()).ok();
-            }
-        })
-        .detach();
+        spawn_task_progress_forwarder(
+            self.app_state.clone(),
+            task_id,
+            move || {
+                let progress = ticker_progress
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .current;
+                (progress.rows_done, progress.estimated_total)
+            },
+            cx,
+        );
     }
 
     fn spawn_run(&self, run: RunTaskContext, task_id: TaskId, cx: &mut Context<Self>) {
@@ -1109,7 +1077,7 @@ impl ConfirmRunPhase {
             )
             .child(
                 div()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_color(ChromeColors::strong(theme))
                     .child(label.to_string()),
             )
@@ -1152,7 +1120,7 @@ impl ConfirmRunPhase {
             .when_some(target_environment, |header, environment| {
                 header.child(Badge::new(
                     environment_label(environment),
-                    BadgeTone::for_environment(environment),
+                    environment_badge_tone(environment),
                 ))
             });
 
@@ -1178,7 +1146,7 @@ impl ConfirmRunPhase {
                     .gap(MigrateRunMetrics::HEADER_GAP)
                     .child(
                         div()
-                            .font_family(AppFonts::DISPLAY)
+                            .font_family(dbflux_components::fonts::display_family(cx))
                             .font_weight(FontWeight::BLACK)
                             .text_size(MigrateRunMetrics::PERCENT_FONT)
                             .text_color(ChromeColors::strong(theme))
@@ -1327,7 +1295,7 @@ impl ConfirmRunPhase {
             .flex_shrink_0()
             .border_b_1()
             .border_color(theme.table_row_border)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(ModalMetrics::CODE_FONT)
             .child(
                 div()

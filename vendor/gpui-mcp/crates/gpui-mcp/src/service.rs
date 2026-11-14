@@ -10,14 +10,16 @@ use std::time::Duration;
 use async_channel::{Receiver, Sender};
 use gpui::{App, Window};
 use gpui_mcp_protocol::{
-    AppId, ApplicationCommandDescriptor, ApplicationCommandResult, BridgeError, BridgeResult,
-    Capabilities, Capability, ContextResource, ContextResourceDescriptor, EndpointDescriptor,
-    ErrorCode, Highlight, InstanceId, LiveDocument, LiveDocumentPreview, LiveDocumentSource,
-    LocalEndpoint, MAX_APPLICATION_COMMAND_OUTPUT_BYTES, MAX_APPLICATION_COMMAND_SCHEMA_BYTES,
+    Annotation, AnnotationSource, AppId, ApplicationCommandDescriptor, ApplicationCommandResult,
+    BridgeError, BridgeResult, Capabilities, Capability, ContextResource,
+    ContextResourceDescriptor, EndpointDescriptor, ErrorCode, Highlight, InstanceId, LiveDocument,
+    LiveDocumentPreview, LiveDocumentSource, LocalEndpoint, MAX_ANNOTATIONS,
+    MAX_APPLICATION_COMMAND_OUTPUT_BYTES, MAX_APPLICATION_COMMAND_SCHEMA_BYTES,
     MAX_APPLICATION_COMMANDS, MAX_CONTEXT_RESOURCE_BYTES, MAX_CONTEXT_RESOURCE_URI_BYTES,
-    MAX_CONTEXT_RESOURCES, MAX_ID_BYTES, MAX_LABEL_BYTES, MAX_LIVE_DOCUMENT_DIAGNOSTICS,
-    MAX_LIVE_DOCUMENT_SOURCE_BYTES, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, MAX_WAIT_MS,
-    NativeWindowId, Operation, PROTOCOL_VERSION, ProcessId, WireRequest, WireResponse,
+    MAX_CONTEXT_RESOURCES, MAX_FRAME_SAMPLES, MAX_ID_BYTES, MAX_LABEL_BYTES,
+    MAX_LIVE_DOCUMENT_DIAGNOSTICS, MAX_LIVE_DOCUMENT_SOURCE_BYTES, MAX_MESSAGE_PAGE,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, MAX_WAIT_MS, Message, MessageSender, NativeWindowId,
+    NewMessage, Operation, PROTOCOL_VERSION, PendingFrame, ProcessId, WireRequest, WireResponse,
 };
 use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, ToFsName as _, ToNsName as _,
@@ -34,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Automation;
 use crate::input;
-use crate::registry::SharedState;
+use crate::registry::{AnnotationChange, SharedState};
 
 const MAX_CONNECTIONS: usize = 8;
 const COMMAND_CAPACITY: usize = 64;
@@ -226,6 +228,48 @@ type DocumentHost = Host<LiveDocumentRequest, LiveDocumentResponse>;
 type ResourceHost = Host<ContextResourceRequest, ContextResourceResponse>;
 type CommandHost = Host<ApplicationCommandRequest, ApplicationCommandResponse>;
 
+/// The annotation set after a change, delivered to [`BridgeHandle::on_annotations`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnnotationEvent {
+    /// Increases with every change. Changes made in quick succession may be
+    /// delivered as one event carrying the latest set.
+    pub revision: u64,
+    /// Who made the latest change.
+    pub changed_by: AnnotationSource,
+    /// Every current annotation, in draw order.
+    pub annotations: Vec<Annotation>,
+}
+
+type Listener<T> = Rc<dyn Fn(&T, &mut Window, &mut App)>;
+
+/// One application callback that receives bridge events on the GPUI thread.
+struct ListenerSlot<T> {
+    name: &'static str,
+    listener: RefCell<Option<Listener<T>>>,
+}
+
+impl<T> ListenerSlot<T> {
+    fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            listener: RefCell::new(None),
+        }
+    }
+
+    fn register(&self, listener: Listener<T>) -> Result<(), HostError> {
+        let mut slot = self.listener.borrow_mut();
+        if slot.is_some() {
+            return Err(HostError::AlreadyRegistered { host: self.name });
+        }
+        *slot = Some(listener);
+        Ok(())
+    }
+
+    fn get(&self) -> Option<Listener<T>> {
+        self.listener.borrow().clone()
+    }
+}
+
 /// Failure to register and publish one application-owned MCP host.
 #[derive(Debug, Error)]
 pub enum HostError {
@@ -285,6 +329,8 @@ pub struct BridgeHandle {
     document_host: Rc<DocumentHost>,
     resource_host: Rc<ResourceHost>,
     command_host: Rc<CommandHost>,
+    annotation_listener: Rc<ListenerSlot<AnnotationEvent>>,
+    message_listener: Rc<ListenerSlot<Message>>,
 }
 
 impl BridgeHandle {
@@ -296,6 +342,7 @@ impl BridgeHandle {
     ///
     /// Returns [`StartError`] when configuration validation, the private endpoint
     /// directory, native local listener, descriptor serialization, or runtime setup fails.
+    #[allow(clippy::too_many_lines)]
     pub fn install(
         window: &mut Window,
         cx: &App,
@@ -315,6 +362,8 @@ impl BridgeHandle {
         let document_host = Rc::new(DocumentHost::new("document"));
         let resource_host = Rc::new(ResourceHost::new("resource"));
         let command_host = Rc::new(CommandHost::new("command"));
+        let annotation_listener = Rc::new(ListenerSlot::new("annotation"));
+        let message_listener = Rc::new(ListenerSlot::new("message"));
         let endpoint_dir = match config.endpoint_dir.clone() {
             Some(directory) => directory,
             None => default_endpoint_dir()?,
@@ -362,6 +411,8 @@ impl BridgeHandle {
             resource_host.clone(),
             command_host.clone(),
         );
+        spawn_annotation_listener(window, cx, &state, &annotation_listener);
+        spawn_message_listener(window, cx, &state, &message_listener);
 
         let cancellation = CancellationToken::new();
         let thread_cancellation = cancellation.clone();
@@ -401,6 +452,8 @@ impl BridgeHandle {
             document_host,
             resource_host,
             command_host,
+            annotation_listener,
+            message_listener,
         })
     }
 
@@ -497,17 +550,80 @@ impl BridgeHandle {
         capability: Capability,
         host: &Host<Request, Response>,
     ) -> Result<(), HostError> {
+        self.publish_capability(capability, host.name)
+            .inspect_err(|_| host.clear())
+    }
+
+    fn publish_capability(
+        &self,
+        capability: Capability,
+        name: &'static str,
+    ) -> Result<(), HostError> {
         let mut descriptor = self.descriptor.borrow().clone();
         descriptor.capabilities.available.insert(capability);
         if let Err(source) = write_descriptor(&self.endpoint_path, &descriptor) {
-            host.clear();
-            return Err(HostError::Publish {
-                host: host.name,
-                source,
-            });
+            return Err(HostError::Publish { host: name, source });
         }
         *self.descriptor.borrow_mut() = descriptor;
         Ok(())
+    }
+
+    /// Register the callback that observes annotation changes.
+    ///
+    /// The callback runs on GPUI's foreground executor after any change by the
+    /// agent, the application, or expiry, with the complete current set, so an
+    /// application can mirror annotations in its own UI. Changes made in quick
+    /// succession may arrive as one call. Combine with
+    /// [`Automation::paint_annotations`] to draw them yourself instead of the
+    /// bridge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a callback is already registered.
+    pub fn on_annotations(
+        &self,
+        handler: impl Fn(&AnnotationEvent, &mut Window, &mut App) + 'static,
+    ) -> Result<(), HostError> {
+        self.annotation_listener.register(Rc::new(handler))?;
+        // Deliver the current set once, so the callback starts in sync.
+        self.automation.state.notify_annotation_listeners();
+        Ok(())
+    }
+
+    /// Register the callback that receives the agent's messages, and advertise
+    /// that this application reads them.
+    ///
+    /// Each message from the agent is delivered once, in order, on GPUI's
+    /// foreground executor, and is then counted as read. Until a callback is
+    /// registered the bridge refuses messages from the agent. Messages the
+    /// application posts with [`Self::post_message`] are not delivered here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a callback already exists or the updated descriptor cannot be written.
+    pub fn on_message(
+        &self,
+        handler: impl Fn(&Message, &mut Window, &mut App) + 'static,
+    ) -> Result<(), HostError> {
+        self.message_listener.register(Rc::new(handler))?;
+        self.automation.state.set_accepts_agent_messages(true);
+        if let Err(error) = self.publish_capability(Capability::Messages, "message") {
+            self.automation.state.set_accepts_agent_messages(false);
+            self.message_listener.listener.borrow_mut().take();
+            return Err(error);
+        }
+        self.automation.state.wake_message_readers();
+        Ok(())
+    }
+
+    /// Post a message for the connected agent. See [`Automation::post_message`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorCode::InvalidRequest`] for a message outside the bounds,
+    /// or [`ErrorCode::Busy`] while the agent has 64 of the app's messages unread.
+    pub fn post_message(&self, message: NewMessage) -> Result<Message, BridgeError> {
+        self.automation.post_message(message)
     }
 }
 
@@ -517,6 +633,7 @@ fn endpoint_capabilities(native_window_id: Option<NativeWindowId>) -> Capabiliti
             Capability::SemanticTree,
             Capability::Input,
             Capability::Highlight,
+            Capability::Annotations,
             Capability::Performance,
             Capability::Logs,
         ]
@@ -573,6 +690,86 @@ fn spawn_ui_pump(
         .detach();
 }
 
+/// Call the annotation listener after each change, with the latest set.
+fn spawn_annotation_listener(
+    window: &Window,
+    cx: &App,
+    state: &Arc<SharedState>,
+    listener: &Rc<ListenerSlot<AnnotationEvent>>,
+) {
+    let mut changes = state.subscribe_annotations();
+    let state = Arc::downgrade(state);
+    let listener = Rc::downgrade(listener);
+    window
+        .spawn(cx, async move |cx| {
+            while changes.changed().await.is_ok() {
+                let AnnotationChange { revision, source } = *changes.borrow_and_update();
+                let (Some(state), Some(listener)) = (state.upgrade(), listener.upgrade()) else {
+                    break;
+                };
+                let Some(handler) = listener.get() else {
+                    continue;
+                };
+                let event = AnnotationEvent {
+                    revision,
+                    changed_by: source,
+                    annotations: state.annotations(),
+                };
+                if cx.update(|window, cx| handler(&event, window, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+}
+
+/// Deliver each message from the agent to the message listener once, in order.
+fn spawn_message_listener(
+    window: &Window,
+    cx: &App,
+    state: &Arc<SharedState>,
+    listener: &Rc<ListenerSlot<Message>>,
+) {
+    let mut events = state.subscribe_messages();
+    let state = Arc::downgrade(state);
+    let listener = Rc::downgrade(listener);
+    window
+        .spawn(cx, async move |cx| {
+            let mut delivered = 0;
+            while events.changed().await.is_ok() {
+                events.borrow_and_update();
+                let (Some(state), Some(listener)) = (state.upgrade(), listener.upgrade()) else {
+                    break;
+                };
+                let Some(handler) = listener.get() else {
+                    continue;
+                };
+                loop {
+                    let page = state.read_messages(
+                        delivered,
+                        Some(MessageSender::Agent),
+                        MAX_MESSAGE_PAGE,
+                        None,
+                    );
+                    for message in &page.messages {
+                        delivered = message.id;
+                        if cx
+                            .update(|window, cx| handler(message, window, cx))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        state.mark_messages_read(MessageSender::App, message.id);
+                    }
+                    if !page.has_more {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+}
+
 #[allow(clippy::too_many_lines)]
 fn handle_ui_operation(
     operation: Operation,
@@ -584,17 +781,16 @@ fn handle_ui_operation(
     cx: &mut App,
 ) -> Result<BridgeResult, BridgeError> {
     match operation {
+        // Injected input invalidates exactly what the same input from the platform would: its
+        // handlers notify the views they change, and nothing else. Refreshing the window here
+        // would render every cached view and report a whole-window redraw as the cost of, say,
+        // a hover. Callers settle the frames the input caused with `GetPendingFrame`.
         Operation::PointerInput { command } => {
             input::dispatch_pointer(&command, window, cx)?;
-            // Each primitive pointer event completes through the same painted-frame contract as
-            // keyboard input. Compound gestures issue one operation per event, so callers can
-            // deterministically settle a frame between drag moves without sleeping.
-            window.refresh();
             Ok(BridgeResult::Ack)
         }
         Operation::Input { command } => {
             input::dispatch_keyboard(command, window, cx)?;
-            window.refresh();
             Ok(BridgeResult::Ack)
         }
         Operation::Focus { node_id } => {
@@ -620,11 +816,22 @@ fn handle_ui_operation(
         Operation::Refresh => Ok(BridgeResult::FrameStats(refresh_and_track_presentation(
             state, window,
         ))),
+        Operation::RequestFrame => Ok(BridgeResult::FrameStats(
+            request_frame_and_track_presentation(state, window),
+        )),
+        Operation::GetPendingFrame => Ok(BridgeResult::PendingFrame(PendingFrame {
+            pending: window.frame_pending(),
+            completed: state.frame_stats(),
+        })),
+        // Marked between draws, so no frame straddles the mark.
+        Operation::MarkFrames => Ok(BridgeResult::FrameStats(state.mark_frames())),
         Operation::GetPointerLocation => Ok(BridgeResult::PointerLocation(
             input::pointer_location(window),
         )),
+        // Highlights are painted by the observer's overlay pass, which runs after the scene on
+        // every frame whether or not views replay from cache, so a frame is all they need.
         Operation::ClearHighlights => {
-            window.refresh();
+            window.request_frame();
             Ok(BridgeResult::Ack)
         }
         Operation::GetLiveDocument => {
@@ -650,6 +857,8 @@ fn handle_ui_operation(
                 return Err(invalid_host_result("document"));
             };
             let preview = validate_live_document_preview(preview)?;
+            // A document host swaps state the bridge cannot see into, and need not notify the
+            // views that render it, so only a full refresh is sure to show the new revision.
             if preview.applied {
                 window.refresh();
             }
@@ -699,6 +908,7 @@ fn handle_ui_operation(
                 return Err(invalid_host_result("command"));
             }
             let result = validate_application_command_result(result)?;
+            // Like a document host, a command may change state no view was notified about.
             window.refresh();
             Ok(BridgeResult::ApplicationCommand(result))
         }
@@ -844,6 +1054,7 @@ async fn read_request(
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "request JSON is invalid"))
 }
 
+#[allow(clippy::too_many_lines)]
 async fn process_request(request: WireRequest, context: ConnectionContext) -> WireResponse {
     if request.protocol_version != PROTOCOL_VERSION {
         return WireResponse::failure(
@@ -915,7 +1126,77 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
             context.state.set_highlights(Vec::new());
             request_ui_refresh(&context.command_tx, context.operation_timeout).await
         }
+        Operation::UpsertAnnotations {
+            annotations,
+            replace_group,
+        } => match context.state.upsert_annotations(
+            annotations,
+            replace_group.as_deref(),
+            AnnotationSource::Agent,
+        ) {
+            Ok(applied) => request_ui_refresh(&context.command_tx, context.operation_timeout)
+                .await
+                .map(|_| BridgeResult::Annotations(applied)),
+            Err(error) => Err(error),
+        },
+        Operation::RemoveAnnotations { ids } => {
+            context
+                .state
+                .remove_annotations(&ids, AnnotationSource::Agent);
+            request_ui_refresh(&context.command_tx, context.operation_timeout)
+                .await
+                .map(|_| BridgeResult::Annotations(context.state.annotations()))
+        }
+        Operation::ClearAnnotations { group } => {
+            context
+                .state
+                .clear_annotations(group.as_deref(), AnnotationSource::Agent);
+            request_ui_refresh(&context.command_tx, context.operation_timeout)
+                .await
+                .map(|_| BridgeResult::Annotations(context.state.annotations()))
+        }
+        Operation::ListAnnotations => Ok(BridgeResult::Annotations(context.state.annotations())),
+        Operation::SendMessage { message } => {
+            if context.state.accepts_agent_messages() {
+                context
+                    .state
+                    .post_message(MessageSender::Agent, message)
+                    .map(BridgeResult::Message)
+            } else {
+                Err(BridgeError::new(
+                    ErrorCode::Unsupported,
+                    "the application does not read agent messages",
+                ))
+            }
+        }
+        Operation::ReadMessages {
+            after,
+            from,
+            limit,
+            wait_ms,
+            mark_read,
+        } => {
+            let reader = mark_read.then_some(MessageSender::Agent);
+            let limit = usize::from(limit);
+            let page = if wait_ms == 0 {
+                context.state.read_messages(after, from, limit, reader)
+            } else {
+                context
+                    .state
+                    .wait_for_messages(after, from, limit, Duration::from_millis(wait_ms), reader)
+                    .await
+            };
+            Ok(BridgeResult::Messages(page))
+        }
         Operation::GetFrameStats => Ok(BridgeResult::FrameStats(context.state.frame_stats())),
+        Operation::GetFrameReport {
+            after_frame_count,
+            frame_limit,
+        } => Ok(BridgeResult::FrameReport(
+            context
+                .state
+                .frame_report(after_frame_count, usize::from(frame_limit)),
+        )),
         Operation::GetPointerLocation => {
             dispatch_to_ui(
                 Operation::GetPointerLocation,
@@ -936,6 +1217,9 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
         | Operation::Focus { .. }
         | Operation::SetValue { .. }
         | Operation::Refresh
+        | Operation::RequestFrame
+        | Operation::GetPendingFrame
+        | Operation::MarkFrames
         | Operation::GetLiveDocument
         | Operation::PreviewLiveDocument { .. }
         | Operation::ListContextResources
@@ -951,19 +1235,39 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
     }
 }
 
-/// Request a new frame and return the completed-frame token observed before the request,
+/// Refresh the window and return the completed-frame token observed before the refresh,
 /// arranging for the presented-frame token to pass it once the refreshed frame is presented.
-///
-/// GPUI runs next-frame callbacks at the start of a frame request, before that request draws
-/// and presents. The outer callback therefore runs at the start of the request that draws the
-/// refreshed frame, and the inner one, registered from it, at the start of the following
-/// request, after the refreshed frame's `present` has returned.
 fn refresh_and_track_presentation(
     state: &Arc<SharedState>,
     window: &mut Window,
 ) -> gpui_mcp_protocol::FrameStats {
     let completed = state.frame_stats();
     window.refresh();
+    track_presentation(state, window);
+    completed
+}
+
+/// Request a frame without discarding cached views and return the completed-frame token
+/// observed before the request, arranging for the presented-frame token to pass it once the
+/// requested frame is presented.
+fn request_frame_and_track_presentation(
+    state: &Arc<SharedState>,
+    window: &mut Window,
+) -> gpui_mcp_protocol::FrameStats {
+    let completed = state.frame_stats();
+    window.request_frame();
+    track_presentation(state, window);
+    completed
+}
+
+/// Advance the presented-frame token once the frame the window was just invalidated for has
+/// been presented.
+///
+/// GPUI runs next-frame callbacks at the start of a frame request, before that request draws
+/// and presents. The outer callback therefore runs at the start of the request that draws the
+/// invalidated frame, and the inner one, registered from it, at the start of the following
+/// request, after that frame's `present` has returned.
+fn track_presentation(state: &Arc<SharedState>, window: &mut Window) {
     let state = Arc::downgrade(state);
     window.on_next_frame(move |window, _| {
         window.on_next_frame(move |_, _| {
@@ -972,7 +1276,6 @@ fn refresh_and_track_presentation(
             }
         });
     });
-    completed
 }
 
 async fn request_ui_refresh(
@@ -1017,6 +1320,7 @@ fn validate_node_id(node_id: &str) -> Result<(), BridgeError> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_operation(operation: &Operation) -> Result<(), BridgeError> {
     match operation {
         Operation::Input { command } => input::validate(command),
@@ -1036,7 +1340,56 @@ fn validate_operation(operation: &Operation) -> Result<(), BridgeError> {
         {
             Err(invalid("frame wait timeout must be between 1 and 30000 ms"))
         }
+        Operation::GetFrameReport { frame_limit, .. }
+            if *frame_limit == 0 || usize::from(*frame_limit) > MAX_FRAME_SAMPLES =>
+        {
+            Err(invalid(
+                "frame report limit must be between 1 and 512 frames",
+            ))
+        }
         Operation::SetHighlights { highlights } => validate_highlights(highlights),
+        Operation::UpsertAnnotations {
+            annotations,
+            replace_group,
+        } => {
+            if annotations.len() > MAX_ANNOTATIONS {
+                return Err(invalid("no more than 128 annotations are allowed"));
+            }
+            if replace_group
+                .as_deref()
+                .is_some_and(|group| !gpui_mcp_protocol::is_valid_annotation_name(group))
+            {
+                return Err(invalid("annotation group is invalid"));
+            }
+            annotations
+                .iter()
+                .try_for_each(|annotation| annotation.validate().map_err(invalid))
+        }
+        Operation::RemoveAnnotations { ids } => {
+            if ids.len() > MAX_ANNOTATIONS
+                || ids
+                    .iter()
+                    .any(|id| !gpui_mcp_protocol::is_valid_annotation_name(id))
+            {
+                return Err(invalid("annotation ids are invalid"));
+            }
+            Ok(())
+        }
+        Operation::ClearAnnotations { group: Some(group) }
+            if !gpui_mcp_protocol::is_valid_annotation_name(group) =>
+        {
+            Err(invalid("annotation group is invalid"))
+        }
+        Operation::SendMessage { message } => message.validate().map_err(invalid),
+        Operation::ReadMessages { limit, wait_ms, .. } => {
+            if *limit == 0 || usize::from(*limit) > MAX_MESSAGE_PAGE {
+                return Err(invalid("message limit must be between 1 and 128"));
+            }
+            if *wait_ms > MAX_WAIT_MS {
+                return Err(invalid("message wait cannot exceed 30000 ms"));
+            }
+            Ok(())
+        }
         Operation::GetLogs { limit, min_level } => {
             if *limit > 512 {
                 return Err(invalid("log limit cannot exceed 512"));
@@ -1472,7 +1825,8 @@ mod tests {
     };
 
     use super::{
-        BridgeConfig, encode_hex, refresh_and_track_presentation, validate_context_resource,
+        BridgeConfig, encode_hex, refresh_and_track_presentation,
+        request_frame_and_track_presentation, validate_context_resource,
         validate_context_resource_list, validate_operation,
     };
     use crate::Automation;
@@ -1530,6 +1884,43 @@ mod tests {
             state.presented_frame_count(),
             state.frame_stats().frame_count
         );
+    }
+
+    /// A requested frame replays cached views instead of rendering them, but it is
+    /// presented the same way, so it advances the presented-frame token the way a
+    /// refresh does.
+    #[gpui::test]
+    fn request_frame_marks_presentation_at_the_request_after_the_requested_frame(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let automation = Automation::isolated();
+        let attached = automation.clone();
+        let (_view, visual) = cx.add_window_view(move |window, _| {
+            attached.attach(window);
+            EmptyView
+        });
+        visual.run_until_parked();
+        let state = automation.state.clone();
+
+        let before =
+            visual.update(|window, _| request_frame_and_track_presentation(&state, window));
+        visual.run_until_parked();
+        assert!(state.presented_frame_count() <= before.frame_count);
+
+        assert_eq!(
+            visual.update(|window, cx| window.simulate_next_frame(cx)),
+            1
+        );
+        assert!(
+            state.presented_frame_count() <= before.frame_count,
+            "the request that draws the requested frame has not presented it yet"
+        );
+
+        assert_eq!(
+            visual.update(|window, cx| window.simulate_next_frame(cx)),
+            1
+        );
+        assert!(state.presented_frame_count() > before.frame_count);
     }
 
     #[test]

@@ -56,6 +56,12 @@ impl Workspace {
                 });
                 Some(true)
             }
+            Command::ToggleResultsPosition => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ToggleResultsPosition, window, cx);
+                });
+                Some(true)
+            }
 
             Command::CancelQuery => {
                 // Route to active document
@@ -119,7 +125,9 @@ impl Workspace {
             | Command::CycleDocumentView
             | Command::CycleResultView
             | Command::ToggleValuePanel
-            | Command::ToggleRowInspector => {
+            | Command::ToggleRowInspector
+            | Command::FindSimilarRows
+            | Command::ToggleConsole => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(cmd, window, cx);
                 });

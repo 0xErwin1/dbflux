@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: Phase 2: from the running app · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Key-value, documents and series, row \"Phase 2: from the running app · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-kv-zset.html",
+      "title": "Key-value: sorted set + expiry editor",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-kv-stream.html",
+      "title": "Key-value: stream + consumer groups",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-kv-filter.html",
+      "title": "Key-value: search while scanning + bulk delete",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

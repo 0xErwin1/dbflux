@@ -116,7 +116,7 @@ impl SchemaInspector {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .font_weight(FontWeight::BOLD)
                     .text_color(ChromeColors::strong(theme))
                     .child(self.snapshot.qualified_name()),
@@ -161,6 +161,7 @@ impl Render for SchemaInspector {
                     Some((AppIcon::Hash, index_color)),
                     index_label(index),
                     theme,
+                    cx,
                 )
                 .into_any_element()
             })
@@ -176,6 +177,7 @@ impl Render for SchemaInspector {
                     Some((AppIcon::Cable, theme.info)),
                     fk_label(fk, own_schema),
                     theme,
+                    cx,
                 )
                 .into_any_element()
             })
@@ -207,7 +209,7 @@ impl Render for SchemaInspector {
                 div()
                     .flex()
                     .flex_col()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(SchemaInspectorMetrics::ROW_FONT)
                     .text_color(ChromeColors::strong(theme))
                     .children(referenced_by.into_iter().map(SharedString::from))
@@ -256,12 +258,13 @@ fn mono_row(
     icon: Option<(AppIcon, Hsla)>,
     value: String,
     theme: &gpui_component::theme::Theme,
+    cx: &App,
 ) -> impl IntoElement {
     div()
         .flex()
         .items_center()
         .gap(SchemaInspectorMetrics::ICON_GAP)
-        .font_family(AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .text_size(SchemaInspectorMetrics::ROW_FONT)
         .when_some(icon, |row, (icon, color)| {
             row.child(

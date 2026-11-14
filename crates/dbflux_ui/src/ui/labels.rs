@@ -314,6 +314,16 @@ pub(crate) fn scripts_filter_redis_label() -> String {
     dbflux_i18n::t!("scripts.dialog.filter.redis")
 }
 
+/// Formats the CSV and TSV file-dialog filter label.
+pub(crate) fn scripts_filter_delimited_label() -> String {
+    dbflux_i18n::t!("scripts.dialog.filter.delimited")
+}
+
+/// Formats the spreadsheet (xlsx, xlsm, xls, ods) file-dialog filter label.
+pub(crate) fn scripts_filter_spreadsheet_label() -> String {
+    dbflux_i18n::t!("scripts.dialog.filter.spreadsheet")
+}
+
 /// Formats the "All Files" file-dialog filter label.
 pub(crate) fn scripts_filter_all_files_label() -> String {
     dbflux_i18n::t!("scripts.dialog.filter.all_files")
@@ -412,6 +422,7 @@ pub(crate) enum NoActiveConnectionKind {
     ObjectStorageAccount,
     Bucket,
     Object,
+    SecretStore,
 }
 
 /// Formats the "No active connection for this X" toast for the given resource kind.
@@ -437,6 +448,9 @@ pub(crate) fn documents_no_active_connection_message(kind: NoActiveConnectionKin
         }
         NoActiveConnectionKind::Object => {
             dbflux_i18n::t!("documents.toast.no_active_connection_for.object")
+        }
+        NoActiveConnectionKind::SecretStore => {
+            dbflux_i18n::t!("documents.toast.no_active_connection_for.secret_store")
         }
     }
 }
@@ -500,10 +514,10 @@ mod tests {
         dump_analysis_dialog_title, dump_analysis_filter_all_files_label,
         dump_analysis_filter_dumps_label, dump_analysis_no_dialog_message,
         dump_analysis_unsupported_extension_message, scripts_filter_all_files_label,
-        scripts_filter_javascript_mongodb_label, scripts_filter_redis_label,
-        scripts_filter_sql_label, scripts_open_dialog_title, scripts_read_file_failed_message,
-        select_dump_analyzer, settings_default_connection_name, shutdown_phase_label,
-        tasks_running_label, unsaved_changes_cannot_save_message,
+        scripts_filter_delimited_label, scripts_filter_javascript_mongodb_label,
+        scripts_filter_redis_label, scripts_filter_sql_label, scripts_open_dialog_title,
+        scripts_read_file_failed_message, select_dump_analyzer, settings_default_connection_name,
+        shutdown_phase_label, tasks_running_label, unsaved_changes_cannot_save_message,
         workspace_delete_connection_message, workspace_delete_folder_message,
         workspace_delete_selected_message, workspace_drop_object_message,
     };
@@ -683,6 +697,7 @@ mod tests {
         "scripts.dialog.filter.sql",
         "scripts.dialog.filter.javascript_mongodb",
         "scripts.dialog.filter.redis",
+        "scripts.dialog.filter.delimited",
         "scripts.dialog.filter.all_files",
         "scripts.error.read_file_failed",
         "audit.toast.mcp_governance_persisted",
@@ -796,6 +811,7 @@ mod tests {
         assert!(!scripts_filter_sql_label().is_empty());
         assert!(!scripts_filter_javascript_mongodb_label().is_empty());
         assert!(!scripts_filter_redis_label().is_empty());
+        assert!(!scripts_filter_delimited_label().is_empty());
         assert!(!scripts_filter_all_files_label().is_empty());
     }
 
@@ -829,6 +845,7 @@ mod tests {
             NoActiveConnectionKind::ObjectStorageAccount,
             NoActiveConnectionKind::Bucket,
             NoActiveConnectionKind::Object,
+            NoActiveConnectionKind::SecretStore,
         ];
 
         let mut messages = Vec::with_capacity(kinds.len());

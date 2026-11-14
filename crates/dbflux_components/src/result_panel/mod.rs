@@ -182,6 +182,12 @@ impl ViewHandleBuilder {
     /// # Panics
     ///
     /// Panics if any required field has not been set.
+    // Attribute on the function: the expect calls all sit inside the single
+    // tail struct literal.
+    #[expect(
+        clippy::expect_used,
+        reason = "build() is documented to panic when a required builder field is unset; the expect calls preserve those panic messages instead of silently substituting a default"
+    )]
     pub fn build(self) -> ViewHandle {
         ViewHandle {
             render: self.render.expect("ViewHandle::render is required"),

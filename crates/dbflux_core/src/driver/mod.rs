@@ -4,8 +4,8 @@ pub(crate) mod form;
 pub use capabilities::{
     DatabaseCategory, DdlCapabilities, DeploymentClass, DriverCapabilities, DriverLimits,
     DriverMetadata, DriverMetadataBuilder, EditorLanguageProfile, ExecutionClassification, Icon,
-    IsolationLevel, MutationCapabilities, OperationClassifier, OrderByMode, PaginationStyle,
-    QueryCapabilities, QueryLanguage, SslCertFields, SslModeOption, SyntaxInfo,
+    IsolationLevel, MutationCapabilities, NativeConsoleProfile, OperationClassifier, OrderByMode,
+    PaginationStyle, QueryCapabilities, QueryLanguage, SslCertFields, SslModeOption, SyntaxInfo,
     TransactionCapabilities, TransferFamily, WhereOperator, transfer_compatible,
 };
 pub use form::{

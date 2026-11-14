@@ -40,6 +40,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ColumnRight),
         ),
         (
+            "segmented-scrollbars-*",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
             "segmented-focus-on-launch-*",
             KeyboardPath::Command(Command::ColumnRight),
         ),
@@ -108,6 +112,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ColumnRight),
         ),
         (
+            "seg-ctl-item-secret_provider",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
             "seg-ctl-item-driver",
             KeyboardPath::Command(Command::ColumnRight),
         ),
@@ -147,6 +155,19 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             "general-vim-leader.*",
             KeyboardPath::Command(Command::Execute),
         ),
+        (
+            "general-toast-timeout.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "general-*-font-family",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "general-*-font-family.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        ("grid-fk-labels", KeyboardPath::Command(Command::Execute)),
         ("pause-on-error", KeyboardPath::Command(Command::Execute)),
         ("refresh-visible", KeyboardPath::Command(Command::Execute)),
         ("reopen-conns", KeyboardPath::Command(Command::Execute)),
@@ -154,6 +175,8 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ("requires-where", KeyboardPath::Command(Command::Execute)),
         ("restore-session", KeyboardPath::Command(Command::Execute)),
         ("vim-mode", KeyboardPath::Command(Command::Execute)),
+        ("table-alias", KeyboardPath::Command(Command::Execute)),
+        ("table-alias-as", KeyboardPath::Command(Command::Execute)),
         ("audit-enabled", KeyboardPath::Command(Command::Execute)),
         (
             "capture-query-text",
@@ -175,6 +198,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ),
         (
             "auth-provider-selector.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "ssh-config-host-picker.*",
             KeyboardPath::Command(Command::Execute),
         ),
         (
@@ -309,6 +336,15 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::FocusRight),
         ),
         (
+            "segmented-navigator-view-*",
+            KeyboardPath::Command(Command::FocusRight),
+        ),
+        (
+            "cm-show-all-databases",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        ("cm-read-only", KeyboardPath::Command(Command::Execute)),
+        (
             "segmented-enter-as-*",
             KeyboardPath::Command(Command::FocusRight),
         ),
@@ -353,6 +389,22 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Execute),
         ),
         ("ssh-enabled", KeyboardPath::Command(Command::Execute)),
+        (
+            "ssh-config-host-picker.*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "seg-ctl-item-private-key",
+            KeyboardPath::Command(Command::FocusRight),
+        ),
+        (
+            "seg-ctl-item-password",
+            KeyboardPath::Command(Command::FocusRight),
+        ),
+        (
+            "toggle-ssh-passphrase",
+            KeyboardPath::Command(Command::Execute),
+        ),
         ("browse-ssh-key", KeyboardPath::Command(Command::Execute)),
         ("clear-ssh-tunnel", KeyboardPath::Command(Command::Execute)),
         (

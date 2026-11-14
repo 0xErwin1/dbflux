@@ -9,10 +9,10 @@ homepage.workspace = true
 license.workspace = true
 
 [features]
-telemetry = ["dep:tokio", "interprocess/tokio"]
+telemetry = ["interprocess/tokio"]
 
 [dependencies]
-tokio = { workspace = true, optional = true, features = ["net", "io-util", "time"] }
+tokio = { workspace = true, features = ["sync", "net", "io-util", "time"] }
 serde = { workspace = true, features = ["derive"] }
 postcard = { workspace = true }
 interprocess.workspace = true
@@ -23,3 +23,10 @@ serde_json.workspace = true
 secrecy = "0.10"
 async-trait = { workspace = true }
 log.workspace = true
+
+[dev-dependencies]
+futures = "0.3"
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[lints]
+workspace = true

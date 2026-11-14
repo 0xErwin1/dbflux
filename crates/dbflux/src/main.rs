@@ -2,6 +2,8 @@
 #![recursion_limit = "256"]
 
 mod cli;
+#[cfg(unix)]
+mod shell_path;
 
 use dbflux_app::mcp_command::run_mcp_command;
 use dbflux_audit::AuditService;
@@ -15,16 +17,20 @@ use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
     APP_CONTROL_VERSION, framing, init_process_auth_tokens,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    read_app_control_token, shutdown_managed_auth_provider_hosts, socket_name,
+    read_app_control_token, shutdown_managed_auth_provider_hosts,
+    shutdown_managed_secret_provider_hosts, socket_name,
 };
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::assets::Assets;
 use dbflux_ui::ipc_server::IpcServer;
+use dbflux_ui::keymap::Command;
 use dbflux_ui::platform;
 use dbflux_ui::ui::views::workspace::{
     DocumentFlushOutcome, QuitConfirmed, Workspace, await_document_flush,
 };
+use dbflux_ui_base::keymap::RunCommand;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+use dbflux_ui_base::window_state::{self, WindowGeometry};
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
@@ -52,6 +58,17 @@ static BRIDGE_HANDLE: Mutex<Option<BridgeHandle>> = Mutex::new(None);
 /// the shutdown sequence can flush pending document edits. Weak so shutdown can
 /// never keep the view alive.
 static WORKSPACE_FOR_SHUTDOWN: Mutex<Option<WeakEntity<Workspace>>> = Mutex::new(None);
+
+/// Handle to the main window, captured where it is created so the shutdown
+/// sequence can save its geometry.
+static MAIN_WINDOW_FOR_SHUTDOWN: Mutex<Option<WindowHandle<Root>>> = Mutex::new(None);
+
+/// Geometry the main window last reported, recorded from a window callback.
+///
+/// A window callback runs with the window taken out of `App`, so its handle
+/// cannot be used to read the bounds again from inside one. Recording them
+/// where the window is in hand is what lets the shutdown write them later.
+static MAIN_WINDOW_GEOMETRY: Mutex<Option<WindowGeometry>> = Mutex::new(None);
 
 /// Previous panic hook, chained after our hook.
 #[allow(clippy::type_complexity)]
@@ -97,6 +114,13 @@ extern "C" fn handle_shutdown_signal(_signum: std::ffi::c_int) {
 /// blocking syscalls elsewhere in the process (IPC accept/read, driver I/O)
 /// fail with `EINTR` on every delivery.
 #[cfg(unix)]
+#[expect(
+    unsafe_code,
+    reason = "libc signal FFI uses an all-zero-valid C `sigaction` value, \
+              initializes its mask through a valid pointer, and passes a valid \
+              action plus the permitted null old-action pointer; only \
+              `sigaction` failures are checked by the existing code"
+)]
 fn install_shutdown_signal_handlers() {
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = handle_shutdown_signal as *const () as usize;
@@ -243,6 +267,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.get(1).map(|s| s.as_str()) == Some("mcp") {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the guard above requires `args[1]` to exist, so \
+                      `args.len() >= 2` and the `[2..]` slice is in range"
+        )]
         let exit_code = run_mcp_command(&args[2..]);
         std::process::exit(exit_code);
     }
@@ -318,7 +347,21 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
     }
 }
 
+/// Runs the GPUI application: tracing, IPC listener, main window, shutdown
+/// wiring. Process-global state lives in the module-level `Mutex<Option<_>>`
+/// holders.
+#[expect(
+    clippy::unwrap_used,
+    reason = "startup preserves the existing fail-fast behavior for poisoned \
+              process-global locks; bridge initialization runs under its \
+              guard, so panic-freedom is an assumption, not a mutex guarantee"
+)]
 fn run_gui() {
+    // Runs first: it sets PATH, which is only sound before any other thread
+    // exists, and the tracing bridge below may start one.
+    #[cfg(unix)]
+    let shell_path_import = shell_path::import_login_shell_path();
+
     let fmt_writer = if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
         FmtWriter::NonBlockingFile(path)
     } else {
@@ -340,6 +383,9 @@ fn run_gui() {
             eprintln!("Failed to initialize tracing: {err}");
         }
     }
+
+    #[cfg(unix)]
+    shell_path_import.log();
 
     let auth_token = match init_process_auth_tokens() {
         Ok(token) => token,
@@ -415,11 +461,22 @@ fn run_gui() {
         );
         dbflux_i18n::set_locale(language);
 
-        // Set up the density global and apply the persisted theme+style so
-        // radius tokens are correct from the very first frame.
-        dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);
+        // Set up the density and font globals and apply the persisted
+        // theme+style so radius tokens and fonts are correct from the very
+        // first frame.
+        let font_settings =
+            dbflux_ui_base::app_state_entity::resolve_font_settings(&general_settings, cx);
+        dbflux_ui::theme::init_with_settings(theme_setting, style_setting, font_settings, cx);
 
         let channel = dbflux_core::ReleaseChannel::current();
+
+        // Open the window where the user left it, pushed back inside the work
+        // area of the displays attached now. With nothing saved this is the
+        // first-run size, fitted the same way; leaving the placement to gpui
+        // instead is what opened the window flush against the screen edges.
+        let window_geometry = window_state::load(app_state.read(cx).storage_runtime());
+        let placement = window_state::resolve_main_window_placement(window_geometry, cx);
+
         let mut main_window_options = WindowOptions {
             app_id: Some(channel.app_id().into()),
             titlebar: Some(TitlebarOptions {
@@ -429,76 +486,134 @@ fn run_gui() {
             // Request client-side decorations on Linux to enable native Wayland support.
             // On other platforms this returns Server explicitly.
             window_decorations: platform::main_window_decoration_request(),
+            window_bounds: placement.bounds,
+            display_id: placement.display_id,
             ..Default::default()
         };
-        platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
+        // The main window stays a normal window: a floating one is an
+        // `NSPanel` above everything else on macOS, which takes it out of
+        // AeroSpace, Spaces and Stage Manager.
+        platform::apply_main_window_options(&mut main_window_options, 800.0, 600.0);
 
-        let window_handle = cx
-            .open_window(main_window_options, |window, cx| {
-                let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
-                workspace.update(cx, |workspace, cx| workspace.start_update_flow(cx));
+        let window_result = cx.open_window(main_window_options, |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+            workspace.update(cx, |workspace, cx| workspace.start_update_flow(cx));
 
-                // Publish a weak handle before the view is moved into `Root` so
-                // both shutdown entry points (window close and SIGINT/SIGTERM)
-                // can flush pending document edits.
-                *WORKSPACE_FOR_SHUTDOWN
+            // Publish a weak handle before the view is moved into `Root` so
+            // both shutdown entry points (window close and SIGINT/SIGTERM)
+            // can flush pending document edits.
+            *WORKSPACE_FOR_SHUTDOWN
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.downgrade());
+
+            // The answer that quits in the active-query or the
+            // unsaved-changes prompt resumes the close it interrupted.
+            let app_state_for_quit = app_state.clone();
+            cx.subscribe(&workspace, move |_, _: &QuitConfirmed, cx| {
+                initiate_graceful_shutdown(&app_state_for_quit, cx);
+            })
+            .detach();
+
+            // The application menu bar. macOS draws it, and the menu it
+            // shows for the application name is empty until one is
+            // installed.
+            dbflux_ui::app_menu::install(cx, app_state.clone());
+
+            // The focused window is not always the workspace: the Settings
+            // window is a window of its own and propagates the commands it
+            // does not own. The application therefore answers the quit
+            // command, whichever window asked, by asking the workspace —
+            // and its running-query prompt — in the window that shows it.
+            let main_window = window.window_handle();
+            cx.on_action(move |action: &RunCommand, cx| {
+                if action.command.as_ref() != Command::Quit.action_id().as_ref() {
+                    cx.propagate();
+                    return;
+                }
+
+                let Some(workspace) = WORKSPACE_FOR_SHUTDOWN
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.downgrade());
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone()
+                    .and_then(|workspace| workspace.upgrade())
+                else {
+                    return;
+                };
 
-                // "Quit anyway" in the active-query prompt resumes the close
-                // the prompt interrupted.
-                let app_state_for_quit = app_state.clone();
-                cx.subscribe(&workspace, move |_, _: &QuitConfirmed, cx| {
-                    initiate_graceful_shutdown(&app_state_for_quit, cx);
+                let outcome = main_window.update(cx, |_root, window, cx| {
+                    // The question belongs to the window that shows it, so
+                    // bring that one to the front of whoever asked.
+                    window.activate_window();
+                    workspace.update(cx, |workspace, cx| {
+                        if workspace.request_quit(window, cx) {
+                            cx.emit(QuitConfirmed);
+                        }
+                    });
+                });
+
+                if let Err(error) = outcome {
+                    log::warn!("The quit request did not reach the main window: {error}");
+                }
+            });
+
+            IpcServer::start_with_listener(
+                listener,
+                workspace.clone(),
+                window.window_handle(),
+                auth_token,
+                #[cfg(feature = "telemetry")]
+                app_state.downgrade(),
+                cx,
+            );
+            info!("IPC server started");
+
+            dbflux_ui_base::ui_automation::install(window, cx);
+
+            // "Follow system" resolved against the app-level appearance
+            // before any window existed; the window's own appearance is
+            // the reliable source on Linux, so resolve once more here and
+            // again whenever the OS switches between light and dark.
+            if theme_setting == dbflux_core::ThemeSetting::System {
+                dbflux_ui::theme::apply_theme(theme_setting, style_setting, Some(window), cx);
+            }
+
+            let app_state_for_appearance = app_state.clone();
+            window
+                .observe_window_appearance(move |window, cx| {
+                    let settings = app_state_for_appearance.read(cx).general_settings();
+                    let (current_theme, current_style) = (settings.theme, settings.style);
+
+                    if current_theme == dbflux_core::ThemeSetting::System {
+                        dbflux_ui::theme::apply_theme(
+                            current_theme,
+                            current_style,
+                            Some(window),
+                            cx,
+                        );
+                    }
                 })
                 .detach();
 
-                IpcServer::start_with_listener(
-                    listener,
-                    workspace.clone(),
-                    window.window_handle(),
-                    auth_token,
-                    #[cfg(feature = "telemetry")]
-                    app_state.downgrade(),
-                    cx,
                 );
-                info!("IPC server started");
+                shutdown_all_managed_hosts();
+                cx.quit();
+                return;
+            }
+        };
 
-                dbflux_ui_base::ui_automation::install(window, cx);
-
-                // "Follow system" resolved against the app-level appearance
-                // before any window existed; the window's own appearance is
-                // the reliable source on Linux, so resolve once more here and
-                // again whenever the OS switches between light and dark.
-                if theme_setting == dbflux_core::ThemeSetting::System {
-                    dbflux_ui::theme::apply_theme(theme_setting, style_setting, Some(window), cx);
-                }
-
-                let app_state_for_appearance = app_state.clone();
-                window
-                    .observe_window_appearance(move |window, cx| {
-                        let settings = app_state_for_appearance.read(cx).general_settings();
-                        let (current_theme, current_style) = (settings.theme, settings.style);
-
-                        if current_theme == dbflux_core::ThemeSetting::System {
-                            dbflux_ui::theme::apply_theme(
-                                current_theme,
-                                current_style,
-                                Some(window),
-                                cx,
-                            );
-                        }
-                    })
-                    .detach();
-
-                cx.new(|cx| Root::new(workspace, window, cx))
-            })
-            .expect("Failed to open main window");
+        *MAIN_WINDOW_FOR_SHUTDOWN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(window_handle);
 
         let app_state_for_close = app_state.clone();
         window_handle
             .update(cx, |_root, window, cx| {
                 window.on_window_should_close(cx, move |window, cx| {
+                    // The window is in hand here and out of `App` until this
+                    // callback returns, so this is the one place the geometry
+                    // can be read on the way out.
+                    record_main_window_geometry(window);
+
                     let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
                     if already_shutting_down {
                         let phase = app_state_for_close.read(cx).shutdown_phase();
@@ -508,8 +623,9 @@ fn run_gui() {
                         return false;
                     }
 
-                    // A running query asks first; the shutdown starts from the
-                    // prompt's "Quit anyway" instead of from here.
+                    // A running query, then unsaved changes the quit cannot
+                    // save on its own, ask first; the shutdown then starts
+                    // from the answer that quits instead of from here.
                     let workspace = WORKSPACE_FOR_SHUTDOWN
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -558,6 +674,55 @@ fn run_gui() {
     });
 }
 
+/// Records the geometry of the main window, to be written when it shuts down.
+fn record_main_window_geometry(window: &Window) {
+    *MAIN_WINDOW_GEOMETRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+        Some(WindowGeometry::from_window(window));
+}
+
+/// Saves the main window geometry for the next launch.
+///
+/// The geometry comes from the last window callback that could read it, which
+/// is the close the user asked for. The handle is only read when no callback
+/// ran, as on the SIGINT/SIGTERM path, and that read is only possible outside
+/// a window update: while one is running the window is not in `App`.
+fn save_main_window_geometry(app_state: &Entity<AppStateEntity>, cx: &mut App) {
+    let recorded = MAIN_WINDOW_GEOMETRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+
+    let geometry = recorded.or_else(|| read_main_window_geometry(cx));
+
+    let Some(geometry) = geometry else {
+        return;
+    };
+
+    window_state::save(app_state.read(cx).storage_runtime(), geometry);
+}
+
+/// Reads the main window geometry from its handle, for the shutdown paths that
+/// no window callback ran on.
+fn read_main_window_geometry(cx: &mut App) -> Option<WindowGeometry> {
+    let main_window = MAIN_WINDOW_FOR_SHUTDOWN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .copied()?;
+
+    let geometry = main_window.update(cx, |_root, window, _cx| WindowGeometry::from_window(window));
+
+    match geometry {
+        Ok(geometry) => Some(geometry),
+        Err(error) => {
+            log::warn!("Could not read the main window geometry to record it: {error}");
+            None
+        }
+    }
+}
+
 /// Single entry point for graceful shutdown, reached from both window close
 /// and OS signals (SIGINT/SIGTERM). Marks shutdown as begun, records the
 /// audit event, and spawns the async shutdown sequence.
@@ -566,6 +731,8 @@ fn initiate_graceful_shutdown(app_state: &Entity<AppStateEntity>, cx: &mut App) 
     let initiated_shutdown = app_state.update(cx, |state, _| state.begin_shutdown());
 
     if initiated_shutdown {
+        save_main_window_geometry(app_state, cx);
+
         let audit_service = app_state.read(cx).audit_service().clone();
         emit_system_shutdown(&audit_service);
 
@@ -648,17 +815,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     loop {
         if start.elapsed() > TOTAL_SHUTDOWN_TIMEOUT {
             log::error!("Shutdown exceeded total timeout, forcing quit");
-            let stopped = shutdown_managed_hosts();
-            if stopped > 0 {
-                info!("Stopped {} managed RPC host process(es)", stopped);
-            }
-            let auth_stopped = shutdown_managed_auth_provider_hosts();
-            if auth_stopped > 0 {
-                info!(
-                    "Stopped {} managed auth-provider host process(es)",
-                    auth_stopped
-                );
-            }
+            shutdown_all_managed_hosts();
             cx.update(|cx| cx.quit());
             return;
         }
@@ -679,48 +836,46 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Closing connections...");
-    let teardown_handles =
+    // A teardown can block on an unreachable host until the kernel gives up
+    // retransmitting (about 15 minutes on Linux), so the handles are polled
+    // against the deadlines instead of joined; a thread still running when
+    // they pass is abandoned and ends with the process.
+    let mut teardown_handles =
         cx.update(|cx| app_state.update(cx, |state, _| state.close_all_connections()));
-    for teardown in teardown_handles {
-        let join_result = cx
-            .background_executor()
-            .spawn(async move { teardown.join() })
-            .await;
-        match join_result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => log::error!("Connection cleanup failed during shutdown: {}", error),
-            Err(_) => log::error!("Connection cleanup thread panicked during shutdown"),
-        }
-    }
 
     let conn_deadline = Instant::now() + CONNECTION_CLOSE_TIMEOUT;
     loop {
         if start.elapsed() > TOTAL_SHUTDOWN_TIMEOUT {
             log::error!("Shutdown exceeded total timeout, forcing quit");
-            let stopped = shutdown_managed_hosts();
-            if stopped > 0 {
-                info!("Stopped {} managed RPC host process(es)", stopped);
-            }
-            let auth_stopped = shutdown_managed_auth_provider_hosts();
-            if auth_stopped > 0 {
-                info!(
-                    "Stopped {} managed auth-provider host process(es)",
-                    auth_stopped
-                );
-            }
+            shutdown_all_managed_hosts();
             cx.update(|cx| cx.quit());
             return;
         }
 
-        let has_connections = cx.update(|cx| app_state.read(cx).has_connections());
+        let (finished, pending): (Vec<_>, Vec<_>) = teardown_handles
+            .into_iter()
+            .partition(|teardown| teardown.is_finished());
+        teardown_handles = pending;
+        for teardown in finished {
+            match teardown.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    log::error!("Connection cleanup failed during shutdown: {}", error)
+                }
+                Err(_) => log::error!("Connection cleanup thread panicked during shutdown"),
+            }
+        }
 
-        if !has_connections {
+        if teardown_handles.is_empty() {
             info!("All connections closed");
             break;
         }
 
         if Instant::now() > conn_deadline {
-            log::warn!("Connection close timed out, proceeding with open connections");
+            log::warn!(
+                "Connection close timed out, proceeding with {} connection(s) still closing",
+                teardown_handles.len()
+            );
             break;
         }
 
@@ -737,6 +892,13 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         });
     });
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "preserve the existing panic-on-poison shutdown policy; the \
+                  if-let guard remains held through bridge shutdown and \
+                  diagnostics, so this is not a guarantee that the critical \
+                  section cannot unwind"
+    )]
     if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().take() {
         match handle.shutdown() {
             Ok(()) => {}
@@ -765,6 +927,16 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         });
     });
 
+    shutdown_all_managed_hosts();
+
+    cx.update(|cx| {
+        cx.quit();
+    });
+}
+
+/// Every GUI exit path, forced or orderly, goes through here, so a new managed host kind is
+/// stopped on all of them. `dbflux mcp` does not use it and leaves its hosts running.
+fn shutdown_all_managed_hosts() {
     let stopped = shutdown_managed_hosts();
     if stopped > 0 {
         info!("Stopped {} managed RPC host process(es)", stopped);
@@ -778,7 +950,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         );
     }
 
-    cx.update(|cx| {
-        cx.quit();
-    });
+    let secret_stopped = shutdown_managed_secret_provider_hosts();
+    if secret_stopped > 0 {
+        info!(
+            "Stopped {} managed secret-provider host process(es)",
+            secret_stopped
+        );
+    }
 }

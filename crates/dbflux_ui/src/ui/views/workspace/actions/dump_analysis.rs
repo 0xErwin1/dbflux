@@ -99,6 +99,13 @@ impl Workspace {
                 return;
             };
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "`select_dump_analyzer` returns an `iter().enumerate()` \
+                          index into `analyzer_candidates`, which maps \
+                          one-to-one from `analyzers`, so `selected_index` \
+                          stays below `analyzers.len()`"
+            )]
             let analyzer = analyzers[selected_index].clone();
 
             let already_open = cx.update(|cx| {

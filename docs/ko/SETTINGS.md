@@ -26,13 +26,33 @@ MCP 관련 섹션(Clients, Roles, Policies)은 바이너리가 `mcp` 기능과 �
 ---
 ## 일반
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
+  <img src="../images/settings/general-light.webp" alt="모양, 편집기, 시작 설정이 보이는 설정 창의 일반 섹션">
+</picture>
+
+저장하면 변경 사항이 즉시 적용되고 DBFlux 데이터베이스(`dbflux.db`,
+**Use the stable database**를 켜지 않은 나이틀리 빌드에서는 `dbflux-nightly.db`)에는 백그라운드에서 기록되므로,
+데이터베이스가 느리거나 사용 중이어도 창이 멈추지 않습니다. 성공 메시지는 디스크에
+기록된 뒤에 표시됩니다. 기록에 실패하면 오류가 표시되고, 변경 사항은 DBFlux를
+종료할 때까지 적용된 상태로 남습니다. 유지하려면 다시 저장하세요.
+
 ### 모양
 
 | 설정 | 옵션 | 기본값 |
 |---------|---------|---------|
-| **Theme** | Dark, Mirage, Light | Dark |
-| **Style** | Default, Compact | Default |
+| **Theme** | Follow system, Dark, Light | Dark |
+| **Density** | Default, Compact | Default |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 | **Language** | System, 그 뒤에 번역 카탈로그가 함께 제공되는 모든 언어 | System |
+
+**Show scrollbars**는 모든 창의 스크롤바가 언제 표시될지 정합니다. 내용이
+스크롤되는 동안만, 포인터가 스크롤 영역 위에 있는 동안, 또는 항상 표시할 수
+있습니다. 저장하면 열려 있는 모든 창에 바로 적용됩니다.
+
+데이터 그리드의 가로 스크롤바는 예외로 항상 표시됩니다. 마우스 휠 이벤트를
+받지 않는 별도의 스크롤러가 이 스크롤바를 움직이므로, 그렇지 않으면 숨겨진
+채로 남기 때문입니다.
 
 언어 목록은 DBFlux가 함께 제공하는 번역 카탈로그에서 도출됩니다. 영어가 먼저
 표시되고, 나머지 언어는 결정적인 순서로 이어지며 고유 언어명으로 표시됩니다.
@@ -42,18 +62,34 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 일반 UI 텍스트에 대해 영어로 대체됩니다. 이 릴리스에서는 General 섹션만 번역되며,
 나머지 UI는 크레이트 단위로 전환 중이며 당분간 영어로 유지됩니다.
 
+`Ctrl+=` / `Cmd+=`와 `Ctrl+-` / `Cmd+-`는 General 섹션의 인터페이스, 편집기,
+데이터 그리드 글꼴 크기를 한꺼번에 1 px씩 바꾸며 서로의 상대적인 크기를
+유지하고, `Ctrl+0` / `Cmd+0`은 기본값으로 되돌립니다. 이 단축키는 워크스페이스
+창에서 동작하고, 명령 팔레트에도 있으며, [키 바인딩](#키-바인딩)에서 다시
+지정할 수 있습니다. 이미 8 px 또는 32 px에 도달한 크기는 그대로 두고 나머지
+크기만 계속 바뀝니다. 새 크기는 다른 설정처럼 저장되므로 재시작 후에도
+유지됩니다.
+
 ### 편집기
 
 | 설정 | 기본값 | 설명 |
 |---------|---------|--------------|
 | **Vim mode in code editors** | Off | 코드 편집기의 모드 편집: `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, `u`를 쓰는 노멀 모드와 삽입 모드. 저장하면 열려 있는 편집기에 적용됩니다. 키보드 참조의 [Vim 모드](KEYBOARD.md#vim-모드선택-사항) 섹션을 참고하세요. |
+| **Add an alias to table completions** | On | `FROM` 또는 `JOIN` 뒤에서 SQL 자동 완성의 테이블, 뷰 또는 CTE를 선택하면 이름의 머리글자로 만든 별칭과 함께 삽입합니다. `access_control`은 `access_control ac`가 되고 `public.order_items`는 `public.order_items oi`가 됩니다. 문에서 이미 쓰인 별칭, 예약어 또는 알려진 테이블 이름에는 숫자를 붙입니다(`ac2`). 커서 뒤에 별칭이 이미 있거나 `INSERT INTO` 뒤에서는 별칭을 추가하지 않습니다. `UPDATE`와 `DELETE FROM`의 대상 테이블은 그 위치에서 별칭을 허용하는 데이터베이스에서만 별칭을 받습니다: PostgreSQL과 DuckDB, 그리고 `AS`를 붙인 SQLite와 Turso입니다. |
+| **Write the alias with AS** | Off | `access_control ac` 대신 `access_control AS ac`를 삽입합니다. |
+
+### 데이터 그리드
+
+| 설정 | 기본값 | 설명 |
+|---------|---------|--------------|
+| **외래 키 셀에 참조된 행의 레이블 표시** | 끔 | 외래 키를 담은 셀은 참조된 행의 레이블을 id와 함께 확인해 표시합니다. 저장한 이후에 불러오는 페이지에 적용됩니다. 행 인스펙터는 항상 참조를 확인합니다. |
 
 ### 시작 및 세션
 
 | 설정 | 기본값 | 설명 |
 |---------|---------|--------------|
 | **Restore session on startup** | On | 마지막에 열어 두었던 탭을 다시 엽니다. |
-| **Reopen last connections** | Off | 활성 상태였던 연결에 다시 연결합니다. |
+| **Reopen last connections** | Off | 시작할 때 마지막으로 종료할 당시 열려 있던 연결과 복원된 탭이 사용하는 연결에 다시 연결합니다. 세션 복원 여부와 관계없이 동작합니다. |
 | **Default focus** | Sidebar | 실행 시 포커스가 놓이는 위치(사이드바 또는 마지막 탭). |
 | **Max history entries** | 1000 | 쿼리 기록 상한(최소 10). |
 | **Auto-save interval (ms)** | 2000 | 열려 있는 편집기가 자동 저장되는 주기(최소 500). 파일로 관리되는 스크립트는 해당 파일에 기록되고, 저장하지 않은 제목 없는 콘텐츠는 sessions 폴더에 보관됩니다. |
@@ -64,9 +100,24 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 |---------|---------|--------------|
 | **Default refresh policy** | Manual | 데이터 뷰에 대한 수동 또는 간격 자동 새로고침. |
 | **Default refresh interval (seconds)** | 5 | 정책이 Interval일 때 사용되는 간격(최소 1). |
-| **Max concurrent background tasks** | 8 | 동시에 실행할 수 있는 백그라운드 작업의 상한(최소 1). |
+| **Max concurrent background tasks** | 8 | 연결과 스키마 작업의 상한(최소 1). 실행 중인 연결, 연결 해제, 연결 훅, 데이터베이스 전환, 스키마 로드·새로 고침·삭제, 키-값 스캔이 상한에 포함됩니다. 상한에 도달하면 실행 중인 작업이 끝날 때까지 새 연결, 데이터베이스 전환, 스키마나 테이블 세부 정보 로드, 키-값 페이지 이동은 알림과 함께 거부되며 대기열에 들어가지 않습니다. 쿼리, 데이터 그리드 로드, 내보내기, 대시보드, 변경 작업은 상한에 포함되지도 제한되지도 않습니다. |
 | **Pause auto-refresh on error** | On | 뷰에서 오류가 발생하면 자동 새로고침을 멈춥니다. |
 | **Auto-refresh only if tab is visible** | Off | 보고 있지 않은 탭은 새로고침을 건너뜁니다. |
+
+### 알림
+
+| 설정 | 옵션 | 기본값 |
+|---------|---------|---------|
+| **알림 표시 시간** | 4초, 8초, 15초, 닫을 때까지 유지 | 8초 |
+
+**알림 표시 시간** 은 알림이 스스로 닫히기까지 화면에 남는 시간을 정합니다.
+성공 및 정보 알림은 이 시간 뒤에 닫히고, 경고 알림은 두 배 뒤에 닫힙니다.
+오류 알림과 동작 버튼이나 진행률 표시줄이 있는 알림은 닫을 때까지 남습니다.
+**닫을 때까지 유지** 를 고르면 모든 알림의 자동 닫기가 꺼집니다. 알림 위에
+포인터를 올리면 타이머가 멈추고, 포인터가 벗어나면 다시 시작됩니다.
+
+알림은 문서 영역의 오른쪽 위에 쌓입니다. 한 번에 최대 네 개가 표시되며, 더
+오래된 알림은 *N개 더 보기* 항목으로 접혀 함께 펼치거나 함께 닫을 수 있습니다.
 
 ### 실행 안전(위험 쿼리 확인)
 
@@ -85,16 +136,27 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 쿼리가 반환하는 행 수를 제한합니다. 위의 세 가지 위험 쿼리 설정과는 별개의 실행
 안전 설정입니다. 1 이상의 정수만 허용하며 0으로 설정하거나 끌 수 없습니다. 다른
 값을 저장하면 오류가 표시되고 이전 제한이 유지됩니다. DBFlux는 쿼리 텍스트에
-`LIMIT`을 추가하는 대신 모든 에디터 쿼리와 함께 이 제한을 드라이버에 전달하며,
-결과에서 행이 생략되면 경고를 표시합니다. 여러 문장으로 된 스크립트에서는 모든 결과
-집합이 하나의 제한을 함께 사용하며, 모든 문장은 그대로 실행됩니다.
+`LIMIT`을 추가하는 대신 이 제한을 드라이버에 전달합니다.
+결과에서 행이 생략되면 결과 하단에는 행 수 대신 "처음 10,000개 행 로드됨"이
+표시됩니다. 읽기만 하는 단일 문장이면 하단에서 **행 수 세기**를 제공하며, 이는
+행을 가져오지 않고 문장을 `SELECT COUNT(*)` 안에서 실행해 "10,000/52,310개 행
+로드됨"을 표시합니다(SQL 연결만 해당). **모든 행 로드**는 같은 결과 탭에서 제한
+없이 문장을 다시 실행합니다. 두 동작은 테이블 메뉴(`m`)에도 있습니다. 여러 문장으로
+된 스크립트에서는 모든 결과 집합이 하나의 제한을 함께 사용하며, 모든 문장은 그대로
+실행됩니다.
 
-행 제한을 적용할 수 없는 드라이버는 제한을 무시하는 대신 실행 전에 쿼리를
-거부합니다. 따라서 MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift,
-CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`DELETE`
-및 put, update, delete 명령)에서는 에디터 쿼리가 "Operation not supported" 오류로
-실패합니다. 제한 값을 바꿔도 이 동작은 바뀌지 않습니다. 이 제한은 시간 제한을
-추가하지 않으며 Lua, Python, Bash 스크립트, 연결 훅, 메트릭에는 적용되지 않습니다.
+제한은 `execute`가 이를 적용하는 드라이버에만 전달됩니다: PostgreSQL,
+MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
+ClickHouse, Redshift, CloudWatch, DynamoDB. 이 중 일부는 응답 전체를 읽은 뒤에
+자르며, Redis는 테이블로 표시되는 응답만 제한합니다. 각 드라이버의 한계는 해당
+드라이버 페이지에 있습니다. 외부 RPC 드라이버는 DBFlux와 드라이버가 모두
+driver RPC 1.6 이상을 사용하고 드라이버가 `REQUEST_ROW_LIMIT`를 선언할 때 제한을
+받습니다. 그 밖의 외부 드라이버에는 제한이 전달되지 않고 쿼리는 제한 없이 실행됩니다. 제한이 없던 결과는 생략된 행이 없으므로
+전체 행 수를 표시하고, 하단에서 행 수 세기와 모든 행 로드를 제공하지 않습니다.
+결과가 클 수 있다면 문장에 `LIMIT`이나 `.limit()`을 넣으세요. 이 제한은 시간
+제한을 추가하지 않으며 Lua, Python, Bash 스크립트, 연결 훅, 메트릭에는 적용되지
+않습니다. [콘솔](CONSOLE.md)은 제한을 적용할 수 있는 드라이버에는 같은 제한을
+보내고, 나머지 드라이버에서는 제한 없이 명령을 실행합니다.
 
 ### 스토리지(나이틀리 빌드 전용)
 
@@ -196,6 +258,11 @@ DBFlux에는 세 가지 수준의 선택적 텔레메트리 모듈이 있습니�
 자신이 가리지 않는 상속 바인딩도 함께 나열합니다. 전체 기본 키맵은
 [키보드 참조](KEYBOARD.md)에 문서화되어 있습니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/keybindings-dark.webp">
+  <img src="../images/settings/keybindings-light.webp" alt="전역 단축키와 각 단축키를 바꾸는 연필 버튼이 나열된 설정 창의 키 바인딩 섹션">
+</picture>
+
 **단축키 변경.** 바인딩의 연필을 누르거나, 바인딩을 선택하고 `Enter`를 누른 뒤
 새 키를 누르세요. 단축키는 수정 키를 포함한 키 하나이거나 `g g`, `Ctrl+K Ctrl+S`
 처럼 최대 네 개의 키 시퀀스일 수 있습니다. 키를 차례로 누르면 1초 동안 멈춘 뒤
@@ -222,7 +289,7 @@ DBFlux에는 세 가지 수준의 선택적 텔레메트리 모듈이 있습니�
 `Editor`, `Results`, `DataTable`, `Input`, `Modal`, …), 창 이름 `Workspace`,
 `SettingsWindow`, `ConnectionManagerWindow`, 그리고 패널 이름 `ActivityRail`,
 `CommandSearch`, `SidebarPanel`, `CodeEditor`, `ResultPanel`, `RowInspector`,
-`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
+`KeyValueConsole`, `NativeConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
 `DashboardsPanel`,
 `SettingsSection`을 쓸 수 있습니다. 값으로는 `vim_mode`(`normal`, `insert`,
 `replace`, `visual`, `visual_line`, `visual_block`, Vim 편집이 켜져 있을 때만),

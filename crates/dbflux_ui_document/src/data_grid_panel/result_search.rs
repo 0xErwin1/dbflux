@@ -166,7 +166,7 @@ impl DataGridPanel {
                     div()
                         .id("result-statement-caption")
                         .flex_shrink_0()
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(EditorMetrics::RESULT_CAPTION_FONT)
                         .text_color(cx.theme().muted_foreground)
                         .child(caption.clone())

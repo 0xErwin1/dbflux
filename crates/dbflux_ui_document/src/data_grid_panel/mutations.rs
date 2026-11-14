@@ -1,4 +1,5 @@
 use super::utils::{extract_pk_columns, value_to_json};
+use super::*;
 use super::{
     DataGridEvent, DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm,
     PendingToast,
@@ -94,6 +95,13 @@ fn set_value_at_path(current: &mut Value, path: &[String], new_value: Value) -> 
         let is_last = idx + 1 == path.len();
 
         if is_last {
+            // The Array arm indexes items[item_idx] after the
+            // item_idx >= items.len() early return, so the bound is
+            // enforced inside the arm.
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "the Array arm indexes items[item_idx] only after item_idx >= items.len() returned false"
+            )]
             match cursor {
                 Value::Document(fields) => {
                     fields.insert(segment.clone(), new_value);
@@ -143,13 +151,23 @@ fn set_value_at_path(current: &mut Value, path: &[String], new_value: Value) -> 
 impl DataGridPanel {
     // === Row Editing ===
 
-    pub(super) fn queue_refresh_after_mutation_success(&mut self, cx: &mut Context<Self>) {
-        if self.pending_batch_remaining.is_some() {
-            self.process_next_batch_op(cx);
-        } else {
+    pub(super) fn queue_refresh_after_mutation_success(
+        &mut self,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if batch_owned {
+            self.batch_op_in_flight = false;
+
+            if self.pending_batch_remaining.is_some() {
+                self.process_next_batch_op(cx);
+                return;
+            }
+
             self.finish_close_after_apply(cx);
-            self.queue_reload_after_mutation(cx);
         }
+
+        self.queue_reload_after_mutation(cx);
     }
 
     /// Queue the reload that shows a landed mutation. Edits still staged on
@@ -176,6 +194,13 @@ impl DataGridPanel {
 
         let mut updated = false;
 
+        // doc_index() returned Some, so node_id.path has at least one element
+        // and [1..] is in range; the [1] index below is covered by the
+        // path.len() == 2 check.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "doc_index() returned Some, so node_id.path has a leading element and [1..] is in range"
+        )]
         if let Some(doc_col_idx) = self
             .result
             .columns
@@ -187,6 +212,10 @@ impl DataGridPanel {
         }
 
         if node_id.path.len() == 2 {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "path.len() == 2 is checked by the enclosing if, so index 1 exists"
+            )]
             let field_name = &node_id.path[1];
             if let Some(col_idx) = self
                 .result
@@ -278,6 +307,12 @@ impl DataGridPanel {
             DocumentFilter::new(serde_json::Value::Object(filter_obj))
         };
 
+        // doc_index() returned Some and path.len() < 2 returned early, so the
+        // path keeps its leading document segment and [1..] is in range.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "doc_index() returned Some and path.len() < 2 returned early, so [1..] is in range"
+        )]
         let field_path = node_id.path[1..].join(".");
         let parsed_json = parse_inline_document_value(new_value);
         let inline_value = json_to_inline_value(&parsed_json);
@@ -314,7 +349,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        panel.abandon_close_apply_independent(cx);
                     });
                 });
                 return;
@@ -376,7 +411,12 @@ impl DataGridPanel {
         .detach();
     }
 
-    pub(super) fn handle_save_row(&mut self, row_idx: usize, cx: &mut Context<Self>) {
+    pub(super) fn handle_save_row(
+        &mut self,
+        row_idx: usize,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
@@ -417,6 +457,7 @@ impl DataGridPanel {
                     table.clone(),
                     row_idx,
                     &changes_ref,
+                    batch_owned,
                     cx,
                 );
             }
@@ -425,12 +466,20 @@ impl DataGridPanel {
                 collection,
                 ..
             } => {
-                self.save_document(*profile_id, collection.clone(), row_idx, &changes_ref, cx);
+                self.save_document(
+                    *profile_id,
+                    collection.clone(),
+                    row_idx,
+                    &changes_ref,
+                    batch_owned,
+                    cx,
+                );
             }
             DataSource::QueryResult { .. } => {}
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn save_table_row(
         &mut self,
         profile_id: Uuid,
@@ -441,6 +490,7 @@ impl DataGridPanel {
             usize,
             &dbflux_components::components::data_table::model::CellValue,
         )],
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -476,13 +526,17 @@ impl DataGridPanel {
                 cx.notify();
             });
 
-            self.abandon_close_apply(cx);
+            if batch_owned {
+                self.abandon_close_apply(cx);
+            }
             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
             return;
         }
 
         if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
-            self.abandon_close_apply(cx);
+            if batch_owned {
+                self.abandon_close_apply(cx);
+            }
             report_error(
                 UserFacingError::new(
                     ErrorKind::User,
@@ -520,7 +574,9 @@ impl DataGridPanel {
                 cx.notify();
             });
 
-            self.abandon_close_apply(cx);
+            if batch_owned {
+                self.abandon_close_apply(cx);
+            }
             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
             return;
         }
@@ -567,7 +623,9 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        if batch_owned {
+                            panel.abandon_close_apply(cx);
+                        }
                     });
                 });
                 return;
@@ -584,7 +642,7 @@ impl DataGridPanel {
                         Ok(_) => panel.runner.complete_mutation(task_id, cx),
                         Err(e) => panel.runner.fail_mutation(task_id, e.to_string(), cx),
                     }
-                    panel.handle_save_result(row_idx, result, cx);
+                    panel.handle_save_result(row_idx, result, batch_owned, cx);
                 });
             });
         })
@@ -600,6 +658,7 @@ impl DataGridPanel {
             usize,
             &dbflux_components::components::data_table::model::CellValue,
         )],
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -632,7 +691,9 @@ impl DataGridPanel {
                 }
                 Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
                 _ => {
-                    self.abandon_close_apply(cx);
+                    if batch_owned {
+                        self.abandon_close_apply(cx);
+                    }
                     report_error(
                         UserFacingError::new(
                             ErrorKind::User,
@@ -701,7 +762,9 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        if batch_owned {
+                            panel.abandon_close_apply(cx);
+                        }
 
                         if let Some(table_state) = &panel.grid_table.table_state {
                             table_state.update(cx, |state, cx| {
@@ -728,7 +791,7 @@ impl DataGridPanel {
                         Ok(_) => panel.runner.complete_mutation(task_id, cx),
                         Err(e) => panel.runner.fail_mutation(task_id, e.to_string(), cx),
                     }
-                    panel.handle_save_result(row_idx, result, cx);
+                    panel.handle_save_result(row_idx, result, batch_owned, cx);
                 });
             });
         })
@@ -739,8 +802,13 @@ impl DataGridPanel {
         &mut self,
         row_idx: usize,
         result: Result<dbflux_core::CrudResult, dbflux_core::DbError>,
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
+        if batch_owned {
+            self.batch_op_in_flight = false;
+        }
+
         let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
@@ -752,9 +820,35 @@ impl DataGridPanel {
                     |warning| report_error(warning, cx),
                 );
 
+                let grid_columns: Vec<String> = self
+                    .result
+                    .columns
+                    .iter()
+                    .map(|column| column.name.clone())
+                    .collect();
+                let table_columns: Option<Vec<String>> =
+                    self.table_views.profile.as_ref().map(|profile| {
+                        profile
+                            .columns
+                            .iter()
+                            .map(|column| column.name.to_string())
+                            .collect()
+                    });
+                let returned_row = crud_result.returning_row.as_deref().and_then(|row| {
+                    super::table_views::returned_row_for_grid(
+                        row,
+                        &grid_columns,
+                        table_columns.as_deref(),
+                    )
+                });
+
                 table_state.update(cx, |state, cx| {
-                    if let Some(returning_row) = crud_result.returning_row {
-                        state.apply_returning_row(row_idx, &returning_row);
+                    match returned_row {
+                        Some(returned_row) => state.apply_returning_row(row_idx, &returned_row),
+                        None if crud_result.returning_row.is_some() => {
+                            state.keep_row_edits(row_idx)
+                        }
+                        None => {}
                     }
                     state.edit_buffer_mut().clear_row(row_idx);
                     cx.notify();
@@ -771,7 +865,9 @@ impl DataGridPanel {
                         .set_row_state(row_idx, RowState::Error(e.to_string()));
                     cx.notify();
                 });
-                self.abandon_close_apply(cx);
+                if batch_owned {
+                    self.abandon_close_apply(cx);
+                }
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Driver,
@@ -782,25 +878,40 @@ impl DataGridPanel {
             }
         }
 
-        // Chain to the next batch operation if in a pipeline
-        if self.pending_batch_remaining.is_some() {
-            self.process_next_batch_op(cx);
-        } else {
-            // The row that just landed was the batch's last one.
-            self.finish_close_after_apply(cx);
+        // Chain the next batch operation. An independent save (the value
+        // panel's Save, the toolbar's Save Row) must not advance or finish a
+        // batch it is not part of.
+        if batch_owned {
+            if self.pending_batch_remaining.is_some() {
+                self.process_next_batch_op(cx);
+            } else {
+                // The row that just landed was the batch's last one.
+                self.finish_close_after_apply(cx);
+            }
         }
 
         cx.notify();
     }
 
-    pub(super) fn handle_commit_insert(&mut self, insert_idx: usize, cx: &mut Context<Self>) {
+    pub(super) fn handle_commit_insert(
+        &mut self,
+        insert_idx: usize,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
         match &self.source {
             DataSource::Collection {
                 profile_id,
                 collection,
                 ..
             } => {
-                self.commit_insert_collection(*profile_id, collection.clone(), insert_idx, cx);
+                self.commit_insert_collection(
+                    *profile_id,
+                    collection.clone(),
+                    insert_idx,
+                    batch_owned,
+                    cx,
+                );
             }
             DataSource::Table {
                 profile_id,
@@ -813,6 +924,7 @@ impl DataGridPanel {
                     database.clone(),
                     table.clone(),
                     insert_idx,
+                    batch_owned,
                     cx,
                 );
             }
@@ -825,6 +937,7 @@ impl DataGridPanel {
         profile_id: Uuid,
         collection: CollectionRef,
         insert_idx: usize,
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -880,7 +993,9 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        if batch_owned {
+                            panel.abandon_close_apply(cx);
+                        }
                     });
                 });
                 return;
@@ -907,17 +1022,20 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
+                            panel.renumber_queued_inserts_after_removal(insert_idx);
                             panel.pending.toast = Some(PendingToast {
                                 message: dbflux_i18n::t!(
                                     "document.data.mutation.toast.document_inserted"
                                 ),
                                 is_error: false,
                             });
-                            panel.queue_refresh_after_mutation_success(cx);
+                            panel.queue_refresh_after_mutation_success(batch_owned, cx);
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            panel.abandon_close_apply(cx);
+                            if batch_owned {
+                                panel.abandon_close_apply(cx);
+                            }
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
@@ -943,6 +1061,7 @@ impl DataGridPanel {
         database: Option<String>,
         table_ref: TableRef,
         insert_idx: usize,
+        batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -987,7 +1106,9 @@ impl DataGridPanel {
         };
 
         if assignments.is_empty() {
-            self.abandon_close_apply(cx);
+            if batch_owned {
+                self.abandon_close_apply(cx);
+            }
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
@@ -1032,7 +1153,9 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        if batch_owned {
+                            panel.abandon_close_apply(cx);
+                        }
                     });
                 });
                 return;
@@ -1059,17 +1182,20 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
+                            panel.renumber_queued_inserts_after_removal(insert_idx);
                             panel.pending.toast = Some(PendingToast {
                                 message: dbflux_i18n::t!(
                                     "document.data.mutation.toast.row_inserted"
                                 ),
                                 is_error: false,
                             });
-                            panel.queue_refresh_after_mutation_success(cx);
+                            panel.queue_refresh_after_mutation_success(batch_owned, cx);
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            panel.abandon_close_apply(cx);
+                            if batch_owned {
+                                panel.abandon_close_apply(cx);
+                            }
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
@@ -1123,6 +1249,7 @@ impl DataGridPanel {
                 ..
             } = &self.source
             {
+                self.batch_op_in_flight = true;
                 self.commit_bulk_deletes_table(
                     *profile_id,
                     database.clone(),
@@ -1137,6 +1264,7 @@ impl DataGridPanel {
             ..
         } = &self.source
         {
+            self.batch_op_in_flight = true;
             self.commit_bulk_deletes_collection(
                 *profile_id,
                 collection.clone(),
@@ -1255,7 +1383,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        panel.abandon_close_apply_independent(cx);
                     });
                 });
                 return;
@@ -1400,7 +1528,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply(cx);
+                        panel.abandon_close_apply_independent(cx);
                     });
                 });
                 return;
@@ -1484,6 +1612,7 @@ impl DataGridPanel {
                     collection,
                     ..
                 } => {
+                    self.batch_op_in_flight = true;
                     self.commit_bulk_deletes_collection(
                         *profile_id,
                         collection.clone(),
@@ -1528,29 +1657,92 @@ impl DataGridPanel {
             return;
         };
 
-        if let Some(insert_idx) = remaining.pending_inserts.first().copied() {
-            remaining.pending_inserts.remove(0);
-            if !remaining.pending_inserts.is_empty() || !remaining.dirty_rows.is_empty() {
-                self.pending_batch_remaining = Some(remaining);
+        loop {
+            if let Some(insert_idx) = remaining.pending_inserts.first().copied() {
+                remaining.pending_inserts.remove(0);
+                if !self.queued_insert_is_pending(insert_idx, cx) {
+                    // The insert was removed before the pump reached it. It has
+                    // nothing to write, so it must not park the batch.
+                    continue;
+                }
+                if !remaining.pending_inserts.is_empty() || !remaining.dirty_rows.is_empty() {
+                    self.pending_batch_remaining = Some(remaining);
+                }
+                self.batch_op_in_flight = true;
+                self.handle_commit_insert(insert_idx, true, cx);
+                return;
             }
-            self.handle_commit_insert(insert_idx, cx);
+
+            if let Some(row_idx) = remaining.dirty_rows.first().copied() {
+                remaining.dirty_rows.remove(0);
+                if !self.queued_row_has_changes(row_idx, cx) {
+                    // The row's edits were cleared before the pump reached it.
+                    // It has nothing to write, so it must not park the batch.
+                    continue;
+                }
+                if !remaining.dirty_rows.is_empty() {
+                    self.pending_batch_remaining = Some(remaining);
+                }
+                self.batch_op_in_flight = true;
+                self.handle_save_row(row_idx, true, cx);
+                return;
+            }
+
+            self.finish_close_after_apply(cx);
+
+            self.queue_reload_after_mutation(cx);
+            cx.notify();
             return;
         }
+    }
 
-        if let Some(row_idx) = remaining.dirty_rows.first().copied() {
-            remaining.dirty_rows.remove(0);
-            if !remaining.dirty_rows.is_empty() {
-                self.pending_batch_remaining = Some(remaining);
-            }
-            self.handle_save_row(row_idx, cx);
+    /// Whether a queued insert still carries data to write.
+    fn queued_insert_is_pending(&self, insert_idx: usize, cx: &App) -> bool {
+        self.grid_table
+            .table_state
+            .as_ref()
+            .is_some_and(|table_state| {
+                table_state
+                    .read(cx)
+                    .edit_buffer()
+                    .get_pending_insert_by_idx(insert_idx)
+                    .is_some()
+            })
+    }
+
+    /// Whether a queued row still holds unsaved edits to write.
+    fn queued_row_has_changes(&self, row_idx: usize, cx: &App) -> bool {
+        self.grid_table
+            .table_state
+            .as_ref()
+            .is_some_and(|table_state| {
+                let state = table_state.read(cx);
+                state.is_editable() && !state.edit_buffer().row_changes(row_idx).is_empty()
+            })
+    }
+
+    /// Keeps the queued insert indices valid after one insert leaves the edit
+    /// buffer.
+    ///
+    /// `remove_pending_insert_by_idx` shifts every later insert down one, so the
+    /// indices the batch still holds would otherwise point at the wrong insert
+    /// or past the end.
+    pub(super) fn renumber_queued_inserts_after_removal(&mut self, removed_idx: usize) {
+        let Some(remaining) = self.pending_batch_remaining.as_mut() else {
             return;
+        };
+
+        // The removed insert may still be queued (the user deleted a row the
+        // batch had not started). Drop it, then shift the ones above it.
+        remaining
+            .pending_inserts
+            .retain(|queued| *queued != removed_idx);
+
+        for queued in &mut remaining.pending_inserts {
+            if *queued > removed_idx {
+                *queued -= 1;
+            }
         }
-
-        // All batch operations complete
-        self.finish_close_after_apply(cx);
-
-        self.queue_reload_after_mutation(cx);
-        cx.notify();
     }
 
     /// Reports a close that was waiting on the staged edits, once the batch has
@@ -1604,6 +1796,7 @@ impl DataGridPanel {
 
         // Collect PK identity for every row upfront before any async work
         let mut identities = Vec::with_capacity(count);
+        let mut unidentified = 0;
         {
             let state = table_state.read(cx);
             let model = state.model();
@@ -1622,10 +1815,11 @@ impl DataGridPanel {
                 }
 
                 if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
-                    log::error!(
+                    log::warn!(
                         "[BULK DELETE] Failed to build row identity for row {}",
                         row_idx
                     );
+                    unidentified += 1;
                     continue;
                 }
 
@@ -1716,52 +1910,15 @@ impl DataGridPanel {
                         |warning| report_error(warning, cx),
                     );
 
-                    let success_count = successful_results.len();
-                    if let Some(e) = last_error {
-                        panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                        panel.abandon_close_apply(cx);
-                        report_error(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::partial_delete_label(
-                                    crate::labels::MutationItemKind::Row,
-                                    success_count,
-                                    identities.len(),
-                                    &e.to_string(),
-                                ),
-                            ),
-                            cx,
-                        );
-                    } else {
-                        panel.runner.complete_mutation(task_id, cx);
-
-                        // Unmark all successfully deleted rows
-                        table_state_clone.update(cx, |state, cx| {
-                            for (row_idx, _) in identities.iter().take(success_count) {
-                                state.edit_buffer_mut().unmark_delete(*row_idx);
-                            }
-                            cx.notify();
-                        });
-
-                        panel.pending.toast = Some(PendingToast {
-                            message: crate::labels::bulk_delete_success_label(
-                                crate::labels::MutationItemKind::Row,
-                                success_count,
-                            ),
-                            is_error: false,
-                        });
-
-                        if panel.pending_batch_remaining.is_some() {
-                            panel.process_next_batch_op(cx);
-                        } else {
-                            // A batch of deletes parks on the confirmation instead
-                            // of staging remaining work, so the pump never runs
-                            // and this tail is what reports the batch.
-                            panel.finish_close_after_apply(cx);
-                            panel.queue_reload_after_mutation(cx);
-                        }
-                    }
-                    cx.notify();
+                    let outcome = BulkDeleteOutcome {
+                        kind: crate::labels::MutationItemKind::Row,
+                        task_id,
+                        attempted_rows: identities.iter().map(|(row_idx, _)| *row_idx).collect(),
+                        deleted: successful_results.len(),
+                        error: last_error,
+                        unidentified,
+                    };
+                    panel.finish_bulk_delete(&table_state_clone, outcome, cx);
                 });
             });
         })
@@ -1785,6 +1942,7 @@ impl DataGridPanel {
 
         // Collect filters for every document upfront
         let mut filters = Vec::with_capacity(count);
+        let mut unidentified = 0;
         {
             let state = table_state.read(cx);
             let model = state.model();
@@ -1811,10 +1969,11 @@ impl DataGridPanel {
                             dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s}))
                         }
                         _ => {
-                            log::error!(
+                            log::warn!(
                                 "[BULK DELETE] Invalid _id value for document at row {}",
                                 row_idx
                             );
+                            unidentified += 1;
                             continue;
                         }
                     }
@@ -1913,56 +2072,217 @@ impl DataGridPanel {
                         |warning| report_error(warning, cx),
                     );
 
-                    let success_count = successful_results.len();
-                    if let Some(e) = last_error {
-                        panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                        panel.abandon_close_apply(cx);
-                        report_error(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::partial_delete_label(
-                                    crate::labels::MutationItemKind::Document,
-                                    success_count,
-                                    filters.len(),
-                                    &e.to_string(),
-                                ),
-                            ),
-                            cx,
-                        );
-                    } else {
-                        panel.runner.complete_mutation(task_id, cx);
-
-                        table_state_clone.update(cx, |state, cx| {
-                            for (row_idx, _) in filters.iter().take(success_count) {
-                                state.edit_buffer_mut().unmark_delete(*row_idx);
-                            }
-                            cx.notify();
-                        });
-
-                        panel.pending.toast = Some(PendingToast {
-                            message: crate::labels::bulk_delete_success_label(
-                                crate::labels::MutationItemKind::Document,
-                                success_count,
-                            ),
-                            is_error: false,
-                        });
-
-                        if panel.pending_batch_remaining.is_some() {
-                            panel.process_next_batch_op(cx);
-                        } else {
-                            // A batch of deletes parks on the confirmation instead
-                            // of staging remaining work, so the pump never runs
-                            // and this tail is what reports the batch.
-                            panel.finish_close_after_apply(cx);
-                            panel.queue_reload_after_mutation(cx);
-                        }
-                    }
-                    cx.notify();
+                    let outcome = BulkDeleteOutcome {
+                        kind: crate::labels::MutationItemKind::Document,
+                        task_id,
+                        attempted_rows: filters.iter().map(|(row_idx, _)| *row_idx).collect(),
+                        deleted: successful_results.len(),
+                        error: last_error,
+                        unidentified,
+                    };
+                    panel.finish_bulk_delete(&table_state_clone, outcome, cx);
                 });
             });
         })
         .detach();
     }
+}
+
+impl DataGridPanel {
+    // === Panel Events ===
+
+    pub fn request_hide(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DataGridEvent::RequestHide);
+    }
+
+    pub fn request_toggle_maximize(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DataGridEvent::RequestToggleMaximize);
+    }
+
+    /// Starts applying the staged edits because a close is waiting on them.
+    ///
+    /// Returns `true` when an apply is in flight, which is also when the caller
+    /// must leave the tab open: the grid asks for the close itself once the edits
+    /// land (`DataGridEvent::RequestClose`). `false` means there was nothing to
+    /// apply, so the caller may close the tab now.
+    pub fn apply_for_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.pending_edit_counts(cx) == (0, 0, 0) {
+            return false;
+        }
+
+        // Armed before the apply starts: a source that answers synchronously can
+        // drain the whole batch inside `request_save_all`.
+        self.close_after_apply = true;
+
+        // A live delete confirmation resumes the batch it was held for, and a
+        // batch already in flight is the same apply. Re-requesting either would
+        // duplicate the rows they already carry.
+        if self.batch_op_in_flight {
+            // A write is already running; it chains the rows it still holds.
+            return true;
+        }
+        if self.pending_delete_confirm.is_some() {
+            return true;
+        }
+        if self.pending_batch_remaining.is_some() {
+            // The pump holds unstarted rows for the write in flight; re-entering
+            // it here would run two writes at once.
+            return true;
+        }
+
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            self.close_after_apply = false;
+            return false;
+        };
+
+        table_state.update(cx, |state, cx| state.request_save_all(cx));
+        true
+    }
+
+    /// Shows the result of a bulk delete in the grid and reports it.
+    ///
+    /// Deletes run one by one and stop at the first error, so a failed run can
+    /// already have deleted rows. Those rows lose their mark, so saving again
+    /// does not retry a row that no longer exists, and a reload drops them from
+    /// the grid while carrying the marks of the rows that were not deleted over
+    /// by identity.
+    fn finish_bulk_delete(
+        &mut self,
+        table_state: &Entity<DataTableState>,
+        outcome: BulkDeleteOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        let BulkDeleteOutcome {
+            kind,
+            task_id,
+            attempted_rows,
+            deleted,
+            error,
+            unidentified,
+        } = outcome;
+
+        table_state.update(cx, |state, cx| {
+            for row_idx in attempted_rows.iter().take(deleted) {
+                state.edit_buffer_mut().unmark_delete(*row_idx);
+            }
+            cx.notify();
+        });
+
+        if let Some(error) = error {
+            self.runner.fail_mutation(task_id, error.to_string(), cx);
+            self.abandon_close_apply(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    crate::labels::partial_delete_label(
+                        kind,
+                        deleted,
+                        attempted_rows.len(),
+                        &error.to_string(),
+                    ),
+                ),
+                cx,
+            );
+            if unidentified > 0 {
+                report_unidentified_deletes(kind, deleted, unidentified, cx);
+            }
+            if deleted > 0 {
+                self.queue_reload_after_mutation(cx);
+            }
+            cx.notify();
+            return;
+        }
+
+        self.runner.complete_mutation(task_id, cx);
+
+        if unidentified > 0 {
+            // The rows left out are still staged, so a close waiting on this
+            // apply must keep the tab instead of closing over them.
+            self.abandon_close_apply_independent(cx);
+            report_unidentified_deletes(kind, deleted, unidentified, cx);
+        } else {
+            self.pending.toast = Some(PendingToast {
+                message: crate::labels::bulk_delete_success_label(kind, deleted),
+                is_error: false,
+            });
+        }
+
+        self.batch_op_in_flight = false;
+        if self.pending_batch_remaining.is_some() {
+            self.process_next_batch_op(cx);
+        } else {
+            // A batch of deletes parks on the confirmation instead of staging
+            // remaining work, so the pump never runs and this tail is what
+            // reports the batch.
+            self.finish_close_after_apply(cx);
+            self.queue_reload_after_mutation(cx);
+        }
+        cx.notify();
+    }
+
+    /// Gives up on the apply a close is waiting on, because one of its operations
+    /// failed.
+    ///
+    /// The batch never chains past a failure, so waiting for it to drain would
+    /// leave the intent armed over a batch that can never finish — and the next
+    /// unrelated row save would drain that batch and close a tab nobody asked to
+    /// close. Reporting the run as not landed here is what keeps the tab open with
+    /// the rows that did not land.
+    pub(super) fn abandon_close_apply(&mut self, cx: &mut Context<Self>) {
+        self.batch_op_in_flight = false;
+        // The batch never chains past a failure, so the rows it still held are
+        // gone with it. Leaving them queued would make the next close mistake
+        // them for a write still in flight and park instead of applying.
+        self.pending_batch_remaining = None;
+
+        if std::mem::take(&mut self.close_after_apply) {
+            cx.emit(DataGridEvent::MutationFinished { landed: false });
+        }
+    }
+
+    /// Reports a failed mutation that is not part of the close-apply batch.
+    ///
+    /// It may still be the failure the user is looking at, so a waiting close is
+    /// told the run did not land. It must not clear the batch state, which
+    /// belongs to the batch operation still in flight: doing so would let the
+    /// next close start a second write beside it.
+    fn abandon_close_apply_independent(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.close_after_apply) {
+            cx.emit(DataGridEvent::MutationFinished { landed: false });
+        }
+    }
+}
+
+/// What a bulk delete did, as the grid needs it to show the result.
+struct BulkDeleteOutcome {
+    kind: crate::labels::MutationItemKind,
+    task_id: Uuid,
+    /// Rows the delete ran against, in the order it ran them.
+    attempted_rows: Vec<usize>,
+    /// How many of `attempted_rows`, from the first, were deleted.
+    deleted: usize,
+    /// The error that stopped the run.
+    error: Option<dbflux_core::DbError>,
+    /// Marked rows left out because their identity could not be read.
+    unidentified: usize,
+}
+
+/// Tells the user that marked rows were left out of a delete, as a warning:
+/// the rest of the delete may have landed.
+fn report_unidentified_deletes(
+    kind: crate::labels::MutationItemKind,
+    deleted: usize,
+    unidentified: usize,
+    cx: &mut App,
+) {
+    report_error(
+        UserFacingError::new(
+            ErrorKind::Driver,
+            crate::labels::bulk_delete_unidentified_label(kind, deleted, unidentified),
+        )
+        .with_severity(dbflux_core::observability::EventSeverity::Warn),
+        cx,
+    );
 }
 
 #[cfg(test)]

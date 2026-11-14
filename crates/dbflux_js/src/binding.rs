@@ -13,7 +13,7 @@
 /// JavaScript evaluated once per run, before the user's script, to define
 /// `db` and `print`. All navigation and array semantics live here; the only
 /// calls back into Rust are `__dispatch` and `__print`.
-pub const BOOTSTRAP_SOURCE: &str = r#"
+pub(crate) const BOOTSTRAP_SOURCE: &str = r#"
 (function () {
   var DB_LEVEL_METHODS = ["dropDatabase","stats","dbStats","serverStatus","runCommand","getCollectionNames","listCollections","createCollection"];
   var CURSOR_ONLY = ["hasNext","next","limit","skip","sort","count"];

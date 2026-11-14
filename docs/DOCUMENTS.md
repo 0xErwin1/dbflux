@@ -6,10 +6,21 @@ with the Tree / Table / JSON control or press `t`. The view you pick stays for
 the tab across pages and refreshes. The table puts `_id` first, then the fields
 in the order the page returns them.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/documents/collection-dark.webp">
+  <img src="images/documents/collection-light.webp" alt="A MongoDB collection opened in the Tree view, with one collapsed node per document">
+</picture>
+
 - A nested object shows its field count and an array its length. `e` on an
   object column expands it in place into a column group; `Enter` on an object or
   array steps into it and lists its contents as rows, with a breadcrumb;
   `Backspace` steps out.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/documents/tree-view-dark.webp">
+  <img src="images/documents/tree-view-light.webp" alt="The Tree view with one document expanded, showing nested objects with their field counts and an array with its length">
+</picture>
+
 - The footer counts documents. When the driver can only estimate how many
   documents match, the count is labelled as an estimate.
 - Drivers that support it (MongoDB) add a query bar with four slots — `filter`,
@@ -59,3 +70,22 @@ in the order the page returns them.
   server after the page loaded, a card says whether your change can apply on
   top, shows the exact update, and offers **Reload document** or **Apply my
   change**.
+- Drivers that offer a native console (MongoDB) dock it under the collection:
+  `` Ctrl+` `` shows or hides it. It runs one shell command at a time, such as
+  `db.orders.find({"status": "paid"})`, against the collection's database and
+  prints documents as one JSON object per line. A command that writes
+  refreshes the documents on screen. See [Console](CONSOLE.md).
+
+## JSON columns in a table
+
+A relational table can hold documents too. On PostgreSQL, a table with a `json`
+or `jsonb` column opens in the grid as usual and adds a **Tree** view of the
+same rows: switch with the Table / Tree button at the end of the filter row, or
+press `t` in the grid. Each row becomes one document, with the JSON values
+expanded into nested fields. The tree is read-only; edits go through the grid.
+The view you pick stays for the tab across pages and refreshes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/documents/json-columns-dark.webp">
+  <img src="images/documents/json-columns-light.webp" alt="The PostgreSQL products table in the Tree view, with the first row expanded and its jsonb attributes column shown as nested fields">
+</picture>

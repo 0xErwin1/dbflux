@@ -3,7 +3,6 @@ use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{Icon, SurfaceRole, Text, surface};
 use crate::tokens::{FontSizes, Heights, Spacing};
-use crate::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
@@ -134,7 +133,7 @@ impl Render for ModalDeleteConnection {
                     .child(
                         div()
                             .text_size(FontSizes::SM)
-                            .font_family(AppFonts::MONO)
+                            .font_family(crate::fonts::editor_family(cx))
                             .text_color(theme.foreground)
                             .child(connection_name),
                     ),

@@ -89,9 +89,13 @@ pub fn project_aggregate_kinds(spec: &VisualQuerySpec, columns: &mut [ColumnMeta
             break;
         }
 
-        let existing_kind = columns[col_index].kind;
+        let Some(column) = columns.get_mut(col_index) else {
+            break;
+        };
 
-        columns[col_index].kind = match agg.function {
+        let existing_kind = column.kind;
+
+        column.kind = match agg.function {
             AggFn::Count | AggFn::CountStar | AggFn::CountDistinct => ColumnKind::Integer,
             AggFn::Avg => ColumnKind::Float,
             AggFn::Sum => match existing_kind {

@@ -18,7 +18,7 @@ use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, StepperMetrics};
 
 /// Width of the phase rail (P1Migrate).
-pub const WIZARD_RAIL_WIDTH: Pixels = px(220.0);
+pub(super) const WIZARD_RAIL_WIDTH: Pixels = px(220.0);
 
 /// Modal width every data wizard opens at.
 pub const WIZARD_MODAL_WIDTH: Pixels = px(1000.0);

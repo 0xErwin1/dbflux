@@ -24,7 +24,32 @@ pub fn build_ssh_config(
     auth_method: SshAuthSelection,
     key_path_str: &str,
 ) -> SshTunnelConfig {
-    let parsed_port = port.parse().unwrap_or(22);
+    build_ssh_config_with_alias(host, port, user, auth_method, key_path_str, None)
+}
+
+/// [`build_ssh_config`] for a form that carries an SSH config host
+/// selection. While an alias is active the alias is the only source of the
+/// target (A7): the manual `host` and `user` are saved empty and `port`
+/// keeps 22, so no stored snapshot of the resolved values can be dialed.
+pub fn build_ssh_config_with_alias(
+    host: &str,
+    port: &str,
+    user: &str,
+    auth_method: SshAuthSelection,
+    key_path_str: &str,
+    ssh_config_host: Option<&str>,
+) -> SshTunnelConfig {
+    // While an alias is active it is the only source of the target (A7):
+    // the manual values are discarded, so neither the save path nor the
+    // test path can dial a stale snapshot of the resolved host.
+    let (host, parsed_port, user) = match ssh_config_host {
+        Some(_) => (String::new(), 22, String::new()),
+        None => (
+            host.to_string(),
+            port.parse().unwrap_or(22),
+            user.to_string(),
+        ),
+    };
 
     let auth = match auth_method {
         SshAuthSelection::PrivateKey => {
@@ -39,10 +64,11 @@ pub fn build_ssh_config(
     };
 
     SshTunnelConfig {
-        host: host.to_string(),
+        host,
         port: parsed_port,
-        user: user.to_string(),
+        user,
         auth_method: auth,
+        ssh_config_host: ssh_config_host.map(str::to_string),
     }
 }
 
@@ -60,5 +86,47 @@ pub fn get_ssh_secret(
         None
     } else {
         Some(secret)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selecting_an_alias_stores_it_with_empty_manual_fields_and_default_port() {
+        let config = build_ssh_config_with_alias(
+            "manual.example.com",
+            "2200",
+            "manualuser",
+            SshAuthSelection::PrivateKey,
+            "",
+            Some("alpha"),
+        );
+
+        assert_eq!(config.ssh_config_host.as_deref(), Some("alpha"));
+        assert_eq!(
+            config.host, "",
+            "the alias is the only source of the target (A7)"
+        );
+        assert_eq!(config.user, "");
+        assert_eq!(config.port, 22);
+    }
+
+    #[test]
+    fn clearing_the_alias_stores_none_and_the_manual_fields_are_the_target_again() {
+        let config = build_ssh_config_with_alias(
+            "manual.example.com",
+            "2200",
+            "manualuser",
+            SshAuthSelection::PrivateKey,
+            "",
+            None,
+        );
+
+        assert_eq!(config.ssh_config_host, None);
+        assert_eq!(config.host, "manual.example.com");
+        assert_eq!(config.user, "manualuser");
+        assert_eq!(config.port, 2200);
     }
 }

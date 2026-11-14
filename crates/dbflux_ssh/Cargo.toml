@@ -36,3 +36,6 @@ tempfile = "3"
 
 [features]
 vendored-openssl = ["ssh2/vendored-openssl"]
+
+[lints]
+workspace = true

@@ -45,6 +45,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::AUTHENTICATION.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
             | DriverCapabilities::TRANSACTIONS.bits()
             | DriverCapabilities::VIEWS.bits()
             | DriverCapabilities::INDEXES.bits()
@@ -62,7 +63,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::EXPORT_JSON.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
             | DriverCapabilities::MULTI_STATEMENT.bits()
-            | DriverCapabilities::BULK_INSERT.bits(),
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits(),
     ),
     default_port: None,
     uri_scheme: "libsql".into(),
@@ -74,6 +76,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: true,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -153,7 +156,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         // transaction-control classifier before they reach the server.
         supports_savepoints: false,
         supports_nested_transactions: false,
-        supports_read_only: true,
+        supports_read_only: false,
         supports_deferrable: true,
     }),
     limits: Some(DriverLimits {
@@ -318,6 +321,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn declares_request_row_limit() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
+
+    #[test]
     fn url_validation_accepts_remote_and_local_endpoints() {
         assert!(validate_url("libsql://db-org.turso.io").is_ok());
         assert!(validate_url("turso://db-org.turso.io/").is_ok());
@@ -355,6 +367,19 @@ mod tests {
         assert!(!extracted.contains_key("password"));
 
         assert!(driver.build_config(&FormValues::new()).is_err());
+    }
+
+    /// libSQL server keeps SQLite's double-quoted string literal fallback:
+    /// `SELECT "nope" FROM t` returns the text `nope` on v0.24.33.
+    #[test]
+    fn turso_declares_that_it_misreads_unknown_quoted_identifiers() {
+        let syntax = TursoDriver::new()
+            .metadata()
+            .syntax
+            .clone()
+            .expect("Turso declares its syntax");
+
+        assert!(syntax.misreads_unknown_quoted_identifiers);
     }
 
     #[test]

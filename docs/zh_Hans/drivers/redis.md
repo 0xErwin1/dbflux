@@ -17,6 +17,7 @@
 - 连接模式：手动（主机/端口/用户/密码/数据库）与 URI 模式。URI 模式接受 `redis://` 与 `rediss://` 连接串。
 - 通过 `SELECT <db>` 支持多个逻辑数据库（`MULTIPLE_DATABASES`）。当前数据库索引由连接记录。
 - 支持可选用户名 + 密码的身份认证（`AUTHENTICATION`）。
+- 原生命令控制台（`NATIVE_CONSOLE`）：键浏览器会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 针对当前打开的数据库一次运行一条命令，并使用与编辑器相同的语言服务校验与危险命令检测、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 连接时通过 `CLIENT SETNAME` 把客户端身份上报给服务器（`dbflux/<version>`，可在 `CLIENT LIST` 中看到）；这是尽力而为的行为，因为部分托管服务商会限制 `CLIENT` 命令。
 - 连接时进行尽力而为的写入权限探测（`probe_write_privilege`）：先尝试 `ACL WHOAMI` + `ACL DRYRUN`，当 `ACL` 不可用时（旧版服务器或受限的托管服务）回退到一次带命名空间的短 TTL `SET ... NX` / `DEL`；副本返回的 `READONLY` 或 `NOPERM` 拒绝会判定为只读连接。
 - TLS/SSL 支持三种模式（`off`、`on`、`verify`）：
@@ -30,7 +31,7 @@
   - `sentinel` 通过 `SentinelClient` 连接，从一个或多个 Sentinel 节点解析具名的主节点（主主机/端口加上任何已配置的额外节点）。解析完成后，驱动程序会执行 `CLIENT SETNAME`、`PING`，以及一次 `ROLE` 健全性检查，确认解析到的节点确实是主节点。
   - Sentinel 故障转移恢复：在由 Sentinel 支撑的连接上发生连接类失败（连接断开、IO 错误）时，会恰好触发一次通过 Sentinel 的重新解析，以及对失败命令的一次重试，之后才把错误呈现出来。
 - 键浏览与发现：
-  - 基于游标的键扫描（`KV_SCAN`、`PaginationStyle::Cursor`）。一次分页请求会持续执行 `SCAN`，直到该页包含所请求数量的键或扫描结束，因此匹配稀疏的 `MATCH` 过滤器不会产生空页。每页最多 1000 次 `SCAN` 往返、耗时最多 500 ms；达到上限时，该页返回目前找到的键以及待处理的游标。`SCAN` 重复返回的键在每页中只列出一次，一页最多可能比请求的大小多出一个 `SCAN` 批次。该页的键类型通过一个管道一次获取。在 Cluster 连接上，单纯的 `SCAN` 没有单节点含义，因此驱动程序在同一分页上限内依次扫描待处理的主节点：每个节点的游标独立跟踪，聚合后的游标以不透明的 JSON 对象往返，把 `"<host>:<port>"` 映射到其待处理的 `SCAN` 游标。当所有主节点都报告游标 0 时，整体扫描才算结束。
+  - 基于游标的键扫描（`KV_SCAN`、`PaginationStyle::Cursor`）。一次分页请求会持续执行 `SCAN`，直到该页包含所请求数量的键或扫描结束，因此匹配稀疏的 `MATCH` 过滤器不会产生空页。每页最多 1000 次 `SCAN` 往返、耗时最多 500 ms；达到上限时，该页返回目前找到的键以及待处理的游标。`SCAN` 重复返回的键在每页中只列出一次，一页最多可能比请求的大小多出一个 `SCAN` 批次。该页的键类型通过一个管道一次获取。在 Cluster 连接上，单纯的 `SCAN` 没有单节点含义，因此驱动程序在同一分页上限内依次扫描待处理的主节点：每个节点的游标独立跟踪，聚合后的游标以不透明的 JSON 对象往返，把 `"<host>:<port>"` 映射到其待处理的 `SCAN` 游标。当所有主节点都报告游标 0 时，整体扫描才算结束。取消键扫描会让该页在下一次 `SCAN` 往返之前停止（`KeyValueApi::scan_keys_with_cancel`）；已经发出的往返会先完成。
   - 键空间键总数（`key_count`）：对所选数据库执行 `DBSIZE`；在 Cluster 连接上为所有主节点 `DBSIZE` 之和。键浏览器会在标题栏中显示该总数，并在键列表底栏中显示为“已加载 N / 总数”。
   - 服务器端类型过滤（`KeyValueFeatures::SCAN_TYPE_FILTER`）：带类型的扫描请求会发送 `SCAN ... TYPE <类型>`，因此过滤覆盖整个键空间，而不只是已加载的键。JSON 键按 `ReJSON-RL` 模块类型过滤。每页都会报告服务器检查过的键数估计值（每次往返的 `COUNT`），键浏览器在过滤搜索进行时显示该数值。
   - 批量键元数据（`KeyValueFeatures::KEY_METADATA`）：在一个管道中获取多个键的过期时间（`PTTL`）与内存大小（`MEMORY USAGE`）（Cluster 连接上使用集群管道），并为当前打开的键获取 `OBJECT ENCODING`。键浏览器只请求屏幕上可见的行。当服务器拒绝 `MEMORY USAGE` 或 `OBJECT ENCODING` 时，该批次会仅用 `PTTL` 重试。
@@ -82,7 +83,8 @@ Schema 探查会为每个逻辑数据库报告键数；`INFO keyspace` 中没有
 
 ## 限制
 
-- `execute()` 对任何请求的行数限制（包括零）或语句超时，在发送命令前返回 `NotSupported`。未请求这些保护的命令仍可执行；默认编辑器无法保证这些保护。
+- `execute()` 对请求的语句超时，以及实例指标或检查器查询上的行数上限，在发送命令前返回 `NotSupported`。
+- 编辑器行数上限只约束以表格显示的回复（由标量值组成的 array、set 或 push 回复）。嵌套数组和 map 回复以文本显示，不受约束；完整回复仍会先从服务器读取，然后才截断。
 
 - 不支持 SQL；查询必须以 Redis 命令的形式书写。
 
@@ -93,7 +95,8 @@ Schema 探查会为每个逻辑数据库报告键数；`INFO keyspace` 中没有
 - 不支持查询取消（未设置 `QUERY_CANCELLATION`）；长时间运行的命令无法从界面中止。
 - 不支持 upsert（`supports_upsert: false`）、不支持 `RETURNING`，也不支持批量更新（`supports_bulk_update: false`）。
 - DDL 能力全部禁用（没有表、视图、索引、schema）—— 这是键值存储，不是关系型数据库。
-- 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务、只读事务与可延迟（deferrable）事务。
+- 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务与可延迟（deferrable）事务。
+- 只读请求（`ReadOnlyEnforcement::Required`，用于 MCP 读取类脚本和编辑器自动刷新）由 DBFlux 强制，而不是由服务器强制。发送命令之前，驱动程序通过 `COMMAND INFO` 向服务器查询其标志；除非服务器将其标记为 `readonly`（或命令为 `PING`、`ECHO`、`TIME`、`INFO`）且没有报告其他标志（如 `write`、`admin`、`blocking`、`pubsub` 或 `may_replicate`），否则拒绝该命令；驱动程序不认识的标志同样会导致拒绝。事务、`SELECT`、订阅、`MONITOR`、所有脚本命令（`EVAL`、`EVALSHA`、`FCALL` 及其只读形式 `EVAL_RO`、`EVALSHA_RO`、`FCALL_RO`）、`PFCOUNT`（在 Redis 6.0 及更早版本上会重写缓存值）、模块命令以及服务器无法描述的命令都会被拒绝，计数为负的 `SRANDMEMBER`、`HRANDFIELD` 和 `ZRANDMEMBER` 也会被拒绝。只读模式保护的是数据，而不是可用性：`KEYS *` 或大型 `SMEMBERS`、`HGETALL` 等开销较大的读取仍会运行，并且 DBFlux 不设置 Redis 读取超时，因此慢命令会一直占用连接，直到服务器响应。带子命令的命令（如 `CONFIG`、`CLIENT` 或 `OBJECT`）按子命令自己的条目判断，只有 Redis 7 及更高版本提供该条目，因此在更旧的服务器上会被拒绝。Redis Cluster 连接以及无法响应 `COMMAND INFO` 的服务器会以 `NotSupported` 拒绝只读请求。对于兼容服务器（Valkey、KeyDB、DragonflyDB），仅依据它们报告的标志。没有写权限的 Redis ACL 用户才是真正的边界。
 - 未暴露 Pub/Sub（未设置 `PUBSUB` 能力）。
 - 启用 URI 模式时无法使用 SSH 隧道；隧道路径只为手动连接模式接入。不支持把 SSH 隧道与 Cluster/Sentinel 的额外种子节点组合使用：隧道只转发主主机/端口，因此额外节点无法通过它访问。
 - 可以列出、检查流消费组并从中认领条目，但不能通过键值 API 创建、删除或重置消费组；请在控制台或编辑器中使用 `XGROUP` 命令。

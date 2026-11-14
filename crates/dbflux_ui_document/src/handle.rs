@@ -1,3 +1,4 @@
+use crate::data_grid_panel::ReferencedRowTarget;
 use dbflux_components::SqlPreviewContext;
 
 /// Events that a document can emit.
@@ -29,10 +30,12 @@ pub enum DocumentEvent {
     },
     /// The document wants to close itself.
     ///
-    /// Emitted only for work the unsaved-changes dialog asked for that actually
-    /// landed: a save a code document wrote, or the staged edits a grid applied.
-    /// It is what lets a tab close after its asynchronous write instead of over
-    /// it, and only documents that report their own completion emit it.
+    /// Emitted for work the unsaved-changes dialog asked for that actually
+    /// landed (a save a code document wrote, or the staged edits a grid
+    /// applied), which lets a tab close after its asynchronous write instead of
+    /// over it. A read-only document also emits it when the user declines to
+    /// open what the tab was created for, such as a Parquet object that would
+    /// need a full download.
     RequestClose,
     /// The document area was clicked and wants focus.
     RequestFocus,
@@ -82,5 +85,10 @@ pub enum DocumentEvent {
     OpenEditorWithContent {
         profile_id: uuid::Uuid,
         sql: String,
+    },
+    /// Open the row a foreign-key value points at (see
+    /// [`ReferencedRowTarget`]).
+    OpenReferencedRow {
+        target: ReferencedRowTarget,
     },
 }

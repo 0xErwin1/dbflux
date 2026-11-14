@@ -1,0 +1,447 @@
+---
+/**
+ * The audit document from the IslAudit board. The first row is the demo's own
+ * update, which the script grows in once the audit viewer opens.
+ */
+import Glyph from '../../Glyph.astro';
+
+type Level = 'INFO' | 'WARN' | 'ERROR';
+type Outcome = 'Success' | 'Pending' | 'Denied' | 'Failure';
+
+interface AuditEvent {
+  time: string;
+  level: Level;
+  category: string;
+  summary: string;
+  actor: string;
+  duration: string;
+  outcome: Outcome;
+}
+
+const CATEGORY_ICONS: Record<string, string> = {
+  Mcp: 'bot',
+  Query: 'play',
+  Governance: 'scale',
+  Hook: 'plug',
+  Script: 'square-terminal',
+  Config: 'key-round',
+  Connection: 'database',
+  System: 'zap',
+};
+
+const OUTCOME_TONES: Record<Outcome, string> = {
+  Success: 'ld-success',
+  Pending: 'ld-accent',
+  Denied: 'ld-danger',
+  Failure: 'ld-danger',
+};
+
+const update: AuditEvent = {
+  time: '14:02:14.530',
+  level: 'INFO',
+  category: 'Query',
+  summary: 'UPDATE orders SET status … (sha256:a41c…07b3)',
+  actor: 'you',
+  duration: '6 ms',
+  outcome: 'Success',
+};
+
+const before: AuditEvent[] = [
+  {
+    time: '14:02:11.204',
+    level: 'INFO',
+    category: 'Mcp',
+    summary: 'select_data on shop-pg',
+    actor: 'claude-desktop',
+    duration: '38 ms',
+    outcome: 'Success',
+  },
+  {
+    time: '14:02:09.887',
+    level: 'INFO',
+    category: 'Query',
+    summary: 'SELECT … FROM orders (sha256:1d77…c0e2)',
+    actor: 'you',
+    duration: '12 ms',
+    outcome: 'Success',
+  },
+];
+
+const expanded: AuditEvent = {
+  time: '14:01:58.310',
+  level: 'WARN',
+  category: 'Governance',
+  summary: 'update_records parked for approval',
+  actor: 'claude-desktop',
+  duration: '—',
+  outcome: 'Pending',
+};
+
+const after: AuditEvent[] = [
+  {
+    time: '14:01:40.002',
+    level: 'INFO',
+    category: 'Hook',
+    summary: 'pre_connect vpn-up',
+    actor: 'system',
+    duration: '1.2 s',
+    outcome: 'Success',
+  },
+  {
+    time: '14:00:52.771',
+    level: 'ERROR',
+    category: 'Mcp',
+    summary: 'drop_table denied by policy analyst',
+    actor: 'claude-desktop',
+    duration: '—',
+    outcome: 'Denied',
+  },
+  {
+    time: '14:00:17.113',
+    level: 'INFO',
+    category: 'Script',
+    summary: 'nightly-report.lua',
+    actor: 'you',
+    duration: '4.8 s',
+    outcome: 'Success',
+  },
+  {
+    time: '13:59:48.640',
+    level: 'INFO',
+    category: 'Config',
+    summary: 'profile staging-pg updated: ssh_host',
+    actor: 'you',
+    duration: '—',
+    outcome: 'Success',
+  },
+  {
+    time: '13:59:02.018',
+    level: 'ERROR',
+    category: 'Query',
+    summary: 'syntax error at or near "FORM"',
+    actor: 'you',
+    duration: '3 ms',
+    outcome: 'Failure',
+  },
+  {
+    time: '13:58:40.441',
+    level: 'INFO',
+    category: 'Mcp',
+    summary: 'list_tables on shop-pg',
+    actor: 'claude-desktop',
+    duration: '9 ms',
+    outcome: 'Success',
+  },
+  {
+    time: '13:58:11.900',
+    level: 'INFO',
+    category: 'Governance',
+    summary: 'update_records approved by you',
+    actor: 'you',
+    duration: '—',
+    outcome: 'Success',
+  },
+  {
+    time: '13:57:44.310',
+    level: 'INFO',
+    category: 'Connection',
+    summary: 'connect catalog-mongo',
+    actor: 'you',
+    duration: '210 ms',
+    outcome: 'Success',
+  },
+  {
+    time: '13:57:30.005',
+    level: 'INFO',
+    category: 'Query',
+    summary: 'db.orders.find({status: …}) (sha256:5c02…aa91)',
+    actor: 'you',
+    duration: '38 ms',
+    outcome: 'Success',
+  },
+  {
+    time: '13:56:58.712',
+    level: 'WARN',
+    category: 'Hook',
+    summary: 'post_connect metrics-push exited 1, policy warn',
+    actor: 'system',
+    duration: '2.1 s',
+    outcome: 'Failure',
+  },
+  {
+    time: '13:56:12.330',
+    level: 'INFO',
+    category: 'Query',
+    summary: 'HGETALL user:1042',
+    actor: 'you',
+    duration: '2 ms',
+    outcome: 'Success',
+  },
+];
+
+const details = [
+  ['Tool', 'update_records'],
+  ['Connection', 'shop-pg / public'],
+  ['Classification', 'Write'],
+  ['Policy', 'analyst → approval'],
+  ['Correlation', '0192b7e4-…-9f21'],
+  ['Rows estimated', '1,204'],
+];
+
+/** Errors and events per bucket, from the board's histogram. */
+const histogram = [
+  [0, 6],
+  [0, 10],
+  [0, 8],
+  [0, 16],
+  [0, 12],
+  [0, 24],
+  [0, 18],
+  [0, 14],
+  [0, 10],
+  [0, 8],
+  [0, 12],
+  [0, 20],
+  [0, 28],
+  [8, 36],
+  [6, 30],
+  [0, 22],
+  [0, 18],
+  [0, 16],
+  [0, 26],
+  [0, 32],
+  [0, 24],
+  [0, 18],
+  [0, 14],
+  [0, 12],
+  [0, 16],
+  [0, 22],
+  [0, 18],
+  [0, 14],
+  [0, 10],
+  [0, 12],
+  [0, 18],
+  [0, 24],
+  [0, 40],
+  [12, 40],
+  [10, 24],
+  [0, 24],
+  [0, 20],
+  [0, 16],
+  [0, 14],
+  [0, 18],
+  [0, 26],
+  [0, 22],
+  [0, 18],
+  [0, 12],
+  [0, 10],
+  [0, 14],
+  [0, 16],
+  [0, 12],
+];
+---
+
+<div class="ld-island ld-island--grow c14">
+  <div class="ld-pane">
+    <div class="ld-tabs">
+      <span class="ld-tab is-on c6">
+        <Glyph name="fingerprint-pattern" size={14} class="ld-accent" />Audit<Glyph
+          name="circle-x"
+          size={12}
+          class="ld-muted"
+        />
+      </span>
+      <span class="ld-muted" style="display: flex; margin-left: 4px"
+        ><Glyph name="plus" size={14} /></span
+      >
+    </div>
+    <div class="ld-body">
+      <div class="ld-audit-head">
+        <Glyph name="fingerprint-pattern" size={15} class="ld-accent" />
+        <span class="ld-strong" style="font-weight: 700; font-size: 14px">Audit</span>
+        <span class="ld-muted">every query, hook, script and agent call on this machine</span>
+      </div>
+      <div class="ld-audit-filters">
+        <span class="ld-field c6" style="width: 300px">
+          <Glyph name="search" size={14} class="ld-muted" />
+          <span class="ld-grow ld-muted">Search events</span>
+          <span class="ld-key c4">/</span>
+        </span>
+        <span class="ld-segments c6">
+          <span class="ld-segment">15m</span>
+          <span class="ld-segment">1h</span>
+          <span class="ld-segment">6h</span>
+          <span class="ld-segment is-on c4">24h</span>
+          <span class="ld-segment">7d</span>
+          <span class="ld-segment"><Glyph name="clock" size={13} />Custom</span>
+        </span>
+        <span class="ld-select c6" style="width: 100px">
+          <Glyph name="globe" size={14} class="ld-muted" />
+          <span class="ld-grow">Local</span>
+          <Glyph name="chevron-down" size={12} class="ld-muted" />
+        </span>
+        <span class="ld-divider"></span>
+        <span class="ld-select c6">
+          <Glyph name="list-filter" size={14} class="ld-muted" />
+          <span class="ld-grow">Level · 2</span>
+          <Glyph name="chevron-down" size={12} class="ld-muted" />
+        </span>
+        <span class="ld-select c6">
+          <span class="ld-grow">Category · all</span>
+          <Glyph name="chevron-down" size={12} class="ld-muted" />
+        </span>
+        <span class="ld-select c6">
+          <span class="ld-grow">Outcome · all</span>
+          <Glyph name="chevron-down" size={12} class="ld-muted" />
+        </span>
+        <span class="ld-grow"></span>
+        <span class="ld-button c6"><Glyph name="circle-x" size={15} />Clear</span>
+        <span class="ld-segments c6">
+          <span class="ld-segment is-on c4"><Glyph name="table" size={13} />Table</span>
+          <span class="ld-segment"><Glyph name="chart-column-big" size={13} />Chart</span>
+        </span>
+        <span class="ld-button ld-button--primary c6"
+          ><Glyph name="refresh-ccw" size={14} />Refresh</span
+        >
+      </div>
+      <div class="ld-histogram">
+        <div class="ld-histogram__bars">
+          {
+            histogram.map(([errors, events]) => (
+              <div class="ld-histogram__bar">
+                <div class="ld-histogram__errors" style={`height: ${errors}px`} />
+                <div class="ld-histogram__events" style={`height: ${events}px`} />
+              </div>
+            ))
+          }
+        </div>
+        <div
+          class="ld-muted"
+          style="display: flex; flex-direction: column; gap: 6px; font-size: 11.5px"
+        >
+          <span class="ld-outcome"
+            ><span class="ld-swatch" style="color: var(--accent-fill)"></span>events</span
+          >
+          <span class="ld-outcome"
+            ><span class="ld-swatch" style="color: var(--danger)"></span>errors</span
+          >
+          <span>drag to zoom</span>
+        </div>
+      </div>
+
+      <div class="ld-audit-table">
+        <div class="ld-audit-rows">
+          <div class="ld-audit-row ld-audit-row--head">
+            <span></span><span>Time</span><span>Level</span><span>Category</span><span>Summary</span
+            ><span>Actor</span><span>Duration</span><span>Outcome</span>
+          </div>
+          {
+            [update, ...before, expanded, ...after].map((event) => {
+              const row = (
+                <div class:list={['ld-audit-row', { 'is-selected': event === expanded }]}>
+                  <span class:list={['ld-tree__chevron', { 'is-open': event === expanded }]}>
+                    <Glyph name="chevron-right" size={12} />
+                  </span>
+                  <span class="ld-audit-row__meta">{event.time}</span>
+                  <span>
+                    <span class={`ld-chip ld-level--${event.level.toLowerCase()} c4`}>
+                      {event.level}
+                    </span>
+                  </span>
+                  <span class="ld-audit-row__category">
+                    <Glyph
+                      name={CATEGORY_ICONS[event.category] ?? 'zap'}
+                      size={13}
+                      class="ld-muted"
+                    />
+                    {event.category}
+                  </span>
+                  <span class="ld-audit-row__summary">{event.summary}</span>
+                  <span class="ld-audit-row__meta">{event.actor}</span>
+                  <span class="ld-audit-row__meta">{event.duration}</span>
+                  <span class={`ld-outcome ${OUTCOME_TONES[event.outcome]}`}>
+                    <span class="ld-diamond" />
+                    {event.outcome}
+                  </span>
+                </div>
+              );
+              if (event === update) {
+                return (
+                  <div
+                    class="ld-audit-new is-highlighted"
+                    data-ld-audit-new
+                    data-ld-anchor="audit-new"
+                  >
+                    {row}
+                  </div>
+                );
+              }
+              if (event === expanded) {
+                return (
+                  <Fragment>
+                    {row}
+                    <div class="ld-audit-detail">
+                      <div class="ld-audit-detail__fields">
+                        {details.map(([label, value]) => (
+                          <div class="ld-audit-detail__field">
+                            <span class="ld-muted" style="font-size: 11px">
+                              {label}
+                            </span>
+                            <span class="ld-mono ld-strong" style="font-size: 12.5px">
+                              {value}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <div class="ld-audit-detail__json c8">
+                        {'{ '}
+                        <span class="ld-link">"table"</span>:{' '}
+                        <span class="ld-success">"orders"</span>, <span class="ld-link">"set"</span>
+                        : {'{ '}
+                        <span class="ld-link">"status"</span>:{' '}
+                        <span class="ld-success">"[redacted]"</span>
+                        {' }, '}
+                        <span class="ld-link">"where"</span>:{' '}
+                        <span class="ld-success">"sha256:77ae…19c0"</span>
+                        {' }'}
+                      </div>
+                      <div style="display: flex; gap: 8px; margin-top: 12px">
+                        <span class="ld-button c6">
+                          <Glyph name="list-filter" size={15} />
+                          Filter by correlation
+                        </span>
+                        <span class="ld-button c6">
+                          <Glyph name="copy" size={15} />
+                          Copy row as JSON
+                        </span>
+                        <span class="ld-button ld-button--primary c6">
+                          <Glyph name="bot" size={15} />
+                          Open approval
+                        </span>
+                      </div>
+                    </div>
+                  </Fragment>
+                );
+              }
+              return row;
+            })
+          }
+        </div>
+        <div class="ld-audit-foot">
+          <Glyph name="rows-3" size={14} />
+          <span>1–50 of 4,812 events</span>
+          <span class="ld-pager">
+            <Glyph name="chevron-left" size={13} />
+            <span><span class="ld-strong">1</span> / 97</span>
+            <Glyph name="chevron-right" size={13} />
+          </span>
+          <span class="ld-grow"></span>
+          <span class="ld-button c6"
+            ><Glyph name="file-down" size={15} />Export<Glyph name="chevron-down" size={12} /></span
+          >
+          <span>asks where to save</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

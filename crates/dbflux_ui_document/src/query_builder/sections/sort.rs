@@ -21,7 +21,7 @@ use dbflux_components::composites::RailMark;
 /// Drivers that order only on their sort key get the direction toggle
 /// instead of the rows, and drivers that cannot order at all get only the
 /// limit and offset fields.
-pub fn render_sort(
+pub(crate) fn render_sort(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {

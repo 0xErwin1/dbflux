@@ -18,6 +18,7 @@ pub mod instance_catalog;
 mod introspection;
 #[cfg(test)]
 mod language_service;
+mod table_views;
 pub mod types;
 
 pub use connection::ClickHouseConnection;

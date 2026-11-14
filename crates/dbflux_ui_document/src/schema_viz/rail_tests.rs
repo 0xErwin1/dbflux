@@ -50,6 +50,7 @@ fn users_table() -> TableInfo {
         presentation: dbflux_core::CollectionPresentation::default(),
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 

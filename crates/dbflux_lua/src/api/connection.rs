@@ -1,7 +1,7 @@
 use dbflux_core::HookContext;
 use mlua::{Lua, Result as LuaResult, Table};
 
-pub fn register_connection_api(lua: &Lua, context: &HookContext) -> LuaResult<()> {
+pub(crate) fn register_connection_api(lua: &Lua, context: &HookContext) -> LuaResult<()> {
     let connection = lua.create_table()?;
     connection.set("profile_id", context.profile_id.to_string())?;
     connection.set("profile_name", context.profile_name.clone())?;

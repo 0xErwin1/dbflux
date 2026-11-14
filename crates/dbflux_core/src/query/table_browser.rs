@@ -366,22 +366,69 @@ impl From<&str> for ColumnRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableBrowseRequest {
     pub table: TableRef,
+    /// The database the table lives in, when the caller knows it. Drivers that
+    /// separate the database from the schema qualify with it (SQL Server);
+    /// drivers whose `TableRef.schema` already names the database ignore it.
+    ///
+    /// Read in-process only. These requests also cross the driver RPC wire,
+    /// whose frames are postcard and positional, so a field in the middle would
+    /// shift every field after it for a peer that expects the layout without
+    /// it, and a minor protocol bump does not separate the two layouts
+    /// (`ProtocolVersion::is_compatible_with` compares the major only). An
+    /// external driver that needs the database needs a protocol change of its
+    /// own, not this field.
+    #[serde(skip)]
+    pub database: Option<String>,
     pub pagination: Pagination,
     pub order_by: Vec<OrderByColumn>,
     pub filter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always encoded. `postcard` has no representation for an absent struct
+    /// field, so `skip_serializing_if` desynchronises the IPC frame even with
+    /// `serde(default)` present.
+    #[serde(default)]
     pub semantic_filter: Option<SemanticFilter>,
+    /// The columns to read, in the order to return them. Empty reads every
+    /// column. Honoured by connections that report
+    /// `TableViewFeatures::COLUMN_PROJECTION`.
+    #[serde(default)]
+    pub columns: Vec<String>,
 }
 
 impl TableBrowseRequest {
     pub fn new(table: TableRef) -> Self {
         Self {
             table,
+            database: None,
             pagination: Pagination::default(),
             order_by: Vec::new(),
             filter: None,
             semantic_filter: None,
+            columns: Vec::new(),
         }
+    }
+
+    pub fn with_database(mut self, database: Option<String>) -> Self {
+        self.database = database;
+        self
+    }
+
+    pub fn with_columns(mut self, columns: Vec<String>) -> Self {
+        self.columns = columns;
+        self
+    }
+
+    /// The select list for this request: `*` when no columns are chosen,
+    /// otherwise the chosen columns quoted with `dialect`.
+    pub fn select_list_with(&self, dialect: &dyn SqlDialect) -> String {
+        if self.columns.is_empty() {
+            return "*".to_string();
+        }
+
+        self.columns
+            .iter()
+            .map(|column| dialect.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     pub fn with_pagination(mut self, pagination: Pagination) -> Self {
@@ -406,7 +453,11 @@ impl TableBrowseRequest {
 
     /// Build the SQL query using a `SqlDialect` for identifier quoting.
     pub fn build_sql_with(&self, dialect: &dyn SqlDialect) -> String {
-        let mut sql = format!("SELECT * FROM {}", self.table.quoted_with(dialect));
+        let mut sql = format!(
+            "SELECT {} FROM {}",
+            self.select_list_with(dialect),
+            self.table.quoted_with(dialect)
+        );
 
         if let Some(ref filter) = self.filter {
             let trimmed = filter.trim();
@@ -451,15 +502,16 @@ pub struct CollectionBrowseRequest {
     pub collection: CollectionRef,
     pub pagination: Pagination,
     pub filter: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always encoded; see `TableBrowseRequest::semantic_filter`.
+    #[serde(default)]
     pub semantic_filter: Option<SemanticFilter>,
     /// Native projection document selecting the fields each document returns.
     /// Honoured by drivers that report `DocumentFeatures::QUERY_SLOTS`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub projection: Option<serde_json::Value>,
     /// Native sort document. Honoured by drivers that report
     /// `DocumentFeatures::QUERY_SLOTS`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub sort: Option<serde_json::Value>,
 }
 
@@ -505,8 +557,14 @@ impl CollectionBrowseRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableCountRequest {
     pub table: TableRef,
+    /// The database the table lives in, when the caller knows it. See
+    /// [`TableBrowseRequest::database`] for why it never reaches the driver RPC
+    /// wire.
+    #[serde(skip)]
+    pub database: Option<String>,
     pub filter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always encoded; see `TableBrowseRequest::semantic_filter`.
+    #[serde(default)]
     pub semantic_filter: Option<SemanticFilter>,
 }
 
@@ -514,9 +572,15 @@ impl TableCountRequest {
     pub fn new(table: TableRef) -> Self {
         Self {
             table,
+            database: None,
             filter: None,
             semantic_filter: None,
         }
+    }
+
+    pub fn with_database(mut self, database: Option<String>) -> Self {
+        self.database = database;
+        self
     }
 
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
@@ -535,7 +599,8 @@ impl TableCountRequest {
 pub struct CollectionCountRequest {
     pub collection: CollectionRef,
     pub filter: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always encoded; see `TableBrowseRequest::semantic_filter`.
+    #[serde(default)]
     pub semantic_filter: Option<SemanticFilter>,
 }
 
@@ -668,6 +733,80 @@ mod tests {
         assert_eq!(
             req.build_sql_with(&DefaultSqlDialect),
             "SELECT * FROM \"orders\" WHERE status = 'active' ORDER BY \"created_at\" DESC LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn build_sql_reads_only_the_projected_columns_in_their_order() {
+        let req = TableBrowseRequest::new(TableRef::new("events"))
+            .with_columns(vec!["ts".into(), "user\"id".into()])
+            .with_filter("site_id = 12");
+
+        assert_eq!(
+            req.build_sql_with(&DefaultSqlDialect),
+            "SELECT \"ts\", \"user\"\"id\" FROM \"events\" WHERE site_id = 12 LIMIT 100 OFFSET 0"
+        );
+        assert_eq!(
+            TableBrowseRequest::new(TableRef::new("events")).select_list_with(&DefaultSqlDialect),
+            "*"
+        );
+    }
+
+    #[test]
+    fn a_request_without_columns_always_encodes_the_field_and_old_payloads_parse() {
+        let request = TableBrowseRequest::new(TableRef::new("events"));
+        let json = serde_json::to_value(&request).unwrap();
+        // postcard has no representation for an absent field, so `columns`
+        // always encodes; JSON consumers see an empty array, not a missing key.
+        assert_eq!(
+            json.get("columns").and_then(|value| value.as_array()),
+            Some(&Vec::new())
+        );
+
+        // A JSON payload written before the field always encoded still parses.
+        let mut legacy = json.clone();
+        legacy.as_object_mut().unwrap().remove("columns");
+        let parsed: TableBrowseRequest = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.columns.is_empty());
+
+        let projected = request.with_columns(vec!["ts".into()]);
+        let round_trip: TableBrowseRequest =
+            serde_json::from_value(serde_json::to_value(&projected).unwrap()).unwrap();
+        assert_eq!(round_trip.columns, vec!["ts".to_string()]);
+    }
+
+    #[test]
+    fn a_request_database_is_read_in_process_and_never_reaches_the_wire() {
+        // The driver RPC frames are postcard, which is positional: a field in
+        // the middle of these requests would shift every field after it for a
+        // peer that expects the layout without it. The field is therefore
+        // skipped in both directions, so a request that carries a database
+        // encodes exactly like one that does not. The postcard half of this
+        // lives in the `dbflux_ipc` layout test.
+        let request = TableBrowseRequest::new(TableRef::new("events"));
+        let scoped = request.clone().with_database(Some("reporting".to_string()));
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            serde_json::to_value(&scoped).unwrap(),
+            "the database must not change the serialized request"
+        );
+        assert!(
+            serde_json::to_value(&scoped)
+                .unwrap()
+                .get("database")
+                .is_none()
+        );
+
+        let parsed: TableBrowseRequest =
+            serde_json::from_value(serde_json::to_value(&scoped).unwrap()).unwrap();
+        assert!(parsed.database.is_none());
+
+        let count = TableCountRequest::new(TableRef::new("events"));
+        let count_scoped = count.clone().with_database(Some("reporting".to_string()));
+        assert_eq!(
+            serde_json::to_value(&count).unwrap(),
+            serde_json::to_value(&count_scoped).unwrap(),
+            "the database must not change the serialized count"
         );
     }
 

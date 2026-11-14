@@ -391,15 +391,19 @@ impl ConnectionHooks {
     ///
     /// If the profile has `hook_bindings`, each binding ID is looked up in
     /// `definitions` and placed into the corresponding phase. Missing IDs are
-    /// silently skipped (logged as warnings). If the profile has no bindings,
-    /// falls back to `profile.hooks` (inline hooks) or an empty default.
+    /// silently skipped (logged as warnings). Profiles without bindings retain
+    /// their inline hooks or use an empty default.
     pub fn resolve_from_bindings(
         profile: &ConnectionProfile,
         definitions: &HashMap<String, ConnectionHook>,
     ) -> Self {
-        if let Some(bindings) = &profile.hook_bindings {
-            let mut hooks = Self::default();
+        let mut hooks = if profile.hook_bindings.is_some() {
+            Self::default()
+        } else {
+            profile.hooks.clone().unwrap_or_default()
+        };
 
+        if let Some(bindings) = &profile.hook_bindings {
             for phase in [
                 HookPhase::PreConnect,
                 HookPhase::PostConnect,
@@ -419,11 +423,9 @@ impl ConnectionHooks {
                     }
                 }
             }
-
-            return hooks;
         }
 
-        profile.hooks.clone().unwrap_or_default()
+        hooks
     }
 }
 
@@ -459,6 +461,11 @@ pub struct HookContext {
     pub port: Option<u16>,
     pub database: Option<String>,
     pub phase: Option<HookPhase>,
+    /// Whether the driver dials `host:port` as configured. An SSH tunnel or
+    /// the connection pipeline (auth profile, value references, access kind)
+    /// decides the dialed address later, so `host:port` may not be reachable
+    /// from this machine at pre-connect time.
+    pub dials_configured_endpoint: bool,
 }
 
 impl HookContext {
@@ -473,7 +480,18 @@ impl HookContext {
             port,
             database,
             phase: None,
+            dials_configured_endpoint: !profile.uses_pipeline() && !profile.config.has_ssh_tunnel(),
         }
+    }
+
+    /// The address a runner checks after a detached pre-connect hook reports
+    /// ready, or `None` when the profile does not dial `host:port` itself.
+    pub fn pre_connect_probe_endpoint(&self) -> Option<(&str, u16)> {
+        if !self.dials_configured_endpoint {
+            return None;
+        }
+
+        Some((self.host.as_deref()?, self.port?))
     }
 }
 
@@ -485,7 +503,9 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             database,
             ..
         } => (Some(host.clone()), Some(*port), Some(database.clone())),
-        DbConfig::SQLite { path, .. } => (None, None, Some(path.to_string_lossy().to_string())),
+        DbConfig::SQLite { path, .. } | DbConfig::DuckDB { path, .. } => {
+            (None, None, Some(path.to_string_lossy().to_string()))
+        }
         DbConfig::MySQL {
             host,
             port,
@@ -532,6 +552,9 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             ..
         } => (Some(host.clone()), Some(*port), Some(database.clone())),
         DbConfig::S3 {
+            region, endpoint, ..
+        }
+        | DbConfig::AwsSecrets {
             region, endpoint, ..
         } => (
             endpoint.clone().or_else(|| Some(region.clone())),
@@ -614,6 +637,14 @@ impl DetachedProcessHandle {
     /// the handle across the move.
     pub fn take_containment(&mut self) -> Option<ProcessContainment> {
         self.containment.take()
+    }
+
+    /// Terminates the detached hook and its entire process tree.
+    pub fn terminate(&mut self) -> Result<(), String> {
+        terminate_child(&mut self.child, self.containment.as_ref())
+            .map_err(|error| format!("{error:?}"))?;
+        self.containment.take();
+        Ok(())
     }
 }
 
@@ -731,9 +762,22 @@ mod windows_job {
     #[derive(Debug)]
     pub(super) struct JobObjectHandle(HANDLE);
 
+    #[expect(
+        unsafe_code,
+        reason = "Send on a raw kernel handle: a job object handle has no thread \
+                  affinity and every operation issued through it is thread-safe, \
+                  as documented in the SAFETY comment on `JobObjectHandle`"
+    )]
     unsafe impl Send for JobObjectHandle {}
 
     impl JobObjectHandle {
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `CreateJobObjectW` is called with the \
+                      documented-allowed null arguments and \
+                      `SetInformationJobObject` with an exact buffer/size pair; \
+                      both failure paths are checked and logged"
+        )]
         pub(super) fn create(kill_on_close: bool) -> Option<Self> {
             // SAFETY: both arguments are allowed to be null: an unnamed job object
             // with default security attributes.
@@ -779,6 +823,12 @@ mod windows_job {
             Some(job)
         }
 
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `AssignProcessToJobObject` takes a live job \
+                      handle owned by `self` and the child's live process handle, \
+                      per the SAFETY comment"
+        )]
         pub(super) fn assign(&self, child: &Child) -> bool {
             // The annotation states the type instead of casting it: `RawHandle` and a
             // windows-sys `HANDLE` are the same `*mut c_void` today, and a future
@@ -798,6 +848,11 @@ mod windows_job {
             true
         }
 
+        #[expect(
+            unsafe_code,
+            reason = "raw Win32 FFI: `TerminateJobObject` takes the live job \
+                      handle owned by `self`, per the SAFETY comment"
+        )]
         pub(super) fn terminate(&self) {
             // SAFETY: `self.0` is a live job object handle.
             let ok = unsafe { TerminateJobObject(self.0, 0) };
@@ -810,9 +865,17 @@ mod windows_job {
         }
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "raw Win32 FFI: `CloseHandle` releases the kernel handle owned \
+                  exclusively by this value, per the SAFETY comment on `drop`"
+    )]
     impl Drop for JobObjectHandle {
         fn drop(&mut self) {
             // A failed close leaks one handle; there is nothing to recover from.
+            // SAFETY: `self.0` is exclusively owned by this value, `create` is the
+            // only constructor and never returns a null handle, `JobObjectHandle`
+            // is not `Clone`, and `drop` runs at most once — closed exactly here.
             unsafe { CloseHandle(self.0) };
         }
     }
@@ -1258,6 +1321,7 @@ impl ConnectionHook {
 
         let mut command = Command::new(&resolved.program);
         command.args(&resolved.args);
+        command.stdin(Stdio::null());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
@@ -1485,6 +1549,11 @@ where
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(bytes_read) => {
+                    // Read::read guarantees bytes_read <= buffer.len().
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "Read::read returns a count no greater than the buffer length"
+                    )]
                     let text = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
 
                     if sender.send(OutputEvent::new(stream, text)).is_err() {
@@ -1553,6 +1622,13 @@ fn terminate_child(
 /// (via `try_wait`), in which case the caller must NOT `wait` on it again.
 #[cfg(unix)]
 fn terminate_process_group(child: &mut Child) -> bool {
+    // SAFETY: `kill` is a standard POSIX syscall; the declaration matches the
+    // libc signature (`pid_t kill(pid_t, int)`) exactly, and only valid
+    // `SIGTERM`/`SIGKILL` signal constants are ever passed.
+    #[expect(
+        unsafe_code,
+        reason = "declaring the POSIX kill() symbol for negative-pid process-group termination; no libc crate dependency, signature matches the libc contract"
+    )]
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
@@ -1568,6 +1644,14 @@ fn terminate_process_group(child: &mut Child) -> bool {
         return false;
     }
 
+    // SAFETY: `pid > 0` and originates from a live `Child` we spawned with
+    // `process_group(0)`, so `-pid` addresses that process group; `kill` with
+    // a valid signal constant is memory-safe for any existing-or-not pid and
+    // never mutates our own process (pid is not ours).
+    #[expect(
+        unsafe_code,
+        reason = "kill(-pid, SIGTERM) targets the child's own process group set at spawn via process_group(0); pid > 0 checked above, so the call cannot signal the parent process"
+    )]
     unsafe {
         let _ = kill(-pid, SIGTERM);
     }
@@ -1577,6 +1661,13 @@ fn terminate_process_group(child: &mut Child) -> bool {
     match child.try_wait() {
         Ok(Some(_)) => true,
         _ => {
+            // SAFETY: same invariants as the SIGTERM call above: `pid > 0` and
+            // `-pid` is the child's spawn-time process group; SIGKILL is a
+            // valid signal constant.
+            #[expect(
+                unsafe_code,
+                reason = "kill(-pid, SIGKILL) targets the child's own process group set at spawn via process_group(0); pid > 0 checked above, so the call cannot signal the parent process"
+            )]
             unsafe {
                 let _ = kill(-pid, SIGKILL);
             }
@@ -1696,6 +1787,7 @@ mod tests {
             port: Some(5432),
             database: Some("mydb".to_string()),
             phase: None,
+            dials_configured_endpoint: true,
         }
     }
 
@@ -2110,6 +2202,72 @@ mod tests {
     }
 
     #[test]
+    fn pre_connect_probe_targets_the_endpoint_of_a_direct_profile() {
+        let profile = ConnectionProfile::new("direct", DbConfig::default_postgres());
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(
+            context.pre_connect_probe_endpoint(),
+            Some(("localhost", 5432))
+        );
+    }
+
+    #[test]
+    fn pre_connect_probe_is_skipped_behind_an_ssh_tunnel() {
+        let mut profile = ConnectionProfile::new("ssh", DbConfig::default_postgres());
+        profile.config.assign_ssh_tunnel(
+            Some(crate::SshTunnelConfig {
+                host: "bastion.example".to_string(),
+                port: 22,
+                user: "dbflux".to_string(),
+                auth_method: Default::default(),
+                ssh_config_host: None,
+            }),
+            None,
+        );
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.pre_connect_probe_endpoint(), None);
+        assert_eq!(context.host.as_deref(), Some("localhost"));
+        assert_eq!(context.port, Some(5432));
+    }
+
+    #[test]
+    fn pre_connect_probe_is_skipped_for_a_saved_ssh_tunnel_profile() {
+        let mut profile = ConnectionProfile::new("ssh", DbConfig::default_postgres());
+        profile.config.assign_ssh_tunnel(None, Some(Uuid::new_v4()));
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.pre_connect_probe_endpoint(), None);
+    }
+
+    #[test]
+    fn pre_connect_probe_is_skipped_when_the_pipeline_resolves_the_endpoint() {
+        let mut profile = ConnectionProfile::new("pipeline", DbConfig::default_postgres());
+        profile.access_kind = Some(crate::AccessKind::Managed {
+            provider: "aws-ssm".to_string(),
+            params: HashMap::new(),
+        });
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.pre_connect_probe_endpoint(), None);
+        assert_eq!(context.host.as_deref(), Some("localhost"));
+    }
+
+    #[test]
+    fn pre_connect_probe_needs_a_port() {
+        let profile = ConnectionProfile::new("clickhouse", DbConfig::default_clickhouse());
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.pre_connect_probe_endpoint(), None);
+    }
+
+    #[test]
     fn hook_context_preserves_profile_id_and_name() {
         let profile = ConnectionProfile::new(
             "my-db",
@@ -2298,7 +2456,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_aws_secret_stripped_by_default() {
-        unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET") };
+        let before = std::env::var_os("AWS_SECRET_ACCESS_KEY");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "connection::hook::tests::test_aws_secret_stripped_by_default",
+            &[("AWS_SECRET_ACCESS_KEY", std::ffi::OsStr::new("REAL_SECRET"))],
+        ) {
+            let after = std::env::var_os("AWS_SECRET_ACCESS_KEY");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2327,7 +2496,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_plain_env_inherited() {
-        unsafe { std::env::set_var("MY_PLAIN_VAR_PROC2", "plainvalue") };
+        let before = std::env::var_os("MY_PLAIN_VAR_PROC2");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "connection::hook::tests::test_plain_env_inherited",
+            &[("MY_PLAIN_VAR_PROC2", std::ffi::OsStr::new("plainvalue"))],
+        ) {
+            let after = std::env::var_os("MY_PLAIN_VAR_PROC2");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2356,7 +2536,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_explicit_env_reinjects_stripped_key() {
-        unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET") };
+        let before = std::env::var_os("AWS_SECRET_ACCESS_KEY");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "connection::hook::tests::test_explicit_env_reinjects_stripped_key",
+            &[("AWS_SECRET_ACCESS_KEY", std::ffi::OsStr::new("REAL_SECRET"))],
+        ) {
+            let after = std::env::var_os("AWS_SECRET_ACCESS_KEY");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
@@ -2386,7 +2577,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_custom_denylist_entry_stripped() {
-        unsafe { std::env::set_var("MY_CUSTOM_PROC2_VAR", "customvalue") };
+        let before = std::env::var_os("MY_CUSTOM_PROC2_VAR");
+        if crate::isolated_env::run_in_isolated_fixture(
+            "connection::hook::tests::test_custom_denylist_entry_stripped",
+            &[("MY_CUSTOM_PROC2_VAR", std::ffi::OsStr::new("customvalue"))],
+        ) {
+            let after = std::env::var_os("MY_CUSTOM_PROC2_VAR");
+            assert!(
+                after == before,
+                "fixture must preserve the caller's process environment"
+            );
+            return;
+        }
 
         let hook = ConnectionHook {
             kind: HookKind::Command {

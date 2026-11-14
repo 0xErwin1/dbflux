@@ -2,7 +2,37 @@ use rusqlite::Transaction;
 
 use super::{Migration, MigrationError};
 
-pub struct MigrationImpl;
+pub(crate) struct MigrationImpl;
+
+impl Migration for MigrationImpl {
+    fn name(&self) -> &str {
+        "022_hook_kind_json"
+    }
+
+    fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {
+        let table_exists: bool = tx.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'cfg_hook_definitions'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+
+        if !table_exists {
+            return Ok(());
+        }
+
+        let column_exists: bool = tx.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('cfg_hook_definitions') WHERE name = 'kind_json'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+
+        if !column_exists {
+            tx.execute_batch("ALTER TABLE cfg_hook_definitions ADD COLUMN kind_json TEXT NULL")?;
+        }
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -32,35 +62,5 @@ mod tests {
             .expect("read legacy row");
 
         assert_eq!(kind_json, None, "migration must not rewrite legacy rows");
-    }
-}
-
-impl Migration for MigrationImpl {
-    fn name(&self) -> &str {
-        "022_hook_kind_json"
-    }
-
-    fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {
-        let table_exists: bool = tx.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'cfg_hook_definitions'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )? > 0;
-
-        if !table_exists {
-            return Ok(());
-        }
-
-        let column_exists: bool = tx.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('cfg_hook_definitions') WHERE name = 'kind_json'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )? > 0;
-
-        if !column_exists {
-            tx.execute_batch("ALTER TABLE cfg_hook_definitions ADD COLUMN kind_json TEXT NULL")?;
-        }
-
-        Ok(())
     }
 }

@@ -134,7 +134,12 @@ impl SettingsCoordinator {
 
                 expanded.insert(SharedString::from(group_id));
 
-                Some(TreeNavNode::group(group_id, group_label, None, leaves))
+                Some(TreeNavNode::group(
+                    group_id,
+                    group_label,
+                    None::<AppIcon>,
+                    leaves,
+                ))
             })
             .collect();
 
@@ -236,6 +241,13 @@ mod tests {
 
     #[test]
     fn tree_id_roundtrip_all_sections() {
+        // `sections` is only mutated under the `mcp` feature, so the `mut` is
+        // unused in the default-feature build. The expectation is fulfilled
+        // exactly in that configuration, which is why it is conditional.
+        #[cfg_attr(
+            not(feature = "mcp"),
+            expect(unused_mut, reason = "sections is only mutated under the mcp feature")
+        )]
         let mut sections = vec![
             SettingsSectionId::General,
             SettingsSectionId::Audit,

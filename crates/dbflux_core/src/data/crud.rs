@@ -92,7 +92,10 @@ pub type RowIdentity = RecordIdentity;
 pub struct ColumnAssignment {
     pub name: String,
     pub value: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Always encoded. `postcard` has no representation for an absent struct
+    /// field, so `skip_serializing_if` desynchronises the IPC frame even with
+    /// `serde(default)` present.
+    #[serde(default)]
     pub type_name: Option<String>,
 }
 
@@ -150,7 +153,7 @@ struct RowPatchWire {
     table: String,
     schema: Option<String>,
     changes: Vec<(String, Value)>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     change_types: Vec<Option<String>>,
 }
 
@@ -274,7 +277,7 @@ struct RowInsertWire {
     schema: Option<String>,
     columns: Vec<String>,
     values: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     column_types: Vec<Option<String>>,
 }
 
@@ -431,7 +434,7 @@ struct SqlUpdateRequestWire {
     schema: Option<String>,
     filter: SemanticFilter,
     changes: Vec<(String, Value)>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     change_types: Vec<Option<String>>,
     returning: Option<Vec<String>>,
 }
@@ -479,11 +482,11 @@ struct SqlUpsertRequestWire {
     schema: Option<String>,
     columns: Vec<String>,
     values: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     column_types: Vec<Option<String>>,
     conflict_columns: Vec<String>,
     update_assignments: Vec<(String, Value)>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     update_assignment_types: Vec<Option<String>>,
 }
 
@@ -869,7 +872,10 @@ pub struct CrudResult {
     /// None if the operation doesn't return row data.
     pub returning_row: Option<Row>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Always encoded. `postcard` has no representation for an absent struct
+    /// field, so `skip_serializing_if` desynchronises the IPC frame even with
+    /// `serde(default)` present.
+    #[serde(default)]
     pub metadata_extra: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 

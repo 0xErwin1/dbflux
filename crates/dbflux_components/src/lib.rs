@@ -9,12 +9,18 @@
 
 pub mod actions;
 pub mod density;
-pub mod helpers;
-pub mod icon;
-pub mod semantic;
-pub mod tokens;
-pub mod typography;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod accessibility;
+pub mod font_settings;
+pub mod helpers;
+// Moved to `bolt`; re-exported at these paths so call sites keep compiling.
+pub use bolt::{command_palette, icon, keymap};
+pub mod semantic;
+// Moved to `bolt`; re-exported at these paths so call sites keep compiling.
+pub use bolt::{fonts, tokens, typography};
+
+pub mod category;
 pub mod chart;
 pub mod common;
 pub mod components;

@@ -14,6 +14,7 @@ pub mod driver;
 pub mod instance_catalog;
 pub mod language_service;
 pub mod rdb;
+pub(crate) mod read_only;
 pub(crate) mod transport;
 
 pub use command_generator::RedisCommandGenerator;

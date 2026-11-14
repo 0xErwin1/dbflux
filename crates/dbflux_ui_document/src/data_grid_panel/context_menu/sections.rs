@@ -75,6 +75,7 @@ fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> 
     let command = match action {
         ContextMenuAction::InspectRow => Command::ToggleRowInspector,
         ContextMenuAction::ViewValue => Command::ToggleValuePanel,
+        ContextMenuAction::FindSimilarRows => Command::FindSimilarRows,
         _ => return None,
     };
 
@@ -84,9 +85,22 @@ fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> 
 }
 
 impl DataGridPanel {
+    /// The entries of the column header menu that precede its filter
+    /// operators, in display order. Rendering and keyboard dispatch both read
+    /// this list, so an entry's row index and its keyboard index agree.
+    pub(in crate::data_grid_panel) fn column_header_menu_fixed_actions() -> [ContextMenuAction; 4] {
+        [
+            ContextMenuAction::CopyColumnName,
+            ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
+            ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+            ContextMenuAction::RemoveOrdering,
+        ]
+    }
+
     /// Render the DBeaver-style flat menu opened from a column header.
-    /// Ordering actions are listed first, followed by all filter operators in
-    /// the same panel (no nested flyouts).
+    /// Copying the column name comes first, then the ordering actions,
+    /// followed by all filter operators in the same panel (no nested
+    /// flyouts).
     pub(super) fn render_column_header_menu_items(
         &self,
         menu: &TableContextMenu,
@@ -105,40 +119,41 @@ impl DataGridPanel {
         let (_, _, filter_items, value_ops_count) = self.build_filter_items(menu, backend, cx);
 
         let mut rows: Vec<AnyElement> = Vec::new();
-        rows.push(
-            render_menu_header(
-                &MenuItem::header(order_title).icon(AppIcon::ArrowUpDown),
-                cx,
-            )
-            .into_any_element(),
-        );
-
         let mut action_index = 0usize;
-        let order_items = [
-            (
-                format!("{} ASC", col_name),
-                ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
-                AppIcon::ArrowUp,
-                false,
-            ),
-            (
-                format!("{} DESC", col_name),
-                ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
-                AppIcon::ArrowDown,
-                false,
-            ),
-            (
-                remove_ordering,
-                ContextMenuAction::RemoveOrdering,
-                AppIcon::X,
-                true,
-            ),
-        ];
 
-        for (idx, (label, action, icon, is_danger)) in order_items.into_iter().enumerate() {
-            if idx == 2 {
-                rows.push(render_separator(cx).into_any_element());
+        for action in Self::column_header_menu_fixed_actions() {
+            let (label, icon, is_danger) = match action {
+                ContextMenuAction::CopyColumnName => (
+                    dbflux_i18n::t!("document.data.context_menu.item.copy_column_name"),
+                    AppIcon::Copy,
+                    false,
+                ),
+                ContextMenuAction::Order(dbflux_core::SortDirection::Ascending) => {
+                    (format!("{} ASC", col_name), AppIcon::ArrowUp, false)
+                }
+                ContextMenuAction::Order(dbflux_core::SortDirection::Descending) => {
+                    (format!("{} DESC", col_name), AppIcon::ArrowDown, false)
+                }
+                _ => (remove_ordering.clone(), AppIcon::X, true),
+            };
+
+            match action {
+                ContextMenuAction::Order(dbflux_core::SortDirection::Ascending) => {
+                    rows.push(render_separator(cx).into_any_element());
+                    rows.push(
+                        render_menu_header(
+                            &MenuItem::header(order_title.clone()).icon(AppIcon::ArrowUpDown),
+                            cx,
+                        )
+                        .into_any_element(),
+                    );
+                }
+                ContextMenuAction::RemoveOrdering => {
+                    rows.push(render_separator(cx).into_any_element());
+                }
+                _ => {}
             }
+
             rows.push(Self::column_menu_action_row(
                 label,
                 action,
@@ -252,28 +267,38 @@ impl DataGridPanel {
             if let Some(shortcut) = action_shortcut(action, cx) {
                 row_item = row_item.shortcut(shortcut);
             }
+            if let Some(detail) = &item.detail {
+                row_item = row_item.detail(detail.clone());
+            }
+            if item.disabled {
+                row_item = row_item.disabled();
+            }
 
-            menu_items.push(
-                menu_row(
-                    item.label.clone(),
-                    &row_item,
-                    current_index == selected_index,
-                    cx,
-                )
-                .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                    if let Some(ref mut menu) = this.context_menu
-                        && (menu.selected_index != current_index || menu.any_submenu_open())
-                    {
-                        menu.selected_index = current_index;
-                        menu.close_submenus();
-                        cx.notify();
-                    }
-                }))
-                .on_click(cx.listener(move |this, _, window, cx| {
+            let row = menu_row(
+                item.label.clone(),
+                &row_item,
+                current_index == selected_index,
+                cx,
+            )
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                if let Some(ref mut menu) = this.context_menu
+                    && (menu.selected_index != current_index || menu.any_submenu_open())
+                {
+                    menu.selected_index = current_index;
+                    menu.close_submenus();
+                    cx.notify();
+                }
+            }));
+
+            let row = if item.disabled {
+                row
+            } else {
+                row.on_click(cx.listener(move |this, _, window, cx| {
                     this.handle_context_menu_action(action, window, cx);
                 }))
-                .into_any_element(),
-            );
+            };
+
+            menu_items.push(row.into_any_element());
 
             *visual_index += 1;
         }

@@ -4,6 +4,11 @@ La guía de uso está dividida en una página por tarea. Si eres nuevo en DBFlux
 empieza por [Primeros pasos](GETTING_STARTED.md), que te lleva del primer inicio
 a tu primera query; si no, elige la página de lo que estás haciendo.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/usage/main-window-dark.webp">
+  <img src="../images/usage/main-window-light.webp" alt="La ventana principal con una tabla de PostgreSQL abierta">
+</picture>
+
 - [Primeros pasos](GETTING_STARTED.md) — primer inicio, creación de una
   conexión y tu primera query.
 - [Conectar a una base de datos](CONNECTIONS.md) — el Connection Manager, los
@@ -16,10 +21,20 @@ a tu primera query; si no, elige la página de lo que estás haciendo.
   DELETE sin escribir SQL.
 - [Trabajar con resultados](RESULTS.md) — el data grid, la vista de registro,
   el filtrado, la edición y la exportación.
+- [Columnas y particiones](TABLE_VIEWS.md) — estadísticas de columnas,
+  particiones, elegir las columnas que lee una tabla y estimaciones de lectura.
 - [Vista clave-valor](KEY_VALUE.md) — claves, valores, expiración y la consola
   de comandos.
 - [Colecciones de documentos](DOCUMENTS.md) — vistas de tabla, árbol y JSON de
   los documentos.
+- [Archivos CSV y TSV](CSV_FILES.md) — abrir, editar y guardar archivos
+  delimitados como tabla o como texto.
+- [Archivos Parquet](PARQUET_FILES.md) — leer archivos Parquet como una tabla
+  paginada de solo lectura e inspeccionar sus columnas.
+- [Archivos de hoja de cálculo](SPREADSHEET_FILES.md) — abrir libros xlsx,
+  xlsm, xls y ods hoja por hoja, editar celdas de archivos xlsx, xlsm y ods y
+  guardarlas en el mismo archivo, y guardar un archivo xls, que es de solo
+  lectura, como un archivo xlsx nuevo.
 - [Gráficos](CHARTS.md) y [Dashboards](DASHBOARDS.md) — graficar resultados y
   construir dashboards.
 - [Referencia de teclado](KEYBOARD.md) — todos los atajos por defecto, incluido

@@ -1,10 +1,9 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::document::{TabManager, TabManagerEvent};
 use crate::ui::icons::AppIcon;
-use dbflux_components::composites::island_fill;
-use dbflux_components::primitives::{Chamfer, Icon, Status, StatusIndicator, Text};
-use dbflux_components::tokens::{ChamferCut, ShellMetrics};
-use dbflux_components::typography::AppFonts;
+use dbflux_components::composites::StatusChip;
+use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
+use dbflux_components::tokens::ShellMetrics;
 use dbflux_core::{TaskKind, TaskSnapshot, TaskStatus};
 use dbflux_ui_document::StatusSegment;
 use gpui::prelude::FluentBuilder;
@@ -216,30 +215,7 @@ impl StatusBar {
     /// 12 px padding, 8 px gap. A clickable chip takes the raised fill on
     /// hover.
     fn chip(id: impl Into<ElementId>, clickable: bool, cx: &App) -> Stateful<Div> {
-        let theme = cx.theme();
-        let id = id.into();
-
-        let mut shape = Chamfer::new(ChamferCut::CONTROL).fill(island_fill(theme));
-
-        if clickable {
-            shape = shape
-                .fill_hover(theme.secondary)
-                .fill_active(theme.secondary_hover)
-                .interactive(ElementId::Name(format!("{id}-chamfer").into()));
-        }
-
-        div()
-            .id(id)
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(ShellMetrics::STATUS_CHIP_GAP)
-            .h(ShellMetrics::STATUS_CHIP_HEIGHT)
-            .px(ShellMetrics::STATUS_CHIP_PADDING_X)
-            .whitespace_nowrap()
-            .when(clickable, |chip| chip.cursor_pointer())
-            .child(shape)
+        StatusChip::new(id).clickable(clickable).build(cx)
     }
 
     fn pending_approvals_count(&self, cx: &App) -> usize {
@@ -279,22 +255,10 @@ impl StatusBar {
         let icon = AppIcon::for_driver(metadata.icon, metadata.category);
         let accent = Self::connection_accent(connection.profile.environment(), theme);
 
-        div()
-            .id("status-bar-connection")
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(ShellMetrics::STATUS_CHIP_GAP)
-            .h(ShellMetrics::STATUS_CHIP_HEIGHT)
-            .px(ShellMetrics::STATUS_CHIP_PADDING_X)
-            .whitespace_nowrap()
-            .text_color(accent)
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(
-                Chamfer::new(ChamferCut::CONTROL)
-                    .fill(accent.opacity(ShellMetrics::STATUS_CHIP_ALPHA)),
-            )
+        StatusChip::new("status-bar-connection")
+            .tone(accent)
+            .wash(true)
+            .build(cx)
             .child(
                 Icon::new(icon)
                     .size(ShellMetrics::STATUS_ICON)
@@ -462,7 +426,7 @@ impl Render for StatusBar {
             .gap(ShellMetrics::STATUS_BAR_GAP)
             .h(ShellMetrics::STATUS_BAR_HEIGHT)
             .px(ShellMetrics::STATUS_BAR_PADDING_X)
-            .font_family(AppFonts::INTERFACE)
+            .font_family(dbflux_components::fonts::ui_family(cx))
             .text_size(ShellMetrics::STATUS_FONT)
             .text_color(cx.theme().muted_foreground)
             .overflow_hidden()
@@ -563,7 +527,10 @@ mod tests {
         let inspection = StatusBar::readout_text("SELECT 1 \u{b7} 12 ms").inspect();
 
         assert_eq!(inspection.family, AppFonts::MONO);
-        assert_eq!(inspection.size_override, Some(ShellMetrics::STATUS_FONT));
+        assert_eq!(
+            inspection.size_override,
+            Some(ShellMetrics::STATUS_FONT.into())
+        );
     }
 
     fn task(status: TaskStatus, description: &str, elapsed_secs: f64) -> TaskSnapshot {

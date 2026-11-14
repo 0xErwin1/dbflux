@@ -13,6 +13,11 @@ DBFlux는 키보드 우선 설계입니다. 거의 모든 작업에 마우스 �
 DBFlux는 시작할 때 이전 세션(열려 있던 탭)을 복원합니다. 새로 설치한 경우 복원할
 것이 없으므로 포커스는 사이드바에 맞춰집니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/first-launch-dark.webp">
+  <img src="../images/getting-started/first-launch-light.webp" alt="새로 설치한 DBFlux의 메인 창. 사이드바가 비어 있고 연결이 없습니다">
+</picture>
+
 ## 연결 만들기
 
 `Ctrl+Shift+N`(macOS에서는 `Cmd+Shift+N`)을 눌러 연결 관리자를 열고, 드라이버를
@@ -21,11 +26,21 @@ DBFlux는 시작할 때 이전 세션(열려 있던 탭)을 복원합니다. 새
 선택기, 접근 탭(SSH, 프록시, 관리형 액세스), 연결이 실패했을 때의 동작을
 설명합니다.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/connection-manager-dark.webp">
+  <img src="../images/getting-started/connection-manager-light.webp" alt="로컬 데이터베이스용 PostgreSQL 폼이 채워진 연결 관리자">
+</picture>
+
 ## 첫 쿼리 실행
 
 `Ctrl+n`(macOS에서는 `Cmd+n`)으로 새 쿼리 탭을 열고, 활성 연결의 쿼리 언어로
 쿼리를 입력한 뒤 `Ctrl+Enter`(`Cmd+Enter`)를 눌러 실행합니다. 결과는 문서 안의
 결과 탭에 렌더링됩니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/getting-started/first-query-dark.webp">
+  <img src="../images/getting-started/first-query-light.webp" alt="PostgreSQL 연결의 쿼리 탭. SELECT 쿼리와 그 아래의 결과가 보입니다">
+</picture>
 
 ## 다음 단계
 

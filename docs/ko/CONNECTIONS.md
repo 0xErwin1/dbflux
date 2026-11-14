@@ -23,8 +23,10 @@
 
 연결 관리자에는 드라이버 선택기가 표시됩니다. 사용 가능한 드라이버는 바이너리가
 빌드될 때 포함된 기능에 따라 다르며, 표준 빌드에는 SQLite, PostgreSQL,
-MySQL/MariaDB, MongoDB, Redis, DynamoDB, Microsoft SQL Server, AWS 기반
-통합이 포함됩니다. 구성되어 있으면 외부에서 등록된 RPC 드라이버도 여기에
+MySQL/MariaDB, Microsoft SQL Server, Amazon Redshift, ClickHouse, TursoDB,
+MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3, AWS Secrets가
+포함됩니다. 선택기는 드라이버를 관계형, 문서, 키-값, 시계열 및 로그, 오브젝트
+스토리지, 시크릿 저장소 범주로 묶어 보여 줍니다. 구성되어 있으면 외부에서 등록된 RPC 드라이버도 여기에
 표시됩니다(`docs/RPC_SERVICES_CONFIG.md` 참조).
 
 `/`로 드라이버 목록을 필터링하고, `j`/`k`(또는 방향 키)로 이동하고, `Enter`로
@@ -34,6 +36,19 @@ MySQL/MariaDB, MongoDB, Redis, DynamoDB, Microsoft SQL Server, AWS 기반
 필요로 하는 필드만 표시합니다. SQLite 같은 파일 기반 드라이버는 파일 경로 폼을
 사용합니다. 대부분의 관계형 드라이버는 단일 연결 문자열도 받습니다.
 [폼 모드 vs. 직접 URI](#폼-모드-vs-직접-uri)를 참고하세요.
+
+메인 탭 끝의 **안전** 섹션에는 **읽기 전용** 토글이 있습니다. 켜면 DBFlux는 해당
+연결에서 데이터 그리드, 비주얼 쿼리 빌더, 스키마 비교로 하는 변경을 차단하고, 데이터나
+스키마를 바꾸는 쿼리 편집기의 문을 거부하며, `read` 클래스보다 높은 MCP 호출을 거부합니다
+([읽기 전용 연결](MCP_AI_INTEGRATION.md#읽기-전용-연결) 참고). 읽기 문은 그대로
+실행됩니다. 앱에서는 설정을 켜면 열려 있는 연결에 바로 적용되고, 끄면 다시 연결한 뒤에 적용됩니다. MCP는 어느 쪽 변경이든 다음 호출부터 반영합니다. 편집기는 문을 텍스트로 분류하므로 PostgreSQL `setval`처럼 부수 효과가 있는
+함수를 `SELECT`에서 호출하면 그대로 실행됩니다. 더 강한 경계는 여전히 데이터베이스의 읽기
+전용 자격 증명입니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
+  <img src="../images/connections/driver-picker-light.webp" alt="관계형, 문서, 키-값, 시계열, 오브젝트 스토리지로 드라이버를 묶어 보여 주는 연결 관리자의 드라이버 선택기">
+</picture>
 
 ---
 
@@ -49,6 +64,11 @@ Proxy, SSM 중 하나이며, 조합은 불가능합니다.
 | **SSH Tunnel** | SSH 호스트를 통해 로컬 포트 포워딩을 열고 그 경유로 연결합니다. |
 | **Proxy** | SOCKS5 또는 HTTP/HTTPS 프록시를 통해 연결을 라우팅합니다. |
 | **SSM Port Forwarding** | AWS Systems Manager를 사용해 인스턴스로 포트 포워딩한 뒤 터널을 통해 연결합니다. `aws` 빌드 기능이 필요합니다. |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/access-tab-dark.webp">
+  <img src="../images/connections/access-tab-light.webp" alt="Direct, SSH Tunnel, Proxy, SSM Port Forwarding이 보이도록 Access Method 목록을 연 PostgreSQL 연결의 액세스 탭">
+</picture>
 
 ### Connect를 눌렀을 때 일어나는 일
 
@@ -112,6 +132,24 @@ SSH 터널은 두 가지 방식으로 사용할 수 있습니다:
 
 **Test SSH**는 연결을 저장하지 않고 터널을 검증합니다.
 
+### SSH 설정에서 호스트 참조하기
+
+**SSH config host** 드롭다운에는 `~/.ssh/config`가 정의한 모든 `Host`가
+사용자, 호스트 이름, 포트와 함께 표시됩니다. 하나를 선택하면 해석된 값이
+아니라 별칭이 저장되므로, 나중에 SSH 설정을 수정하면 프로필을 건드리지 않고도
+다음 연결에 반영됩니다. 별칭이 선택된 동안 **Host**, **Port**, **Username**
+필드는 아무 값도 표시하지 않고 비활성화됩니다. 별칭이 곧 대상이기 때문입니다.
+키 경로를 비워 두면 해당 호스트가 지정한 `IdentityFile`을 사용하고, 지정하지
+않으면 SSH 에이전트나 기본 키를 사용합니다. `Include`, `Match`, 그리고
+`IdentityFile` 안의 `%h`, `%r`, `%d` 토큰은 OpenSSH와 같은 방식으로
+해석됩니다.
+
+설정에 `ProxyJump`나 `ProxyCommand`가 필요한 호스트는 목록에 표시되며 표시가
+붙습니다. DBFlux는 그 호스트에 연결할 수 없으며, 배스천 호스트로 직접
+연결하는 대신 그 이유와 함께 실패합니다. 호스트 키는 `~/.ssh/known_hosts`가
+아니라 DBFlux 데이터 디렉터리의 자체 저장소로 계속 검증되므로, 오랫동안
+터미널에서 접속해 온 호스트라도 처음에는 키 확인을 요청합니다.
+
 ### SSH 비밀이 저장되는 위치
 
 암호 문구와 비밀번호는 데이터베이스가 아닌 **OS 키링**에 저장됩니다. **Save**
@@ -171,6 +209,7 @@ SSH 터널은 두 가지 방식으로 사용할 수 있습니다:
 | **SSO session** | **AWS SSO Session** 프로필에 대한 선택적 참조입니다. 설정하면 Start URL과 리전이 상속되고 해당 인라인 필드는 회색으로 비활성화됩니다. |
 | **SSO Start URL** | Identity Center 포털 URL입니다(세션을 사용한다면 건너뜁니다). |
 | **Region** | 예: `us-east-1`. |
+| **Endpoint URL** | 선택 사항. 예: LocalStack의 경우 `http://localhost:4566`. `~/.aws/config`의 `[services]` 섹션을 통해 Secrets Manager와 SSM에만 적용됩니다. AWS Shared Credentials 프로필에도 같은 필드가 있습니다. |
 | **Account** | **로그인 후에** 채워지는 드롭다운 — SSO 세션이 접근할 수 있는 계정을 나열합니다. |
 | **Role** | 계정을 선택하면 채워지는 드롭다운입니다. |
 
@@ -220,6 +259,12 @@ URL, 리전을 입력하면 로그인을 진행한 뒤 계정과 역할을 나�
 **로컬** 터널 포트는 DBFlux와 OS가 자동으로 할당합니다 — 설정할 수 있는 것은
 원격 포트뿐입니다.
 
+SSM을 사용하려면 AWS CLI와 Session Manager 플러그인이 `PATH`에 있어야 합니다.
+macOS와 Linux에서 DBFlux를 터미널 밖(Finder, Dock, 데스크톱 항목)에서 실행하면
+시작할 때 로그인 셸의 `PATH`를 읽어 오므로, Homebrew로 설치했거나 셸 설정에서
+추가한 도구를 찾을 수 있습니다. 셸 시작에 5초 넘게 걸리면 DBFlux는 실행될 때의
+`PATH`를 그대로 사용하고 경고를 기록합니다.
+
 ---
 
 ## 값 소스: Secret Manager, Parameter Store, Auth Session
@@ -231,6 +276,8 @@ URL, 리전을 입력하면 로그인을 진행한 뒤 계정과 역할을 나�
 |--------|--------------|
 | **Literal** | 직접 입력한 값입니다(기본값). |
 | **Environment Variable** | 이름으로 환경 변수를 읽습니다. |
+| **Dotenv File** | 사용자가 소유한 `.env` 파일에서 키 하나를 읽습니다. `path#KEY` 형식으로 입력합니다. |
+| **Secret File** | 사용자가 소유한 파일 전체 또는 JSON 파일의 키 하나를 읽습니다. `path` 또는 `path#json_key` 형식으로 입력합니다. |
 | **Secret Manager** | 시크릿 공급자(AWS Secrets Manager)에서 가져옵니다. |
 | **Parameter Store** | 파라미터 공급자(AWS SSM Parameter Store)에서 가져옵니다. |
 | **Auth Session Field** | 확인된 인증 프로필의 세션/자격 증명에서 필드를 가져옵니다. |
@@ -239,9 +286,134 @@ URL, 리전을 입력하면 로그인을 진행한 뒤 계정과 역할을 나�
 
 - Secret/Parameter 소스는 JSON 시크릿 내부의 **JSON 키**를 대상으로 할 수
   있으므로, 하나의 저장된 JSON 문서가 여러 필드를 공급할 수 있습니다.
-- 확인된 값은 재연결 때마다 다시 가져오지 않도록 **5분** 동안 캐시됩니다.
+- Secret Manager와 Parameter Store 참조에서 확인된 값은 재연결 때마다 다시
+  가져오지 않도록 **5분** 동안 캐시됩니다. 환경 변수, dotenv 파일, 시크릿 파일
+  값은 사용할 때마다 읽습니다.
 - 인증 공급자에 의해 지원되는 Secret/Parameter 소스는 연결에 **인증 프로필이
   필요**합니다(연결 전에 강제됩니다).
+- LocalStack 또는 VPC 엔드포인트에 연결하려면 AWS 인증 프로필에 **Endpoint
+  URL**을 설정하세요. AWS SDK는 `AWS_ENDPOINT_URL_SECRETS_MANAGER`와
+  `AWS_ENDPOINT_URL_SSM`도 따릅니다.
+
+> **주의:** DBFlux는 프로필이 참조하는 `[services]` 섹션에 엔드포인트를
+> 기록하므로 Secrets Manager와 SSM에만 적용됩니다. 해당 프로필로 실행하는 AWS
+> CLI의 `secretsmanager`, `ssm` 명령과 SSM 포트 포워딩도 포함됩니다. DynamoDB,
+> S3, CloudWatch는 기본 엔드포인트를 유지합니다. 다른 프로필과 공유하는
+> `[services]` 섹션은 수정하지 않으며, 이 프로필에 별도의 사본을 만듭니다.
+
+### 환경 변수와 dotenv 파일
+
+두 소스 모두 DBFlux가 연결할 때마다 읽으므로, 교체된 값은 DBFlux를 다시 시작하지
+않아도 다음 연결부터 사용됩니다. DBFlux는 참조(변수 이름, 또는 파일 경로와 키)만
+저장하고 값은 저장하지 않으며, 두 소스 모두 캐시하지 않습니다.
+
+| 필드 입력 | 소스 | 읽는 값 |
+|-----------|------|---------|
+| `DB_PASSWORD` | Environment Variable | DBFlux를 시작한 환경의 `DB_PASSWORD` |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv File | 해당 파일의 `DB_PASSWORD` |
+
+dotenv 파일은 다음 규칙을 지켜야 합니다. 그렇지 않으면 파일과 키 이름은 알려 주지만
+값은 절대 보여 주지 않는 오류와 함께 연결이 실패합니다:
+
+- 경로는 절대 경로이거나 `~/`로 시작합니다.
+- 최대 64 KiB, 1024개 항목의 UTF-8 일반 파일입니다(일반 파일을 가리키는 심볼릭
+  링크는 따라갑니다).
+- Linux와 macOS에서는 소유자만 읽고 쓸 수 있어야 하며(`chmod 600`), 그
+  소유자는 DBFlux를 실행하는 사용자여야 합니다.
+- 각 줄은 빈 줄, `#` 주석, 또는 선택적인 `export` 접두사가 붙은 `KEY=value`입니다.
+  값은 따옴표 없이(끝의 ` # comment`는 제거), 작은따옴표로(그대로 사용), 또는
+  큰따옴표로(`\n`, `\t`, `\"`, `\\`, `\$`를 해석) 쓸 수 있습니다. 값은 한 줄이며
+  `${VAR}`는 확장하지 않습니다. 같은 키가 두 번 나오면 마지막 정의가 적용됩니다.
+
+| 문제 | 오류 |
+|------|------|
+| 변수가 설정되지 않음 | `Environment variable 'DB_PASSWORD' not set` |
+| 변수가 빈 문자열로 설정됨 | `Environment variable 'DB_PASSWORD' is empty` |
+| 파일 없음 | `Dotenv file '~/prod.env' does not exist` |
+| 파일을 읽을 수 없음 | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| 다른 사용자에게 열린 파일 | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| 다른 사용자 소유의 파일 | `Dotenv file '~/prod.env' is owned by another user; DBFlux only reads files owned by the user it runs as` |
+| 항목이 아닌 줄 | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| 파일에 키가 없음 | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| 값이 빈 키 | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+읽기에 실패하면 연결이 중단됩니다. DBFlux는 해당 필드에 대해 키링에 저장된
+비밀번호로 대체하지 않습니다.
+
+> **주의:** 데스크톱 런처는 셸이 아니라 세션의 환경으로 DBFlux를 시작합니다.
+> `~/.zshrc`나 `~/.bashrc`에서만 export한 변수는 애플리케이션 메뉴에서 시작한
+> DBFlux에 보이지 않습니다. dotenv 파일을 사용하거나 세션 환경에 변수를 설정하세요.
+
+### 시크릿 파일
+
+Secret File 소스는 sops-nix나 systemd 자격 증명이 프로비저닝한 시크릿처럼 다른
+도구가 기록한 파일을 읽습니다. DBFlux는 연결할 때마다 파일을 읽으므로,
+원자적 rename이나 심볼릭 링크 교체로 교체된 파일은 DBFlux를 재시작하지 않아도
+다음 연결에서 사용됩니다. 열린 연결에서 데이터베이스를 전환하면 비밀번호 필드만
+파일에서 다시 읽고, 파일 기반의 다른 필드는 연결할 때 확인된 값을 유지합니다. DBFlux는
+참조만 저장하고 파일 내용은 저장하지 않습니다:
+
+```json
+{"source": "file", "path": "~/.config/dbflux/db.json", "json_key": "password"}
+```
+
+| 필드 입력 | 값 |
+|-----------|----|
+| `/run/secrets/db_password` | 파일 전체에서 마지막 줄바꿈(`\n` 또는 `\r\n`) 정확히 하나를 제거한 값 |
+| `~/.config/dbflux/db.json#password` | JSON 객체의 최상위 `password` 필드. 문자열, 숫자 또는 불리언이어야 합니다 |
+
+입력은 마지막 `#`에서 나뉘며, 키 부분은 선택 사항입니다.
+
+시크릿 파일은 다음 규칙을 지켜야 하며, 그렇지 않으면 파일과 키 이름은 알려 주지만
+파일 내용은 절대 보여 주지 않는 오류와 함께 연결이 실패합니다:
+
+- 경로는 절대 경로이거나 `~/`로 시작합니다.
+- 최대 64 KiB의 UTF-8 일반 파일입니다(일반 파일을 가리키는 심볼릭 링크는
+  따라가며, 디렉터리와 FIFO는 거부합니다).
+- Linux와 macOS에서는 소유자만 읽거나 쓸 수 있어야 합니다. 그룹이나 다른
+  사용자의 읽기 또는 쓰기 비트가 있으면 거부하며, `0400`과 `0600` 모드는
+  동작합니다.
+- Linux와 macOS에서는 DBFlux를 실행하는 사용자가 소유한 파일이어야 합니다.
+  root를 포함한 다른 사용자 소유의 파일은 모드가 읽기를 허용해도 거부합니다.
+
+| 문제 | 오류 |
+|------|------|
+| 파일 없음 | `Secret file '/run/secrets/db_password' does not exist` |
+| 파일을 읽을 수 없음 | `Secret file '/run/secrets/db_password' cannot be read: permission denied` |
+| 디렉터리, FIFO 등 일반 파일이 아님 | `Secret file '/run/secrets/db_password' is not a regular file` |
+| 파일이 너무 큼 | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
+| 내용이 UTF-8이 아님 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
+| 다른 사용자에게 열린 파일 | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| 다른 사용자 소유의 파일 | `Secret file '/run/secrets/db_password' is owned by another user; DBFlux only reads files owned by the user it runs as` |
+| 빈 파일 | `Secret file '/run/secrets/db_password' is empty` |
+| 키를 지정했지만 내용이 올바른 JSON이 아니거나 객체가 아님 | `Secret file '~/.config/dbflux/db.json' is not a valid JSON object, so key 'password' cannot be read` |
+| `#` 뒤의 키가 비어 있음 | `JSON key in secret file '~/.config/dbflux/db.json' is empty` |
+| 객체에 키가 없음 | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
+| 키 값이 객체, 배열 또는 null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
+| 키 값이 빈 문자열 | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |
+
+파일이 없거나 잠겨 있거나 접근이 거부되면 눈에 보이는 오류와 함께 연결이
+중단됩니다. DBFlux는 해당 필드에 대해 키링에 저장된 비밀번호로 대체하지 않습니다.
+
+#### sops-nix, secretspec, systemd 자격 증명의 파일
+
+DBFlux는 파일을 읽기만 합니다. 파일을 소유하고 복호화하는 것은 이 도구들이며,
+DBFlux는 이 도구들을 실행하지 않습니다.
+
+| 도구 | 설정할 내용 |
+|------|-------------|
+| sops-nix (NixOS 모듈) | 시크릿은 `/run/secrets/<name>`에 나타납니다. 기본적으로 root 소유이므로 시크릿의 `owner`를 사용자 계정으로 설정하세요. 기본값 `mode = "0400"`을 유지하세요. `0440`처럼 그룹이 읽을 수 있는 모드는 거부됩니다. |
+| sops-nix (Home Manager 모듈) | 시크릿은 `$XDG_RUNTIME_DIR/secrets.d`에 있고 `~/.config/sops-nix/secrets/`의 심볼릭 링크로 노출됩니다. 필드에 심볼릭 링크를 지정하세요. |
+| secretspec | 확인된 시크릿을 사용자가 소유한 `0600` 모드 파일에 기록하고 필드에 그 파일을 지정하세요. |
+| systemd 자격 증명 | 아래를 참고하세요. |
+
+`LoadCredential=`, `LoadCredentialEncrypted=`, `SetCredential=`은
+`$CREDENTIALS_DIRECTORY` 아래의 파일을 해당 유닛의 프로세스에만 노출합니다. 이
+디렉터리는 서비스 전용이므로, 그 유닛 밖에서 시작한 데스크톱 DBFlux는 읽을 수
+없으며 접근할 수 있다고 가정해서는 안 됩니다. 유닛 안에서 실행한 DBFlux(예:
+`LoadCredential=`을 지정한 `systemd-run --user` 임시 서비스)만
+`$CREDENTIALS_DIRECTORY/<name>`을 사용할 수 있습니다. DBFlux는 경로의 환경 변수를
+확장하지 않으므로 확장된 절대 경로를 입력하세요.
 
 ---
 
@@ -268,6 +440,12 @@ URL, 리전을 입력하면 로그인을 진행한 뒤 계정과 역할을 나�
 - **연결당 하나의 액세스 방식.** 방식을 전환하면 다른 방식은 지워집니다.
 - **비밀은 DBFlux 데이터베이스가 아닌 OS 키링에 저장됩니다.** 키링을 사용할
   수 없으면 "Save" 확인란이 사라지고 비밀이 유지되지 않습니다.
+- **저장하지 않은 비밀번호는 연결할 때 묻습니다.** 연결의 비밀번호가 키링에
+  저장되어 있지 않고 값 소스에서도 가져오지 않으면, DBFlux는 연결하기 전에
+  비밀번호를 묻고, 연결을 끊을 때까지 그 연결이 여는 모든 데이터베이스에 이를
+  사용합니다. 비밀번호가 필요 없는 서버라면 비워 두세요. **DBFlux를 닫을
+  때까지 기억**을 선택하면 키링이 아닌 메모리에만 보관되어 이후 연결에서 다시
+  묻지 않습니다. 취소하면 연결은 닫힌 상태로 남습니다.
 - **비활성화된 프록시나 No-Proxy 일치는 조용히 직접 연결됩니다.**
 - **`No Proxy`는 CIDR을 지원하지 않습니다** — IP 범위가 아니라
   호스트/접미사를 나열하세요.

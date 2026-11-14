@@ -112,6 +112,9 @@ fn global_layer() -> KeymapLayer {
         KeyChord::new("w", Modifiers::primary()),
         Command::CloseCurrentTab,
     );
+    // Quit goes through the workspace, which asks first when a query is still
+    // running. macOS also shows this chord beside Quit in the application menu.
+    layer.bind(KeyChord::new("q", Modifiers::primary()), Command::Quit);
     // Ctrl+Tab / Ctrl+Shift+Tab stay literal Ctrl on every platform — that is
     // the long-standing tabbed-UI idiom (browsers, terminals). Cmd+Tab on
     // macOS is the system app switcher and must not be shadowed.
@@ -202,9 +205,53 @@ fn global_layer() -> KeymapLayer {
         Command::ToggleSidebar,
     );
 
+    // Ctrl+Cmd+F is the macOS full-screen convention; F11 elsewhere.
+    #[cfg(target_os = "macos")]
+    let full_screen = KeyChord::new(
+        "f",
+        Modifiers {
+            ctrl: true,
+            platform: true,
+            ..Modifiers::none()
+        },
+    );
+    #[cfg(not(target_os = "macos"))]
+    let full_screen = KeyChord::new("f11", Modifiers::none());
+    layer.bind(full_screen, Command::ToggleFullScreen);
+
+    // Interface size, as in most desktop apps. `+` and `=` share a key on
+    // common layouts, and some platforms report the chord with Shift held as
+    // `+`, so every form of that key makes the interface larger.
+    for key in ["=", "+"] {
+        layer.bind(
+            KeyChord::new(key, Modifiers::primary()),
+            Command::IncreaseInterfaceSize,
+        );
+        layer.bind(
+            KeyChord::new(key, Modifiers::primary_shift()),
+            Command::IncreaseInterfaceSize,
+        );
+    }
+    layer.bind(
+        KeyChord::new("-", Modifiers::primary()),
+        Command::DecreaseInterfaceSize,
+    );
+    layer.bind(
+        KeyChord::new("0", Modifiers::primary()),
+        Command::ResetInterfaceSize,
+    );
+
     // Tab context menu — stays Ctrl+M everywhere: Cmd+M is the system
     // "minimize window" shortcut on macOS.
     layer.bind(KeyChord::new("m", Modifiers::ctrl()), Command::OpenTabMenu);
+
+    // The native console of the active document, where its connection has
+    // one. A global chord, so it also closes the console from its input. The
+    // key-value document binds the same keys on itself.
+    layer.bind(
+        KeyChord::new("`", Modifiers::ctrl()),
+        Command::ToggleConsole,
+    );
 
     bind_workspace_commands(&mut layer);
 
@@ -302,7 +349,7 @@ fn sidebar_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
     layer.bind(
         KeyChord::new("q", Modifiers::none()),
-        Command::SidebarNextTab,
+        Command::SidebarPrevTab,
     );
     layer.bind(
         KeyChord::new("e", Modifiers::none()),
@@ -531,6 +578,15 @@ fn results_layer() -> KeymapLayer {
         Command::NewQueryTab,
     );
 
+    // The secret store's Edit value; other documents leave it unhandled.
+    layer.bind(KeyChord::new("e", Modifiers::none()), Command::EditValue);
+
+    // The secret store's Roll back; other documents leave it unhandled.
+    layer.bind(
+        KeyChord::new("b", Modifiers::none()),
+        Command::RollBackVersion,
+    );
+
     // Panel navigation (Ctrl+hjkl) — vim-style, literal Ctrl on every platform.
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusToolbar);
@@ -651,6 +707,10 @@ fn results_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("space", Modifiers::ctrl()),
         Command::ToggleRowInspector,
+    );
+    layer.bind(
+        KeyChord::new("s", Modifiers::shift()),
+        Command::FindSimilarRows,
     );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.

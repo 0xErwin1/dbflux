@@ -12,14 +12,20 @@
 ## 기능
 
 - SQL 쿼리 실행과 스키마 탐색을 갖춘 PostgreSQL 관계형 드라이버입니다.
+- 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL 문 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 콘솔 명령에도 편집기의 행 제한이 적용됩니다.
 - 스키마, 테이블, 뷰, 인덱스, 외래 키, CHECK 제약 조건, UNIQUE 제약 조건, 사용자 정의 타입을 지원합니다.
 - 저장 루틴(함수, 프로시저, 집계 함수, 윈도우 함수)을 스키마 트리에서 읽기 전용 정의 뷰어와 함께 노출합니다.
-- 인증, SSL, SSH 터널링, URI/수동 연결 모드를 지원합니다.
+- 인증, SSL, SSH 터널링, URI/수동 연결 모드를 지원합니다. libpq와 마찬가지로 `verify-ca`는 인증서 체인만 검증하고, `verify-full`은 호스트 이름도 확인합니다.
+- TLS 인증서 파일: Connection Manager의 루트 인증서, 클라이언트 인증서, 클라이언트 키 필드 또는 libpq URI 매개변수 `sslrootcert`, `sslcert`, `sslkey`(예: `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). `verify-ca`와 `verify-full`에서는 루트 인증서가 신뢰할 수 있는 루트에 추가되며, 체인을 검증하지 않는 다른 모드에서는 무시됩니다. 클라이언트 인증서와 키는 `disable`을 제외한 모든 모드에서 상호 TLS용으로 제시됩니다. 파일은 PEM 형식이며 클라이언트 키는 PKCS#8이어야 합니다. 파일이 없거나 읽을 수 없거나 유효하지 않은 경우, 또는 키 없이 클라이언트 인증서만 있는 경우(또는 그 반대)에는 연결을 시도하기 전에 해당 파일을 명시한 오류로 연결이 실패합니다. `sslmode=disable`에서는 파일이 무시됩니다.
 - PostgreSQL 취소 토큰을 통한 쿼리 취소를 지원합니다.
 - CRUD, 인덱스, reindex, 외래 키, 타입 작업을 위한 PostgreSQL 전용 SQL/코드 생성을 포함합니다.
 - 다중 문 스크립트(여러 개의 `;`로 구분된 문)는 단순 쿼리 프로토콜을 통해 배치로 실행되며 문마다 하나의 결과 집합을 반환합니다.
+- 쿼리가 발생시킨 서버 알림과 경고(예: 단독 `COMMIT`의 `WARNING: there is no transaction in progress` 또는 `RAISE NOTICE`)는 그 결과와 함께 반환됩니다. 배치는 모든 알림을 기본 결과에 붙이며, 실패한 쿼리는 알림을 버립니다. 쿼리는 처음 100개의 알림을 유지하고, 나머지 개수를 알려 주는 알림 하나를 덧붙입니다.
 - 데이터 전송 엔진: 네이티브 다중 행 `INSERT` 대량 적재(`BULK_INSERT`), 원본 테이블의 열을 기반으로 한 드라이버 네이티브 `CREATE TABLE` DDL, `TRUNCATE TABLE` 지원, FK 안전 마이그레이션을 위한 참조 무결성 토글(`SET session_replication_role`).
 - 검증된 1차원 배열을 포함해 `pgvector`의 `vector`, `halfvec`, `sparsevec` 값을 텍스트 결과로 표시합니다.
+- `pgvector` `vector` 열이 있는 테이블에서 선택한 행과 가장 가까운 행을 L2 거리, 코사인 거리 또는 내적으로 찾습니다. 쿼리는 거리를 `nearest_distance`(`dbflux_core::NEAREST_DISTANCE_COLUMN`)로 이름 붙이고, 그리드는 선택한 행 아래에 거리를 첫 열로 보여 주며 pgvector의 음의 내적 대신 내적 자체를 표시합니다. `halfvec`와 `sparsevec` 열은 이 검색을 제공하지 않습니다.
+- `json` 또는 `jsonb` 열이 있는 테이블은 그리드 옆에 문서 보기를 제공합니다. 각 행은 JSON 값이 펼쳐진 문서로 열립니다. 트리는 읽기 전용이며 편집은 그리드에서 합니다.
+- TimescaleDB 하이퍼테이블은 시계열로 읽힙니다. 세부 정보에 시간 차원을 지정하는 `Hypertable` 저장 힌트가 붙고, 테이블은 행 옆에 그 열을 축으로 한 차트와 함께 열립니다. TimescaleDB가 없는 서버에서는 달라지는 것이 없습니다.
 - 1차원 배열을 포함해 전문 검색의 `tsvector`와 `tsquery` 값을 PostgreSQL의 정규 텍스트 형태로 표시합니다.
 - 1차원 `numeric[]` 배열을 포함해 `numeric` 값을 PostgreSQL이 저장한 정확한 십진수로 표시합니다.
 - `infinity`와 `-infinity` 날짜와 타임스탬프, 그리고 그 1차원 배열을 PostgreSQL 자체의 텍스트로 표시합니다.
@@ -72,6 +78,7 @@ PostgreSQL 시스템 뷰에서 가져온 엄선된 실시간 서버 지표 집�
 - 루틴 편집과 실행은 지원되지 않습니다. 루틴 뷰어는 읽기 전용입니다.
 - 취소는 최선 노력이며 취소 시점의 서버/세션 상태에 따라 달라집니다.
 - 코드 생성은 지원되는 PostgreSQL 구문만 대상으로 합니다. 지원되지 않는 생성기 ID는 `NotSupported`를 반환합니다.
+- 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `BEGIN READ ONLY` 안에서 실행된 뒤 롤백되며, 열린 트랜잭션 안에서는 거부됩니다. PostgreSQL은 세션의 데이터 변경을 거부하지만, 읽기 전용 트랜잭션에서도 변경할 수 있는 `TEMPORARY` 테이블은 예외이며 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다. 열린 트랜잭션을 감지하기 위해 드라이버는 먼저 `SAVEPOINT` 프로브를 실행하며, 이 프로브는 트랜잭션 밖에서는 SQLSTATE `25P01`(활성 트랜잭션 없음)로 실패합니다. 따라서 트랜잭션 밖에서 실행되는 읽기 전용 요청마다, 편집기 자동 새로 고침의 각 주기를 포함해, 서버 로그에 `ERROR`가 한 줄씩 기록됩니다.
 
 ## DDL 지원 범위
 

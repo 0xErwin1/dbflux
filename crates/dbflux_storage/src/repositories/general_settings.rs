@@ -4,7 +4,8 @@
 //! replacing the JSON blob previously stored in app_settings.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::types::ValueRef;
+use rusqlite::{Connection, Row, params};
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
@@ -40,6 +41,10 @@ impl GeneralSettingsRepository {
                        style, schema_snapshot_retention,
                        object_preview_size_limit_mib, language,
                        key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
+                       ui_font_family, ui_font_size, editor_font_family, editor_font_size,
+                       grid_font_family, grid_font_size, toast_auto_dismiss_secs,
+                       table_alias_completion, table_alias_use_as,
+                       grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -74,7 +79,19 @@ impl GeneralSettingsRepository {
                 vim_mode: row.get(20)?,
                 editor_row_limit: row.get(21)?,
                 vim_leader: row.get(22)?,
-                updated_at: row.get(23)?,
+                ui_font_family: row.get(23)?,
+                ui_font_size: row.get(24)?,
+                editor_font_family: row.get(25)?,
+                editor_font_size: row.get(26)?,
+                grid_font_family: row.get(27)?,
+                grid_font_size: row.get(28)?,
+                toast_auto_dismiss_secs: row.get(29)?,
+                table_alias_completion: row.get(30)?,
+                table_alias_use_as: row.get(31)?,
+                grid_fk_labels: row.get(32)?,
+                scrollbar_visibility: row.get(33)?,
+                workspace_inspector_width_px: read_inspector_width(row, 34)?,
+                updated_at: row.get(35)?,
             })
         });
 
@@ -103,8 +120,12 @@ impl GeneralSettingsRepository {
                     style, schema_snapshot_retention,
                     object_preview_size_limit_mib, language,
                     key_value_size_limit_mib, vim_mode, editor_row_limit, vim_leader,
+                    ui_font_family, ui_font_size, editor_font_family, editor_font_size,
+                    grid_font_family, grid_font_size, toast_auto_dismiss_secs,
+                    table_alias_completion, table_alias_use_as,
+                    grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
                     updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, datetime('now'))
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -128,6 +149,18 @@ impl GeneralSettingsRepository {
                     vim_mode = excluded.vim_mode,
                     editor_row_limit = excluded.editor_row_limit,
                     vim_leader = excluded.vim_leader,
+                    ui_font_family = excluded.ui_font_family,
+                    ui_font_size = excluded.ui_font_size,
+                    editor_font_family = excluded.editor_font_family,
+                    editor_font_size = excluded.editor_font_size,
+                    grid_font_family = excluded.grid_font_family,
+                    grid_font_size = excluded.grid_font_size,
+                    toast_auto_dismiss_secs = excluded.toast_auto_dismiss_secs,
+                    table_alias_completion = excluded.table_alias_completion,
+                    table_alias_use_as = excluded.table_alias_use_as,
+                    grid_fk_labels = excluded.grid_fk_labels,
+                    scrollbar_visibility = excluded.scrollbar_visibility,
+                    workspace_inspector_width_px = excluded.workspace_inspector_width_px,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -153,6 +186,18 @@ impl GeneralSettingsRepository {
                     settings.vim_mode,
                     settings.editor_row_limit,
                     settings.vim_leader,
+                    settings.ui_font_family,
+                    settings.ui_font_size,
+                    settings.editor_font_family,
+                    settings.editor_font_size,
+                    settings.grid_font_family,
+                    settings.grid_font_size,
+                    settings.toast_auto_dismiss_secs,
+                    settings.table_alias_completion,
+                    settings.table_alias_use_as,
+                    settings.grid_fk_labels,
+                    settings.scrollbar_visibility,
+                    settings.workspace_inspector_width_px,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -163,6 +208,23 @@ impl GeneralSettingsRepository {
         info!("Upserted general settings");
         Ok(())
     }
+}
+
+/// Reads the inspector width without failing the whole row.
+///
+/// SQLite stores any type in a column, and a value written by hand or by an
+/// older build can be text or a blob. Only the width falls back in that case;
+/// the rest of the row still loads.
+fn read_inspector_width(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<f64>> {
+    Ok(match row.get_ref(index)? {
+        ValueRef::Null => None,
+        ValueRef::Integer(value) => Some(value as f64),
+        ValueRef::Real(value) => Some(value),
+        ValueRef::Text(bytes) => std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|text| text.trim().parse::<f64>().ok()),
+        ValueRef::Blob(_) => None,
+    })
 }
 
 /// DTO for general_settings table.
@@ -205,6 +267,36 @@ pub struct GeneralSettingsDto {
     /// The key that starts Vim leader sequences, in the keymap's stored key
     /// form (`space`, `,`).
     pub vim_leader: String,
+    /// Interface font family; `None` selects the bundled interface font.
+    pub ui_font_family: Option<String>,
+    /// Interface font size in pixels.
+    pub ui_font_size: f64,
+    /// Code editor font family; `None` selects the bundled monospace font.
+    pub editor_font_family: Option<String>,
+    /// Code editor font size in pixels.
+    pub editor_font_size: f64,
+    /// Data grid font family; `None` falls back to the editor family.
+    pub grid_font_family: Option<String>,
+    /// Data grid font size in pixels.
+    pub grid_font_size: f64,
+    /// Auto-dismiss delay for toasts, in seconds; `0` keeps them until the
+    /// user dismisses them.
+    pub toast_auto_dismiss_secs: i64,
+    /// Whether accepting a table completion after `FROM` / `JOIN` appends a
+    /// generated alias: 1 on, 0 off.
+    pub table_alias_completion: i32,
+    /// Whether that alias is written with `AS`: 1 on, 0 off.
+    pub table_alias_use_as: i32,
+    /// Whether foreign-key grid cells resolve to the referenced row's label:
+    /// 1 on, 0 off.
+    pub grid_fk_labels: i32,
+    /// Serialized `ScrollbarVisibility` value: `"while_scrolling"`,
+    /// `"on_hover"` or `"always"`. Unknown values fall back to
+    /// `"while_scrolling"` at the loader layer.
+    pub scrollbar_visibility: String,
+    /// Width in pixels the row inspector was last resized to, or `None` to
+    /// open it at its default width.
+    pub workspace_inspector_width_px: Option<f64>,
     pub updated_at: String,
 }
 
@@ -225,6 +317,32 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
         path
+    }
+
+    #[test]
+    fn a_non_numeric_inspector_width_only_drops_the_width() {
+        let path = temp_db("width_text");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+        conn.execute(
+            "UPDATE cfg_general_settings SET theme = 'light', ui_font_size = 15.0, \
+             workspace_inspector_width_px = 'wide' WHERE id = 1",
+            [],
+        )
+        .expect("store text in the width column");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let fetched = repo
+            .get()
+            .expect("a text width must not fail the row read")
+            .expect("the row exists");
+        assert_eq!(fetched.workspace_inspector_width_px, None);
+        assert_eq!(fetched.theme, "light", "other settings still load");
+        assert_eq!(fetched.ui_font_size, 15.0);
     }
 
     #[test]
@@ -262,6 +380,18 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
 
@@ -314,6 +444,18 @@ mod tests {
                 vim_mode: 0,
                 editor_row_limit: 10_000,
                 vim_leader: "space".to_string(),
+                ui_font_family: None,
+                ui_font_size: 13.0,
+                editor_font_family: None,
+                editor_font_size: 13.0,
+                grid_font_family: None,
+                grid_font_size: 12.5,
+                toast_auto_dismiss_secs: 8,
+                table_alias_completion: 1,
+                table_alias_use_as: 0,
+                grid_fk_labels: 0,
+                scrollbar_visibility: "while_scrolling".to_string(),
+                workspace_inspector_width_px: None,
                 updated_at: String::new(),
             };
 
@@ -386,6 +528,18 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
 
@@ -430,6 +584,10 @@ mod tests {
         );
         assert_eq!(fetched.vim_mode, 0, "vim_mode column default should be 0");
         assert_eq!(
+            fetched.grid_fk_labels, 0,
+            "grid_fk_labels column default should be 0"
+        );
+        assert_eq!(
             fetched.vim_leader, "space",
             "vim_leader column default should be 'space'"
         );
@@ -472,6 +630,18 @@ mod tests {
             vim_mode: 0,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
 
@@ -518,6 +688,18 @@ mod tests {
             vim_mode: 1,
             editor_row_limit: 10_000,
             vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
 
@@ -533,6 +715,178 @@ mod tests {
         .expect("should upsert the leader");
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.vim_leader, ",");
+
+        drop(repo);
+        std::fs::remove_file(&path).expect("remove the test database");
+    }
+
+    #[test]
+    fn migrated_row_defaults_fonts_to_bundled_families_and_default_sizes() {
+        let path = temp_db("fonts_column_default");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+        let fetched = repo.get().expect("should get").expect("should exist");
+
+        assert_eq!(fetched.ui_font_family, None);
+        assert_eq!(fetched.ui_font_size, 13.0);
+        assert_eq!(fetched.editor_font_family, None);
+        assert_eq!(fetched.editor_font_size, 13.0);
+        assert_eq!(fetched.grid_font_family, None);
+        assert_eq!(fetched.grid_font_size, 12.5);
+
+        drop(repo);
+        std::fs::remove_file(&path).expect("remove the test database");
+    }
+
+    #[test]
+    fn fonts_round_trip_through_upsert() {
+        let path = temp_db("fonts_roundtrip");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: String::new(),
+            key_value_size_limit_mib: 10,
+            vim_mode: 0,
+            editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
+            ui_font_family: Some("Inter".to_string()),
+            ui_font_size: 15.5,
+            editor_font_family: Some("JetBrains Mono".to_string()),
+            editor_font_size: 16.0,
+            grid_font_family: Some("Fira Code".to_string()),
+            grid_font_size: 14.0,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.ui_font_family.as_deref(), Some("Inter"));
+        assert_eq!(fetched.ui_font_size, 15.5);
+        assert_eq!(
+            fetched.editor_font_family.as_deref(),
+            Some("JetBrains Mono")
+        );
+        assert_eq!(fetched.editor_font_size, 16.0);
+        assert_eq!(fetched.grid_font_family.as_deref(), Some("Fira Code"));
+        assert_eq!(fetched.grid_font_size, 14.0);
+
+        repo.upsert(&GeneralSettingsDto {
+            ui_font_family: None,
+            editor_font_family: None,
+            grid_font_family: None,
+            ..dto
+        })
+        .expect("should upsert cleared families");
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.ui_font_family, None);
+        assert_eq!(fetched.editor_font_family, None);
+        assert_eq!(fetched.grid_font_family, None);
+        assert_eq!(fetched.grid_font_size, 14.0);
+
+        drop(repo);
+        std::fs::remove_file(&path).expect("remove the test database");
+    }
+
+    #[test]
+    fn grid_fk_labels_round_trips_through_upsert() {
+        let path = temp_db("grid_fk_labels_roundtrip");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: String::new(),
+            key_value_size_limit_mib: 10,
+            vim_mode: 0,
+            editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 1,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.grid_fk_labels, 1);
+        assert_eq!(fetched.scrollbar_visibility, "while_scrolling");
+
+        repo.upsert(&GeneralSettingsDto {
+            scrollbar_visibility: "always".to_string(),
+            ..dto
+        })
+        .expect("should upsert the scrollbar visibility");
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.scrollbar_visibility, "always");
+        assert_eq!(fetched.grid_fk_labels, 1);
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");

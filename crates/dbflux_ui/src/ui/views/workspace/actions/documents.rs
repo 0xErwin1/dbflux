@@ -1,10 +1,55 @@
 use super::*;
+use crate::ui::document::file_format::{FileDocumentFormat, file_document_format};
 use crate::ui::document::pane::CloseDisposition;
+use crate::ui::document::{FileDocumentKey, ObjectSavedCallback};
 use crate::ui::labels::{
     NoActiveConnectionKind, documents_default_title, documents_no_active_connection_message,
 };
+use dbflux_ui_base::app_state_entity::rescan_script_root_in_background;
 
 impl Workspace {
+    /// Opens a data file or object in the document for its format, or focuses
+    /// the tab that already shows it. This is the one place that maps a
+    /// [`FileDocumentFormat`] to a document; callers check
+    /// [`file_document_format`] first and route here.
+    ///
+    /// `on_object_saved` is told an object's key after each save that
+    /// replaces it.
+    pub(in crate::ui::views::workspace) fn open_file_document(
+        &mut self,
+        file: FileDocumentKey,
+        on_object_saved: Option<ObjectSavedCallback>,
+        cx: &mut Context<Self>,
+    ) {
+        let name = match &file {
+            FileDocumentKey::Local { path } => path.as_path(),
+            FileDocumentKey::Object { key, .. } => std::path::Path::new(key),
+        };
+
+        match file_document_format(name) {
+            Some(FileDocumentFormat::Delimited) => {
+                self.open_delimited_file(file, on_object_saved, cx);
+            }
+
+            // Read-only: an object is never replaced, so nothing is told of
+            // a save.
+            Some(FileDocumentFormat::Parquet) => {
+                self.open_parquet_file(file, cx);
+            }
+
+            Some(FileDocumentFormat::Spreadsheet) => {
+                self.open_spreadsheet_file(file, on_object_saved, cx);
+            }
+
+            None => {
+                log::warn!(
+                    "Not opening {:?} as a file document: its format is not recognized",
+                    name
+                );
+            }
+        }
+    }
+
     /// Opens a table in a new DataDocument tab, or focuses the existing one.
     pub(in crate::ui::views::workspace) fn open_table_document(
         &mut self,
@@ -75,6 +120,70 @@ impl Workspace {
         });
 
         log::info!("Opened table document: {:?}.{:?}", table.schema, table.name);
+    }
+
+    /// Opens the table a foreign-key value points at, positioned on the
+    /// referenced row: reuses (or opens) the table's tab, then replaces its
+    /// filter with an equality on the key column. A tab whose rows an
+    /// applied builder query owns keeps that query — the referenced row
+    /// opens in a tab of its own, since the equality would land in a filter
+    /// input the builder hides. A missing connection is reported by
+    /// [`Self::open_table_document`]; a tab that cannot be found afterwards
+    /// is left alone.
+    pub(in crate::ui::views::workspace) fn open_table_at_referenced_row(
+        &mut self,
+        target: crate::ui::document::ReferencedRowTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = crate::ui::document::DocumentKey::Table {
+            profile_id: target.profile_id,
+            database: target.database.clone(),
+            table: target.table.clone(),
+        };
+
+        let builder_tab = {
+            let manager = self.tab_manager.read(cx);
+            manager
+                .find_by_key(&key, cx)
+                .and_then(|id| manager.document(id))
+                .is_some_and(|tab| tab.as_pane().has_applied_builder_query(cx))
+        };
+
+        self.open_table_document(
+            target.profile_id,
+            target.table.clone(),
+            target.database.clone(),
+            if builder_tab {
+                TabPlacement::NewTab
+            } else {
+                TabPlacement::ReuseExisting
+            },
+            window,
+            cx,
+        );
+
+        // With a tab opened beside the builder one, `find_by_key` still
+        // returns the builder tab (the first match), so the fresh tab is
+        // addressed by the activation opening it produced.
+        let doc_id = if builder_tab {
+            self.tab_manager.read(cx).active_id()
+        } else {
+            self.tab_manager.read(cx).find_by_key(&key, cx)
+        };
+
+        if let Some(doc_id) = doc_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                if let Some(tab) = mgr.document(doc_id) {
+                    tab.as_pane().apply_table_filter(
+                        &target.key_column,
+                        &target.key_value,
+                        window,
+                        cx,
+                    );
+                }
+            });
+        }
     }
 
     pub(in crate::ui::views::workspace) fn open_collection_document(
@@ -379,10 +488,249 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens one secret in its own tab, or focuses the tab that already shows
+    /// it. The key carries the region the listing was loaded under, so the
+    /// same name in two regions gets two tabs.
+    /// Opens the secret the active tab asked to have opened in a tab of its
+    /// own, if it asked. The secret store listing raises the request from its
+    /// expand button and its row menu.
+    pub(in crate::ui::views::workspace) fn open_pending_secret(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active_id = self.tab_manager.read(cx).active_id();
+        let pending = active_id.and_then(|id| {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.document(id).and_then(|tab| {
+                    tab.take_pending_open_secret(cx)
+                        .map(|request| (tab.connection_id(cx), request))
+                })
+            })
+        });
+
+        if let Some((Some(profile_id), request)) = pending {
+            self.open_secret_document(profile_id, request, window, cx);
+        }
+    }
+
+    pub(in crate::ui::views::workspace) fn open_secret_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        request: crate::ui::document::SecretOpenRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = crate::ui::document::DocumentKey::Secret {
+            profile_id,
+            store_id: request.store_id.clone(),
+            name: request.name.clone(),
+            version: request.version.clone(),
+            region: request.region.clone(),
+        };
+
+        if let Some(id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| mgr.activate(id, cx));
+            self.set_focus(FocusTarget::Document, window, cx);
+
+            // The tab that exists takes the editor the way a key press would.
+            if request.edit {
+                let tab_manager = self.tab_manager.clone();
+                tab_manager.update(cx, |mgr, cx| {
+                    if let Some(tab) = mgr.document(id) {
+                        tab.dispatch_command(crate::keymap::Command::EditValue, window, cx);
+                    }
+                });
+            }
+            return;
+        }
+
+        // The tab reads its store's capabilities from the live connection when
+        // it is created, and keeps them: without one it would stay empty after
+        // a reconnect, with no writes and no history.
+        let connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        if !connected {
+            let message =
+                documents_no_active_connection_message(NoActiveConnectionKind::SecretStore);
+            Toast::error(message.clone())
+                .meta_right(now_hms())
+                .action(copy_action(message))
+                .push(cx);
+            return;
+        }
+
+        let edit = request.edit;
+        let doc = cx.new(|cx| {
+            crate::ui::document::SecretDocument::new(
+                profile_id,
+                request.store_id,
+                request.name,
+                request.version,
+                request.region,
+                self.app_state.clone(),
+                cx,
+            )
+        });
+
+        if edit {
+            doc.update(cx, |doc, cx| doc.begin_edit(cx));
+        }
+
+        let pane = crate::ui::document::SecretDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Opens the document of one secret store, or focuses the store's
+    /// existing tab. A `path` of a hierarchical store opens at that path, and
+    /// navigates an existing tab to it.
+    pub(in crate::ui::views::workspace) fn open_secret_store_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        store_id: String,
+        path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::SecretStore {
+                    profile_id,
+                    store_id: store_id.clone(),
+                },
+                cx,
+            )
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                let message =
+                    documents_no_active_connection_message(NoActiveConnectionKind::SecretStore);
+                Toast::error(message.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(message))
+                    .push(cx);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    if path.is_some()
+                        && let Some(tab) = mgr.documents().iter().find(|tab| tab.id() == id)
+                    {
+                        tab.navigate_secret_path(path.clone(), cx);
+                    }
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::SecretStoreDocument::new(
+                profile_id,
+                store_id,
+                path,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let pane = crate::ui::document::SecretStoreDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Opens what a driver-declared root section folder presents.
+    pub(in crate::ui::views::workspace) fn open_root_section(
+        &mut self,
+        profile_id: uuid::Uuid,
+        section_id: &str,
+        presentation: dbflux_core::RootSectionPresentation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match presentation {
+            dbflux_core::RootSectionPresentation::ObjectContainerTable => {
+                self.open_object_store_buckets_document(profile_id, window, cx);
+            }
+            other => {
+                log::warn!("Root section {section_id} declares unsupported presentation {other:?}")
+            }
+        }
+    }
+
+    /// Reloads the open document that shows a root section presentation of
+    /// `profile_id`, after an action changed the section's items.
+    pub(in crate::ui::views::workspace) fn refresh_root_section_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        presentation: Option<dbflux_core::RootSectionPresentation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = match presentation {
+            Some(dbflux_core::RootSectionPresentation::ObjectContainerTable) => {
+                crate::ui::document::DocumentKey::ObjectStoreBucketsRoot { profile_id }
+            }
+            _ => return,
+        };
+
+        let tab_manager = self.tab_manager.clone();
+        tab_manager.update(cx, |manager, cx| {
+            let Some(id) = manager.find_by_key(&key, cx) else {
+                return;
+            };
+            if let Some(tab) = manager.document(id) {
+                tab.dispatch_command(crate::keymap::Command::RefreshSchema, window, cx);
+            }
+        });
+    }
+
+    /// Opens what an item of a driver-declared root section presents.
+    pub(in crate::ui::views::workspace) fn open_root_section_item(
+        &mut self,
+        profile_id: uuid::Uuid,
+        item_id: String,
+        presentation: dbflux_core::RootItemPresentation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match presentation {
+            dbflux_core::RootItemPresentation::ObjectBrowser => {
+                self.open_object_browser(profile_id, item_id, window, cx);
+            }
+            other => log::warn!(
+                "Root section item {item_id} declares unsupported presentation {other:?}"
+            ),
+        }
+    }
+
     /// Opens the prefix/object tree browser for a single bucket, or focuses
     /// the existing one for that `(profile_id, bucket)` pair. Reached from
-    /// the buckets table's Enter-on-row action and the sidebar's
-    /// `OpenObjectStoreBucket` event.
+    /// the buckets table's Enter-on-row action and from activating an item
+    /// of a root section that presents an object browser.
     pub(in crate::ui::views::workspace) fn open_object_browser(
         &mut self,
         profile_id: uuid::Uuid,
@@ -448,7 +796,8 @@ impl Workspace {
     /// Opens one object-store text object in its own editor tab, or focuses
     /// the existing tab for that `(profile_id, bucket, key)` triple. Reached
     /// from the object browser's "Open in editor" header button and its row
-    /// context menu, both drained generically in `render.rs`.
+    /// context menu, both drained generically in `render.rs`. A CSV or TSV
+    /// object opens in the delimited document instead.
     pub(in crate::ui::views::workspace) fn open_object_editor(
         &mut self,
         profile_id: uuid::Uuid,
@@ -456,6 +805,24 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A data file object opens as a table that reads it in pages, so it
+        // is not held to the preview size limit the object editor applies.
+        let opens_as_file_document =
+            file_document_format(std::path::Path::new(&request.key)).is_some();
+
+        if opens_as_file_document {
+            self.open_file_document(
+                FileDocumentKey::Object {
+                    profile_id,
+                    bucket: request.bucket,
+                    key: request.key,
+                },
+                Some(request.on_saved),
+                cx,
+            );
+            return;
+        }
+
         let has_connection = self
             .app_state
             .read(cx)
@@ -542,6 +909,11 @@ impl Workspace {
         cx: &mut Context<Self>,
         ids: Vec<crate::ui::document::DocumentId>,
     ) {
+        let ids: Vec<crate::ui::document::DocumentId> = ids
+            .into_iter()
+            .filter(|doc_id| self.commit_pending_input(*doc_id, cx))
+            .collect();
+
         let needs_confirmation =
             self.documents_requiring_close_confirmation(ids.iter().copied(), cx);
 
@@ -562,6 +934,23 @@ impl Workspace {
         for doc_id in ids {
             self.close_tab(doc_id, window, cx);
         }
+    }
+
+    /// Commits the input `doc_id` still holds in an open editor, so the close
+    /// gate counts it as a pending change instead of closing over it.
+    ///
+    /// Returns `false` when the document kept input it could not commit; its
+    /// tab must then stay open.
+    fn commit_pending_input(
+        &mut self,
+        doc_id: crate::ui::document::DocumentId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.tab_manager.update(cx, |manager, cx| {
+            manager
+                .document(doc_id)
+                .is_none_or(|tab| tab.as_pane().commit_pending_input(cx))
+        })
     }
 
     /// Returns the pending-edit entries of the documents in `ids` that must be
@@ -619,6 +1008,12 @@ impl Workspace {
     ) {
         use crate::ui::overlays::modals::UnsavedChangesRequest;
 
+        // The prompt now guards this close, not the quit it showed for. A
+        // quit whose saves run is not the prompt's, and stays pending.
+        if matches!(self.pending_quit, Some(PendingQuit::Asking { .. })) {
+            self.pending_quit = None;
+        }
+
         self.modal_unsaved_changes.update(cx, |modal, cx| {
             modal.open(UnsavedChangesRequest { entries }, cx);
         });
@@ -646,7 +1041,12 @@ impl Workspace {
         // before anything is written or removed. The gate lives here rather than
         // at one entry point because every close route reaches this funnel, and
         // a route that skipped it would force a Save As dialog instead of
-        // asking.
+        // asking. A value still in an open editor is committed first, so the
+        // gate sees it.
+        if !self.commit_pending_input(doc_id, cx) {
+            return false;
+        }
+
         let needs_confirmation = self.documents_requiring_close_confirmation([doc_id], cx);
 
         if !needs_confirmation.is_empty() {
@@ -715,14 +1115,19 @@ impl Workspace {
     /// bytes the document last loaded or wrote. Both the verification and the
     /// removal run on the background executor — reading the whole file, and the
     /// directory walk that follows the removal, block for as long as the disk takes
-    /// to answer, and a close gesture must not inherit that wait. The foreground
-    /// only adopts the freshly scanned tree and tells the sidebar.
+    /// to answer, and a close gesture must not inherit that wait. The tree is then
+    /// rescanned in the background too, and adopted only if nothing changed in
+    /// that folder meanwhile.
     ///
     /// Deleting on buffer emptiness alone could destroy foreign content, and a
     /// leftover empty script is the safer failure, so every uncertain case keeps
     /// the file: a change made outside dbflux, a file that is already gone, a file
     /// that cannot be read, and a document with no trustworthy baseline for the
     /// path (which the pane reports as no candidate at all).
+    ///
+    /// Only scripts in the managed scripts folder are candidates. A file opened
+    /// from anywhere else, an external scripts folder included, belongs to the
+    /// user and is kept even when it was emptied here.
     fn cleanup_empty_script(
         &mut self,
         doc_id: crate::ui::document::DocumentId,
@@ -746,9 +1151,14 @@ impl Workspace {
             return;
         };
 
+        if !cleanup.path.starts_with(&root) {
+            return;
+        }
+
         let app_state = self.app_state.clone();
+        let removed_path = cleanup.path.clone();
         cx.spawn(async move |_this, cx| {
-            let scanned_after_removal = cx
+            let removed = cx
                 .background_executor()
                 .spawn(async move {
                     match dbflux_core::ScriptsDirectory::remove_if_unchanged(
@@ -756,29 +1166,23 @@ impl Workspace {
                         &cleanup.path,
                         &cleanup.expected_bytes,
                     ) {
-                        Ok(true) => Some(dbflux_core::ScriptsDirectory::scan(&root)),
-                        Ok(false) => None,
+                        Ok(removed) => removed,
                         Err(e) => {
                             log::warn!(
                                 "Failed to remove the emptied script {}: {e}",
                                 cleanup.path.display()
                             );
-                            None
+                            false
                         }
                     }
                 })
                 .await;
 
-            let Some(entries) = scanned_after_removal else {
+            if !removed {
                 return;
-            };
+            }
 
-            app_state.update(cx, |state, cx| {
-                if let Some(dir) = state.scripts_directory_mut() {
-                    dir.adopt_scan(entries);
-                }
-                cx.emit(AppStateChanged);
-            });
+            cx.update(|cx| rescan_script_root_in_background(&app_state, &removed_path, cx));
         })
         .detach();
     }
@@ -916,13 +1320,61 @@ impl Workspace {
             database
         );
     }
+
+    /// Opens (or activates) the native console tab of `database` on
+    /// `profile_id`. Does nothing when the connection is closed or its driver
+    /// offers no console.
+    pub(in crate::ui::views::workspace) fn open_console_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::{ConsoleDocument, DocumentKey};
+
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &DocumentKey::Console {
+                profile_id,
+                database: database.clone(),
+            },
+            cx,
+        );
+
+        if let Some(existing_id) = existing_id {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.activate(existing_id, cx));
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
+            return;
+        }
+
+        let Some(profile) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connected| connected.connection.metadata().native_console())
+        else {
+            return;
+        };
+
+        let app_state = self.app_state.clone();
+        let doc =
+            cx.new(|cx| ConsoleDocument::new(profile_id, database, profile, app_state, window, cx));
+
+        let pane = ConsoleDocument::into_pane(doc, cx);
+        self.tab_manager
+            .update(cx, |mgr, cx| mgr.open(Tab::Pane(Box::new(pane)), cx));
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
-    use crate::ui::document::{CodeDocument, DocumentId, Tab};
+    use crate::ui::document::{CodeDocument, DataDocument, DocumentId, DocumentKey, Tab};
     use crate::ui::views::workspace::Workspace;
     use dbflux_core::QueryLanguage;
     use dbflux_ui_base::AppStateEntity;
@@ -2013,5 +2465,1010 @@ mod tests {
                 "the scratch tab closes without a file to delete"
             );
         });
+    }
+
+    /// Opening a referenced row on a profile without a connection must not
+    /// panic: `open_table_document` reports the error through its toast and no
+    /// tab is opened, so the positioning step finds nothing and stays quiet.
+    #[gpui::test]
+    fn opening_a_referenced_row_without_a_connection_does_not_panic(cx: &mut TestAppContext) {
+        let (workspace, _app_state, window) = new_workspace(cx);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_table_at_referenced_row(
+                    crate::ui::document::ReferencedRowTarget {
+                        profile_id: uuid::Uuid::new_v4(),
+                        database: None,
+                        table: dbflux_core::TableRef::new("orders"),
+                        key_column: "id".to_string(),
+                        key_value: dbflux_core::Value::Int(7),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document_ids()
+                    .is_empty(),
+                "no tab opens for a profile without a connection"
+            );
+        });
+    }
+
+    // ---- Referenced-row navigation versus the query builder ----
+
+    /// Answers every structured-SELECT request, so `apply_builder_draft_spec`
+    /// leaves the tab with `visual_select` set — its refresh prefers the
+    /// builder query over the raw filter.
+    struct ReferencedRowGenerator;
+
+    impl dbflux_core::QueryGenerator for ReferencedRowGenerator {
+        fn supported_categories(&self) -> &'static [dbflux_core::MutationCategory] {
+            &[]
+        }
+
+        fn generate_mutation(
+            &self,
+            _mutation: &dbflux_core::MutationRequest,
+        ) -> Option<dbflux_core::GeneratedQuery> {
+            None
+        }
+
+        fn generate_select(
+            &self,
+            _spec: &dbflux_core::VisualQuerySpec,
+        ) -> Result<Option<dbflux_core::SelectQuery>, dbflux_core::QueryGenError> {
+            Ok(Some(dbflux_core::SelectQuery {
+                sql: "SELECT * FROM public.orders".to_string(),
+                params: Vec::new(),
+            }))
+        }
+    }
+
+    /// Connection stub for the referenced-row navigation test: SQL dialect,
+    /// structured SELECT generation, and a recorded table browse.
+    struct ReferencedRowConnection {
+        generator: ReferencedRowGenerator,
+        browses: std::sync::Mutex<Vec<dbflux_core::TableBrowseRequest>>,
+    }
+
+    impl ReferencedRowConnection {
+        fn browses(&self) -> Vec<dbflux_core::TableBrowseRequest> {
+            self.browses.lock().expect("browse log").clone()
+        }
+    }
+
+    impl Default for ReferencedRowConnection {
+        fn default() -> Self {
+            Self {
+                generator: ReferencedRowGenerator,
+                browses: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    fn orders_page() -> dbflux_core::QueryResult {
+        let column = |name: &str, is_primary_key: bool| dbflux_core::ColumnMeta {
+            name: name.to_string(),
+            type_name: "int4".to_string(),
+            kind: dbflux_core::ColumnKind::Integer,
+            nullable: false,
+            is_primary_key,
+        };
+
+        dbflux_core::QueryResult::table(
+            vec![column("id", true), column("customer_id", false)],
+            vec![vec![dbflux_core::Value::Int(7), dbflux_core::Value::Int(8)]],
+            None,
+            std::time::Duration::ZERO,
+        )
+    }
+
+    impl dbflux_core::Connection for ReferencedRowConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            static METADATA: std::sync::OnceLock<dbflux_core::DriverMetadata> =
+                std::sync::OnceLock::new();
+
+            METADATA.get_or_init(|| {
+                dbflux_core::DriverMetadataBuilder::new(
+                    "workspace-referenced-row-test",
+                    "Referenced Row Test",
+                    dbflux_core::DatabaseCategory::Relational,
+                    dbflux_core::QueryLanguage::Sql,
+                )
+                .build()
+            })
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _request: &dbflux_core::QueryRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Ok(orders_page())
+        }
+
+        fn browse_table(
+            &self,
+            request: &dbflux_core::TableBrowseRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            self.browses
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(request.clone());
+            Ok(orders_page())
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+
+        fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+            Some(&self.generator)
+        }
+    }
+
+    /// Registers `connection` as the workspace's only connected profile, the
+    /// way `connect_object_store` does, and returns the profile id.
+    fn connect_referenced_row_profile(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        connection: std::sync::Arc<dyn dbflux_core::Connection>,
+    ) -> uuid::Uuid {
+        let profile_id = uuid::Uuid::new_v4();
+
+        window.update(|_, cx| {
+            let app_state = workspace.read(cx).app_state.clone();
+
+            app_state.update(cx, |state, _| {
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "orders",
+                    dbflux_core::DbConfig::SQLite {
+                        path: std::path::PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+
+                state.connections_mut().insert(
+                    profile_id,
+                    dbflux_core::ConnectedProfile {
+                        profile,
+                        connection,
+                        schema: None,
+                        mutation_policy: dbflux_core::MutationPolicy::default(),
+                        read_only_reason: None,
+                        database_schemas: Default::default(),
+                        table_details: Default::default(),
+                        collection_children: Default::default(),
+                        schema_types: Default::default(),
+                        schema_columns: Default::default(),
+                        schema_indexes: Default::default(),
+                        schema_foreign_keys: Default::default(),
+                        schema_routines: Default::default(),
+                        dependents_cache: Default::default(),
+                        active_database: None,
+                        redis_key_cache: Default::default(),
+                        database_connections: Default::default(),
+                        proxy_tunnel: None,
+                    },
+                );
+            });
+        });
+
+        profile_id
+    }
+
+    fn orders_builder_spec() -> dbflux_core::VisualQuerySpec {
+        dbflux_core::VisualQuerySpec {
+            source: dbflux_core::SourceTable {
+                schema: Some("public".to_string()),
+                table: "orders".to_string(),
+                alias: "orders".to_string(),
+            },
+            projection: dbflux_core::Projection::All,
+            joins: vec![],
+            filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
+            sort: vec![],
+            limit: Some(100),
+            offset: 0,
+        }
+    }
+
+    /// A referenced row opened into a tab whose rows an applied builder query
+    /// owns lands in a tab of its own: the builder tab keeps its query (the
+    /// equality would land in a filter input the builder hides), and the
+    /// fresh tab browses under the dialect-quoted equality from the first
+    /// page.
+    #[gpui::test]
+    fn a_referenced_row_opens_a_fresh_tab_when_the_existing_one_runs_a_builder_query(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, _app_state, window) = new_workspace(cx);
+
+        let connection = std::sync::Arc::new(ReferencedRowConnection::default());
+        let profile_id = connect_referenced_row_profile(window, &workspace, connection.clone());
+
+        let table = dbflux_core::TableRef::with_schema("public", "orders");
+
+        // The tab already showing the table runs an applied builder query.
+        window.update(|window, cx| {
+            let app_state = workspace.read(cx).app_state.clone();
+            let document = cx.new(|cx| {
+                DataDocument::new_for_table(
+                    profile_id,
+                    table.clone(),
+                    Some("app".to_string()),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+            let grid = document.read(cx).data_grid_for_tests().clone();
+            grid.update(cx, |grid, cx| {
+                grid.apply_builder_draft_spec(orders_builder_spec(), cx)
+            });
+
+            let pane = DataDocument::into_pane(document, cx);
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .tab_manager
+                    .update(cx, |mgr, cx| mgr.open(Tab::Pane(Box::new(pane)), cx));
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_table_at_referenced_row(
+                    crate::ui::document::ReferencedRowTarget {
+                        profile_id,
+                        database: Some("app".to_string()),
+                        table: table.clone(),
+                        key_column: "id".to_string(),
+                        key_value: dbflux_core::Value::Int(7),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.read(cx);
+            assert_eq!(
+                manager.document_ids().len(),
+                2,
+                "the referenced row opens a tab of its own"
+            );
+
+            let builder_tab = manager
+                .find_by_key(
+                    &DocumentKey::Table {
+                        profile_id,
+                        database: Some("app".to_string()),
+                        table: table.clone(),
+                    },
+                    cx,
+                )
+                .expect("the builder tab stays open");
+            assert!(
+                manager
+                    .document(builder_tab)
+                    .expect("the builder tab exists")
+                    .as_pane()
+                    .has_applied_builder_query(cx),
+                "the builder tab keeps its applied query"
+            );
+        });
+
+        let browses = connection.browses();
+        let reload = browses
+            .last()
+            .expect("the fresh tab reloaded under the equality");
+        assert_eq!(reload.pagination.offset(), 0);
+        assert_eq!(reload.filter.as_deref(), Some("\"id\" = 7"));
+        assert_eq!(
+            browses
+                .iter()
+                .filter(|browse| browse.filter.is_some())
+                .count(),
+            1,
+            "only the fresh tab browsed under the equality"
+        );
+    }
+
+    /// Opens the section's containers table the way activating its sidebar
+    /// folder does, for a profile connected to `store`.
+    fn open_connected_section(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        store: std::sync::Arc<
+            crate::ui::views::workspace::actions::delimited::tests::ObjectStoreFake,
+        >,
+    ) -> uuid::Uuid {
+        let profile_id =
+            crate::ui::views::workspace::actions::delimited::tests::connect_object_store(
+                window, workspace, store,
+            );
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+
+        window.update(|_, cx| {
+            sidebar.update(cx, |_, cx| {
+                cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenRootSection {
+                    profile_id,
+                    section_id: "buckets".to_string(),
+                    presentation: dbflux_core::RootSectionPresentation::ObjectContainerTable,
+                });
+            });
+        });
+        window.run_until_parked();
+
+        profile_id
+    }
+
+    /// For a connected profile the section event opens the containers table
+    /// and the item event opens the object browser of that item.
+    #[gpui::test]
+    fn root_section_events_open_the_declared_documents(cx: &mut TestAppContext) {
+        use crate::ui::views::workspace::actions::delimited::tests::{BUCKET, ObjectStoreFake};
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        let profile_id =
+            open_connected_section(window, &workspace, ObjectStoreFake::with_objects(&[]));
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+
+        window.update(|_, cx| {
+            sidebar.update(cx, |_, cx| {
+                cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenRootSectionItem {
+                    profile_id,
+                    section_id: "buckets".to_string(),
+                    item_id: BUCKET.to_string(),
+                    presentation: dbflux_core::RootItemPresentation::ObjectBrowser,
+                });
+            });
+        });
+        window.run_until_parked();
+
+        let opened = window.update(|_, cx| {
+            let tabs = workspace.read(cx).tab_manager.read(cx);
+            (
+                tabs.find_by_key(&DocumentKey::ObjectStoreBucketsRoot { profile_id }, cx)
+                    .is_some(),
+                tabs.find_by_key(
+                    &DocumentKey::ObjectBrowser {
+                        profile_id,
+                        bucket: BUCKET.to_string(),
+                    },
+                    cx,
+                )
+                .is_some(),
+            )
+        });
+        assert_eq!(opened, (true, true));
+    }
+
+    /// A successful sidebar action on a section reloads the open document
+    /// that presents that section, so it does not keep showing stale items.
+    #[gpui::test]
+    fn a_successful_root_section_action_reloads_the_open_section_document(cx: &mut TestAppContext) {
+        use crate::ui::views::workspace::actions::delimited::tests::{BUCKET, ObjectStoreFake};
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[]);
+        let profile_id = open_connected_section(window, &workspace, store.clone());
+        let listings_before = store.bucket_listings();
+        assert!(listings_before >= 1, "opening the table lists the buckets");
+
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+        window.update(|_, cx| {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.dispatch_root_section_action(
+                    dbflux_ui_sidebar::RootSectionActionRequest {
+                        profile_id,
+                        section_id: "buckets".to_string(),
+                        section_presentation: Some(
+                            dbflux_core::RootSectionPresentation::ObjectContainerTable,
+                        ),
+                        item_id: BUCKET.to_string(),
+                        item_label: BUCKET.to_string(),
+                        action: dbflux_core::RootSectionAction {
+                            id: "inspect".to_string(),
+                            label: dbflux_core::LocalizedText::plain("Inspect"),
+                            description: None,
+                            classification: dbflux_core::ExecutionClassification::Read,
+                        },
+                    },
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(store.bucket_listings(), listings_before + 1);
+    }
+}
+
+/// A value typed into an open grid editor and not yet committed must reach the
+/// close gate: every close route either asks about it or keeps it, and never
+/// drops it without a word.
+#[cfg(test)]
+mod pending_cell_input_close_tests {
+    // Explicit imports, not `use super::*`: the parent glob together with
+    // `#[gpui::test]` sends the macro expansion into unbounded recursion.
+    use crate::keymap::{Command, CommandDispatcher, FocusTarget};
+    use crate::ui::document::tab_bar::TAB_MENU_CLOSE;
+    use crate::ui::document::{DataDocument, DocumentId, Tab, TabBarEvent};
+    use crate::ui::views::workspace::Workspace;
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
+    use dbflux_ui_base::AppStateEntity;
+    use gpui::{
+        AppContext as _, Bounds, Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext,
+        VisualTestContext, point,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    fn new_workspace(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Workspace>,
+        Entity<AppStateEntity>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
+        let workspace_ref = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+            workspace_ref.replace(Some(workspace.clone()));
+            gpui_component::Root::new(workspace, window, cx)
+        });
+
+        let workspace = holder
+            .borrow()
+            .clone()
+            .expect("workspace should be created");
+
+        // Test windows open inactive, and gpui hides focus paths of an
+        // inactive window from its focus listeners, which would keep the cell
+        // editor from ever seeing its blur.
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+
+        (workspace, app_state, window)
+    }
+
+    fn column(name: &str, kind: ColumnKind, is_primary_key: bool) -> ColumnMeta {
+        ColumnMeta {
+            name: name.to_string(),
+            type_name: "text".to_string(),
+            kind,
+            nullable: true,
+            is_primary_key,
+        }
+    }
+
+    /// One row keyed by `id`, with a text column edited inline, a JSON column
+    /// and a multi-line text column, both edited in the cell editor dialog.
+    fn orders_result() -> QueryResult {
+        QueryResult::table(
+            vec![
+                column("id", ColumnKind::Integer, true),
+                column("name", ColumnKind::Text, false),
+                column("data", ColumnKind::Unknown, false),
+                column("notes", ColumnKind::Text, false),
+            ],
+            vec![vec![
+                Value::Int(1),
+                Value::Text("alice".to_string()),
+                Value::Json("{\"a\":1}".to_string()),
+                Value::Text("first line\nsecond line".to_string()),
+            ]],
+            None,
+            Duration::ZERO,
+        )
+    }
+
+    /// Opens an editable table tab that reads from no connection, makes it the
+    /// focused document and returns its id.
+    fn open_grid_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        app_state: &Entity<AppStateEntity>,
+    ) -> DocumentId {
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                DataDocument::new_for_test_table(
+                    orders_result(),
+                    vec!["id".to_string()],
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            })
+        });
+        let document_id = window.update(|_, cx| document.read(cx).id());
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let pane = DataDocument::into_pane(document.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx);
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        document_id
+    }
+
+    /// Sends grid commands to the active document, as the keymap does.
+    fn dispatch_to_grid(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        commands: &[Command],
+    ) {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    for command in commands {
+                        manager.dispatch_active(*command, window, cx);
+                    }
+                });
+            });
+        });
+        window.run_until_parked();
+    }
+
+    /// Opens the editor on the given column of the first row and types `text`
+    /// into it, without committing it.
+    fn type_into_cell(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        column_moves: usize,
+        text: &str,
+    ) {
+        let mut commands = vec![Command::SelectFirst];
+        commands.extend(std::iter::repeat_n(Command::ColumnRight, column_moves));
+        commands.push(Command::Execute);
+        dispatch_to_grid(window, workspace, &commands);
+
+        window.simulate_input(text);
+        window.run_until_parked();
+    }
+
+    fn change_summary(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        id: DocumentId,
+    ) -> Option<String> {
+        window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .document(id)
+                .and_then(|tab| tab.change_summary(cx))
+        })
+    }
+
+    fn tab_is_open(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        id: DocumentId,
+    ) -> bool {
+        window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .document(id)
+                .is_some()
+        })
+    }
+
+    /// The number of documents the unsaved-changes prompt lists, or `None`
+    /// when it is not open.
+    fn prompt_entries(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Option<usize> {
+        window.update(|_, cx| {
+            let modal = workspace.read(cx).modal_unsaved_changes.read(cx);
+            modal.is_visible().then(|| modal.selected_count())
+        })
+    }
+
+    fn center(bounds: Bounds<Pixels>) -> Point<Pixels> {
+        point(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        )
+    }
+
+    fn rendered_bounds(window: &mut VisualTestContext, selector: String) -> Bounds<Pixels> {
+        let selector: &'static str = selector.leak();
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+        window
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} was not rendered"))
+    }
+
+    /// The close was held for the user's decision: the tab is still open, the
+    /// prompt lists it, and the typed value is a pending change.
+    fn assert_close_asks_about_the_typed_value(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        id: DocumentId,
+        route: &str,
+    ) {
+        assert!(
+            tab_is_open(window, workspace, id),
+            "{route}: the tab must stay open while the typed value is unsaved"
+        );
+        assert_eq!(
+            prompt_entries(window, workspace),
+            Some(1),
+            "{route}: the unsaved-changes prompt must list the grid"
+        );
+        assert!(
+            change_summary(window, workspace, id).is_some(),
+            "{route}: the typed value must be a pending change"
+        );
+    }
+
+    /// Control for the fixture: Enter commits what was typed, so the value the
+    /// other tests type really sits in the cell editor.
+    #[gpui::test]
+    fn enter_commits_the_value_typed_into_the_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+
+        type_into_cell(window, &workspace, 1, "bob");
+        assert!(
+            change_summary(window, &workspace, id).is_none(),
+            "a value still in the editor is not a pending change yet"
+        );
+
+        dispatch_to_grid(window, &workspace, &[Command::Execute]);
+        assert!(
+            change_summary(window, &workspace, id).is_some(),
+            "Enter stages the typed value"
+        );
+    }
+
+    #[gpui::test]
+    fn the_close_button_asks_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "close button");
+    }
+
+    #[gpui::test]
+    fn a_middle_click_asks_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let tab = center(rendered_bounds(window, format!("tab-{}", id.0)));
+        window.simulate_mouse_down(tab, MouseButton::Middle, Modifiers::none());
+        window.simulate_mouse_up(tab, MouseButton::Middle, Modifiers::none());
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "middle click");
+    }
+
+    /// The right click moves focus out of the cell editor, and the frame drawn
+    /// before the menu item is chosen delivers the editor's blur.
+    #[gpui::test]
+    fn the_tab_menu_close_asks_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let tab = center(rendered_bounds(window, format!("tab-{}", id.0)));
+        window.simulate_mouse_down(tab, MouseButton::Right, Modifiers::none());
+        window.simulate_mouse_up(tab, MouseButton::Right, Modifiers::none());
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_bar.update(cx, |bar, cx| {
+                    bar.context_menu_execute_at(TAB_MENU_CLOSE, cx)
+                });
+            });
+        });
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "tab menu close");
+    }
+
+    /// Only the tab menu commits on its way in. A plain click on the tab moves
+    /// focus out of the cell editor like any other click outside the table,
+    /// and that still cancels the edit.
+    #[gpui::test]
+    fn clicking_the_tab_still_cancels_the_typed_value(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let tab = center(rendered_bounds(window, format!("tab-{}", id.0)));
+        window.simulate_click(tab, Modifiers::none());
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        assert!(tab_is_open(window, &workspace, id));
+        assert!(
+            change_summary(window, &workspace, id).is_none(),
+            "focus leaving the cell editor drops the typed value, as before"
+        );
+    }
+
+    #[gpui::test]
+    fn the_close_tab_command_asks_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::CloseCurrentTab, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "close tab command");
+    }
+
+    /// Close Others, Close All, Close to the Left and Close to the Right.
+    #[gpui::test]
+    fn batch_closes_ask_about_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        type CloseBatchRoute = (&'static str, fn(DocumentId, DocumentId) -> TabBarEvent);
+        let routes: [CloseBatchRoute; 4] = [
+            ("close others", |_grid, other| {
+                TabBarEvent::CloseOtherTabs(other)
+            }),
+            ("close all", |_grid, _other| TabBarEvent::CloseAllTabs),
+            ("close to the left", |_grid, other| {
+                TabBarEvent::CloseTabsToLeft(other)
+            }),
+            ("close to the right", |_grid, other| {
+                TabBarEvent::CloseTabsToRight(other)
+            }),
+        ];
+
+        for (route, event) in routes {
+            let (workspace, app_state, window) = new_workspace(cx);
+
+            // The grid sits on the side of `other` that each batch closes.
+            let left_of_other = route != "close to the right";
+            let (id, other) = if left_of_other {
+                let id = open_grid_tab(window, &workspace, &app_state);
+                let other = open_grid_tab(window, &workspace, &app_state);
+                (id, other)
+            } else {
+                let other = open_grid_tab(window, &workspace, &app_state);
+                let id = open_grid_tab(window, &workspace, &app_state);
+                (id, other)
+            };
+
+            window.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace
+                        .tab_manager
+                        .update(cx, |manager, cx| manager.activate(id, cx));
+                });
+            });
+            window.run_until_parked();
+            type_into_cell(window, &workspace, 1, "bob");
+
+            let event = event(id, other);
+            window.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.tab_bar.update(cx, |_bar, cx| cx.emit(event));
+                });
+            });
+            window.run_until_parked();
+
+            assert_close_asks_about_the_typed_value(window, &workspace, id, route);
+        }
+    }
+
+    /// The cell editor dialog sits inside the document, so the tab bar stays
+    /// reachable while it holds an edited value.
+    #[gpui::test]
+    fn the_close_button_asks_about_a_value_edited_in_the_cell_editor_dialog(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 3, " and more");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        assert_close_asks_about_the_typed_value(window, &workspace, id, "cell editor dialog");
+    }
+
+    /// A JSON value that does not parse cannot become a pending change, so the
+    /// close leaves the tab open with the value in the dialog.
+    #[gpui::test]
+    fn an_invalid_json_value_in_the_dialog_keeps_the_tab_open(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 2, "{\"b\":");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        assert!(tab_is_open(window, &workspace, id));
+        assert_eq!(
+            prompt_entries(window, &workspace),
+            None,
+            "nothing could be committed, so there is nothing to ask about"
+        );
+    }
+
+    /// Cancelling the prompt keeps the tab and the typed value, now a pending
+    /// change the user can save or revert.
+    #[gpui::test]
+    fn cancelling_the_prompt_keeps_the_typed_value(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .modal_unsaved_changes
+                    .update(cx, |modal, cx| modal.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert!(tab_is_open(window, &workspace, id));
+        assert!(
+            change_summary(window, &workspace, id).is_some(),
+            "the typed value stays as a pending change"
+        );
+    }
+
+    /// Saving from the prompt applies the typed value, and the tab closes only
+    /// once the apply lands. This grid reads from no connection, so the apply
+    /// cannot land and the tab stays open.
+    #[gpui::test]
+    fn saving_from_the_prompt_applies_the_typed_value(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .modal_unsaved_changes
+                    .update(cx, |modal, cx| modal.confirm(cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            tab_is_open(window, &workspace, id),
+            "an apply that did not land must not take the tab away"
+        );
+    }
+
+    /// Discarding from the prompt is the user's decision to drop the value.
+    #[gpui::test]
+    fn discarding_from_the_prompt_closes_the_tab(cx: &mut TestAppContext) {
+        use crate::ui::overlays::modals::UnsavedChangesOutcome;
+
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        let close_button = rendered_bounds(window, format!("tab-close-{}", id.0));
+        window.simulate_click(center(close_button), Modifiers::none());
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.modal_unsaved_changes.update(cx, |modal, cx| {
+                    cx.emit(UnsavedChangesOutcome::DiscardAll(vec![id]));
+                    modal.close(cx);
+                });
+            });
+        });
+        window.run_until_parked();
+
+        assert!(!tab_is_open(window, &workspace, id));
+    }
+
+    /// A quit flushes every document before shutting down; the value still in
+    /// the cell editor is committed first, so a document that persists its
+    /// pending changes on shutdown persists this one too.
+    #[gpui::test]
+    fn the_shutdown_flush_commits_a_value_typed_into_an_open_cell(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let id = open_grid_tab(window, &workspace, &app_state);
+        type_into_cell(window, &workspace, 1, "bob");
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.flush_pending_document_edits(cx);
+            });
+        });
+
+        assert!(
+            change_summary(window, &workspace, id).is_some(),
+            "the shutdown flush must commit the typed value"
+        );
     }
 }

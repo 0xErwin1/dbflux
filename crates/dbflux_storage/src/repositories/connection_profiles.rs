@@ -118,7 +118,8 @@ impl ConnectionProfileRepository {
                        save_password, kind, access_kind, access_provider,
                        auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id,
-                       created_at, updated_at, environment
+                       created_at, updated_at, environment, navigator_view,
+                       show_all_databases, read_only
                 FROM cfg_connection_profiles
                 ORDER BY name ASC
                 "#,
@@ -148,6 +149,9 @@ impl ConnectionProfileRepository {
                     created_at: row.get(14)?,
                     updated_at: row.get(15)?,
                     environment: row.get(16)?,
+                    navigator_view: row.get(17)?,
+                    show_all_databases: row.get::<_, i32>(18)? != 0,
+                    read_only: row.get::<_, i32>(19)? != 0,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -184,7 +188,8 @@ impl ConnectionProfileRepository {
                        save_password, kind, access_kind, access_provider,
                        auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id,
-                       created_at, updated_at, environment
+                       created_at, updated_at, environment, navigator_view,
+                       show_all_databases, read_only
                 FROM cfg_connection_profiles
                 WHERE id = ?1
                 "#,
@@ -213,6 +218,9 @@ impl ConnectionProfileRepository {
                 created_at: row.get(14)?,
                 updated_at: row.get(15)?,
                 environment: row.get(16)?,
+                navigator_view: row.get(17)?,
+                show_all_databases: row.get::<_, i32>(18)? != 0,
+                read_only: row.get::<_, i32>(19)? != 0,
             })
         });
 
@@ -235,10 +243,10 @@ impl ConnectionProfileRepository {
                     id, name, driver_id, description, favorite, color, icon,
                     save_password, kind, access_kind, access_provider,
                     auth_profile_id, proxy_profile_id,
-                    ssh_tunnel_profile_id, environment,
-                    created_at, updated_at
+                    ssh_tunnel_profile_id, environment, navigator_view, show_all_databases,
+                    read_only, created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                     datetime('now'), datetime('now')
                 )
                 "#,
@@ -258,6 +266,9 @@ impl ConnectionProfileRepository {
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.environment,
+                    profile.navigator_view,
+                    profile.show_all_databases as i32,
+                    profile.read_only as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -290,6 +301,9 @@ impl ConnectionProfileRepository {
                     proxy_profile_id = ?13,
                     ssh_tunnel_profile_id = ?14,
                     environment = ?15,
+                    navigator_view = ?16,
+                    show_all_databases = ?17,
+                    read_only = ?18,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -309,6 +323,9 @@ impl ConnectionProfileRepository {
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.environment,
+                    profile.navigator_view,
+                    profile.show_all_databases as i32,
+                    profile.read_only as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -334,10 +351,10 @@ impl ConnectionProfileRepository {
                     id, name, driver_id, description, favorite, color, icon,
                     save_password, kind, access_kind, access_provider,
                     auth_profile_id, proxy_profile_id,
-                    ssh_tunnel_profile_id, environment,
-                    created_at, updated_at
+                    ssh_tunnel_profile_id, environment, navigator_view, show_all_databases,
+                    read_only, created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                     datetime('now'), datetime('now')
                 )
                 ON CONFLICT(id) DO UPDATE SET
@@ -355,6 +372,9 @@ impl ConnectionProfileRepository {
                     proxy_profile_id = excluded.proxy_profile_id,
                     ssh_tunnel_profile_id = excluded.ssh_tunnel_profile_id,
                     environment = excluded.environment,
+                    navigator_view = excluded.navigator_view,
+                    show_all_databases = excluded.show_all_databases,
+                    read_only = excluded.read_only,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -373,6 +393,9 @@ impl ConnectionProfileRepository {
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.environment,
+                    profile.navigator_view,
+                    profile.show_all_databases as i32,
+                    profile.read_only as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -435,6 +458,12 @@ pub struct ConnectionProfileDto {
     /// Deployment environment identifier (`development`, `staging`,
     /// `production`), `None` when the user set none.
     pub environment: Option<String>,
+    /// Sidebar layout of the connection: `advanced` or `simple`.
+    pub navigator_view: String,
+    /// Whether the sidebar lists every database on the server.
+    pub show_all_databases: bool,
+    /// Whether mutations are forbidden for this connection.
+    pub read_only: bool,
 }
 
 impl ConnectionProfileDto {
@@ -458,6 +487,9 @@ impl ConnectionProfileDto {
             created_at: String::new(),
             updated_at: String::new(),
             environment: None,
+            navigator_view: "advanced".to_string(),
+            show_all_databases: true,
+            read_only: false,
         }
     }
 }
@@ -574,6 +606,44 @@ mod tests {
 
         let cleared = repo.all().expect("should fetch");
         assert_eq!(cleared[0].environment, None);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn read_only_round_trips_through_insert_update_and_upsert() {
+        let path = temp_db("read_only");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let id = Uuid::new_v4();
+        let mut dto = ConnectionProfileDto::new(id, "Locked".to_string());
+        assert!(!dto.read_only, "new profiles default to not read-only");
+        dto.read_only = true;
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = ConnectionProfileRepository::new(Arc::new(conn));
+        repo.insert(&dto).expect("should insert");
+
+        let fetched = repo
+            .get(&id.to_string())
+            .expect("should fetch")
+            .expect("should exist");
+        assert!(fetched.read_only);
+
+        dto.read_only = false;
+        repo.update(&dto).expect("should update");
+        assert!(!repo.all().expect("should fetch")[0].read_only);
+
+        dto.read_only = true;
+        repo.upsert(&dto).expect("should upsert");
+        assert!(repo.all().expect("should fetch")[0].read_only);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

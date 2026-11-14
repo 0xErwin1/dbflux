@@ -9,7 +9,6 @@ use dbflux_components::modals::modal::{Modal, ModalFocus};
 use dbflux_components::primitives::Text;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::typography::AppFonts;
 use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::{LogErr, MetricDescriptor};
 use gpui::prelude::*;
@@ -668,6 +667,10 @@ impl ModalAddPanelPicker {
             .iter()
             .position(|tab| *tab == self.active_tab)
             .unwrap_or(0);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`visible_tabs_for` always returns at least the Saved and Query tabs, and `rem_euclid` over the positive `tabs.len()` yields an index in `[0, tabs.len())`"
+        )]
         let next = tabs[(current as isize + delta).rem_euclid(tabs.len() as isize) as usize];
 
         self.set_active_tab(next, cx);
@@ -1102,7 +1105,7 @@ impl ModalAddPanelPicker {
                             .editor(false)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::MONO)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     )

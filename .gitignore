@@ -4,6 +4,7 @@ thoughts/
 scripts/src
 scripts/pkg
 scripts/dbflux*
+__pycache__/
 .logs
 result
 .atl/

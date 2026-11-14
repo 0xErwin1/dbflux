@@ -1,4 +1,5 @@
 use super::*;
+use crate::data_grid_panel::{LimitedRowActions, LimitedRowTotal};
 use dbflux_core::observability::actions as audit_actions;
 
 /// Resolve the `ExecutionSourceContext` for the next query, giving precedence
@@ -64,6 +65,37 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
     dbflux_core::DangerousAction::Confirm(kind)
 }
 
+/// Returns `true` when the connection's profile is set to read-only and
+/// `query` would do more than read data or metadata.
+///
+/// The query is classified with the connection's own language service, so
+/// driver-owned dialects are rated by their driver. Only the profile setting
+/// is enforced here; a server that rejects writes reports them itself.
+fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, query: &str) -> bool {
+    if connected.read_only_reason != Some(dbflux_core::ReadOnlyReason::ProfileSetting) {
+        return false;
+    }
+
+    let classification = dbflux_core::classify_query_for_language_with_service(
+        &connected.connection.metadata().query_language,
+        query,
+        Some(connected.connection.language_service()),
+    );
+
+    !matches!(
+        classification,
+        dbflux_core::ExecutionClassification::Metadata | dbflux_core::ExecutionClassification::Read
+    )
+}
+
+fn show_read_only_profile_toast(cx: &mut App) {
+    let msg = dbflux_i18n::t!("document.code.execution.toast.read_only_profile");
+    Toast::error(msg.clone())
+        .meta_right(now_hms())
+        .action(copy_action(msg))
+        .push(cx);
+}
+
 fn task_target_for_execution(
     profile_id: Uuid,
     connected: &dbflux_core::ConnectedProfile,
@@ -93,19 +125,32 @@ impl CodeDocument {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<String> {
-        self.editor.input_state.update(cx, |state, _cx| {
-            let ranges = state.selected_nonempty_ranges();
-            if ranges.is_empty() {
-                return None;
-            }
-            let fragments = ranges
-                .into_iter()
-                .filter_map(|range| state.value().get(range).map(str::to_string))
-                .collect::<Vec<_>>();
-            let text = fragments.join("\n");
-            let text = text.trim();
-            (!text.is_empty()).then(|| text.to_string())
-        })
+        self.selected_query_text(cx)
+    }
+
+    fn selected_query_text(&self, cx: &App) -> Option<String> {
+        let state = self.editor.input_state.read(cx);
+        let ranges = state.selected_nonempty_ranges();
+        if ranges.is_empty() {
+            return None;
+        }
+        let fragments = ranges
+            .into_iter()
+            .filter_map(|range| state.value().get(range).map(str::to_string))
+            .collect::<Vec<_>>();
+        let text = fragments.join("\n");
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_string())
+    }
+
+    /// The text an auto-refresh runs, and whether it is the selection: the
+    /// selection when there is one, otherwise the whole buffer, exactly as a
+    /// manual run picks it.
+    pub(super) fn auto_refresh_query(&self, cx: &App) -> (String, bool) {
+        match self.selected_query_text(cx) {
+            Some(selection) => (selection, true),
+            None => (self.editor.input_state.read(cx).value().to_string(), false),
+        }
     }
 
     /// Returns the selected text if a selection exists, otherwise the full editor content.
@@ -174,13 +219,9 @@ impl CodeDocument {
         self.run_query_impl(origin, false, window, cx);
     }
 
-    fn run_query_impl(
-        &mut self,
-        origin: ExecutionOrigin,
-        in_new_tab: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.execution.load_all_rows = None;
+
         // A selection always runs as-is, without the script confirmation.
         if let Some(query) = self.selected_query(window, cx) {
             self.execution.query_origin = None;
@@ -188,12 +229,57 @@ impl CodeDocument {
             return;
         }
 
-        let query = self.editor.input_state.read(cx).value().to_string();
+        let state = self.editor.input_state.read(cx);
+        let query = state.value().to_string();
+        let cursor = state.cursor();
+
+        // Without a selection, a buffer of several statements runs only the
+        // one under the cursor; selecting everything runs the whole script.
+        let cursor_statement =
+            statements::cursor_statement(self.effective_language(), &query, cursor)
+                .and_then(|range| Some((range.start, query.get(range)?.to_string())));
+
+        if let Some((origin, statement)) = cursor_statement {
+            // A lone BEGIN leaves a transaction open that later runs silently
+            // join; a lone COMMIT or ROLLBACK ends nothing the script did.
+            if statements::is_transaction_boundary(&statement) {
+                let statement_count = self.effective_language().statement_count(&query);
+                let line = query
+                    .get(..origin)
+                    .map_or(0, |prefix| prefix.matches('\n').count())
+                    + 1;
+
+                self.ask_script_confirm(
+                    PendingScriptConfirm {
+                        query,
+                        in_new_tab,
+                        statement_count,
+                        cursor_statement: Some(CursorStatement {
+                            text: statement,
+                            origin,
+                            line,
+                            offers_script: statements::guard_offers_script(
+                                self.connection_capabilities(cx),
+                            ),
+                        }),
+                    },
+                    window,
+                    cx,
+                );
+                return;
+            }
+
+            self.execution.query_origin = Some(origin);
+            self.run_query_text(statement, in_new_tab, window, cx);
+            return;
+        }
+
         self.execution.query_origin = Some(0);
 
-        // No selection means the whole buffer runs. When it holds more than one
-        // statement and the driver can execute batches, confirm before running
-        // the entire script.
+        // A language without a statement splitter, or a buffer with a
+        // compound block, runs the whole buffer. When
+        // it holds more than one statement and the driver can execute batches,
+        // confirm before running the entire script.
         if let Some(statement_count) = self.script_statement_count(&query, cx) {
             self.ask_script_confirm(
                 PendingScriptConfirm {
@@ -201,6 +287,7 @@ impl CodeDocument {
                     query,
                     in_new_tab,
                     statement_count,
+                    cursor_statement: None,
                 },
                 window,
                 cx,
@@ -263,7 +350,29 @@ impl CodeDocument {
         supports_batch.then_some(count)
     }
 
+    /// Capabilities of the active connection's driver, `None` without one.
+    fn connection_capabilities(&self, cx: &Context<Self>) -> Option<DriverCapabilities> {
+        let conn_id = self.connection_id?;
+        let app_state = self.app_state.read(cx);
+        let connected = app_state.connections().get(&conn_id)?;
+
+        Some(connected.connection.metadata().capabilities)
+    }
+
     pub(super) fn confirm_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Enter confirms the dialog; when it offers only the statement under
+        // the cursor, that is what Enter runs.
+        let statement_only = self
+            .pending
+            .script_confirm
+            .as_ref()
+            .and_then(|pending| pending.cursor_statement.as_ref())
+            .is_some_and(|statement| !statement.offers_script);
+        if statement_only {
+            self.confirm_cursor_statement(window, cx);
+            return;
+        }
+
         let Some(pending) = self.pending.script_confirm.take() else {
             return;
         };
@@ -271,13 +380,27 @@ impl CodeDocument {
         self.script_confirm_focus.restore(cx);
         self.focus(window, cx);
         cx.notify();
-        self.run_query_text(
-            pending.origin,
-            pending.query,
-            pending.in_new_tab,
-            window,
-            cx,
-        );
+        self.execution.query_origin = Some(0);
+        self.run_query_text(pending.query, pending.in_new_tab, window, cx);
+    }
+
+    /// Runs only the transaction boundary the script confirmation was raised
+    /// for, as a run without the confirmation would have.
+    pub(super) fn confirm_cursor_statement(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending.script_confirm.take() else {
+            return;
+        };
+
+        self.script_confirm_focus.restore(cx);
+        self.focus(window, cx);
+        cx.notify();
+
+        let Some(statement) = pending.cursor_statement else {
+            return;
+        };
+
+        self.execution.query_origin = Some(statement.origin);
+        self.run_query_text(statement.text, pending.in_new_tab, window, cx);
     }
 
     pub(super) fn cancel_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -295,10 +418,39 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.run_query_text_with(query, in_new_tab, ReadOnlyEnforcement::None, window, cx);
+    }
+
+    /// Runs `query` with the given read-only enforcement. Only auto-refresh
+    /// requests [`ReadOnlyEnforcement::Required`]; every run the user starts
+    /// goes through [`Self::run_query_text`].
+    fn run_query_text_with(
+        &mut self,
+        query: String,
+        in_new_tab: bool,
+        read_only: ReadOnlyEnforcement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if query.trim().is_empty() {
             Toast::warning(dbflux_i18n::t!("document.code.execution.toast.enter_query"))
                 .meta_right(now_hms())
                 .push(cx);
+            return;
+        }
+
+        // Refusing before the dangerous-query check keeps a confirmation from
+        // being asked for a statement that cannot run anyway.
+        let refused_by_read_only_profile = self.connection_id.is_some_and(|conn_id| {
+            self.app_state
+                .read(cx)
+                .connections()
+                .get(&conn_id)
+                .is_some_and(|connected| is_refused_by_read_only_profile(connected, &query))
+        });
+
+        if refused_by_read_only_profile {
+            show_read_only_profile_toast(cx);
             return;
         }
 
@@ -314,6 +466,13 @@ impl CodeDocument {
                         .detect_dangerous(&query)
                 })
         });
+
+        // An unattended run never asks for a confirmation; a query that needs
+        // one cannot auto-refresh.
+        if dangerous_kind.is_some() && read_only.is_required() {
+            self.fall_back_to_manual_refresh(cx);
+            return;
+        }
 
         if let Some(kind) = dangerous_kind {
             let is_suppressed = self
@@ -425,7 +584,7 @@ impl CodeDocument {
         // Run the schema drift preflight check asynchronously so it does not
         // block the UI thread. The actual execution is deferred to the render
         // loop via `pending.drift_query`.
-        self.start_drift_preflight(origin, query, in_new_tab, cx);
+        self.start_drift_preflight(query, in_new_tab, read_only, cx);
     }
 
     /// Kick off the async drift preflight for `query`.
@@ -437,9 +596,9 @@ impl CodeDocument {
     /// the render loop picks it up.
     fn start_drift_preflight(
         &mut self,
-        origin: ExecutionOrigin,
         query: String,
         in_new_tab: bool,
+        read_only: ReadOnlyEnforcement,
         cx: &mut Context<Self>,
     ) {
         let Some(conn_id) = self.connection_id else {
@@ -450,6 +609,7 @@ impl CodeDocument {
                 in_new_tab,
                 action: DriftAction::ExecuteNow,
                 cache_updates: Vec::new(),
+                read_only,
             });
             cx.notify();
             return;
@@ -464,6 +624,7 @@ impl CodeDocument {
                 in_new_tab,
                 action: DriftAction::ExecuteNow,
                 cache_updates: Vec::new(),
+                read_only,
             });
             cx.notify();
             return;
@@ -500,6 +661,7 @@ impl CodeDocument {
                     in_new_tab,
                     action: DriftAction::ExecuteNow,
                     cache_updates: Vec::new(),
+                    read_only,
                 });
                 cx.notify();
                 return;
@@ -539,6 +701,7 @@ impl CodeDocument {
                             in_new_tab,
                             action: DriftAction::ExecuteNow,
                             cache_updates: Vec::new(),
+                            read_only,
                         });
                     }
 
@@ -550,6 +713,7 @@ impl CodeDocument {
                             in_new_tab,
                             action: DriftAction::ExecuteNow,
                             cache_updates: entries,
+                            read_only,
                         });
                     }
 
@@ -580,6 +744,7 @@ impl CodeDocument {
                             in_new_tab,
                             action: DriftAction::Pending,
                             cache_updates: all_updates,
+                            read_only,
                         });
 
                         doc.drift.schema_drift_modal.update(cx, |modal, cx| {
@@ -599,10 +764,25 @@ impl CodeDocument {
         _origin: ExecutionOrigin,
         query: String,
         in_new_tab: bool,
+        read_only: ReadOnlyEnforcement,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(conn_id) = self.connection_id else {
+        // A Load all rows run goes back to where its result came from, which
+        // may no longer be the document's connection or database.
+        let load_all = self
+            .execution
+            .load_all_rows
+            .take()
+            .filter(|load_all| load_all.query == query);
+        let result_grid = load_all.as_ref().map(|load_all| load_all.grid);
+        let rerun_origin = load_all.map(|load_all| load_all.origin);
+
+        let Some(conn_id) = rerun_origin
+            .as_ref()
+            .map(|origin| origin.connection_id)
+            .or(self.connection_id)
+        else {
             let msg = dbflux_i18n::t!("document.code.execution.toast.no_active_connection");
             Toast::error(msg.clone())
                 .meta_right(now_hms())
@@ -622,39 +802,71 @@ impl CodeDocument {
                 return;
             };
 
-            let active_database = self
-                .source
-                .exec_ctx
-                .database
-                .clone()
-                .or_else(|| connected.active_database.clone());
+            if is_refused_by_read_only_profile(connected, &query) {
+                show_read_only_profile_toast(cx);
+                return;
+            }
 
-            match connected.resolve_connection_for_execution(active_database.as_deref()) {
-                Ok(connection) => (
-                    connection,
-                    active_database.clone(),
-                    task_target_for_execution(conn_id, connected, active_database.as_deref()),
-                ),
-                Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
-                    database,
-                }) => {
-                    let msg = dbflux_i18n::t!(
-                        "document.code.execution.toast.connecting",
-                        database = database
-                    );
-                    Toast::error(msg.clone())
-                        .meta_right(now_hms())
-                        .action(copy_action(msg))
-                        .push(cx);
-                    return;
+            if let Some(origin) = &rerun_origin {
+                let database = origin.context.database.clone();
+                (
+                    origin.context.root.clone(),
+                    database.clone(),
+                    task_target_for_execution(conn_id, connected, database.as_deref()),
+                )
+            } else {
+                let active_database = self
+                    .source
+                    .exec_ctx
+                    .database
+                    .clone()
+                    .or_else(|| connected.active_database.clone());
+
+                match connected.resolve_connection_for_execution(active_database.as_deref()) {
+                    Ok(connection) => (
+                        connection,
+                        active_database.clone(),
+                        task_target_for_execution(conn_id, connected, active_database.as_deref()),
+                    ),
+                    Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
+                        database,
+                    }) => {
+                        let msg = dbflux_i18n::t!(
+                            "document.code.execution.toast.connecting",
+                            database = database
+                        );
+                        Toast::error(msg.clone())
+                            .meta_right(now_hms())
+                            .action(copy_action(msg))
+                            .push(cx);
+                        return;
+                    }
                 }
             }
         };
 
-        self.execution_session_context = Some(ExecutionSessionContext {
+        let session_context = ExecutionSessionContext {
             root: connection.clone(),
             database: active_database.clone(),
-        });
+        };
+        // A rerun on a context the document has left runs on that context's
+        // own connection, so the editor session stays bound where it is.
+        let on_session = rerun_origin.is_none()
+            || self
+                .current_execution_context(cx)
+                .is_some_and(|current| current.same_as(&session_context));
+        let exec_ctx = rerun_origin
+            .map(|origin| origin.exec_ctx)
+            .unwrap_or_else(|| self.source.exec_ctx.clone());
+        let origin = ResultOrigin {
+            connection_id: conn_id,
+            context: session_context.clone(),
+            exec_ctx: exec_ctx.clone(),
+        };
+
+        if on_session {
+            self.execution_session_context = Some(session_context);
+        }
         self.clear_live_output();
         self.result_tabs.run_in_new_tab = in_new_tab;
 
@@ -686,20 +898,31 @@ impl CodeDocument {
         self.execution.active_query_task = Some(ActiveQueryTask {
             task_id,
             target: task_target.clone(),
-            uses_isolated_session: connection.execution_session_factory().is_some(),
+            uses_isolated_session: on_session && connection.execution_session_factory().is_some(),
         });
 
         self.state = DocumentState::Executing;
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
+        // Drivers that cannot enforce a row budget refuse a request that carries
+        // one, so the editor's cap goes only to the connections that advertise
+        // the enforcement; the others run the query with no cap at all.
+        let row_limit = enforces_request_row_limit(connection.as_ref()).then(|| {
+            if result_grid.is_some() {
+                usize::MAX
+            } else {
+                self.app_state.read(cx).general_settings().editor_row_limit
+            }
+        });
+
         let session_database = active_database.clone();
         let mut request = query_request_for_execution(
             query.clone(),
             active_database,
-            &self.source.exec_ctx,
+            &exec_ctx,
             self.effective_language().clone(),
-            self.app_state.read(cx).general_settings().editor_row_limit,
+            row_limit,
         );
 
         // Governance ceiling for a driver-dispatched multi-statement script
@@ -713,22 +936,22 @@ impl CodeDocument {
         // ceiling `None`, which the driver defaults to the restrictive
         // `Read`. This never branches on a concrete driver id — the
         // downstream driver decides whether the ceiling even applies to it.
-        let confirmed_ceiling = self.connection_id.and_then(|conn_id| {
-            self.app_state
-                .read(cx)
-                .connections()
-                .get(&conn_id)
-                .and_then(|connected| {
-                    connected
-                        .connection
-                        .language_service()
-                        .detect_dangerous(&query)
-                })
-        });
+        let confirmed_ceiling = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&conn_id)
+            .and_then(|connected| {
+                connected
+                    .connection
+                    .language_service()
+                    .detect_dangerous(&query)
+            });
         if confirmed_ceiling.is_some() {
             request =
                 request.with_confirmed_ceiling(dbflux_core::ExecutionClassification::Destructive);
         }
+        request = request.with_read_only(read_only);
 
         // Capture audit_service, task_target, and started_at before spawning so we can emit
         // audit events even if the document is closed before the deferred task runs.
@@ -739,10 +962,12 @@ impl CodeDocument {
 
         // Capture honest connection metadata (connection_id string + driver_id) before spawn
         // so we can emit proper fallback events without needing cx in the async block.
-        let fallback_conn_id = self.connection_id.map(|id| id.to_string());
+        let fallback_conn_id = Some(conn_id.to_string());
         let fallback_driver_id = self
-            .connection_id
-            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&conn_id)
             .map(|c| c.profile.driver_id())
             .unwrap_or_default();
 
@@ -751,11 +976,42 @@ impl CodeDocument {
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
             let session_binding = session_binding.clone();
-            async move { session_binding.execute(connection, session_database, &request) }
+            let dispatch_token = cancel_token.clone();
+            async move {
+                // The editor is released as soon as its task is cancelled, so a
+                // cancel that lands before this worker runs must keep the
+                // statement from reaching the database at all.
+                let execution = if dispatch_token.is_cancelled() {
+                    None
+                } else if on_session {
+                    session_binding.execute_unless_cancelled(
+                        connection,
+                        session_database,
+                        &request,
+                        &dispatch_token,
+                    )
+                } else {
+                    Some(super::execution_session::SessionExecution {
+                        result: connection.execute(&request),
+                        isolated: false,
+                    })
+                };
+
+                match execution {
+                    Some(execution) => (true, execution),
+                    None => {
+                        let skipped = super::execution_session::SessionExecution {
+                            result: Err(DbError::Cancelled),
+                            isolated: false,
+                        };
+                        (false, skipped)
+                    }
+                }
+            }
         });
 
         cx.spawn(async move |this, cx| {
-            let session_execution = task.await;
+            let (dispatched, session_execution) = task.await;
             let session_isolated = session_execution.isolated;
             let result = session_execution.result;
 
@@ -783,7 +1039,10 @@ impl CodeDocument {
             } else if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
-                if let Err(error) = connection.cleanup_after_cancel() {
+                // The cleanup rolls back the connection's transaction. A query
+                // that never reached the driver left nothing to undo, and
+                // rolling back would discard a transaction the user opened.
+                if dispatched && let Err(error) = connection.cleanup_after_cancel() {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
 
@@ -830,6 +1089,7 @@ impl CodeDocument {
             }
 
             if !cancel_token.is_cancelled()
+                && on_session
                 && !session_binding.is_current_generation(session_generation)
             {
                 let _ = this.update(cx, |doc, cx| {
@@ -889,14 +1149,9 @@ impl CodeDocument {
                     query,
                     result,
                     is_script: false,
-                    #[cfg(feature = "telemetry")]
-                    usage_ticket,
-                    #[cfg(feature = "telemetry")]
-                    usage_success: true,
-                    #[cfg(feature = "telemetry")]
-                    usage_cancel: cancel_token,
-                    #[cfg(feature = "telemetry")]
-                    usage_session_generation: Some(session_generation),
+                    read_only,
+                    result_grid,
+                    origin: Some(origin),
                 });
                 cx.notify();
             });
@@ -963,9 +1218,9 @@ impl CodeDocument {
         self.focus(window, cx);
         cx.notify();
         self.execute_query_internal(
-            pending.origin,
             pending.query,
             pending.in_new_tab,
+            ReadOnlyEnforcement::None,
             window,
             cx,
         );
@@ -1220,41 +1475,29 @@ impl CodeDocument {
         self.pending.auto_refresh = false;
 
         if !self.can_auto_refresh(cx) {
-            self.refresh.refresh_policy = dbflux_core::RefreshPolicy::Manual;
-            self.refresh._refresh_timer = None;
-            self.refresh.refresh_dropdown.update(cx, |dd, cx| {
-                dd.set_selected_index(Some(dbflux_core::RefreshPolicy::Manual.index()), cx);
-            });
-            Toast::warning(dbflux_i18n::t!(
-                "document.code.execution.toast.auto_refresh_blocked"
-            ))
-            .meta_right(now_hms())
-            .push(cx);
+            self.fall_back_to_manual_refresh(cx);
             return;
         }
 
-        self.run_query_impl(ExecutionOrigin::Automatic, false, window, cx);
+        self.execution.load_all_rows = None;
+        let (query, from_selection) = self.auto_refresh_query(cx);
+        self.execution.query_origin = if from_selection { None } else { Some(0) };
+        self.run_query_text_with(query, false, ReadOnlyEnforcement::Required, window, cx);
     }
 
-    #[cfg(feature = "telemetry")]
-    fn capture_usage_ticket(
-        &mut self,
-        origin: ExecutionOrigin,
-        cx: &mut Context<Self>,
-    ) -> Option<dbflux_core::observability::usage::UsageTicket> {
-        if origin != ExecutionOrigin::User {
-            return None;
-        }
-        self.app_state.update(cx, |state, _| {
-            let source = state.telemetry_usage_source(chrono::Utc::now())?;
-            match source.ticket() {
-                Ok(ticket) => ticket,
-                Err(error) => {
-                    log::warn!("Usage ticket capture failed: {error:?}");
-                    None
-                }
-            }
-        })
+    /// Turns auto-refresh off and tells the user why: the query cannot run
+    /// unattended under read-only enforcement.
+    fn fall_back_to_manual_refresh(&mut self, cx: &mut Context<Self>) {
+        self.refresh.refresh_policy = dbflux_core::RefreshPolicy::Manual;
+        self.refresh._refresh_timer = None;
+        self.refresh.refresh_dropdown.update(cx, |dd, cx| {
+            dd.set_selected_index(Some(dbflux_core::RefreshPolicy::Manual.index()), cx);
+        });
+        Toast::warning(dbflux_i18n::t!(
+            "document.code.execution.toast.auto_refresh_blocked"
+        ))
+        .meta_right(now_hms())
+        .push(cx);
     }
 
     /// Process pending query result (called from render where we have window access).
@@ -1295,6 +1538,8 @@ impl CodeDocument {
             .map(|d| d.as_millis() as i64);
 
         let is_script = pending.is_script;
+        let read_only_refused = pending.read_only.is_required()
+            && matches!(pending.result, Err(DbError::NotSupported(_)));
 
         match pending.result {
             Ok(mut qr) => {
@@ -1343,7 +1588,14 @@ impl CodeDocument {
                     state.add_history_entry(history_entry);
                 });
 
-                self.setup_data_grid(arc_result, pending.query.clone(), window, cx);
+                self.setup_data_grid(
+                    arc_result,
+                    pending.query.clone(),
+                    pending.result_grid,
+                    pending.origin,
+                    window,
+                    cx,
+                );
 
                 #[cfg(feature = "telemetry")]
                 if usage_current
@@ -1467,53 +1719,58 @@ impl CodeDocument {
                 record.error = Some(error_msg.clone());
                 self.state = DocumentState::Error;
 
-                let title: SharedString = if is_script {
-                    dbflux_i18n::t!("document.code.execution.result_title.script_failed").into()
-                } else {
-                    dbflux_i18n::t!("document.code.execution.result_title.query_failed").into()
-                };
-                let now = dbflux_core::chrono::Local::now()
-                    .format("%H:%M:%S")
-                    .to_string();
-                let copy_payload = error_msg.clone();
+                // A read-only refusal on an unattended run is expected: the
+                // fallback to Manual below tells the user, so it is not shown
+                // as a failed query.
+                if !read_only_refused {
+                    let title: SharedString = if is_script {
+                        dbflux_i18n::t!("document.code.execution.result_title.script_failed").into()
+                    } else {
+                        dbflux_i18n::t!("document.code.execution.result_title.query_failed").into()
+                    };
+                    let now = dbflux_core::chrono::Local::now()
+                        .format("%H:%M:%S")
+                        .to_string();
+                    let copy_payload = error_msg.clone();
 
-                // Pull structured info (code, message, detail, hint) from
-                // FormattedError when the driver provided it; fall back to
-                // the to_string() form otherwise.
-                let mut toast = match e.formatted() {
-                    Some(f) => {
-                        let mut t = dbflux_ui_base::toast::Toast::error(title)
+                    // Pull structured info (code, message, detail, hint) from
+                    // FormattedError when the driver provided it; fall back to
+                    // the to_string() form otherwise.
+                    let mut toast = match e.formatted() {
+                        Some(f) => {
+                            let mut t = dbflux_ui_base::toast::Toast::error(title)
+                                .meta_right(now)
+                                .body(f.message.clone());
+                            if let Some(code) = f.code.as_ref() {
+                                t = t.subtitle(format!("ERROR {}", code));
+                            }
+                            if let Some(detail) = f.detail.as_ref() {
+                                t = t.details(detail.clone());
+                            }
+                            if let Some(hint) = f.hint.as_ref() {
+                                t = t.code_block(format!("HINT: {}", hint));
+                            }
+                            t.collapsible()
+                        }
+                        None => dbflux_ui_base::toast::Toast::error(title)
                             .meta_right(now)
-                            .body(f.message.clone());
-                        if let Some(code) = f.code.as_ref() {
-                            t = t.subtitle(format!("ERROR {}", code));
-                        }
-                        if let Some(detail) = f.detail.as_ref() {
-                            t = t.details(detail.clone());
-                        }
-                        if let Some(hint) = f.hint.as_ref() {
-                            t = t.code_block(format!("HINT: {}", hint));
-                        }
-                        t.collapsible()
-                    }
-                    None => dbflux_ui_base::toast::Toast::error(title)
-                        .meta_right(now)
-                        .body(error_msg.clone()),
-                };
+                            .body(error_msg.clone()),
+                    };
 
-                toast = toast.action(
-                    dbflux_ui_base::toast::ToastAction::new(
-                        "copy-error",
-                        dbflux_i18n::t!("document.code.execution.copy_error"),
-                    )
-                    .primary()
-                    .on_click(move |cx: &mut App| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                            copy_payload.clone(),
-                        ));
-                    }),
-                );
-                toast.push(cx);
+                    toast = toast.action(
+                        dbflux_ui_base::toast::ToastAction::new(
+                            "copy-error",
+                            dbflux_i18n::t!("document.code.execution.copy_error"),
+                        )
+                        .primary()
+                        .on_click(move |cx: &mut App| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                copy_payload.clone(),
+                            ));
+                        }),
+                    );
+                    toast.push(cx);
+                }
                 let _ = window;
 
                 // Emit audit event for failed execution
@@ -1548,6 +1805,10 @@ impl CodeDocument {
                         None,
                     );
                 }
+
+                if read_only_refused {
+                    self.fall_back_to_manual_refresh(cx);
+                }
             }
         }
 
@@ -1564,10 +1825,15 @@ impl CodeDocument {
         cx.emit(DocumentEvent::MetaChanged);
     }
 
+    /// Shows `result` in a new tab, or in place of the tab holding
+    /// `result_grid` when set, else of the active tab. A `result_grid` whose
+    /// tab was closed meanwhile drops the result.
     fn setup_data_grid(
         &mut self,
         result: Arc<QueryResult>,
         query: String,
+        result_grid: Option<gpui::EntityId>,
+        origin: Option<ResultOrigin>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1589,27 +1855,53 @@ impl CodeDocument {
         // each its own tab so every statement's output is visible, rather than
         // surfacing only the primary set.
         if result.has_additional_results() {
-            self.create_result_tabs_for_batch(result, query, captions, window, cx);
+            self.create_result_tabs_for_batch(result, query, captions, origin, window, cx);
             return;
         }
 
         let caption: Option<SharedString> = captions.into_iter().next().flatten().map(Into::into);
 
-        let should_create_new_tab = self.result_tabs.run_in_new_tab
-            || self.result_tabs.result_tabs.is_empty()
-            || self.result_tabs.active_result_index.is_none();
+        let target_index = match result_grid {
+            Some(grid_id) => {
+                let Some(index) = self
+                    .result_tabs
+                    .result_tabs
+                    .iter()
+                    .position(|tab| tab.grid.entity_id() == grid_id)
+                else {
+                    self.result_tabs.run_in_new_tab = false;
+                    return;
+                };
+                self.result_tabs.active_result_index = Some(index);
+                Some(index)
+            }
+            None if self.result_tabs.run_in_new_tab => None,
+            None => self.result_tabs.active_result_index,
+        };
 
         self.result_tabs.run_in_new_tab = false;
 
-        if should_create_new_tab {
-            self.create_result_tab(result, query, caption, window, cx);
-        } else if let Some(index) = self.result_tabs.active_result_index
-            && let Some(tab) = self.result_tabs.result_tabs.get_mut(index)
+        let profile_id = origin
+            .as_ref()
+            .map(|origin| origin.connection_id)
+            .or(self.connection_id);
+        let limited_row_actions = self.limited_row_actions(&query, profile_id, cx);
+
+        if let Some(tab) =
+            target_index.and_then(|index| self.result_tabs.result_tabs.get_mut(index))
         {
-            let profile_id = self.connection_id;
+            tab.origin = origin;
             tab.grid.update(cx, |g, cx| {
                 g.set_query_result(result, query.clone(), profile_id, cx);
                 g.set_result_caption(caption, cx);
+            });
+        } else {
+            self.create_result_tab(result, query, caption, origin, window, cx);
+        }
+
+        if let Some(grid) = self.active_result_grid() {
+            grid.update(cx, |grid, cx| {
+                grid.set_limited_row_actions(limited_row_actions, cx);
             });
         }
     }
@@ -1624,6 +1916,7 @@ impl CodeDocument {
         result: Arc<QueryResult>,
         query: String,
         captions: Vec<Option<String>>,
+        origin: Option<ResultOrigin>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1636,7 +1929,14 @@ impl CodeDocument {
             single.additional_results.clear();
 
             let caption = captions.get(index).cloned().flatten().map(Into::into);
-            self.create_result_tab(Arc::new(single), query.clone(), caption, window, cx);
+            self.create_result_tab(
+                Arc::new(single),
+                query.clone(),
+                caption,
+                origin.clone(),
+                window,
+                cx,
+            );
         }
 
         if first_new_index < self.result_tabs.result_tabs.len() {
@@ -1649,6 +1949,7 @@ impl CodeDocument {
         result: Arc<QueryResult>,
         query: String,
         caption: Option<SharedString>,
+        origin: Option<ResultOrigin>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1660,15 +1961,12 @@ impl CodeDocument {
         );
 
         let app_state = self.app_state.clone();
+        let profile_id = origin
+            .as_ref()
+            .map(|origin| origin.connection_id)
+            .or(self.connection_id);
         let grid = cx.new(|cx| {
-            DataGridPanel::new_for_result(
-                result,
-                query.clone(),
-                self.connection_id,
-                app_state,
-                window,
-                cx,
-            )
+            DataGridPanel::new_for_result(result, query.clone(), profile_id, app_state, window, cx)
         });
 
         grid.update(cx, |grid, cx| {
@@ -1682,9 +1980,8 @@ impl CodeDocument {
             });
         }
 
-        let subscription = cx.subscribe(
-            &grid,
-            |this, _grid, event: &DataGridEvent, cx| match event {
+        let subscription =
+            cx.subscribe(&grid, |this, grid, event: &DataGridEvent, cx| match event {
                 DataGridEvent::RequestHide => {
                     this.hide_results(cx);
                 }
@@ -1740,14 +2037,24 @@ impl CodeDocument {
                     // from it. A code document's own close flow decides when its
                     // result tab goes, so `RequestClose` is not forwarded here.
                 }
+                DataGridEvent::CountRowsRequested => {
+                    this.count_result_rows(grid, cx);
+                }
+                DataGridEvent::LoadAllRowsRequested => {
+                    this.pending.load_all_rows = Some(grid.entity_id());
+                    cx.notify();
+                }
                 DataGridEvent::ApplyVisualQuery(_)
                 | DataGridEvent::ClearVisualQuery
                 | DataGridEvent::OpenEditorWithContent { .. } => {
                     // Builder events are only emitted from table-browsing grids.
                     // CodeDocument result grids never have a builder panel.
                 }
-            },
-        );
+                DataGridEvent::OpenReferencedRow { .. } => {
+                    // FK navigation needs a DataSource::Table with FK metadata;
+                    // CodeDocument result grids browse query results.
+                }
+            });
 
         let view_handle = DataGridPanel::into_view_handle(grid.clone(), cx);
         let result_panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
@@ -1757,6 +2064,7 @@ impl CodeDocument {
             title,
             grid,
             result_panel,
+            origin,
             _subscription: subscription,
         };
 
@@ -1764,15 +2072,225 @@ impl CodeDocument {
         self.result_tabs.active_result_index = Some(self.result_tabs.result_tabs.len() - 1);
     }
 
+    /// What a result of `query` may offer when the row limit cuts it short.
+    ///
+    /// Both actions run the query again, so they are offered only for one
+    /// statement that reads. Counting wraps the statement in `COUNT(*)`, which
+    /// only SQL can express.
+    fn limited_row_actions(
+        &self,
+        query: &str,
+        connection_id: Option<Uuid>,
+        cx: &App,
+    ) -> LimitedRowActions {
+        if self.read_only {
+            return LimitedRowActions::default();
+        }
+
+        let language = self.effective_language();
+        if language.statement_count(query) != 1 {
+            return LimitedRowActions::default();
+        }
+
+        let Some(connected) =
+            connection_id.and_then(|id| self.app_state.read(cx).connections().get(&id))
+        else {
+            return LimitedRowActions::default();
+        };
+
+        let classification = dbflux_core::classify_query_for_language_with_service(
+            language,
+            query,
+            Some(connected.connection.language_service()),
+        );
+        let reads = classification == dbflux_core::ExecutionClassification::Read;
+
+        LimitedRowActions {
+            count: reads && *language == QueryLanguage::Sql,
+            load_all: reads,
+        }
+    }
+
+    /// The query behind a result tab and where it ran.
+    fn result_tab_query(
+        &self,
+        grid: &Entity<DataGridPanel>,
+        cx: &App,
+    ) -> Option<(String, ResultOrigin)> {
+        let tab = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .find(|tab| tab.grid.entity_id() == grid.entity_id())?;
+        let query = tab.grid.read(cx).result_query()?.to_string();
+        Some((query, tab.origin.clone()?))
+    }
+
+    /// Runs `request` where a result tab's query ran: on the editor session
+    /// while the document is still bound to that context, else on the
+    /// context's own connection, so the session is not reopened elsewhere.
+    fn execute_in_result_context(
+        &self,
+        context: ExecutionSessionContext,
+        request: QueryRequest,
+        cx: &App,
+    ) -> Task<Result<QueryResult, DbError>> {
+        let on_session = self
+            .execution_session_context
+            .as_ref()
+            .is_some_and(|current| current.same_as(&context));
+        let session = self.execution_session.clone();
+
+        cx.background_executor().spawn(async move {
+            if on_session {
+                session
+                    .execute(context.root, context.database, &request)
+                    .result
+            } else {
+                context.root.execute(&request)
+            }
+        })
+    }
+
+    /// Counts the rows of the query behind a result tab, without fetching
+    /// them, where the query ran.
+    fn count_result_rows(&mut self, grid: Entity<DataGridPanel>, cx: &mut Context<Self>) {
+        let Some((query, origin)) = self.result_tab_query(&grid, cx) else {
+            grid.update(cx, |grid, cx| {
+                grid.set_limited_row_total(LimitedRowTotal::Unknown, cx);
+            });
+            return;
+        };
+
+        let generation = grid.read(cx).result_generation();
+        // The count query returns one row; the cap keeps a driver from
+        // collecting more, but only a connection that enforces one may be sent
+        // it (see `enforces_request_row_limit`).
+        let count_row_limit = enforces_request_row_limit(origin.context.root.as_ref()).then_some(1);
+        let request = query_request_for_execution(
+            dbflux_core::count_query_from_sql(&query),
+            origin.context.database.clone(),
+            &origin.exec_ctx,
+            self.effective_language().clone(),
+            count_row_limit,
+        );
+        let task = self.execute_in_result_context(origin.context, request, cx);
+
+        cx.spawn(async move |_this, cx| {
+            let total = match task.await {
+                Ok(result) => result
+                    .rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(count_value)
+                    .ok_or_else(|| "the count query returned no number".to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+
+            cx.update(|cx| {
+                grid.update(cx, |grid, cx| {
+                    if grid.result_generation() != generation {
+                        return;
+                    }
+                    match total {
+                        Ok(total) => grid.set_limited_row_total(LimitedRowTotal::Known(total), cx),
+                        Err(error) => {
+                            grid.set_limited_row_total(LimitedRowTotal::Unknown, cx);
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Driver,
+                                    dbflux_i18n::t!("document.code.execution.count_rows_failed"),
+                                )
+                                .with_cause(error),
+                                cx,
+                            );
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Runs the query behind a result tab again without the editor row limit,
+    /// on the connection and database it came from, replacing that tab's rows.
+    ///
+    /// The statement was validated and classified as a read when it first ran,
+    /// so the rerun skips the dangerous-query and drift checks of a run the
+    /// user starts, and goes straight to execution, which records the task,
+    /// history and audit as usual.
+    pub(super) fn process_pending_load_all_rows(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(grid_id) = self.pending.load_all_rows.take() else {
+            return;
+        };
+
+        let Some(grid) = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .find(|tab| tab.grid.entity_id() == grid_id)
+            .map(|tab| tab.grid.clone())
+        else {
+            return;
+        };
+        let Some((query, origin)) = self.result_tab_query(&grid, cx) else {
+            return;
+        };
+
+        self.execution.query_origin = None;
+        self.execution.load_all_rows = Some(LoadAllRows {
+            query: query.clone(),
+            grid: grid_id,
+            origin,
+        });
+        self.execute_query_internal(query, false, ReadOnlyEnforcement::None, window, cx);
+    }
+
+    /// Releases the editor when its running query task was cancelled outside
+    /// it, from the Background tasks panel. The driver call keeps running
+    /// until the database answers the cancel, and its completion still records
+    /// the cancellation; without this the editor kept showing a run the user
+    /// had already cancelled for as long as that call blocked.
+    pub(super) fn sync_external_query_cancellation(&mut self, cx: &mut Context<Self>) {
+        if self.state != DocumentState::Executing {
+            return;
+        }
+
+        let Some(task) = self.execution.active_query_task.as_ref() else {
+            return;
+        };
+
+        let cancelled = self
+            .app_state
+            .read(cx)
+            .tasks()
+            .get(task.task_id)
+            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+
+        if cancelled {
+            self.release_cancelled_execution(cx);
+        }
+    }
+
+    fn release_cancelled_execution(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) = self.execution.active_execution_index
+            && let Some(record) = self.execution.execution_history.get_mut(index)
+            && record.finished_at.is_none()
+        {
+            record.finished_at = Some(Instant::now());
+        }
+
+        self.state = DocumentState::Clean;
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
-            if let Some(index) = self.execution.active_execution_index
-                && let Some(record) = self.execution.execution_history.get_mut(index)
-                && record.finished_at.is_none()
-            {
-                record.finished_at = Some(Instant::now());
-            }
-
             if let Some(task) = self.execution.active_query_task.as_ref() {
                 if !task.uses_isolated_session {
                     self.app_state
@@ -1794,9 +2312,7 @@ impl CodeDocument {
                 self.app_state.read(cx).cancel_query_for_target(&target);
             }
 
-            self.state = DocumentState::Clean;
-            cx.emit(DocumentEvent::MetaChanged);
-            cx.notify();
+            self.release_cancelled_execution(cx);
         }
     }
 
@@ -1823,6 +2339,22 @@ impl CodeDocument {
         }
 
         cx.notify();
+    }
+
+    /// Moves the results between below and beside the editor, and keeps the
+    /// choice for the query tabs opened after it.
+    pub fn toggle_results_position(&mut self, cx: &mut Context<Self>) {
+        self.results_position = self.results_position.toggled();
+        self.results_position.save(self.app_state.read(cx));
+        cx.notify();
+    }
+
+    /// Restores the split when maximized results hide the editor, so moving
+    /// the keyboard to the query text never focuses an input that is not shown.
+    pub(super) fn reveal_editor(&mut self, cx: &mut Context<Self>) {
+        if self.layout == SqlQueryLayout::ResultsOnly {
+            self.toggle_maximize_results(cx);
+        }
     }
 
     pub fn run_query_in_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2064,6 +2596,7 @@ impl CodeDocument {
             port: None,
             database: None,
             phase: None,
+            dials_configured_endpoint: false,
         };
 
         let description =
@@ -2298,14 +2831,9 @@ impl CodeDocument {
                     query: content,
                     result,
                     is_script: true,
-                    #[cfg(feature = "telemetry")]
-                    usage_ticket,
-                    #[cfg(feature = "telemetry")]
-                    usage_success,
-                    #[cfg(feature = "telemetry")]
-                    usage_cancel: cancel_token,
-                    #[cfg(feature = "telemetry")]
-                    usage_session_generation: None,
+                    read_only: ReadOnlyEnforcement::None,
+                    result_grid: None,
+                    origin: None,
                 });
                 cx.notify();
             });
@@ -2375,6 +2903,7 @@ impl CodeDocument {
             in_new_tab: pending.in_new_tab,
             action: DriftAction::ExecuteNow,
             cache_updates: Vec::new(),
+            read_only: pending.read_only,
         });
 
         cx.notify();
@@ -2428,9 +2957,9 @@ impl CodeDocument {
                 }
 
                 self.execute_query_internal(
-                    pending.origin,
                     pending.query,
                     pending.in_new_tab,
+                    pending.read_only,
                     window,
                     cx,
                 );
@@ -2439,14 +2968,24 @@ impl CodeDocument {
             DriftAction::ContinueStale => {
                 // User chose to proceed without updating the cache.
                 self.execute_query_internal(
-                    pending.origin,
                     pending.query,
                     pending.in_new_tab,
+                    pending.read_only,
                     window,
                     cx,
                 );
             }
         }
+    }
+}
+
+/// Reads the single value a `COUNT(*)` query returns as a row count.
+fn count_value(value: &dbflux_core::Value) -> Option<u64> {
+    use dbflux_core::Value;
+    match value {
+        Value::Int(count) => u64::try_from(*count).ok(),
+        Value::Text(count) | Value::Decimal(count) => count.trim().parse().ok(),
+        _ => None,
     }
 }
 
@@ -2466,7 +3005,7 @@ mod tests {
             None,
             &ExecutionContext::default(),
             QueryLanguage::Sql,
-            GeneralSettings::default().editor_row_limit,
+            Some(GeneralSettings::default().editor_row_limit),
         );
 
         assert_eq!(request.limit, Some(10_000));
@@ -2491,7 +3030,7 @@ mod tests {
                 None,
                 &ExecutionContext::default(),
                 language.clone(),
-                5_000,
+                Some(5_000),
             );
 
             assert_eq!(request.limit, Some(5_000), "{language:?}");
@@ -2499,22 +3038,63 @@ mod tests {
         }
     }
 
+    /// A connection that cannot enforce a row budget is never sent one: the
+    /// driver would refuse the request instead of running it, so the editor
+    /// query would never reach it. This is the external RPC driver case, where
+    /// the adapter clears [`DriverCapabilities::REQUEST_ROW_LIMIT`].
+    #[test]
+    fn editor_query_request_carries_no_limit_without_an_enforcing_driver() {
+        let request = query_request_for_execution(
+            "SELECT 1".into(),
+            None,
+            &ExecutionContext::default(),
+            QueryLanguage::MongoQuery,
+            None,
+        );
+
+        assert_eq!(request.limit, None);
+        assert_eq!(request.statement_timeout, None);
+    }
+
     #[test]
     fn editor_row_limit_preserves_an_explicit_request_limit() {
-        for explicit_limit in [0, 25] {
-            let request = apply_editor_row_limit(
-                QueryRequest::new("SELECT 1").with_limit(explicit_limit),
-                5_000,
-            );
+        for editor_row_limit in [Some(5_000), None] {
+            for explicit_limit in [0, 25] {
+                let request = apply_editor_row_limit(
+                    QueryRequest::new("SELECT 1").with_limit(explicit_limit),
+                    editor_row_limit,
+                );
 
-            assert_eq!(request.limit, Some(explicit_limit));
-            assert_eq!(request.statement_timeout, None);
+                assert_eq!(request.limit, Some(explicit_limit));
+                assert_eq!(request.statement_timeout, None);
+            }
         }
+    }
+
+    /// No cap leaves a request that has no limit of its own untouched, rather
+    /// than filling one in.
+    #[test]
+    fn editor_row_limit_adds_nothing_without_a_cap() {
+        let request = apply_editor_row_limit(QueryRequest::new("SELECT 1"), None);
+
+        assert_eq!(request.limit, None);
+        assert_eq!(request.statement_timeout, None);
+    }
+
+    #[test]
+    fn count_value_reads_the_count_drivers_return() {
+        use dbflux_core::Value;
+
+        assert_eq!(super::count_value(&Value::Int(52_310)), Some(52_310));
+        assert_eq!(super::count_value(&Value::Text(" 7 ".into())), Some(7));
+        assert_eq!(super::count_value(&Value::Decimal("12".into())), Some(12));
+        assert_eq!(super::count_value(&Value::Int(-1)), None);
+        assert_eq!(super::count_value(&Value::Null), None);
     }
 
     #[test]
     fn editor_row_limit_above_u32_range_saturates() {
-        let request = apply_editor_row_limit(QueryRequest::new("SELECT 1"), usize::MAX);
+        let request = apply_editor_row_limit(QueryRequest::new("SELECT 1"), Some(usize::MAX));
 
         assert_eq!(request.limit, Some(u32::MAX));
     }
@@ -2633,7 +3213,7 @@ mod tests {
             Some("logs".into()),
             &exec_ctx,
             QueryLanguage::CloudWatchLogsInsightsQl,
-            10_000,
+            Some(10_000),
         );
 
         assert_eq!(request.database.as_deref(), Some("logs"));
@@ -2725,7 +3305,7 @@ mod tests {
             None,
             &exec_ctx,
             QueryLanguage::InfluxQuery,
-            10_000,
+            Some(10_000),
         );
 
         assert!(
@@ -2770,7 +3350,7 @@ mod tests {
             None,
             &exec_ctx,
             QueryLanguage::Flux,
-            10_000,
+            Some(10_000),
         );
 
         assert!(
@@ -2812,7 +3392,7 @@ mod tests {
             None,
             &exec_ctx,
             QueryLanguage::InfluxQuery,
-            10_000,
+            Some(10_000),
         );
 
         assert_eq!(
@@ -2841,8 +3421,13 @@ mod tests {
         };
 
         let query = "SELECT $__from FROM table";
-        let request =
-            query_request_for_execution(query.into(), None, &exec_ctx, QueryLanguage::Sql, 10_000);
+        let request = query_request_for_execution(
+            query.into(),
+            None,
+            &exec_ctx,
+            QueryLanguage::Sql,
+            Some(10_000),
+        );
 
         assert_eq!(
             request.sql, query,
@@ -2871,6 +3456,7 @@ mod tests {
             in_new_tab: false,
             action: DriftAction::Pending,
             cache_updates: Vec::new(),
+            read_only: dbflux_core::ReadOnlyEnforcement::None,
         });
 
         assert!(
@@ -2898,6 +3484,7 @@ mod tests {
                 in_new_tab: true,
                 action: DriftAction::Pending,
                 cache_updates: Vec::new(),
+                read_only: dbflux_core::ReadOnlyEnforcement::None,
             }),
             ..Default::default()
         };
@@ -3055,7 +3642,14 @@ mod rail_tests {
 
         window.update(|window, cx| {
             document.update(cx, |document, cx| {
-                document.setup_data_grid(two_row_result(), "SELECT 1".to_string(), window, cx);
+                document.setup_data_grid(
+                    two_row_result(),
+                    "SELECT 1".to_string(),
+                    None,
+                    None,
+                    window,
+                    cx,
+                );
             });
 
             let grid = document
@@ -3220,6 +3814,7 @@ mod confirm_keyboard_tests {
                             query,
                             in_new_tab: false,
                             statement_count: 2,
+                            cursor_statement: None,
                         },
                         window,
                         cx,
@@ -3467,7 +4062,7 @@ mod result_tab_keyboard_tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
-    use crate::code::{CodeDocument, SqlQueryLayout};
+    use crate::code::{CodeDocument, SqlQueryFocus, SqlQueryLayout};
     use crate::pane::PaneActionRun;
     use dbflux_app::keymap::Command;
     use dbflux_components::theme;
@@ -3527,7 +4122,14 @@ mod result_tab_keyboard_tests {
             document.update(cx, |document, cx| {
                 for _ in 0..tab_count {
                     document.result_tabs.run_in_new_tab = true;
-                    document.setup_data_grid(one_row_result(), "SELECT 1".to_string(), window, cx);
+                    document.setup_data_grid(
+                        one_row_result(),
+                        "SELECT 1".to_string(),
+                        None,
+                        None,
+                        window,
+                        cx,
+                    );
                 }
                 document.layout = SqlQueryLayout::Split;
             });
@@ -3669,6 +4271,47 @@ mod result_tab_keyboard_tests {
         assert!(state(window) == (SqlQueryLayout::Split, false));
     }
 
+    /// Moving the keyboard to the query text while the results fill the
+    /// document brings the editor back into view instead of focusing it
+    /// hidden.
+    #[gpui::test]
+    fn focusing_the_text_restores_the_editor_hidden_by_maximized_results(cx: &mut TestAppContext) {
+        let (document, window) = document_with_result_tabs(cx, 1);
+        let state = |window: &mut VisualTestContext| {
+            window.update(|window, cx| {
+                let document = document.read(cx);
+                let editor_focused = document
+                    .editor
+                    .input_state
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window);
+
+                (
+                    document.layout,
+                    document.results_maximized,
+                    document.focus_mode,
+                    editor_focused,
+                )
+            })
+        };
+
+        dispatch(window, &document, Command::ToggleResults);
+        dispatch(window, &document, Command::FocusEditor);
+        assert!(
+            state(window) == (SqlQueryLayout::Split, false, SqlQueryFocus::Editor, true),
+            "Focus editor shows the text it focuses"
+        );
+
+        dispatch(window, &document, Command::FocusDown);
+        dispatch(window, &document, Command::ToggleResults);
+        dispatch(window, &document, Command::FocusUp);
+        assert!(
+            state(window) == (SqlQueryLayout::Split, false, SqlQueryFocus::Editor, true),
+            "stepping up out of maximized results shows the text"
+        );
+    }
+
     #[gpui::test]
     fn the_pane_actions_list_the_result_tabs_and_the_results_area(cx: &mut TestAppContext) {
         let (document, window) = document_with_result_tabs(cx, 2);
@@ -3694,6 +4337,7 @@ mod result_tab_keyboard_tests {
                 ("close-result-tab", Some(Command::CloseResultTab)),
                 ("maximize-results", Some(Command::ToggleResults)),
                 ("hide-results", Some(Command::ToggleEditor)),
+                ("results-position", Some(Command::ToggleResultsPosition)),
             ]
         );
 
@@ -3734,6 +4378,8 @@ mod result_tab_keyboard_tests {
                         document.setup_data_grid(
                             one_row_result(),
                             "SELECT 1".to_string(),
+                            None,
+                            None,
                             window,
                             cx,
                         );
@@ -3765,6 +4411,602 @@ mod result_tab_keyboard_tests {
         assert!(
             checked.iter().any(|id| id.starts_with("result-tab-")),
             "{checked:?}"
+        );
+        assert!(
+            checked.iter().any(|id| id == "sql-refresh-action"),
+            "Refresh sits in the results header: {checked:?}"
+        );
+    }
+
+    /// Refresh and its interval sit in the results header, so the pane
+    /// actions list them while the header is drawn, and the interval entry
+    /// opens the header's dropdown with keyboard focus.
+    #[gpui::test]
+    fn the_auto_refresh_entry_hands_the_keyboard_to_its_dropdown(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+
+        init_keyboard_runtime(cx);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let document = cx.new(|cx| {
+                    CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+                });
+                document.update(cx, |document, cx| {
+                    document.setup_data_grid(
+                        one_row_result(),
+                        "SELECT 1".to_string(),
+                        None,
+                        None,
+                        window,
+                        cx,
+                    );
+                    document.layout = SqlQueryLayout::Split;
+                });
+                document
+            },
+            |document, cx| document.active_context(cx),
+            |document, command, window, cx| document.dispatch_command(command, window, cx),
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.focus_handle.focus(window, cx));
+        });
+        window.run_until_parked();
+
+        let actions = window.update(|_, cx| document.read(cx).pane_actions(&document));
+        let refresh = actions
+            .iter()
+            .find(|action| action.id == "refresh")
+            .expect("a refresh entry while the results show");
+        assert!(matches!(
+            refresh.run,
+            PaneActionRun::Command(Command::RunQuery)
+        ));
+
+        let auto_refresh = actions
+            .into_iter()
+            .find(|action| action.id == "auto-refresh")
+            .expect("an auto-refresh entry while the results show");
+        let PaneActionRun::Callback(open_interval) = auto_refresh.run else {
+            panic!("the auto-refresh entry runs a callback");
+        };
+
+        window.update(|window, cx| open_interval(window, cx));
+        window.run_until_parked();
+
+        let dropdown = window.update(|_, cx| document.read(cx).refresh.refresh_dropdown.clone());
+        let (open, focused) = window.update(|window, cx| {
+            let dropdown = dropdown.read(cx);
+            (dropdown.is_open(), dropdown.is_focused(window))
+        });
+        assert!(open && focused, "the interval dropdown opens with focus");
+
+        window.simulate_keystrokes("j escape");
+        window.run_until_parked();
+
+        let (open, document_focused) = window.update(|window, cx| {
+            (
+                dropdown.read(cx).is_open(),
+                document.read(cx).focus_handle.is_focused(window),
+            )
+        });
+        assert!(!open, "Escape closes the interval list");
+        assert!(document_focused, "focus returns to the editor pane");
+    }
+}
+
+#[cfg(test)]
+mod auto_refresh_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use crate::code::CodeDocument;
+    use dbflux_components::theme;
+    use dbflux_core::{
+        ConnectionProfile, DbConfig, DbKind, QueryLanguage, ReadOnlyEnforcement, RefreshPolicy,
+        WritePrivilege,
+    };
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_test_support::FakeDriver;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::test_host::host_modal;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::ops::Range;
+
+    /// Opens a code document connected through `driver` and holding `content`.
+    fn open_connected<'a>(
+        cx: &'a mut TestAppContext,
+        driver: &FakeDriver,
+        content: &str,
+    ) -> (
+        Entity<CodeDocument>,
+        Entity<ToastHost>,
+        &'a mut VisualTestContext,
+    ) {
+        open_connected_with_profile(cx, driver, content, false)
+    }
+
+    /// Opens a code document like [`open_connected`], on a profile whose
+    /// read-only setting is `read_only_flag`.
+    fn open_connected_with_profile<'a>(
+        cx: &'a mut TestAppContext,
+        driver: &FakeDriver,
+        content: &str,
+        read_only_flag: bool,
+    ) -> (
+        Entity<CodeDocument>,
+        Entity<ToastHost>,
+        &'a mut VisualTestContext,
+    ) {
+        cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let toasts = cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        });
+        let app_state = cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("in-memory storage"),
+            )
+            .expect("app state")
+        });
+
+        let mut profile = ConnectionProfile::new(
+            "fake",
+            DbConfig::SQLite {
+                path: ":memory:".into(),
+                connection_id: None,
+            },
+        );
+        profile.read_only_flag = read_only_flag;
+        let connection = driver.connect_arc(&profile).expect("fake connection");
+        let profile_id = profile.id;
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                app.apply_connect_profile(
+                    profile,
+                    connection,
+                    None,
+                    None,
+                    false,
+                    WritePrivilege::Unknown,
+                );
+            });
+        });
+
+        let content = content.to_string();
+        let (document, _outside, window) = host_modal(cx, move |window, cx| {
+            let mut document =
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx);
+            document.connection_id = Some(profile_id);
+            document.set_content(&content, window, cx);
+            document
+        });
+        window.run_until_parked();
+
+        (document, toasts, window)
+    }
+
+    fn select(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+        range: Range<usize>,
+    ) {
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| {
+                document
+                    .editor
+                    .input_state
+                    .update(cx, |state, cx| state.set_selected_range(range, cx));
+            });
+        });
+    }
+
+    fn can_auto_refresh(window: &mut VisualTestContext, document: &Entity<CodeDocument>) -> bool {
+        window.update(|_, cx| document.read(cx).can_auto_refresh(cx))
+    }
+
+    fn settle(window: &mut VisualTestContext) {
+        for _ in 0..3 {
+            window.run_until_parked();
+            window.update(|window, _| window.refresh());
+        }
+        window.run_until_parked();
+    }
+
+    /// Fires one auto-refresh tick on a document whose refresh policy is
+    /// automatic, the way the refresh timer does.
+    fn auto_refresh_tick(window: &mut VisualTestContext, document: &Entity<CodeDocument>) {
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.refresh.refresh_policy = RefreshPolicy::Interval { every_secs: 5 };
+                document.pending.auto_refresh = true;
+                document.process_pending_auto_refresh(window, cx);
+            });
+        });
+        settle(window);
+    }
+
+    fn refresh_policy(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+    ) -> RefreshPolicy {
+        window.update(|_, cx| document.read(cx).refresh.refresh_policy)
+    }
+
+    fn showed_blocked_toast(window: &mut VisualTestContext, toasts: &Entity<ToastHost>) -> bool {
+        let expected = dbflux_i18n::t!("document.code.execution.toast.auto_refresh_blocked");
+        window.update(|_, cx| toasts.read(cx).last_toast_title()) == Some(expected)
+    }
+
+    fn executed(driver: &FakeDriver) -> Vec<(String, ReadOnlyEnforcement)> {
+        driver
+            .stats()
+            .executed_requests
+            .iter()
+            .map(|request| (request.sql.clone(), request.read_only))
+            .collect()
+    }
+
+    #[gpui::test]
+    fn auto_refresh_runs_the_query_with_read_only_enforcement(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite).with_read_only_enforcement();
+        let (document, _toasts, window) = open_connected(cx, &driver, "SELECT 1");
+
+        auto_refresh_tick(window, &document);
+
+        assert_eq!(
+            executed(&driver),
+            vec![("SELECT 1".to_string(), ReadOnlyEnforcement::Required)]
+        );
+        assert!(refresh_policy(window, &document).is_auto());
+    }
+
+    fn run_query(window: &mut VisualTestContext, document: &Entity<CodeDocument>) {
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        settle(window);
+    }
+
+    fn showed_read_only_profile_toast(
+        window: &mut VisualTestContext,
+        toasts: &Entity<ToastHost>,
+    ) -> bool {
+        let expected = dbflux_i18n::t!("document.code.execution.toast.read_only_profile");
+        window.update(|_, cx| toasts.read(cx).last_toast_title()) == Some(expected)
+    }
+
+    fn has_pending_dangerous_query(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+    ) -> bool {
+        window.update(|_, cx| document.read(cx).pending.dangerous_query.is_some())
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_refuses_a_write_from_the_editor(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) = open_connected_with_profile(
+            cx,
+            &driver,
+            "UPDATE users SET name = 'a' WHERE id = 1",
+            true,
+        );
+
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty(), "a write must not run");
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_refuses_ddl_from_the_editor(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected_with_profile(cx, &driver, "CREATE TABLE t (id INTEGER)", true);
+
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty(), "DDL must not run");
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_still_runs_a_read_from_the_editor(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) = open_connected_with_profile(cx, &driver, "SELECT 1", true);
+
+        run_query(window, &document);
+
+        assert_eq!(
+            executed(&driver),
+            vec![("SELECT 1".to_string(), ReadOnlyEnforcement::None)]
+        );
+        assert!(!showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_refuses_before_asking_to_confirm_a_dangerous_query(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected_with_profile(cx, &driver, "DELETE FROM users", true);
+
+        run_query(window, &document);
+
+        assert!(!has_pending_dangerous_query(window, &document));
+        assert!(executed(&driver).is_empty());
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_refuses_a_confirmed_dangerous_query(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected_with_profile(cx, &driver, "DELETE FROM users", true);
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.pending.dangerous_query = Some(super::super::PendingDangerousQuery {
+                    query: "DELETE FROM users".to_string(),
+                    kind: dbflux_core::DangerousQueryKind::DeleteNoWhere,
+                    in_new_tab: false,
+                    suppress: false,
+                });
+                document.confirm_dangerous_query(false, window, cx);
+            });
+        });
+        settle(window);
+
+        assert!(
+            executed(&driver).is_empty(),
+            "a confirmed write must not run"
+        );
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_writable_profile_still_runs_a_write_from_the_editor(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected(cx, &driver, "UPDATE users SET name = 'a' WHERE id = 1");
+
+        run_query(window, &document);
+
+        assert_eq!(
+            executed(&driver),
+            vec![(
+                "UPDATE users SET name = 'a' WHERE id = 1".to_string(),
+                ReadOnlyEnforcement::None
+            )]
+        );
+        assert!(!showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_profile_saved_as_read_only_while_connecting_opens_read_only(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let toasts = cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        });
+        let app_state = cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("in-memory storage"),
+            )
+            .expect("app state")
+        });
+
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let profile_at_connect_start = ConnectionProfile::new(
+            "fake",
+            DbConfig::SQLite {
+                path: ":memory:".into(),
+                connection_id: None,
+            },
+        );
+        let profile_id = profile_at_connect_start.id;
+        let connection = driver
+            .connect_arc(&profile_at_connect_start)
+            .expect("fake connection");
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                app.profiles_mut().push(profile_at_connect_start.clone());
+
+                let mut saved = profile_at_connect_start.clone();
+                saved.read_only_flag = true;
+                app.update_profile(saved);
+
+                app.apply_connect_profile(
+                    profile_at_connect_start,
+                    connection,
+                    None,
+                    None,
+                    false,
+                    WritePrivilege::Unknown,
+                );
+            });
+        });
+
+        let (document, _outside, window) = host_modal(cx, move |window, cx| {
+            let mut document =
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx);
+            document.connection_id = Some(profile_id);
+            document.set_content("UPDATE users SET name = 'a' WHERE id = 1", window, cx);
+            document
+        });
+        window.run_until_parked();
+
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty());
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    /// Saves the document's connected profile with `read_only_flag`, as the
+    /// connection manager does when the user edits an open connection.
+    fn save_profile_read_only_flag(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+        read_only_flag: bool,
+    ) {
+        window.update(|_, cx| {
+            let app_state = document.read(cx).app_state.clone();
+            let profile_id = document.read(cx).connection_id.expect("connected");
+
+            app_state.update(cx, |app, _| {
+                let mut profile = app
+                    .connections()
+                    .get(&profile_id)
+                    .expect("profile is connected")
+                    .profile
+                    .clone();
+                profile.read_only_flag = read_only_flag;
+                app.update_profile(profile);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn saving_an_open_profile_as_read_only_refuses_the_next_write(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected(cx, &driver, "UPDATE users SET name = 'a' WHERE id = 1");
+
+        save_profile_read_only_flag(window, &document, true);
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty());
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn saving_an_open_profile_as_writable_keeps_it_read_only_until_reconnect(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) = open_connected_with_profile(
+            cx,
+            &driver,
+            "UPDATE users SET name = 'a' WHERE id = 1",
+            true,
+        );
+
+        save_profile_read_only_flag(window, &document, false);
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty());
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_manual_run_requests_no_read_only_enforcement(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite).with_read_only_enforcement();
+        let (document, _toasts, window) = open_connected(cx, &driver, "SELECT 1");
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        settle(window);
+
+        assert_eq!(
+            executed(&driver),
+            vec![("SELECT 1".to_string(), ReadOnlyEnforcement::None)]
+        );
+    }
+
+    #[gpui::test]
+    fn auto_refresh_falls_back_to_manual_when_the_driver_cannot_enforce_read_only(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) = open_connected(cx, &driver, "SELECT 1");
+
+        assert!(!can_auto_refresh(window, &document));
+
+        auto_refresh_tick(window, &document);
+
+        assert!(executed(&driver).is_empty(), "nothing may run unenforced");
+        assert_eq!(refresh_policy(window, &document), RefreshPolicy::Manual);
+        assert!(showed_blocked_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn auto_refresh_falls_back_to_manual_when_the_driver_refuses_at_execution(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SQLite).with_read_only_refusal();
+        let (document, toasts, window) = open_connected(cx, &driver, "SELECT 1");
+
+        auto_refresh_tick(window, &document);
+
+        assert_eq!(
+            executed(&driver),
+            vec![("SELECT 1".to_string(), ReadOnlyEnforcement::Required)]
+        );
+        assert_eq!(refresh_policy(window, &document), RefreshPolicy::Manual);
+        assert!(showed_blocked_toast(window, &toasts));
+        assert_eq!(
+            window.update(|_, cx| toasts.read(cx).toast_count()),
+            1,
+            "a refusal shows only the blocked warning, not a query failure"
+        );
+    }
+
+    #[gpui::test]
+    fn a_selection_holding_a_write_is_not_auto_refreshable(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite).with_read_only_enforcement();
+        let content = "SELECT 'DELETE FROM items'";
+        let (document, _toasts, window) = open_connected(cx, &driver, content);
+
+        assert!(
+            can_auto_refresh(window, &document),
+            "the whole buffer is a read"
+        );
+
+        let start = content.find("DELETE").expect("write inside the literal");
+        select(window, &document, start..start + "DELETE FROM items".len());
+
+        assert!(!can_auto_refresh(window, &document));
+    }
+
+    #[gpui::test]
+    fn a_read_selection_is_auto_refreshable_and_is_what_runs(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite).with_read_only_enforcement();
+        let content = "SELECT 1;\nDELETE FROM items";
+        let (document, _toasts, window) = open_connected(cx, &driver, content);
+
+        assert!(
+            !can_auto_refresh(window, &document),
+            "the whole buffer holds a write"
+        );
+
+        select(window, &document, 0.."SELECT 1".len());
+        assert!(can_auto_refresh(window, &document));
+
+        auto_refresh_tick(window, &document);
+
+        assert_eq!(
+            executed(&driver),
+            vec![("SELECT 1".to_string(), ReadOnlyEnforcement::Required)]
         );
     }
 }

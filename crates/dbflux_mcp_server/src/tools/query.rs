@@ -289,6 +289,7 @@ mod tests {
             supports_schemas: true,
             default_schema: Some("public".into()),
             case_sensitive_identifiers: true,
+            misreads_unknown_quoted_identifiers: false,
         }),
         query: Some(QueryCapabilities::default()),
         mutation: Some(MutationCapabilities::default()),
@@ -364,6 +365,11 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test connection double: mutex poisoning makes the fixture's recorded \
+                state untrustworthy, so aborting the test is intentional"
+        )]
         fn execute(&self, req: &dbflux_core::QueryRequest) -> Result<QueryResult, DbError> {
             self.executed_queries
                 .lock()
@@ -400,6 +406,11 @@ mod tests {
             }
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test connection double: mutex poisoning makes the fixture's recorded \
+                state untrustworthy, so aborting the test is intentional"
+        )]
         fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
             self.explain_queries
                 .lock()

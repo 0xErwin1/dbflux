@@ -7,26 +7,38 @@ use rusqlite::Connection;
 
 use dbflux_storage::migrations::MigrationRegistry;
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-#[test] fixture helper: SQLite setup failures must abort the test run with context"
+)]
 fn table_names(conn: &Connection) -> std::collections::HashSet<String> {
     let mut stmt = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='table'")
         .unwrap();
     stmt.query_map([], |row| row.get::<_, String>(0))
         .unwrap()
-        .filter_map(|r| r.ok())
-        .collect()
+        .collect::<Result<_, _>>()
+        .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-#[test] fixture helper: SQLite setup failures must abort the test run with context"
+)]
 fn index_names(conn: &Connection) -> std::collections::HashSet<String> {
     let mut stmt = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='index'")
         .unwrap();
     stmt.query_map([], |row| row.get::<_, String>(0))
         .unwrap()
-        .filter_map(|r| r.ok())
-        .collect()
+        .collect::<Result<_, _>>()
+        .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-#[test] fixture helper: SQLite setup failures must abort the test run with context"
+)]
 fn insert_profile(conn: &Connection) -> String {
     let id = uuid::Uuid::new_v4().to_string();
     conn.execute(

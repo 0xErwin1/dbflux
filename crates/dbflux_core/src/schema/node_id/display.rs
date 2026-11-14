@@ -2,20 +2,20 @@ use std::fmt;
 
 use super::SchemaNodeId;
 use super::{
-    P_BASE_TYPE, P_BUCKET, P_BUCKETS_FOLDER, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER,
-    P_COLL_INDEX, P_COLLECTION, P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE,
-    P_COLLECTIONS_FOLDER, P_COLUMN, P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT,
-    P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE, P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE,
-    P_DATABASES_FOLDER, P_DB_IDX_FOLDER, P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER,
-    P_EMPTY_DATABASES_FOLDER, P_ENUM_VALUE, P_FK, P_FK_FOLDER, P_INDEX, P_INDEXES_FOLDER,
-    P_INST_INSPECTOR_LEAF, P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF, P_INST_METRICS_FOLDER,
-    P_INST_OVERVIEW_LEAF, P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER, P_METRICS_FOLDER,
-    P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM, P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE,
-    P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA,
-    P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER,
-    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_STORAGE_HINT_ITEM,
-    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
-    P_VIEWS_FOLDER,
+    P_BASE_TYPE, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER, P_COLL_INDEX, P_COLLECTION,
+    P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE, P_COLLECTIONS_FOLDER, P_COLUMN,
+    P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT, P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE,
+    P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE, P_DATABASES_FOLDER, P_DB_IDX_FOLDER,
+    P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER, P_EMPTY_DATABASES_FOLDER, P_ENUM_VALUE, P_FK,
+    P_FK_FOLDER, P_INDEX, P_INDEXES_FOLDER, P_INST_FOLDER, P_INST_INSPECTOR_LEAF,
+    P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF, P_INST_METRICS_FOLDER, P_INST_OVERVIEW_LEAF,
+    P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER, P_METRICS_FOLDER, P_PLACEHOLDER, P_PROFILE,
+    P_REMOTE_DASHBOARD_ITEM, P_REMOTE_DASHBOARDS_FOLDER, P_ROOT_SECTION, P_ROOT_SECTION_ITEM,
+    P_ROOT_SECTION_MORE, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM,
+    P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING,
+    P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER,
+    P_SCRIPTS_ROOT, P_SECRET_PATH, P_SECRET_STORE, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER,
+    P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
 };
 
 impl fmt::Display for SchemaNodeId {
@@ -80,7 +80,9 @@ impl fmt::Display for SchemaNodeId {
             | Self::MetricNamespaceFolder { .. }
             | Self::MetricLeaf { .. } => fmt_metric_variants(self, f),
 
-            Self::ScriptsFolder { .. } | Self::ScriptFile { .. } => fmt_scripts_variants(self, f),
+            Self::ScriptsFolder { .. } | Self::ScriptFile { .. } | Self::ScriptsRoot { .. } => {
+                fmt_scripts_variants(self, f)
+            }
 
             Self::DashboardsFolder { .. }
             | Self::DashboardItem { .. }
@@ -93,10 +95,35 @@ impl fmt::Display for SchemaNodeId {
             | Self::InstanceMetricLeaf { .. }
             | Self::InstanceInspectorsFolder { .. }
             | Self::InstanceInspectorLeaf { .. }
-            | Self::InstanceOverviewLeaf { .. } => fmt_instance_variants(self, f),
+            | Self::InstanceOverviewLeaf { .. }
+            | Self::InstanceFolder { .. } => fmt_instance_variants(self, f),
 
-            Self::Bucket { profile_id, name } => write!(f, "{}|{}|{}", P_BUCKET, profile_id, name),
-            Self::BucketsFolder { profile_id } => write!(f, "{}|{}", P_BUCKETS_FOLDER, profile_id),
+            Self::RootSection {
+                profile_id,
+                section_id,
+            } => write!(f, "{}|{}|{}", P_ROOT_SECTION, profile_id, section_id),
+            Self::RootSectionItem {
+                profile_id,
+                section_id,
+                item_id,
+            } => write!(
+                f,
+                "{}|{}|{}|{}",
+                P_ROOT_SECTION_ITEM, profile_id, section_id, item_id
+            ),
+            Self::RootSectionLoadMore {
+                profile_id,
+                section_id,
+            } => write!(f, "{}|{}|{}", P_ROOT_SECTION_MORE, profile_id, section_id),
+            Self::SecretStore {
+                profile_id,
+                store_id,
+            } => write!(f, "{}|{}|{}", P_SECRET_STORE, profile_id, store_id),
+            Self::SecretPath {
+                profile_id,
+                store_id,
+                path,
+            } => write!(f, "{}|{}|{}|{}", P_SECRET_PATH, profile_id, store_id, path),
         }
     }
 }
@@ -608,6 +635,9 @@ fn fmt_scripts_variants(id: &SchemaNodeId, f: &mut fmt::Formatter<'_>) -> fmt::R
         SchemaNodeId::ScriptFile { path } => {
             write!(f, "{}|{}", P_SCRIPT_FILE, path)
         }
+        SchemaNodeId::ScriptsRoot { path } => {
+            write!(f, "{}|{}", P_SCRIPTS_ROOT, path)
+        }
         _ => unreachable!("fmt_scripts_variants called with an unexpected variant"),
     }
 }
@@ -664,6 +694,9 @@ fn fmt_instance_variants(id: &SchemaNodeId, f: &mut fmt::Formatter<'_>) -> fmt::
         }
         SchemaNodeId::InstanceOverviewLeaf { profile_id } => {
             write!(f, "{}|{}", P_INST_OVERVIEW_LEAF, profile_id)
+        }
+        SchemaNodeId::InstanceFolder { profile_id } => {
+            write!(f, "{}|{}", P_INST_FOLDER, profile_id)
         }
         _ => unreachable!("fmt_instance_variants called with an unexpected variant"),
     }

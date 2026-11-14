@@ -1,14 +1,17 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+
+use uuid::Uuid;
 
 use dbflux_core::observability::actions::CONFIG_CHANGE;
 use dbflux_core::observability::{
     EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
 };
 use dbflux_core::{
-    AuthProfile, ConnectionProfile, DbDriver, DriverKey, FormValues, GeneralSettings,
-    GlobalOverrides, ProfileManager, ProxyProfile, ScriptsDirectory, ServiceConfig, SessionFacade,
-    SshTunnelProfile,
+    AuthProfile, ConnectionProfile, DbDriver, DriverKey, ExternalScriptRoot, FormValues,
+    GeneralSettings, GlobalOverrides, ProfileManager, ProxyProfile, ScriptsDirectory,
+    ServiceConfig, SessionFacade, SshTunnelProfile,
 };
 
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -60,19 +63,26 @@ use dbflux_driver_redshift::RedshiftDriver;
 
 #[cfg(feature = "clickhouse")]
 use dbflux_driver_clickhouse::ClickHouseDriver;
+#[cfg(feature = "duckdb")]
+use dbflux_driver_duckdb::DuckDbDriver;
 #[cfg(feature = "turso")]
 use dbflux_driver_turso::TursoDriver;
 
 #[cfg(feature = "s3")]
 use dbflux_driver_s3::S3Driver;
 
+#[cfg(feature = "aws_secrets")]
+use dbflux_driver_aws_secrets::AwsSecretsDriver;
+
 use crate::auth_provider_registry::AuthProviderRegistry;
 use crate::config_loader::{EditableGlobalHook, HookLoadDiagnostic, ProtectedHookRow};
 use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 use crate::rpc_services::{
     AuthProviderServiceAdaptation, DriverServiceAdaptation, ExternalDriverDiagnostic,
-    RpcServiceDiscovery, adapt_auth_provider_service, adapt_driver_service, discover_services,
+    RpcServiceDiscovery, SecretProviderServiceAdaptation, adapt_auth_provider_service,
+    adapt_driver_service, adapt_secret_provider_service, discover_services,
 };
+use crate::secret_provider_registry::SecretProviderRegistry;
 
 #[cfg(test)]
 use crate::rpc_services::{
@@ -170,8 +180,18 @@ impl AppState {
         ssh_tunnels: Vec<SshTunnelProfile>,
     ) -> Result<Self, dbflux_storage::error::StorageError> {
         let mut scripts_directory_diagnostics = Vec::new();
-        let scripts_directory = match ScriptsDirectory::new() {
-            Ok(directory) => Some(directory),
+        // An in-memory runtime keeps its scripts inside its own temporary
+        // directory, so tests never create files in the user's scripts folder.
+        let opened_scripts_directory = match storage_runtime.temp_root() {
+            Some(temp_root) => ScriptsDirectory::new_at(temp_root.join("scripts")),
+            None => ScriptsDirectory::new(),
+        };
+        let scripts_directory = match opened_scripts_directory {
+            Ok(mut directory) => {
+                directory
+                    .register_external_roots(Self::load_external_script_roots(&storage_runtime));
+                Some(directory)
+            }
             Err(error) => {
                 log::warn!("Failed to initialize scripts directory: {}", error);
                 scripts_directory_diagnostics.push(ScriptsDirectoryDiagnostic {
@@ -193,6 +213,7 @@ impl AppState {
             );
         }
 
+        let secret_provider_registry = Self::build_secret_provider_registry(services.clone());
         let auth_provider_registry = Self::build_auth_provider_registry(services, audit_emitter);
 
         let facade = Self::build_session_facade(
@@ -240,6 +261,7 @@ impl AppState {
             protected_hook_rows,
             detached_hook_tasks: HashMap::new(),
             auth_provider_registry,
+            secret_provider_registry,
             history_manager,
             scripts_directory,
             storage_runtime,
@@ -248,6 +270,7 @@ impl AppState {
             session_passphrase_vault: Arc::new(RwLock::new(
                 dbflux_ssh::SessionPassphraseVault::new(),
             )),
+            remembered_connection_passwords: HashMap::new(),
             metric_catalog_cache: crate::metric_catalog_cache::MetricCatalogCache::new(),
             remote_dashboard_cache: crate::remote_dashboard_cache::RemoteDashboardCache::new(),
             #[cfg(feature = "mcp")]
@@ -267,9 +290,42 @@ impl AppState {
         Ok(state)
     }
 
+    /// Reads the registered external scripts folders. A read failure or a row
+    /// with a malformed id is logged and skipped, so the managed scripts still
+    /// load; the folders themselves are scanned later, off the startup path.
+    fn load_external_script_roots(storage_runtime: &StorageRuntime) -> Vec<ExternalScriptRoot> {
+        let rows = match storage_runtime.script_roots().list() {
+            Ok(rows) => rows,
+            Err(error) => {
+                log::warn!("Failed to load external scripts folders: {error}");
+                return Vec::new();
+            }
+        };
+
+        rows.into_iter()
+            .filter_map(|row| match Uuid::parse_str(&row.id) {
+                Ok(id) => Some(ExternalScriptRoot {
+                    id,
+                    path: PathBuf::from(row.path),
+                    label: row.label,
+                }),
+                Err(error) => {
+                    log::warn!("Skipping external scripts folder with malformed id: {error}");
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Initializes the audit backend used during startup, falling back to a
     /// degraded in-memory store when the real SQLite-backed store cannot be
     /// opened, and derives the external-audit emitter from it.
+    #[expect(
+        clippy::expect_used,
+        reason = "the existing degraded-startup path aborts if constructing \
+                  the fallback audit store fails; this annotation preserves \
+                  that failure policy rather than changing audit initialization"
+    )]
     fn init_audit_backend(
         db_path: &std::path::Path,
     ) -> (
@@ -327,6 +383,19 @@ impl AppState {
         }
 
         auth_provider_registry
+    }
+
+    /// Builds the registry of external secret providers declared by `services`.
+    /// Built-in AWS secret providers are registered per connection by their auth
+    /// provider, so they are not part of this registry.
+    fn build_secret_provider_registry(services: Vec<ServiceConfig>) -> SecretProviderRegistry {
+        let mut secret_provider_registry = SecretProviderRegistry::new();
+
+        if !services.is_empty() {
+            Self::launch_rpc_secret_providers(&mut secret_provider_registry, services);
+        }
+
+        secret_provider_registry
     }
 
     /// Builds the `SessionFacade` from the profile/ssh/proxy/auth managers and
@@ -479,6 +548,13 @@ impl AppState {
     ///
     /// Providers not present in the registry are skipped (their secret layout is
     /// unknown), leaving their data untouched.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "`count` is captured from `items.len()` before the loop and no \
+                  statement inside the loop body removes from or reassigns \
+                  `auth_profiles.items`, so every `items[idx]` access has \
+                  `idx < items.len()`"
+    )]
     fn hydrate_and_migrate_auth_secrets(&mut self) {
         let mut needs_persist = false;
         let count = self.facade.auth_profiles.items.len();
@@ -842,6 +918,14 @@ impl AppState {
 
     #[allow(clippy::result_large_err)]
     fn build_default_drivers() -> Result<DefaultDriverBuild, dbflux_storage::error::StorageError> {
+        #[expect(
+            clippy::expect_used,
+            clippy::unwrap_in_result,
+            reason = "internal storage bootstrap failure is unrecoverable: the \
+                      application cannot start without its database, so \
+                      aborting here is the intended behavior rather than \
+                      propagating a `StorageError`"
+        )]
         let runtime = dbflux_storage::bootstrap::initialize()
             .expect("failed to initialize internal storage — cannot continue");
 
@@ -1003,6 +1087,65 @@ impl AppState {
                 | AuthProviderServiceAdaptation::ProbeFailed { diagnostic } => {
                     log::warn!(
                         "Skipping RPC auth-provider service '{}': {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                }
+            }
+        }
+    }
+
+    fn launch_rpc_secret_providers(
+        registry: &mut SecretProviderRegistry,
+        services: Vec<ServiceConfig>,
+    ) {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC secret-provider service '{}': invalid launch configuration: {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                    continue;
+                }
+            };
+
+            match adapt_secret_provider_service(descriptor, |provider_id| {
+                registry.contains(provider_id)
+            }) {
+                SecretProviderServiceAdaptation::Registered {
+                    provider_id,
+                    service,
+                } => {
+                    log::info!("Registered external RPC secret provider '{}'", provider_id);
+                    registry.register(service);
+                }
+                SecretProviderServiceAdaptation::SkippedDisabled { socket_id } => {
+                    log::info!("Skipping disabled secret-provider service '{}'", socket_id);
+                }
+                SecretProviderServiceAdaptation::SkippedNonSecretProvider { socket_id, kind } => {
+                    log::info!(
+                        "Deferring non-secret RPC service '{}' of kind {:?}",
+                        socket_id,
+                        kind
+                    );
+                }
+                SecretProviderServiceAdaptation::SkippedDuplicate {
+                    socket_id,
+                    provider_id,
+                } => {
+                    log::warn!(
+                        "Skipping RPC secret-provider service '{}': provider id '{}' already exists",
+                        socket_id,
+                        provider_id
+                    );
+                }
+                SecretProviderServiceAdaptation::Incompatible { diagnostic }
+                | SecretProviderServiceAdaptation::ProbeFailed { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC secret-provider service '{}': {}",
                         diagnostic.socket_id,
                         diagnostic.summary
                     );
@@ -1179,9 +1322,19 @@ impl AppState {
             drivers.insert("turso".to_string(), Arc::new(TursoDriver::new()));
         }
 
+        #[cfg(feature = "duckdb")]
+        {
+            drivers.insert("duckdb".to_string(), Arc::new(DuckDbDriver::new()));
+        }
+
         #[cfg(feature = "s3")]
         {
             drivers.insert("s3".to_string(), Arc::new(S3Driver::new()));
+        }
+
+        #[cfg(feature = "aws_secrets")]
+        {
+            drivers.insert("aws_secrets".to_string(), Arc::new(AwsSecretsDriver::new()));
         }
 
         drivers

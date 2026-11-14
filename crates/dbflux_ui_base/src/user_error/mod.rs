@@ -124,27 +124,9 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
     use crate::toast::{Toast, ToastAction, copy_action, now_hms};
 
     let id_str = err.correlation_id.to_string();
-    let kind_str = err.kind.as_str();
     let summary = &err.summary;
 
-    match err.severity {
-        EventSeverity::Warn => tracing::warn!(
-            target: "dbflux_ui::user_error",
-            correlation_id = %id_str,
-            kind            = %kind_str,
-            outcome         = "failure",
-            action          = "user_error",
-            "{summary}",
-        ),
-        _ => tracing::error!(
-            target: "dbflux_ui::user_error",
-            correlation_id = %id_str,
-            kind            = %kind_str,
-            outcome         = "failure",
-            action          = "user_error",
-            "{summary}",
-        ),
-    }
+    record(&err, cx);
 
     let mut toast = match err.severity {
         EventSeverity::Warn => Toast::warning(err.summary.clone()),
@@ -182,17 +164,85 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
         .action(view_in_audit);
 
     toast.push(cx);
+}
+
+/// Records a user-facing failure exactly as [`report_error`] does — the audit
+/// row through the same tracing event, the correlation id, the
+/// notification-center entry and the error badge — but queues no toast.
+///
+/// Use it for a failure the surface already shows in place, such as a section
+/// that draws its own error banner: a toast on top would cover the controls
+/// next to it, while the failure still belongs in the audit trail and the
+/// notification center. A failure with no inline home keeps [`report_error`].
+///
+/// | Caller context                          | Use                     |
+/// | --------------------------------------- | ----------------------- |
+/// | `&mut Context<T>`, `&mut App`           | `record_error`          |
+/// | Inside `cx.spawn(async ...)`            | `record_error_async`    |
+pub fn record_error(err: UserFacingError, cx: &mut App) {
+    record(&err, cx);
+}
+
+/// Background-safe variant of [`record_error`]. Marshals to the foreground
+/// via `cx.update`.
+pub fn record_error_async(err: UserFacingError, cx: &AsyncApp) {
+    let cx = cx.clone();
+    cx.update(move |cx| record_error(err, cx));
+}
+
+/// The part of reporting every failure shares, toast or not: the tracing
+/// event the audit bridge turns into the audit row, then the
+/// notification-center entry and the error badge.
+fn record(err: &UserFacingError, cx: &mut App) {
+    use crate::app_state_entity::AppStateGlobal;
+
+    trace_user_error(err);
 
     if let Some(app_state_global) = cx.try_global::<AppStateGlobal>() {
         let entity = app_state_global.entity.clone();
         entity.update(cx, |s, cx| {
             s.notifications
                 .record_error(crate::notifications::ErrorNotification::from_user_error(
-                    &err,
+                    err,
                     dbflux_core::chrono::Utc::now(),
                 ));
             s.note_user_error(err.correlation_id, err.severity, cx);
         });
+    }
+}
+
+/// Emits the tracing event the audit bridge turns into the audit row.
+///
+/// `cause` and `suggested_action` are not typed audit fields, so the bridge
+/// stores them in `details_json` next to `kind`. Both are skipped when unset.
+fn trace_user_error(err: &UserFacingError) {
+    let id_str = err.correlation_id.to_string();
+    let kind_str = err.kind.as_str();
+    let summary = &err.summary;
+    let cause = err.cause.as_deref();
+    let suggested_action = err.suggested_action.as_deref();
+
+    match err.severity {
+        EventSeverity::Warn => tracing::warn!(
+            target: "dbflux_ui::user_error",
+            correlation_id = %id_str,
+            kind            = %kind_str,
+            outcome         = "failure",
+            action          = "user_error",
+            cause,
+            suggested_action,
+            "{summary}",
+        ),
+        _ => tracing::error!(
+            target: "dbflux_ui::user_error",
+            correlation_id = %id_str,
+            kind            = %kind_str,
+            outcome         = "failure",
+            action          = "user_error",
+            cause,
+            suggested_action,
+            "{summary}",
+        ),
     }
 }
 
@@ -212,69 +262,11 @@ pub fn report_error_async(err: UserFacingError, cx: &AsyncApp) {
     cx.update(move |cx| report_error(err, cx));
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod capture;
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_defaults_to_error_severity() {
-        let err = UserFacingError::new(ErrorKind::Driver, "something failed");
-        assert_eq!(err.severity, EventSeverity::Error);
-        assert_eq!(err.kind, ErrorKind::Driver);
-        assert_eq!(err.summary, "something failed");
-        assert!(err.cause.is_none());
-        assert!(err.suggested_action.is_none());
-    }
-
-    #[test]
-    fn with_correlation_id_overrides_generated_uuid() {
-        let known = Uuid::nil();
-        let err = UserFacingError::new(ErrorKind::Storage, "io error").with_correlation_id(known);
-        assert_eq!(err.correlation_id, known);
-    }
-
-    #[test]
-    fn with_severity_round_trips() {
-        let err = UserFacingError::new(ErrorKind::User, "mild problem")
-            .with_severity(EventSeverity::Warn);
-        assert_eq!(err.severity, EventSeverity::Warn);
-    }
-
-    #[test]
-    fn from_formatted_sets_driver_kind_and_populates_cause() {
-        let fe = FormattedError::new("connection refused")
-            .with_detail("no route to host")
-            .with_code("08006");
-        let err = UserFacingError::from_formatted(ErrorKind::Driver, fe);
-        assert_eq!(err.kind, ErrorKind::Driver);
-        assert_eq!(err.summary, "connection refused");
-        assert!(
-            err.cause.is_some(),
-            "cause must be populated from detail/code"
-        );
-    }
-
-    #[test]
-    fn from_formatted_no_extras_has_no_cause() {
-        let fe = FormattedError::new("simple error");
-        let err = UserFacingError::from_formatted(ErrorKind::Network, fe);
-        assert!(
-            err.cause.is_none(),
-            "cause must be None when no detail/hint/code"
-        );
-    }
-
-    #[test]
-    fn error_kind_as_str_returns_lowercase() {
-        assert_eq!(ErrorKind::Storage.as_str(), "storage");
-        assert_eq!(ErrorKind::Network.as_str(), "network");
-        assert_eq!(ErrorKind::Auth.as_str(), "auth");
-        assert_eq!(ErrorKind::Hook.as_str(), "hook");
-        assert_eq!(ErrorKind::Driver.as_str(), "driver");
-        assert_eq!(ErrorKind::User.as_str(), "user");
-        assert_eq!(ErrorKind::Config.as_str(), "config");
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod i18n_tests {

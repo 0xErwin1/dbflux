@@ -20,6 +20,13 @@ fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Locates the workspace root from `crates/dbflux`.
+#[expect(
+    clippy::expect_used,
+    reason = "`CARGO_MANIFEST_DIR` for this test target is always \
+              `<workspace>/crates/dbflux`, so both `.parent()` calls return \
+              `Some`"
+)]
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -28,6 +35,13 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Reads a checked-in workspace file; read failures intentionally fail the test.
+#[expect(
+    clippy::expect_used,
+    reason = "callers pass paths of workspace files whose presence the tests \
+              assert; a missing file is a broken checkout, not an expected \
+              runtime condition"
+)]
 fn read_workspace_file(relative_path: &str) -> String {
     fs::read_to_string(workspace_root().join(relative_path)).expect("workspace file")
 }

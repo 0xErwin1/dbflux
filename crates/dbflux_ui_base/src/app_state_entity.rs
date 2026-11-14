@@ -11,8 +11,10 @@ use dbflux_app::{
 };
 use dbflux_core::observability::EventSeverity;
 use dbflux_storage::bootstrap::StorageRuntime;
-use gpui::{Entity, EventEmitter, Global, WindowHandle};
+use gpui::{App, Entity, EventEmitter, Global, WindowHandle};
 use gpui_component::Root;
+use gpui_component::scroll::ScrollbarMode;
+use gpui_component::theme::Theme;
 use uuid::Uuid;
 
 use crate::dashboard_manager::DashboardManager;
@@ -44,6 +46,66 @@ fn apply_vim_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
 
     dbflux_components::vim::set_vim_enabled(cx, enabled);
     crate::keymap::set_vim_leader(leader, cx);
+}
+
+/// Publishes the font settings now and after every app-state change. When
+/// the resolved fonts change, the theme takes the new families and sizes and
+/// every open window re-renders with them.
+pub fn publish_font_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    apply_font_settings(app_state, cx);
+
+    cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
+        apply_font_settings(&app_state, cx);
+    })
+    .detach();
+}
+
+/// Publishes the scrollbar visibility now and after every app-state change.
+/// The theme carries the mode, so it applies to every window.
+pub fn publish_scrollbar_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    apply_scrollbar_setting(app_state, cx);
+
+    cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
+        apply_scrollbar_setting(&app_state, cx);
+    })
+    .detach();
+}
+
+fn apply_scrollbar_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let mode = scrollbar_mode_for(app_state.read(cx).general_settings().scrollbar_visibility);
+
+    // `set_scrollbar_mode` refreshes every window, so skip it when nothing
+    // changed: this runs on every app-state change.
+    if Theme::global(cx).scrollbar_mode != mode {
+        Theme::set_scrollbar_mode(mode, cx);
+    }
+}
+
+/// The theme scrollbar mode that shows scrollbars as `visibility` asks.
+pub fn scrollbar_mode_for(visibility: dbflux_core::ScrollbarVisibility) -> ScrollbarMode {
+    match visibility {
+        dbflux_core::ScrollbarVisibility::WhileScrolling => ScrollbarMode::Scrolling,
+        dbflux_core::ScrollbarVisibility::OnHover => ScrollbarMode::Hover,
+        dbflux_core::ScrollbarVisibility::Always => ScrollbarMode::Always,
+    }
+}
+
+/// Resolves persisted font settings against the fonts installed on this
+/// machine.
+pub fn resolve_font_settings(
+    settings: &dbflux_core::GeneralSettings,
+    cx: &gpui::App,
+) -> dbflux_components::fonts::FontSettings {
+    dbflux_components::font_settings::resolve(settings, cx)
+}
+
+fn apply_font_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let fonts = resolve_font_settings(app_state.read(cx).general_settings(), cx);
+
+    if dbflux_components::fonts::set(cx, fonts) {
+        dbflux_components::theme::apply_fonts(cx);
+        cx.refresh_windows();
+    }
 }
 
 /// Drains startup hook-load diagnostics into safe, actionable user-facing errors.
@@ -397,6 +459,62 @@ impl AppStateEntity {
     }
 }
 
+/// Re-scans every scripts root on the background executor, adopts the result
+/// and emits [`AppStateChanged`] so the sidebar redraws.
+///
+/// External folders may sit on slow or unmounted disks, so the walk never runs
+/// on the thread that renders. A scan that lands after a folder was removed
+/// leaves that folder alone (see `ScriptsDirectory::adopt_full_scan`).
+pub fn rescan_scripts_in_background(app_state: &Entity<AppStateEntity>, cx: &mut App) {
+    let request = app_state
+        .read(cx)
+        .scripts_directory()
+        .map(|directory| directory.scan_request());
+
+    run_scripts_scan(app_state, request, cx);
+}
+
+/// Re-scans, in the background, only the scripts root that owns `path`, for
+/// example after a change there, to pick up what the in-memory edit cannot
+/// know (files changed outside DBFlux, a first scan the change superseded).
+pub fn rescan_script_root_in_background(
+    app_state: &Entity<AppStateEntity>,
+    path: &std::path::Path,
+    cx: &mut App,
+) {
+    let request = app_state
+        .read(cx)
+        .scripts_directory()
+        .and_then(|directory| directory.scan_request_for(path));
+
+    run_scripts_scan(app_state, request, cx);
+}
+
+fn run_scripts_scan(
+    app_state: &Entity<AppStateEntity>,
+    request: Option<dbflux_core::ScriptsScanRequest>,
+    cx: &mut App,
+) {
+    let Some(request) = request else {
+        return;
+    };
+
+    let scan = cx.background_executor().spawn(async move { request.run() });
+    let app_state = app_state.clone();
+
+    cx.spawn(async move |cx| {
+        let scan = scan.await;
+
+        app_state.update(cx, |state, cx| {
+            if let Some(directory) = state.scripts_directory_mut() {
+                directory.adopt_full_scan(scan);
+            }
+            cx.emit(AppStateChanged);
+        });
+    })
+    .detach();
+}
+
 impl std::ops::Deref for AppStateEntity {
     type Target = AppState;
 
@@ -646,5 +764,136 @@ mod vim_setting_tests {
         assert_eq!(vim_leader(), default_vim_leader());
 
         cx.update(|cx| set_vim_leader(default_vim_leader(), cx));
+    }
+}
+
+#[cfg(test)]
+mod font_setting_tests {
+    use super::{AppStateChanged, AppStateEntity, publish_font_settings};
+    use dbflux_components::fonts::{self, FontSettings};
+    use dbflux_components::typography::AppFonts;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext as _, SharedString, TestAppContext, px};
+    use gpui_component::theme::Theme;
+
+    /// The font global starts from the saved settings and follows every
+    /// later save, and the theme carries the new fonts.
+    #[gpui::test]
+    fn font_settings_are_published_and_reach_the_theme(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_font_settings(&app_state, cx));
+        assert_eq!(cx.update(|cx| fonts::current(cx)), FontSettings::default());
+
+        cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let mut settings = state.general_settings().clone();
+                settings.ui_font_size = 15.6;
+                settings.editor_font_family = Some(AppFonts::INTERFACE.to_string());
+                settings.editor_font_size = 18.0;
+                settings.grid_font_size = 99.0;
+                state.update_general_settings(settings);
+                cx.emit(AppStateChanged);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let current = fonts::current(cx);
+            assert_eq!(current.ui_size, 15.6);
+            assert_eq!(
+                current.editor_family,
+                SharedString::from(AppFonts::INTERFACE)
+            );
+            assert_eq!(current.grid_family, SharedString::from(AppFonts::INTERFACE));
+            assert_eq!(current.grid_size, 32.0);
+
+            let theme = Theme::global(cx);
+            assert_eq!(theme.font_size, px(16.0 * 15.6 / 13.0));
+            assert_eq!(
+                theme.mono_font_family,
+                SharedString::from(AppFonts::INTERFACE)
+            );
+            assert_eq!(theme.mono_font_size, px(18.0));
+            assert_eq!(theme.dark_theme.font_size, Some(16.0 * 15.6 / 13.0));
+            assert_eq!(theme.light_theme.mono_font_size, Some(18.0));
+        });
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_setting_tests {
+    use super::{AppStateChanged, AppStateEntity, publish_scrollbar_setting, scrollbar_mode_for};
+    use dbflux_core::{AppStyle, ScrollbarVisibility, ThemeSetting};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext as _, TestAppContext};
+    use gpui_component::scroll::ScrollbarMode;
+    use gpui_component::theme::Theme;
+
+    #[test]
+    fn every_visibility_maps_to_its_scrollbar_mode() {
+        assert_eq!(
+            scrollbar_mode_for(ScrollbarVisibility::WhileScrolling),
+            ScrollbarMode::Scrolling
+        );
+        assert_eq!(
+            scrollbar_mode_for(ScrollbarVisibility::OnHover),
+            ScrollbarMode::Hover
+        );
+        assert_eq!(
+            scrollbar_mode_for(ScrollbarVisibility::Always),
+            ScrollbarMode::Always
+        );
+    }
+
+    /// The theme takes the saved visibility at startup, follows every later
+    /// save, and keeps it when the theme is applied again.
+    #[gpui::test]
+    fn scrollbar_setting_is_published_and_survives_a_theme_change(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_scrollbar_setting(&app_state, cx));
+        assert_eq!(
+            cx.update(|cx| Theme::global(cx).scrollbar_mode),
+            ScrollbarMode::Scrolling
+        );
+
+        cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let mut settings = state.general_settings().clone();
+                settings.scrollbar_visibility = ScrollbarVisibility::Always;
+                state.update_general_settings(settings);
+                cx.emit(AppStateChanged);
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| Theme::global(cx).scrollbar_mode),
+            ScrollbarMode::Always
+        );
+
+        cx.update(|cx| {
+            dbflux_components::theme::apply_theme(ThemeSetting::Light, AppStyle::Default, None, cx)
+        });
+        assert_eq!(
+            cx.update(|cx| Theme::global(cx).scrollbar_mode),
+            ScrollbarMode::Always
+        );
     }
 }

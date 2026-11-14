@@ -12,7 +12,7 @@ use dbflux_core::{
 
 /// Slot texts to write; `None` leaves a slot as it is.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SlotWrite {
+pub(crate) struct SlotWrite {
     pub filter: Option<String>,
     pub projection: Option<String>,
     pub sort: Option<String>,
@@ -20,7 +20,7 @@ pub struct SlotWrite {
 }
 
 impl SlotWrite {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.filter.is_none()
             && self.projection.is_none()
             && self.sort.is_none()
@@ -30,7 +30,7 @@ impl SlotWrite {
 
 /// What the slots and the builder last agreed on.
 #[derive(Debug, Clone, Default)]
-pub struct SlotSync {
+pub(crate) struct SlotSync {
     /// Slot texts as last read or written.
     texts: DocumentFindSlots,
     /// The query those texts hold, part by part.
@@ -42,7 +42,7 @@ pub struct SlotSync {
 
 impl SlotSync {
     /// Records the slots and what the builder read from them.
-    pub fn read(&mut self, slots: &DocumentFindSlots, parse: &DocumentSlotParse) {
+    pub(crate) fn read(&mut self, slots: &DocumentFindSlots, parse: &DocumentSlotParse) {
         self.texts = slots.clone();
         self.spec = parse.spec.clone();
         self.unrepresentable = parse.unrepresentable.clone();
@@ -51,7 +51,7 @@ impl SlotSync {
 
     /// Whether `slots` hold exactly what was last read or written, so a
     /// change notification carries nothing new.
-    pub fn is_echo(&self, slots: &DocumentFindSlots) -> bool {
+    pub(crate) fn is_echo(&self, slots: &DocumentFindSlots) -> bool {
         self.texts.filter == slots.filter
             && self.texts.projection == slots.projection
             && self.texts.sort == slots.sort
@@ -59,41 +59,45 @@ impl SlotSync {
     }
 
     /// Whether some slot holds clauses the builder could not read.
-    pub fn is_conflicted(&self) -> bool {
+    pub(crate) fn is_conflicted(&self) -> bool {
         !self.unrepresentable.is_empty()
     }
 
     /// Whether `slot` holds clauses the builder could not read.
-    pub fn locks(&self, slot: DocumentSlot) -> bool {
+    pub(crate) fn locks(&self, slot: DocumentSlot) -> bool {
         self.unrepresentable
             .iter()
             .any(|clause| clause.slot == slot)
     }
 
     /// Slot texts as last read or written.
-    pub fn texts(&self) -> &DocumentFindSlots {
+    pub(crate) fn texts(&self) -> &DocumentFindSlots {
         &self.texts
     }
 
     /// The query the slots held when last read or written.
-    pub fn spec(&self) -> &DocumentQuerySpec {
+    pub(crate) fn spec(&self) -> &DocumentQuerySpec {
         &self.spec
     }
 
-    pub fn unrepresentable(&self) -> &[UnrepresentableClause] {
+    pub(crate) fn unrepresentable(&self) -> &[UnrepresentableClause] {
         &self.unrepresentable
     }
 
     /// Slots whose builder edits wait for "Keep the text" or "Rewrite from
     /// builder".
-    pub fn held(&self) -> &[DocumentSlot] {
+    pub(crate) fn held(&self) -> &[DocumentSlot] {
         &self.held
     }
 
     /// Texts to write for an edit that produced `spec`, rendered as
     /// `rendered`. Only the parts that changed are written, and never a slot
     /// the builder could not fully read.
-    pub fn plan(&mut self, spec: &DocumentQuerySpec, rendered: &DocumentFindSlots) -> SlotWrite {
+    pub(crate) fn plan(
+        &mut self,
+        spec: &DocumentQuerySpec,
+        rendered: &DocumentFindSlots,
+    ) -> SlotWrite {
         let mut write = SlotWrite::default();
 
         if spec.filter != self.spec.filter {
@@ -137,7 +141,11 @@ impl SlotSync {
     /// the clauses it could not read. Every part is written: the slots may
     /// no longer hold what was last read, so a part that looks unchanged
     /// here is not known to be unchanged there.
-    pub fn rewrite(&mut self, spec: &DocumentQuerySpec, rendered: &DocumentFindSlots) -> SlotWrite {
+    pub(crate) fn rewrite(
+        &mut self,
+        spec: &DocumentQuerySpec,
+        rendered: &DocumentFindSlots,
+    ) -> SlotWrite {
         let write = SlotWrite {
             filter: Some(self.write_filter(spec, rendered)),
             projection: Some(self.write_projection(spec, rendered)),

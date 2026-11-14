@@ -186,10 +186,15 @@ a un ID guardado y, por tanto, no se deduplica hasta que se guarda.
 
 Hay cuatro puntos de entrada.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/chart-view-dark.webp">
+  <img src="../images/charts/chart-view-light.webp" alt="Una pestaña de chart abierta desde una query, que dibuja los ingresos mensuales como gráfico de líneas">
+</picture>
+
 ### Botón de gráfico en el editor de queries
 
 Cualquier query que produzca resultados tabulares se puede graficar. En la
-toolbar del editor de queries, haz clic en el botón de gráfico (tooltip: "Open
+barra de acciones del borde izquierdo del editor de queries, haz clic en el botón de gráfico (tooltip: "Open
 current query in a chart document") para abrir la query actual en un documento
 de gráfico.
 
@@ -197,7 +202,7 @@ de gráfico.
 
 El menú contextual de un data grid ofrece un elemento "Chart this query". El
 elemento está condicionado por `can_chart_from_context_menu` en
-`crates/dbflux_ui_document/src/data_grid_panel/context_menu.rs`, que requiere
+`crates/dbflux_ui_document/src/data_grid_panel/context_menu/mod.rs`, que requiere
 ambas condiciones:
 
 1. La fuente del panel es un `QueryResult` con una query original no vacía, y
@@ -220,14 +225,17 @@ guardado, ejecuta **Open chart…** desde el command palette (`OpenSavedChart`),
 que lista los gráficos guardados del perfil actual en un overlay de búsqueda
 difusa.
 
-### Colecciones de series temporales
+### Tablas y colecciones de series temporales
 
-Abrir una colección en una conexión cuya categoría es
-`DatabaseCategory::TimeSeries` (un measurement de InfluxDB, por ejemplo) le da a
-su data grid las vistas Data, Chart y JSON que tienen los resultados de query,
+Abrir una tabla o colección que su driver declara como serie temporal
+(`ObjectFacet::TimeSeries`: un measurement de InfluxDB, o una hypertable de
+TimescaleDB en PostgreSQL) le da a su data grid las vistas Data, Chart y JSON que tienen los resultados de query,
 más **Both**, que dibuja el chart sobre la cuadrícula. La primera página se abre
 en Both cuando `detect_chart_columns` devuelve `Ok`, con los ejes sembrados por `default_bindings_for_time_series` (el tiempo en
 X, la primera columna numérica en Y y la primera columna `Text` como grupo).
+La columna de tiempo que nombra el driver, como la dimensión de tiempo de una
+hypertable, va en X cuando el resultado la tiene; si no, va la primera columna
+de timestamp.
 Un grupo dibuja una línea por cada valor distinto de su columna, etiquetada con
 ese valor, así que un tag como `host` le da a cada host su propia línea. Lo
 mismo aplica cuando el grupo se elige en la barra de ejes. El grupo por defecto
@@ -238,6 +246,11 @@ Data muestra las filas en la grilla en lugar del árbol de documentos que usan
 las demás colecciones. Un refresco, sea manual, automático o un cambio de
 página, conserva la vista que eligió el usuario, y vuelve a Data solo cuando la
 página nueva ya no se puede graficar.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/hypertable-dark.webp">
+  <img src="../images/charts/hypertable-light.webp" alt="La hypertable server_metrics abierta en la vista Both: un gráfico de líneas de cpu_percent en el tiempo, con una línea por host, sobre la cuadrícula de filas">
+</picture>
 
 La barra de herramientas y la barra de estado nombran el browse con la query que
 ejecuta el driver, tomada de `QueryGenerator::collection_browse_query`, así que
@@ -281,6 +294,11 @@ herramientas** mientras hay un punto resaltado.
 
 Los gráficos de resultados del editor de queries y las pestañas de gráfico no
 guardan la fila de cada punto, así que no muestran el inspector de puntos.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/point-inspector-dark.webp">
+  <img src="../images/charts/point-inspector-light.webp" alt="La vista de chart de una tabla con un punto resaltado y el inspector de puntos acoplado a la derecha">
+</picture>
 
 ## Limitaciones
 

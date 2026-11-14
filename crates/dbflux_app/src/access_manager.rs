@@ -93,15 +93,15 @@ impl AppAccessManager {
             ))
         })?;
 
-        let session = dbflux_ssh::establish_session(
+        let dbflux_ssh::OpenedSshTunnel { tunnel, .. } = dbflux_ssh::open_tunnel(
             &resolved.config,
             resolved
                 .secret
                 .as_ref()
                 .map(|secret| secret.expose_secret()),
+            remote_host,
+            remote_port,
         )?;
-
-        let tunnel = dbflux_ssh::SshTunnel::start(session, remote_host.to_string(), remote_port)?;
         let local_port = tunnel.local_port();
 
         Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
@@ -157,21 +157,14 @@ impl AppAccessManager {
         match provider {
             #[cfg(feature = "aws")]
             "aws-ssm" => {
-                let instance_id = _params.get("instance_id").map(String::as_str).unwrap_or("");
-                let region = _params
-                    .get("region")
-                    .map(String::as_str)
-                    .unwrap_or("us-east-1");
-                let remote_port: u16 = _params
-                    .get("remote_port")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
+                let ssm = dbflux_core::SsmAccessParams::from_params(_params)?;
 
                 let factory = self.ssm_factory.as_ref().ok_or_else(|| {
                     DbError::connection_failed("SSM tunnel factory not available")
                 })?;
 
-                let tunnel = factory.start(instance_id, region, _remote_host, remote_port)?;
+                let tunnel =
+                    factory.start(&ssm.instance_id, &ssm.region, _remote_host, ssm.remote_port)?;
                 let local_port = tunnel.local_port();
 
                 Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
@@ -209,6 +202,17 @@ mod tests {
         AppAccessManager::new(HashMap::new(), HashMap::new())
     }
 
+    /// Polls `future` to completion on the current thread.
+    ///
+    /// The current test paths complete synchronously; the no-op waker carries
+    /// no owned data.
+    #[expect(
+        unsafe_code,
+        reason = "the stateless `RawWaker` clone/wake/drop callbacks never \
+                  dereference or own the null data pointer and are thread-safe, \
+                  so `Waker::from_raw` receives a valid vtable; the current \
+                  test paths also complete synchronously"
+    )]
     fn run_ready_future<F>(future: F) -> F::Output
     where
         F: Future,

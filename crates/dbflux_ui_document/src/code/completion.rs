@@ -5,6 +5,8 @@ use crate::completion_support::{
     scan_identifier_start,
 };
 use dbflux_core::{SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis};
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 
@@ -17,13 +19,15 @@ const RANK_KEYWORD: u8 = 2;
 /// `(database, schema, table)` fetch key for a table-details prefetch.
 type PrefetchKey = (String, Option<String>, String);
 
-pub(super) struct QueryCompletionProvider {
+pub(crate) struct QueryCompletionProvider {
     query_language: dbflux_core::QueryLanguage,
     app_state: Entity<AppStateEntity>,
     connection_id: Option<Uuid>,
     /// The document's selected database (document-local; the document
     /// reattaches the provider when it changes).
     database: Option<String>,
+    /// The document's selected schema, same reattach discipline as `database`.
+    schema: Option<String>,
     /// Fetch keys with an in-flight or completed table-details prefetch. A
     /// key is added once the fetch is actually spawned and removed if the
     /// fetch fails, so a transient error does not block retry for the session.
@@ -41,11 +45,12 @@ pub(super) struct QueryCompletionProvider {
 }
 
 impl QueryCompletionProvider {
-    pub(super) fn new(
+    pub(crate) fn new(
         query_language: dbflux_core::QueryLanguage,
         app_state: Entity<AppStateEntity>,
         connection_id: Option<Uuid>,
         database: Option<String>,
+        schema: Option<String>,
         completion_query_generation: Rc<Cell<u64>>,
     ) -> Self {
         Self {
@@ -53,6 +58,7 @@ impl QueryCompletionProvider {
             app_state,
             connection_id,
             database,
+            schema,
             prefetched_tables: Rc::new(RefCell::new(HashSet::new())),
             prefetched_databases: Rc::new(RefCell::new(HashSet::new())),
             sql_context: SqlContextEngine::new(),
@@ -228,14 +234,13 @@ impl QueryCompletionProvider {
                 .map_or(!lazy_per_database, |selected| selected == database)
         };
 
-        let snapshot = connected.schema.as_ref().filter(|snapshot| {
-            match (effective_database.as_deref(), snapshot.current_database()) {
-                (Some(selected), Some(current)) => selected == current,
-                _ => true,
-            }
-        });
+        let snapshot = target_database_snapshot(
+            connected.schema.as_ref(),
+            database_slot_snapshot(connected, effective_database.as_deref()),
+            effective_database.as_deref(),
+        );
 
-        build_sql_completion_metadata(
+        let mut metadata = build_sql_completion_metadata(
             snapshot,
             connected
                 .database_schemas
@@ -248,7 +253,24 @@ impl QueryCompletionProvider {
                 .filter(|((database, _, _), _)| database_in_scope(database))
                 .map(|(_, details)| details),
             is_document_category,
-        )
+        );
+
+        // Drivers with real schemas complete a table reference schema first:
+        // `ra` offers the schema `raw`, and `raw.` then lists its tables.
+        // Drivers without them may still tag tables with a database name as
+        // their schema, so they keep the flat table list.
+        if connected
+            .connection
+            .metadata()
+            .capabilities
+            .contains(dbflux_core::DriverCapabilities::SCHEMAS)
+        {
+            metadata.schema_first = Some(SchemaFirst {
+                selected_schema: self.schema.as_deref().map(normalize_identifier),
+            });
+        }
+
+        metadata
     }
 
     fn mongo_completion_metadata(&self, cx: &App) -> MongoCompletionMetadata {
@@ -343,7 +365,27 @@ impl QueryCompletionProvider {
             .as_ref()
             .and_then(|engine| engine.analyze(source, cursor));
 
-        sql_completion_items_with_context(&metadata, source, cursor, analysis.as_ref())
+        let mut items =
+            sql_completion_items_with_context(&metadata, source, cursor, analysis.as_ref());
+
+        let app_state = self.app_state.read(cx);
+        let mutation_target_alias = self
+            .connection_id
+            .and_then(|connection_id| app_state.connections().get(&connection_id))
+            .map_or(dbflux_core::MutationTargetAlias::Unsupported, |connected| {
+                connected.connection.dialect().mutation_target_alias()
+            });
+
+        append_table_aliases(
+            &mut items,
+            &metadata,
+            source,
+            cursor,
+            app_state.general_settings(),
+            mutation_target_alias,
+        );
+
+        items
     }
 
     /// Background-fetches column details for tables referenced by the statement
@@ -385,7 +427,11 @@ impl QueryCompletionProvider {
                 .or((!lazy_per_database).then_some("default"));
 
             let known = known_relational_tables(
-                connected.schema.as_ref(),
+                target_database_snapshot(
+                    connected.schema.as_ref(),
+                    database_slot_snapshot(connected, effective_database.as_deref()),
+                    effective_database.as_deref(),
+                ),
                 connected.database_schemas.iter().filter(|(database, _)| {
                     // Same scope as the metadata builder: without a selection,
                     // lazy-per-database drivers contribute nothing (otherwise
@@ -526,19 +572,51 @@ impl QueryCompletionProvider {
     }
 }
 
+fn database_slot_snapshot<'a>(
+    connected: &'a dbflux_core::ConnectedProfile,
+    database: Option<&str>,
+) -> Option<&'a dbflux_core::SchemaSnapshot> {
+    database
+        .and_then(|database| connected.database_connection(database))
+        .and_then(|slot| slot.schema.as_ref())
+}
+
+/// The catalog snapshot describing `database`.
+///
+/// `ConnectionPerDatabase` drivers keep a secondary database's snapshot in
+/// its per-database slot, so that slot wins. The primary snapshot only
+/// applies when it describes the selected database: falling back to it for a
+/// slot that is not loaded yet would offer another database's tables.
+fn target_database_snapshot<'a>(
+    primary: Option<&'a dbflux_core::SchemaSnapshot>,
+    database_slot: Option<&'a dbflux_core::SchemaSnapshot>,
+    database: Option<&str>,
+) -> Option<&'a dbflux_core::SchemaSnapshot> {
+    database_slot.or_else(|| {
+        primary.filter(|snapshot| match (database, snapshot.current_database()) {
+            (Some(selected), Some(current)) => selected == current,
+            _ => true,
+        })
+    })
+}
+
 /// A table from a connection's cached schema listings, tagged with its
 /// `table_details` cache key.
 struct KnownTableListing {
     database: String,
     schema: Option<String>,
+    /// The snapshot schema the table is listed under. A schema qualifier
+    /// matches it when the table carries no schema of its own; the fetch key
+    /// still uses `schema`.
+    enclosing_schema: Option<String>,
     name: String,
     has_columns: bool,
 }
 
 /// Flattens a connection's relational schema listings into [`KnownTableListing`]s.
 ///
-/// Mirrors the sources of [`build_sql_completion_metadata`]: the connect-time
-/// snapshot (top-level tables plus per-schema tables) and the lazily cached
+/// Mirrors the sources of [`build_sql_completion_metadata`]: the selected
+/// database's snapshot (top-level tables plus per-schema tables) and the lazily cached
 /// per-database schemas. Snapshot tables are tagged with `snapshot_database`
 /// as their fetch key; without one they are skipped, since there is no valid
 /// key to fetch them under.
@@ -553,11 +631,18 @@ fn known_relational_tables<'a>(
         && let Some(snapshot) = snapshot
         && let Some(relational) = snapshot.as_relational()
     {
-        let per_schema = relational.schemas.iter().flat_map(|schema| &schema.tables);
-        for table in relational.tables.iter().chain(per_schema) {
+        let top_level = relational.tables.iter().map(|table| (None, table));
+        let per_schema = relational.schemas.iter().flat_map(|schema| {
+            schema
+                .tables
+                .iter()
+                .map(|table| (Some(schema.name.as_str()), table))
+        });
+        for (enclosing_schema, table) in top_level.chain(per_schema) {
             tables.push(KnownTableListing {
                 database: database.to_string(),
                 schema: table.schema.clone(),
+                enclosing_schema: enclosing_schema.map(String::from),
                 name: table.name.clone(),
                 has_columns: table.columns.is_some(),
             });
@@ -569,6 +654,7 @@ fn known_relational_tables<'a>(
             tables.push(KnownTableListing {
                 database: database.clone(),
                 schema: table.schema.clone(),
+                enclosing_schema: None,
                 name: table.name.clone(),
                 has_columns: table.columns.is_some(),
             });
@@ -605,6 +691,7 @@ fn tables_needing_details(
                 let schema_matches = table
                     .schema
                     .as_deref()
+                    .or(table.enclosing_schema.as_deref())
                     .is_some_and(|schema| normalize_identifier(schema) == qualifier);
                 let database_matches = normalize_identifier(&table.database) == qualifier;
 
@@ -681,12 +768,14 @@ fn build_sql_completion_metadata<'a>(
             }
 
             for schema in &relational.schemas {
+                metadata.schema_names.insert(schema.name.clone());
+
                 for table in &schema.tables {
-                    metadata.add_table(table);
+                    metadata.add_table_in(table, Some(&schema.name));
                 }
 
                 for view in &schema.views {
-                    metadata.add_view(view);
+                    metadata.add_view_in(view, Some(&schema.name));
                 }
             }
         }
@@ -715,17 +804,54 @@ fn build_sql_completion_metadata<'a>(
     metadata
 }
 
-/// Push-helper for the SQL item builders: applies the typed-prefix filter and
-/// an optional rank group to whole candidate sets.
+/// Push-helper for the SQL item builders: filters whole candidate sets
+/// against the typed prefix, with an optional rank group.
+///
+/// Candidates that start with the prefix keep their push order. Candidates
+/// that only fuzzy-match it (fzf-style subsequence, e.g. `messa` for
+/// `alarm_message`) are held back and appended by [`Self::finish`] after every
+/// prefix match, so fuzzy hits never push an exact continuation down the
+/// menu.
+///
+/// Fuzzy matching starts at [`FUZZY_MIN_PREFIX_CHARS`] typed characters, since
+/// a shorter prefix is a subsequence of nearly every name, and only the
+/// [`FUZZY_MAX_MATCHES`] best fuzzy hits are kept. Prefix matches stay
+/// unlimited.
 struct SqlItemSink<'a> {
     items: Vec<CompletionItem>,
     seen: HashSet<String>,
     prefix: &'a str,
     prefix_upper: String,
     replace_range: lsp_types::Range,
+    /// `None` while the prefix is too short for fuzzy matching.
+    matcher: Option<SkimMatcherV2>,
+    fuzzy_matches: Vec<FuzzyCandidate>,
+}
+
+const FUZZY_MIN_PREFIX_CHARS: usize = 3;
+const FUZZY_MAX_MATCHES: usize = 50;
+
+struct FuzzyCandidate {
+    score: i64,
+    label: String,
+    kind: CompletionItemKind,
+    rank: Option<u8>,
 }
 
 impl SqlItemSink<'_> {
+    fn new<'a>(prefix: &'a str, replace_range: lsp_types::Range) -> SqlItemSink<'a> {
+        SqlItemSink {
+            items: Vec::new(),
+            seen: HashSet::new(),
+            prefix,
+            prefix_upper: prefix.to_uppercase(),
+            replace_range,
+            matcher: (prefix.chars().count() >= FUZZY_MIN_PREFIX_CHARS)
+                .then(|| SkimMatcherV2::default().ignore_case()),
+            fuzzy_matches: Vec::new(),
+        }
+    }
+
     fn push_all<'c>(
         &mut self,
         candidates: impl IntoIterator<Item = &'c str>,
@@ -733,32 +859,107 @@ impl SqlItemSink<'_> {
         rank: Option<u8>,
     ) {
         for candidate in candidates {
-            if !self.prefix_upper.is_empty()
-                && !candidate.to_uppercase().starts_with(&self.prefix_upper)
+            if self.prefix_upper.is_empty()
+                || candidate.to_uppercase().starts_with(&self.prefix_upper)
             {
-                continue;
-            }
-
-            match rank {
-                Some(rank_group) => push_completion_item_ranked(
-                    &mut self.items,
-                    &mut self.seen,
-                    candidate,
+                self.push_item(candidate, kind, rank);
+            } else if let Some(score) = self
+                .matcher
+                .as_ref()
+                .and_then(|matcher| matcher.fuzzy_match(candidate, self.prefix))
+            {
+                self.fuzzy_matches.push(FuzzyCandidate {
+                    score,
+                    label: candidate.to_string(),
                     kind,
-                    self.prefix,
-                    self.replace_range,
-                    rank_group,
-                ),
-                None => push_completion_item(
-                    &mut self.items,
-                    &mut self.seen,
-                    candidate,
-                    kind,
-                    self.prefix,
-                    self.replace_range,
-                ),
+                    rank,
+                });
             }
         }
+    }
+
+    fn push_item(&mut self, label: &str, kind: CompletionItemKind, rank: Option<u8>) {
+        match rank {
+            Some(rank_group) => push_completion_item_ranked(
+                &mut self.items,
+                &mut self.seen,
+                label,
+                kind,
+                self.prefix,
+                self.replace_range,
+                rank_group,
+            ),
+            None => push_completion_item(
+                &mut self.items,
+                &mut self.seen,
+                label,
+                kind,
+                self.prefix,
+                self.replace_range,
+            ),
+        }
+    }
+
+    fn finish(mut self) -> Vec<CompletionItem> {
+        let mut fuzzy_matches = std::mem::take(&mut self.fuzzy_matches);
+
+        // Keep the best-scoring hits, then order them by rank group; the
+        // stable sort keeps the score order inside each group.
+        fuzzy_matches.sort_by_key(|candidate| std::cmp::Reverse(candidate.score));
+        let mut kept_labels = HashSet::new();
+        fuzzy_matches.retain(|candidate| kept_labels.insert(candidate.label.clone()));
+        fuzzy_matches.truncate(FUZZY_MAX_MATCHES);
+        fuzzy_matches.sort_by_key(|candidate| candidate.rank);
+
+        for candidate in fuzzy_matches {
+            self.push_item(&candidate.label, candidate.kind, candidate.rank);
+        }
+
+        self.items
+    }
+
+    /// Tables and views for a table position. Schema-first metadata offers
+    /// the selected schema's relations unqualified, relations without a
+    /// schema, and the schema names themselves; a schema's other relations
+    /// are reached by typing `schema.`. Otherwise every relation is offered
+    /// both bare and schema-qualified.
+    fn push_relations(
+        &mut self,
+        metadata: &SqlCompletionMetadata,
+        relation_rank: Option<u8>,
+        schema_rank: Option<u8>,
+    ) {
+        let Some(schema_first) = &metadata.schema_first else {
+            self.push_all(
+                metadata.table_names_iter(),
+                CompletionItemKind::STRUCT,
+                relation_rank,
+            );
+            self.push_all(
+                metadata.view_names_iter(),
+                CompletionItemKind::STRUCT,
+                relation_rank,
+            );
+            return;
+        };
+
+        if let Some(schema) = &schema_first.selected_schema {
+            self.push_all(
+                metadata.relations_in_schema(schema),
+                CompletionItemKind::STRUCT,
+                relation_rank,
+            );
+        }
+        self.push_all(
+            metadata.unqualified_relations.iter().map(String::as_str),
+            CompletionItemKind::STRUCT,
+            relation_rank,
+        );
+        self.push_all(
+            metadata.schema_names.iter().map(String::as_str),
+            CompletionItemKind::MODULE,
+            schema_rank,
+        );
     }
 
     fn has_prefix(&self) -> bool {
@@ -787,19 +988,10 @@ impl SqlItemSink<'_> {
             );
         }
 
-        self.push_all(
-            metadata.table_names_iter(),
-            CompletionItemKind::STRUCT,
-            Some(RANK_PRIMARY),
-        );
-        self.push_all(
-            metadata.view_names_iter(),
-            CompletionItemKind::STRUCT,
-            Some(RANK_PRIMARY),
-        );
+        self.push_relations(metadata, Some(RANK_PRIMARY), Some(RANK_SECONDARY));
 
         if self.stop_before_keywords() {
-            return self.items;
+            return self.finish();
         }
 
         self.push_all(
@@ -807,7 +999,7 @@ impl SqlItemSink<'_> {
             CompletionItemKind::KEYWORD,
             Some(RANK_KEYWORD),
         );
-        self.items
+        self.finish()
     }
 
     /// Items for a column position: scoped columns (with the referenced-table
@@ -875,7 +1067,7 @@ impl SqlItemSink<'_> {
         }
 
         if self.stop_before_keywords() {
-            return self.items;
+            return self.finish();
         }
 
         self.push_all(
@@ -883,7 +1075,7 @@ impl SqlItemSink<'_> {
             CompletionItemKind::KEYWORD,
             Some(RANK_KEYWORD),
         );
-        self.items
+        self.finish()
     }
 
     /// Heuristic fallback when the cursor position could not be classified:
@@ -904,19 +1096,14 @@ impl SqlItemSink<'_> {
 
         let in_table_context = is_sql_table_context(before_cursor);
         if in_table_context || self.has_prefix() {
-            self.push_all(
-                metadata.table_names_iter(),
-                CompletionItemKind::STRUCT,
-                None,
-            );
-            self.push_all(metadata.view_names_iter(), CompletionItemKind::STRUCT, None);
+            self.push_relations(metadata, None, None);
         }
 
         if !in_table_context && self.has_prefix() {
             self.push_all(metadata.all_columns_iter(), CompletionItemKind::FIELD, None);
         }
 
-        self.items
+        self.finish()
     }
 }
 
@@ -929,13 +1116,10 @@ fn sql_completion_items_with_context(
     let (prefix_start, prefix) = extract_identifier_prefix(source, cursor);
     let before_cursor = &source[..cursor];
 
-    let mut sink = SqlItemSink {
-        items: Vec::new(),
-        seen: HashSet::new(),
-        prefix: &prefix,
-        prefix_upper: prefix.to_uppercase(),
-        replace_range: completion_replace_range(source, prefix_start, cursor),
-    };
+    let mut sink = SqlItemSink::new(
+        &prefix,
+        completion_replace_range(source, prefix_start, cursor),
+    );
 
     let has_dot_before_prefix =
         prefix_start > 0 && source.as_bytes().get(prefix_start - 1) == Some(&b'.');
@@ -951,7 +1135,12 @@ fn sql_completion_items_with_context(
 
         let qualifier_columns = metadata.columns_for_table_or_bare(&resolved_qualifier, bare);
         sink.push_all(qualifier_columns, CompletionItemKind::FIELD, None);
-        return sink.items;
+        sink.push_all(
+            metadata.relations_in_schema(&normalize_identifier(qualifier)),
+            CompletionItemKind::STRUCT,
+            None,
+        );
+        return sink.finish();
     }
 
     let scope = analysis.map(|analysis| &analysis.scope);
@@ -1154,6 +1343,12 @@ impl QueryCompletionProvider {
             return items;
         }
 
+        // Command mode returned above when tokens is empty, so this branch
+        // only runs with at least one token.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "command_mode is false here, which requires tokens to be non-empty; the empty case returned earlier"
+        )]
         let command = tokens[0].to_uppercase();
         let argument_index = if ends_with_space {
             tokens.len().saturating_sub(1)
@@ -1302,6 +1497,10 @@ impl CompletionProvider for QueryCompletionProvider {
             return false;
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the len() != 1 early return above leaves new_text with exactly one byte"
+        )]
         let ch = new_text.as_bytes()[0] as char;
         if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '$' {
             return true;
@@ -1321,19 +1520,50 @@ struct SqlCompletionMetadata {
     view_names: BTreeSet<String>,
     all_columns: BTreeSet<String>,
     columns_by_table: HashMap<String, BTreeSet<String>>,
+    /// Bare table and view names keyed by normalized schema name, so a
+    /// `schema.` qualifier can list the relations of that schema.
+    relations_by_schema: HashMap<String, BTreeSet<String>>,
+    /// Schema names as the driver spells them.
+    schema_names: BTreeSet<String>,
+    /// Tables and views that belong to no schema.
+    unqualified_relations: BTreeSet<String>,
+    /// Set when table positions complete schema first (see `push_relations`).
+    schema_first: Option<SchemaFirst>,
+}
+
+struct SchemaFirst {
+    /// The document's selected schema, normalized, whose relations are
+    /// offered without a qualifier.
+    selected_schema: Option<String>,
 }
 
 impl SqlCompletionMetadata {
     fn add_table(&mut self, table: &dbflux_core::TableInfo) {
+        self.add_table_in(table, None);
+    }
+
+    /// Adds `table`, listed under the snapshot schema `enclosing_schema`. A
+    /// table without its own schema belongs to the enclosing one, so
+    /// `schema.` lists it; the flat list keeps only its bare name.
+    fn add_table_in(&mut self, table: &dbflux_core::TableInfo, enclosing_schema: Option<&str>) {
         self.table_names.insert(table.name.clone());
 
-        if let Some(schema) = &table.schema {
-            self.table_names
-                .insert(format!("{}.{}", schema, table.name));
+        match (&table.schema, enclosing_schema) {
+            (Some(schema), _) => {
+                self.table_names
+                    .insert(format!("{}.{}", schema, table.name));
+                self.add_schema_relation(schema, &table.name);
+            }
+            (None, Some(enclosing_schema)) => {
+                self.add_schema_relation(enclosing_schema, &table.name);
+            }
+            (None, None) => {
+                self.unqualified_relations.insert(table.name.clone());
+            }
         }
 
         let mut keys = vec![normalize_identifier(&table.name)];
-        if let Some(schema) = &table.schema {
+        if let Some(schema) = table.schema.as_deref().or(enclosing_schema) {
             keys.push(normalize_identifier(&format!("{}.{}", schema, table.name)));
         }
 
@@ -1360,11 +1590,41 @@ impl SqlCompletionMetadata {
     }
 
     fn add_view(&mut self, view: &dbflux_core::ViewInfo) {
+        self.add_view_in(view, None);
+    }
+
+    /// Adds `view` the way [`Self::add_table_in`] adds a table.
+    fn add_view_in(&mut self, view: &dbflux_core::ViewInfo, enclosing_schema: Option<&str>) {
         self.view_names.insert(view.name.clone());
 
-        if let Some(schema) = &view.schema {
-            self.view_names.insert(format!("{}.{}", schema, view.name));
+        match (&view.schema, enclosing_schema) {
+            (Some(schema), _) => {
+                self.view_names.insert(format!("{}.{}", schema, view.name));
+                self.add_schema_relation(schema, &view.name);
+            }
+            (None, Some(enclosing_schema)) => {
+                self.add_schema_relation(enclosing_schema, &view.name);
+            }
+            (None, None) => {
+                self.unqualified_relations.insert(view.name.clone());
+            }
         }
+    }
+
+    fn add_schema_relation(&mut self, schema: &str, name: &str) {
+        self.schema_names.insert(schema.to_string());
+        self.relations_by_schema
+            .entry(normalize_identifier(schema))
+            .or_default()
+            .insert(name.to_string());
+    }
+
+    fn relations_in_schema(&self, schema: &str) -> impl Iterator<Item = &str> {
+        self.relations_by_schema
+            .get(schema)
+            .into_iter()
+            .flatten()
+            .map(|name| name.as_str())
     }
 
     /// Folds a document-store collection into the SQL completion metadata so an
@@ -1720,6 +1980,12 @@ fn scan_redis_token_start(source: &str, end: usize) -> usize {
 
     while start > 0 {
         let idx = start - 1;
+        // `end` is a byte offset into `source` (the editor cursor at the call
+        // site), so start never exceeds bytes.len() and idx stays in bounds.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "start begins at end, a byte offset within source, and only decreases; idx = start - 1 is below bytes.len()"
+        )]
         if bytes[idx].is_ascii_whitespace() {
             break;
         }
@@ -1847,6 +2113,10 @@ fn extract_sql_aliases(statement: &str) -> HashMap<String, String> {
 
     let mut idx = 0;
     while idx < tokens.len() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "loop condition holds idx < tokens.len() at this point"
+        )]
         let token_upper = tokens[idx].to_uppercase();
         if !keywords.contains(&token_upper.as_str()) {
             idx += 1;
@@ -1880,6 +2150,166 @@ fn extract_sql_aliases(statement: &str) -> HashMap<String, String> {
     }
 
     aliases
+}
+
+/// Appends a generated alias to every table/view/CTE item when the reference
+/// being completed follows `FROM` or `JOIN` and no alias follows the cursor:
+/// accepting `access_control` inserts `access_control ac`. The target of
+/// `UPDATE` and `DELETE FROM` is aliased only as the connection's dialect
+/// allows, and `INSERT INTO` is left bare. As in DBeaver, an alias that names
+/// a known table or view is treated as taken, so `t2` is aliased `t3`, not
+/// `t2`.
+fn append_table_aliases(
+    items: &mut [CompletionItem],
+    metadata: &SqlCompletionMetadata,
+    source: &str,
+    cursor: usize,
+    settings: &dbflux_core::GeneralSettings,
+    mutation_target_alias: dbflux_core::MutationTargetAlias,
+) {
+    if !settings.table_alias_completion {
+        return;
+    }
+
+    let mut reference_start = scan_identifier_start(source, cursor);
+    if let Some(dot_index) = reference_start.checked_sub(1)
+        && source.as_bytes().get(dot_index) == Some(&b'.')
+    {
+        reference_start = scan_identifier_start(source, dot_index);
+    }
+
+    let use_as = match table_reference_position(&source[..reference_start]) {
+        Some(TableReferencePosition::Relation) => settings.table_alias_use_as,
+        Some(TableReferencePosition::MutationTarget) => match mutation_target_alias {
+            dbflux_core::MutationTargetAlias::Unsupported => return,
+            dbflux_core::MutationTargetAlias::Accepted => settings.table_alias_use_as,
+            dbflux_core::MutationTargetAlias::RequiresAs => true,
+        },
+        None => return,
+    };
+
+    if alias_follows(&source[cursor..]) {
+        return;
+    }
+
+    let statement = &source[dbflux_core::QueryLanguage::Sql.statement_bounds_at(source, cursor)];
+    let mut taken = HashSet::new();
+    for (alias, table) in extract_sql_aliases(statement) {
+        taken.insert(alias);
+        taken.insert(table);
+    }
+    for relation in metadata
+        .table_names_iter()
+        .chain(metadata.view_names_iter())
+        .chain(metadata.unqualified_relations.iter().map(String::as_str))
+    {
+        let bare = relation.rsplit('.').next().unwrap_or(relation);
+        taken.insert(normalize_identifier(bare));
+    }
+
+    let separator = if use_as { " AS " } else { " " };
+
+    for item in items
+        .iter_mut()
+        .filter(|item| item.kind == Some(CompletionItemKind::STRUCT))
+    {
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit.as_mut() else {
+            continue;
+        };
+        let alias = table_alias(&item.label, &taken);
+        edit.new_text = format!("{}{separator}{alias}", edit.new_text);
+    }
+}
+
+enum TableReferencePosition {
+    /// After `FROM` or `JOIN`.
+    Relation,
+    /// The target of `UPDATE` or `DELETE FROM`.
+    MutationTarget,
+}
+
+fn table_reference_position(before_reference: &str) -> Option<TableReferencePosition> {
+    let mut words = before_reference
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .filter(|word| !word.is_empty())
+        .rev()
+        .map(str::to_uppercase);
+
+    match (words.next().as_deref(), words.next().as_deref()) {
+        (Some("JOIN"), _) => Some(TableReferencePosition::Relation),
+        (Some("FROM"), Some("DELETE")) => Some(TableReferencePosition::MutationTarget),
+        (Some("FROM"), _) => Some(TableReferencePosition::Relation),
+        // `DO UPDATE`, `KEY UPDATE`, `FOR UPDATE` and `ON UPDATE` are not followed by a table.
+        (Some("UPDATE"), Some("DO" | "KEY" | "FOR" | "ON")) => None,
+        (Some("UPDATE"), _) => Some(TableReferencePosition::MutationTarget),
+        _ => None,
+    }
+}
+
+/// Whether the text after the cursor already gives the table an alias (or
+/// the cursor sits inside a word, where an appended alias would split it).
+fn alias_follows(after_cursor: &str) -> bool {
+    if after_cursor
+        .bytes()
+        .next()
+        .is_some_and(|byte| is_identifier_byte(byte) || byte == b'.')
+    {
+        return true;
+    }
+
+    let next_word: String = after_cursor
+        .trim_start()
+        .chars()
+        .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+        .collect();
+
+    if next_word.is_empty() {
+        return false;
+    }
+
+    next_word.eq_ignore_ascii_case("AS") || !is_sql_keyword(&next_word)
+}
+
+fn is_sql_keyword(word: &str) -> bool {
+    sql_keyword_candidates()
+        .binary_search(&word.to_uppercase().as_str())
+        .is_ok()
+}
+
+/// The initials of the table name's word parts (`access_control` → `ac`,
+/// `orderItems` → `oi`), numbered (`ac2`) when the alias is already used in
+/// the statement or is a keyword. Schema qualifiers are ignored.
+fn table_alias(label: &str, taken: &HashSet<String>) -> String {
+    let table = label.rsplit('.').next().unwrap_or(label).trim_matches('"');
+
+    let mut initials = String::new();
+    let mut previous: Option<char> = None;
+    for ch in table.chars() {
+        let starts_part = match previous {
+            None => true,
+            Some(previous) => {
+                !(previous.is_alphanumeric()) || (previous.is_lowercase() && ch.is_uppercase())
+            }
+        };
+        if starts_part && ch.is_alphabetic() {
+            initials.extend(ch.to_lowercase());
+        }
+        previous = Some(ch);
+    }
+
+    if initials.is_empty() {
+        initials.push('t');
+    }
+
+    let is_free = |alias: &str| !taken.contains(alias) && !is_sql_keyword(alias);
+    if is_free(&initials) {
+        return initials;
+    }
+
+    (2..)
+        .map(|number| format!("{initials}{number}"))
+        .find(|alias| is_free(alias))
+        .unwrap_or(initials)
 }
 
 /// Returns true when `argument_index` is a key-name position for the given Redis command.
@@ -1918,14 +2348,15 @@ fn is_sql_table_context(sql_before_cursor: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompletionItem, KnownTableListing, SqlCompletionMetadata, build_sql_completion_metadata,
-        known_relational_tables, should_use_sql_completion, sql_completion_items_with_context,
-        tables_needing_details,
+        CompletionItem, KnownTableListing, SqlCompletionMetadata, append_table_aliases,
+        build_sql_completion_metadata, known_relational_tables, should_use_sql_completion,
+        sql_completion_items_with_context, tables_needing_details, target_database_snapshot,
     };
     use crate::completion_support::normalize_identifier;
     use dbflux_core::{
         CollectionInfo, ColumnInfo, DatabaseCategory, DatabaseInfo, DbSchemaInfo, DocumentSchema,
-        FieldInfo, QueryLanguage, QueryTableRef, RelationalSchema, SchemaSnapshot, TableInfo,
+        FieldInfo, MutationTargetAlias, QueryLanguage, QueryTableRef, RelationalSchema,
+        SchemaSnapshot, TableInfo,
     };
 
     /// The heuristic-only path (no cursor analysis): the exact pre-context
@@ -2001,6 +2432,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -2190,6 +2622,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
 
         let mut metadata = SqlCompletionMetadata::default();
@@ -2223,6 +2656,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -2255,6 +2689,275 @@ mod tests {
     }
 
     #[test]
+    fn schema_qualifier_lists_the_relations_of_that_schema() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&TableInfo {
+            name: "events".to_string(),
+            schema: Some("raw".to_string()),
+            ..t1_table()
+        });
+        metadata.add_table(&TableInfo {
+            name: "users".to_string(),
+            schema: Some("public".to_string()),
+            ..t1_table()
+        });
+        metadata.add_view(&dbflux_core::ViewInfo {
+            name: "event_counts".to_string(),
+            schema: Some("raw".to_string()),
+        });
+
+        let source = "SELECT * FROM raw.";
+        let items = sql_completion_items(&metadata, source, source.len());
+        assert_eq!(labels(&items), vec!["event_counts", "events"]);
+
+        let source = "SELECT * FROM RAW.ev";
+        let items = sql_completion_items(&metadata, source, source.len());
+        let labels = labels(&items);
+        assert!(labels.contains(&"events".to_string()));
+        assert!(labels.contains(&"event_counts".to_string()));
+        assert!(!labels.contains(&"users".to_string()));
+    }
+
+    fn schema_first_metadata(selected_schema: Option<&str>) -> SqlCompletionMetadata {
+        let mut metadata = SqlCompletionMetadata::default();
+        for (schema, table) in [
+            ("raw", "messages"),
+            ("raw", "rates_raw"),
+            ("reporting", "daily_rates"),
+            ("reporting", "revenue"),
+            ("public", "rates"),
+            ("public", "users"),
+        ] {
+            metadata.add_table(&TableInfo {
+                name: table.to_string(),
+                schema: Some(schema.to_string()),
+                ..t1_table()
+            });
+        }
+        metadata.schema_first = Some(super::SchemaFirst {
+            selected_schema: selected_schema.map(normalize_identifier),
+        });
+        metadata
+    }
+
+    /// Completion labels without SQL keywords.
+    fn non_keyword_labels(items: &[CompletionItem]) -> Vec<String> {
+        items
+            .iter()
+            .filter(|item| item.kind != Some(lsp_types::CompletionItemKind::KEYWORD))
+            .map(|item| item.label.clone())
+            .collect()
+    }
+
+    fn table_position_labels(metadata: &SqlCompletionMetadata, source: &str) -> Vec<String> {
+        non_keyword_labels(&analyzed_items(metadata, source))
+    }
+
+    #[test]
+    fn without_a_selected_schema_a_table_position_offers_schemas_only() {
+        let metadata = schema_first_metadata(None);
+
+        assert_eq!(
+            table_position_labels(&metadata, "SELECT * FROM ra"),
+            vec!["raw"]
+        );
+        assert_eq!(
+            non_keyword_labels(&sql_completion_items(&metadata, "SELECT * FROM ra", 16)),
+            vec!["raw"]
+        );
+        assert_eq!(
+            labels(&analyzed_items(&metadata, "SELECT * FROM raw.")),
+            vec!["messages", "rates_raw"]
+        );
+    }
+
+    #[test]
+    fn a_selected_schema_offers_its_tables_unqualified_and_the_schemas() {
+        let metadata = schema_first_metadata(Some("public"));
+
+        let found = table_position_labels(&metadata, "SELECT * FROM ra");
+        assert_eq!(found, vec!["rates", "raw"]);
+        assert!(!found.iter().any(|label| label.contains('.')));
+    }
+
+    #[test]
+    fn snapshot_tables_without_their_own_schema_belong_to_the_enclosing_one() {
+        let snapshot = SchemaSnapshot::relational(RelationalSchema {
+            schemas: vec![DbSchemaInfo {
+                name: "raw".to_string(),
+                tables: vec![t1_table()],
+                views: vec![dbflux_core::ViewInfo {
+                    name: "v1".to_string(),
+                    schema: None,
+                }],
+                custom_types: None,
+            }],
+            ..Default::default()
+        });
+        let mut metadata = build_sql_completion_metadata(
+            Some(&snapshot),
+            std::iter::empty(),
+            std::iter::empty(),
+            false,
+        );
+        metadata.schema_first = Some(super::SchemaFirst {
+            selected_schema: Some(normalize_identifier("public")),
+        });
+
+        assert_eq!(
+            labels(&analyzed_items(&metadata, "SELECT * FROM raw.")),
+            vec!["t1", "v1"]
+        );
+        assert_eq!(
+            table_position_labels(&metadata, "SELECT * FROM "),
+            vec!["raw"]
+        );
+        assert_eq!(
+            metadata.columns_for_table("raw.t1"),
+            vec!["c1", "c2", "c3"],
+            "columns are keyed under the enclosing schema"
+        );
+
+        let known = known_relational_tables(Some(&snapshot), std::iter::empty(), Some("db"));
+        let keys = tables_needing_details(
+            &[KnownTableListing {
+                has_columns: false,
+                ..known.into_iter().next().expect("listed table")
+            }],
+            &[QueryTableRef {
+                database: None,
+                schema: Some("raw".to_string()),
+                table: "t1".to_string(),
+            }],
+        );
+        assert_eq!(keys, vec![("db".to_string(), None, "t1".to_string())]);
+    }
+
+    fn database_snapshot(database: &str, schemas: &[(&str, &str)]) -> SchemaSnapshot {
+        SchemaSnapshot::relational(RelationalSchema {
+            current_database: Some(database.to_string()),
+            schemas: schemas
+                .iter()
+                .map(|(schema, table)| DbSchemaInfo {
+                    name: schema.to_string(),
+                    tables: vec![TableInfo {
+                        name: table.to_string(),
+                        schema: Some(schema.to_string()),
+                        columns: None,
+                        ..t1_table()
+                    }],
+                    views: vec![],
+                    custom_types: None,
+                })
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    fn schema_first_snapshot_metadata(
+        snapshot: Option<&SchemaSnapshot>,
+        selected_schema: Option<&str>,
+    ) -> SqlCompletionMetadata {
+        let mut metadata =
+            build_sql_completion_metadata(snapshot, std::iter::empty(), std::iter::empty(), false);
+        metadata.schema_first = Some(super::SchemaFirst {
+            selected_schema: selected_schema.map(normalize_identifier),
+        });
+        metadata
+    }
+
+    #[test]
+    fn a_secondary_database_completes_from_its_own_snapshot() {
+        let primary = database_snapshot("completion_primary", &[("public", "rates")]);
+        let secondary = database_snapshot("completion_secondary", &[("public", "other_users")]);
+
+        let snapshot = target_database_snapshot(
+            Some(&primary),
+            Some(&secondary),
+            Some("completion_secondary"),
+        );
+        let metadata = schema_first_snapshot_metadata(snapshot, Some("public"));
+
+        assert_eq!(
+            table_position_labels(&metadata, "SELECT * FROM ot"),
+            vec!["other_users"]
+        );
+        assert!(
+            table_position_labels(&metadata, "SELECT * FROM ra").is_empty(),
+            "tables of the initial database must not leak into the secondary one"
+        );
+
+        let known =
+            known_relational_tables(snapshot, std::iter::empty(), Some("completion_secondary"));
+        assert_eq!(
+            tables_needing_details(&known, &[table_ref(None, "other_users")]),
+            vec![(
+                "completion_secondary".to_string(),
+                Some("public".to_string()),
+                "other_users".to_string()
+            )],
+            "table details prefetch targets the selected database"
+        );
+    }
+
+    #[test]
+    fn a_secondary_database_without_public_offers_its_schemas() {
+        let primary = database_snapshot("completion_primary", &[("public", "rates")]);
+        let secondary = database_snapshot(
+            "completion_secondary",
+            &[("raw", "messages"), ("reporting", "revenue")],
+        );
+
+        let snapshot = target_database_snapshot(
+            Some(&primary),
+            Some(&secondary),
+            Some("completion_secondary"),
+        );
+        let metadata = schema_first_snapshot_metadata(snapshot, None);
+
+        assert_eq!(
+            table_position_labels(&metadata, "SELECT * FROM ra"),
+            vec!["raw"]
+        );
+    }
+
+    #[test]
+    fn target_database_snapshot_never_borrows_another_databases_catalog() {
+        let primary = database_snapshot("completion_primary", &[("public", "rates")]);
+        let secondary = database_snapshot("completion_secondary", &[("public", "other_users")]);
+
+        assert!(
+            target_database_snapshot(Some(&primary), None, Some("completion_secondary")).is_none(),
+            "a database whose snapshot is not loaded yet must not fall back to the primary"
+        );
+        assert!(std::ptr::eq(
+            target_database_snapshot(Some(&primary), None, Some("completion_primary"))
+                .expect("primary snapshot"),
+            &primary
+        ));
+        assert!(std::ptr::eq(
+            target_database_snapshot(Some(&primary), None, None).expect("primary snapshot"),
+            &primary
+        ));
+        assert!(std::ptr::eq(
+            target_database_snapshot(None, Some(&secondary), Some("completion_secondary"))
+                .expect("secondary snapshot"),
+            &secondary
+        ));
+    }
+
+    #[test]
+    fn without_schema_first_tables_stay_bare_and_qualified() {
+        let mut metadata = schema_first_metadata(None);
+        metadata.schema_first = None;
+
+        let found = labels(&sql_completion_items(&metadata, "SELECT * FROM ra", 16));
+        assert!(found.contains(&"raw.messages".to_string()));
+        assert!(found.contains(&"rates".to_string()));
+        assert!(!found.contains(&"raw".to_string()));
+    }
+
+    #[test]
     fn alias_resolution_survives_semicolon_inside_string_literal() {
         let mut metadata = SqlCompletionMetadata::default();
         metadata.add_table(&t1_table());
@@ -2274,6 +2977,7 @@ mod tests {
         KnownTableListing {
             database: database.to_string(),
             schema: schema.map(String::from),
+            enclosing_schema: None,
             name: name.to_string(),
             has_columns,
         }
@@ -2357,6 +3061,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let db2 = (
             "db2".to_string(),
@@ -2405,6 +3110,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -2506,6 +3212,209 @@ mod tests {
         );
     }
 
+    fn alias_settings(enabled: bool, use_as: bool) -> dbflux_core::GeneralSettings {
+        dbflux_core::GeneralSettings {
+            table_alias_completion: enabled,
+            table_alias_use_as: use_as,
+            ..Default::default()
+        }
+    }
+
+    fn insert_text_of(items: &[CompletionItem], label: &str) -> String {
+        let item = items
+            .iter()
+            .find(|item| item.label == label)
+            .unwrap_or_else(|| panic!("{label} offered"));
+        match &item.text_edit {
+            Some(lsp_types::CompletionTextEdit::Edit(edit)) => edit.new_text.clone(),
+            other => panic!("unexpected text edit {other:?}"),
+        }
+    }
+
+    fn aliased_items(
+        metadata: &SqlCompletionMetadata,
+        source: &str,
+        settings: &dbflux_core::GeneralSettings,
+        mutation_target_alias: MutationTargetAlias,
+    ) -> Vec<CompletionItem> {
+        let mut items = analyzed_items(metadata, source);
+        append_table_aliases(
+            &mut items,
+            metadata,
+            source,
+            source.len(),
+            settings,
+            mutation_target_alias,
+        );
+        items
+    }
+
+    fn aliased_insert_text(
+        source: &str,
+        label: &str,
+        use_as: bool,
+        mutation_target_alias: MutationTargetAlias,
+    ) -> String {
+        let items = aliased_items(
+            &context_metadata(),
+            source,
+            &alias_settings(true, use_as),
+            mutation_target_alias,
+        );
+        insert_text_of(&items, label)
+    }
+
+    fn assert_no_alias(
+        source: &str,
+        settings: &dbflux_core::GeneralSettings,
+        mutation_target_alias: MutationTargetAlias,
+    ) {
+        let metadata = context_metadata();
+        let before: Vec<_> = analyzed_items(&metadata, source)
+            .into_iter()
+            .map(|item| item.text_edit)
+            .collect();
+        let after: Vec<_> = aliased_items(&metadata, source, settings, mutation_target_alias)
+            .into_iter()
+            .map(|item| item.text_edit)
+            .collect();
+        assert_eq!(before, after, "no alias for {source:?}");
+    }
+
+    #[test]
+    fn table_completion_after_from_and_join_appends_an_alias() {
+        let unsupported = MutationTargetAlias::Unsupported;
+        assert_eq!(
+            aliased_insert_text("SELECT * FROM ", "t1", false, unsupported),
+            "t1 t"
+        );
+        assert_eq!(
+            aliased_insert_text("SELECT * FROM t", "t1", true, unsupported),
+            "t1 AS t"
+        );
+        assert_eq!(
+            aliased_insert_text("SELECT * FROM t1 t JOIN ", "t2", false, unsupported),
+            "t2 t3",
+            "an alias used in the statement or naming a known table is numbered"
+        );
+    }
+
+    #[test]
+    fn table_completion_stays_bare_where_an_alias_does_not_belong() {
+        let settings = alias_settings(true, false);
+        for source in ["INSERT INTO ", "SELECT * FROM t1 WHERE c1 = 1"] {
+            assert_no_alias(source, &settings, MutationTargetAlias::Accepted);
+        }
+    }
+
+    #[test]
+    fn table_completion_stays_bare_when_the_setting_is_off() {
+        let settings = alias_settings(false, true);
+        for source in ["SELECT * FROM ", "SELECT * FROM t1 t JOIN ", "UPDATE "] {
+            assert_no_alias(source, &settings, MutationTargetAlias::Accepted);
+        }
+    }
+
+    #[test]
+    fn mutation_target_alias_follows_the_dialect() {
+        let settings = alias_settings(true, false);
+        for source in ["UPDATE ", "DELETE FROM "] {
+            assert_no_alias(source, &settings, MutationTargetAlias::Unsupported);
+            assert_eq!(
+                aliased_insert_text(source, "t1", false, MutationTargetAlias::Accepted),
+                "t1 t"
+            );
+            assert_eq!(
+                aliased_insert_text(source, "t1", true, MutationTargetAlias::Accepted),
+                "t1 AS t"
+            );
+            assert_eq!(
+                aliased_insert_text(source, "t1", false, MutationTargetAlias::RequiresAs),
+                "t1 AS t",
+                "a dialect that needs AS gets it whatever the setting"
+            );
+        }
+
+        assert!(
+            super::table_reference_position("INSERT INTO t1 VALUES (1) ON CONFLICT DO UPDATE ")
+                .is_none()
+        );
+        assert!(super::table_reference_position("SELECT * FROM t1 FOR UPDATE ").is_none());
+        assert!(
+            super::table_reference_position(
+                "CREATE TABLE t2 (id INT REFERENCES t1 (id) ON UPDATE "
+            )
+            .is_none()
+        );
+        assert!(
+            super::table_reference_position("CREATE TABLE t2 (at TIMESTAMP ON UPDATE ").is_none()
+        );
+    }
+
+    #[test]
+    fn schema_qualified_table_is_aliased_by_its_table_name() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&TableInfo {
+            name: "order_items".to_string(),
+            schema: Some("raw".to_string()),
+            columns: None,
+            ..t1_table()
+        });
+        let settings = alias_settings(true, false);
+
+        let source = "SELECT * FROM raw.";
+        let items = aliased_items(
+            &metadata,
+            source,
+            &settings,
+            MutationTargetAlias::Unsupported,
+        );
+        assert_eq!(insert_text_of(&items, "order_items"), "order_items oi");
+
+        let source = "SELECT * FROM raword";
+        let items = aliased_items(
+            &metadata,
+            source,
+            &settings,
+            MutationTargetAlias::Unsupported,
+        );
+        assert_eq!(
+            insert_text_of(&items, "raw.order_items"),
+            "raw.order_items oi"
+        );
+    }
+
+    #[test]
+    fn no_alias_when_one_already_follows_the_cursor() {
+        assert!(super::alias_follows(" ac WHERE x = 1"));
+        assert!(super::alias_follows(" AS ac"));
+        assert!(super::alias_follows("_suffix"));
+        assert!(!super::alias_follows(" WHERE x = 1"));
+        assert!(!super::alias_follows("\n"));
+        assert!(!super::alias_follows(""));
+    }
+
+    #[test]
+    fn alias_is_built_from_name_initials() {
+        let taken = std::collections::HashSet::new();
+        assert_eq!(super::table_alias("access_control", &taken), "ac");
+        assert_eq!(super::table_alias("users", &taken), "u");
+        assert_eq!(super::table_alias("public.order_items", &taken), "oi");
+        assert_eq!(super::table_alias("orderItems", &taken), "oi");
+        assert_eq!(super::table_alias("\"Order Items\"", &taken), "oi");
+        assert_eq!(super::table_alias("_2024", &taken), "t");
+
+        let taken = std::collections::HashSet::from(["ac".to_string(), "ac2".to_string()]);
+        assert_eq!(super::table_alias("access_control", &taken), "ac3");
+    }
+
+    #[test]
+    fn alias_skips_reserved_words() {
+        let taken = std::collections::HashSet::new();
+        assert_eq!(super::table_alias("order_records", &taken), "or2");
+        assert_eq!(super::table_alias("audit_sessions", &taken), "as2");
+    }
+
     #[test]
     fn context_from_offers_cte_names() {
         let metadata = context_metadata();
@@ -2571,6 +3480,55 @@ mod tests {
         let source = "SELECT * FROM db1.t1 WHERE ";
         let items = analyzed_items(&metadata, source);
         assert!(labels(&items).contains(&"c2".to_string()));
+    }
+
+    #[test]
+    fn fuzzy_matching_waits_for_three_characters_and_keeps_the_best_fifty() {
+        let mut metadata = SqlCompletionMetadata::default();
+        for index in 0..80 {
+            metadata.add_table(&TableInfo {
+                name: format!("alarm_message_{index:02}"),
+                schema: None,
+                columns: None,
+                ..t1_table()
+            });
+        }
+
+        let source = "SELECT * FROM ms";
+        assert!(
+            sql_completion_items(&metadata, source, source.len()).is_empty(),
+            "two characters do not fuzzy-match"
+        );
+
+        let source = "SELECT * FROM msg";
+        let items = sql_completion_items(&metadata, source, source.len());
+        assert_eq!(items.len(), super::FUZZY_MAX_MATCHES);
+    }
+
+    #[test]
+    fn table_names_match_fuzzily_after_prefix_matches() {
+        let mut metadata = context_metadata();
+        metadata.add_table(&TableInfo {
+            name: "alarm_message".to_string(),
+            schema: Some("raw".to_string()),
+            columns: None,
+            ..t1_table()
+        });
+        metadata.add_table(&TableInfo {
+            name: "message_log".to_string(),
+            schema: Some("raw".to_string()),
+            columns: None,
+            ..t1_table()
+        });
+
+        let items = analyzed_items(&metadata, "SELECT * FROM raw.messa");
+        assert_eq!(labels(&items), vec!["message_log", "alarm_message"]);
+
+        let items = analyzed_items(&metadata, "SELECT * FROM rawmsg");
+        assert!(labels(&items).contains(&"raw.alarm_message".to_string()));
+
+        let items = analyzed_items(&metadata, "SELECT * FROM t1 WHERE c");
+        assert_eq!(labels(&items).first().map(String::as_str), Some("c1"));
     }
 
     #[test]

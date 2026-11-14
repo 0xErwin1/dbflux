@@ -12,8 +12,16 @@ Base de datos relacional open-source popular.
 ## Funcionalidades
 
 - Implementaciones de driver relacional para MySQL y MariaDB en un solo crate.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
+  con la validación del editor, la confirmación de queries peligrosas, las
+  filas de auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Soporta ejecución de SQL, descubrimiento de schema, índices, foreign keys,
   constraints CHECK, y constraints UNIQUE.
+- Muestra valores `DECIMAL` como el decimal exacto que guarda MySQL.
 - Soporta autenticación, túnel SSH, y modos de conexión URI/manual.
 - TLS con los cinco modos SSL nativos (`DISABLED`, `PREFERRED`, `REQUIRED`,
   `VERIFY_CA`, `VERIFY_IDENTITY`): `VERIFY_CA` verifica la cadena del servidor
@@ -89,6 +97,19 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   acota bytes, trabajo del servidor, asignación de memoria del motor ni tiempo
   transcurrido. No se verificó MariaDB alojado.
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
+- En MariaDB, que no tiene `information_schema.VIEW_TABLE_USAGE`, la confirmación
+  de eliminar tabla busca las vistas dependientes en las definiciones de vista
+  por el nombre `` `base`.`tabla` ``, así que una vista que llega a la tabla solo
+  a través de otra vista no aparece.
+- MySQL anterior a 8.0.16 no guarda las restricciones `CHECK`, así que los
+  detalles de tabla no muestran ninguna. MariaDB anterior a 10.2.22 (10.3.10 en
+  la serie 10.3) las guarda pero no tiene `information_schema.CHECK_CONSTRAINTS`,
+  así que los detalles de tabla muestran sus restricciones de verificación sin
+  la cláusula.
+- Las columnas `DECIMAL` se reportan como `ColumnKind::Float`, porque no existe
+  un tipo de columna decimal: los gráficos y otros usos del tipo de columna las
+  tratan como números de punto flotante, aunque los valores en sí se mantienen
+  exactos.
 
 - Instance Metrics devuelve un único dato por llamada (snapshot actual de `SHOW
   GLOBAL STATUS`), no una serie temporal histórica. Los contadores acumulativos
@@ -117,6 +138,7 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   `SHOW_ROUTINE` (MySQL 8.0+) o ser propietario de la rutina; sin privilegios
   suficientes la columna de definición devuelve `NULL` y el visor muestra un
   aviso en vez del código fuente.
+- Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se ejecuta en `START TRANSACTION READ ONLY` y se revierte. Solo puede contener sentencias `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `TABLE` y `VALUES` sin comentarios ejecutables (`/*! */`, `/*M! */`) ni la palabra `INTO`, y se rechaza salvo que el servidor demuestre que no hay una transacción abierta y que la sesión no puede tener bloqueos de `LOCK TABLES`. MySQL rechaza entonces la modificación de datos en la sesión, salvo en las tablas `TEMPORARY`, que una transacción de solo lectura todavía puede modificar, y no impide las funciones con efectos externos como `GET_LOCK` o las funciones definidas por el usuario; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.
 
 ## Capacidades de DDL
 

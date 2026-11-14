@@ -20,6 +20,7 @@ use crate::{
         SearchableListAdapter, SearchableListChange, SearchableListDelegate, SearchableListItem,
         SearchableListState,
     },
+    sizing::DROPDOWN_LIST_PADDING,
     v_flex,
 };
 use gpui_base::{Combobox as BaseCombobox, GlobalState};
@@ -1049,7 +1050,7 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
         v_flex()
             .occlude()
             .map(|this| match menu_width {
-                Length::Auto => this.w(bounds.size.width + px(2.)),
+                Length::Auto => this.w(bounds.size.width),
                 Length::Definite(w) => this.w(w),
             })
             .popover_style(cx)
@@ -1060,7 +1061,7 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
                     })
                     .with_size(size)
                     .max_h(menu_max_h)
-                    .paddings(Edges::all(px(4.))),
+                    .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
             )
             .when(has_footer, |this| {
                 this.child(

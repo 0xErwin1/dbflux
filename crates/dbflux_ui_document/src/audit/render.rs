@@ -24,7 +24,7 @@ use dbflux_components::primitives::{
     StatusIndicator, Text, focus_ring,
 };
 use dbflux_components::tokens::{
-    ChamferCut, ChromeColors, DocumentMetrics, Feedback, Spacing, SyntaxColors,
+    ChamferCut, ChromeColors, DocumentMetrics, Feedback, Spacing, SyntaxColors, ui,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_components::vim::VimBinding;
@@ -70,15 +70,15 @@ const TELEMETRY_DELIVERY_ACTION: &str = "telemetry.delivery";
 struct AuditColumns;
 
 impl AuditColumns {
-    const CHEVRON: Pixels = px(26.0);
-    const TIME: Pixels = px(110.0);
-    const LEVEL: Pixels = px(70.0);
-    const CATEGORY: Pixels = px(130.0);
-    const ACTOR: Pixels = px(140.0);
-    const DURATION: Pixels = px(70.0);
-    const OUTCOME: Pixels = px(90.0);
-    const PARTITION: Pixels = px(200.0);
-    const EVENT_ID: Pixels = px(220.0);
+    const CHEVRON: Rems = ui(26.0);
+    const TIME: Rems = ui(110.0);
+    const LEVEL: Rems = ui(70.0);
+    const CATEGORY: Rems = ui(130.0);
+    const ACTOR: Rems = ui(140.0);
+    const DURATION: Rems = ui(70.0);
+    const OUTCOME: Rems = ui(90.0);
+    const PARTITION: Rems = ui(200.0);
+    const EVENT_ID: Rems = ui(220.0);
 }
 
 fn now_epoch_ms() -> i64 {
@@ -150,6 +150,7 @@ fn category_icon(category: Option<EventCategory>) -> AppIcon {
         Some(EventCategory::Mcp) => AppIcon::Bot,
         Some(EventCategory::Governance) => AppIcon::Scale,
         Some(EventCategory::ObjectStorage) => AppIcon::Boxes,
+        Some(EventCategory::SecretStore) => AppIcon::Lock,
         None => AppIcon::Info,
     }
 }
@@ -862,13 +863,13 @@ impl AuditDocument {
 
         let expanded_wash = ChromeColors::tint(&theme).opacity(DocumentMetrics::EXPANDED_ROW_ALPHA);
 
-        let mono_cell = |width: Pixels, value: String| {
+        let mono_cell = |width: Rems, value: String| {
             div()
                 .w(width)
                 .flex_shrink_0()
                 .pr(DocumentMetrics::GAP)
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(DocumentMetrics::TABLE_META_FONT)
                 .text_color(muted)
                 .child(value)
@@ -881,7 +882,9 @@ impl AuditDocument {
                 .pr(DocumentMetrics::GAP)
                 .truncate()
                 .text_color(strong)
-                .when(mono, |cell| cell.font_family(AppFonts::MONO))
+                .when(mono, |cell| {
+                    cell.font_family(dbflux_components::fonts::editor_family(cx))
+                })
                 .child(if value.is_empty() {
                     SharedString::from("—")
                 } else {
@@ -1025,7 +1028,7 @@ impl AuditDocument {
     /// A table cell holding a badge. The cell lays its child out as a flex
     /// item so the badge keeps its content width instead of stretching to
     /// the column, and the trailing padding keeps it off the next column.
-    fn badge_cell(width: Pixels) -> Div {
+    fn badge_cell(width: Rems) -> Div {
         div()
             .w(width)
             .flex_shrink_0()
@@ -1080,7 +1083,7 @@ impl AuditDocument {
             .mt(DocumentMetrics::DETAIL_BLOCK_MARGIN_TOP)
             .px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
             .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(DocumentMetrics::DETAIL_BLOCK_FONT)
             .line_height(relative(DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT))
             .text_color(theme.foreground)
@@ -1340,7 +1343,7 @@ impl AuditDocument {
                 detail.child(
                     div()
                         .mt(DocumentMetrics::DETAIL_BLOCK_MARGIN_TOP)
-                        .font_family(AppFonts::MONO)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
                         .text_size(DocumentMetrics::DETAIL_BLOCK_FONT)
                         .text_color(theme.danger)
                         .child(error),
@@ -1588,22 +1591,30 @@ impl AuditDocument {
             footer_pager(
                 self.pagination.current_page() as u32,
                 Some(total_pages),
-                pager_arrow("audit-prev-page", AppIcon::ChevronLeft, can_prev, cx).when(
+                pager_arrow(
+                    "audit-prev-page",
+                    AppIcon::ChevronLeft,
+                    dbflux_i18n::t!("document.results.actions.results_prev_page"),
                     can_prev,
-                    |arrow| {
-                        arrow.on_click(cx.listener(|this, _, _, cx| {
-                            this.go_to_prev_page(cx);
-                        }))
-                    },
-                ),
-                pager_arrow("audit-next-page", AppIcon::ChevronRight, can_next, cx).when(
+                    cx,
+                )
+                .when(can_prev, |arrow| {
+                    arrow.on_click(cx.listener(|this, _, _, cx| {
+                        this.go_to_prev_page(cx);
+                    }))
+                }),
+                pager_arrow(
+                    "audit-next-page",
+                    AppIcon::ChevronRight,
+                    dbflux_i18n::t!("document.results.actions.results_next_page"),
                     can_next,
-                    |arrow| {
-                        arrow.on_click(cx.listener(|this, _, _, cx| {
-                            this.go_to_next_page(cx);
-                        }))
-                    },
-                ),
+                    cx,
+                )
+                .when(can_next, |arrow| {
+                    arrow.on_click(cx.listener(|this, _, _, cx| {
+                        this.go_to_next_page(cx);
+                    }))
+                }),
                 cx,
             )
         });

@@ -8,11 +8,11 @@ use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DeploymentClass, DriverCapabilities, DriverFormDef, DriverKey, DriverMetadata, FormFieldKind,
     FormSection, FormTab, FormValues, Icon, OrderByMode, PaginationStyle, PlaceholderStyle,
-    QueryCapabilities, QueryLanguage, SshTunnelConfig, SyntaxInfo, TransferFamily, WhereOperator,
-    field_password, field_required, field_use_uri, ssh_tab, when_checked, when_unchecked,
-    with_default, with_help,
+    QueryCapabilities, QueryLanguage, SshTunnelConfig, SyntaxInfo, TransactionCapabilities,
+    TransferFamily, WhereOperator, field_password, field_required, field_use_uri, ssh_tab,
+    when_checked, when_unchecked, with_default, with_help,
 };
-use dbflux_ssh::SshTunnel;
+use dbflux_ssh::OpenedSshTunnel;
 use postgres::Config;
 
 use crate::connection::{
@@ -44,11 +44,13 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::MULTIPLE_DATABASES.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
             | DriverCapabilities::SCHEMAS.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::QUERY_CANCELLATION.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::PREPARED_STATEMENTS.bits()
             | DriverCapabilities::VIEWS.bits()
             | DriverCapabilities::PAGINATION.bits()
@@ -67,6 +69,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: true,
         default_schema: Some("public".to_string()),
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: false,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -108,7 +111,17 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     }),
     mutation: None,
     ddl: None,
-    transactions: None,
+    // DBFlux runs no user transactions on Redshift; declared only so callers
+    // can see that `ReadOnlyEnforcement::Required` runs in `BEGIN READ ONLY`.
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: Vec::new(),
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: true,
+        supports_deferrable: false,
+    }),
     limits: None,
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -626,7 +639,7 @@ impl RedshiftDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -658,7 +671,7 @@ impl RedshiftDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -676,8 +689,8 @@ impl RedshiftDriver {
         ssl_mode: &str,
         tls_certs: &RedshiftTlsCerts,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
-        let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
+        let OpenedSshTunnel { tunnel, .. } =
+            dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port = tunnel.local_port();
 
         let client = connect_redshift(&RedshiftConnectParams {
@@ -696,7 +709,7 @@ impl RedshiftDriver {
             client: Arc::new(Mutex::new(client)),
             ssh_tunnel: Some(tunnel),
             cancel_token,
-            active_query: RwLock::new(None),
+            active_query: Arc::new(RwLock::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -709,6 +722,15 @@ mod tests {
         DatabaseCategory, DbConfig, DbDriver, DbError, DriverCapabilities, FormValues,
         QueryLanguage, TransferFamily,
     };
+
+    #[test]
+    fn metadata_declares_request_row_limit_enforcement() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
+        );
+    }
 
     #[test]
     fn metadata_declares_relational_sql_read_only_contract() {
@@ -994,7 +1016,7 @@ mod tests {
                 redshift_uri_sslmode(
                     "postgresql://cluster.example.com:5439/dev?sslmode=verify-full"
                 ),
-                RedshiftSslMode::Verify
+                RedshiftSslMode::VerifyFull
             );
         }
 
@@ -1052,7 +1074,7 @@ mod tests {
             )
             .expect("URI should parse after sslmode is stripped");
 
-            assert_eq!(ssl_mode, RedshiftSslMode::Verify);
+            assert_eq!(ssl_mode, RedshiftSslMode::VerifyFull);
         }
 
         #[test]

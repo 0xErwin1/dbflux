@@ -15,7 +15,7 @@
 
 ### 分层的 crate 图谱
 
-依赖自上而下。`dbflux_core` 是每个 crate 都构建其上的无依赖契约层；界面从不依赖具体的驱动程序 crate（参见[驱动程序/界面解耦](#驱动程序体系)）。
+依赖自上而下。`dbflux_core` 是整个工作区共同构建其上的契约层；它自身仅有一项很窄的依赖 `dbflux_policy`，用于它再导出的执行分类与模式变更类型。界面从不依赖具体的驱动程序 crate（参见[驱动程序/界面解耦](#驱动程序体系)）。
 
 ```mermaid
 flowchart TB
@@ -46,12 +46,17 @@ flowchart TB
     end
 
     subgraph Support["支撑库"]
-        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+        sup["storage · audit · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    subgraph Policy["策略 — dbflux_policy"]
+        policy["ExecutionClassification、<br/>模式变更分类"]
     end
 
     bin --> uithin --> app --> core
     drv --> core
     sup --> core
+    core --> policy
     app --> drv
     app --> sup
     uithin -. "仅通过通用接缝" .-> core
@@ -93,7 +98,7 @@ flowchart TB
     start["从连接管理器 / 侧边栏<br/>发起连接"] --> prep["AppState::prepare_pipeline_input<br/>（与提供程序无关的输入）"]
     prep --> pre{{"连接前 Hook"}}
     pre --> auth["流水线：认证<br/>（DynAuthProvider，例如 AWS SSO）"]
-    auth --> values["流水线：解析取值<br/>（ValueRef → env/secret/param/auth）"]
+    auth --> values["流水线：解析取值<br/>（ValueRef → env/dotenv/secret/param/auth）"]
     values --> access["流水线：开通访问"]
     access --> tunnel{"访问方式？"}
     tunnel -->|Direct| connect
@@ -110,7 +115,7 @@ flowchart TB
 - 界面：`gpui`、`gpui-component`（Cargo.toml）。
 - 数据库：`tokio-postgres`（PostgreSQL）、`rusqlite`（SQLite）、`mysql`（MySQL/MariaDB）、`mongodb`（MongoDB）、`redis`（Redis）、`aws-sdk-dynamodb`（DynamoDB），以及基于 `reqwest` 的 HTTP（ClickHouse）（Cargo.toml）。
 - AWS 认证/集成：`aws-config`、`aws-sdk-sso`、`aws-sdk-ssooidc`、`aws-sdk-sts`、`aws-sdk-secretsmanager`、`aws-sdk-ssm`（`dbflux_aws`）。
-- IPC/RPC：`interprocess` 本地 Socket + `bincode` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
+- IPC/RPC：`interprocess` 本地 Socket + `postcard` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
 - SSH：经由 `dbflux_ssh` 使用 `ssh2`（crates/dbflux_ssh/src/lib.rs）。
 - 导出：经由 `dbflux_export` 使用 `csv` + `hex` + `base64` + `serde_json`（crates/dbflux_export/src/lib.rs）。
 - 序列化/配置：`serde`、`serde_json`、`dirs`（Cargo.toml）。
@@ -224,7 +229,13 @@ crates/
         file_ops.rs         # 自动保存、临时/影子文件管理
         focus.rs            # 内部焦点管理
         live_output.rs      # 文档自有的流式脚本输出缓冲区
-        render.rs           # 工具栏、编辑器与实时输出渲染
+        render.rs           # 操作栏、编辑器与实时输出渲染
+      console/              # NativeConsole：停靠在文档下方的可复用命令控制台
+        mod.rs              # 实体、执行、审计、历史回溯、渲染
+        format.rs           # 危险命令关卡、结果格式化、回溯列表
+      console_document/     # ConsoleDocument：在单独标签页中的原生控制台
+        mod.rs
+        pane.rs             # ConsoleDocument::into_pane 构造函数
       key_value/            # Redis/键值专用的文档标签页
         mod.rs              # KeyValueDocument 实体
         pane.rs             # KeyValueDocument::into_pane 构造函数
@@ -241,8 +252,8 @@ crates/
         mod.rs              # AuditDocument 实体
         pane.rs             # AuditDocument::into_pane 构造函数
         view.rs             # LogStreamView 边界结构体
-        render.rs           # 抽出的渲染代码（约 1300 行）
-        commands.rs         # 抽出的命令分发（约 560 行）
+        render.rs           # 抽出的渲染代码
+        commands.rs         # 抽出的命令分发
         filters.rs
         saved_filter.rs
         source_adapter.rs
@@ -260,7 +271,7 @@ crates/
     src/
       lib.rs                # SidebarView 实体（由 dbflux_ui 重新导出）
       code_generation.rs
-      context_menu.rs
+      context_menu/
       deletion.rs
       drag_drop.rs
       expansion.rs
@@ -271,7 +282,7 @@ crates/
       render_tree.rs
       selection.rs
       table_loading.rs
-      tree_builder.rs
+      tree_builder/         # 连接树；遍历快照的 DatabaseLayout
   dbflux_ui_windows/        # 设置窗口 + 连接管理器窗口
     src/
       ssh_shared.rs         # 共享的 SSH 认证界面组件
@@ -304,10 +315,11 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # 按配置文件的 Hook 绑定
-  dbflux_ui/                # 轻量集成层（约 13.5k 行）：把六个 UI crate 串联起来
+  dbflux_ui/                # 轻量集成层：把六个 UI crate 串联起来
     src/                    # 通过旧模块路径上的 pub use 垫片重新导出已迁移的子系统
       lib.rs                # crate 根；通过垫片模块重新导出
       app.rs                # GPUI 应用引导
+      app_menu.rs           # macOS 应用程序菜单栏（关于、服务、隐藏、退出）
       ipc_server.rs         # 应用控制 IPC 服务器（Focus、OpenScript）
       assets.rs             # 用于内嵌 SVG 图标的 GPUI AssetSource 实现
       platform.rs           # 垫片：pub use dbflux_ui_base::platform::*
@@ -427,7 +439,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + 应用/驱动程序协议常量
     src/protocol.rs         # 单实例应用控制消息
     src/driver_protocol.rs  # 驱动程序 RPC 请求/响应结构（DTO + 错误）
-    src/framing.rs          # 长度前缀的 bincode 传输分帧
+    src/framing.rs          # 长度前缀的 postcard 传输分帧
     src/socket.rs           # 跨平台 Socket 命名辅助函数
   dbflux_driver_ipc/        # 面向外部 RPC 服务的 DbDriver 适配器
     src/driver.rs           # IpcDriver + 受管宿主进程生命周期
@@ -465,10 +477,17 @@ crates/
     src/connection.rs       # Tokio 桥接、批量执行、Schema 发现、CRUD 与错误映射
     src/session.rs          # 基于每流连接的 ExecutionSessionFactory/ExecutionSession
     src/dialect.rs          # SQLite 方言、值转换与 DDL 代码生成
+  dbflux_driver_duckdb/     # 支持 DuckLake 目录的嵌入式 DuckDB 驱动程序
+    src/driver.rs           # 元数据、连接表单、共享实例注册表与 DuckLake 挂载
+    src/connection.rs       # 执行、只读检查、目录发现、CRUD 与执行会话
+    src/dialect.rs          # DuckDB 方言与值字面量
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs 驱动程序（DatabaseCategory::LogStream）
     src/driver.rs           # 日志组/流发现、EventStreamTarget、CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 对象存储驱动程序（DatabaseCategory::ObjectStorage）
     src/driver.rs           # 存储桶/对象发现、ObjectStoreConnection 实现、预签名/复制/版本
+  dbflux_driver_aws_secrets/ # AWS Secrets Manager + Parameter Store 驱动程序（DatabaseCategory::SecretStore）
+    src/secrets_manager/    # 基于 ListSecrets/DescribeSecret/GetSecretValue 的 SecretStoreSource
+    src/parameter_store/    # 基于 DescribeParameters/GetParameter 的 SecretStoreSource，客户端路径分组
   dbflux_aws/               # AWS 认证提供程序 + Secrets Manager/SSM 取值提供程序
     src/auth.rs             # AWS SSO/共享/静态提供程序与 SSO 登录流程
     src/config.rs           # ~/.aws/config 解析器/缓存与配置回写辅助函数
@@ -485,6 +504,9 @@ crates/
   dbflux_proxy/             # SOCKS5/HTTP CONNECT 代理隧道
     src/lib.rs              # ProxyTunnelConfig、SOCKS5/HTTP 握手、隧道循环
   dbflux_ssh/               # SSH 隧道支持
+  dbflux_byte_source/       # 供文件读取器使用的随机访问字节源（内存、本地文件）
+  dbflux_parquet/           # 基于字节源读取 Parquet 页脚与页索引（不依赖 GPUI）
+  dbflux_spreadsheet/       # 基于字节源用 calamine 读取 xlsx、xlsm、xls 与 ods 工作表，原地编辑 xlsx 与 ods 单元格，并将值写入新的 xlsx（不依赖 GPUI）
   dbflux_export/            # 导出（CSV、JSON、文本、二进制）
     src/lib.rs              # 基于形状的导出 API 与格式分发
     src/binary.rs           # 二进制/hex/base64 导出器
@@ -576,17 +598,17 @@ crates/
 
 1. **`Tab`**（`tab_manager.rs`）—— `#[non_exhaustive]` 枚举，只有一个 `Pane(Box<PaneHandle>)` 变体。保留枚举形式是为了向前兼容（例如将来可能出现可分离的面板变体）。`TabManager` 持有一个 `Vec<Tab>` 以及 MRU 顺序。
 
-2. **`PaneHandle`**（`pane.rs`）—— 擦除闭包的壳，取代了原先封闭的 `DocumentHandle` 枚举。它的各项操作（render、focus、dispatch_command、meta_snapshot、tab_title、can_close、connection_id、active_context、change_summary、refresh_policy、set_active_tab、set_refresh_policy、flush_auto_save、matches_dedup_key、subscribe，以及若干可选辅助方法，如 `resolve_close`、`save_for_close`、`flush_for_shutdown` 和 `is_file_backed_empty`）各自是一个捕获类型化 `Entity<T>` 的 `Box<dyn Fn>` 闭包。`PaneHandle` 不实现 `Clone`。每种文档类型都在自己的 `pane.rs` 中提供 `XxxDocument::into_pane(entity, cx) -> PaneHandle`（均位于 `crates/dbflux_ui_document/src/` 下）。新增一种文档类型无需改动 `workspace/mod.rs`、`tab_manager.rs`、`tab_bar.rs` 或 `handle.rs`。
+2. **`PaneHandle`**（`pane.rs`）—— 擦除闭包的壳，取代了原先封闭的 `DocumentHandle` 枚举。每一项操作都是一个捕获类型化 `Entity<T>` 的 `Box<dyn Fn>` 闭包：渲染与焦点、命令分发、纯元数据读取（标题、是否可关闭、连接与活动上下文、变更摘要、刷新策略）、诸如活动标签页与刷新策略这类变更、去重匹配、事件订阅，以及可选的文档专属辅助方法（关闭、保存与退出策略、侧边面板、面板操作、状态栏片段）。`PaneHandle` 不实现 `Clone`。每种文档类型都在自己的 `pane.rs` 中提供 `XxxDocument::into_pane(entity, cx) -> PaneHandle`（均位于 `crates/dbflux_ui_document/src/` 下）。新增一种文档类型无需改动 `workspace/mod.rs`、`tab_manager.rs`、`tab_bar.rs` 或 `handle.rs`。
 
-3. **`DocumentKey`**（`dedup.rs`）—— 用于标签页去重的身份枚举。变体：`Table`、`Collection`、`File`、`KeyValueDb`、`Chart`、`Audit`、`EventStream`、`Routine`、`MetricChart`、`Dashboard`、`InstanceMetric`、`InstanceInspector`、`InstanceOverview`、`ObjectStoreBucketsRoot`、`ObjectBrowser`、`ObjectEditor`。它取代了旧 `DocumentHandle` 上的那些 `is_*` 方法。调用点写作 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`。
+3. **`DocumentKey`**（`dedup.rs`）—— 用于标签页去重的身份枚举；变体列表以 `dedup.rs` 为准。它取代了旧 `DocumentHandle` 上的那些 `is_*` 方法。调用点写作 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`。
 
-4. **`DocumentEvent`**（`handle.rs`，约 30 行）—— 统一的事件枚举，取代了已被删除的四个按文档划分的事件枚举。变体：`MetaChanged`、`ExecutionStarted`、`ExecutionFinished`、`RequestClose`、`RequestFocus`、`RequestSqlPreview`、`OpenInspector`、`ChartThisQuery`。
+4. **`DocumentEvent`**（`handle.rs`）—— 统一的事件枚举，取代了已被删除的四个按文档划分的事件枚举；变体列表以 `handle.rs` 为准。
 
 5. **`ResultPanel` + `ViewHandle`**（`crates/dbflux_components/src/result_panel/mod.rs`）—— 通用框架宿主。`ResultPanel` 持有一行框架，并把主体渲染委托给 `ViewHandle`（7 个闭包：render、focus、focus_handle、toolbar_segments、available_modes、current_mode、set_mode）。槽位系统（`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`）让各视图可以贡献任意框架内容：`ResultPanel` 合并内置段（当 `available_modes.len() >= 2` 时，把模式栏放在 Left/0）与视图提供的段，按 `(position, index)` 排序，并在一个 `flex_wrap` 行中渲染。
 
 **面板操作**
 
-文档通过填写可选的 `PaneHandle::pane_actions` 闭包，列出原本只能用指针操作的动作（工具栏按钮及类似控件）。每个 `PaneAction` 条目包含标签、可选图标、有效键位映射为同一命令分配的快捷键、是否启用，以及执行时的行为（`PaneActionRun::Command` 与其键绑定一样经由工作区执行；没有对应命令的动作使用 `PaneActionRun::Callback`）。`Command::OpenPaneActions` 首先交给活动文档，因此拥有自己菜单的面板可以自行响应；否则工作区（`views/workspace/pane_actions.rs`）把这些条目快照为一个绘制在文档区域上方的菜单。菜单打开期间，工作区报告 `ContextId::ContextMenu`，由上下文菜单按键驱动。工作区从不知道文档类型，文档在自己的 `pane.rs` 中接入，无需改动 `workspace/mod.rs`、`tab_manager.rs` 或 `tab_bar.rs`。`CodeDocument` 列出整个工具栏；数据表格保留 `m` 打开自己的上下文菜单，该菜单即其操作菜单。
+文档通过填写可选的 `PaneHandle::pane_actions` 闭包，列出原本只能用指针操作的动作（工具栏按钮及类似控件）。每个 `PaneAction` 条目包含标签、可选图标、有效键位映射为同一命令分配的快捷键、是否启用，以及执行时的行为（`PaneActionRun::Command` 与其键绑定一样经由工作区执行；没有对应命令的动作使用 `PaneActionRun::Callback`）。`Command::OpenPaneActions` 首先交给活动文档，因此拥有自己菜单的面板可以自行响应；否则工作区（`views/workspace/pane_actions.rs`）把这些条目快照为一个绘制在文档区域上方的菜单。菜单打开期间，工作区报告 `ContextId::ContextMenu`，由上下文菜单按键驱动。工作区从不知道文档类型，文档在自己的 `pane.rs` 中接入，无需改动 `workspace/mod.rs`、`tab_manager.rs` 或 `tab_bar.rs`。`CodeDocument` 列出整个操作栏以及结果的刷新按钮；数据表格保留 `m` 打开自己的上下文菜单，该菜单即其操作菜单。
 
 **文档类型**
 
@@ -601,6 +623,7 @@ crates/
 - `BucketsTableDocument`（`crates/dbflux_ui_document/src/buckets_table/`）—— 连接根节点的对象存储视图（名称、区域、对象数、大小、版本控制、创建时间），复用 `dbflux_components::data_table` 而非 `DataGridPanel`；以 `DocumentKey::ObjectStoreBucketsRoot` 为键。
 - `ObjectBrowserDocument`（`crates/dbflux_ui_document/src/object_browser/`）—— 分栏的树/预览对象存储浏览器，支持分页与惰性树导航、预览、元数据、上传、删除、重命名与预签名；以 `DocumentKey::ObjectBrowser` 为键。
 - `ObjectEditorDocument`（`crates/dbflux_ui_document/src/object_editor/`）—— 面向 S3 文本对象的独立「在编辑器中打开」标签页，与 `ObjectBrowserDocument` 的内联编辑器共用 `object_text` 模块（行尾检测、语言高亮、保存审计）；以 `DocumentKey::ObjectEditor` 为键。
+- `SecretStoreDocument`（`crates/dbflux_ui_document/src/secret_store/`）—— 针对单个 `SecretStoreSource` 的分页密钥列表（支持按名称搜索）、详情面板，以及显式且经过审计的值读取；值以 `secrecy` 类型保存，并且只通过密文输入框绘制，因此从不进入 UI 自动化树；以 `DocumentKey::SecretStore` 为键。
 
 **新增一种文档类型**（无需改动新模块之外的任何内容）：
 1. 创建 `crates/dbflux_ui_document/src/<name>/mod.rs`，放入实体。
@@ -638,13 +661,14 @@ crates/
 
 **持久化**：迁移 `017_qry_saved_queries` 新增了 `qry_*` 表族（根表 + 列/排序/连接子表、级联外键、`UNIQUE (profile_id, name)`），由 `SavedQueryRepo`（`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`）与内存中的 `SavedQueryManager`（`crates/dbflux_ui_base/src/saved_query_manager.rs`）负责前端访问。`TableProbe` 接缝用于在把已保存查询导入另一个连接时验证表是否存在，而无需侵入驱动程序代码。
 
-**文档查询构建器**：文档集合有自己的侧栏，以 `DocumentFeatures::VISUAL_BUILDER` 加上 `Connection::document_query_codec()` 返回的编解码器为门控，从不依据驱动程序 id。`DocumentQuerySpec`（`crates/dbflux_core/src/query/document_query.rs`）描述筛选树、带类型的值、包含/排除投影、排序、限制、跳过以及可选的分组阶段（`$count` / `$sum` / `$avg`）。驱动程序实现 `DocumentQueryCodec`，把 spec 渲染为 find 栏位（`DocumentFindSlots`）、管道和预览文本，并把栏位解析回 spec；无法表示的子句以 `UnrepresentableClause` 返回，使界面显示同步冲突而不是覆盖它们。界面位于 `crates/dbflux_ui_document/src/document_builder/` 与 `data_grid_panel/documents/builder.rs`：Find 写入栏位并通过 `browse_collection` 运行，因此结果保持可编辑；Aggregate 模式（同时以 `DocumentFeatures::AGGREGATE` 为门控）通过聚合视图运行管道，结果为只读。已保存的文档查询使用迁移 `037_qry_saved_document_queries`（spec 以 JSON 存储，`UNIQUE (profile_id, database_name, collection_name, name)`）、`DocumentQueryRepo` 与 `SavedDocumentQueryManager`（`crates/dbflux_ui_base/src/saved_document_query_manager.rs`）。
+**文档查询构建器**：文档集合有自己的侧栏，以 `DocumentFeatures::VISUAL_BUILDER` 加上 `Connection::document_query_codec()` 返回的编解码器为门控，从不依据驱动程序 id。`DocumentQuerySpec`（`crates/dbflux_core/src/query/document_query.rs`）描述筛选树、带类型的值、包含/排除投影、排序、限制、跳过以及可选的分组阶段（`$count` / `$sum` / `$avg`）。驱动程序实现 `DocumentQueryCodec`，把 spec 渲染为 find 栏位（`DocumentFindSlots`）、管道和预览文本，并把栏位解析回 spec；无法表示的子句以 `UnrepresentableClause` 返回，使界面显示同步冲突而不是覆盖它们。界面位于 `crates/dbflux_ui_document/src/document_builder/` 与 `data_grid_panel/documents/builder/mod.rs`：Find 写入栏位并通过 `browse_collection` 运行，因此结果保持可编辑；Aggregate 模式（同时以 `DocumentFeatures::AGGREGATE` 为门控）通过聚合视图运行管道，结果为只读。已保存的文档查询使用迁移 `037_qry_saved_document_queries`（spec 以 JSON 存储，`UNIQUE (profile_id, database_name, collection_name, name)`）、`DocumentQueryRepo` 与 `SavedDocumentQueryManager`（`crates/dbflux_ui_base/src/saved_document_query_manager.rs`）。
 
 ### 数据可视化
 
 - **数据表格**：`crates/dbflux_components/src/components/data_table/` 自研的虚拟化表格，支持排序、选区、基于虚拟滚动条模式的横向滚动、键盘导航、列宽调整，以及带 CRUD 操作的右键菜单。
 - **文档树**：`crates/dbflux_components/src/components/document_tree/` 面向文档数据库的层级式 JSON/BSON 查看器，支持键盘导航（j/k/h/l）、搜索（Ctrl+F 或 /）、可折叠节点，以及多种视图模式（仅键、键+预览、完整值）。
 - **键值视图**：`crates/dbflux_ui_document/src/key_value/` Redis 专用的文档标签页，按类型渲染（String、Hash、List、Set、SortedSet、Stream），支持分页、变更与右键菜单。通过 `key_value/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
+- **原生控制台**：`crates/dbflux_ui_document/src/console/` 是一个命令控制台，供驱动声明了 `DriverCapabilities::NATIVE_CONSOLE` 的连接使用；`DriverMetadata::native_console()` 根据查询语言推导其提示符与示例。命令先经过驱动 `LanguageService` 的校验与危险命令检测，再通过 `Connection::execute` 运行（当驱动提供隔离会话时，经由编辑器的 `ExecutionSessionBinding`）；确认后会携带已确认的上限，产生与编辑器相同的 `query_execute` 审计记录，并进入共享的查询历史。编辑器的行数上限只会发送给声明了 `DriverCapabilities::REQUEST_ROW_LIMIT` 的驱动。输入补全复用编辑器的 `QueryCompletionProvider`。键值文档以及表和集合的 `DataDocument` 会停靠该控制台；`ConsoleDocument`（`console_document/`、`DocumentKey::Console`）则在单独的标签页中承载它，可从数据库在侧边栏中的菜单打开。
 - **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。
 - 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。
@@ -673,15 +697,16 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - 由驱动程序拥有的、位于集合/容器之下的子资源，通过通用的 `CollectionChildInfo` 元数据发布。侧边栏不得根据名称、字段类型或驱动程序 ID 去推断驱动程序特有的子项。
 - 例程（函数、存储过程、聚合函数、窗口函数）会在驱动程序设置了 `ROUTINES` 能力并填充 `schema_routines` 接缝时，显示为一个按 Schema 划分的「例程」文件夹。界面通用地渲染该文件夹，不会为任何驱动程序做特殊处理。
 - 侧边栏 dock：`crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` 仍可通过 ToggleSidebar（Ctrl+B）折叠和调整大小，同时将临时展开与明确的折叠选择分开管理。
+- 连接树只遍历一个投影：`SchemaSnapshot::database_layout`（`crates/dbflux_core/src/schema/listing.rs`）说明每个数据库是把表和视图归入 schema、把对象列在一个 `ObjectFolder`（集合或度量）中，还是一个 keyspace。侧边栏（`tree_builder/object_folder.rs`）根据该描述构建每个数据库的内容，其上下文菜单读取对象的 facet 和同一布局。驱动程序在连接根部显示的对象类型（例如 S3 存储桶）不在快照中，而是来自驱动程序的根分区（参见驱动程序系统）。
 - `dbflux_ui_base::object_tree` 提供通用的延迟加载层级结构，每个 `AppStateEntity` 配备一个协调器。core/app 边界按会话及目标槽位限定结果的应用；侧边栏和向导适配器保留兼容的 ID，同时各自管理交互状态。并非所有侧边栏特有类别都已迁移。
 - 连接树：`crates/dbflux_core/src/connection/tree.rs` 把文件夹与连接建模为树结构；`tree_manager.rs` 负责内存中的管理。
 
 ### 驱动程序体系
 
 - **驱动程序能力**：`crates/dbflux_core/src/driver/capabilities.rs` 定义了：
-  - `DatabaseCategory`：Relational、Document、KeyValue、Graph、TimeSeries、WideColumn、LogStream、ObjectStorage
+  - `DatabaseCategory`：Relational、Document、KeyValue、TimeSeries、LogStream、ObjectStorage、SecretStore
   - `QueryLanguage`：Sql、CloudWatchLogsInsightsQl、OpenSearchPpl、OpenSearchSql、MongoQuery、RedisCommands、Cypher、InfluxQuery、Flux、Cql、Lua、Python、Bash（各自携带编辑器模式、占位提示、注释前缀）
-  - `DriverCapabilities`：`u64` 位标志，用于 PAGINATION、TRANSACTIONS、NESTED_DOCUMENTS、MULTI_STATEMENT、ROUTINES、STORED_PROCEDURES、DASHBOARD_IMPORT、DASHBOARD_SYNC 等特性
+  - `DriverCapabilities`：`u128` 位标志，用于 PAGINATION、TRANSACTIONS、NESTED_DOCUMENTS、MULTI_STATEMENT、ROUTINES、STORED_PROCEDURES、DASHBOARD_IMPORT、DASHBOARD_SYNC 等特性
   - `DriverMetadata`：静态的驱动程序信息（id、name、category、query_language、capabilities、icon）
 - **由驱动程序拥有的连接表单**：每个 `DbDriver` 从 `form_definition()` 返回自己的 `&DriverFormDef`。表单定义存在于驱动程序 crate 中（例如 `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`），而非核心 crate。`DriverFormDef` 携带标签页 → 分区 → 字段，其中 `FormFieldKind` 覆盖 `Text`、`Password`、`WriteOnly`（密钥）、`FilePath`、`Select`、`DynamicSelect`（运行时获取的选项，`depends_on` + `RefreshTrigger`）与 `AuthProfileRef { provider_id }`。
 - **错误格式化**：`crates/dbflux_core/src/core/error_formatter.rs` 提供 `ErrorFormatter` trait，用于生成带上下文的驱动程序特定错误消息（detail、hint、column、table、constraint）。
@@ -691,10 +716,15 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - **驱动程序/界面解耦**：界面与应用编排层绝不能依据具体的驱动程序 ID 做分支，也不能内嵌针对特定驱动程序的路由。核心 crate 暴露接缝，驱动程序去填充它们。
   - `DriverMetadata` 覆盖宽泛的适配需求（`DatabaseCategory`、`QueryLanguage`、`DriverCapabilities`）。
   - `CollectionPresentation` 告诉界面一个集合/容器如何打开（例如数据网格还是事件流）。
+  - `ObjectFacet`（`crates/dbflux_core/src/schema/facet.rs`）表示一个对象所暴露的范式：`Tabular`、`Document`、`Vector`、`TimeSeries`。`CollectionPresentation` 决定打开哪种文档；facet 决定数据文档内部的视图模式、功能开关与筛选措辞。`Connection::object_facets`（表）与 `Connection::collection_facets`（集合）默认返回 `[Tabular]`，由驱动程序覆盖：PostgreSQL 为 `json`/`jsonb` 列添加 `Document`，为 TimescaleDB 超表添加 `TimeSeries`，并为每个 `vector(n)` 列添加一个 `Vector`；MongoDB 与 DynamoDB 声明 `[Document, Tabular]`；InfluxDB 声明基于 `time` 的 `TimeSeries`。由于线上协议不携带 facet，只有 RPC 适配器从声明的类别推导 facet（`category_collection_facets`）。`TimeSeries` 在行旁打开基于其时间列的图表；表上的 `Document` 打开一个只读文档树，并展开 JSON 值。该枚举是穷尽的，因此新的 facet 在 `DataViewMode::for_facet`（`crates/dbflux_ui_document/src/data_view.rs`）处理它之前无法编译。最近邻 SQL 仍由驱动程序通过 `QueryGenerator::generate_nearest_neighbors` 生成，默认不支持。
+  - `category_presentation`（`crates/dbflux_components/src/category.rs`）是按类别提供后备图标、色调与 Schema 树容器标签的唯一表；新增 `DatabaseCategory` 只需在此添加一个分支，而不必在每个界面 crate 中写 match。
+  - `DataStructure::ReservedGraph` 与 `ReservedWideColumn` 仅占用 postcard 线上索引 3 与 4，`DatabaseCategory::ReservedGraph` 与 `ReservedWideColumn` 占用索引 3 与 5，使其后的变体对驱动程序 RPC 对端保持原有索引；`crates/dbflux_ipc/tests/driver_wire_roundtrip.rs` 固定两个枚举的索引。不要删除或重排它们的变体。
   - `CollectionChildInfo` 让驱动程序可以发布集合/容器之下的子来源，无需界面做启发式推断。
   - `EventStreamTarget` 为工作区/审计提供一个通用标识符，指向由驱动程序支撑的事件流。
   - `SourceContextSpec` 让驱动程序可以声明额外的查询上下文控件，而无需在 `dbflux_ui` 中硬编码驱动程序名。
   - `ObjectStoreConnection`（`crates/dbflux_core/src/core/traits.rs`，经由 `Connection::object_store_api()` 抵达）是对象存储接缝（存储桶/对象列举、CRUD、预签名、复制、版本）；`CollectionPresentation::ObjectBrowser` 与 `PaneHandle::status_segments()` 让界面能够打开对象存储文档并为其添加框架，而无需依据驱动程序 ID 做分支。
+  - `RootSectionSource`（`crates/dbflux_core/src/connection/root_section/mod.rs`，经由 `Connection::root_section_source()` 抵达，受 `DriverCapabilities::ROOT_SECTIONS` 门控）声明侧边栏中连接根部显示的对象类型。每个 `RootSectionDef` 携带稳定的 id、标签、空状态标签、可选的文件夹 `RootSectionPresentation`、其条目打开时使用的 `RootItemPresentation`、激活连接行时是否打开该分区，以及条目操作。`list_items` 返回带 `next_page_token` 的 `RootSectionItem` 分页 `RootSectionPage`。节点 id `SchemaNodeId::RootSection`、`RootSectionItem` 与 `RootSectionLoadMore` 携带分区 id，因此新的对象类型无需新增 `SchemaNodeKind` 变体。一个通用渲染器（`crates/dbflux_ui_sidebar/src/root_sections/`）构建文件夹、按配置文件缓存列表并按需加载后续页面。声明或首页获取失败时显示重试行，且不会被缓存为空。分区 id 不能包含 `|`，因为节点 id 会嵌入它；侧边栏会拒绝并报告此类声明。文件夹或条目呈现方式需要 `Connection::object_store_api` 的分区，在不提供它的连接上会被隐藏。工作区按声明的呈现方式路由激活（`ObjectContainerTable` 打开容器表，`ObjectBrowser` 打开对象浏览器）。标签为 `LocalizedText`：宿主 i18n 目录中的可选键加上必填的英文回退文本，通过 `dbflux_i18n::try_translate` 解析。每个 `RootSectionAction` 携带一个 `ExecutionClassification`：`Destructive`、`Admin` 与 `AdminDestructive` 需要确认，每次运行无论成功与否都会记录一条 `Governance` 审计行。操作只会在发起请求时的连接上运行，且配置文件的 `MutationPolicy` 会管控所有高于 `Read` 的操作：`ReadOnly` 会拒绝它们，在审批流程覆盖这些操作之前 `ApprovalRequired` 也会拒绝。操作成功后会重新列出该分区，并重新加载显示它的已打开文档。外部驱动程序通过驱动程序 RPC 1.9（`RootSections`、`RootSectionItems`、`ExecuteRootSectionAction`）使用该接缝。S3 是参考实现：一个 `buckets` 分区，其条目在对象浏览器中打开，并带有分类为 `AdminDestructive` 的 Delete bucket 操作。
+  - `TableViewFeatures`（`crates/dbflux_core/src/data/column_profile.rs`，由 `Connection::table_view_features()` 报告）控制表的“列”与“分区”视图、读取量估算、样本分析和列选择器。数据来自 `table_profile`、`table_partitions`、`estimate_table_read` 与 `sample_table_profile`，`TableBrowseRequest::columns` 携带投影。界面（`crates/dbflux_ui_document/src/data_grid_panel/table_views.rs`）使用 `dbflux_components` 中共享的 `ColumnProfileView`、`PartitionListView`、`ColumnProjectionPicker` 与 `ReadEstimateBar` 渲染它们。Parquet 文档使用同样的分析视图、列选择器与估算栏，CSV 文档使用分析视图。
   - 如果界面需要新行为，请先添加一个通用的核心抽象；不要在 `dbflux_ui` 或面向应用的工作流代码里写 `if driver_id == ...`。
 
 ### 认证与访问流水线
@@ -847,6 +877,11 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - 把异步的 `turso_serverless` SDK 封装在同步的 `Connection` 契约之后，每个配置一个 Tokio 运行时；当调用方已处于 Tokio 上下文时，future 会在作用域线程中驱动
   - 在根连接上实现 `ExecutionSessionFactory`：每个隔离会话都是一条新的 Hrana 流，因此编辑器事务、网格 CRUD 与 MCP 操作绝不共享服务端事务状态
   - 复用 SQLite 方言、基于 PRAGMA 的发现与共享 SQL 构建器；不支持查询取消、SSH 隧道或副本
+- **DuckDB**：`crates/dbflux_driver_duckdb/` —— 面向嵌入式 DuckDB 文件、内存数据库与 DuckLake 目录的 `DatabaseCategory::Relational` + `QueryLanguage::Sql` 驱动程序：
+  - 通过 `duckdb` crate 内置 DuckDB；由于 DuckDB 在每个进程内锁定文件，连接同一文件（或同一配置的内存数据库）时会从一个存活实例克隆
+  - 连接时把配置中的 DuckLake 目录挂载为 `lake`；每个已挂载的目录在 `SchemaLoadingStrategy::LazyPerDatabase` 下作为一个数据库，经由 `duckdb_databases()`、`duckdb_tables()` 与 `duckdb_columns()` 发现
+  - 在根连接上实现 `ExecutionSessionFactory`：每个会话都是连接到共享实例的独立 DuckDB 连接，因此编辑器事务绝不会吞入网格、侧边栏或 MCP 的请求
+  - 只读强制只接受 DuckDB 解析器能序列化为 SELECT 语句的文本（`json_serialize_sql`），并在 `BEGIN TRANSACTION READ ONLY` 中执行；由于这样的事务仍能读取文件与 URL，允许列表之外的表函数以及 DuckDB 会当作文件读取的表名都会被拒绝
 - **CloudWatch Logs**：`crates/dbflux_driver_cloudwatch/` —— 面向 AWS CloudWatch Logs 的 `DatabaseCategory::LogStream` 驱动程序：
   - 日志组/流发现以集合形式暴露；日志组经由 `CollectionPresentation::EventStream` 与通用的 `EventStreamTarget` 打开为事件流，由 `AuditDocument`/日志流查看器使用，不带任何驱动程序特有的界面分支
   - 查询模式（Logs Insights QL、OpenSearch PPL/SQL）通过 `SourceContextSpec` 呈现；`DriverMetadata.query_language` 默认取 `Sql`，用于编辑器行为
@@ -856,7 +891,11 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - 存储桶发现（连接根处的 `BucketsTableDocument`）与按层级分页的对象导航（`ObjectBrowserDocument`），并可切换到不分页的树形模式
   - `ObjectStoreConnection` 实现覆盖上传、删除、递归前缀/存储桶删除（批量 `DeleteObjects`）、复制、预签名、存储桶详情/版本控制与对象版本
   - 界面提供完整 CRUD：上传、需输入确认的递归删除、创建文件夹/存储桶（按端点优雅降级）、重命名（先复制后删除）、预签名 URL
-  - 每次变更都在 `EventCategory::ObjectStorage` 下审计；凭据与预签名 URL 从不被记录到日志或持久化
+  - 启用审计时，在存储桶表格或对象浏览器中进行的每次变更都在 `EventCategory::ObjectStorage` 下审计；审计写入失败时只记录一条警告，变更依然生效，且不会写入替代记录；侧边栏的 Delete bucket 操作属于根分区操作，在 `EventCategory::Governance` 下审计。凭据与预签名 URL 从不被记录到日志或持久化
+- **AWS Secrets**：`crates/dbflux_driver_aws_secrets/` —— `aws-sdk-secretsmanager` + `aws-sdk-ssm` 驱动程序（`DatabaseCategory::SecretStore`）：
+  - 通过 `Connection::secret_stores()` 与提供方无关的 `SecretStoreSource` 接缝（`dbflux_core/src/connection/secret_store/`）暴露两个存储库，由 `DriverCapabilities::SECRET_STORE` 门控；各存储库的 `SecretStoreCapabilities` 门控 UI 行为
+  - 列表（`ListSecrets`、`DescribeParameters`）从不读取值；Parameter Store 路径在客户端分组为直接条目与子路径
+  - 值只在显式读取时获取，并在 `EventCategory::SecretStore` 下审计且不含该值；被拒绝的 `kms:Decrypt` 映射为 `DbError::PermissionDenied`
 
 ### 驱动程序 README 规范
 
@@ -865,14 +904,14 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 ### 支撑组件
 
-- Toast 提示系统：`crates/dbflux_ui_base/src/toast.rs` 自研实现，对成功/信息/警告类 Toast 提示自动消失（4 秒）。（`crates/dbflux_ui/src/ui/components/toast.rs` 处留有垫片。）
+- Toast 提示系统：`crates/dbflux_ui_base/src/toast.rs` 自研实现，对成功/信息/警告类 Toast 提示提供可配置的自动消失（默认 8 秒，警告类为其两倍；在 Settings > General 中调整）。
 - 隧道基础设施：`crates/dbflux_tunnel_core/` 提供 RAII `Tunnel`，带 `TunnelConnector` trait 与 `ForwardingConnection<R>` 双向转发器。
 - 代理隧道：`crates/dbflux_proxy/` 经由 `TunnelConnector` 实现 SOCKS5 与 HTTP CONNECT 代理隧道。
 - SSH 隧道：`crates/dbflux_ssh/src/lib.rs` 经由 `TunnelConnector` 实现 SSH 隧道，为保障 libssh2 安全，所有操作串行到单个线程上。
 - 导出：`crates/dbflux_export/` 提供基于形状的导出（CSV、JSON 美化/紧凑、文本、二进制/Hex/Base64）。可用格式由 `QueryResultShape` 决定，而不是由驱动程序决定。每种格式各有自己的模块（`binary.rs`、`csv.rs`、`json.rs`、`text.rs`）。文件对话框的可用性在运行时通过 `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` 探测（在 Linux 上：检查 `PATH` 中是否有 `xdg-desktop-portal`、`zenity`、`kdialog`）；若没有可用的后端，导出会回退到 `fallback_export_dir()`（`~/.local/share/dbflux/exports/`），并用 `unique_path_in()` 去重。此外还有一条剪贴板导出路径可作为替代目标。
 - 测试支撑：`crates/dbflux_test_support/` 提供 Docker 容器管理与固件（Fixture），用于跨所有驱动程序的真实集成测试。DynamoDB Local 仅用于集成测试与本地验证；生产环境使用的是远端 AWS DynamoDB 端点。
 - 图标系统：`AppIcon` 枚举定义在 `crates/dbflux_components/src/icons/mod.rs`；内嵌的 SVG 字节与 `ALL_ICONS` 列表仍位于 `crates/dbflux_ui/src/ui/icons/mod.rs`（资源文件在 `crates/dbflux_ui/resources/` 下），通过 `assets.rs` 加载。
-- 平台检测：`crates/dbflux_ui_base/src/platform.rs` 用 `is_x11()`、`floating_window_kind()` 与 `apply_window_options()` 处理 X11/Wayland 差异，以正确设置窗口最小尺寸提示。（`crates/dbflux_ui/src/platform.rs` 处留有垫片。）
+- 平台检测：`crates/dbflux_ui_base/src/platform.rs` 用 `is_x11()`、主窗口的 `apply_main_window_options()`，以及次要窗口的 `floating_window_kind()` 与 `apply_window_options()` 处理 X11/Wayland 差异，以正确设置窗口最小尺寸提示。（`crates/dbflux_ui/src/platform.rs` 处留有垫片。）
 
 ### MCP 治理系统
 
@@ -965,9 +1004,11 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - DynamoDB：`aws-sdk-dynamodb` 驱动程序，支持 AWS 配置/区域以连接远端 DynamoDB，并可为本地模拟器与测试覆盖端点（crates/dbflux_driver_dynamodb/src/driver.rs）。
 - ClickHouse：使用 `reqwest` 的 HTTP(S) 驱动程序，带动态 JSON 解码、数据库/表发现，以及面向自托管 ClickHouse 与 ClickHouse Cloud 的以读取为主的 SQL 支持（crates/dbflux_driver_clickhouse/src/driver.rs）。
 - TursoDB：基于 Hrana HTTP 的 `turso_serverless` 驱动程序，带按配置的 Tokio 桥接、基于 PRAGMA 的 Schema 发现、类型化 CRUD，以及用于交互式事务的按流执行会话（crates/dbflux_driver_turso/src/connection.rs）。
+- DuckDB：内置的 `duckdb` 驱动程序，面向文件、内存数据库与 DuckLake 目录，每个文件共享一个实例，按目录发现数据库，支持查询取消与只读事务（crates/dbflux_driver_duckdb/src/connection.rs）。
 - Amazon S3：`aws-sdk-s3` 驱动程序，支持 AWS 配置/SSO 或静态凭据，对兼容 S3 的端点（Cloudflare R2、MinIO）支持端点覆盖与路径风格寻址，并支持存储桶/对象 CRUD、预签名 URL 与复制/版本（crates/dbflux_driver_s3/src/driver.rs）。
+- AWS Secrets：`aws-sdk-secretsmanager` 与 `aws-sdk-ssm` 驱动程序，支持 AWS 配置/SSO 或静态凭据与端点覆盖、分页的密钥与参数列表、详情以及显式读取值（crates/dbflux_driver_aws_secrets/src/driver/mod.rs）。
 - AWS 认证栈：`dbflux_aws` 提供 AWS SSO/共享/静态认证提供程序、SSO 登录编排、账户/角色发现，以及新保存认证配置对 `~/.aws/config` 的回写。
-- 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。
+- 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`），并把 `RpcServiceKind::SecretProvider` 接入 `RpcSecretProvider`（它实现 `DynSecretProvider`；参见 [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。
 - 代理：经由 `dbflux_tunnel_core::Tunnel` 的 SOCKS5/HTTP CONNECT 隧道（crates/dbflux_proxy/src/lib.rs）。
 - SSH：`ssh2` 会话，经由 `dbflux_tunnel_core::Tunnel` 做本地 TCP 转发（crates/dbflux_ssh/src/lib.rs）。
 - 操作系统密钥环：为密码、SSH 口令与代理凭据提供可选的密钥存储（crates/dbflux_core/src/storage/secrets.rs）。
@@ -976,13 +1017,14 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 ## 配置
 
 - 工作区设置：`Cargo.toml` 定义工作区成员与共享依赖。
-- 应用 feature：`crates/dbflux/Cargo.toml` 门控 `sqlite`、`postgres`、`mysql`、`mongodb`、`redis`、`dynamodb`、`cloudwatch`、`influxdb`、`mssql`、`redshift`、`clickhouse`、`s3`、`lua`、`aws` 与 `mcp`（本分支默认启用）。
+- 应用 feature：`crates/dbflux/Cargo.toml` 门控 `sqlite`、`postgres`、`mysql`、`mongodb`、`redis`、`dynamodb`、`cloudwatch`、`influxdb`、`mssql`、`redshift`、`clickhouse`、`s3`、`aws_secrets`、`lua`、`aws` 与 `mcp`（本分支默认启用）。
 - 运行时数据：所有运行时配置都存放在 `~/.local/share/dbflux/dbflux.db`（单个 SQLite 文件）。
   - `cfg_connection_profiles` + 子表（认证、代理、SSH 绑定）
   - `cfg_auth_profiles`（与提供程序无关的认证配置存储）
   - `cfg_ssh_tunnel_profiles`、`cfg_proxy_profiles`
   - `cfg_hooks`、`cfg_hook_bindings`
-  - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver` 与 `auth_provider`）
+  - `cfg_script_roots`（在原位置列出的外部脚本文件夹；删除一行绝不会触碰该文件夹）
+  - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver`、`auth_provider` 或 `secret_provider`）
   - `cfg_governance_*` 表（角色、策略、受信客户端）
   - `cfg_drivers`（各驱动程序的设置覆盖项）
   - `cfg_folders`（连接树组织）
@@ -999,7 +1041,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
   - 导入具幂等性（在 `sys_legacy_imports` 中跟踪）
 - 会话数据（数据目录）：
   - `sessions/` 用于编辑器自动保存与内容恢复的临时与影子文件（crates/dbflux_storage/src/artifacts.rs）。
-  - `scripts/` 用户脚本文件夹（crates/dbflux_core/src/config/scripts_directory.rs）。
+  - `scripts/` 用户脚本文件夹（crates/dbflux_core/src/config/scripts_directory.rs）。`ScriptsDirectory` 还保存在 `cfg_script_roots` 中登记的外部文件夹；每个文件操作都限制在单个根目录内（在外部根目录中按解析后的路径判断，因此指向外部的符号链接既不会被列出也不会被写入），变更只在内存中更新缓存树，扫描在 UI 线程之外进行，MCP 脚本工具只能看到 `scripts/`。
 - 密钥：密码存放在操作系统密钥环中；引用由配置 ID 推导。`HasSecretRef` trait 统一了 SSH 隧道与代理的密钥操作（crates/dbflux_core/src/storage/secrets.rs、crates/dbflux_core/src/storage/secret_manager.rs）。
 
 ## 构建与部署

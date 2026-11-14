@@ -209,7 +209,7 @@ impl KeyValueDocument {
             .pr(KeyValueMetrics::LIST_PADDING_RIGHT)
             .border_b_1()
             .border_color(theme.table_row_border)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(KeyValueMetrics::FOLDER_ROW_FONT)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -339,7 +339,7 @@ impl KeyValueDocument {
             .pr(KeyValueMetrics::LIST_PADDING_RIGHT)
             .border_b_1()
             .border_color(theme.table_row_border)
-            .font_family(AppFonts::MONO)
+            .font_family(dbflux_components::fonts::editor_family(cx))
             .text_size(KeyValueMetrics::LIST_ROW_FONT)
             .cursor_pointer()
             .when(selected, |row| {

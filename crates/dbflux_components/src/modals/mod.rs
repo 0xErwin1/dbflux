@@ -8,6 +8,8 @@ pub mod import_dashboard;
 pub mod json_report_preview;
 pub mod modal;
 pub mod mutation_confirm;
+// The rendering moved to `bolt`; this path keeps the product's code preview,
+// which is the half that knows what its language's keywords are.
 pub mod parts;
 pub mod schema_drift;
 pub mod tunnel_auth;
@@ -41,7 +43,9 @@ pub use parts::{
 pub use schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
 };
-pub use tunnel_auth::{ModalTunnelAuth, TunnelAuthOutcome, TunnelAuthRequest};
+pub use tunnel_auth::{
+    ConnectionPasswordRequest, ModalTunnelAuth, TunnelAuthOutcome, TunnelAuthRequest,
+};
 pub use unsaved_changes::{
     CloseAction, DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome,
     UnsavedChangesRequest,

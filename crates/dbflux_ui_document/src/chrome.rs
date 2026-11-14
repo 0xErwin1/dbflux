@@ -21,10 +21,12 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 
-/// A document row: `height` tall, 14 px side padding, 8 px gap and a line
-/// along the bottom. The header, toolbar and filter rows of every document
-/// view start from this.
-pub(crate) fn document_bar(height: Pixels, cx: &App) -> Div {
+/// A document row: `height` tall (pixels or rems), 14 px side padding, 8 px
+/// gap and a line along the bottom. The header, toolbar and filter rows of
+/// every document view start from this.
+pub(crate) fn document_bar(height: impl Into<AbsoluteLength>, cx: &App) -> Div {
+    let height: AbsoluteLength = height.into();
+
     div()
         .flex()
         .flex_shrink_0()
@@ -114,7 +116,7 @@ pub(crate) fn toolbar_rule(cx: &App) -> Div {
 /// search icon, the frameless input and the `/` keycap while it is empty.
 pub(crate) fn search_field(
     input: &Entity<InputState>,
-    width: Option<Pixels>,
+    width: Option<Rems>,
     focused: bool,
     cx: &App,
 ) -> Div {
@@ -245,7 +247,7 @@ pub(crate) fn detail_field(
             div()
                 .min_w_0()
                 .truncate()
-                .font_family(AppFonts::MONO)
+                .font_family(dbflux_components::fonts::editor_family(cx))
                 .text_size(DocumentMetrics::TABLE_CELL_FONT)
                 .text_color(ChromeColors::strong(theme))
                 .child(value),
@@ -291,9 +293,13 @@ pub(crate) fn footer_item(
 }
 
 /// One arrow of a footer pager; disabled arrows fade and ignore clicks.
+///
+/// The arrow draws only an icon, so `name` is what the arrow is called for
+/// assistive technology and UI automation.
 pub(crate) fn pager_arrow(
     id: &'static str,
     icon: AppIcon,
+    name: impl Into<SharedString>,
     enabled: bool,
     cx: &App,
 ) -> Stateful<Div> {
@@ -302,6 +308,8 @@ pub(crate) fn pager_arrow(
 
     div()
         .id(id)
+        .role(Role::Button)
+        .aria_label(name.into())
         .flex()
         .items_center()
         .when(!enabled, |arrow| arrow.opacity(Fields::DISABLED_OPACITY))
@@ -327,7 +335,7 @@ pub(crate) fn footer_pager(
         .flex_shrink_0()
         .items_center()
         .gap(ResultMetrics::PAGER_GAP)
-        .font_family(AppFonts::MONO)
+        .font_family(dbflux_components::fonts::editor_family(cx))
         .child(previous)
         .child(
             div()

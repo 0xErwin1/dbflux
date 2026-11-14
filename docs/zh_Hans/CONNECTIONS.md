@@ -16,11 +16,18 @@
 
 ## 选择驱动
 
-连接管理器会显示一个驱动选择器。可用驱动取决于二进制构建时启用的 feature；标准构建包含 SQLite、PostgreSQL、MySQL/MariaDB、MongoDB、Redis、DynamoDB、Microsoft SQL Server 以及基于 AWS 的集成。外部注册的 RPC 驱动在配置后也会出现在这里（参见 `docs/RPC_SERVICES_CONFIG.md`）。
+连接管理器会显示一个驱动选择器。可用驱动取决于二进制构建时启用的 feature；标准构建包含 SQLite、PostgreSQL、MySQL/MariaDB、Microsoft SQL Server、Amazon Redshift、ClickHouse、TursoDB、DuckDB、MongoDB、DynamoDB、Redis、InfluxDB、CloudWatch Logs、Amazon S3 和 AWS Secrets。选择器按类别对驱动分组：关系型、文档、键值、时间序列和日志、对象存储、密钥存储。外部注册的 RPC 驱动在配置后也会出现在这里（参见 `docs/RPC_SERVICES_CONFIG.md`）。
 
 使用 `/` 筛选驱动列表，`j`/`k`（或方向键）移动，`Enter` 确认选择。
 
 每个驱动都有自己的连接表单。表单是动态的：只显示该驱动真正需要的字段。以文件为基础的驱动（如 SQLite）使用文件路径表单。大多数关系型驱动也接受单个连接字符串，参见[表单模式与直接填写 URI](#表单模式与直接填写-uri)。
+
+主选项卡末尾的 **安全** 部分包含 **只读** 开关。开启后，DBFlux 会阻止在该连接上通过数据网格、可视化查询构建器和模式对比进行的更改，拒绝查询编辑器中会更改数据或模式的语句，并拒绝高于 `read` 类别的 MCP 调用（参见[只读连接](MCP_AI_INTEGRATION.md#只读连接)）。读取语句仍会执行。在应用中，开启该设置会立即作用于已打开的连接，关闭则在重新连接后生效。MCP 会在下一次调用时采用任一方向的更改。编辑器根据文本对语句分类，因此在 `SELECT` 中调用有副作用的函数（如 PostgreSQL 的 `setval`）仍会执行：数据库中的只读凭据仍是更强的边界。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
+  <img src="../images/connections/driver-picker-light.webp" alt="连接管理器的驱动选择器，驱动按关系型、文档、键值、时序与对象存储分组">
+</picture>
 
 ---
 
@@ -34,6 +41,11 @@
 | **SSH 隧道** | 先通过 SSH 主机建立本地端口转发，再经由该隧道连接。 |
 | **代理** | 通过 SOCKS5 或 HTTP/HTTPS 代理转发连接。 |
 | **SSM 端口转发** | 使用 AWS Systems Manager 将端口转发到目标实例，再经由该隧道连接。需要 `aws` 构建 feature。 |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/access-tab-dark.webp">
+  <img src="../images/connections/access-tab-light.webp" alt="PostgreSQL 连接的访问标签页，访问方式列表已展开，显示 Direct、SSH Tunnel、Proxy 与 SSM Port Forwarding">
+</picture>
 
 ### 点击连接后会发生什么
 
@@ -79,6 +91,12 @@ SSH 隧道有两种用法：
 没有单独的「SSH agent」选项——选择**私钥**并将私钥路径留空，就是基于 agent 的认证方式。
 
 **测试 SSH 连接**可在不保存连接的情况下验证隧道是否可用。
+
+### 引用 SSH 配置中的主机
+
+**SSH 配置主机**下拉框会列出 `~/.ssh/config` 中定义的每个 `Host`，并显示各自解析出的用户名、主机名和端口。选择后保存的是别名而不是解析结果，因此之后修改 SSH 配置会在下一次连接时生效，无需改动该配置。选中别名期间，**主机**、**端口**和**用户名**字段不再显示任何内容并被禁用——别名就是目标；密钥路径留空时会采用该主机指定的 `IdentityFile`，若未指定则回退到 SSH agent 或默认密钥。`Include`、`Match` 以及 `IdentityFile` 中的 `%h`、`%r`、`%d` 标记都按 OpenSSH 的方式解析。
+
+配置中需要 `ProxyJump` 或 `ProxyCommand` 的主机会被列出并标记：DBFlux 无法连接它，连接会带着该原因失败，而不会直接连接跳板机。主机密钥仍按 DBFlux 数据目录中的自有存储校验，而不是你的 `~/.ssh/known_hosts`，因此即使你多年来一直从终端访问某台主机，首次连接时仍会要求确认其密钥。
 
 ### SSH 密钥保存在哪里
 
@@ -126,6 +144,7 @@ SSH 隧道有两种用法：
 | **SSO 会话** | 可选，引用一个 **AWS SSO Session** 配置文件。设置后，起始 URL 和区域将从该会话继承，对应的内联字段会置灰。 |
 | **SSO 起始 URL** | 你的 Identity Center 门户 URL（使用会话时可跳过）。 |
 | **区域** | 例如 `us-east-1`。 |
+| **Endpoint URL** | 可选，例如 LocalStack 使用 `http://localhost:4566`。通过 `~/.aws/config` 中的 `[services]` 节，仅作用于 Secrets Manager 和 SSM。AWS 共享凭据配置文件也有同一字段。 |
 | **账户** | **登录后才**会填充的下拉框，列出当前 SSO 会话可访问的账户。 |
 | **角色** | 选定账户后才会填充的下拉框。 |
 
@@ -165,6 +184,8 @@ SSH 隧道有两种用法：
 
 **本地**隧道端口由 DBFlux 和操作系统自动分配，只有远程端口可以配置。
 
+SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linux 上，如果 DBFlux 不是从终端启动（而是从 Finder、程序坞或桌面启动项启动），它会在启动时读取登录 shell 的 `PATH`，因此能找到通过 Homebrew 安装或在 shell 配置中添加的工具。如果 shell 启动超过五秒，DBFlux 会保留启动时的 `PATH` 并记录一条警告。
+
 ---
 
 ## 取值来源：密钥管理器、参数存储与认证会话
@@ -175,6 +196,8 @@ SSH 隧道有两种用法：
 | --- | --- |
 | **字符**（Literal） | 直接输入的值（默认）。 |
 | **环境变量**（Environment Variable） | 按名称从环境变量读取。 |
+| **Dotenv 文件**（Dotenv File） | 从你拥有的 `.env` 文件中读取一个键，写作 `路径#键`。 |
+| **密钥文件**（Secret File） | 读取你拥有的整个文件，或 JSON 文件中的一个键，写作 `路径` 或 `路径#JSON键`。 |
 | **AWS 云密钥管理**（Secret Manager） | 从密钥提供程序（AWS Secrets Manager）获取。 |
 | **AWS 参数存储**（Parameter Store） | 从参数提供程序（AWS SSM Parameter Store）获取。 |
 | **认证会话字段**（Auth Session Field） | 从已解析的认证配置文件会话或凭据中提取指定字段。 |
@@ -182,8 +205,96 @@ SSH 隧道有两种用法：
 补充说明：
 
 - AWS 云密钥管理 / AWS 参数存储来源可以指向 JSON 密钥中的某个 **JSON 键**，因此一份 JSON 文档就能为多个字段供值。
-- 解析结果会缓存 **5 分钟**，避免每次重连都重新获取。
+- 从 Secret Manager 和 Parameter Store 引用解析的值会缓存 **5 分钟**，避免每次重连都重新获取。环境变量、dotenv 文件和密钥文件的值在每次使用时读取。
 - 由认证提供程序支持的 AWS 云密钥管理 / AWS 参数存储来源**要求连接上配置了认证配置文件**（连接前强制校验）。
+- 要访问 LocalStack 或 VPC 终端节点，请在 AWS 认证配置文件中设置 **Endpoint URL**。AWS SDK 也会读取 `AWS_ENDPOINT_URL_SECRETS_MANAGER` 和 `AWS_ENDPOINT_URL_SSM`。
+
+> **注意：**DBFlux 将终端节点写入配置文件引用的 `[services]` 节，因此只作用于 Secrets Manager 和 SSM，包括使用该配置文件运行的 AWS CLI `secretsmanager`、`ssm` 命令以及 SSM 端口转发。DynamoDB、S3 和 CloudWatch 保持默认终端节点。与其他配置文件共享的 `[services]` 节不会被修改，DBFlux 会为此配置文件创建单独的副本。
+
+### 环境变量与 dotenv 文件
+
+这两种来源在 DBFlux 每次连接时读取，因此轮换后的值无需重启 DBFlux 即可在下一次连接中生效。DBFlux 只保存引用（变量名，或文件路径和键），从不保存值，两种来源都不会缓存。
+
+| 字段输入 | 来源 | 读取 |
+| --- | --- | --- |
+| `DB_PASSWORD` | 环境变量 | 启动 DBFlux 时环境中的 `DB_PASSWORD` |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv 文件 | 该文件中的 `DB_PASSWORD` |
+
+dotenv 文件必须满足以下规则，否则连接会失败，错误信息会指出文件和键，但绝不会显示值：
+
+- 路径为绝对路径或以 `~/` 开头。
+- 是不超过 64 KiB、1024 个条目的 UTF-8 普通文件（指向普通文件的符号链接会被跟随）。
+- 在 Linux 和 macOS 上，只有文件所有者可以读写（`chmod 600`），且所有者必须是运行 DBFlux 的用户。
+- 每一行是空行、`#` 注释，或 `KEY=value`（可带 `export` 前缀）。值可以不加引号（末尾的 ` # 注释` 会被去掉）、使用单引号（按原样读取）或使用双引号（解析 `\n`、`\t`、`\"`、`\\` 和 `\$`）。值只占一行，`${VAR}` 不会展开。同一个键出现两次时，以最后一次定义为准。
+
+| 问题 | 错误 |
+| --- | --- |
+| 变量未设置 | `Environment variable 'DB_PASSWORD' not set` |
+| 变量为空字符串 | `Environment variable 'DB_PASSWORD' is empty` |
+| 文件不存在 | `Dotenv file '~/prod.env' does not exist` |
+| 文件不可读 | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| 其他用户可访问该文件 | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| 文件属于其他用户 | `Dotenv file '~/prod.env' is owned by another user; DBFlux only reads files owned by the user it runs as` |
+| 某一行不是条目 | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| 文件中没有该键 | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| 键的值为空 | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+读取失败会中止连接。DBFlux 绝不会为该字段改用密钥环中保存的密码。
+
+> **注意：**桌面启动器使用会话环境而不是 shell 环境启动 DBFlux。仅在 `~/.zshrc` 或 `~/.bashrc` 中导出的变量，对从应用菜单启动的 DBFlux 不可见；请改用 dotenv 文件，或在会话环境中设置该变量。
+
+### 密钥文件
+
+密钥文件来源读取由其他工具写入的文件，例如由 sops-nix 或 systemd 凭据提供的密钥。DBFlux 每次连接时都会读取文件，因此通过原子重命名或替换符号链接轮换的文件，无需重启 DBFlux 即可在下一次连接中生效。在已打开的连接上切换数据库时，只有密码字段会从其文件重新读取；其他由文件提供的字段保留连接时解析的值。DBFlux 只保存引用，从不保存文件内容：
+
+```json
+{"source": "file", "path": "~/.config/dbflux/db.json", "json_key": "password"}
+```
+
+| 字段输入 | 值 |
+| --- | --- |
+| `/run/secrets/db_password` | 整个文件，去掉末尾恰好一个换行符（`\n` 或 `\r\n`） |
+| `~/.config/dbflux/db.json#password` | JSON 对象的顶层 `password` 字段，必须是字符串、数字或布尔值 |
+
+输入在最后一个 `#` 处拆分，键部分可省略。
+
+密钥文件必须满足以下规则，否则连接会失败，错误信息会指出文件和键，但绝不会显示文件内容：
+
+- 路径为绝对路径或以 `~/` 开头。
+- 是不超过 64 KiB 的 UTF-8 普通文件（指向普通文件的符号链接会被跟随；目录和 FIFO 会被拒绝）。
+- 在 Linux 和 macOS 上，只有文件所有者可以读写。组或其他用户的任何读写位都会被拒绝；`0400` 和 `0600` 模式可以使用。
+- 在 Linux 和 macOS 上，文件必须属于运行 DBFlux 的用户。属于其他用户（包括 root）的文件即使模式允许读取也会被拒绝。
+
+| 问题 | 错误 |
+| --- | --- |
+| 文件不存在 | `Secret file '/run/secrets/db_password' does not exist` |
+| 文件不可读 | `Secret file '/run/secrets/db_password' cannot be read: permission denied` |
+| 目录、FIFO 或其他非普通文件 | `Secret file '/run/secrets/db_password' is not a regular file` |
+| 文件过大 | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
+| 内容不是 UTF-8 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
+| 其他用户可访问该文件 | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| 文件属于其他用户 | `Secret file '/run/secrets/db_password' is owned by another user; DBFlux only reads files owned by the user it runs as` |
+| 文件为空 | `Secret file '/run/secrets/db_password' is empty` |
+| 指定了键但内容不是有效的 JSON 或不是对象 | `Secret file '~/.config/dbflux/db.json' is not a valid JSON object, so key 'password' cannot be read` |
+| `#` 后的键为空 | `JSON key in secret file '~/.config/dbflux/db.json' is empty` |
+| 对象中没有该键 | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
+| 键的值是对象、数组或 null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
+| 键的值为空字符串 | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |
+
+文件不存在、被锁定或拒绝访问时，连接会中止并显示错误。DBFlux 绝不会为该字段改用密钥环中保存的密码。
+
+#### 来自 sops-nix、secretspec 和 systemd 凭据的文件
+
+DBFlux 只读取文件。这些工具拥有并解密这些文件；DBFlux 从不运行它们。
+
+| 工具 | 需要设置的内容 |
+| --- | --- |
+| sops-nix（NixOS 模块） | 密钥出现在 `/run/secrets/<name>`。默认情况下密钥属于 root，因此请将密钥的 `owner` 设为你的用户。保留默认的 `mode = "0400"`：`0440` 等组可读模式会被拒绝。 |
+| sops-nix（Home Manager 模块） | 密钥位于 `$XDG_RUNTIME_DIR/secrets.d`，并通过 `~/.config/sops-nix/secrets/` 中的符号链接提供；将字段指向该符号链接。 |
+| secretspec | 将解析出的密钥写入你拥有、模式为 `0600` 的文件，并将字段指向该文件。 |
+| systemd 凭据 | 见下文。 |
+
+`LoadCredential=`、`LoadCredentialEncrypted=` 和 `SetCredential=` 只向该单元的进程提供 `$CREDENTIALS_DIRECTORY` 下的文件。该目录为服务私有：在该单元之外启动的桌面版 DBFlux 无法读取它，也不应假定拥有访问权限。只有在该单元内启动的 DBFlux（例如带 `LoadCredential=` 的 `systemd-run --user` 临时服务）才能使用 `$CREDENTIALS_DIRECTORY/<name>`。DBFlux 不会展开路径中的环境变量，因此请填写展开后的绝对路径。
 
 ---
 
@@ -202,6 +313,7 @@ SSH 隧道有两种用法：
 
 - **每个连接只能使用一种访问方式。** 切换方式会清空其他方式的配置。
 - **密钥保存在操作系统密钥环中**，不会写入 DBFlux 数据库。密钥环不可用时，「保存」复选框会消失，密钥也不会被保留。
+- **未保存的密码会在连接时询问。** 如果连接的密码既没有保存在密钥环中，也不来自值来源，DBFlux 会在连接前询问密码，并在断开连接之前将其用于该连接打开的每个数据库。服务器不需要密码时可以留空。勾选「在 DBFlux 关闭前记住」会将其保存在内存中（绝不写入密钥环），之后的连接不会再次询问；点击「取消」则连接保持关闭。
 - **代理被禁用或命中不使用代理规则时，会静默直连。**
 - **`No Proxy`（不使用代理）不支持 CIDR** —— 请填写主机或后缀，而不是 IP 网段。
 - **SSM 和由认证提供程序支持的取值来源都需要认证配置文件。**

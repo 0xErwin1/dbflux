@@ -1674,7 +1674,7 @@ mod tests {
                 let dispositions_in = dispositions.clone();
 
                 window.update(|_, app| {
-                    app.subscribe(&doc, move |doc_entity, event, cx| {
+                    app.subscribe(doc, move |doc_entity, event, cx| {
                         if !matches!(event, DocumentEvent::RequestClose) {
                             return;
                         }
@@ -1767,7 +1767,7 @@ mod tests {
                 let dispositions_in = dispositions.clone();
 
                 window.update(|_, app| {
-                    app.subscribe(&doc, move |doc_entity, event, cx| {
+                    app.subscribe(doc, move |doc_entity, event, cx| {
                         if !matches!(event, DocumentEvent::RequestClose) {
                             return;
                         }
@@ -1924,14 +1924,12 @@ mod tests {
                 let path_for_conflict = path.clone();
 
                 window.update(|_, app| {
-                    app.subscribe(&doc, move |doc_entity, event, cx| match event {
+                    app.subscribe(doc, move |doc_entity, event, cx| match event {
                         // Another process rewrites the file between the save landing
                         // and the queued flush running.
-                        DocumentEvent::SaveFinished { .. } => {
-                            if !injected_in.replace(true) {
-                                std::fs::write(&path_for_conflict, "THEIRS;")
-                                    .expect("the external write must succeed");
-                            }
+                        DocumentEvent::SaveFinished { .. } if !injected_in.replace(true) => {
+                            std::fs::write(&path_for_conflict, "THEIRS;")
+                                .expect("the external write must succeed");
                         }
                         DocumentEvent::RequestClose => {
                             if dispositions_in.borrow().len() >= 4 {

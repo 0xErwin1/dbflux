@@ -9,7 +9,7 @@ use crate::query_builder::panel::{AggregateRow, GroupByRow, QueryBuilderPanel};
 /// Two sub-sections:
 /// 1. Group-by rows: column text input + remove button, "+" button at bottom.
 /// 2. Aggregate rows: function dropdown + column input + alias input + remove button.
-pub fn render_group_by(
+pub(crate) fn render_group_by(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
@@ -51,7 +51,7 @@ pub fn render_group_by(
 
         if let Some(col_input) = gb_col_inputs.get(i).cloned() {
             row_div = row_div.child(
-                crate::completion_support::single_line_completion_editor(&col_input)
+                crate::completion_support::single_line_completion_editor(&col_input, cx)
                     .flex_1()
                     .min_w(gpui::px(0.0))
                     .w_full(),
@@ -142,7 +142,7 @@ pub fn render_group_by(
                         div().flex_1().min_w(gpui::px(0.0)),
                     )
                     .child(
-                        crate::completion_support::single_line_completion_editor(&col_input)
+                        crate::completion_support::single_line_completion_editor(&col_input, cx)
                             .w_full(),
                     ),
                 );
@@ -215,7 +215,7 @@ pub fn render_group_by(
 ///
 /// Delegates to the same filter-node renderer used by the WHERE section,
 /// but bound to `FilterTarget::Having` so mutations land on `spec.having`.
-pub fn render_having(
+pub(crate) fn render_having(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {

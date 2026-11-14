@@ -13,7 +13,7 @@ use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChang
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{ConfirmOutcome, ConfirmRequest, ModalConfirm, ModalVariant};
 use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Text};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, ui};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AccessKind, AuthEditCapabilities, AuthEditSnapshot, AuthProfile, AuthSaveOutcome,
@@ -33,7 +33,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 /// Width of the text fields and selects of the auth profile form. (300 px)
-const AUTH_SELECT_WIDTH: Pixels = px(300.0);
+const AUTH_SELECT_WIDTH: Rems = ui(300.0);
 
 /// Cached dropdown options for a `DynamicSelect` field.
 ///
@@ -637,7 +637,18 @@ impl AuthProfilesSection {
                         self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
                     }
 
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "`field_id` is inserted into `dynamic_dropdowns` \
+                                  and `form_inputs` above when absent, so the \
+                                  lookups below cannot miss"
+                    )]
                     let dropdown = self.dynamic_dropdowns[&field_id].clone();
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "`field_id` is inserted into `form_inputs` above \
+                                  when absent, so this lookup cannot miss"
+                    )]
                     let input = self.form_inputs[&field_id].clone();
                     let sub = cx.subscribe_in(
                         &dropdown,
@@ -953,6 +964,11 @@ impl AuthProfilesSection {
             self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the block above inserts `field_id` into `dynamic_dropdowns` \
+                      when absent, so this lookup cannot miss"
+        )]
         let dropdown = self.dynamic_dropdowns[&field_id].clone();
 
         // Sync cached options into the dropdown.
@@ -1056,6 +1072,11 @@ impl AuthProfilesSection {
             self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the block above inserts `field_id` into `dynamic_dropdowns` \
+                      when absent, so this lookup cannot miss"
+        )]
         let dropdown = self.dynamic_dropdowns[&field_id].clone();
 
         let mut items: Vec<DropdownItem> = vec![DropdownItem::with_value(
@@ -2275,7 +2296,7 @@ impl AuthProfilesSection {
             .flex()
             .flex_col()
             .child(toolbar)
-            .child(
+            .child(layout::scrolled_list_viewport(
                 div()
                     .id("auth-profile-list-scroll")
                     .flex_1()
@@ -2285,7 +2306,8 @@ impl AuthProfilesSection {
                     .flex()
                     .flex_col()
                     .children(rows),
-            )
+                &self.profile_list_scroll_handle,
+            ))
     }
 
     /// Renders a read-only info panel for profiles that are reflected from

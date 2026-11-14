@@ -2,7 +2,7 @@ use std::{cell::RefCell, ops::RangeInclusive, rc::Rc};
 
 use crate::{
     TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint, TextSelectionEvent,
-    TextSelectionHandle, TextSelectionRegistration, TextSelectionSnapshot,
+    TextSelectionHandle, TextSelectionRegistration, TextSelectionRun, TextSelectionSnapshot,
 };
 use gpui::{App, Bounds, EntityId, Hitbox, Pixels, Point, WeakEntity, Window};
 
@@ -19,19 +19,29 @@ struct VirtualBlockSelection {
     anchor: Option<CachedBlockEndpoint>,
     cursor: Option<CachedBlockEndpoint>,
     coverage: TextSelectionCoverage,
+    is_selecting: bool,
 }
 
 impl VirtualBlockSelection {
-    fn update(&mut self, snapshot: Option<TextSelectionSnapshot>, entity_id: EntityId) {
+    fn update(&mut self, snapshot: Option<TextSelectionSnapshot>, entity_id: EntityId) -> bool {
         let Some(snapshot) = snapshot else {
+            let changed = self.anchor.is_some() || self.cursor.is_some();
             *self = Self::default();
-            return;
+            return changed;
         };
 
+        // Origin and scroll changes only alter the window projection. They must
+        // not turn a held logical range back into a hit test in reflowed text.
+        let changed = self.anchor.map(|cached| cached.endpoint) != Some(snapshot.anchor())
+            || self.cursor.map(|cached| cached.endpoint) != Some(snapshot.cursor())
+            || self.coverage != snapshot.coverage()
+            || self.is_selecting != snapshot.is_selecting();
         self.coverage = snapshot.coverage();
+        self.is_selecting = snapshot.is_selecting();
 
         Self::update_endpoint(&mut self.anchor, snapshot.anchor(), entity_id);
         Self::update_endpoint(&mut self.cursor, snapshot.cursor(), entity_id);
+        changed
     }
 
     fn update_endpoint(
@@ -72,8 +82,21 @@ impl VirtualBlockSelection {
 #[derive(Clone)]
 pub(super) struct TextViewSelectionAdapter {
     selection: TextSelectionHandle,
-    text_bounds: Vec<Bounds<Pixels>>,
+    /// What the view's text painted this frame, shared by the adapter's
+    /// clones. Inlines report it as they paint, through a read of the view's
+    /// state: reporting it is not a change of the view.
+    frame: Rc<RefCell<PaintedText>>,
     layout_revision: Option<usize>,
+}
+
+/// The text a [`TextViewSelectionAdapter`]'s view painted this frame.
+#[derive(Default)]
+struct PaintedText {
+    text_bounds: Vec<Bounds<Pixels>>,
+    text_runs: Vec<TextSelectionRun>,
+    /// The caret boxes at the first and last selected character painted this
+    /// frame, where the touch handles go.
+    selection_edges: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
 }
 
 impl TextViewSelectionAdapter {
@@ -90,9 +113,12 @@ impl TextViewSelectionAdapter {
                     TextSelectionEvent::SelectionChanged(snapshot) => {
                         let snapshot = *snapshot;
                         let _ = view_for_events.update(cx, |state, cx| {
-                            blocks_for_events
+                            let changed = blocks_for_events
                                 .borrow_mut()
                                 .update(snapshot, selection_id);
+                            if snapshot.is_none() || changed {
+                                state.preserve_inline_selection = false;
+                            }
                             state.is_selecting =
                                 snapshot.is_some_and(|snapshot| snapshot.is_selecting());
                             cx.notify();
@@ -109,6 +135,9 @@ impl TextViewSelectionAdapter {
                         });
                     }
                     TextSelectionEvent::Cleared => {}
+                    TextSelectionEvent::TouchSelectionChanged => {
+                        let _ = view_for_events.update(cx, |_, cx| cx.notify());
+                    }
                 },
                 cx,
             )
@@ -167,7 +196,7 @@ impl TextViewSelectionAdapter {
 
         Self {
             selection,
-            text_bounds: Vec::new(),
+            frame: Rc::default(),
             layout_revision: None,
         }
     }
@@ -182,12 +211,24 @@ impl TextViewSelectionAdapter {
         changed && !is_selecting
     }
 
-    pub(super) fn begin_frame(&mut self) {
-        self.text_bounds.clear();
+    pub(super) fn begin_frame(&self) {
+        *self.frame.borrow_mut() = PaintedText::default();
     }
 
-    pub(super) fn register_inline(&mut self, bounds: Vec<Bounds<Pixels>>) {
-        self.text_bounds.extend(bounds);
+    /// Records one inline's painted selection ends. Inlines paint in document
+    /// order, so the first start and the last end are the view's.
+    pub(super) fn register_selection_edges(&self, start: Bounds<Pixels>, end: Bounds<Pixels>) {
+        let mut frame = self.frame.borrow_mut();
+        let first = frame.selection_edges.map_or(start, |(first, _)| first);
+        frame.selection_edges = Some((first, end));
+    }
+
+    pub(super) fn register_text_run(&self, run: TextSelectionRun) {
+        self.frame.borrow_mut().text_runs.push(run);
+    }
+
+    pub(super) fn register_inline(&self, bounds: Vec<Bounds<Pixels>>) {
+        self.frame.borrow_mut().text_bounds.extend(bounds);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -201,15 +242,43 @@ impl TextViewSelectionAdapter {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.selection.register(
-            TextSelectionRegistration::new(hitbox, bounds)
-                .with_scroll_offset(scroll_offset)
-                .with_document_order(document_order)
-                .with_text_bounds(self.text_bounds.clone())
-                .with_self_scroll(self_scroll),
-            window,
-            cx,
-        );
+        let frame = self.frame.borrow();
+        self.selection.set_hit_test_runs(&frame.text_runs, cx);
+        let registration = TextSelectionRegistration::new(hitbox, bounds)
+            .with_scroll_offset(scroll_offset)
+            .with_document_order(document_order)
+            .with_text_bounds(frame.text_bounds.clone())
+            .with_self_scroll(self_scroll)
+            .with_rendered_element(&self.selection, window, cx);
+        let registration = match frame.selection_edges {
+            Some((start, end)) => registration.with_selection_edges(start, end),
+            None => registration,
+        };
+        drop(frame);
+        self.selection.register(registration, window, cx);
+    }
+
+    /// Lays out the touch handles this view owns; see
+    /// [`TextSelectionHandle::prepaint_touch_handles`].
+    pub(super) fn prepaint_touch_handles(
+        &self,
+        window: &mut Window,
+        cx: &App,
+    ) -> crate::TouchHandleLayout {
+        self.selection.prepaint_touch_handles(window, cx)
+    }
+
+    /// Paints the touch handles this view owns, after its content for the
+    /// frame; see [`TextSelectionHandle::paint_touch_handles`].
+    pub(super) fn paint_touch_handles(
+        &self,
+        layout: &crate::TouchHandleLayout,
+        color: gpui::Hsla,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.selection
+            .paint_touch_handles(layout, color, window, cx);
     }
 
     pub(super) fn selection_points(&self, cx: &App) -> Option<(Point<Pixels>, Point<Pixels>)> {
@@ -234,6 +303,6 @@ impl TextViewSelectionAdapter {
 
     #[cfg(test)]
     pub(super) fn text_bounds(&self) -> Vec<Bounds<Pixels>> {
-        self.text_bounds.clone()
+        self.frame.borrow().text_bounds.clone()
     }
 }

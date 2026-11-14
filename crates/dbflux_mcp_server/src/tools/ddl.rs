@@ -304,6 +304,11 @@ fn validate_postgres_type_expression(expression: &str, field_name: &str) -> Resu
     let mut index = 0usize;
 
     while index < chars.len() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the loop condition `index < chars.len()` bounds this index; index only \
+                advances by fixed steps below"
+        )]
         let ch = chars[index];
         match ch {
             'A'..='Z' | 'a'..='z' | '_' => saw_identifier = true,
@@ -1487,14 +1492,18 @@ impl DbFluxServer {
                 .map_err(|error| format!("BEGIN failed: {error}"))?;
 
             for (operation_index, statement) in transactional_statements {
-                if let Err(execution_error) = connection.execute(&QueryRequest::new(statement))
-                    .inspect(|result| {
-                        #[cfg(feature = "telemetry")]
-                        observe_query_result(result);
-                        #[cfg(not(feature = "telemetry"))]
-                        let _result = result;
-                    })
-                {
+                let outcome = connection.execute(&QueryRequest::new(statement));
+                #[cfg(feature = "telemetry")]
+                if let Ok(result) = &outcome {
+                    observe_query_result(result);
+                }
+                if let Err(execution_error) = outcome {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "operation_index comes from enumerating all_stmts, which has \
+                            one entry per element of ops; operation_names has exactly one \
+                            entry per element of ops, so operation_index is in bounds"
+                    )]
                     let message = format!(
                         "ALTER TABLE aborted at operation {} ({}): {}",
                         operation_index, operation_names[operation_index], execution_error
@@ -1773,7 +1782,14 @@ impl DbFluxServer {
     ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        let sql = connection.build_drop_index_sql(index_name, table, if_exists);
+        let sql = connection
+            .build_drop_index_sql(index_name, table, if_exists)
+            .map_err(|error| {
+                format!(
+                    "Drop index is not supported by the {:?} driver: {error}",
+                    connection.kind()
+                )
+            })?;
         let sql_for_audit = sql.clone();
 
         let request = QueryRequest::new(&sql);
@@ -2379,6 +2395,7 @@ mod diff_parity_tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 
@@ -2596,11 +2613,16 @@ mod alter_table_integration_tests {
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(driver_registry),
             auth_provider_registry: Arc::new(HashMap::new()),
+            secret_provider_registry: Arc::new(HashMap::new()),
             driver_settings: Arc::new(HashMap::new()),
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
-            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            detached_processes: Arc::new(crate::state::DetachedProcessRegistry::new()),
             secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
             mcp_enabled_by_default: true,
+            profile_store_path: None,
         }
     }
 
@@ -2625,8 +2647,8 @@ mod alter_table_integration_tests {
         let cols: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(1))
             .expect("query_map")
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .expect("every row reads");
         cols
     }
 

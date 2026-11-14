@@ -20,6 +20,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::Copy),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.view_document").into(),
@@ -27,6 +29,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::Maximize2),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
             ]);
         }
@@ -39,6 +43,8 @@ pub(super) fn build_context_menu_items(
                     icon: None,
                     is_separator: true,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 });
             }
 
@@ -48,6 +54,8 @@ pub(super) fn build_context_menu_items(
                 icon: Some(AppIcon::Plus),
                 is_separator: false,
                 is_danger: false,
+                detail: None,
+                disabled: false,
             });
 
             if has_row_target {
@@ -61,6 +69,8 @@ pub(super) fn build_context_menu_items(
                         icon: Some(AppIcon::Copy),
                         is_separator: false,
                         is_danger: false,
+                        detail: None,
+                        disabled: false,
                     },
                     ContextMenuItem {
                         label: dbflux_i18n::t!("document.data.context_menu.item.delete_document")
@@ -69,6 +79,8 @@ pub(super) fn build_context_menu_items(
                         icon: Some(AppIcon::Delete),
                         is_separator: false,
                         is_danger: true,
+                        detail: None,
+                        disabled: false,
                     },
                 ]);
             }
@@ -77,13 +89,27 @@ pub(super) fn build_context_menu_items(
         return items;
     }
 
-    let mut items = vec![ContextMenuItem {
-        label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
-        action: Some(ContextMenuAction::Copy),
-        icon: Some(AppIcon::Copy),
-        is_separator: false,
-        is_danger: false,
-    }];
+    // The column name needs no row under the cursor, only the column.
+    let mut items = vec![
+        ContextMenuItem {
+            label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
+            action: Some(ContextMenuAction::Copy),
+            icon: Some(AppIcon::Copy),
+            is_separator: false,
+            is_danger: false,
+            detail: None,
+            disabled: false,
+        },
+        ContextMenuItem {
+            label: dbflux_i18n::t!("document.data.context_menu.item.copy_column_name").into(),
+            action: Some(ContextMenuAction::CopyColumnName),
+            icon: Some(AppIcon::Copy),
+            is_separator: false,
+            is_danger: false,
+            detail: None,
+            disabled: false,
+        },
+    ];
 
     // Offered for read-only results too — the panel is how a long JSON or XML
     // value gets read at all, whether or not it can be changed. It still needs
@@ -95,6 +121,8 @@ pub(super) fn build_context_menu_items(
             icon: Some(AppIcon::Eye),
             is_separator: false,
             is_danger: false,
+            detail: None,
+            disabled: false,
         });
     }
 
@@ -107,6 +135,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::Clipboard),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.edit").into(),
@@ -114,6 +144,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::Pencil),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.edit_in_modal").into(),
@@ -121,6 +153,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::Maximize2),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
                 ContextMenuItem {
                     label: "".into(),
@@ -128,6 +162,8 @@ pub(super) fn build_context_menu_items(
                     icon: None,
                     is_separator: true,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.set_default").into(),
@@ -135,6 +171,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::RotateCcw),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.set_null").into(),
@@ -142,6 +180,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::CircleX),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
                 ContextMenuItem {
                     label: "".into(),
@@ -149,6 +189,8 @@ pub(super) fn build_context_menu_items(
                     icon: None,
                     is_separator: true,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
             ]);
         }
@@ -159,6 +201,8 @@ pub(super) fn build_context_menu_items(
             icon: Some(AppIcon::Plus),
             is_separator: false,
             is_danger: false,
+            detail: None,
+            disabled: false,
         });
 
         if has_row_target {
@@ -169,6 +213,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::Info),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 });
             }
 
@@ -179,6 +225,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::Copy),
                     is_separator: false,
                     is_danger: false,
+                    detail: None,
+                    disabled: false,
                 },
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.delete_row").into(),
@@ -186,6 +234,8 @@ pub(super) fn build_context_menu_items(
                     icon: Some(AppIcon::Delete),
                     is_separator: false,
                     is_danger: true,
+                    detail: None,
+                    disabled: false,
                 },
             ]);
         }
@@ -198,6 +248,8 @@ pub(super) fn build_context_menu_items(
             icon: None,
             is_separator: true,
             is_danger: false,
+            detail: None,
+            disabled: false,
         });
         items.push(ContextMenuItem {
             label: dbflux_i18n::t!("document.data.context_menu.item.chart_this_query").into(),
@@ -205,6 +257,8 @@ pub(super) fn build_context_menu_items(
             icon: Some(AppIcon::ChartSpline),
             is_separator: false,
             is_danger: false,
+            detail: None,
+            disabled: false,
         });
     }
 

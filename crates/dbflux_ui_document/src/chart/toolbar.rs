@@ -216,6 +216,7 @@ pub fn render_chart_toolbar(
     )
     .icon(AppIcon::Sigma)
     .selected(is_stats_active)
+    .toggled(is_stats_active)
     .tab_stop(false)
     .on_click(move |_, window, cx| on_stats(window, cx));
 
@@ -253,7 +254,7 @@ pub fn render_chart_toolbar(
             row.child(div().flex_1()).child(
                 div()
                     .flex_shrink_0()
-                    .font_family(AppFonts::MONO)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(DocumentMetrics::TABLE_META_FONT)
                     .text_color(theme.muted_foreground)
                     .child(label),

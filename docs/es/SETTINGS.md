@@ -30,13 +30,71 @@ Integration](MCP_AI_INTEGRATION.md).
 
 ## General
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
+  <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de apariencia, editor y arranque">
+</picture>
+
+Guardar aplica los cambios al instante y los escribe en la base de datos de
+DBFlux (`dbflux.db`, o `dbflux-nightly.db` en un build Nightly sin
+**Use the stable database**) en segundo
+plano, así que una base de datos lenta u ocupada nunca congela la ventana. El
+mensaje de éxito aparece cuando ya están en disco. Si la escritura falla, un
+error lo indica y los cambios siguen aplicados hasta que DBFlux se cierre;
+guarda de nuevo para conservarlos.
+
 ### Apariencia
 
 | Setting      | Opciones                 | Default |
 | ------------ | ------------------------ | ------- |
-| **Theme**    | Dark, Mirage, Light      | Dark    |
-| **Style**    | Default, Compact         | Default |
+| **Theme**    | Follow system, Dark, Light | Dark  |
+| **Density**  | Default, Compact         | Default |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 | **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
+| **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
+| **Tamaño de fuente de la interfaz** | De 8 a 32 px, admite decimales | 13 |
+| **Fuente del editor** | Predeterminada (JetBrains Mono) o cualquier fuente instalada | Predeterminada |
+| **Tamaño de fuente del editor** | De 8 a 32 px, admite decimales | 13 |
+| **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
+| **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
+
+**Show scrollbars** decide cuándo aparecen las barras de desplazamiento de
+todas las ventanas: solo mientras el contenido se desplaza, mientras el puntero
+está sobre un área desplazable, o siempre. Se aplica a todas las ventanas
+abiertas en cuanto guardas.
+
+La barra horizontal de la cuadrícula de datos es la excepción: se muestra
+siempre, porque la mueve un desplazador aparte que nunca recibe eventos de la
+rueda y, de otro modo, quedaría oculta.
+
+Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
+guardas; no hace falta reiniciar. La fuente del editor también define el texto
+monoespaciado de la interfaz (metadatos, atajos de teclado, consola), y una
+fuente de interfaz personalizada también reemplaza la fuente expandida de las
+etiquetas de sección. Qué controla cada tamaño:
+
+- **Tamaño de fuente de la interfaz** escala todo el texto, las filas, los
+  controles y los íconos de la interfaz.
+- **Tamaño de fuente del editor** define el texto y la altura de línea del
+  editor de código, y el texto de la consola.
+- **Tamaño de fuente de la tabla de datos** define el texto de las celdas, la
+  altura de filas y encabezados, y el ancho automático de las columnas. Las
+  columnas que redimensionaste a mano conservan su ancho.
+
+`Ctrl+=` / `Cmd+=` y `Ctrl+-` / `Cmd+-` cambian los tres tamaños a la vez, 1 px
+cada uno, manteniendo sus proporciones, y `Ctrl+0` / `Cmd+0` restablece los
+valores predeterminados. Funcionan desde la ventana del espacio de trabajo,
+también están en la paleta de comandos y se pueden reasignar en
+[Keybindings](#keybindings). Un tamaño que ya está en 8 o 32 px se
+queda ahí mientras los demás siguen cambiando. Los nuevos tamaños se guardan
+como cualquier otra configuración, así que estos campos los muestran y se
+conservan al reiniciar.
+
+Las listas de fuentes tienen un campo de búsqueda, porque un sistema puede tener
+cientos de fuentes. Una fuente guardada que ya no está instalada sigue
+seleccionada, marcada como "(no instalada)", y DBFlux dibuja con la fuente
+predeterminada hasta que se vuelva a instalar; la tabla de datos recurre a la
+fuente del editor.
 
 La lista de idiomas se deriva de los catálogos de traducción incluidos con
 DBFlux: English aparece primero, seguido de los demás idiomas en un orden
@@ -54,13 +112,21 @@ y permanece en English por ahora.
 | ---------------------------- | ------- | -------- |
 | **Vim mode in editors**      | Off     | Edición modal en todos los editores de varias líneas (editor de código, editor de objetos, diálogos JSON, panel de valor, vista JSON y pipeline de colecciones; solo movimientos en los visores de solo lectura): modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de [modo Vim](KEYBOARD.md#modo-vim-opcional) en la referencia de teclado. |
 | **Leader key**               | Space   | La tecla que inicia las secuencias de líder de Vim en los modos Normal y Visual, como la líder y luego `a` para las acciones del panel: espacio, coma o barra invertida. Se aplica a los editores abiertos al guardar, y los atajos de líder que cambiaste en **Keybindings** la siguen. |
+| **Add an alias to table completions** | On | Al aceptar una tabla, vista o CTE del autocompletado SQL después de `FROM` o `JOIN` se inserta con un alias formado por las iniciales de su nombre: `access_control` pasa a ser `access_control ac` y `public.order_items` pasa a ser `public.order_items oi`. Un alias ya usado en la sentencia, una palabra reservada o el nombre de una tabla conocida recibe un número (`ac2`). No se añade alias cuando ya hay uno después del cursor, ni después de `INSERT INTO`. La tabla destino de `UPDATE` y `DELETE FROM` solo recibe alias en las bases de datos que lo aceptan ahí: PostgreSQL y DuckDB, y SQLite y Turso con `AS`. |
+| **Write the alias with AS** | Off | Inserta `access_control AS ac` en lugar de `access_control ac`. |
+
+### Cuadrícula de datos
+
+| Setting                      | Default | Qué hace |
+| ---------------------------- | ------- | -------- |
+| **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
 
 ### Inicio y sesión
 
 | Setting                        | Default | Qué hace                                                         |
 | ------------------------------ | ------- | ---------------------------------------------------------------- |
 | **Restore session on startup** | On      | Reabre las tabs que tenías abiertas la última vez.               |
-| **Reopen last connections**    | Off     | Reconecta a las conexiones que estaban activas.                  |
+| **Reopen last connections**    | Off     | Al iniciar, reconecta las conexiones que estaban abiertas al salir la última vez y las que usan las tabs restauradas. Funciona aunque la sesión no se restaure. |
 | **Default focus**              | Sidebar | Dónde cae el focus al iniciar (Sidebar o la última tab).         |
 | **Max history entries**        | 1000    | Tope del historial de queries (mínimo 10).                       |
 | **Auto-save interval (ms)**    | 2000    | Cada cuánto se auto-guarda el contenido del editor (mínimo 500). Un script respaldado por un archivo se escribe en ese archivo; el contenido sin título se conserva en la carpeta `sessions/`. |
@@ -71,9 +137,27 @@ y permanece en English por ahora.
 | --------------------------------------- | ------- | --------------------------------------------------------- |
 | **Default refresh policy**              | Manual  | Manual o Interval auto-refresh para las data views.       |
 | **Default refresh interval (seconds)**  | 5       | Intervalo usado cuando la policy es Interval (mínimo 1).  |
-| **Max concurrent background tasks**     | 8       | Tope de trabajo simultáneo en segundo plano (mínimo 1).   |
+| **Max concurrent background tasks**     | 8       | Tope de las tareas de conexión y de esquema (mínimo 1). Cuentan las conexiones, desconexiones, hooks de conexión, cambios de base de datos, cargas, actualizaciones y eliminaciones de esquema, y los escaneos key-value en curso. Al llegar al tope, una nueva conexión, cambio de base de datos, carga de esquema o de detalles de tabla, o página key-value se rechaza con un aviso hasta que termine una tarea en curso; no se encola. Las queries, las cargas del data grid, los exports, los dashboards y las mutaciones no cuentan ni tienen límite. |
 | **Pause auto-refresh on error**         | On      | Detiene el auto-refresh de una view después de que falla. |
 | **Auto-refresh only if tab is visible** | Off     | Se salta el refresh de las tabs que no estás mirando.     |
+
+### Notificaciones
+
+| Ajuste | Opciones | Predeterminado |
+|---------|---------|---------|
+| **Duración de los avisos** | 4 segundos, 8 segundos, 15 segundos, Mantener hasta descartarlos | 8 segundos |
+
+**Duración de los avisos** define cuánto permanece un aviso antes de cerrarse
+solo. Los avisos de éxito y de información se cierran al cabo de ese tiempo, y
+los de advertencia al doble. Un error, y un aviso con un botón de acción o una
+barra de progreso, permanece hasta que lo descartes. **Mantener hasta
+descartarlos** desactiva el cierre automático para todos los avisos. Pasar el
+puntero por encima de un aviso detiene su temporizador, que se reanuda cuando el
+puntero se va.
+
+Los avisos se apilan en la esquina superior derecha del área de documentos. Se
+muestran como máximo cuatro a la vez; los más antiguos se pliegan en una entrada
+*N más* que los expande o los descarta todos juntos.
 
 ### Seguridad de ejecución (confirmación de queries peligrosas)
 
@@ -93,19 +177,31 @@ cuántas filas devuelve una query ejecutada desde el editor. Es una opción de
 seguridad independiente de los tres controles de queries peligrosas de arriba.
 Acepta cualquier número entero desde 1 y no se puede poner en cero ni
 desactivar: al guardar cualquier otro valor se muestra un error y se conserva
-el límite anterior. DBFlux envía el límite al driver con cada query del editor
-en lugar de agregar un `LIMIT` al texto de la query, y muestra una advertencia
-cuando un resultado omitió filas. En un script con varias sentencias, el límite
-es un único presupuesto compartido por todos sus resultados, y todas las
-sentencias se ejecutan igual.
+el límite anterior. DBFlux envía el límite al driver
+en lugar de agregar un `LIMIT` al texto de la query. Cuando un resultado omitió
+filas, su pie dice "Primeras 10,000 filas cargadas" en lugar del número de
+filas. Para una sola sentencia que solo lee, el pie ofrece entonces **Contar
+filas**, que ejecuta la sentencia dentro de `SELECT COUNT(*)` sin traer sus
+filas y muestra "10,000/52,310 filas cargadas" (solo conexiones SQL), y
+**Cargar todas las filas**, que vuelve a ejecutar la sentencia sin el límite en
+la misma pestaña de resultados. Ambas están también en el menú de la tabla
+(`m`). En un script con varias sentencias, el límite es un único presupuesto
+compartido por todos sus resultados, y todas las sentencias se ejecutan igual.
 
-Los drivers que no pueden aplicar un límite de filas rechazan la query antes de
-ejecutarla en lugar de ignorar el límite. Por eso las queries del editor fallan
-con un error "Operation not supported" en MongoDB, Redis, Turso, InfluxDB, ClickHouse,
-Redshift, CloudWatch, drivers RPC externos y escrituras de DynamoDB (PartiQL
-`INSERT`/`UPDATE`/`DELETE` y los comandos put, update y delete). Cambiar el
-límite no cambia esto. El límite no agrega un timeout y no se aplica a scripts
-Lua, Python o Bash, hooks de conexión ni métricas.
+El límite solo llega a un driver cuyo `execute` lo aplica: PostgreSQL,
+MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
+ClickHouse, Redshift, CloudWatch y DynamoDB. Algunos todavía leen la respuesta
+completa antes de recortarla, y Redis solo limita las respuestas que se muestran
+como tabla; la página de cada driver detalla sus límites. Los drivers RPC
+externos reciben el límite cuando DBFlux y el driver hablan driver RPC 1.6 o
+posterior y el driver declara `REQUEST_ROW_LIMIT`; cualquier otro driver externo
+no recibe ninguno y la query se ejecuta sin límite. Un resultado sin límite muestra su recuento de filas
+completo, porque no se omitió ninguna, y su pie no ofrece ni Contar filas ni
+Cargar todas las filas; agrega un `LIMIT` o un `.limit()` a la sentencia cuando
+el resultado pueda ser grande. El límite no agrega un timeout y no se aplica a
+scripts Lua, Python o Bash, hooks de conexión ni métricas. La
+[consola](CONSOLE.md) envía el mismo límite a los drivers que pueden aplicarlo y
+ejecuta sus comandos sin él en los demás.
 
 ### Almacenamiento (solo builds Nightly)
 
@@ -220,6 +316,11 @@ con el filtro de contexto. Un contexto que hereda de otro (el Editor hereda de
 Global) también lista los bindings heredados que no sombrea. El keymap por
 defecto completo está documentado en [Referencia de teclado](KEYBOARD.md).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/keybindings-dark.webp">
+  <img src="../images/settings/keybindings-light.webp" alt="La sección Keybindings de la ventana de Settings, con los atajos globales y un lápiz para cambiar cada uno">
+</picture>
+
 **Cambiar un atajo.** Pulsa el lápiz de un binding, o selecciónalo y pulsa
 `Enter`, y luego pulsa las teclas nuevas. Un atajo puede ser una tecla con sus
 modificadores o una secuencia de hasta cuatro, como `g g` o `Ctrl+K Ctrl+S`:
@@ -248,7 +349,7 @@ Los nombres son los de los contextos que muestra el filtro de contexto
 los nombres de ventana `Workspace`, `SettingsWindow` y
 `ConnectionManagerWindow`, y los nombres de panel `ActivityRail`,
 `CommandSearch`, `SidebarPanel`, `CodeEditor`, `ResultPanel`, `RowInspector`,
-`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
+`KeyValueConsole`, `NativeConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
 `DashboardsPanel` y
 `SettingsSection`. Los valores son `vim_mode` (`normal`, `insert`, `replace`,
 `visual`, `visual_line`, `visual_block`, presente solo con la edición Vim

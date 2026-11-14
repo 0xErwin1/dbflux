@@ -18,15 +18,16 @@ pub enum StaticScanOutcome {
     Rejected { construct: &'static str },
 
     /// The scan proves the script cannot reach anything worse than a read —
-    /// no write/destructive method name appears anywhere in the source, and
-    /// no computed member access (`obj[expr]`) is present that could hide
+    /// no write/destructive method name or `$out`/`$merge` aggregation stage
+    /// appears anywhere in the source, and no computed member access (`obj[expr]`) is present that could hide
     /// one. No up-front confirmation is required.
     Read,
 
     /// The scan cannot prove the script is read-only. Either a write or
-    /// worse method name appears in the source (regardless of whether it
-    /// sits behind a loop or a conditional), or a computed member access is
-    /// present whose runtime value the scan cannot see. One up-front
+    /// worse method name or an output stage appears in the source
+    /// (regardless of whether it sits behind a loop or a conditional), or a
+    /// computed member access is present whose runtime value the scan cannot
+    /// see. One up-front
     /// confirmation is required before the script may run.
     RequiresConfirmation,
 }
@@ -53,6 +54,12 @@ const WRITE_OR_WORSE_METHOD_NAMES: &[&str] = &[
     "runCommand",
 ];
 
+/// Aggregation stages that write to a collection. `aggregate` itself is a
+/// read, so the scan must see the stage to flag the script; the engine
+/// classifies the dispatched pipeline the same way (see
+/// `engine::classify_operation`).
+const OUTPUT_STAGE_NAMES: &[&str] = &["$out", "$merge"];
+
 /// Constructs this engine rejects outright, in the order they are checked.
 const REJECTED_CONSTRUCTS: &[&str] = &["await", "require", "import"];
 
@@ -74,8 +81,22 @@ pub fn static_scan(source: &str) -> StaticScanOutcome {
 fn reachable_write_or_worse(source: &str) -> bool {
     WRITE_OR_WORSE_METHOD_NAMES
         .iter()
-        .any(|method| contains_word(source, method))
+        .chain(OUTPUT_STAGE_NAMES)
+        .any(|name| contains_word(source, name))
         || contains_computed_member_access(source)
+        || contains_computed_object_key(source)
+}
+
+/// True if `source` contains a `]` followed (ignoring whitespace) by `:` —
+/// the shape of a computed object key (`{ ["$mer" + "ge"]: "x" }`), which can
+/// build a stage name the word search cannot see. A ternary such as
+/// `c ? a[0] : b` also matches; over-flagging only costs one confirmation.
+fn contains_computed_object_key(source: &str) -> bool {
+    source.match_indices(']').any(|(index, _)| {
+        source
+            .get(index + 1..)
+            .is_some_and(|rest| rest.trim_start().starts_with(':'))
+    })
 }
 
 /// True if `source` contains `word` as a whole identifier (not as a
@@ -89,8 +110,16 @@ fn contains_word(source: &str, word: &str) -> bool {
     while let Some(relative_pos) = source.get(search_from..).and_then(|s| s.find(word)) {
         let absolute_pos = search_from + relative_pos;
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the index evaluates only when the `absolute_pos == 0` short-circuit is false, i.e. 1 <= absolute_pos < bytes.len() because a non-empty word matched at absolute_pos, so absolute_pos - 1 is in bounds"
+        )]
         let before_is_boundary = absolute_pos == 0 || !is_identifier_char(bytes[absolute_pos - 1]);
         let after_index = absolute_pos + word_len;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the `after_index >= bytes.len()` short-circuit is evaluated first, so the index only runs when after_index < bytes.len()"
+        )]
         let after_is_boundary =
             after_index >= bytes.len() || !is_identifier_char(bytes[after_index]);
 
@@ -120,6 +149,10 @@ fn contains_computed_member_access(source: &str) -> bool {
         let mut lookback = index;
         while lookback > 0 {
             lookback -= 1;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "lookback starts at index < bytes.len() and the `while lookback > 0` guard decrements it, so at the index 0 <= lookback < bytes.len()"
+            )]
             let candidate = bytes[lookback];
             if (candidate as char).is_whitespace() {
                 continue;
@@ -195,6 +228,35 @@ mod tests {
             static_scan("db.users.insertOne({name: 'a'});"),
             StaticScanOutcome::RequiresConfirmation
         );
+    }
+
+    #[test]
+    fn aggregate_output_stage_requires_confirmation() {
+        for script in [
+            r#"db.orders.aggregate([{ $merge: { into: "archive" } }]);"#,
+            r#"db.orders.aggregate([{ "$out": "archive" }]);"#,
+            r#"db.orders.aggregate([{ "$facet": { "a": [{ '$merge': "archive" }] } }]);"#,
+        ] {
+            assert_eq!(
+                static_scan(script),
+                StaticScanOutcome::RequiresConfirmation,
+                "{script}"
+            );
+        }
+    }
+
+    #[test]
+    fn computed_object_key_requires_confirmation() {
+        for script in [
+            r#"db.orders.aggregate([{ ["$mer" + "ge"]: "archive" }]);"#,
+            r#"db.orders.aggregate([{ "$match": {}, [key]: "archive" }]);"#,
+        ] {
+            assert_eq!(
+                static_scan(script),
+                StaticScanOutcome::RequiresConfirmation,
+                "{script}"
+            );
+        }
     }
 
     #[test]

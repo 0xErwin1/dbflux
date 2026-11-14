@@ -157,6 +157,19 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             }
         }
 
+        DbConfig::DuckDB {
+            path,
+            ducklake_catalog,
+            ducklake_data_path,
+            init_sql,
+        } => match field {
+            "path" => *path = val.into(),
+            "ducklake_catalog" => *ducklake_catalog = Some(val.to_string()),
+            "ducklake_data_path" => *ducklake_data_path = Some(val.to_string()),
+            "init_sql" => *init_sql = Some(val.to_string()),
+            _ => {}
+        },
+
         DbConfig::DynamoDB {
             region,
             profile,
@@ -266,6 +279,19 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             "access_key_id" => *access_key_id = Some(val.to_string()),
             "endpoint" => *endpoint = Some(val.to_string()),
             "path_style" => *path_style = val == "true",
+            _ => {}
+        },
+
+        DbConfig::AwsSecrets {
+            region,
+            profile,
+            access_key_id,
+            endpoint,
+        } => match field {
+            "region" => *region = val.to_string(),
+            "profile" => *profile = Some(val.to_string()),
+            "access_key_id" => *access_key_id = Some(val.to_string()),
+            "endpoint" => *endpoint = Some(val.to_string()),
             _ => {}
         },
 

@@ -24,9 +24,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
-use dbflux_core::{
-    CancelToken, Connection, DriverCapabilities, TaskId, TaskKind, TaskStatus, TaskTarget,
-};
+use dbflux_core::{CancelToken, Connection, DriverCapabilities, TaskId, TaskKind, TaskTarget};
 use dbflux_transfer::import::{
     ImportOptions, ImportOutcome, ImportTablePlan, ImportedTable, run_import,
 };
@@ -38,6 +36,8 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use uuid::Uuid;
+
+use crate::progress_forwarding::spawn_task_progress_forwarder;
 
 pub use column_mapping::TableImportConfig;
 use column_mapping::mapping_mode_options;
@@ -608,49 +608,17 @@ impl ImportWizard {
         let app_state = self.app_state.clone();
         let progress = Arc::clone(&self.progress);
         let ticker_progress = Arc::clone(&self.progress);
-        let ticker_app_state = app_state.clone();
 
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(150))
-                    .await;
-
-                let still_running = cx.update(|cx| {
-                    ticker_app_state.update(cx, |state, cx| {
-                        let Some(snapshot) = state.tasks().get(task_id) else {
-                            return false;
-                        };
-                        if snapshot.status != TaskStatus::Running {
-                            return false;
-                        }
-
-                        let (rows_done, estimated_total) = *ticker_progress
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        if let Some(total) = estimated_total
-                            && total > 0
-                        {
-                            let fraction = (rows_done as f32 / total as f32).clamp(0.0, 1.0);
-                            state.tasks_mut().update_progress(task_id, fraction);
-                            cx.notify();
-                        }
-
-                        true
-                    })
-                });
-
-                if !still_running {
-                    break;
-                }
-
-                // The app-state notify above only refreshes the Tasks panel;
-                // re-render the wizard so its own row counter and progress
-                // bar advance while the run is in flight.
-                this.update(cx, |_this, cx| cx.notify()).ok();
-            }
-        })
-        .detach();
+        spawn_task_progress_forwarder(
+            app_state.clone(),
+            task_id,
+            move || {
+                *ticker_progress
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+            },
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
             let import_result = cx

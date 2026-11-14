@@ -16,18 +16,17 @@ use dbflux_core::{
     DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest, DropIndexRequest,
     ExecutionSourceContext, ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues,
     FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection, LogErr,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field_file_path,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_update_template, render_semantic_filter_sql, strip_leading_comments,
-    validate_ddl_fragment,
+    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
+    TransferFamily, Value, ViewInfo, WhereOperator, field_file_path, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
+    render_semantic_filter_sql, strip_leading_comments, validate_ddl_fragment,
 };
-use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
+use rusqlite::{Connection as RusqliteConnection, InterruptHandle, OptionalExtension};
 
 use crate::table_rebuild::SqliteTableAlterPlanner;
 
@@ -59,6 +58,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::VIEWS.bits()
+            | DriverCapabilities::NATIVE_CONSOLE.bits()
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits()
             | DriverCapabilities::INDEXES.bits()
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
@@ -88,6 +89,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_schemas: false,
         default_schema: None,
         case_sensitive_identifiers: true,
+        misreads_unknown_quoted_identifiers: true,
     }),
     query: Some(QueryCapabilities {
         pagination: vec![PaginationStyle::Offset],
@@ -210,6 +212,10 @@ impl SqlDialect for SqliteDialect {
 
     fn placeholder_style(&self) -> PlaceholderStyle {
         PlaceholderStyle::QuestionMark
+    }
+
+    fn mutation_target_alias(&self) -> dbflux_core::MutationTargetAlias {
+        dbflux_core::MutationTargetAlias::RequiresAs
     }
 
     fn build_upsert_statement(
@@ -712,7 +718,8 @@ fn plan_sqlite_table_browse(
 ) -> Result<SemanticPlan, DbError> {
     let sql = if let Some(filter) = request.semantic_filter.as_ref() {
         let mut sql = format!(
-            "SELECT * FROM {}",
+            "SELECT {} FROM {}",
+            request.select_list_with(&SQLITE_DIALECT),
             request.table.quoted_with(&SQLITE_DIALECT)
         );
         let where_clause = render_semantic_filter_sql(filter, &SQLITE_DIALECT)?;
@@ -923,6 +930,17 @@ impl Connection for SqliteConnection {
             #[cfg(test)]
             run_after_execute_lock_hook();
 
+            if req.read_only.is_required() {
+                return execute_query_only(
+                    &conn,
+                    &req.sql,
+                    req.limit,
+                    &bounded_statements,
+                    start,
+                    &self.cancelled,
+                );
+            }
+
             match req.limit {
                 Some(limit) if bounded_statements.len() > 1 => {
                     execute_bounded_batch(&conn, &bounded_statements, limit, start, &self.cancelled)
@@ -992,10 +1010,15 @@ impl Connection for SqliteConnection {
 
         let conn = self.lock_connection()?;
 
-        let columns = self.get_columns(&conn, table)?;
-        let indexes = self.get_indexes(&conn, table)?;
-        let foreign_keys = self.get_foreign_keys(&conn, table)?;
-        let constraints = self.get_constraints(&conn, table)?;
+        let resolved = resolve_relation_name(&conn, table)?;
+        let (columns, unlisted_columns) = self.get_columns(&conn, &resolved)?;
+        let indexes = self.get_indexes(&conn, &resolved)?;
+        let foreign_keys = self.get_foreign_keys(&conn, &resolved)?;
+        let constraints = self.get_constraints(&conn, &resolved)?;
+        let pseudo_columns = unlisted_columns
+            .into_iter()
+            .chain(rowid_pseudo_columns(&conn, &resolved))
+            .collect();
 
         log::debug!(
             "[SCHEMA] Table {}: {} columns, {} indexes, {} FKs, {} constraints",
@@ -1008,7 +1031,7 @@ impl Connection for SqliteConnection {
 
         Ok(TableInfo {
             name: table.to_string(),
-            schema: _schema.map(String::from),
+            schema: None,
             columns: Some(columns),
             indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
@@ -1017,6 +1040,7 @@ impl Connection for SqliteConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns,
         })
     }
 
@@ -1081,6 +1105,63 @@ impl Connection for SqliteConnection {
             .collect();
 
         Ok(Some(map))
+    }
+
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values. Honors `projection`; an empty projection list
+    /// falls back to `*` rather than emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        _database: &str,
+        _schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[dbflux_core::Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let select_list = match projection {
+            Some(columns) if !columns.is_empty() => columns
+                .iter()
+                .map(|column| SQLITE_DIALECT.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => "*".to_string(),
+        };
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let literals = chunk
+                .iter()
+                .map(|value| SQLITE_DIALECT.value_to_literal(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {} FROM {} WHERE {} IN ({})",
+                select_list,
+                SQLITE_DIALECT.quote_identifier(table),
+                SQLITE_DIALECT.quote_identifier(pk_column),
+                literals,
+            );
+
+            let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(col, val)| (col.name.clone(), val))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
     }
 
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
@@ -1304,185 +1385,9 @@ impl Connection for SqliteConnection {
         plan_sqlite_semantic_request(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let cols = if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| SQLITE_DIALECT.quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        if !order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let order_parts = order_by
-                .iter()
-                .map(|col| {
-                    let dir = match col.direction {
-                        SortDirection::Ascending => "ASC",
-                        SortDirection::Descending => "DESC",
-                    };
-                    format!("{} {}", col.column.quoted_with(&SQLITE_DIALECT), dir)
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&order_parts);
-        }
-
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
-        sql
-    }
-
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| SQLITE_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            quoted_table, cols, placeholders_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-
-        let set_parts: Vec<String> = set
-            .iter()
-            .map(|(col, _)| format!("{} = ?", SQLITE_DIALECT.quote_identifier(col)))
-            .collect();
-        let set_str = set_parts.join(", ");
-
-        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
-        if let Some(f) = filter {
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let mut sql = format!("DELETE FROM {}", quoted_table);
-        let mut params = Vec::new();
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-            collect_filter_values(f, &mut params);
-        }
-
-        (sql, params)
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let cols = columns
-            .iter()
-            .map(|c| SQLITE_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let conflict_cols = conflict_columns
-            .iter()
-            .map(|c| SQLITE_DIALECT.quote_identifier(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let update_parts: Vec<String> = update_columns
-            .iter()
-            .map(|col| format!("{} = ?", SQLITE_DIALECT.quote_identifier(col)))
-            .collect();
-        let update_str = update_parts.join(", ");
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
-            quoted_table, cols, placeholders_str, conflict_cols, update_str
-        );
-
-        (sql, values.to_vec())
-    }
-
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
-
-        if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
-            if !where_clause.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&where_clause);
-            }
-        }
-
-        sql
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
-        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
-        format!("DELETE FROM {}", quoted_table)
+        Ok(format!("DELETE FROM {}", quoted_table))
     }
 
     fn build_drop_index_sql(
@@ -1490,25 +1395,21 @@ impl Connection for SqliteConnection {
         index_name: &str,
         _table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         let quoted_index = SQLITE_DIALECT.quote_identifier(index_name);
         if if_exists {
-            format!("DROP INDEX IF EXISTS {}", quoted_index)
+            Ok(format!("DROP INDEX IF EXISTS {}", quoted_index))
         } else {
-            format!("DROP INDEX {}", quoted_index)
+            Ok(format!("DROP INDEX {}", quoted_index))
         }
     }
 
-    fn version_query(&self) -> &'static str {
-        "SELECT sqlite_version()"
+    fn version_query(&self) -> Result<&'static str, DbError> {
+        Ok("SELECT sqlite_version()")
     }
 
     fn supports_transactional_ddl(&self) -> bool {
         true
-    }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        Ok(translate_filter_to_sql(filter))
     }
 
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
@@ -1583,8 +1484,8 @@ impl SqliteConnection {
         let table_names: Vec<String> = stmt
             .query_map([], |row| row.get(0))
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let tables = table_names
             .into_iter()
@@ -1599,57 +1500,67 @@ impl SqliteConnection {
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             })
             .collect();
 
         Ok(tables)
     }
 
+    /// Reads the columns of a table or view. Returns the columns
+    /// `PRAGMA table_info` lists, which the UI shows, and the names of the
+    /// other columns the engine resolves: hidden columns of virtual tables
+    /// and generated columns.
+    ///
+    /// `PRAGMA table_xinfo` lists both, with `hidden` 0 for an ordinary
+    /// column, 1 for a hidden one and 2 or 3 for a generated one
+    /// (<https://www.sqlite.org/pragma.html#pragma_table_xinfo>).
     fn get_columns(
         &self,
         conn: &RusqliteConnection,
         table: &str,
-    ) -> Result<Vec<ColumnInfo>, DbError> {
-        // First check if the table exists
-        let table_exists: bool = conn
-            .query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
-                [table],
-                |_row| Ok(()),
-            )
-            .is_ok();
-
-        if !table_exists {
-            return Err(DbError::ObjectNotFound(
-                format!("Table '{}' not found", table).into(),
-            ));
-        }
-
+    ) -> Result<(Vec<ColumnInfo>, Vec<String>), DbError> {
         let mut stmt = conn
-            .prepare(&format!("PRAGMA table_info('{}')", table))
+            .prepare(
+                "SELECT name, type, \"notnull\", dflt_value, pk, hidden \
+                 FROM pragma_table_xinfo(?1)",
+            )
             .map_err(|e| format_sqlite_query_error(&e))?;
 
-        let columns: Vec<ColumnInfo> = stmt
-            .query_map([], |row| {
-                let notnull: i32 = row.get(3).unwrap_or(1);
-                let pk: i32 = row.get(5).unwrap_or(0);
-                Ok(ColumnInfo {
-                    name: row.get(1)?,
-                    type_name: row.get::<_, String>(2).unwrap_or_default(),
+        let rows: Vec<(ColumnInfo, i64)> = stmt
+            .query_map([table], |row| {
+                let notnull: i32 = row.get(2).unwrap_or(1);
+                let pk: i32 = row.get(4).unwrap_or(0);
+                let column = ColumnInfo {
+                    name: row.get(0)?,
+                    type_name: row.get::<_, String>(1).unwrap_or_default(),
                     // SQLite reports notnull=0 for INTEGER PRIMARY KEY columns,
                     // but they are implicitly NOT NULL. Columns with pk > 0 are NOT NULL.
                     nullable: notnull == 0 && pk == 0,
                     // Any column with pk > 0 is part of a primary key (composite PKs have pk=1,2,3,...)
                     is_primary_key: pk > 0,
-                    default_value: row.get::<_, Option<String>>(4).unwrap_or(None),
+                    default_value: row.get::<_, Option<String>>(3).unwrap_or(None),
                     enum_values: None,
-                })
+                };
+
+                Ok((column, row.get::<_, i64>(5).unwrap_or(0)))
             })
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
-        Ok(columns)
+        let mut columns = Vec::new();
+        let mut unlisted = Vec::new();
+
+        for (column, hidden) in rows {
+            if hidden == 0 {
+                columns.push(column);
+            } else {
+                unlisted.push(column.name);
+            }
+        }
+
+        Ok((columns, unlisted))
     }
 
     fn get_indexes(
@@ -1658,26 +1569,18 @@ impl SqliteConnection {
         table: &str,
     ) -> Result<Vec<IndexInfo>, DbError> {
         let mut stmt = conn
-            .prepare(&format!("PRAGMA index_list('{}')", table))
+            .prepare("SELECT seq, name, \"unique\", origin FROM pragma_index_list(?1)")
             .map_err(|e| format_sqlite_query_error(&e))?;
 
         let index_list: Vec<(String, bool)> = stmt
-            .query_map([], |row| Ok((row.get(1)?, row.get::<_, i32>(2)? == 1)))
+            .query_map([table], |row| Ok((row.get(1)?, row.get::<_, i32>(2)? == 1)))
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let mut indexes = Vec::new();
         for (index_name, is_unique) in index_list {
-            let mut col_stmt = conn
-                .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                .map_err(|e| format_sqlite_query_error(&e))?;
-
-            let columns: Vec<String> = col_stmt
-                .query_map([], |row| row.get(2))
-                .map_err(|e| format_sqlite_query_error(&e))?
-                .filter_map(|r| r.ok())
-                .collect();
+            let columns = index_columns(conn, &index_name)?;
 
             indexes.push(IndexInfo {
                 name: index_name,
@@ -1703,8 +1606,8 @@ impl SqliteConnection {
                 })
             })
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         Ok(views)
     }
@@ -1714,25 +1617,7 @@ impl SqliteConnection {
         conn: &RusqliteConnection,
         table: &str,
     ) -> Result<Vec<ForeignKeyInfo>, DbError> {
-        let mut stmt = conn
-            .prepare(&format!("PRAGMA foreign_key_list('{}')", table))
-            .map_err(|e| format_sqlite_query_error(&e))?;
-
-        // PRAGMA foreign_key_list returns: id, seq, table, from, to, on_update, on_delete, match
-        let fk_rows: Vec<(i32, String, String, String, String, String)> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get(0)?,              // id
-                    row.get::<_, String>(2)?, // table (referenced)
-                    row.get::<_, String>(3)?, // from (local column)
-                    row.get::<_, String>(4)?, // to (referenced column)
-                    row.get::<_, String>(5)?, // on_update
-                    row.get::<_, String>(6)?, // on_delete
-                ))
-            })
-            .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+        let fk_rows = foreign_key_rows(conn, table)?;
 
         // Group by FK id
         let mut fk_map: HashMap<i32, ForeignKeyInfo> = HashMap::new();
@@ -1772,7 +1657,11 @@ impl SqliteConnection {
             .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
             .map_err(|e| format_sqlite_query_error(&e))?;
 
-        let sql: Option<String> = stmt.query_row([table], |row| row.get(0)).ok();
+        let sql: Option<String> = stmt
+            .query_row([table], |row| row.get(0))
+            .optional()
+            .map_err(|e| format_sqlite_query_error(&e))?
+            .flatten();
 
         let mut constraints = Vec::new();
 
@@ -1811,31 +1700,26 @@ impl SqliteConnection {
 
         // Get UNIQUE constraints from indexes
         let mut idx_stmt = conn
-            .prepare(&format!("PRAGMA index_list('{}')", table))
+            .prepare("SELECT seq, name, \"unique\", origin FROM pragma_index_list(?1)")
             .map_err(|e| format_sqlite_query_error(&e))?;
 
         let unique_indexes: Vec<(String, String)> = idx_stmt
-            .query_map([], |row| {
+            .query_map([table], |row| {
                 Ok((
                     row.get::<_, String>(1)?, // name
                     row.get::<_, String>(3)?, // origin (c=CREATE INDEX, u=UNIQUE, pk=PRIMARY KEY)
                 ))
             })
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .filter(|(_, origin)| origin == "u") // Only UNIQUE constraints, not indexes
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
-        for (index_name, _) in unique_indexes {
-            let mut col_stmt = conn
-                .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                .map_err(|e| format_sqlite_query_error(&e))?;
-
-            let columns: Vec<String> = col_stmt
-                .query_map([], |row| row.get(2))
-                .map_err(|e| format_sqlite_query_error(&e))?
-                .filter_map(|r| r.ok())
-                .collect();
+        // Only UNIQUE constraints (origin `u`), not plain indexes or the primary key.
+        for (index_name, _) in unique_indexes
+            .into_iter()
+            .filter(|(_, origin)| origin == "u")
+        {
+            let columns = index_columns(conn, &index_name)?;
 
             constraints.push(ConstraintInfo {
                 name: index_name,
@@ -1857,18 +1741,18 @@ impl SqliteConnection {
         let table_names: Vec<String> = tables_stmt
             .query_map([], |row| row.get(0))
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let mut all_indexes = Vec::new();
 
         for table_name in table_names {
             let mut stmt = conn
-                .prepare(&format!("PRAGMA index_list('{}')", table_name))
+                .prepare("SELECT seq, name, \"unique\", origin FROM pragma_index_list(?1)")
                 .map_err(|e| format_sqlite_query_error(&e))?;
 
             let index_list: Vec<(String, bool, String)> = stmt
-                .query_map([], |row| {
+                .query_map([&table_name], |row| {
                     Ok((
                         row.get::<_, String>(1)?,   // name
                         row.get::<_, i32>(2)? == 1, // unique
@@ -1876,19 +1760,11 @@ impl SqliteConnection {
                     ))
                 })
                 .map_err(|e| format_sqlite_query_error(&e))?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|e| format_sqlite_query_error(&e))?;
 
             for (index_name, is_unique, origin) in index_list {
-                let mut col_stmt = conn
-                    .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                    .map_err(|e| format_sqlite_query_error(&e))?;
-
-                let columns: Vec<String> = col_stmt
-                    .query_map([], |row| row.get(2))
-                    .map_err(|e| format_sqlite_query_error(&e))?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                let columns = index_columns(conn, &index_name)?;
 
                 all_indexes.push(SchemaIndexInfo {
                     name: index_name,
@@ -1915,30 +1791,13 @@ impl SqliteConnection {
         let table_names: Vec<String> = tables_stmt
             .query_map([], |row| row.get(0))
             .map_err(|e| format_sqlite_query_error(&e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let mut all_fks = Vec::new();
 
         for table_name in table_names {
-            let mut stmt = conn
-                .prepare(&format!("PRAGMA foreign_key_list('{}')", table_name))
-                .map_err(|e| format_sqlite_query_error(&e))?;
-
-            let fk_rows: Vec<(i32, String, String, String, String, String)> = stmt
-                .query_map([], |row| {
-                    Ok((
-                        row.get(0)?,              // id
-                        row.get::<_, String>(2)?, // table (referenced)
-                        row.get::<_, String>(3)?, // from (local column)
-                        row.get::<_, String>(4)?, // to (referenced column)
-                        row.get::<_, String>(5)?, // on_update
-                        row.get::<_, String>(6)?, // on_delete
-                    ))
-                })
-                .map_err(|e| format_sqlite_query_error(&e))?
-                .filter_map(|r| r.ok())
-                .collect();
+            let fk_rows = foreign_key_rows(conn, &table_name)?;
 
             // Group by FK id
             let mut fk_map: HashMap<i32, SchemaForeignKeyInfo> = HashMap::new();
@@ -2012,6 +1871,119 @@ fn execute_sql(
     }
 
     Ok(primary)
+}
+
+/// Runs a request that requires read-only enforcement under `PRAGMA
+/// query_only`, which makes SQLite refuse every write with `SQLITE_READONLY`.
+///
+/// `query_only` is chosen over a per-statement `sqlite3_stmt_readonly` check
+/// because the engine enforces it for everything a statement reaches,
+/// triggers and attached databases included. Its one escape is a later
+/// statement that turns the pragma off, so the request runs one statement at a
+/// time and the pragma is checked before each one. The previous value is
+/// restored on every exit path.
+///
+/// A transaction the user already opened is refused rather than joined, so
+/// the request never runs where the user expects their own work to continue.
+/// A transaction the request opens itself cannot hold a write and is rolled
+/// back before returning.
+fn execute_query_only(
+    conn: &RusqliteConnection,
+    sql: &str,
+    limit: Option<u32>,
+    bounded_statements: &[&str],
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    if !conn.is_autocommit() {
+        return Err(DbError::NotSupported(
+            "SQLite: read-only execution cannot run inside an open transaction; end it with COMMIT or ROLLBACK first. The request was rejected before execution".to_string(),
+        ));
+    }
+
+    let query_only_before = read_query_only(conn)?;
+    set_query_only(conn, true)?;
+
+    let outcome =
+        execute_query_only_statements(conn, sql, limit, bounded_statements, start, cancelled);
+
+    let rollback = if conn.is_autocommit() {
+        Ok(())
+    } else {
+        conn.execute_batch("ROLLBACK")
+            .map_err(|error| format_sqlite_query_error(&error))
+    };
+    let restore = set_query_only(conn, query_only_before);
+
+    let result = outcome?;
+    rollback?;
+    restore?;
+
+    Ok(result)
+}
+
+/// Runs the statements of a query-only request in order, checking before each
+/// one that `query_only` is still on. Bounded requests reuse the statements
+/// the SQLite lexer already split; unbounded ones follow `execute_sql`.
+fn execute_query_only_statements(
+    conn: &RusqliteConnection,
+    sql: &str,
+    limit: Option<u32>,
+    bounded_statements: &[&str],
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let statements: Vec<String> = match limit {
+        Some(_) if bounded_statements.len() > 1 => bounded_statements
+            .iter()
+            .map(|statement| statement.to_string())
+            .collect(),
+        Some(_) => vec![sql.to_string()],
+        None => {
+            let split = QueryLanguage::Sql.split_statements(sql);
+            if split.len() <= 1 {
+                vec![sql.to_string()]
+            } else {
+                split
+            }
+        }
+    };
+
+    let mut remaining_rows = limit;
+    let mut primary: Option<QueryResult> = None;
+
+    for statement in &statements {
+        if !read_query_only(conn)? {
+            return Err(DbError::NotSupported(
+                "SQLite: a read-only request cannot turn off PRAGMA query_only; the remaining statements were not run".to_string(),
+            ));
+        }
+
+        let result = execute_one_statement(conn, statement, remaining_rows, start, cancelled)?;
+
+        if let Some(rows) = remaining_rows.as_mut() {
+            let retained_rows = u32::try_from(result.rows.len()).unwrap_or(u32::MAX);
+            *rows = rows.saturating_sub(retained_rows);
+        }
+
+        match primary.as_mut() {
+            Some(primary) => primary.push_additional_result(result),
+            None => primary = Some(result),
+        }
+    }
+
+    primary.ok_or_else(|| DbError::query_failed("SQLite: the request held no statements"))
+}
+
+fn read_query_only(conn: &RusqliteConnection) -> Result<bool, DbError> {
+    conn.query_row("PRAGMA query_only", [], |row| row.get(0))
+        .map_err(|error| format_sqlite_query_error(&error))
+}
+
+fn set_query_only(conn: &RusqliteConnection, enabled: bool) -> Result<(), DbError> {
+    let value = if enabled { "ON" } else { "OFF" };
+    conn.execute_batch(&format!("PRAGMA query_only = {value}"))
+        .map_err(|error| format_sqlite_query_error(&error))
 }
 
 /// Settles the transaction a failed execution left open on the shared connection.
@@ -2366,7 +2338,7 @@ fn format_sqlite_query_error(e: &rusqlite::Error) -> DbError {
 
 fn sqlite_quote_ident(ident: &str) -> String {
     debug_assert!(!ident.is_empty(), "identifier cannot be empty");
-    format!("\"{}\"", ident.replace('"', "\"\""))
+    dbflux_core::quote_double_quoted_identifier(ident)
 }
 
 /// Convert a Value to a safe SQLite literal string.
@@ -2469,49 +2441,6 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
     sql
 }
 
-/// Translate a Value filter expression to a SQL WHERE clause string for SQLite.
-fn translate_filter_to_sql(filter: &Value) -> String {
-    match filter {
-        Value::Document(doc) => {
-            let mut parts = Vec::new();
-            for (key, value) in doc {
-                let quoted_col = SQLITE_DIALECT.quote_identifier(key);
-                let expr = match value {
-                    Value::Null => format!("{} IS NULL", quoted_col),
-                    Value::Text(s) => format!("{} = '{}'", quoted_col, sqlite_escape_string(s)),
-                    Value::Int(i) => format!("{} = {}", quoted_col, i),
-                    Value::Bool(b) => format!("{} = {}", quoted_col, if *b { "1" } else { "0" }),
-                    Value::Float(f) => format!("{} = {}", quoted_col, f),
-                    _ => format!("{} = {}", quoted_col, value_to_sqlite_literal(value)),
-                };
-                parts.push(expr);
-            }
-            if parts.is_empty() {
-                String::new()
-            } else {
-                parts.join(" AND ")
-            }
-        }
-        Value::Text(s) => {
-            // Treat a plain text filter as a raw SQL expression (for advanced users)
-            s.clone()
-        }
-        _ => String::new(),
-    }
-}
-
-/// Collect all Value items from a filter expression into a vector for parameterized queries.
-fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    if let Value::Document(doc) = filter {
-        for value in doc.values() {
-            match value {
-                Value::Null => {}
-                _ => params.push(value.clone()),
-            }
-        }
-    }
-}
-
 /// Map a SQLite declared-type string to a `ColumnKind` using SQLite's type-affinity rules.
 ///
 /// The mapping is case-insensitive substring matching following the SQLite type affinity
@@ -2540,6 +2469,12 @@ pub(crate) fn kind_from_decltype(decl: Option<&str>) -> ColumnKind {
         || decl.contains("DECIMAL")
     {
         return ColumnKind::Float;
+    }
+
+    // A time of day has no absolute instant, so the chart engine cannot plot
+    // it; the other drivers report it as Unknown too.
+    if decl.starts_with("TIME") && !decl.starts_with("TIMESTAMP") {
+        return ColumnKind::Unknown;
     }
 
     if decl.contains("DATE") || decl.contains("TIME") || decl.contains("STAMP") {
@@ -2592,8 +2527,8 @@ pub fn fetch_dependents(
     let rows: Vec<(String, String)> = stmt
         .query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(|e| DbError::QueryFailed(format!("fetch_dependents query: {}", e).into()))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents query: {}", e).into()))?;
 
     for (obj_type, obj_name) in rows {
         let kind = match obj_type.as_str() {
@@ -2619,8 +2554,10 @@ pub fn fetch_dependents(
             .map_err(|e| {
                 DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
             })?
-            .filter_map(|r| r.ok())
-            .collect()
+            .collect::<Result<_, _>>()
+            .map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
+            })?
     };
 
     for child_table in all_tables {
@@ -2791,10 +2728,200 @@ mod cancel_tests {
     }
 }
 
+/// Names SQLite resolves on every rowid table although `PRAGMA table_info`
+/// does not list them: <https://www.sqlite.org/lang_createtable.html#rowid>.
+const ROWID_NAMES: [&str; 3] = ["rowid", "oid", "_rowid_"];
+
+/// The rowid names when the engine accepts them on `table`: ordinary rowid
+/// tables and the virtual tables whose module has a rowid, such as FTS5 and
+/// R*Tree. A `WITHOUT ROWID` table and a view refuse them.
+///
+/// Asks the engine itself by preparing a statement that names them, unquoted
+/// so the double-quoted string fallback cannot apply. Preparing does not run
+/// anything. A refused statement declares nothing, so the column check
+/// refuses the names as it would without this metadata.
+fn rowid_pseudo_columns(conn: &RusqliteConnection, table: &str) -> Vec<String> {
+    let probe = format!(
+        "SELECT {} FROM \"{}\"",
+        ROWID_NAMES.join(", "),
+        table.replace('"', "\"\"")
+    );
+
+    match conn.prepare(&probe) {
+        Ok(_) => ROWID_NAMES.iter().map(|name| name.to_string()).collect(),
+        Err(error) => {
+            log::debug!("[SCHEMA] '{table}' has no rowid: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// The stored name of the table or view `table` names. SQLite resolves table
+/// names with ASCII case folding, which `COLLATE NOCASE` applies.
+/// One row of `PRAGMA foreign_key_list`: the constraint id, the referenced
+/// table, the local column, the referenced column, and the ON UPDATE and
+/// ON DELETE actions.
+type ForeignKeyRow = (i32, String, String, String, String, String);
+
+/// Reads the foreign key columns of `table`.
+///
+/// A reference that names only the parent table (`REFERENCES parents`)
+/// targets the parent's primary key, and the pragma reports its target
+/// column as NULL, so the primary key columns are filled in here
+/// (<https://www.sqlite.org/foreignkeys.html#fk_indexes>).
+fn foreign_key_rows(conn: &RusqliteConnection, table: &str) -> Result<Vec<ForeignKeyRow>, DbError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete \
+             FROM pragma_foreign_key_list(?1) ORDER BY id, seq",
+        )
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    struct PragmaRow {
+        id: i32,
+        seq: i64,
+        referenced_table: String,
+        from: String,
+        to: Option<String>,
+        on_update: String,
+        on_delete: String,
+    }
+
+    let rows: Vec<PragmaRow> = stmt
+        .query_map([table], |row| {
+            Ok(PragmaRow {
+                id: row.get(0)?,
+                seq: row.get(1)?,
+                referenced_table: row.get(2)?,
+                from: row.get(3)?,
+                to: row.get(4)?,
+                on_update: row.get(5)?,
+                on_delete: row.get(6)?,
+            })
+        })
+        .map_err(|e| format_sqlite_query_error(&e))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    let mut primary_keys: HashMap<String, Vec<String>> = HashMap::new();
+    let mut foreign_keys = Vec::with_capacity(rows.len());
+    let mut unresolved_ids = std::collections::HashSet::new();
+    let mut implicit_key_lengths: HashMap<i32, (usize, usize)> = HashMap::new();
+
+    for PragmaRow {
+        id,
+        seq,
+        referenced_table,
+        from,
+        to,
+        on_update,
+        on_delete,
+    } in rows
+    {
+        let to = match to {
+            Some(to) => to,
+            None => {
+                if !primary_keys.contains_key(&referenced_table) {
+                    let columns = primary_key_columns(conn, &referenced_table)?;
+                    primary_keys.insert(referenced_table.clone(), columns);
+                }
+
+                let parent_key = primary_keys.get(&referenced_table);
+                let lengths = implicit_key_lengths
+                    .entry(id)
+                    .or_insert((0, parent_key.map_or(0, Vec::len)));
+                lengths.0 += 1;
+
+                match parent_key
+                    .zip(usize::try_from(seq).ok())
+                    .and_then(|(columns, position)| columns.get(position))
+                {
+                    Some(column) => column.clone(),
+                    None => {
+                        // SQLite accepts this schema and reports a mismatch only
+                        // when the key is used. Listing the other columns would
+                        // present a narrower key than the one declared, so the
+                        // whole constraint is left out rather than failing the
+                        // schema read.
+                        log::warn!(
+                            "[SCHEMA] Foreign key {id} of {table} references {referenced_table}, \
+                             which has no primary key column at position {seq}"
+                        );
+                        unresolved_ids.insert(id);
+                        continue;
+                    }
+                }
+            }
+        };
+
+        foreign_keys.push((id, referenced_table, from, to, on_update, on_delete));
+    }
+
+    // A reference with fewer columns than the parent key is a mismatch too.
+    for (id, (child_columns, parent_columns)) in implicit_key_lengths {
+        if child_columns != parent_columns && unresolved_ids.insert(id) {
+            log::warn!(
+                "[SCHEMA] Foreign key {id} of {table} lists {child_columns} columns, \
+                 but the primary key it references has {parent_columns}"
+            );
+        }
+    }
+
+    foreign_keys.retain(|(id, ..)| !unresolved_ids.contains(id));
+
+    Ok(foreign_keys)
+}
+
+fn primary_key_columns(conn: &RusqliteConnection, table: &str) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT name FROM pragma_table_info(?1) WHERE pk > 0 ORDER BY pk")
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    stmt.query_map([table], |row| row.get(0))
+        .map_err(|e| format_sqlite_query_error(&e))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format_sqlite_query_error(&e))
+}
+
+/// Reads the named columns of an index.
+///
+/// `PRAGMA index_info` reports an expression column such as `lower(label)`
+/// with a NULL name; it has no column to name, so it is left out.
+fn index_columns(conn: &RusqliteConnection, index: &str) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    let names: Vec<Option<String>> = stmt
+        .query_map([index], |row| row.get(0))
+        .map_err(|e| format_sqlite_query_error(&e))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format_sqlite_query_error(&e))?;
+
+    Ok(names.into_iter().flatten().collect())
+}
+
+fn resolve_relation_name(conn: &RusqliteConnection, table: &str) -> Result<String, DbError> {
+    let resolved = conn.query_row(
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') \
+         AND name = ?1 COLLATE NOCASE",
+        [table],
+        |row| row.get::<_, String>(0),
+    );
+
+    match resolved {
+        Ok(name) => Ok(name),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Err(DbError::ObjectNotFound(
+            format!("Table '{}' not found", table).into(),
+        )),
+        Err(error) => Err(format_sqlite_query_error(&error)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        RusqliteConnection, SqliteDialect, SqliteDriver, kind_from_decltype,
+        RusqliteConnection, SqliteConnectionState, SqliteDialect, SqliteDriver, kind_from_decltype,
         plan_sqlite_semantic_request, sqlite_generate_create_table,
     };
     use dbflux_core::{
@@ -2803,6 +2930,259 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily, Value,
         WhereOperator,
     };
+
+    /// The generated truncate, drop-index and version statements must stay
+    /// byte-for-byte identical while the trait defaults move to `Result`.
+    #[test]
+    fn truncate_drop_index_and_version_statements_match_the_driver_contract() {
+        use super::SqliteConnection;
+        use dbflux_core::Connection;
+        use std::sync::{Arc, Mutex};
+
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let connection = SqliteConnection::for_test(state);
+
+        assert_eq!(
+            connection
+                .build_truncate_sql("users")
+                .expect("SQLite supports truncate"),
+            "DELETE FROM \"users\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), false)
+                .expect("SQLite supports drop index"),
+            "DROP INDEX \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .build_drop_index_sql("idx_users_email", Some("users"), true)
+                .expect("SQLite supports drop index"),
+            "DROP INDEX IF EXISTS \"idx_users_email\""
+        );
+        assert_eq!(
+            connection
+                .version_query()
+                .expect("SQLite has a version query"),
+            "SELECT sqlite_version()"
+        );
+    }
+
+    /// `table_details` declares `rowid`, `oid` and `_rowid_` only for rowid
+    /// tables (<https://www.sqlite.org/lang_createtable.html#rowid>).
+    #[test]
+    fn table_details_declares_rowid_names_only_for_rowid_tables() {
+        use super::{SqliteConnection, SqliteConnectionState};
+        use dbflux_core::Connection;
+        use std::sync::{Arc, Mutex};
+
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        raw.execute_batch(
+            "CREATE TABLE notes (label TEXT);
+             CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT);
+             CREATE TABLE codes (code TEXT PRIMARY KEY) WITHOUT ROWID;",
+        )
+        .expect("create the tables");
+
+        let connection =
+            SqliteConnection::for_test(Arc::new(Mutex::new(SqliteConnectionState::new(raw))));
+
+        let pseudo_columns = |table: &str| {
+            connection
+                .table_details("main", None, table)
+                .expect("read the table details")
+                .pseudo_columns
+        };
+
+        assert_eq!(*pseudo_columns("notes"), ["rowid", "oid", "_rowid_"]);
+        assert_eq!(*pseudo_columns("items"), ["rowid", "oid", "_rowid_"]);
+        assert!(pseudo_columns("codes").is_empty());
+    }
+
+    /// `fetch_rows_by_pks` batches key lookups into `WHERE pk IN (...)`
+    /// statements: misses are absent, `projection` is honored, and inputs
+    /// beyond 100 keys are chunked into a second statement.
+    #[test]
+    fn fetch_rows_by_pks_batches_misses_projection_and_chunks() {
+        use super::{SqliteConnection, SqliteConnectionState};
+        use dbflux_core::Connection;
+        use std::sync::{Arc, Mutex};
+
+        let raw = RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        raw.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT);
+             INSERT INTO items (id, label)
+             WITH RECURSIVE seq(i) AS (
+                 SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < 150
+             )
+             SELECT i, 'row ' || i FROM seq;",
+        )
+        .expect("seed the table");
+
+        let connection =
+            SqliteConnection::for_test(Arc::new(Mutex::new(SqliteConnectionState::new(raw))));
+
+        let empty = connection
+            .fetch_rows_by_pks("main", "", "items", "id", &[], None)
+            .expect("empty batch returns without querying");
+        assert!(empty.is_empty());
+
+        let mixed = vec![Value::Int(1), Value::Int(999), Value::Int(3)];
+        let rows = connection
+            .fetch_rows_by_pks("main", "", "items", "id", &mixed, None)
+            .expect("batch with a miss");
+        let mut ids = rows
+            .iter()
+            .filter_map(|row| match row.get("id") {
+                Some(Value::Int(id)) => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<i64>>();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 3], "the missing key stays absent");
+
+        let projected = connection
+            .fetch_rows_by_pks(
+                "main",
+                "",
+                "items",
+                "id",
+                &[Value::Int(2)],
+                Some(&["label".to_string()]),
+            )
+            .expect("projected batch");
+        assert_eq!(projected.len(), 1);
+        assert_eq!(
+            projected[0].keys().collect::<Vec<_>>(),
+            [&"label"],
+            "projection limits the fetched columns"
+        );
+        assert_eq!(
+            projected[0].get("label"),
+            Some(&Value::Text("row 2".to_string()))
+        );
+
+        let all = (1..=150).map(Value::Int).collect::<Vec<_>>();
+        let rows = connection
+            .fetch_rows_by_pks("main", "", "items", "id", &all, None)
+            .expect("batch larger than one chunk");
+        assert_eq!(rows.len(), 150, "every key resolves across chunks");
+    }
+
+    fn engine_names_connection() -> super::SqliteConnection {
+        use super::{SqliteConnection, SqliteConnectionState};
+        use std::sync::{Arc, Mutex};
+
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        raw.execute_batch(
+            "CREATE TABLE doubled (a INTEGER, g INTEGER GENERATED ALWAYS AS (a * 2) VIRTUAL, \
+             s INTEGER AS (a + 1) STORED);
+             CREATE VIEW doubled_view AS SELECT a FROM doubled;
+             CREATE VIRTUAL TABLE docs USING fts5(body);
+             CREATE VIRTUAL TABLE boxes USING rtree(id, x0, x1);",
+        )
+        .expect("create the tables");
+
+        SqliteConnection::for_test(Arc::new(Mutex::new(SqliteConnectionState::new(raw))))
+    }
+
+    fn column_names(details: &TableInfo) -> Vec<&str> {
+        details
+            .columns
+            .iter()
+            .flatten()
+            .map(|column| column.name.as_str())
+            .collect()
+    }
+
+    /// `PRAGMA table_xinfo` marks hidden columns 1 and generated columns 2
+    /// (virtual) or 3 (stored): <https://www.sqlite.org/pragma.html#pragma_table_xinfo>.
+    /// `columns` keeps what `PRAGMA table_info` lists, which the UI shows, and
+    /// the other names the engine resolves are pseudo-columns.
+    #[test]
+    fn generated_and_hidden_columns_are_pseudo_columns() {
+        use dbflux_core::Connection;
+
+        let connection = engine_names_connection();
+
+        let doubled = connection
+            .table_details("main", None, "doubled")
+            .expect("read the table");
+        assert_eq!(column_names(&doubled), ["a"]);
+        assert_eq!(
+            *doubled.pseudo_columns,
+            ["g", "s", "rowid", "oid", "_rowid_"]
+        );
+
+        let docs = connection
+            .table_details("main", None, "docs")
+            .expect("read the FTS5 table");
+        assert_eq!(column_names(&docs), ["body"]);
+        assert_eq!(
+            *docs.pseudo_columns,
+            ["docs", "rank", "rowid", "oid", "_rowid_"]
+        );
+    }
+
+    #[test]
+    fn rowid_names_follow_what_the_engine_accepts() {
+        use dbflux_core::Connection;
+
+        let connection = engine_names_connection();
+        let pseudo_columns = |table: &str| {
+            connection
+                .table_details("main", None, table)
+                .expect("read the details")
+                .pseudo_columns
+        };
+
+        assert_eq!(*pseudo_columns("boxes"), ["rowid", "oid", "_rowid_"]);
+        assert!(pseudo_columns("doubled_view").is_empty());
+    }
+
+    /// SQLite resolves table names with ASCII case folding and accepts a view
+    /// wherever a table is read.
+    #[test]
+    fn table_details_resolves_views_and_names_in_another_case() {
+        use dbflux_core::Connection;
+
+        let connection = engine_names_connection();
+
+        let view = connection
+            .table_details("main", None, "doubled_view")
+            .expect("a view resolves");
+        assert_eq!(column_names(&view), ["a"]);
+
+        let other_case = connection
+            .table_details("main", None, "DOUBLED")
+            .expect("a name in another case resolves");
+        assert_eq!(column_names(&other_case), ["a"]);
+
+        assert!(connection.table_details("main", None, "nope").is_err());
+    }
+
+    /// SQLite has no schemas, so `table_details` must not echo a schema the
+    /// caller passed: completion would offer `public.doubled`, which SQLite
+    /// reads as an attached database and fails to run.
+    #[test]
+    fn table_details_reports_no_schema_even_when_one_is_passed() {
+        use dbflux_core::Connection;
+
+        let connection = engine_names_connection();
+
+        let with_schema = connection
+            .table_details("main", Some("public"), "doubled")
+            .expect("read the table with a schema argument");
+        assert_eq!(with_schema.schema, None);
+        assert_eq!(column_names(&with_schema), ["a"]);
+
+        let without_schema = connection
+            .table_details("main", None, "doubled")
+            .expect("read the table without a schema argument");
+        assert_eq!(without_schema.schema, None);
+    }
 
     // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---
 
@@ -2833,8 +3213,27 @@ mod tests {
         assert_eq!(kind_from_decltype(Some("DATETIME")), ColumnKind::Timestamp);
         assert_eq!(kind_from_decltype(Some("TIMESTAMP")), ColumnKind::Timestamp);
         assert_eq!(kind_from_decltype(Some("DATE")), ColumnKind::Timestamp);
-        assert_eq!(kind_from_decltype(Some("TIME")), ColumnKind::Timestamp);
         assert_eq!(kind_from_decltype(Some("datetime")), ColumnKind::Timestamp);
+        assert_eq!(
+            kind_from_decltype(Some("TIMESTAMPTZ")),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(
+            kind_from_decltype(Some("TIMESTAMP WITH TIME ZONE")),
+            ColumnKind::Timestamp
+        );
+    }
+
+    #[test]
+    fn kind_from_decltype_time_of_day_is_unknown() {
+        assert_eq!(kind_from_decltype(Some("TIME")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("time")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("TIME(3)")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("TIMETZ")), ColumnKind::Unknown);
+        assert_eq!(
+            kind_from_decltype(Some("TIME WITH TIME ZONE")),
+            ColumnKind::Unknown
+        );
     }
 
     #[test]
@@ -2901,6 +3300,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
 
         let composite_pk = TableInfo {
@@ -2931,6 +3331,7 @@ mod tests {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
 
         let single_sql = sqlite_generate_create_table(&single_pk);
@@ -3000,6 +3401,21 @@ mod tests {
         assert_eq!(metadata.default_port, None);
         assert_eq!(metadata.uri_scheme, "sqlite");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    /// SQLite reads an unknown double-quoted identifier as a string literal
+    /// (<https://www.sqlite.org/quirks.html#dblquote>), and the bundled
+    /// library keeps that fallback on.
+    #[test]
+    fn sqlite_declares_that_it_misreads_unknown_quoted_identifiers() {
+        let driver = SqliteDriver::new();
+        let syntax = driver
+            .metadata()
+            .syntax
+            .as_ref()
+            .expect("SQLite declares its syntax");
+
+        assert!(syntax.misreads_unknown_quoted_identifiers);
     }
 
     #[test]
@@ -3326,5 +3742,152 @@ mod picker_tests {
     #[test]
     fn picker_names_a_file_instead_of_a_port() {
         assert_eq!(SqliteDriver::new().picker_hint(), "file");
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::{SqliteConnection, SqliteConnectionState};
+    use dbflux_core::{Connection, DbError, QueryRequest, ReadOnlyEnforcement, Value};
+    use rusqlite::Connection as RusqliteConnection;
+    use std::sync::{Arc, Mutex};
+
+    fn connection_with_one_row() -> (Arc<Mutex<SqliteConnectionState>>, SqliteConnection) {
+        let raw = RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        raw.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY); INSERT INTO items VALUES (1);",
+        )
+        .expect("fixture should load");
+
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(raw)));
+        let connection = SqliteConnection::for_test(state.clone());
+
+        (state, connection)
+    }
+
+    fn read_only(sql: &str) -> QueryRequest {
+        QueryRequest::new(sql).with_read_only(ReadOnlyEnforcement::Required)
+    }
+
+    fn row_count(state: &Arc<Mutex<SqliteConnectionState>>) -> i64 {
+        state
+            .lock()
+            .expect("state mutex")
+            .query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))
+            .expect("count rows")
+    }
+
+    fn query_only_enabled(state: &Arc<Mutex<SqliteConnectionState>>) -> bool {
+        state
+            .lock()
+            .expect("state mutex")
+            .query_row("PRAGMA query_only", [], |row| row.get(0))
+            .expect("read query_only")
+    }
+
+    #[test]
+    fn sqlite_declares_read_only_enforcement() {
+        let (_state, connection) = connection_with_one_row();
+
+        assert!(connection.metadata().enforces_read_only());
+    }
+
+    #[test]
+    fn a_read_runs_under_read_only_enforcement() {
+        let (state, connection) = connection_with_one_row();
+
+        let result = connection
+            .execute(&read_only("SELECT id FROM items"))
+            .expect("a read should run");
+
+        assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
+        assert!(!query_only_enabled(&state));
+    }
+
+    #[test]
+    fn a_write_fails_under_read_only_enforcement_and_the_session_is_restored() {
+        let (state, connection) = connection_with_one_row();
+
+        for sql in [
+            "DELETE FROM items",
+            "WITH doomed AS (SELECT id FROM items) DELETE FROM items WHERE id IN (SELECT id FROM doomed)",
+            "SELECT 1; DELETE FROM items",
+        ] {
+            let outcome = connection.execute(&read_only(sql));
+            assert!(outcome.is_err(), "{sql} must fail, got {outcome:?}");
+            assert_eq!(row_count(&state), 1, "{sql} must not delete the row");
+            assert!(!query_only_enabled(&state), "{sql} left query_only on");
+        }
+
+        let bounded = connection.execute(&read_only("SELECT 1; DELETE FROM items").with_limit(10));
+        assert!(bounded.is_err(), "bounded write must fail, got {bounded:?}");
+        assert_eq!(row_count(&state), 1);
+
+        connection
+            .execute(&QueryRequest::new("DELETE FROM items"))
+            .expect("a write without read-only enforcement still runs");
+        assert_eq!(row_count(&state), 0);
+    }
+
+    #[test]
+    fn turning_query_only_off_inside_the_request_is_refused() {
+        let (state, connection) = connection_with_one_row();
+
+        let outcome = connection.execute(&read_only("PRAGMA query_only = OFF; DELETE FROM items"));
+
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "got {outcome:?}"
+        );
+        assert_eq!(row_count(&state), 1);
+        assert!(!query_only_enabled(&state));
+    }
+
+    #[test]
+    fn a_session_that_already_had_query_only_keeps_it() {
+        let (state, connection) = connection_with_one_row();
+        state
+            .lock()
+            .expect("state mutex")
+            .execute_batch("PRAGMA query_only = ON")
+            .expect("enable query_only");
+
+        connection
+            .execute(&read_only("SELECT id FROM items"))
+            .expect("a read should run");
+
+        assert!(query_only_enabled(&state));
+    }
+
+    #[test]
+    fn read_only_enforcement_is_refused_inside_an_open_transaction() {
+        let (state, connection) = connection_with_one_row();
+        connection
+            .execute(&QueryRequest::new("BEGIN"))
+            .expect("open a user transaction");
+
+        let outcome = connection.execute(&read_only("SELECT id FROM items"));
+
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "got {outcome:?}"
+        );
+        assert!(
+            !state.lock().expect("state mutex").is_autocommit(),
+            "the user's transaction must stay open"
+        );
+        assert!(!query_only_enabled(&state));
+    }
+
+    #[test]
+    fn a_transaction_opened_by_a_read_only_request_is_closed() {
+        let (state, connection) = connection_with_one_row();
+
+        connection
+            .execute(&read_only("BEGIN; SELECT id FROM items"))
+            .expect("a read inside its own transaction should run");
+
+        assert!(state.lock().expect("state mutex").is_autocommit());
+        assert!(!query_only_enabled(&state));
     }
 }

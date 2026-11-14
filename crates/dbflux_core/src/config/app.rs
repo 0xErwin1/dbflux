@@ -383,19 +383,156 @@ pub struct GeneralSettings {
     #[serde(default = "default_key_value_size_limit_mib")]
     pub key_value_size_limit_mib: u64,
 
+    // -- Notifications --
+    /// Auto-dismiss delay for toasts, in seconds. Success and Info toasts
+    /// close after it and Warning toasts after twice it; an Error toast and
+    /// a toast with actions or progress stay until it is dismissed. `0`
+    /// keeps every toast until the user dismisses it.
+    #[serde(default = "default_toast_auto_dismiss_secs")]
+    pub toast_auto_dismiss_secs: u32,
+
     // -- Editor --
     /// Modal (Vim) editing in multi-line editors. Off by default.
     #[serde(default)]
     pub vim_mode: bool,
 
+    /// Append a generated alias (`access_control ac`) when a table completion
+    /// is accepted after `FROM` / `JOIN`. On by default.
+    #[serde(default = "default_true")]
+    pub table_alias_completion: bool,
+
+    /// Write that alias with `AS` (`access_control AS ac`). Off by default.
+    #[serde(default)]
+    pub table_alias_use_as: bool,
+
     /// The key that starts Vim leader sequences, in the keymap's stored key
     /// form (`space`, `,`, `\`). Space by default.
     #[serde(default = "default_vim_leader")]
     pub vim_leader: String,
+
+    // -- Data grid --
+    /// Resolve foreign-key cells to the referenced row's label in the data
+    /// grid. Off by default; the row inspector always resolves references.
+    #[serde(default)]
+    pub grid_fk_labels: bool,
+
+    // -- Appearance --
+    /// When scrollbars are shown in every window. While scrolling by default.
+    #[serde(default)]
+    pub scrollbar_visibility: ScrollbarVisibility,
+
+    // -- Fonts --
+    /// Interface font family. `None` uses the bundled interface font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_font_family: Option<String>,
+
+    /// Interface font size in pixels; every interface text size scales with it.
+    #[serde(default = "default_ui_font_size")]
+    pub ui_font_size: f32,
+
+    /// Code editor font family. `None` uses the bundled monospace font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_font_family: Option<String>,
+
+    /// Code editor font size in pixels.
+    #[serde(default = "default_editor_font_size")]
+    pub editor_font_size: f32,
+
+    /// Data grid font family. `None` uses the editor font family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_font_family: Option<String>,
+
+    /// Data grid font size in pixels.
+    #[serde(default = "default_grid_font_size")]
+    pub grid_font_size: f32,
+}
+
+/// A change the interface size commands make to the font sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterfaceSizeChange {
+    Increase,
+    Decrease,
+    Reset,
+}
+
+impl GeneralSettings {
+    pub const DEFAULT_UI_FONT_SIZE: f32 = 13.0;
+    pub const DEFAULT_EDITOR_FONT_SIZE: f32 = 13.0;
+    pub const DEFAULT_GRID_FONT_SIZE: f32 = 12.5;
+    pub const MIN_FONT_SIZE: f32 = 8.0;
+    pub const MAX_FONT_SIZE: f32 = 32.0;
+    /// Pixels one interface size command adds to or removes from each font
+    /// size.
+    pub const INTERFACE_SIZE_STEP: f32 = 1.0;
+    pub const DEFAULT_TOAST_AUTO_DISMISS_SECS: u32 = 8;
+
+    /// Clamps a font size to `[MIN_FONT_SIZE, MAX_FONT_SIZE]`. A non-finite
+    /// size (NaN or infinite) is replaced by `default`, since it carries no
+    /// usable intent.
+    pub fn clamp_font_size(size: f32, default: f32) -> f32 {
+        if size.is_finite() {
+            size.clamp(Self::MIN_FONT_SIZE, Self::MAX_FONT_SIZE)
+        } else {
+            default
+        }
+    }
+
+    /// Moves the interface, editor and data grid font sizes together, as the
+    /// interface size commands do. A step changes each size by
+    /// [`Self::INTERFACE_SIZE_STEP`] and stops it at the supported range, so
+    /// a size already at a limit stays there while the others still move.
+    pub fn change_interface_size(&mut self, change: InterfaceSizeChange) {
+        let step = match change {
+            InterfaceSizeChange::Increase => Self::INTERFACE_SIZE_STEP,
+            InterfaceSizeChange::Decrease => -Self::INTERFACE_SIZE_STEP,
+            InterfaceSizeChange::Reset => {
+                self.ui_font_size = Self::DEFAULT_UI_FONT_SIZE;
+                self.editor_font_size = Self::DEFAULT_EDITOR_FONT_SIZE;
+                self.grid_font_size = Self::DEFAULT_GRID_FONT_SIZE;
+                return;
+            }
+        };
+
+        self.ui_font_size =
+            Self::clamp_font_size(self.ui_font_size + step, Self::DEFAULT_UI_FONT_SIZE);
+        self.editor_font_size =
+            Self::clamp_font_size(self.editor_font_size + step, Self::DEFAULT_EDITOR_FONT_SIZE);
+        self.grid_font_size =
+            Self::clamp_font_size(self.grid_font_size + step, Self::DEFAULT_GRID_FONT_SIZE);
+    }
+
+    /// Trims a font family name. A missing or blank name becomes `None`,
+    /// which selects the bundled font.
+    pub fn normalize_font_family(family: Option<String>) -> Option<String> {
+        let family = family?;
+        let trimmed = family.trim();
+
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+}
+
+fn default_toast_auto_dismiss_secs() -> u32 {
+    GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS
+}
+
+fn default_ui_font_size() -> f32 {
+    GeneralSettings::DEFAULT_UI_FONT_SIZE
+}
+
+fn default_editor_font_size() -> f32 {
+    GeneralSettings::DEFAULT_EDITOR_FONT_SIZE
+}
+
+fn default_grid_font_size() -> f32 {
+    GeneralSettings::DEFAULT_GRID_FONT_SIZE
 }
 
 /// The Vim leader key of a new installation.
-pub fn default_vim_leader() -> String {
+pub(crate) fn default_vim_leader() -> String {
     "space".to_string()
 }
 
@@ -442,9 +579,87 @@ impl Default for GeneralSettings {
             schema_snapshot_retention: default_schema_snapshot_retention(),
             object_preview_size_limit_mib: default_object_preview_size_limit_mib(),
             key_value_size_limit_mib: default_key_value_size_limit_mib(),
+            toast_auto_dismiss_secs: Self::DEFAULT_TOAST_AUTO_DISMISS_SECS,
             vim_mode: false,
+            table_alias_completion: true,
+            table_alias_use_as: false,
             vim_leader: default_vim_leader(),
+            grid_fk_labels: false,
+            scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
+            ui_font_family: None,
+            ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
+            editor_font_family: None,
+            editor_font_size: Self::DEFAULT_EDITOR_FONT_SIZE,
+            grid_font_family: None,
+            grid_font_size: Self::DEFAULT_GRID_FONT_SIZE,
         }
+    }
+}
+
+#[cfg(test)]
+mod font_settings_tests {
+    use super::GeneralSettings;
+
+    #[test]
+    fn font_defaults_use_bundled_families_and_default_sizes() {
+        let settings = GeneralSettings::default();
+
+        assert_eq!(settings.ui_font_family, None);
+        assert_eq!(settings.ui_font_size, 13.0);
+        assert_eq!(settings.editor_font_family, None);
+        assert_eq!(settings.editor_font_size, 13.0);
+        assert_eq!(settings.grid_font_family, None);
+        assert_eq!(settings.grid_font_size, 12.5);
+
+        let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
+        assert!(!legacy.grid_fk_labels);
+        assert_eq!(
+            legacy.scrollbar_visibility,
+            super::ScrollbarVisibility::WhileScrolling
+        );
+        assert_eq!(legacy, settings);
+    }
+
+    #[test]
+    fn clamp_font_size_bounds_finite_sizes_and_replaces_non_finite() {
+        let default = GeneralSettings::DEFAULT_GRID_FONT_SIZE;
+
+        assert_eq!(GeneralSettings::clamp_font_size(14.0, default), 14.0);
+        assert_eq!(GeneralSettings::clamp_font_size(8.0, default), 8.0);
+        assert_eq!(GeneralSettings::clamp_font_size(32.0, default), 32.0);
+        assert_eq!(GeneralSettings::clamp_font_size(2.0, default), 8.0);
+        assert_eq!(GeneralSettings::clamp_font_size(-5.0, default), 8.0);
+        assert_eq!(GeneralSettings::clamp_font_size(64.0, default), 32.0);
+        assert_eq!(GeneralSettings::clamp_font_size(f32::NAN, default), 12.5);
+        assert_eq!(
+            GeneralSettings::clamp_font_size(f32::INFINITY, default),
+            12.5
+        );
+        assert_eq!(
+            GeneralSettings::clamp_font_size(f32::NEG_INFINITY, default),
+            12.5
+        );
+    }
+
+    #[test]
+    fn normalize_font_family_trims_and_maps_blank_to_none() {
+        assert_eq!(GeneralSettings::normalize_font_family(None), None);
+        assert_eq!(
+            GeneralSettings::normalize_font_family(Some(String::new())),
+            None
+        );
+        assert_eq!(
+            GeneralSettings::normalize_font_family(Some("  \t ".to_string())),
+            None
+        );
+        assert_eq!(
+            GeneralSettings::normalize_font_family(Some("  Fira Code ".to_string())).as_deref(),
+            Some("Fira Code")
+        );
+        assert_eq!(
+            GeneralSettings::normalize_font_family(Some("Inter".to_string())).as_deref(),
+            Some("Inter")
+        );
     }
 }
 
@@ -499,6 +714,21 @@ pub enum AppStyle {
     #[default]
     Default,
     Compact,
+}
+
+/// When scrollbars are shown.
+///
+/// - `WhileScrolling` — the bar appears while the content scrolls and fades
+///   out when idle.
+/// - `OnHover` — the bar appears while the pointer is over the scroll area.
+/// - `Always` — the bar stays visible.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollbarVisibility {
+    #[default]
+    WhileScrolling,
+    OnHover,
+    Always,
 }
 
 fn default_true() -> bool {
@@ -562,41 +792,6 @@ impl GeneralSettings {
                 every_secs: self.default_refresh_interval_secs,
             },
         }
-    }
-
-    /// Evaluate a detected dangerous query kind against the safety settings.
-    ///
-    /// Returns:
-    /// - `DangerousAction::Allow` — execute without confirmation
-    /// - `DangerousAction::Confirm(kind)` — show the confirmation modal
-    /// - `DangerousAction::Block(msg)` — block execution with a hard error
-    pub fn evaluate_dangerous(
-        &self,
-        kind: crate::DangerousQueryKind,
-        is_suppressed: bool,
-    ) -> DangerousAction {
-        use crate::DangerousQueryKind::*;
-
-        if !self.confirm_dangerous_queries {
-            return DangerousAction::Allow;
-        }
-
-        // No-where queries aren't dangerous when WHERE isn't required
-        if !self.dangerous_requires_where && matches!(kind, DeleteNoWhere | UpdateNoWhere) {
-            return DangerousAction::Allow;
-        }
-
-        // If preview is forced, ignore suppressions
-        if self.dangerous_requires_preview {
-            return DangerousAction::Confirm(kind);
-        }
-
-        // Otherwise, respect suppressions
-        if is_suppressed {
-            return DangerousAction::Allow;
-        }
-
-        DangerousAction::Confirm(kind)
     }
 }
 
@@ -664,6 +859,7 @@ pub enum RpcServiceKind {
     #[default]
     Driver,
     AuthProvider,
+    SecretProvider,
 }
 
 impl RpcServiceKind {
@@ -671,6 +867,9 @@ impl RpcServiceKind {
         match self {
             RpcServiceKind::Driver => ServiceRpcApiContract::new("driver_rpc", 1, 1),
             RpcServiceKind::AuthProvider => ServiceRpcApiContract::new("auth_provider_rpc", 1, 2),
+            RpcServiceKind::SecretProvider => {
+                ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
+            }
         }
     }
 }
@@ -1215,6 +1414,24 @@ mod tests {
         assert_eq!(
             restored.api_contract,
             Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 2))
+        );
+    }
+
+    #[test]
+    fn secret_provider_kind_serializes_as_snake_case() {
+        let json = serde_json::to_value(RpcServiceKind::SecretProvider).unwrap();
+
+        assert_eq!(json, serde_json::json!("secret_provider"));
+
+        let restored: RpcServiceKind = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, RpcServiceKind::SecretProvider);
+    }
+
+    #[test]
+    fn secret_provider_kind_defaults_to_secret_provider_contract() {
+        assert_eq!(
+            RpcServiceKind::SecretProvider.default_api_contract(),
+            ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
         );
     }
 

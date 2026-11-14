@@ -14,6 +14,8 @@ mod render;
 mod render_footer;
 mod render_overlays;
 mod render_tree;
+mod root_sections;
+mod secret_store;
 mod selection;
 mod style_guardrails;
 mod table_loading;
@@ -47,12 +49,32 @@ use gpui_component::tree::{TreeItem, TreeState, tree};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+pub use root_sections::{RootSectionActionConfirm, RootSectionActionRequest};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarTab {
     Connections,
     Scripts,
     /// Every saved dashboard, grouped by connection profile.
     Dashboards,
+}
+
+impl SidebarTab {
+    pub fn next(self) -> Self {
+        match self {
+            SidebarTab::Connections => SidebarTab::Scripts,
+            SidebarTab::Scripts => SidebarTab::Dashboards,
+            SidebarTab::Dashboards => SidebarTab::Connections,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        match self {
+            SidebarTab::Connections => SidebarTab::Dashboards,
+            SidebarTab::Scripts => SidebarTab::Connections,
+            SidebarTab::Dashboards => SidebarTab::Scripts,
+        }
+    }
 }
 
 pub enum SidebarEvent {
@@ -76,17 +98,36 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         database: String,
     },
-    /// Connection root activated (double-click/Enter) for an object-storage
-    /// driver — opens the searchable buckets table for the connection.
-    OpenObjectStoreBuckets {
+    /// A driver-declared root section was activated: its folder, or the
+    /// connection row when the section opens on profile activation. The
+    /// workspace opens the section's declared presentation.
+    OpenRootSection {
         profile_id: Uuid,
+        section_id: String,
+        presentation: dbflux_core::RootSectionPresentation,
     },
-    /// A bucket row was activated (double-click/Enter) under an object-storage
-    /// connection. The workspace focuses the connection's buckets table on that
-    /// bucket until the object browser document exists.
-    OpenObjectStoreBucket {
+    /// An item of a driver-declared root section was activated. The
+    /// workspace opens the section's declared item presentation.
+    OpenRootSectionItem {
         profile_id: Uuid,
-        bucket: String,
+        section_id: String,
+        item_id: String,
+        presentation: dbflux_core::RootItemPresentation,
+    },
+    /// An action changed the items of a driver-declared root section. The
+    /// workspace reloads the open document that shows `presentation`.
+    RootSectionChanged {
+        profile_id: Uuid,
+        section_id: String,
+        presentation: Option<dbflux_core::RootSectionPresentation>,
+    },
+    /// A store of a secret-store connection, or one of its paths, was
+    /// activated. The workspace opens the store's document, at `path` when
+    /// one is given.
+    OpenSecretStore {
+        profile_id: Uuid,
+        store_id: String,
+        path: Option<String>,
     },
     /// Request to show SQL preview modal
     RequestSqlPreview {
@@ -120,6 +161,11 @@ pub enum SidebarEvent {
     },
     /// Open global schema visualization for an entire database.
     OpenGlobalSchemaViz {
+        profile_id: Uuid,
+        database: String,
+    },
+    /// Open the native console of a database in its own tab.
+    OpenConsole {
         profile_id: Uuid,
         database: String,
     },
@@ -259,6 +305,12 @@ pub enum SidebarEvent {
     /// disconnecting right away.
     RequestActiveQueryDisconnect {
         profile_id: Uuid,
+    },
+
+    /// Request to ask for the connection password before connecting a profile
+    /// whose password is neither saved nor supplied by a value source.
+    RequestConnectionPassword {
+        prompt: dbflux_app::ConnectionPasswordPrompt,
     },
 
     /// Request to prompt the user for an SSH tunnel passphrase.
@@ -510,13 +562,16 @@ pub enum ContextMenuAction {
     GenerateCollectionCode(CollectionCodeKind),
     /// Open a new code document pre-seeded with a query template for this collection.
     ///
-    /// Available for any `DatabaseCategory::TimeSeries` measurement. The template
+    /// Available for any collection with the time-series facet. The template
     /// text is produced by the driver's `QueryGenerator::template_for_collection`.
     QueryCollection,
     /// Open a new empty code document for writing queries against this database/bucket.
     ///
-    /// Available for database nodes belonging to a time-series connection.
+    /// Available for database nodes whose objects sit in a measurement folder.
     NewQueryForDatabase,
+    /// Open the connection's native console against this database, in its
+    /// own tab. Offered where the driver advertises `NATIVE_CONSOLE`.
+    OpenConsole,
     // Schema DDL actions
     RefreshDatabase,
     RefreshObject,
@@ -531,6 +586,10 @@ pub enum ContextMenuAction {
     NewScriptFolder,
     RevealInFileManager,
     CopyPath,
+    /// Re-scan every scripts root, external folders included, off the UI thread.
+    RefreshScripts,
+    /// Unregister an external scripts folder. The folder stays on disk.
+    RemoveExternalScriptsFolder,
     // Dashboard actions
     NewDashboard,
     ImportDashboard,
@@ -548,6 +607,9 @@ pub enum ContextMenuAction {
     RefreshInstanceCatalog,
     /// Copy the string ID of the selected node to the clipboard.
     CopyItemId,
+    /// Copy the bare name of the selected column or collection field to the
+    /// clipboard.
+    CopyColumnName,
     /// Open the Export wizard for the selected table(s) (or the right-
     /// clicked table, when it is not part of a larger selection). Distinct
     /// from `Export` (connection-profile export) — gated on
@@ -567,6 +629,8 @@ pub enum ContextMenuAction {
     /// menu was opened on. Gated on `DatabaseCategory::Relational` — never a
     /// driver id; non-relational nodes surface an explicit "unsupported" toast.
     CompareSchema,
+    /// Run the driver-declared root section item action with this id.
+    RootSectionAction(String),
 }
 
 #[derive(Clone)]
@@ -628,13 +692,14 @@ impl ContextMenuAction {
 
         match self {
             Self::Open | Self::OpenDatabase | Self::OpenScript => Some(Command::Execute),
-            Self::Refresh | Self::RefreshObject | Self::RefreshDatabase => {
+            Self::Refresh | Self::RefreshObject | Self::RefreshDatabase | Self::RefreshScripts => {
                 Some(Command::RefreshSchema)
             }
             Self::RenameFolder | Self::RenameScript => Some(Command::Rename),
             Self::Delete
             | Self::DeleteFolder
             | Self::DeleteScript
+            | Self::RemoveExternalScriptsFolder
             | Self::DropTable
             | Self::DropCollection
             | Self::DropDatabase => Some(Command::Delete),
@@ -672,6 +737,7 @@ impl ContextMenuAction {
             Self::GenerateCollectionCode(_) => Some(AppIcon::Code),
             Self::QueryCollection => Some(AppIcon::Code),
             Self::NewQueryForDatabase => Some(AppIcon::Code),
+            Self::OpenConsole => Some(AppIcon::SquareTerminal),
             Self::RefreshDatabase => Some(AppIcon::RefreshCcw),
             Self::RefreshObject => Some(AppIcon::RefreshCcw),
             Self::DropDatabase => Some(AppIcon::Delete),
@@ -684,6 +750,8 @@ impl ContextMenuAction {
             Self::NewScriptFolder => Some(AppIcon::Folder),
             Self::RevealInFileManager => Some(AppIcon::Folder),
             Self::CopyPath => None,
+            Self::RefreshScripts => Some(AppIcon::RefreshCcw),
+            Self::RemoveExternalScriptsFolder => Some(AppIcon::X),
             // Dashboard actions
             Self::NewDashboard => Some(AppIcon::Layers),
             Self::ImportDashboard => Some(AppIcon::Download),
@@ -698,10 +766,12 @@ impl ContextMenuAction {
             // Instance catalog actions
             Self::RefreshInstanceCatalog => Some(AppIcon::RefreshCcw),
             Self::CopyItemId => Some(AppIcon::Copy),
+            Self::CopyColumnName => Some(AppIcon::Copy),
             Self::ExportTables => Some(AppIcon::ArrowUp),
             Self::ImportTables => Some(AppIcon::Download),
             Self::MigrateTables => Some(AppIcon::ArrowUpDown),
             Self::CompareSchema => Some(AppIcon::Columns),
+            Self::RootSectionAction(_) => None,
         }
     }
 }
@@ -1016,6 +1086,8 @@ pub struct Sidebar {
         std::cell::RefCell<HashMap<(Uuid, String), KnownInvalidatedDatabase>>,
     /// Item IDs currently being fetched (tables, type/index/FK folders)
     loading_items: HashSet<String>,
+    /// Loading rows whose fetch `fetch_visible_inline_lists` already started.
+    inline_list_fetches: HashSet<String>,
     view_refresh_tasks: HashMap<
         String,
         (
@@ -1074,6 +1146,9 @@ pub struct Sidebar {
     /// Profile ID waiting for an SSH passphrase to be supplied via the tunnel-auth modal.
     /// Set when a connect attempt fails with a passphrase-required error.
     pub pending_tunnel_auth_profile_id: Option<Uuid>,
+    /// Connection password of the attempt waiting for the SSH passphrase, so
+    /// the retry does not ask for it again.
+    pub(crate) pending_tunnel_auth_password: Option<dbflux_core::secrecy::SecretString>,
     /// In-flight metric catalog fetch tasks, keyed by profile_id.
     ///
     /// Dropping the task on collapse abandons the await; the underlying cache fetch
@@ -1098,12 +1173,21 @@ pub struct Sidebar {
     /// A single fetch populates both `instance_metrics_cache` and
     /// `instance_inspectors_cache` because the catalog returns both in one round-trip.
     pending_instance_catalog_fetches: HashMap<Uuid, Task<()>>,
-    /// Session-scoped cache of the buckets listed for an object-storage
-    /// connection, keyed by profile_id. Populated on first expansion of the
-    /// connection node; buckets are listed flat, with no prefix recursion.
-    bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
-    /// In-flight `list_buckets` fetches, keyed by profile_id.
-    pending_bucket_fetches: HashMap<Uuid, Task<()>>,
+    /// Session-scoped cache of the driver-declared root sections of each
+    /// connected profile and the items listed for them. Populated on first
+    /// expansion of the connection node.
+    root_section_cache: root_sections::RootSectionCache,
+    /// In-flight root section declaration and page fetches.
+    pending_root_section_fetches: root_sections::PendingRootSectionFetches,
+    /// Connected profiles whose row was activated before their root section
+    /// declarations arrived; the section that opens on activation opens once
+    /// they land.
+    pending_root_section_activations: HashSet<Uuid>,
+    /// Session-scoped cache of the listed path levels of hierarchical secret
+    /// stores. Populated on first expansion of a store or path node.
+    secret_path_cache: secret_store::SecretPathCache,
+    /// In-flight path level listings, keyed like `secret_path_cache`.
+    pending_secret_path_fetches: secret_store::PendingSecretPathFetches,
     /// Round trip of one `ping` measured after each profile connected, shown
     /// after its status diamond. `None` records a probe that failed, so a
     /// failing connection is not pinged again on every state change.
@@ -1130,6 +1214,9 @@ struct DeleteConfirmState {
     /// what to delete when that overlay emits `Confirmed`, but the generic
     /// inline confirm popup must NOT render alongside it.
     delegated_to_modal: bool,
+    /// When set, confirm runs this driver-declared root section action
+    /// instead of a delete.
+    root_action: Option<root_sections::PendingRootSectionAction>,
 }
 
 /// Borrowed snapshot of the delete confirmation modal state, used by the
@@ -1142,6 +1229,9 @@ pub struct DeleteModalState<'a> {
     /// When `Some(n)`, the modal confirms a batch delete of `n` selected
     /// sidebar items. The renderer uses this to switch the message wording.
     pub multi_count: Option<usize>,
+    /// When set, the modal confirms a driver-declared root section action
+    /// and shows this copy instead of the delete wording.
+    pub root_action: Option<RootSectionActionConfirm>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -1362,6 +1452,7 @@ impl Sidebar {
             recovered_table_databases: HashMap::new(),
             known_invalidated_databases: std::cell::RefCell::new(HashMap::new()),
             loading_items: HashSet::new(),
+            inline_list_fetches: HashSet::new(),
             view_refresh_tasks: HashMap::new(),
             active_databases: HashMap::new(),
             syncing_expansion: false,
@@ -1401,6 +1492,7 @@ impl Sidebar {
             scripts_gutter_metadata,
             hovered_item_id: None,
             pending_tunnel_auth_profile_id: None,
+            pending_tunnel_auth_password: None,
             pending_metric_namespace_fetches: HashMap::new(),
             pending_metric_fetches: HashMap::new(),
             pending_remote_dashboard_fetches: HashMap::new(),
@@ -1408,8 +1500,11 @@ impl Sidebar {
             instance_metrics_cache: HashMap::new(),
             instance_inspectors_cache: HashMap::new(),
             pending_instance_catalog_fetches: HashMap::new(),
-            bucket_cache: HashMap::new(),
-            pending_bucket_fetches: HashMap::new(),
+            root_section_cache: root_sections::RootSectionCache::default(),
+            pending_root_section_fetches: HashMap::new(),
+            pending_root_section_activations: HashSet::new(),
+            secret_path_cache: HashMap::new(),
+            pending_secret_path_fetches: HashMap::new(),
             connection_latencies: HashMap::new(),
             pending_latency_probes: HashMap::new(),
         }
@@ -1418,6 +1513,12 @@ impl Sidebar {
     /// Return the profile ID that is currently awaiting SSH passphrase input, if any.
     pub fn pending_tunnel_auth_profile_id(&self) -> Option<Uuid> {
         self.pending_tunnel_auth_profile_id
+    }
+
+    /// Drops the connect attempt that was waiting for an SSH passphrase.
+    pub fn clear_pending_tunnel_auth(&mut self) {
+        self.pending_tunnel_auth_profile_id = None;
+        self.pending_tunnel_auth_password = None;
     }
 
     /// Records whether the sidebar holds keyboard focus. Gaining it, including
@@ -1498,12 +1599,11 @@ impl Sidebar {
     }
 
     pub fn cycle_tab(&mut self, cx: &mut Context<Self>) {
-        let next = match self.active_tab {
-            SidebarTab::Connections => SidebarTab::Scripts,
-            SidebarTab::Scripts => SidebarTab::Dashboards,
-            SidebarTab::Dashboards => SidebarTab::Connections,
-        };
-        self.set_active_tab(next, cx);
+        self.set_active_tab(self.active_tab.next(), cx);
+    }
+
+    pub fn cycle_tab_back(&mut self, cx: &mut Context<Self>) {
+        self.set_active_tab(self.active_tab.previous(), cx);
     }
 
     fn build_initial_scripts_tree(state: &AppState) -> Vec<TreeItem> {
@@ -1514,13 +1614,10 @@ impl Sidebar {
     }
 
     fn refresh_scripts_tree(&mut self, cx: &mut Context<Self>) {
-        let state = self.app_state.read(cx);
-        let entries = match state.scripts_directory() {
-            Some(dir) => dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query),
-            None => Vec::new(),
-        };
-
-        let items = self.apply_expansion_overrides_public(Self::build_scripts_tree_items(&entries));
+        let items = self.apply_expansion_overrides_public(Self::scripts_tree_items(
+            self.app_state.read(cx),
+            &self.scripts_search_query,
+        ));
         self.scripts_gutter_metadata = compute_gutter_map(&items);
         self.prune_scripts_selection(&items);
         self.scripts_tree_state.update(cx, |state, cx| {
@@ -1592,6 +1689,10 @@ impl Sidebar {
     }
 
     fn execute_item(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if self.retry_root_section_row(item_id, cx) {
+            return;
+        }
+
         // Retry sentinels for failed metric fetches have a non-parseable ID of the
         // form "metrics-retry|<profile_id>|<database_name>".  Handle them before
         // attempting to parse as a SchemaNodeId.
@@ -1709,22 +1810,49 @@ impl Sidebar {
                         cx.notify();
                     });
 
-                    if self.profile_category(profile_id, cx)
-                        == Some(DatabaseCategory::ObjectStorage)
-                    {
-                        cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
-                    }
+                    self.activate_profile_root_section(profile_id, cx);
                 } else {
                     self.connect_to_profile(profile_id, cx);
                 }
             }
-            SchemaNodeId::BucketsFolder { profile_id } => {
-                cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
+            SchemaNodeId::RootSection {
+                profile_id,
+                section_id,
+            } => {
+                self.activate_root_section(profile_id, &section_id, cx);
             }
-            SchemaNodeId::Bucket { profile_id, name } => {
-                cx.emit(SidebarEvent::OpenObjectStoreBucket {
+            SchemaNodeId::RootSectionItem {
+                profile_id,
+                section_id,
+                item_id,
+            } => {
+                self.activate_root_section_item(profile_id, &section_id, &item_id, cx);
+            }
+            SchemaNodeId::RootSectionLoadMore {
+                profile_id,
+                section_id,
+            } => {
+                self.load_more_root_section_items(profile_id, &section_id, cx);
+            }
+            SchemaNodeId::SecretStore {
+                profile_id,
+                store_id,
+            } => {
+                cx.emit(SidebarEvent::OpenSecretStore {
                     profile_id,
-                    bucket: name,
+                    store_id,
+                    path: None,
+                });
+            }
+            SchemaNodeId::SecretPath {
+                profile_id,
+                store_id,
+                path,
+            } => {
+                cx.emit(SidebarEvent::OpenSecretStore {
+                    profile_id,
+                    store_id,
+                    path: Some(path),
                 });
             }
             SchemaNodeId::ScriptFile { path } => {
@@ -1886,9 +2014,23 @@ impl Sidebar {
 
         self.set_selection_anchor(item_id);
 
+        // Retry rows parse as placeholders, which have no click behavior of
+        // their own; the second click of a double click must not fetch again.
+        if Self::is_root_section_retry_row(item_id) {
+            if click_count == 1 {
+                self.execute_item(item_id, cx);
+            }
+            cx.notify();
+            return;
+        }
+
         let node_kind = parse_node_kind(item_id);
 
-        if node_kind == SchemaNodeKind::CollectionChildrenMore && click_count == 1 {
+        if matches!(
+            node_kind,
+            SchemaNodeKind::CollectionChildrenMore | SchemaNodeKind::RootSectionLoadMore
+        ) && click_count == 1
+        {
             self.execute_item(item_id, cx);
             cx.notify();
             return;
@@ -1903,9 +2045,12 @@ impl Sidebar {
 
             let is_object_storage_root = match parse_node_id(item_id) {
                 Some(SchemaNodeId::Profile { profile_id }) => {
-                    self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+                    self.profile_activation_section(profile_id).is_some()
+                        || self.root_section_declarations_pending(profile_id, cx)
                 }
-                Some(SchemaNodeId::BucketsFolder { .. }) => true,
+                Some(SchemaNodeId::RootSection { .. })
+                | Some(SchemaNodeId::SecretStore { .. })
+                | Some(SchemaNodeId::SecretPath { .. }) => true,
                 _ => false,
             };
 
@@ -2037,12 +2182,10 @@ impl Sidebar {
         &self,
         cx: &Context<Self>,
     ) -> Vec<TreeItem> {
-        let state = self.app_state.read(cx);
-        let entries = match state.scripts_directory() {
-            Some(dir) => dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query),
-            None => Vec::new(),
-        };
-        self.apply_expansion_overrides_public(Self::build_scripts_tree_items(&entries))
+        self.apply_expansion_overrides_public(Self::scripts_tree_items(
+            self.app_state.read(cx),
+            &self.scripts_search_query,
+        ))
     }
 
     fn find_item_expanded(items: &[TreeItem], target_id: &str) -> Option<bool> {
@@ -2060,14 +2203,28 @@ impl Sidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::Sidebar;
     use super::{ContextMenuAction, ContextMenuItem, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
+    use super::{Sidebar, SidebarTab};
     use crate::operations::{connect_prepare_error_toast, format_connect_prepare_error};
     use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
     use dbflux_core::PrepareConnectError;
     use dbflux_core::{SchemaNodeId, SchemaNodeKind};
     use gpui_component::tree::TreeItem;
     use uuid::Uuid;
+
+    #[test]
+    fn sidebar_tab_next_cycles_forward_and_wraps() {
+        assert_eq!(SidebarTab::Connections.next(), SidebarTab::Scripts);
+        assert_eq!(SidebarTab::Scripts.next(), SidebarTab::Dashboards);
+        assert_eq!(SidebarTab::Dashboards.next(), SidebarTab::Connections);
+    }
+
+    #[test]
+    fn sidebar_tab_previous_cycles_backward_and_wraps() {
+        assert_eq!(SidebarTab::Connections.previous(), SidebarTab::Dashboards);
+        assert_eq!(SidebarTab::Dashboards.previous(), SidebarTab::Scripts);
+        assert_eq!(SidebarTab::Scripts.previous(), SidebarTab::Connections);
+    }
 
     fn test_uuid() -> Uuid {
         Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()

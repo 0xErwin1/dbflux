@@ -1,16 +1,40 @@
 # Trabajar con resultados
 
-Los resultados se renderizan en pestañas de resultado dentro del documento. El
-modo de vista se elige automáticamente según la categoría de la base de datos:
+Los resultados se renderizan en pestañas de resultado dentro del documento. Cada
+tabla o colección se abre en la vista que su driver declara para ese objeto, y
+ofrece las demás vistas que declara:
 
-- **Vista de tabla** para bases de datos relacionales.
-- **Vista de tabla** para colecciones de documentos (por ejemplo MongoDB,
-  DynamoDB), con vistas de **Árbol** y **JSON** de la misma página (ver
+- **Vista de tabla** para tablas relacionales y resultados de query.
+- **Vista de árbol** para colecciones de documentos (por ejemplo MongoDB,
+  DynamoDB), con vistas de **Tabla** y **JSON** de la misma página (ver
   [Colecciones de documentos](DOCUMENTS.md)).
+- **Vista de tabla** con una vista de **Árbol** de las mismas filas para una
+  tabla con columnas JSON (ver
+  [Columnas JSON en una tabla](DOCUMENTS.md#columnas-json-en-una-tabla)).
+- **Gráfico sobre la cuadrícula** para una serie temporal, como un measurement
+  de InfluxDB o una hypertable de TimescaleDB, cuando sus filas se pueden
+  graficar (ver
+  [Tablas y colecciones de series temporales](CHARTS.md#tablas-y-colecciones-de-series-temporales)).
 - **Vista clave-valor** para Redis (ver [Vista clave-valor](KEY_VALUE.md)).
+
+Una tabla con una columna vectorial también lista las filas más
+[similares](#filas-similares) a la seleccionada.
 
 Los contenedores de tipo event-stream se abren como event streams cuando el
 driver declara esa presentación.
+
+## Resultados junto al editor
+
+En una pestaña de consulta los resultados están debajo del editor. En una
+pantalla ancha, muévelos a la derecha del editor con el botón de panel de la
+cabecera de resultados, la entrada **Mostrar los resultados a la derecha** de
+las acciones del panel o **Mover los resultados junto al editor o debajo** en la
+paleta de comandos. El mismo control los vuelve a poner debajo. Arrastra el
+divisor para cambiar el tamaño de cada lado. Las pestañas de consulta nuevas se
+abren con la última posición elegida.
+
+En cualquiera de las dos posiciones, `Ctrl+j` lleva el teclado del editor a los
+resultados y `Ctrl+k` lo devuelve.
 
 ## Navegar el data grid
 
@@ -35,12 +59,19 @@ que los cambios sin guardar, Guardar fila y revertir funcionan igual en ambos
 modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 `i` de nuevo para volver a la cuadrícula.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/record-view-dark.webp">
+  <img src="../images/results/record-view-light.webp" alt="La vista de registro con una fila de cliente como lista de campos y valores">
+</picture>
+
 ## Menú de la cabecera de columna
 
 Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
-esa columna: ordenar ascendente o descendente, quitar el orden y todos los
-operadores de filtro, en una sola lista plana. El clic izquierdo en la
+esa columna: copiar el nombre de la columna, ordenar ascendente o descendente,
+quitar el orden y todos los operadores de filtro, en una sola lista plana. El clic izquierdo en la
 cabecera sigue alternando el orden.
+El menú de la tabla (`m`) también ofrece **Copiar nombre de columna** para la
+columna de la celda activa, así que el teclado también llega a él.
 
 ## Panel de valor
 
@@ -56,13 +87,32 @@ tenga un cambio sin guardar.
 
 Pulsa `Ctrl+Space`, o haz clic derecho en una fila y elige **Inspeccionar
 fila**, para abrir la fila seleccionada en el panel inspector de la derecha.
-Lista cada columna de la fila con su valor, marca las columnas de clave
-primaria y foránea y, bajo **Referencias**, nombra la tabla a la que apunta cada
-clave foránea de una sola columna, con la fila referenciada cuando se resuelve.
-El inspector sigue la fila seleccionada al moverte por la cuadrícula; el botón
-de fijar de su cabecera lo mantiene en la fila actual. **Editar**, **Duplicar**
-y **Eliminar**, al pie, actúan sobre la fila inspeccionada cuando el resultado
-es editable. Pulsa `Ctrl+Space` de nuevo, o el botón de cerrar, para ocultarlo.
+Lista cada columna de la fila con su valor y marca las columnas de clave
+primaria y foránea. El inspector sigue la fila seleccionada al moverte por la
+cuadrícula; el botón de fijar de su cabecera lo mantiene en la fila actual.
+**Editar**, **Duplicar** y **Eliminar**, al pie, actúan sobre la fila
+inspeccionada cuando el resultado es editable. Pulsa `Ctrl+Space` de nuevo, o
+el botón de cerrar, para ocultarlo.
+
+Bajo **Referencias** el inspector lista las claves foráneas de la fila en ambas
+direcciones:
+
+- **Salientes** — una clave foránea de una sola columna de esta fila apunta a
+  otra tabla. La entrada nombra esa tabla y la fila a la que apunta, por su
+  valor legible una vez resuelto («María López · #8»), o por su clave hasta
+  entonces. Haz clic en ella para abrir la tabla referenciada en esa fila:
+  DBFlux reutiliza la pestaña existente de la tabla — abriendo una si no la
+  hay — y reemplaza su filtro por una igualdad de clave primaria, de modo que
+  la fila referenciada sea la visible.
+- **Entrantes** — otras tablas tienen claves foráneas que apuntan a esta fila.
+  Cada entrada nombra la tabla y cuenta cuántas de sus filas la referencian;
+  los conteos se cargan en segundo plano. Estas entradas son solo
+  informativas.
+
+Las celdas de clave foránea de la cuadrícula pueden mostrar el mismo valor del
+registro referenciado junto a su id: activa **Mostrar el valor del registro
+referenciado en celdas de clave foránea** en [Configuración](SETTINGS.md). El
+inspector de fila resuelve las referencias independientemente de ese ajuste.
 
 ## Filtrar resultados
 
@@ -87,6 +137,43 @@ El input de filtro también ofrece autocompletado consciente del schema (misma
 navegación que el builder — ver [Autocompletado consciente del
 schema](QUERY_BUILDER.md#autocompletado-consciente-del-schema)).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/filtering-dark.webp">
+  <img src="../images/results/filtering-light.webp" alt="La tabla customers filtrada con una condición WHERE escrita en la barra de filtro">
+</picture>
+
+## Filas similares
+
+En una tabla con una columna vectorial (hoy, una tabla PostgreSQL con una
+columna `vector` de pgvector), pulsa `Shift+s` o elige **Buscar filas
+similares** en el menú de la fila para listar las filas más cercanas a la fila
+seleccionada. La entrada del menú indica qué columna lee y cuántas filas lista,
+o por qué no puede ejecutarse: la fila no tiene valor en esa columna, o la
+cuadrícula tiene cambios sin guardar, que hay que guardar o revertir antes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/similar-rows-dark.webp">
+  <img src="../images/results/similar-rows-light.webp" alt="La tabla products tras Buscar filas similares: la fila seleccionada fijada arriba como ancla, sus diez filas más cercanas ordenadas por distancia L2 y la barra con la columna vectorial, la distancia y K">
+</picture>
+
+La cuadrícula muestra entonces la fila seleccionada fijada arriba, marcada como
+`referencia`, y debajo sus 10 filas más cercanas, de la más cercana a la más
+lejana. La primera columna contiene la distancia, bajo una cabecera que la
+nombra. Una barra reemplaza la fila de filtro:
+
+- El selector de columna elige la columna vectorial. Con el cursor sobre una
+  columna vectorial, la búsqueda empieza en esa columna; si no, en la primera de
+  la tabla.
+- **L2**, **Coseno** y **Producto interno** cambian la distancia. Producto
+  interno muestra el producto en sí, de mayor a menor.
+- **K** fija cuántas filas listar, de 1 a 1000.
+- **Volver a la tabla**, o `Esc`, regresa a la página de la tabla con su filtro.
+
+La fila seleccionada queda fuera de sus vecinas por su clave primaria, las filas
+sin vector no se listan y las filas similares son de solo lectura. Una distancia
+que no es un número se muestra como un guion. Las columnas `halfvec` y
+`sparsevec` no ofrecen la búsqueda.
+
 ## Editar y CRUD
 
 En el data grid:
@@ -96,6 +183,11 @@ En el data grid:
 - `r` — renombrar / editar (según el contexto).
 - `y` — copiar la fila seleccionada.
 - `Ctrl+c` (`Cmd+c`) — copiar la(s) celda(s) seleccionada(s) al portapapeles.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
+  <img src="../images/results/editing-light.webp" alt="La tabla customers con una celda editada aún sin guardar y los botones Save y Revert habilitados">
+</picture>
 
 ### Cuándo los resultados son editables
 
@@ -149,3 +241,32 @@ resultado e incluyen:
 - **JSON (pretty)** y **JSON (compact)**
 - **Text**
 - **Binary** (para resultados con forma binaria)
+
+Las secciones **Guardar filas cargadas como archivo** y **Copiar filas cargadas
+al portapapeles** del menú escriben las filas que tiene la cuadrícula, que en una
+tabla son la página actual, y el aviso indica cuántas filas fueron al archivo o
+al portapapeles.
+
+Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
+menú añade **Exportar todas las filas a un archivo**, en CSV o en JSON con un
+objeto por línea. Vuelve a leer la tabla o la colección completa con el filtro,
+el orden y la selección de columnas actuales de la cuadrícula, una página a la
+vez, y la escribe en el único archivo que elijas, de modo que los datos nunca
+tienen que caber en memoria. Una tabla mostrada mediante el constructor de
+consultas o un filtro relacional se lee con esa misma consulta, desde su
+desplazamiento y hasta su límite cuando lo define. La exportación se ejecuta
+como una tarea en el panel de tareas, que muestra su progreso y permite
+cancelarla; el aviso indica el total de filas y la ruta.
+
+Una colección de documentos exportada como JSON escribe cada documento
+completo, un objeto por línea, con todos sus campos. Como CSV se escribe con
+las columnas que la cuadrícula muestra para la primera página, incluidos los
+objetos expandidos. Los documentos de una colección no tienen por qué
+compartir sus campos, así que en un CSV un campo que aparece por primera vez en
+una página posterior no tiene columna, porque el encabezado ya está escrito; en
+ese caso la exportación nombra esos campos en una advertencia.
+
+Un resultado de consulta ofrece solo las filas cargadas, porque exportarlas
+todas implicaría volver a ejecutar la consulta. Lo mismo ocurre con una búsqueda
+de vecinos más cercanos: devuelve un número fijo de las filas más próximas, y la
+cuadrícula ya las tiene todas.

@@ -158,6 +158,13 @@ impl Sidebar {
                 |this, cx| this.import_script(cx),
                 cx,
             ),
+            self.add_menu_row(
+                "add-external-scripts-folder",
+                AppIcon::HardDrive,
+                dbflux_i18n::t!("sidebar.overlay.add_external_folder"),
+                |this, cx| this.add_external_scripts_folder(cx),
+                cx,
+            ),
         ]
     }
 
@@ -384,6 +391,12 @@ impl Sidebar {
         let page = picker.page.min(page_count.saturating_sub(1));
         let start = page.saturating_mul(picker.page_size);
         let end = (start + picker.page_size).min(total);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "`page` is clamped below `page_count = \
+                      rows.len().max(1).div_ceil(page_size)` and `end` is clamped \
+                      to `rows.len()`, so `start..end` stays within `rows`"
+        )]
         let visible_rows = rows[start..end].to_vec();
         let selected_index = picker.selected_index;
 

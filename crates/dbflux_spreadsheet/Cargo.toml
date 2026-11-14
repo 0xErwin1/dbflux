@@ -1,0 +1,29 @@
+[package]
+name = "dbflux_spreadsheet"
+version.workspace = true
+publish = false
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+calamine.workspace = true
+chrono.workspace = true
+dbflux_byte_source.workspace = true
+# Patching xlsx parts rewrites their XML, so this crate reads `quick-xml`
+# directly. It stays on 0.41 while calamine 0.37 uses 0.42: 0.42 moved the whole
+# API from bytes to `str`, and that migration is a change of its own. The two
+# copies coexist until then.
+quick-xml = "0.41"
+rust_xlsxwriter.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true

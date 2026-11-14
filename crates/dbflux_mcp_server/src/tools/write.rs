@@ -48,7 +48,7 @@ pub struct UpdateRecordsParams {
     #[schemars(description = "Table or collection name")]
     pub table: String,
 
-    #[schemars(description = "Filter conditions (REQUIRED - cannot be empty)")]
+    #[schemars(description = crate::tools::REQUIRED_WHERE_FILTER_DESCRIPTION)]
     pub r#where: serde_json::Value,
 
     #[schemars(description = "Fields to update")]
@@ -955,11 +955,16 @@ mod tests {
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(driver_registry),
             auth_provider_registry: Arc::new(HashMap::new()),
+            secret_provider_registry: Arc::new(HashMap::new()),
             driver_settings: Arc::new(HashMap::new()),
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
-            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            detached_processes: Arc::new(crate::state::DetachedProcessRegistry::new()),
             secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
             mcp_enabled_by_default: true,
+            profile_store_path: None,
         }
     }
 

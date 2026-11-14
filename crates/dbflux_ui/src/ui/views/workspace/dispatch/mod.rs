@@ -9,11 +9,29 @@ mod preflight;
 mod query;
 mod scripts;
 mod settings;
+#[cfg(test)]
+mod tests;
 
 use preflight::sidebar_tree_command_is_blocked_by_search_focus;
 
 impl CommandDispatcher for Workspace {
     fn dispatch(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.route_command(cmd, window, cx).unwrap_or_else(|| {
+            log::warn!("Command::{cmd:?} is not handled by any dispatch domain; ignoring it");
+            false
+        })
+    }
+}
+
+impl Workspace {
+    /// The whole dispatch path: `Some(handled)` when a branch or a domain
+    /// claims `cmd`, `None` when nothing routes it.
+    pub(super) fn route_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
         // Fallback for the active-query prompt when focus is not inside it,
         // like `route_confirm_modal_command` for the other confirmations; the
         // shell answers Escape and Enter itself while it has focus. Checked
@@ -26,13 +44,25 @@ impl CommandDispatcher for Workspace {
                 Command::Execute => modal.confirm(cx),
                 _ => modal.keep_waiting(cx),
             });
-            return true;
+            return Some(true);
+        }
+
+        // Quit is the application's own command: the workspace answers it no
+        // matter which panel holds focus, asks about a running query first,
+        // and leaves the shutdown itself to the shell, which owns it and
+        // starts it on `QuitConfirmed`. While the prompt is already up that
+        // prompt decides this quit, so a second request is ignored.
+        if cmd == Command::Quit {
+            if !self.modal_active_query.read(cx).is_visible() && self.request_quit(window, cx) {
+                cx.emit(QuitConfirmed);
+            }
+            return Some(true);
         }
 
         // The open notifications popover owns the keyboard (its context has
         // no parent), so its commands never reach the panels behind it.
         if let Some(result) = self.dispatch_notifications(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
 
         // A visible workspace confirmation captures the keyboard
@@ -52,7 +82,7 @@ impl CommandDispatcher for Workspace {
                 cx,
             )
         {
-            return true;
+            return Some(true);
         }
 
         // The sidebar's inline delete confirmation, drawn by the workspace,
@@ -64,35 +94,35 @@ impl CommandDispatcher for Workspace {
                 Command::Execute => sidebar.confirm_modal_delete(cx),
                 _ => sidebar.cancel_modal_delete(cx),
             });
-            return true;
+            return Some(true);
         }
 
         if self.sidebar.read(cx).has_child_picker_open() {
             match cmd {
                 Command::SelectNext => {
                     self.sidebar.update(cx, |s, cx| s.picker_select_next(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::SelectPrev => {
                     self.sidebar.update(cx, |s, cx| s.picker_select_prev(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::SelectFirst => {
                     self.sidebar.update(cx, |s, cx| s.picker_select_first(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::SelectLast => {
                     self.sidebar.update(cx, |s, cx| s.picker_select_last(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::Execute => {
                     self.sidebar.update(cx, |s, cx| s.picker_execute(cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::FocusSearch => {
                     self.sidebar
                         .update(cx, |s, cx| s.picker_focus_search(window, cx));
-                    return true;
+                    return Some(true);
                 }
                 Command::Cancel => {
                     if self.sidebar.read(cx).child_picker_filter_is_focused() {
@@ -102,9 +132,9 @@ impl CommandDispatcher for Workspace {
                     } else {
                         self.sidebar.update(cx, |s, cx| s.close_child_picker(cx));
                     }
-                    return true;
+                    return Some(true);
                 }
-                _ => return false,
+                _ => return Some(false),
             }
         }
 
@@ -113,11 +143,11 @@ impl CommandDispatcher for Workspace {
         {
             if cmd == Command::Cancel {
                 self.set_focus(FocusTarget::Sidebar, window, cx);
-                return true;
+                return Some(true);
             }
 
             if sidebar_tree_command_is_blocked_by_search_focus(cmd) {
-                return false;
+                return Some(false);
             }
         }
 
@@ -135,40 +165,53 @@ impl CommandDispatcher for Workspace {
                 | Command::ColumnRight
                 | Command::Cancel
                 | Command::NewQueryTab => {}
-                _ => return true,
+                _ => return Some(true),
             }
         }
 
         if cmd == Command::Cancel {
-            return self.handle_cancel(window, cx);
+            return Some(self.handle_cancel(window, cx));
         }
 
+        self.dispatch_to_domain(cmd, window, cx)
+    }
+}
+
+impl Workspace {
+    /// Hands `cmd` to the first dispatch domain that claims it. `None` means
+    /// no domain routes the command.
+    pub(super) fn dispatch_to_domain(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
         if let Some(result) = self.dispatch_connections(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
         if let Some(result) = self.dispatch_settings(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
         if let Some(result) = self.dispatch_audit(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
         if let Some(result) = self.dispatch_scripts(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
         if let Some(result) = self.dispatch_charts_dashboards(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
         if let Some(result) = self.dispatch_query(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
         if let Some(result) = self.dispatch_documents(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
         if let Some(result) = self.dispatch_navigation(cmd, window, cx) {
-            return result;
+            return Some(result);
         }
 
-        unreachable!("Command::{:?} not handled by any dispatch domain", cmd)
+        None
     }
 }
 
@@ -236,8 +279,8 @@ pub(crate) fn route_confirm_modal_command(
     cmd: Command,
     delete_connection: &Entity<crate::ui::overlays::modals::ModalDeleteConnection>,
     unsaved_changes: &Entity<crate::ui::overlays::modals::ModalUnsavedChanges>,
-    delete_dashboard: &Entity<ModalDeleteDashboardConfirm>,
-    delete_saved_chart: &Entity<ModalDeleteSavedChartConfirm>,
+    delete_dashboard: &Entity<ModalDeleteConfirm>,
+    delete_saved_chart: &Entity<ModalDeleteConfirm>,
     cx: &mut App,
 ) -> bool {
     if delete_connection.read(cx).is_visible() {
@@ -288,8 +331,7 @@ mod confirm_modal_routing_tests {
     };
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::modals::{
-        DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
-        DeleteSavedChartRequest, ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm,
+        DeleteConfirmOutcome, DeleteConfirmRequest, DeleteTarget, ModalDeleteConfirm,
     };
     use gpui::AppContext;
     use std::cell::RefCell;
@@ -335,8 +377,8 @@ mod confirm_modal_routing_tests {
                 Command::Execute,
                 &modal,
                 &cx.new(ModalUnsavedChanges::new),
-                &cx.new(ModalDeleteDashboardConfirm::new),
-                &cx.new(ModalDeleteSavedChartConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
                 cx,
             )
         });
@@ -366,8 +408,8 @@ mod confirm_modal_routing_tests {
                 Command::Cancel,
                 &modal,
                 &cx.new(ModalUnsavedChanges::new),
-                &cx.new(ModalDeleteDashboardConfirm::new),
-                &cx.new(ModalDeleteSavedChartConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
                 cx,
             )
         });
@@ -415,8 +457,8 @@ mod confirm_modal_routing_tests {
                 Command::Execute,
                 &cx.new(ModalDeleteConnection::new),
                 &modal,
-                &cx.new(ModalDeleteDashboardConfirm::new),
-                &cx.new(ModalDeleteSavedChartConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
                 cx,
             )
         });
@@ -434,26 +476,26 @@ mod confirm_modal_routing_tests {
     fn dashboard_and_chart_delete_modals_resolve_on_execute_and_cancel(
         cx: &mut gpui::TestAppContext,
     ) {
-        let dashboard_outcomes: Rc<RefCell<Vec<DeleteDashboardOutcome>>> =
+        let dashboard_outcomes: Rc<RefCell<Vec<DeleteConfirmOutcome>>> =
             Rc::new(RefCell::new(Vec::new()));
-        let chart_outcomes: Rc<RefCell<Vec<DeleteSavedChartOutcome>>> =
+        let chart_outcomes: Rc<RefCell<Vec<DeleteConfirmOutcome>>> =
             Rc::new(RefCell::new(Vec::new()));
         let (dashboard, chart) = cx.update(|cx| {
-            let dashboard = cx.new(ModalDeleteDashboardConfirm::new);
-            let chart = cx.new(ModalDeleteSavedChartConfirm::new);
+            let dashboard = cx.new(ModalDeleteConfirm::new);
+            let chart = cx.new(ModalDeleteConfirm::new);
             let d_sink = dashboard_outcomes.clone();
             let c_sink = chart_outcomes.clone();
-            cx.subscribe(&dashboard, move |_, event: &DeleteDashboardOutcome, _| {
+            cx.subscribe(&dashboard, move |_, event: &DeleteConfirmOutcome, _| {
                 d_sink.borrow_mut().push(event.clone());
             })
             .detach();
-            cx.subscribe(&chart, move |_, event: &DeleteSavedChartOutcome, _| {
+            cx.subscribe(&chart, move |_, event: &DeleteConfirmOutcome, _| {
                 c_sink.borrow_mut().push(event.clone());
             })
             .detach();
             dashboard.update(cx, |modal, cx| {
                 modal.open(
-                    DeleteDashboardRequest {
+                    DeleteConfirmRequest::Dashboard {
                         dashboard_id: test_uuid(),
                         dashboard_name: "Ops".to_string(),
                     },
@@ -462,7 +504,7 @@ mod confirm_modal_routing_tests {
             });
             chart.update(cx, |modal, cx| {
                 modal.open(
-                    DeleteSavedChartRequest {
+                    DeleteConfirmRequest::SavedChart {
                         chart_id: test_uuid(),
                         chart_name: "Latency".to_string(),
                         referencing_dashboards: Vec::new(),
@@ -488,7 +530,8 @@ mod confirm_modal_routing_tests {
         assert!(handled);
         assert!(matches!(
             dashboard_outcomes.borrow().first(),
-            Some(DeleteDashboardOutcome::Confirmed { dashboard_id }) if *dashboard_id == test_uuid()
+            Some(DeleteConfirmOutcome::Confirmed(DeleteTarget::Dashboard { dashboard_id }))
+                if *dashboard_id == test_uuid()
         ));
         assert_eq!(chart_outcomes.borrow().len(), 0);
         let dashboard_visible = cx.update(|cx| dashboard.read(cx).is_visible());
@@ -510,7 +553,7 @@ mod confirm_modal_routing_tests {
         assert!(handled);
         assert_eq!(
             chart_outcomes.borrow().as_slice(),
-            vec![DeleteSavedChartOutcome::Cancelled]
+            vec![DeleteConfirmOutcome::Cancelled]
         );
         let chart_visible = cx.update(|cx| chart.read(cx).is_visible());
         assert!(!chart_visible);
@@ -523,8 +566,8 @@ mod confirm_modal_routing_tests {
                 Command::Execute,
                 &cx.new(ModalDeleteConnection::new),
                 &cx.new(ModalUnsavedChanges::new),
-                &cx.new(ModalDeleteDashboardConfirm::new),
-                &cx.new(ModalDeleteSavedChartConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
+                &cx.new(ModalDeleteConfirm::new),
                 cx,
             )
         });

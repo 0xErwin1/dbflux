@@ -12,19 +12,27 @@ Advanced open-source relational database.
 ## Features
 
 - PostgreSQL relational driver with SQL query execution and schema discovery.
+- Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL statement line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Supports schemas, tables, views, indexes, foreign keys, check constraints, unique constraints, and custom types.
 - Exposes stored routines (functions, procedures, aggregates, window functions) in the schema tree with read-only definition viewer.
-- Supports authentication, SSL, SSH tunneling, and URI/manual connection modes.
+- Supports authentication, SSL, SSH tunneling, and URI/manual connection modes. As in libpq, `verify-ca` validates the certificate chain only and `verify-full` also checks the hostname.
+- TLS certificate files: the Connection Manager's root certificate, client certificate and client key fields, or the libpq URI parameters `sslrootcert`, `sslcert` and `sslkey` (for example `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). With `verify-ca` and `verify-full` the root certificate is added to the trusted roots; the other modes do not validate the chain and ignore it. The client certificate and key are presented for mutual TLS in every mode except `disable`. Files are PEM; the client key must be PKCS#8. A missing, unreadable or invalid file, or a client certificate without its key (or the reverse), fails the connection with an error naming the file, before any connection attempt. With `sslmode=disable` the files are ignored.
 - Supports query cancellation through PostgreSQL cancel tokens.
 - Includes PostgreSQL-specific SQL/code generation for CRUD, indexes, reindex, foreign keys, and type operations.
 - Multi-statement scripts (several `;`-separated statements) run as a batch via the simple query protocol, returning one result set per statement.
+- Server notices and warnings raised by a query (for example `WARNING: there is no transaction in progress` from a bare `COMMIT`, or `RAISE NOTICE`) are returned with its result; a batch attaches them all to the primary result, and a failed query drops them. A query keeps its first 100 notices, followed by one that counts the rest.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET session_replication_role`) for FK-safe migrations.
+- Batched primary-key row lookup (`fetch_rows_by_pks`): one `WHERE pk IN (...)` statement per chunk of at most 100 values, with an optional column projection; used to resolve foreign-key labels in the data grid.
 - Displays `pgvector` `vector`, `halfvec`, and `sparsevec` values, including verified one-dimensional arrays, as textual results.
+- Finds the rows nearest to a selected row on a table with a `pgvector` `vector` column, by L2 distance, cosine distance or inner product. The query names the distance `nearest_distance` (`dbflux_core::NEAREST_DISTANCE_COLUMN`); the grid shows it first, under the selected row, and shows the inner product itself rather than pgvector's negative product. `halfvec` and `sparsevec` columns do not offer the search.
+- A table with a `json` or `jsonb` column offers a Document view next to the grid: each row opens as a document with its JSON values expanded. The tree is read-only; edits go through the grid.
+- A TimescaleDB hypertable is read as a time series: its details carry a `Hypertable` storage hint naming the time dimension, and the table opens with a chart over that column next to the rows. On a server without TimescaleDB nothing changes.
 - Displays full-text search `tsvector` and `tsquery` values, including one-dimensional arrays, in PostgreSQL's canonical text form.
 - Displays `numeric` values, including one-dimensional `numeric[]` arrays, as the exact decimal PostgreSQL stores.
 - Displays `infinity` and `-infinity` dates, timestamps, and their one-dimensional arrays as PostgreSQL's own text.
 - Reports its client identity to the server as `application_name=dbflux/<version>` unless the connection string already sets `application_name`, in which case the user-supplied value is kept.
 - Probes write privilege after connecting: a replica or a read-only transaction mode resolves to read-only regardless of grants, otherwise the authenticated role's `INSERT`/`UPDATE`/`DELETE` privileges on visible base tables decide it; an empty database or a probe failure is inconclusive and leaves the profile's own mutation policy unchanged.
+- Table views (`TableViewFeatures`): a table's Columns view shows planner statistics from `pg_stats` (null share, distinct estimate, histogram bounds as the range, most common values with their shares) and the table's access method, partition key for a partitioned table, when the statistics were last updated (last `ANALYZE` or autoanalyze, or "never"), estimated rows and `pg_table_size`. Reading them reads no table rows. The Data view gets a column picker that names only the chosen columns in the query and keeps the primary key on an editable table. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
 
 ### Instance Metrics
 
@@ -46,18 +54,19 @@ Exposes tabular snapshots of running server state:
 - `pg.activity` — current sessions from `pg_stat_activity` (query text, state, wait event, duration)
 - `pg.locks` — active locks from `pg_locks` joined with `pg_class`
 
-- Row limits stream results, retain at most the requested count across the whole request, and report for each result set whether it omitted rows; execution always drains to completion.
+- Row limits stream results, retain at most the requested count across the whole request, and report for each result set whether it omitted rows; a single statement that returns rows stops reading at the limit (see Limitations), and every other request drains to completion.
 - A row-limited multi-statement batch runs statement by statement through the same typed streaming path, under one row budget shared by the whole request. Statements after the budget is exhausted still run, result sets keep the unbounded order (the first is the primary result), and the batch stops at the first failure.
 - A row-limited batch keeps the transaction boundaries the same script has when it runs unbounded as one simple query. Statements outside a user transaction run inside a transaction the driver opens and commits, or rolls back on failure, so a failure leaves none of them behind. A `BEGIN` in the script adopts the statements before it and a `COMMIT` or `ROLLBACK` ends it, as PostgreSQL's implicit transaction block does. Inside an open session transaction the statements join it, and a failure leaves it aborted.
 - Requested statement timeouts are rejected before execution.
 
 ## Limitations
 
-- Row limits cap retained rows, not server work, network traffic, or execution time; mutations still complete all effects.
+- A row-limited single statement that returns rows stops reading at the limit: it runs in a transaction the driver opens and commits, and fetches one row past the limit through a portal, so the server stops producing rows there and the result is flagged as truncated only when rows remain. An error the statement would raise in a later row is not reported. Mutations with `RETURNING` still complete all effects. `CALL`, statements inside an open transaction, and row-limited batches cap retained rows only, not server work, network traffic, or execution time. To detect an open transaction the driver first runs `SELECT transaction_timestamp() = statement_timestamp()`, which raises no error.
 - Row limits on instance metrics and inspectors are rejected before dispatch. Unbounded batches retain their buffered behavior.
 - A row-limited batch refuses, before any statement runs, `PREPARE TRANSACTION`, and a `SAVEPOINT`, `RELEASE`, `ROLLBACK TO`, or chained `COMMIT`/`ROLLBACK` that follows statements outside an explicit transaction. PostgreSQL rejects those inside its implicit transaction block, while the transaction the driver opens would accept them.
 - Statements that cannot run inside a transaction block, such as `VACUUM` or `CREATE INDEX CONCURRENTLY`, fail inside a row-limited batch with PostgreSQL's own error, as they do in an unbounded batch.
 - A row-limited batch is split with the SQL editor's statement splitter, which does not recognise SQL-standard `BEGIN ATOMIC` function bodies. A batch that contains one fails with a syntax error and rolls back instead of running; the same function alone in a request runs normally.
+- Batched primary-key row lookup sends at most 100 values per query; a larger request runs as several `IN (...)` statements.
 
 
 - Unbounded batched (multi-statement) result columns carry no type metadata; values are returned as text and chart auto-detection is disabled for them. Run a single statement to get fully typed columns.
@@ -73,6 +82,8 @@ Exposes tabular snapshots of running server state:
 - Routine editing and execution are not supported; the routine viewer is read-only.
 - Cancellation is best effort and depends on server/session state at cancellation time.
 - Code generation targets supported PostgreSQL constructs only; unsupported generator IDs return `NotSupported`.
+- Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) runs in `BEGIN READ ONLY` and is rolled back, and is refused inside an open transaction. PostgreSQL then rejects data modification in the session, except on `TEMPORARY` tables, which a read-only transaction may still change, and it does not stop functions with external effects such as `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` or advisory locks; least-privilege database credentials remain the real boundary. To detect an open transaction, the driver first runs a `SAVEPOINT` probe, which fails with SQLSTATE `25P01` (no active transaction) outside a transaction, so the server logs one `ERROR` for every read-only request that runs outside a transaction, including each editor auto-refresh tick.
+- The Columns view shows planner estimates, as fresh as the last `ANALYZE`. A column the planner has no statistics for shows every fact as unknown. It has no per-column sizes or codecs, no partitions view, no read estimate and no row profile.
 
 ## DDL Capabilities
 

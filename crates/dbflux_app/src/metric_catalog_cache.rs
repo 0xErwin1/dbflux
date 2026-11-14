@@ -91,6 +91,12 @@ impl MetricCatalogCache {
     /// Returns `None` if no fetch has completed yet for this connection.
     /// Callers that get `None` must spawn a fetch and store the result via
     /// `store_namespaces`.
+    #[expect(
+        clippy::expect_used,
+        reason = "cache lock poisoning is treated as an invariant violation; \
+                  retain the existing panic-on-poison behavior; cache updates \
+                  and value cloning run under the mutex"
+    )]
     pub fn peek_namespaces(&self, profile_id: Uuid) -> Option<Arc<Vec<MetricNamespace>>> {
         self.inner
             .lock()
@@ -102,6 +108,12 @@ impl MetricCatalogCache {
     /// Return a snapshot of the metrics cache for `(profile_id, namespace)`.
     ///
     /// Returns `None` if no fetch has started for this namespace yet.
+    #[expect(
+        clippy::expect_used,
+        reason = "cache lock poisoning is treated as an invariant violation; \
+                  retain the existing panic-on-poison behavior; cache updates \
+                  and value cloning run under the mutex"
+    )]
     pub fn peek_metrics(
         &self,
         profile_id: Uuid,
@@ -123,6 +135,12 @@ impl MetricCatalogCache {
     // -----------------------------------------------------------------------
 
     /// Store a completed namespace fetch result.
+    #[expect(
+        clippy::expect_used,
+        reason = "cache lock poisoning is treated as an invariant violation; \
+                  retain the existing panic-on-poison behavior; cache updates \
+                  and value cloning run under the mutex"
+    )]
     pub fn store_namespaces(&self, profile_id: Uuid, namespaces: Vec<MetricNamespace>) {
         let mut inner = self.inner.lock().expect("MetricCatalogCache lock poisoned");
         inner.entry(profile_id).or_default().namespaces = Some(Arc::new(namespaces));
@@ -132,6 +150,12 @@ impl MetricCatalogCache {
     ///
     /// If `next_token` is `None`, `fully_loaded` is set to `true` on the entry.
     /// Returns a `MetricsPageView` snapshot for the caller to use immediately.
+    #[expect(
+        clippy::expect_used,
+        reason = "cache lock poisoning is treated as an invariant violation; \
+                  retain the existing panic-on-poison behavior; cache updates \
+                  and value cloning run under the mutex"
+    )]
     pub fn store_metrics_page(
         &self,
         profile_id: Uuid,
@@ -167,6 +191,12 @@ impl MetricCatalogCache {
     /// Return the stored continuation token for the next page, if any.
     ///
     /// Returns `None` if no entry exists or the namespace is fully loaded.
+    #[expect(
+        clippy::expect_used,
+        reason = "cache lock poisoning is treated as an invariant violation; \
+                  retain the existing panic-on-poison behavior; cache updates \
+                  and value cloning run under the mutex"
+    )]
     pub fn peek_next_token(&self, profile_id: Uuid, namespace: &MetricNamespace) -> Option<String> {
         self.inner
             .lock()
@@ -184,6 +214,12 @@ impl MetricCatalogCache {
     ///
     /// Called on connection disconnect to ensure stale data is not served
     /// if the user reconnects with a different account or region.
+    #[expect(
+        clippy::expect_used,
+        reason = "cache lock poisoning is treated as an invariant violation; \
+                  retain the existing panic-on-poison behavior; cache updates \
+                  and value cloning run under the mutex"
+    )]
     pub fn invalidate(&self, profile_id: Uuid) {
         self.inner
             .lock()
@@ -195,6 +231,12 @@ impl MetricCatalogCache {
     ///
     /// The namespace list for `profile_id` is kept. Useful when the user
     /// triggers a refresh on a specific namespace.
+    #[expect(
+        clippy::expect_used,
+        reason = "cache lock poisoning is treated as an invariant violation; \
+                  retain the existing panic-on-poison behavior; cache updates \
+                  and value cloning run under the mutex"
+    )]
     pub fn invalidate_namespace(&self, profile_id: Uuid, namespace: &MetricNamespace) {
         if let Some(ns_cache) = self
             .inner

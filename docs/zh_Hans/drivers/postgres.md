@@ -12,19 +12,26 @@
 ## 功能
 
 - PostgreSQL 关系型驱动程序，支持 SQL 查询执行与 Schema 发现。
+- 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL 语句，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 支持 schema、表、视图、索引、外键、CHECK 约束、唯一约束与自定义类型。
 - 在 Schema 树中呈现存储例程（函数、存储过程、聚合函数、窗口函数），并提供只读的定义查看器。
-- 支持身份认证、SSL、SSH 隧道，以及 URI/手动两种连接模式。
+- 支持身份认证、SSL、SSH 隧道，以及 URI/手动两种连接模式。与 libpq 一致，`verify-ca` 只校验证书链，`verify-full` 还会校验主机名。
+- TLS 证书文件：Connection Manager 中的根证书、客户端证书和客户端密钥字段，或 libpq URI 参数 `sslrootcert`、`sslcert` 和 `sslkey`（例如 `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`）。在 `verify-ca` 和 `verify-full` 下，根证书会加入受信任的根；其他模式不校验证书链，会忽略它。除 `disable` 外，所有模式都会出示客户端证书和密钥以进行双向 TLS。文件为 PEM 格式，客户端密钥必须是 PKCS#8。文件不存在、不可读或无效，或只有客户端证书而没有对应密钥（或相反）时，连接会在任何连接尝试之前失败，错误信息会指明该文件。`sslmode=disable` 时这些文件会被忽略。
 - 通过 PostgreSQL 的取消令牌支持查询取消。
 - 包含 PostgreSQL 专属的 SQL/代码生成，面向 CRUD、索引、重建索引（reindex）、外键与类型操作。
 - 多语句脚本（若干以 `;` 分隔的语句）通过简单查询协议作为一个批次执行，每个语句返回一个结果集。
+- 查询引发的服务器通知和警告（例如单独的 `COMMIT` 产生的 `WARNING: there is no transaction in progress`，或 `RAISE NOTICE`）会随其结果一并返回；批次会把它们全部附加到主结果上，失败的查询会丢弃它们。每个查询保留前 100 条通知，并附加一条说明其余数量的通知。
 - 数据传输引擎：原生的多行 `INSERT` 批量装载（`BULK_INSERT`）、依据源表列生成的驱动程序原生 `CREATE TABLE` DDL、`TRUNCATE TABLE` 支持，以及用于外键安全迁移的参照完整性开关（`SET session_replication_role`）。
 - 以文本形式展示 `pgvector` 的 `vector`、`halfvec` 与 `sparsevec` 取值，包括经验证的一维数组。
+- 在含有 `pgvector` `vector` 列的表上，按 L2 距离、余弦距离或内积查找与所选行最接近的行。查询将距离命名为 `nearest_distance`（`dbflux_core::NEAREST_DISTANCE_COLUMN`）；表格在所选行下方将其显示为第一列，并显示内积本身而非 pgvector 的负内积。`halfvec` 与 `sparsevec` 列不提供该搜索。
+- 含有 `json` 或 `jsonb` 列的表在表格旁提供文档视图：每一行作为文档打开，其中的 JSON 值会展开。该树为只读；编辑通过表格进行。
+- TimescaleDB 超表按时间序列读取：其详情带有一个注明时间维度的 `Hypertable` 存储提示，表格打开时会在行旁显示基于该列的图表。在未安装 TimescaleDB 的服务器上不受影响。
 - 以 PostgreSQL 的规范文本形式展示全文检索的 `tsvector` 与 `tsquery` 取值，包括一维数组。
 - 以 PostgreSQL 存储的精确小数展示 `numeric` 取值，包括一维 `numeric[]` 数组。
 - 以 PostgreSQL 自身的文本展示 `infinity` 与 `-infinity` 日期和时间戳，包括其一维数组。
 - 把客户端身份以 `application_name=dbflux/<version>` 上报给服务器，除非连接串本身已设置 `application_name` —— 此时保留用户提供的值。
 - 连接后探测写入权限：副本或只读事务模式无论授权如何都判定为只读；否则由已认证角色在可见基表上的 `INSERT`/`UPDATE`/`DELETE` 权限决定；空数据库或探测失败属于无结论，配置自身的变更策略保持不变。
+- 表视图（`TableViewFeatures`）：表的“列”视图显示来自 `pg_stats` 的规划器统计信息（空值比例、去重值估算、作为范围的直方图边界、最常见值及其占比），以及表的访问方法、分区表的分区键、统计信息的最后更新时间（最近一次 `ANALYZE` 或 autoanalyze，或 "never"）、估算行数和 `pg_table_size`。读取这些信息不会读取表中的行。“数据”视图增加列选择器，查询中只列出所选的列，在可编辑的表上会保留主键。参见[列与分区](../TABLE_VIEWS.md)。
 
 ### 实例指标
 
@@ -46,14 +53,14 @@
 - `pg.activity` —— 来自 `pg_stat_activity` 的当前会话（查询文本、状态、等待事件、持续时间）
 - `pg.locks` —— 来自 `pg_locks` 并与 `pg_class` 连接后的活动锁
 
-- 行数限制以流式方式读取结果，在整个请求范围内最多保留请求的行数，并针对每个结果集报告是否省略了行；执行始终会运行至完成。
+- 行数限制以流式方式读取结果，在整个请求范围内最多保留请求的行数，并针对每个结果集报告是否省略了行；返回行的单条语句在达到上限时停止读取（见“限制”），其他请求均会运行至完成。
 - 带行数限制的多语句批次通过同一条带类型的流式路径逐条执行语句，整个请求共享一个行数预算。预算耗尽之后的语句仍会执行，结果集保持与无限制执行相同的顺序（第一个是主结果），批次在第一个失败处停止。
 - 带行数限制的批次保持同一脚本在无限制下作为单个简单查询运行时的事务边界。位于用户事务之外的语句在驱动程序开启并提交的事务中运行，失败时回滚，因此失败不会留下其中任何语句的效果。脚本中的 `BEGIN` 会把之前的语句纳入其事务，`COMMIT` 或 `ROLLBACK` 会结束该事务，这与 PostgreSQL 的隐式事务块一致。在已打开的会话事务中，这些语句会加入该事务，失败时该事务保持中止状态。
 - 请求的语句超时会在执行前被拒绝。
 
 ## 限制
 
-- 行数限制只限制保留的数据，不限制服务器工作量、网络流量或执行时间；变更操作仍会完成所有效果。
+- 带行数限制且返回行的单条语句会在达到上限时停止读取：它在驱动自行开启并提交的事务中运行，通过 portal 多获取一行，因此服务器在此停止生成行，且只有确实还有剩余行时结果才会被标记为已截断。语句在后续行中才会产生的错误不会被报告。带 `RETURNING` 的变更操作仍会完成所有效果。`CALL`、已打开事务中的语句以及带行数限制的批次只限制保留的数据，不限制服务器工作量、网络流量或执行时间。为检测已打开的事务，驱动会先运行 `SELECT transaction_timestamp() = statement_timestamp()`，该查询不会产生错误。
 - 实例指标和检查器不支持行数限制，请求会在分派前被拒绝。无限制批次保留原有行为。
 - 带行数限制的批次会在执行任何语句之前拒绝 `PREPARE TRANSACTION`，以及位于显式事务之外的语句之后的 `SAVEPOINT`、`RELEASE`、`ROLLBACK TO` 或带链的 `COMMIT`/`ROLLBACK`。PostgreSQL 会在其隐式事务块中拒绝这些语句，而驱动程序开启的事务会接受它们。
 - 无法在事务块中运行的语句，例如 `VACUUM` 或 `CREATE INDEX CONCURRENTLY`，在带行数限制的批次中会以 PostgreSQL 自身的错误失败，与无限制批次相同。
@@ -72,6 +79,8 @@
 - 不支持例程的编辑与执行；例程查看器是只读的。
 - 取消是尽力而为的，取决于取消当时的服务器/会话状态。
 - 代码生成只针对受支持的 PostgreSQL 结构；不受支持的生成器 ID 会返回 `NotSupported`。
+- 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）在 `BEGIN READ ONLY` 中运行并回滚，在已打开的事务中会被拒绝。PostgreSQL 会拒绝该会话中的数据修改，但 `TEMPORARY` 表除外，只读事务仍可修改它们；它也不会阻止具有外部效果的函数，例如 `dblink_exec`、`COPY ... TO PROGRAM`、`lo_export`、`pg_terminate_backend` 或 advisory lock；真正的边界仍是最小权限的数据库凭据。为了检测是否存在打开的事务，驱动会先执行一次 `SAVEPOINT` 探测，在事务之外它会以 SQLSTATE `25P01`（没有活动事务）失败，因此每个在事务之外运行的只读请求（包括编辑器自动刷新的每一次触发）都会让服务器记录一条 `ERROR` 日志。
+- “列”视图显示的是规划器估算，新鲜程度取决于最近一次 `ANALYZE`。规划器没有统计信息的列，其所有信息都显示为未知。它没有按列的大小或编解码器，也没有分区视图、读取量估算或行分析。
 
 ## DDL 能力
 

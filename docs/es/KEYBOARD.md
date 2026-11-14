@@ -25,6 +25,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+N` / `Cmd+Shift+N`                   | Abrir el Connection Manager                                       |
 | `Ctrl+n` / `Cmd+n`                               | Nueva pestaña de query                                            |
 | `Ctrl+w` / `Cmd+w`                               | Cerrar pestaña actual                                             |
+| `Ctrl+q` / `Cmd+q`                               | Salir de DBFlux, preguntando antes si hay una query en ejecución  |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab`                    | Pestaña siguiente / anterior                                      |
 | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown`      | Mover la pestaña activa a la izquierda / derecha                  |
 | `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9`        | Cambiar a la pestaña N                                            |
@@ -39,7 +40,12 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+4`                                   | Enfocar tareas en segundo plano                                   |
 | `Ctrl+Shift+A` / `Cmd+Shift+A`                   | Abrir el visor de auditoría                                       |
 | `Ctrl+b` / `Cmd+b`                               | Alternar sidebar                                                  |
+| `F11` / `Ctrl+Cmd+F`                             | Alternar pantalla completa                                        |
+| `Ctrl+=` / `Cmd+=`                               | Agrandar el texto de la interfaz, el editor y la tabla de datos (también `Ctrl+Shift+=` y `Ctrl++`) |
+| `Ctrl+-` / `Cmd+-`                               | Achicar el texto de la interfaz, el editor y la tabla de datos    |
+| `Ctrl+0` / `Cmd+0`                               | Restablecer el texto de la interfaz, el editor y la tabla de datos a los tamaños predeterminados |
 | `Ctrl+m`                                         | Abrir el menú contextual de la pestaña                            |
+| `` Ctrl+` ``                                     | Mostrar u ocultar la consola acoplada bajo la tabla, colección o navegador clave-valor activo, cuando su conexión tiene una; en una pestaña de consola, devolver el teclado a su campo |
 | `Ctrl+,` / `Cmd+,`                               | Abrir la configuración                                            |
 | `Ctrl+Shift+E` / `Cmd+Shift+E`                   | Ocultar o mostrar los resultados de un documento de consulta, dejando solo el editor |
 | `Ctrl+Shift+R` / `Cmd+Shift+R`                   | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
@@ -55,7 +61,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+M` / `Cmd+Shift+M`                   | Abrir aprobaciones de MCP                                         |
 | `Ctrl+Shift+G` / `Cmd+Shift+G`                   | Actualizar gobernanza de MCP                                      |
 
-`Ctrl+Shift+X` abre el visor de auditoría en el error más reciente de esta sesión, como hace **Ver en auditoría** en el toast del error, y pone a cero el contador de la insignia de errores de la barra de estado; antes de cualquier error muestra los errores de usuario. `Ctrl+Shift+5` .. `Ctrl+Shift+7` se comportan como la barra de actividad: elegir la vista que ya se muestra colapsa la sidebar. `Ctrl+Shift+Y` lista los botones del toast más reciente en pantalla, como **Copiar**, **Ver en auditoría** o **Reconectar ahora**, luego **Mostrar detalles** u **Ocultar detalles** cuando tiene detalles, y **Descartar**; se maneja con las teclas del menú contextual y, sin ningún toast en pantalla, no abre nada. Los atajos de MCP existen en las compilaciones con soporte de MCP. **Exportar conexiones** e **Importar dashboard desde JSON** se ejecutan desde la command palette.
+`Ctrl+Shift+X` abre el visor de auditoría en el error más reciente de esta sesión, como hace **Ver en auditoría** en el toast del error, y pone a cero el contador de la insignia de errores de la barra de estado; antes de cualquier error muestra los errores de usuario. `Ctrl+Shift+5` .. `Ctrl+Shift+7` se comportan como la barra de actividad: elegir la vista que ya se muestra colapsa la sidebar. `Ctrl+Shift+Y` lista los botones del toast más reciente en pantalla, como **Copiar**, **Ver en auditoría** o **Reconectar ahora**, luego **Mostrar detalles** u **Ocultar detalles** cuando tiene detalles, y **Descartar**; se maneja con las teclas del menú contextual y, sin ningún toast en pantalla, no abre nada. Los atajos de MCP existen en las compilaciones con soporte de MCP. **Exportar conexiones** e **Importar dashboard desde JSON** se ejecutan desde la command palette. En macOS, Acerca de, Servicios, Ocultar y Salir viven en el menú de la aplicación; Salir usa el atajo de arriba.
 
 Todo lo que se puede clicar en la estructura de la ventana tiene una tecla, y nada de eso entra en el ciclo de `Tab`: las entradas de la barra de actividad son `Ctrl+Shift+5` .. `Ctrl+Shift+7`, `Ctrl+Shift+A` (Auditoría), `Ctrl+Shift+M` (Aprobaciones) y `Ctrl+,` (Configuración); la búsqueda de comandos de la barra de título es `Ctrl+Shift+P` y su campana `Ctrl+Shift+B`; la entrada de tareas de la barra de estado es `Ctrl+Shift+T`, la de aprobaciones `Ctrl+Shift+M` y la insignia de errores `Ctrl+Shift+X`; una pestaña se cierra con `Ctrl+w`, se abre con `Ctrl+n`, se reordena con `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` y su menú de clic derecho se abre con `Ctrl+m`. Los botones de minimizar, maximizar y cerrar de la ventana quedan en manos de los atajos del escritorio.
 
@@ -63,7 +69,7 @@ Todo lo que se puede clicar en la estructura de la ventana tiene una tecla, y na
 
 | Teclas                                        | Acción                                                 |
 | --------------------------------------------- | ------------------------------------------------------ |
-| `q` / `e`                                     | Cambiar de pestaña del sidebar (Connections / Scripts) |
+| `q` / `e`                                     | Pestaña anterior / siguiente del sidebar (Connections / Scripts / Dashboards) |
 | `/`                                           | Enfocar búsqueda                                       |
 | `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior                       |
 | `h` / `l`                                     | Colapsar / expandir nodo (`l` en una conexión desconectada la conecta) |
@@ -119,22 +125,30 @@ búsqueda, `Tab` / `Shift+Tab` alternan entre el campo de consulta y el de
 reemplazo mientras el campo de reemplazo está visible; si no, mueven el foco
 entre paneles, igual que fuera del editor.
 
-La toolbar del editor también es un menú. `Shift+F10` abre el menú de **acciones
+Con un menú de sugerencias abierto, `Tab` escribe la sugerencia resaltada en
+lugar de la palabra que se está completando, y cada `Tab` / `Shift+Tab` siguiente
+la reemplaza por la siguiente / anterior, volviendo al principio o al final del
+menú. Una vez que `Tab` insertó una sugerencia, las flechas también actualizan el
+texto. `Enter`, o escribir cualquier otro carácter, conserva la sugerencia
+insertada y cierra el menú; `Escape` restaura la palabra escrita. Todo el ciclo
+es un único paso de deshacer.
+
+La barra de acciones del borde izquierdo del editor también es un menú. `Shift+F10` abre el menú de **acciones
 del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
 `Ctrl+k` mueve el foco a la barra de contexto de ejecución, donde `m` (o
 `Shift+F10`) también lo abre. Un editor de scripts (Lua, Python, Bash) no tiene
 controles de conexión, así que su barra de contexto solo contiene un botón
 **Acciones**, que `Ctrl+k` enfoca y que se pulsa con `Enter`, `m` o un clic. El
 menú lista Ejecutar (Cancelar mientras corre una query), Ejecutar en
-una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar, Gráfico,
-Actualizar y el intervalo de actualización automática, cada una con su atajo
-cuando lo tiene. Muévete con `j` / `k` y elige con `Enter`, como en cualquier
-[menú contextual](#menú-contextual); `Escape` lo cierra. La entrada de
+una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar y
+Gráfico, cada una con su atajo cuando lo tiene. Muévete con `j` / `k` y elige con
+`Enter`, como en cualquier [menú contextual](#menú-contextual); `Escape` lo
+cierra. Mientras la consulta tiene resultados, el menú sigue con la cabecera de
+resultados: Actualizar y el intervalo de actualización automática, Pestaña de
+resultados siguiente y anterior, Cerrar pestaña de resultados, Maximizar
+(Restaurar) resultados y Ocultar (Mostrar) resultados. La entrada de
 actualización automática abre la lista de intervalos con el foco del teclado (ver
-[Desplegables](#desplegables)). Mientras la consulta tiene resultados, el menú
-sigue con la cabecera de resultados: Pestaña de resultados siguiente y anterior,
-Cerrar pestaña de resultados, Maximizar (Restaurar) resultados y Ocultar
-(Mostrar) resultados. El menú también está en la command palette como
+[Desplegables](#desplegables)). El menú también está en la command palette como
 **Abrir acciones del panel**.
 
 ## Modo Vim (opcional)
@@ -189,6 +203,7 @@ de estado del espacio de trabajo.
 | Normal / Visual / Visual Línea / Visual Bloque | `gg` / `G` / `Ngg` / `NG` | Ir a la primera / última / línea lógica absoluta N (desde 1, limitada al archivo); en Visual se extiende la selección |
 | Normal | `i` | Insertar antes del cursor |
 | Normal | `a` / `A` / `I` | Insertar después del cursor / al final de la línea / en el primer carácter no blanco de la línea |
+| Normal | `o` / `O` | Abrir una línea nueva debajo / encima de la línea del cursor con la misma indentación e insertar allí |
 | Normal | `e` / `w` / `b` | Ir al final de una palabra / al inicio de la siguiente / al inicio de la anterior |
 | Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
@@ -199,14 +214,35 @@ de estado del espacio de trabajo.
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `gg` / `G` | Borrar / copiar líneas lógicas completas hasta un destino absoluto (`y` usa el portapapeles del sistema) |
+| Normal / Visual | `$` / `^` / `0` | Ir al último carácter / al primer carácter no blanco / al inicio de la línea; `N$` va al final de la línea N-1 líneas más abajo |
+| Normal / Visual | `f{car}` / `t{car}` / `F{car}` / `T{car}` | Ir sobre / justo antes del siguiente `{car}` de la línea, o sobre / justo después del anterior; un contador busca el N-ésimo |
+| Normal / Visual | `;` / `,` | Repetir el último `f` / `t` / `F` / `T` en la misma dirección / en la contraria |
+| Normal / Visual | `%` | Saltar al paréntesis, corchete o llave que cierra o abre el que está bajo el cursor o después de él en la línea |
+| Normal / Visual | `}` / `{` | Ir a la siguiente / anterior línea vacía |
+| Normal | `d` / `c` / `y` + `$` / `^` / `0` / `f` / `t` / `F` / `T` / `;` / `,` / `%` / `}` / `{` | Actuar sobre el rango del movimiento; `f`, `t`, `$` y `%` incluyen el carácter de destino |
+| Normal | `d` / `c` / `y` + `i` / `a` + objeto | Actuar sobre un objeto de texto (ver **Objetos de texto** más abajo), por ejemplo `ciw`, `di"`, `ca(` |
+| Normal | `D` / `C` | Borrar / cambiar hasta el final de la línea, como `d$` / `c$` |
+| Normal | `s` / `S` | Cambiar el carácter bajo el cursor (o los N siguientes) / la línea entera |
+| Normal | `J` | Unir la línea con la siguiente (o con las N-1 siguientes) con un espacio |
+| Normal | `~` | Cambiar mayúsculas y minúsculas del carácter bajo el cursor (o de los N siguientes) y avanzar |
+| Normal | `*` / `#` | Buscar la palabra completa bajo el cursor hacia adelante / hacia atrás |
+| Normal | `?` | Abrir el panel de búsqueda buscando hacia atrás |
+| Normal | `p` / `P` / `Np` | Pegar el portapapeles del sistema después / antes del cursor; un contador lo pega esa cantidad de veces |
+| Normal | `Ctrl+Shift+V` | Pegar el portapapeles del sistema antes del cursor, como `P` |
 | Normal | `u` | Deshacer |
+| Normal | `Ctrl+r` | Rehacer; un contador rehace esa cantidad de pasos |
+| Normal | `.` | Repetir el último cambio, incluido el texto escrito después; un contador reemplaza el del cambio |
+| Normal / Visual | `Ctrl+d` / `Ctrl+u` | Bajar / subir la mitad de las líneas visibles; un contador mueve esa cantidad de líneas |
 | Normal | `v` / `V` / `Ctrl+v` | Seleccionar caracteres / líneas completas / un rectángulo de filas mostradas en modo Visual |
 | Visual / Visual Línea | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extender la selección con los mismos movimientos y contadores del modo Normal |
 | Visual / Visual Línea | `v` / `V` | Salir del modo Visual activo / alternar entre selección de caracteres y líneas |
 | Visual / Visual Línea / Visual Bloque | `c` | Cambiar los caracteres seleccionados inclusive, las líneas lógicas o las columnas del bloque y entrar en modo Insertar |
 | Visual / Visual Línea / Visual Bloque | `d` / `x` / `y` | Borrar la selección (`d` / `x`) o copiarla al portapapeles del sistema (`y`) |
+| Visual / Visual Línea | `i` / `a` + objeto | Seleccionar un objeto de texto |
+| Visual / Visual Línea | `p` / `P` | Reemplazar la selección por el portapapeles; `p` deja luego el texto reemplazado en el portapapeles y `P` conserva el portapapeles |
 | Visual / Visual Línea / Visual Bloque | `Escape` | Borrar la selección y volver al modo Normal |
 | Insertar | `Escape` | Cerrar un menú de autocompletado abierto; si no hay ninguno, volver al modo Normal |
+| Insertar / Reemplazar | `Ctrl+Shift+V` | Insertar el portapapeles del sistema en el cursor, reemplazando la selección |
 | Reemplazar | Caracteres escritos | Sobrescribir el carácter bajo el cursor; al final de una línea se agregan |
 | Reemplazar | `Backspace` | Restaurar el carácter que sobrescribió esta sesión de Reemplazar; si no hay ninguno, moverse a la izquierda |
 | Reemplazar | `Escape` | Volver al modo Normal |
@@ -221,15 +257,16 @@ hasta el final de la línea sin unir líneas; `u` con contador deshace esa canti
 al inicio de la línea; después de un dígito distinto de cero forma parte del
 contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
-selección del editor. `gg` y `G` sitúan el cursor en el primer carácter no blanco
+selección del editor, y un clic izquierdo simple vuelve al modo Normal con el cursor
+donde se hizo clic, como en Vim. `gg` y `G` sitúan el cursor en el primer carácter no blanco
 de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
 se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema.
 
 `Ctrl+Enter` usa la selección sin espacios al inicio ni al final si contiene
-texto no blanco; si no, usa todo el editor. En Visual Bloque, une con saltos de
-línea los fragmentos no vacíos en orden, como al seleccionar con Alt y
-arrastrar el mouse. Si el bloque solo contiene espacios en blanco, usa todo el
-editor. Las columnas del bloque cuentan escalares Unicode, no celdas visuales:
+texto no blanco; si no, ejecuta la sentencia bajo el cursor, como sin Vim. En
+Visual Bloque, une con saltos de línea los fragmentos no vacíos en orden, como
+al seleccionar con Alt y arrastrar el mouse. Si el bloque solo contiene espacios
+en blanco, ejecuta la sentencia bajo el cursor. Las columnas del bloque cuentan escalares Unicode, no celdas visuales:
 las tabulaciones, los caracteres anchos y las secuencias combinadas pueden no
 alinearse con las columnas en pantalla.
 
@@ -266,18 +303,19 @@ Todo lo demás en modo Normal:
 | `Space` | Inicia una secuencia de líder (ver **Tecla líder** más abajo); sola, nada |
 | `Tab` / `Shift+Tab` | Mover el foco al panel siguiente / anterior, igual que fuera del editor (también en los modos Visual); no indenta |
 | `Ctrl+v` | Entrar en Visual Bloque (no pegar) |
-| Pegar (`Cmd+v` o el menú contextual) | Nada |
+| Pegar (`Cmd+v` o el menú contextual) | Nada; use `p`, `P` o `Ctrl+Shift+V` |
 | Composición y confirmación del método de entrada (IME) | Se descartan |
 | `Backspace` / `Delete` | Nada |
 | `Escape` | Su significado habitual: cancelar una query en curso o salir del editor |
-| Atajos con `Ctrl`, `Alt` o `Cmd`; flechas; el mouse | Funcionan como siempre, incluidos deshacer y rehacer |
+| Atajos con `Ctrl`, `Alt` o `Cmd`; flechas; el mouse | Funcionan como siempre, incluidos deshacer y rehacer, salvo las teclas de Vim `Ctrl+r`, `Ctrl+d`, `Ctrl+u` y `Ctrl+v` |
 
 En modo Normal el cursor está sobre un carácter, nunca después del final de una
 línea. Al salir del modo Insertar retrocede un carácter, como en Vim. En una
 línea vacía `x` no hace nada, así que nunca une líneas.
 
 En modo Insertar el editor se comporta igual que con el modo Vim desactivado,
-incluido pegar con `Ctrl+v`, salvo por `Escape`. Con un menú de autocompletado o de acciones de código
+incluido pegar con `Ctrl+v`, salvo por `Escape`. `Ctrl+Shift+V` también pega
+allí, y en modo Reemplazar inserta el portapapeles sin sobrescribir. Con un menú de autocompletado o de acciones de código
 abierto, `Escape` cierra el menú y se queda en modo Insertar; si no, vuelve al
 modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
 o una sugerencia en línea visible, el primer `Escape` los descarta y el
@@ -293,9 +331,15 @@ Visual `c` por caracteres o líneas cambia la selección inclusiva mediante edic
 
 `R` entra en modo Reemplazar. Cada carácter escrito sobrescribe el carácter bajo el cursor; al final de una línea se agrega en lugar de reemplazar el salto de línea. `Backspace` restaura en orden inverso los caracteres sobrescritos en esta sesión de Reemplazar y, si no queda ninguno, solo mueve el cursor a la izquierda. `Enter` inserta un salto de línea y `Tab` indenta, como en modo Insertar. `Escape` vuelve al modo Normal y retrocede el cursor un carácter. Toda la sesión de Reemplazar es un solo paso de deshacer. Se ignora un contador antes de `R`.
 
+**Abrir línea y pegar.** `o` / `O` abren una línea nueva debajo / encima de la línea lógica del cursor, conservan sus espacios y tabulaciones iniciales y su fin de línea LF o CRLF, y entran en modo Insertar después de la indentación. La línea nueva y el texto escrito antes de `Escape` forman un solo paso de deshacer. Se ignora un contador antes de `o` / `O`. `p` / `P` pegan el portapapeles del sistema en modo Normal y se quedan en él. Las líneas completas van debajo / encima de la línea del cursor, con el cursor en el primer carácter no blanco de la primera línea nueva; el resto del texto va después del carácter bajo el cursor / en el cursor, con el cursor en el último carácter insertado. Un contador pega el texto esa cantidad de veces (`3p`). Cada pegado es un solo paso de deshacer, y un portapapeles vacío no pega nada.
+
 Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, también con contador. Todo lo escrito en una sesión ordinaria de modo Insertar es un paso; cada nueva sesión empieza otro. Un grupo de deshacer tiene un límite de 1000 cambios: una sesión larga puede requerir varios pasos. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
 **Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. En modo Reemplazar, el texto que llega sin pulsar una tecla, como una confirmación del IME, se inserta en lugar de sobrescribir, y `Backspace` no restaura caracteres a su alrededor. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
+
+**Objetos de texto.** Después de `d`, `c` o `y`, o en los modos Visual y Visual Línea, `i` selecciona el interior de un objeto y `a` un poco más. `iw` / `aw` toman la palabra bajo el cursor, `aw` con los espacios que la siguen, o los que la preceden cuando no hay ninguno después; `iW` / `aW` usan palabras separadas por espacios. `i"` / `a"`, `i'` / `a'` y `` i` `` / `` a` `` toman texto entre comillas en la línea del cursor: sobre una comilla, las comillas se emparejan desde el inicio de la línea; en otro lugar se usan las comillas más cercanas alrededor del cursor, o el primer texto entre comillas después de él; una comilla precedida por una barra invertida no cuenta, y `a"` agrega los espacios que siguen a la comilla de cierre. `i(` / `a(` (también `ib`, `i)`), `i[`, `i{` (también `iB`) e `i<` toman los paréntesis, corchetes o llaves que rodean al cursor, aunque crucen líneas; `a(` los incluye. Un contador elige palabras o un par exterior (`d2i(`). Cuando el interior empieza con un salto de línea y la llave de cierre solo tiene espacios antes en su línea, `i{` abarca las líneas completas de en medio, así que `ci{` deja las llaves en sus propias líneas.
+
+**Búsquedas y repetición.** `f`, `t`, `F` y `T` no salen de la línea del cursor y toman la tecla siguiente como carácter, así que `f` seguido de `Space` busca un espacio; `Escape` cancela. Después de `t` o `T`, `;` salta un destino que está justo al lado del cursor. `%` no acepta contador. `{` y `}` solo se detienen en líneas vacías; una línea de espacios es parte de su párrafo. `*` y `#` buscan texto literal con la opción de mayúsculas del panel de búsqueda y saltan las coincidencias dentro de palabras más largas; después de ellos, `n` y `N` mantienen la dirección y la regla de palabra completa; después de `?`, mantienen la dirección hacia atrás. Después de `?`, `Enter` en el panel de búsqueda va a la coincidencia anterior y `Shift+Enter` a la siguiente. `.` repite el último comando de modo Normal que cambió el texto, con el texto escrito en la sesión de Insertar que abrió si el cursor quedó al final de ese texto; si el cursor salió de ese texto o el foco salió del editor durante la sesión, `.` no hace nada hasta el próximo cambio; no repite comandos de los modos Visual ni el modo Reemplazar, y cada repetición es un solo paso de deshacer. `Ctrl+d` y `Ctrl+u` cuentan las líneas visibles en el editor y mueven el cursor; la vista sigue al cursor.
 
 **Tecla líder.** En modo Normal y en los modos Visual, la tecla líder inicia
 una secuencia de dos teclas que ejecuta un comando sin salir de la fila
@@ -329,7 +373,7 @@ la tecla líder se guarda la propia líder, mostrada como `Leader`, así que el
 atajo sigue a la tecla líder cuando esta cambia.
 
 **Editores de solo lectura** (definiciones de rutinas): aceptan los
-movimientos, `yy` y `y` con movimiento; `x`, `r`, `R`, `dd`, `cc`, `c` / `d` con movimiento, `c` en Visual y `u`
+movimientos, `yy` y `y` con movimiento; `x`, `r`, `R`, `o`, `O`, `p`, `P`, `Ctrl+Shift+V`, `dd`, `cc`, `c` / `d` con movimiento, `c` en Visual y `u`
 no hacen nada. Borrar tampoco modifica el portapapeles.
 
 **Limitaciones.**
@@ -343,9 +387,14 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
   admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
   el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
   `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
-  No se admiten otras marcas, objetos de texto, registros,
-  macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
+  No se admiten otras marcas, registros, macros ni comandos `:`. No es Vim
   completo.
+- No hay registros: `p` / `P` pegan el portapapeles del sistema. El texto que
+  DBFlux copió o borró por última vez conserva su tipo (líneas completas con
+  `yy`, `dd`, los movimientos `j` / `k` y `gg` / `G`, y Visual Línea;
+  caracteres en los demás casos, incluido Visual Bloque). Cualquier otro texto
+  del portapapeles se pega como líneas completas si termina en un salto de
+  línea, y como caracteres si no.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así
   que una letra escrita con un acento combinante separado requiere dos pulsaciones.
 - El modo Normal solo bloquea lo que escribes y pegas. Las ediciones que hace
@@ -363,21 +412,27 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
-| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, o vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, dando la vuelta en los extremos |
+| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, o vista siguiente / anterior (Datos, Columnas, Particiones) de una tabla, dando la vuelta en los extremos |
 | `Alt+w`                                       | Cerrar la pestaña de resultados visible; si era la última, el editor recibe el foco |
 | `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
-| `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos de guardar y copiar, `Enter` ejecuta uno, `Escape` lo cierra |
+| `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos para guardar o copiar las filas cargadas y, en una tabla, para exportar todas las filas; `Enter` ejecuta uno, `Escape` lo cierra |
 | `f`                                           | Enfocar la toolbar                         |
 | `Shift+f`                                     | Limpiar el filtro WHERE y recargar las filas; en una colección de documentos, vaciar el campo de filtro y buscar |
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
+| `e` | Editar el valor del secreto seleccionado en el documento de AWS Secrets: recupera antes el valor si no está cargado (la recuperación se audita cuando la auditoría está activa; con la auditoría desactivada, o si falla la escritura de auditoría, puede completarse sin registro) y luego abre el editor; solo cuando se puede editar (texto sin formato, no gestionado por otro servicio, sin eliminación programada, en un almacén que acepta escrituras) |
+| `b` | Revertir el secreto seleccionado a su versión anterior más reciente en el documento de AWS Secrets (pregunta antes; solo en un almacén con etiquetas de etapa, para un secreto que no gestiona otro servicio ni tiene la eliminación programada) |
+| `m` → Abrir en una pestaña | Abre el secreto seleccionado del documento de AWS Secrets en su propia pestaña (también con el botón de expandir del panel de detalles y la opción Abrir en una pestaña del menú de la fila). En esa pestaña, `e`, `b`, `x` y `F5` actúan sobre su único secreto como en el listado. Una pestaña cuya región difiere de la de la conexión, o cuyo secreto fue eliminado, no inicia lecturas ni escrituras y explica por qué (un guardado ya en curso no se cancela y aún puede llegar a la región anterior). Editar valor (`e`) en el listado abre esa pestaña con el editor activo y recupera antes el valor si no está cargado (auditado cuando la auditoría está activa). |
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
+| `t` | Mostrar la vista de datos siguiente (Tabla, Árbol, JSON) de una tabla o colección que ofrece más de una |
 | `Shift+t`                                     | Mostrar la vista siguiente del resultado (Datos o Cuadrícula, JSON, Gráfico y las demás que ofrezca), dando la vuelta; el teclado sigue en los resultados |
 | `v`                                           | Alternar el panel de valor de la celda     |
 | `Ctrl+Space`                                  | Alternar el inspector de la fila           |
+| `Shift+s` | Buscar las filas más cercanas a la fila seleccionada por su columna vectorial, en una tabla con una columna `vector` de `pgvector` (también en el menú contextual de la fila) |
+| `Esc` | Salir de las filas similares y volver a la página de la tabla |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, mostrar otra vista del resultado, los botones del panel de valor y del inspector de fila, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
@@ -405,6 +460,16 @@ tablas: `Alt+l` y `Alt+h` pasan de Claves más grandes a Por prefijo y viceversa
 `Escape` cancela un análisis que todavía lee el archivo, y `m` lista la otra
 tabla, un orden por columna de la tabla donde está el teclado (como lo hace un
 clic en la cabecera) y Cancelar mientras se lee el archivo.
+
+La vista Columnas de una tabla toma `j` / `k` para moverse entre columnas,
+`Space` para agregar a la vista Datos la columna bajo el cursor o quitarla,
+`Shift+t` para recorrer el orden (orden de la tabla, tamaño, nombre), `/` para
+filtrar las columnas y `F5` para volver a leer las estadísticas. En la vista
+Particiones, `F5` vuelve a leer las particiones. El submenú Barra de
+herramientas de `m` lista Mostrar Datos, Mostrar Columnas, Mostrar Particiones,
+Elegir columnas, Actualizar estadísticas de columnas, Perfilar las primeras
+filas y Actualizar particiones cuando la tabla los ofrece. Ver [Columnas y
+particiones](TABLE_VIEWS.md).
 
 ## Diferencia de esquemas
 
@@ -523,6 +588,8 @@ El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado
 
 La tarea seleccionada se resalta mientras el panel tiene el foco; hacer clic en una fila también la selecciona. El menú de acciones lista **Mostrar salida**, **Cancelar tarea** y **Descartar** de la tarea seleccionada, y después **Limpiar terminadas** y **Ocultar el panel de tareas**, cada una con su atajo; se maneja con las teclas del menú contextual. **Borrar tareas terminadas** también está en la paleta de comandos.
 
+**Cancelar tarea** solo se ofrece para el trabajo que se detiene al cancelarlo, como una consulta, una exportación o un escaneo de claves. Una escritura ya enviada al servidor, una lectura de clave o una única consulta de metadatos llega hasta el final y no muestra cancelar.
+
 ## Centro de notificaciones
 
 La campana del extremo derecho de la barra de título abre el centro de
@@ -569,6 +636,11 @@ Mientras el popover está abierto se queda con el teclado: los paneles de atrás
 
 Las letras quedan para el campo de búsqueda, así que escribir filtra la lista.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/keyboard/command-palette-dark.webp">
+  <img src="../images/keyboard/command-palette-light.webp" alt="La command palette filtrada por una búsqueda corta, con los comandos que coinciden y sus atajos">
+</picture>
+
 ## Tabla de datos
 
 Estas teclas se aplican mientras una grilla de resultados o una tabla tiene el
@@ -609,7 +681,14 @@ constructor de consultas que está a su lado.
 | `Enter` | Editar el valor (panel de valor) |
 | `Escape` | Dejar de editar el valor, o volver a la grilla |
 | `Ctrl+h` | Volver a la grilla |
-| `m` (o `Shift+F10`) | Abrir el menú contextual de la grilla. Su entrada Barra de herramientas lista los botones del panel abierto: en el panel de valor los demás formatos, el ajuste de línea, Formatear, Compactar y, cuando el valor cambió, Revertir y Guardar; en el inspector de fila Fijar o Soltar |
+| `m` (o `Shift+F10`) | Abrir el menú contextual de la grilla. Su entrada Barra de herramientas lista los botones del panel abierto: en el panel de valor los demás formatos, el ajuste de línea, Formatear, Compactar y, cuando el valor cambió, Revertir y Guardar; en el inspector de fila Fijar o Soltar, e Ir al registro referenciado cuando lista referencias de clave foránea salientes, o cuando el cursor está sobre una celda de clave foránea |
+
+**Ir al registro referenciado** abre la fila a la que apunta una clave foránea de la
+fila inspeccionada, igual que hacer clic en una entrada REFERENCES del
+inspector: sigue la celda del cursor de la grilla cuando está sobre una clave
+foránea de una sola columna con valor no nulo, y si no, la primera referencia
+saliente que lista el inspector. No tiene atajo propio; se ejecuta desde la
+entrada Barra de herramientas de arriba.
 
 Los constructores de consultas tienen teclas propias, descritas en
 [Constructores de consultas](#constructores-de-consultas).
@@ -699,7 +778,8 @@ masivo, y Detener o Buscar en todo el keyspace mientras un escaneo filtrado lee
 página por página). En los diálogos Nueva clave y Añadir miembro, `Tab` y
 `Shift+Tab` recorren los campos como `j` y `k` y no salen del diálogo. Cuando la
 consola pide confirmar un comando peligroso, `Enter` en su campo vacío lo ejecuta
-y `Escape` lo cancela.
+y `Escape` lo cancela. La consola de una colección de documentos responde a las
+mismas teclas.
 
 ## Almacenamiento de objetos
 
@@ -723,6 +803,23 @@ Al salir de un objeto con ediciones sin guardar, el diálogo que pregunta qué
 hacer se abre con **Guardar** enfocado, así que `Enter` guarda. `Tab` y
 `Shift+Tab` pasan entre **Guardar**, **Cancelar** y **Descartar** sin salir del
 diálogo, `Enter` o `Space` presionan el botón enfocado y `Escape` cancela.
+
+## Archivos CSV y TSV
+
+Una pestaña CSV o TSV toma en su tabla las teclas de
+[Tabla de datos](#tabla-de-datos), y estas. Ver
+[Archivos CSV y TSV](CSV_FILES.md).
+
+| Teclas | Acción |
+|--------|--------|
+| `t` | Mostrar la vista siguiente: tabla, texto, Columnas |
+| `Shift+t` | Cambiar el texto entre Sin formato y Alineado, o recorrer el orden de las columnas en la vista Columnas |
+| `/` | En la vista Columnas, filtrar las columnas por nombre o tipo |
+| `Escape` / `Enter` | Sacar el teclado del texto / devolverlo |
+| `]` | Cargar los siguientes 500 registros |
+| `F5` | Volver a leer el archivo desde su origen |
+| `Ctrl+s` / `Cmd+s` | Guardar, desde la tabla o desde el texto |
+| `m` (o `Shift+F10`) | Acciones del panel: los controles del dialecto, Insertar fila arriba, Agregar columna, Renombrar columna, Descartar cambios, Recargar desde el archivo, Perfilar el archivo completo y Cancelar la carga mientras se carga el resto del archivo |
 
 ## Visor de auditoría
 
@@ -781,10 +878,10 @@ Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
 
 Mientras escribes en un campo de texto fuera de un diálogo, como la búsqueda de
 la sidebar o la barra de contexto de ejecución, los atajos globales que llevan
-`Ctrl` o `Cmd` siguen funcionando: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`,
-`Ctrl+Shift+P` y los demás de [Global](#global-disponible-sin-importar-el-foco).
-Las teclas sin esos modificadores, incluidas `Tab`, `Escape`, `Enter` y las
-flechas, se quedan en el campo. Un atajo que el propio campo define, como
+`Ctrl` o `Cmd`, o que empiezan con una tecla de función como `F11`, siguen
+funcionando: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` y los
+demás de [Global](#global-disponible-sin-importar-el-foco). Las demás teclas,
+incluidas `Tab`, `Escape`, `Enter` y las flechas, se quedan en el campo. Un atajo que el propio campo define, como
 `Ctrl+a` o `Ctrl+c`, tiene prioridad sobre el global. Dentro de un diálogo, un
 menú, un desplegable o un selector, los atajos globales esperan a que se cierre.
 

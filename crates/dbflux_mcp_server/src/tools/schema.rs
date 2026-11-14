@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use dbflux_core::{Connection, DataStructure, DescribeRequest, TableRef};
+use dbflux_core::{
+    Connection, ContainerInfo, DataStructure, DescribeRequest, KeySpaceInfo, TableRef,
+};
 use rmcp::{
     ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
@@ -12,6 +14,7 @@ use crate::{
     helper::{IntoErrorData, *},
     server::DbFluxServer,
     state::ServerState,
+    tools::not_found::{self, CallFailure, FailedCall},
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -39,6 +42,47 @@ pub struct ListTablesParams {
 
     #[schemars(description = "Optional schema filter (for relational databases)")]
     pub schema: Option<String>,
+
+    #[schemars(
+        description = "When true, `tables` is an array of name strings instead of one object per entry, which keeps the response small on databases with many tables. Default: false"
+    )]
+    #[serde(default)]
+    pub names_only: bool,
+}
+
+/// Renders one table, view or collection of a `list_tables` response: the bare
+/// name when `names_only` is set, the full entry otherwise.
+fn named_entry(
+    name: &str,
+    schema: Option<&str>,
+    kind: &str,
+    names_only: bool,
+) -> serde_json::Value {
+    if names_only {
+        return serde_json::json!(name);
+    }
+
+    serde_json::json!({
+        "name": name,
+        "schema": schema,
+        "kind": kind,
+    })
+}
+
+/// Renders one keyspace of a `list_tables` response. A keyspace has no name
+/// field, so the names-only form uses the name `ContainerInfo` gives it.
+fn keyspace_entry(keyspace: &KeySpaceInfo, names_only: bool) -> serde_json::Value {
+    if names_only {
+        let container = ContainerInfo::KeySpace(keyspace.clone());
+
+        return serde_json::json!(container.name());
+    }
+
+    serde_json::json!({
+        "db_index": keyspace.db_index,
+        "key_count": keyspace.key_count,
+        "kind": "Keyspace",
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -123,6 +167,7 @@ impl DbFluxServer {
         let connection_id = params.connection_id.clone();
         let database = params.database.clone();
         let schema = params.schema.clone();
+        let names_only = params.names_only;
 
         self.governance
             .authorize_and_execute(
@@ -135,6 +180,7 @@ impl DbFluxServer {
                         &connection_id,
                         database.as_deref(),
                         schema.as_deref(),
+                        names_only,
                     )
                     .await
                     .map_err(|e| e.into_error_data())?;
@@ -290,6 +336,7 @@ impl DbFluxServer {
     async fn list_tables_document(
         connection: &Arc<dyn Connection>,
         database: &str,
+        names_only: bool,
     ) -> Result<serde_json::Value, String> {
         let conn = connection.clone();
         let db_name = database.to_string();
@@ -302,23 +349,18 @@ impl DbFluxServer {
         let collections: Vec<serde_json::Value> = db_schema
             .tables
             .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "name": t.name,
-                    "schema": t.schema,
-                    "kind": "Collection",
-                })
-            })
+            .map(|t| named_entry(&t.name, t.schema.as_deref(), "Collection", names_only))
             .collect();
 
         Ok(serde_json::json!({ "tables": collections }))
     }
 
-    async fn list_tables_impl(
+    pub(crate) async fn list_tables_impl(
         state: ServerState,
         connection_id: &str,
         database: Option<&str>,
         schema: Option<&str>,
+        names_only: bool,
     ) -> Result<serde_json::Value, String> {
         let connection = if let Some(target_db) = database {
             let current_db = Self::get_current_database(&state, connection_id).await?;
@@ -343,7 +385,7 @@ impl DbFluxServer {
                  Use: list_tables(connection_id, database=\"db_name\", ...)"
             })?;
 
-            return Self::list_tables_document(&connection, db_name).await;
+            return Self::list_tables_document(&connection, db_name, names_only).await;
         }
 
         let conn = connection.clone();
@@ -408,25 +450,13 @@ impl DbFluxServer {
                 let mut tables: Vec<serde_json::Value> = schema_data
                     .tables
                     .iter()
-                    .map(|t| {
-                        serde_json::json!({
-                            "name": t.name,
-                            "schema": t.schema,
-                            "kind": "Table",
-                        })
-                    })
+                    .map(|t| named_entry(&t.name, t.schema.as_deref(), "Table", names_only))
                     .collect();
 
                 let views: Vec<serde_json::Value> = schema_data
                     .views
                     .iter()
-                    .map(|v| {
-                        serde_json::json!({
-                            "name": v.name,
-                            "schema": v.schema,
-                            "kind": "View",
-                        })
-                    })
+                    .map(|v| named_entry(&v.name, v.schema.as_deref(), "View", names_only))
                     .collect();
 
                 tables.extend(views);
@@ -443,13 +473,7 @@ impl DbFluxServer {
                 let patterns: Vec<serde_json::Value> = kv
                     .keyspaces
                     .iter()
-                    .map(|k| {
-                        serde_json::json!({
-                            "db_index": k.db_index,
-                            "key_count": k.key_count,
-                            "kind": "Keyspace",
-                        })
-                    })
+                    .map(|k| keyspace_entry(k, names_only))
                     .collect();
 
                 Ok(serde_json::json!({ "tables": patterns }))
@@ -469,12 +493,12 @@ impl DbFluxServer {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
             if target_db != current_db.as_deref().unwrap_or("") {
-                Self::connect_with_database(state, connection_id, target_db).await?
+                Self::connect_with_database(state.clone(), connection_id, target_db).await?
             } else {
-                Self::get_or_connect(state, connection_id).await?
+                Self::get_or_connect(state.clone(), connection_id).await?
             }
         } else {
-            Self::get_or_connect(state, connection_id).await?
+            Self::get_or_connect(state.clone(), connection_id).await?
         };
 
         let table_ref = TableRef {
@@ -482,28 +506,44 @@ impl DbFluxServer {
             name: name.to_string(),
         };
 
-        let request = DescribeRequest::new(table_ref);
+        let request = DescribeRequest::new(table_ref.clone());
         let conn = connection.clone();
-        let connection_id = connection_id.to_string();
-        let database = database.map(str::to_string);
-        let schema = schema.map(str::to_string);
-        let name = name.to_string();
+        let error_connection_id = connection_id.to_string();
+        let error_database = database.map(str::to_string);
+        let error_schema = schema.map(str::to_string);
+        let error_name = name.to_string();
 
-        let result = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || {
             conn.describe_table(&request).map_err(|e| {
-                error_messages::schema_operation_error(
+                let message = error_messages::schema_operation_error(
                     "describe object",
-                    &connection_id,
-                    database.as_deref(),
-                    schema.as_deref(),
-                    Some(&name),
-                    e,
-                )
+                    &error_connection_id,
+                    error_database.as_deref(),
+                    error_schema.as_deref(),
+                    Some(&error_name),
+                    &e,
+                );
+
+                CallFailure::from_driver(message, &e)
             })
         })
         .await
-        .map_err(|e| format!("Blocking task failed: {}", e))??;
+        .map_err(|e| format!("Blocking task failed: {}", e))?;
 
-        Ok(serialize_query_result(&result))
+        match outcome {
+            Ok(result) => Ok(serialize_query_result(&result)),
+            Err(failure) => Err(not_found::explain(
+                FailedCall {
+                    state: &state,
+                    connection_id,
+                    connection: &connection,
+                    target: &table_ref,
+                    database,
+                    columns: Vec::new(),
+                },
+                failure,
+            )
+            .await),
+        }
     }
 }

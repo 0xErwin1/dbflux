@@ -16,6 +16,7 @@ pub(super) fn sidebar_tree_command_is_blocked_by_search_focus(cmd: Command) -> b
             | Command::Delete
             | Command::CreateFolder
             | Command::SidebarNextTab
+            | Command::SidebarPrevTab
             | Command::OpenItemMenu
             | Command::ExtendSelectNext
             | Command::ExtendSelectPrev

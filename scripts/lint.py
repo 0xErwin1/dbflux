@@ -259,7 +259,18 @@ def main() -> int:
 
         return run(command)
 
-    return run(["cargo", "clippy", "--no-deps", *packages, *extra, "--", "-D", "warnings"])
+    return run([
+        "cargo",
+        "clippy",
+        "--no-deps",
+        # Lint test, bench and example targets too, not only lib/bin defaults.
+        "--all-targets",
+        *packages,
+        *extra,
+        "--",
+        "-D",
+        "warnings",
+    ])
 
 
 if __name__ == "__main__":

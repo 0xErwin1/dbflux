@@ -1,0 +1,17 @@
+FLUSHALL
+SET config:feature:new-checkout "enabled"
+SET config:maintenance-window "2025-03-15T02:00:00Z/PT2H"
+SET stats:orders:total 300
+SET cache:product:KB-101 "{\"sku\":\"KB-101\",\"name\":\"Mechanical Keyboard\",\"price\":129.0,\"stock\":84}"
+HSET customer:1 name "Ada Alvarez" email "ada.alvarez1@example.com" country "Argentina" tier "gold" orders 12
+HSET customer:2 name "Bruno Becker" email "bruno.becker2@example.com" country "Germany" tier "silver" orders 7
+HSET customer:3 name "Carla Costa" email "carla.costa3@example.com" country "Brazil" tier "bronze" orders 3
+HSET session:sess-001 customer_id 1 cart_items 3 last_page "/checkout" user_agent "Firefox 128"
+ZADD leaderboard:sales 48210.50 "Ada Alvarez" 41875.00 "Kenji Hayashi" 39990.90 "Carla Costa" 35120.00 "Diego Dubois" 31004.75 "Elena Evans" 28760.40 "Bruno Becker" 24315.00 "Grace Garcia" 19870.20 "Hugo Hayashi" 15402.00 "Ines Ivanova" 11250.60 "Jonas Jensen"
+RPUSH queue:emails "order-confirmation:291" "order-confirmation:292" "shipping-update:271" "password-reset:customer-14" "newsletter:2025-03"
+SADD tags:popular "fast-shipping" "gift" "quality" "value" "durable"
+XADD orders:events 1740787200000-0 order_id 286 status pending total 418.00
+XADD orders:events 1740790800000-0 order_id 271 status shipped carrier "DHL"
+XADD orders:events 1740794400000-0 order_id 287 status pending total 129.00
+XADD orders:events 1740798000000-0 order_id 264 status delivered signed_by "R. Rossi"
+XADD orders:events 1740801600000-0 order_id 253 status refunded amount 89.00

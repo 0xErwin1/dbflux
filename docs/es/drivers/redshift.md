@@ -20,11 +20,19 @@ directamente sobre el cliente de wire protocol
 - Driver relacional (`DatabaseCategory::Relational`, `QueryLanguage::Sql`) que
   habla el protocolo wire de PostgreSQL contra un cluster de Redshift o un
   endpoint de Redshift Serverless.
+- Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
+  de una base de datos en la barra lateral abre una en su propia pestaña, que
+  ejecuta una línea SQL a la vez mediante `Connection::execute` con la
+  validación del editor, la confirmación de queries peligrosas, las filas de
+  auditoría y el historial de consultas. El driver aplica
+  `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), así que los comandos de la
+  consola llevan el límite de filas del editor.
 - Formulario de conexión con host, port (por defecto `5439`), database, user,
   password, SSL/`sslmode`
   (`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`), un modo de
   URI de conexión (`redshift://...`, normalizado internamente a
-  `postgresql://...`), y túnel SSH.
+  `postgresql://...`), y túnel SSH. Como en libpq, `verify-ca` valida solo la
+  cadena de certificados y `verify-full` además comprueba el nombre del host.
 - Confianza TLS personalizada y TLS mutuo: para los modos con TLS habilitado se
   agrega una CA raíz privada fijada (PEM) al almacén de confianza además de las
   raíces del sistema, y un certificado de cliente + clave privada (PEM/PKCS#8)
@@ -61,10 +69,18 @@ directamente sobre el cliente de wire protocol
 - Reporta `application_name` como `dbflux/<version>` en cada conexión, salvo
   que la URI de conexión ya defina su propio parámetro de query
   `application_name`.
+- Vistas de tabla (`TableViewFeatures`): la vista Columnas de una tabla lee
+  `pg_attribute` para obtener la codificación de cada columna
+  (`format_encoding`), su posición en la clave de ordenación (compuesta o
+  intercalada) y la clave de distribución, y `svv_table_info` para el estilo de
+  distribución, las filas, el tamaño (contado en bloques de 1 MB) y la
+  proporción sin ordenar de la tabla. La vista Datos incorpora un selector de
+  columnas que nombra en la query solo las columnas elegidas. Ver [Columnas y
+  particiones](../TABLE_VIEWS.md).
 
 ## Limitaciones
 
-- Los límites de filas solicitados (incluso cero) y los tiempos máximos de sentencia se rechazan antes de validar la consulta de solo lectura o prepararla: este driver no puede aplicarlos antes de ejecutar. Sin esas opciones, las consultas conservan su comportamiento anterior y pueden almacenar el resultado completo; no hay un límite de trabajo del servidor ni de memoria. La prueba de rechazo temprano usa PostgreSQL 16 descartable para comprobar la compatibilidad del protocolo, no un clúster Redshift.
+- Los tiempos máximos de sentencia se rechazan antes de validar la consulta de solo lectura o prepararla. Un límite de filas del request transmite las filas y conserva solo las que entran en el presupuesto, como el driver de PostgreSQL, pero el resultado se sigue leyendo hasta el final; no hay un límite de trabajo del servidor. La prueba de rechazo temprano usa PostgreSQL 16 descartable para comprobar la compatibilidad del protocolo, no un clúster Redshift.
 
 - Solo lectura: `DriverMetadata.capabilities` omite `INSERT`, `UPDATE`,
   `DELETE`, `RETURNING`, `BULK_INSERT`, `TRUNCATE_TABLE`, y todas las flags de
@@ -122,3 +138,8 @@ directamente sobre el cliente de wire protocol
   decodificador binario está cubierto por pruebas unitarias sobre payloads wire
   sintéticos; la fidelidad de extremo a extremo solo se valida contra un cluster
   real vía las pruebas de integración marcadas `#[ignore]`.
+- Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) también se ejecuta en `BEGIN READ ONLY` y se revierte, además del rechazo propio del driver a las sentencias que no son lecturas. Las funciones con efectos externos no se detienen; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.
+- La vista Columnas no tiene tamaños por columna, porque requieren acceso a
+  `stv_blocklist`, ni vista de particiones, estimación de lectura o perfil de
+  filas. Solo la cubren pruebas unitarias y no se comprobó contra un clúster
+  Redshift real.

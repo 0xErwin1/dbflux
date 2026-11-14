@@ -1,0 +1,736 @@
+"""Declarative shot list for `scripts/docs_screenshots.py`.
+
+A shot is a page of the documentation, a name, and the steps that bring a
+freshly started DBFlux into the state to capture. Each step is one call to a
+tool of the UI automation MCP server (see docs/UI_AUTOMATION.md, "Tools"), or
+one of the runner's own steps:
+
+- `pause`: sleeps.
+- `open_window` / `close_window`: press a key that opens or closes a
+  secondary window (Connection Manager, Settings) and direct the following
+  steps at it, or back at the main window.
+- `click_label`: clicks the center of the element with a given label. Sidebar
+  tree rows need it: their ids change from run to run and they expose no click
+  action.
+- `wait_gone`: waits until no element id matches a pattern.
+- `wait_value`: waits until an input holds a given value.
+- `ensure`: repeats a few actions until a check passes. Software rendering
+  draws about one frame per second and an input is sometimes dropped, so
+  every action whose effect matters is wrapped in one.
+
+A tool step may name its element by `label` instead of `id`; the runner looks
+the id up with `find_elements` right before the call. A text input without a
+label, such as the inline cell editor, can be named by `input_value`, the value
+it holds.
+
+Every shot starts from the same state: DBFlux just launched with the demo
+connections saved, nothing connected and no tab open. A shot that sets
+`demo_connections=False` starts without any saved connection instead, as on a
+fresh install. A shot is captured in the light and the dark theme, and written
+to `docs/images/<page>/<name>-<theme>.webp`.
+
+Strings in step arguments may use `{postgres_port}`, `{mongodb_port}`,
+`{redis_port}` and `{sqlite_path}`, which the runner fills in.
+
+Coordinates and regions are logical pixels of the 1600x900 main window. The
+output image has one pixel per logical pixel.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+
+WAIT_MS = 30_000
+
+
+@dataclass(frozen=True)
+class Step:
+    tool: str
+    arguments: dict = field(default_factory=dict)
+    # An optional step may fail without failing the shot.
+    optional: bool = False
+
+
+@dataclass(frozen=True)
+class Region:
+    x: float
+    y: float
+    width: float
+    height: float
+
+    def as_arguments(self) -> dict:
+        return {"x": self.x, "y": self.y, "width": self.width, "height": self.height}
+
+    def as_tuple(self) -> tuple[float, float, float, float]:
+        return (self.x, self.y, self.width, self.height)
+
+
+@dataclass(frozen=True)
+class Shot:
+    page: str
+    name: str
+    steps: tuple[Step, ...]
+    # Capture only this part of the window with `screenshot_region`.
+    region: Region | None = None
+    # Crop the captured image afterwards, relative to the captured area.
+    crop: Region | None = None
+    # Start from a profile with the demo connections saved.
+    demo_connections: bool = True
+
+
+# -- Step helpers -------------------------------------------------------------
+
+
+def call(tool: str, *, optional: bool = False, **arguments) -> Step:
+    return Step(tool, arguments, optional)
+
+
+def key(keystroke: str) -> Step:
+    return call("keyboard", keystroke=keystroke)
+
+
+def click(element_id: str) -> Step:
+    return call("click_element", id=element_id)
+
+
+def click_label(label: str, *, exact: bool = True, role: str | None = None) -> Step:
+    arguments: dict = {"label": label, "exact": exact}
+
+    if role is not None:
+        arguments["role"] = role
+
+    return Step("click_label", arguments)
+
+
+def set_text(element_id: str, text: str) -> Step:
+    return call("set_text", id=element_id, text=text)
+
+
+def wait_checked(element_id: str, checked: bool) -> Step:
+    return call("wait_for_state", id=element_id, checked=checked, timeout_ms=WAIT_MS)
+
+
+def wait_gone(pattern: str) -> Step:
+    """Waits until no element id matches the regular expression `pattern`."""
+
+    return Step("wait_gone", {"pattern": pattern})
+
+
+def wait_for(label: str, *, exact: bool = False) -> Step:
+    """Waits until an element whose label contains `label` is in the tree."""
+
+    return call("wait_for_element", query=label, exact=exact, timeout_ms=WAIT_MS)
+
+
+def wait_visible(element_id: str) -> Step:
+    return call("wait_for_state", id=element_id, visible=True, timeout_ms=WAIT_MS)
+
+
+def idle() -> Step:
+    return call("wait_for_idle", timeout_ms=WAIT_MS)
+
+
+def pause(seconds: float) -> Step:
+    return Step("pause", {"seconds": seconds})
+
+
+def open_window(keystroke: str) -> Step:
+    """Presses `keystroke` and directs the following steps at the window it opens."""
+
+    return Step("open_window", {"keystroke": keystroke})
+
+
+def close_window(keystroke: str) -> Step:
+    """Presses `keystroke` in the current window and returns to the main window."""
+
+    return Step("close_window", {"keystroke": keystroke})
+
+
+def ensure(check: Step, *actions: Step, attempts: int = 4) -> Step:
+    """Runs `actions` until `check` passes, at most `attempts` times.
+
+    Under the software renderer an input is sometimes dropped. The runner
+    checks before the first attempt and again after the window settles, so an
+    action that took effect late is not repeated.
+    """
+
+    return Step("ensure", {"check": check, "actions": actions, "attempts": attempts})
+
+
+def wait_value(element_id: str, value: str) -> Step:
+    """Waits until the input `element_id` holds `value`."""
+
+    return Step("wait_value", {"id": element_id, "value": value})
+
+
+def wait_selected(label: str, *, exact: bool = True) -> Step:
+    """Waits until the element labelled `label`, such as a sidebar row, is selected."""
+
+    return Step("wait_selected", {"label": label, "exact": exact})
+
+
+def open_sidebar_item(label: str, loaded: str, *, exact: bool = False) -> tuple[Step, ...]:
+    """Opens the sidebar row `label`, connecting it if it is a connection.
+
+    The row is selected with a click and opened with Enter, which is more
+    reliable than a double click under the software renderer. Enter waits for
+    the selection: pressed on another row it would open that one.
+    """
+
+    # The row's expand arrow carries the row's name too, so the click targets
+    # the tree item itself.
+    return (
+        ensure(wait_selected(label), click_label(label, role="tree_item")),
+        ensure(wait_for(loaded, exact=exact), key("enter")),
+    )
+
+
+def fill_connection_form(driver: str, fields: dict[str, str]) -> tuple[Step, ...]:
+    """Opens the Connection Manager, picks `driver` and fills its form, leaving the window open."""
+
+    steps = [
+        open_window("ctrl-shift-n"),
+        ensure(wait_visible("cm-field-name"), click(f"cm-driver-card-{driver}")),
+    ]
+    steps += [
+        ensure(wait_value(f"cm-field-{field_id}", value), set_text(f"cm-field-{field_id}", value))
+        for field_id, value in fields.items()
+    ]
+
+    return tuple(steps)
+
+
+def create_connection(driver: str, fields: dict[str, str]) -> tuple[Step, ...]:
+    """Creates a connection through the Connection Manager and saves it."""
+
+    return (
+        *fill_connection_form(driver, fields),
+        close_window("ctrl-s"),
+        wait_for(fields["name"], exact=True),
+    )
+
+
+# -- Runner hooks -------------------------------------------------------------
+
+# Run after every launch, before the window is resized.
+STARTUP_STEPS = (wait_visible("activity-rail"),)
+
+# Run right before every capture. Success toasts close themselves after four
+# seconds, and they carry the time of day.
+SETTLE_STEPS = (
+    wait_gone(r"^toast-\d"),
+    idle(),
+    pause(1.5),
+)
+
+POSTGRES = "Shop (PostgreSQL)"
+MONGODB = "Reviews (MongoDB)"
+REDIS = "Cache (Redis)"
+SQLITE = "Inventory (SQLite)"
+
+POSTGRES_FIELDS = {
+    "name": POSTGRES,
+    "host": "127.0.0.1",
+    "port": "{postgres_port}",
+    "database": "shop",
+    "user": "postgres",
+}
+
+# Run once, in the first DBFlux launch of a run.
+FIRST_RUN_STEPS = (
+    # The first-run welcome dialog. Turning off the update check keeps the
+    # shots from depending on the network or on a newer release.
+    wait_visible("welcome-dialog"),
+    ensure(wait_checked("welcome-check-for-updates", False), click("welcome-check-for-updates")),
+    ensure(wait_checked("welcome-show-whats-new", False), click("welcome-show-whats-new")),
+    ensure(wait_gone(r"^welcome-dialog$"), key("enter")),
+)
+
+# Run once, after the first-run steps, in a later launch.
+DEMO_CONNECTION_STEPS = (
+    *create_connection("postgres", POSTGRES_FIELDS),
+    *create_connection(
+        "mongodb",
+        {"name": MONGODB, "host": "127.0.0.1", "port": "{mongodb_port}", "database": "shop"},
+    ),
+    *create_connection(
+        "redis",
+        {"name": REDIS, "host": "127.0.0.1", "port": "{redis_port}"},
+    ),
+    *create_connection(
+        "sqlite",
+        {"name": SQLITE, "path": "{sqlite_path}"},
+    ),
+)
+
+
+def theme_steps(theme: str) -> tuple[Step, ...]:
+    """Selects `theme` ("light" or "dark") in Settings > General and saves it."""
+
+    return (
+        open_window("ctrl-,"),
+        wait_visible(f"segmented-theme-{theme}"),
+        ensure(wait_checked(f"segmented-theme-{theme}", True), click(f"segmented-theme-{theme}")),
+        # The footer marks unsaved changes until they are saved.
+        ensure(wait_gone(r"^settings-unsaved-changes$"), click("save-general")),
+        close_window("ctrl-w"),
+    )
+
+
+# -- Shots --------------------------------------------------------------------
+
+# The document area right of the sidebar, below the title bar.
+DOCUMENT_AREA = Region(360, 44, 1232, 818)
+
+# The activity rail and the sidebar, below the title bar.
+SIDEBAR_AREA = Region(0, 44, 360, 818)
+
+QUERY_RESULT_SQL = """SELECT c.country,
+       count(*) AS orders,
+       sum(o.total) AS revenue
+FROM orders AS o
+JOIN customers AS c ON c.id = o.customer_id
+WHERE o.status IN ('delivered', 'shipped')
+GROUP BY c.country
+ORDER BY revenue DESC;"""
+
+FIRST_QUERY_SQL = "SELECT id, name, country FROM customers ORDER BY id LIMIT 20;"
+
+MULTI_STATEMENT_SQL = """SELECT status, count(*) AS orders
+FROM orders
+GROUP BY status
+ORDER BY orders DESC;
+
+SELECT count(*) AS customers FROM customers;
+
+SELECT name, price FROM products ORDER BY price DESC LIMIT 5;"""
+
+# A foreign key from orders makes this DELETE fail even if it ran, so the
+# demo data cannot change.
+DANGEROUS_SQL = "DELETE FROM customers;"
+
+CHART_SQL = "SELECT month, revenue FROM monthly_revenue ORDER BY month;"
+
+WHERE_INPUT = "e.g. id > 10 AND name LIKE '%test%'"
+
+# Grid cells are named `cell-<row * 10000 + column>`, counting from zero.
+CARLA_BECKER_COUNTRY = "cell-20003"
+SIXTH_ROW_ID = "cell-50000"
+
+PRODUCTS_FIRST_ID = "cell-0"
+
+# A point in the status bar, away from the chart, so the pointer does not
+# replace the point highlighted from the keyboard.
+AWAY_FROM_CHART = {"x": 1000, "y": 880}
+
+
+def open_customers_table() -> tuple[Step, ...]:
+    """Connects the demo PostgreSQL connection and opens its customers table."""
+
+    return (
+        *open_sidebar_item(POSTGRES, "customers", exact=True),
+        *open_sidebar_item("customers", "Ada Hayashi", exact=True),
+    )
+
+
+def open_reviews_collection() -> tuple[Step, ...]:
+    """Connects the demo MongoDB connection and opens its reviews collection."""
+
+    return (
+        *open_sidebar_item(MONGODB, "shop", exact=True),
+        ensure(wait_selected("shop"), click_label("shop", role="tree_item")),
+        # Enter loads the database's collections, then l expands it.
+        ensure(wait_for("reviews", exact=True), key("enter"), idle(), key("l")),
+        ensure(wait_selected("reviews"), click_label("reviews", role="tree_item")),
+        ensure(wait_visible(document_tree_id("row", "0")), key("enter")),
+    )
+
+
+def open_postgres_table(table: str, loaded: str) -> tuple[Step, ...]:
+    """Connects the demo PostgreSQL connection and opens `table`, waiting for `loaded`."""
+
+    return (
+        *open_sidebar_item(POSTGRES, "customers", exact=True),
+        *open_sidebar_item(table, loaded, exact=True),
+    )
+
+
+def document_tree_id(kind: str, *path: str) -> str:
+    """The id of a document tree `row` or `chevron`, such as `tree-row-["0", "author"]`."""
+
+    return f"tree-{kind}-{json.dumps(list(path))}"
+
+
+def expand_document_node(*path: str, child: str) -> Step:
+    """Expands the document tree node at `path` until its field `child` shows."""
+
+    return ensure(wait_visible(document_tree_id("row", *path, child)), click(document_tree_id("chevron", *path)))
+
+
+def highlight_chart_point(index: int) -> tuple[Step, ...]:
+    """Highlights point `index` of the focused series from the keyboard.
+
+    One key per step, each checked through the point inspector, so a dropped
+    or late key cannot move the highlight past the point.
+    """
+
+    steps = [ensure(wait_visible("inspector-action-show-in-tree-row-0"), key("g"))]
+    steps += [
+        ensure(wait_visible(f"inspector-action-show-in-tree-row-{point}"), key("l")) for point in range(1, index + 1)
+    ]
+
+    return tuple(steps)
+
+
+def open_query_tab() -> tuple[Step, ...]:
+    """Connects the demo PostgreSQL connection and opens a new query tab on it."""
+
+    return (
+        *open_sidebar_item(POSTGRES, "customers", exact=True),
+        ensure(wait_for("Enter SQL here"), key("ctrl-n")),
+    )
+
+
+def run_query(sql: str, check: Step) -> Step:
+    """Types `sql` into the query tab and runs it until `check` passes."""
+
+    return ensure(
+        check,
+        call("focus_element", label="Enter SQL here", exact=False),
+        call("set_text", label="Enter SQL here", exact=False, text=sql),
+        key("ctrl-enter"),
+    )
+
+
+def run_script(sql: str, check: Step) -> Step:
+    """Types `sql` into the query tab and runs the whole buffer until `check` passes.
+
+    Without a selection Ctrl+Enter runs only the statement under the cursor,
+    so the buffer is selected first.
+    """
+
+    return ensure(
+        check,
+        call("focus_element", label="Enter SQL here", exact=False),
+        call("set_text", label="Enter SQL here", exact=False, text=sql),
+        key("ctrl-a"),
+        key("ctrl-enter"),
+    )
+
+
+SHOTS = (
+    Shot(
+        page="getting-started",
+        name="first-launch",
+        # The pointer starts at the center of the screen, over a row of the
+        # start list, which would show it hovered.
+        steps=(call("pointer_move", x=1200, y=760),),
+        demo_connections=False,
+    ),
+    Shot(
+        page="getting-started",
+        name="connection-manager",
+        steps=fill_connection_form("postgres", POSTGRES_FIELDS),
+    ),
+    Shot(
+        page="getting-started",
+        name="first-query",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            ensure(wait_for("Enter SQL here"), key("ctrl-n")),
+            ensure(
+                wait_for("Ada Hayashi", exact=True),
+                call("focus_element", label="Enter SQL here", exact=False),
+                call("set_text", label="Enter SQL here", exact=False, text=FIRST_QUERY_SQL),
+                key("ctrl-enter"),
+            ),
+        ),
+    ),
+    Shot(
+        page="usage",
+        name="main-window",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            *open_sidebar_item("customers", "Ada Hayashi", exact=True),
+        ),
+    ),
+    Shot(
+        page="editor",
+        name="query-result",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            ensure(wait_for("Enter SQL here"), key("ctrl-n")),
+            ensure(
+                wait_for("Canada", exact=True),
+                call("focus_element", label="Enter SQL here", exact=False),
+                call("set_text", label="Enter SQL here", exact=False, text=QUERY_RESULT_SQL),
+                key("ctrl-enter"),
+            ),
+        ),
+    ),
+    Shot(
+        page="editor",
+        name="multi-statement",
+        steps=(
+            *open_query_tab(),
+            # A selection runs as-is, without the script confirmation.
+            run_script(MULTI_STATEMENT_SQL, wait_for("Result 3")),
+        ),
+    ),
+    Shot(
+        page="editor",
+        name="dangerous-query",
+        steps=(
+            *open_query_tab(),
+            run_query(DANGEROUS_SQL, wait_visible("dangerous-confirm-btn")),
+        ),
+    ),
+    Shot(
+        page="results",
+        name="record-view",
+        steps=(
+            *open_customers_table(),
+            ensure(wait_for("name text Ada Hayashi", exact=True), click("record-mode-toggle")),
+        ),
+    ),
+    Shot(
+        page="results",
+        name="filtering",
+        steps=(
+            *open_customers_table(),
+            ensure(
+                wait_for("Tania Alvarez", exact=True),
+                call("focus_element", label=WHERE_INPUT),
+                call("set_text", label=WHERE_INPUT, text="country = 'Japan'"),
+                key("enter"),
+            ),
+            wait_gone(f"^{SIXTH_ROW_ID}$"),
+        ),
+    ),
+    Shot(
+        page="results",
+        name="editing",
+        steps=(
+            *open_customers_table(),
+            # The edit stays pending: nothing is saved to the demo database.
+            ensure(
+                wait_for("Portugal", exact=True),
+                call("double_click_element", id=CARLA_BECKER_COUNTRY, optional=True),
+                idle(),
+                call("focus_element", input_value="Brazil"),
+                call("set_text", input_value="Brazil", text="Portugal"),
+                key("enter"),
+            ),
+        ),
+    ),
+    Shot(
+        page="results",
+        name="similar-rows",
+        steps=(
+            *open_postgres_table("products", "Mechanical Keyboard"),
+            wait_gone(r"^toast-\d"),
+            # Shift+S finds the rows nearest to the selected one by its
+            # vector column, so pressing it again repeats the same search.
+            ensure(wait_visible("nearest-neighbors-summary"), click(PRODUCTS_FIRST_ID), idle(), key("shift-s")),
+        ),
+    ),
+    Shot(
+        page="table-views",
+        name="columns",
+        steps=(
+            *open_customers_table(),
+            # The connection toast covers the view switch until it closes.
+            wait_gone(r"^toast-\d"),
+            ensure(wait_for("Filter columns"), click("segmented-table-view-columns")),
+        ),
+    ),
+    Shot(
+        page="charts",
+        name="chart-view",
+        steps=(
+            *open_query_tab(),
+            ensure(
+                wait_for("Untitled chart", exact=True),
+                call("focus_element", label="Enter SQL here", exact=False),
+                call("set_text", label="Enter SQL here", exact=False, text=CHART_SQL),
+                click("toolbar-chart-btn"),
+            ),
+        ),
+    ),
+    Shot(
+        page="charts",
+        name="point-inspector",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            *open_sidebar_item("monthly_revenue", "average_order numeric", exact=True),
+            ensure(wait_visible("axis-pill-x"), click("seg-ctl-item-result-view-Chart")),
+            # Y starts with every numeric column. A click on a column of the
+            # picker toggles it and closes the picker, so it opens once per
+            # column, leaving revenue alone.
+            ensure(wait_visible("y-pick-1"), click("axis-pill-y")),
+            ensure(wait_for("revenue +1", exact=True), click("y-pick-1")),
+            ensure(wait_visible("y-pick-3"), click("axis-pill-y")),
+            ensure(wait_gone(r"^chart-legend-series-1$"), click("y-pick-3")),
+            # The picker stays open after the click and would take the keys below.
+            ensure(wait_gone(r"^y-pick-"), key("escape")),
+            call("pointer_move", **AWAY_FROM_CHART),
+            # August: the readout drawn next to the point leaves the other
+            # points visible.
+            *highlight_chart_point(7),
+        ),
+    ),
+    Shot(
+        page="charts",
+        name="hypertable",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            # The hypertable lives in the metrics database, which loads on Enter.
+            ensure(wait_selected("metrics"), click_label("metrics", role="tree_item")),
+            ensure(wait_for("server_metrics", exact=True), key("enter")),
+            *open_sidebar_item("server_metrics", "api-1", exact=True),
+            wait_visible("axis-pill-x"),
+        ),
+    ),
+    Shot(
+        page="documents",
+        name="collection",
+        steps=open_reviews_collection(),
+    ),
+    Shot(
+        page="documents",
+        name="tree-view",
+        steps=(
+            *open_reviews_collection(),
+            expand_document_node("0", child="author"),
+            expand_document_node("0", "author", child="country"),
+            expand_document_node("0", "location", child="geo"),
+            expand_document_node("0", "location", "geo", child="type"),
+        ),
+    ),
+    Shot(
+        page="documents",
+        name="json-columns",
+        steps=(
+            *open_postgres_table("products", "Mechanical Keyboard"),
+            wait_gone(r"^toast-\d"),
+            ensure(wait_visible(document_tree_id("row", "0")), click("view-toggle-btn")),
+            expand_document_node("0", child="attributes"),
+            expand_document_node("0", "attributes", child="rating"),
+        ),
+    ),
+    Shot(
+        page="key-value",
+        name="browser",
+        steps=(
+            *open_sidebar_item(REDIS, "db 0", exact=True),
+            *open_sidebar_item("db 0", "customer:", exact=False),
+            ensure(wait_for("HASH customer:1", exact=False), click_label("customer:", exact=False)),
+            ensure(wait_for("email ada.alvarez1@example.com"), click_label("HASH customer:1", exact=False)),
+        ),
+        crop=DOCUMENT_AREA,
+    ),
+    Shot(
+        page="schema-browser",
+        name="tree",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            ensure(wait_selected("customers"), click_label("customers", role="tree_item")),
+            ensure(wait_for("Columns (5)", exact=True), key("l")),
+            ensure(wait_selected("Columns (5)"), click_label("Columns (5)", role="tree_item")),
+            ensure(wait_for("id: integer PK", exact=True), key("l")),
+        ),
+        crop=SIDEBAR_AREA,
+    ),
+    Shot(
+        page="schema-browser",
+        name="diagram",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            ensure(wait_selected("shop"), click_label("shop", role="tree_item")),
+            ensure(wait_for("View schema diagram", exact=True), key("m")),
+            ensure(wait_visible("schema-arrange"), click_label("View schema diagram")),
+            wait_for("0 background tasks", exact=True),
+        ),
+    ),
+    Shot(
+        page="audit",
+        name="viewer",
+        steps=(
+            *open_query_tab(),
+            run_query(FIRST_QUERY_SQL, wait_for("Ada Hayashi", exact=True)),
+            ensure(wait_for("Query executed successfully"), key("ctrl-shift-a")),
+        ),
+    ),
+    Shot(
+        page="audit",
+        name="event-details",
+        steps=(
+            *open_query_tab(),
+            run_query(FIRST_QUERY_SQL, wait_for("Ada Hayashi", exact=True)),
+            ensure(wait_for("Query executed successfully"), key("ctrl-shift-a")),
+            ensure(
+                wait_visible("audit-detail-copy-json"),
+                click_label("Query executed successfully", exact=False),
+            ),
+        ),
+    ),
+    Shot(
+        page="keyboard",
+        name="command-palette",
+        steps=(
+            # A query tab behind the palette instead of the empty start page.
+            ensure(wait_for("Query 1.sql", exact=True), key("ctrl-n")),
+            ensure(wait_visible("command-palette-container"), key("ctrl-shift-p")),
+            ensure(
+                wait_for("Previous tab"),
+                call("set_text", label="Search commands", exact=False, text="tab"),
+            ),
+        ),
+    ),
+    Shot(
+        page="connections",
+        name="driver-picker",
+        steps=(
+            open_window("ctrl-shift-n"),
+            wait_visible("cm-driver-card-postgres"),
+        ),
+    ),
+    Shot(
+        page="connections",
+        name="access-tab",
+        steps=(
+            *fill_connection_form("postgres", POSTGRES_FIELDS),
+            ensure(wait_visible("access-method-dropdown.dropdown-trigger"), click("tab-access")),
+            # The open list shows every access method at once.
+            ensure(wait_for("SSM Port Forwarding", exact=True), click("access-method-dropdown.dropdown-trigger")),
+        ),
+    ),
+    Shot(
+        page="settings",
+        name="general",
+        steps=(
+            open_window("ctrl-,"),
+            wait_visible("save-general"),
+        ),
+    ),
+    Shot(
+        page="settings",
+        name="keybindings",
+        steps=(
+            open_window("ctrl-,"),
+            ensure(wait_visible("context-Global"), click("settings-nav-keybindings")),
+        ),
+    ),
+    Shot(
+        page="key-value",
+        name="sorted-set",
+        steps=(
+            *open_sidebar_item(REDIS, "db 0", exact=True),
+            *open_sidebar_item("db 0", "leaderboard:"),
+            ensure(wait_for("ZSET leaderboard:sales"), click_label("leaderboard:", exact=False)),
+            ensure(wait_for("Ada Alvarez"), click_label("ZSET leaderboard:sales", exact=False)),
+        ),
+        crop=DOCUMENT_AREA,
+    ),
+)

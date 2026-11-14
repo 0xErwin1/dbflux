@@ -163,6 +163,10 @@ impl ArtifactStore {
 }
 
 impl Default for ArtifactStore {
+    #[expect(
+        clippy::expect_used,
+        reason = "`Default` must return `Self`, not `Result`; a missing data directory is an unrecoverable startup failure by contract"
+    )]
     fn default() -> Self {
         Self::new().expect("ArtifactStore::default() requires a valid data directory")
     }

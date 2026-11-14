@@ -105,6 +105,54 @@ fn tab_moves_through_the_new_key_dialog(cx: &mut TestAppContext) {
     );
 }
 
+/// Tab stays in the Add member dialog too: the value panel's Add row opens
+/// the dialog on the command path, and the document answers Tab there.
+#[gpui::test]
+fn tab_moves_through_the_add_member_dialog(cx: &mut TestAppContext) {
+    use super::KeyValueFocusMode;
+    use super::add_member_modal::AddMemberFocus;
+    use dbflux_core::{KeyEntry, KeyGetResult, KeyLoadState, ValueRepr};
+
+    let (_host, document, window) = open(cx);
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            let mut entry = KeyEntry::new("user:1");
+            entry.key_type = Some(KeyType::Hash);
+            document.keys = vec![entry.clone()];
+            document.rebuild_key_rows();
+            document.selected_index = Some(0);
+            document.selected_value = Some(KeyGetResult {
+                entry,
+                value: Vec::new(),
+                repr: ValueRepr::Structured,
+                load_state: KeyLoadState::Loaded,
+            });
+            document.focus_mode = KeyValueFocusMode::ValuePanel;
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
+
+    keys(window, "o");
+    let modal = window.update(|_, cx| document.read(cx).add_member_modal.clone());
+    assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+    assert_eq!(
+        window.update(|_, cx| document.read(cx).active_context(cx)),
+        ContextId::FormNavigation
+    );
+    assert_eq!(
+        window.update(|_, cx| modal.read(cx).form_focus()),
+        AddMemberFocus::RowField(0)
+    );
+
+    keys(window, "tab");
+    assert_eq!(
+        window.update(|_, cx| modal.read(cx).form_focus()),
+        AddMemberFocus::AddRow,
+        "Tab moves to the next field"
+    );
+}
+
 /// The key menu ends with the toolbar's layout switch and auto-refresh
 /// interval, and running the layout entry switches the key list.
 #[gpui::test]
@@ -166,43 +214,6 @@ fn alt_keys_step_the_type_filter(cx: &mut TestAppContext) {
         "Alt+H moves back past All to the last type"
     );
     assert!(window.update(|_, cx| document.read(cx).type_filter.is_some()));
-}
-
-/// Enter in the empty console field answers a pending confirmation with
-/// Run anyway, as Escape answers it with Cancel.
-#[gpui::test]
-fn enter_confirms_a_pending_console_command(cx: &mut TestAppContext) {
-    let (_host, document, window) = open(cx);
-
-    keys(window, "ctrl-`");
-    window.update(|_, cx| {
-        document.update(cx, |doc, _| {
-            doc.console.pending = Some(super::console::PendingConsoleCommand {
-                command: "FLUSHDB".to_string(),
-                title: "Dangerous".to_string(),
-                body: "Deletes every key".to_string(),
-            });
-        })
-    });
-
-    keys(window, "enter");
-    assert!(
-        window.update(|_, cx| document.read(cx).console.pending.is_none()),
-        "Enter answers the confirmation"
-    );
-    let cancelled = dbflux_i18n::t!("document.key_value.console.cancelled");
-    let was_cancelled = window.update(|_, cx| {
-        document
-            .read(cx)
-            .console
-            .transcript
-            .iter()
-            .any(|entry| entry.output.iter().any(|line| line.text == cancelled))
-    });
-    assert!(
-        !was_cancelled,
-        "Enter runs the command rather than cancelling it"
-    );
 }
 
 /// The key list with keys, a selected string key and its value panel.
@@ -316,5 +327,173 @@ fn the_value_menu_switches_view_as_and_opens_the_decompression(cx: &mut TestAppC
     assert!(
         window.update(|_, cx| document.read(cx).compression_dropdown.read(cx).is_open()),
         "the entry opens the decompression list"
+    );
+}
+
+/// Asserts that every row named in `rows` starts where the header named
+/// `header` starts and is as wide as it, so the row's cells sit under the
+/// header's columns whatever the length of the row's text.
+fn assert_rows_span_the_header(
+    window: &mut VisualTestContext,
+    header: &'static str,
+    rows: &[&'static str],
+) {
+    let header_bounds = window
+        .debug_bounds(header)
+        .unwrap_or_else(|| panic!("{header} should render"));
+
+    for row in rows {
+        let row_bounds = window
+            .debug_bounds(row)
+            .unwrap_or_else(|| panic!("{row} should render"));
+
+        assert_eq!(
+            row_bounds.origin.x, header_bounds.origin.x,
+            "{row} {row_bounds:?} starts where {header} {header_bounds:?} starts"
+        );
+        assert_eq!(
+            row_bounds.size.width, header_bounds.size.width,
+            "{row} {row_bounds:?} is as wide as {header} {header_bounds:?}"
+        );
+    }
+}
+
+/// Selects `entry` with `value` as its loaded value.
+fn show_value(
+    document: &mut KeyValueDocument,
+    entry: dbflux_core::KeyEntry,
+    value: Vec<u8>,
+    repr: dbflux_core::ValueRepr,
+) {
+    document.keys = vec![entry.clone()];
+    document.rebuild_key_rows();
+    document.selected_index = Some(0);
+    document.selected_value = Some(dbflux_core::KeyGetResult {
+        entry,
+        value,
+        repr,
+        load_state: dbflux_core::KeyLoadState::Loaded,
+    });
+}
+
+/// Every sorted-set row spans the full width of the list, so its score and
+/// relative bar line up with the header columns whatever the member name's
+/// length.
+#[gpui::test]
+fn sorted_set_rows_span_the_header_width(cx: &mut TestAppContext) {
+    use super::collection_panes::ZSetPane;
+    use dbflux_core::{KeyEntry, RangeOrder, ValueRepr, ZSetMember};
+
+    let (_host, document, window) = open(cx);
+    let members = [
+        "Studio Headphones",
+        "Desk",
+        "Mechanical Keyboard with Wrist Rest",
+    ];
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            let mut entry = KeyEntry::new("leaderboard");
+            entry.key_type = Some(KeyType::SortedSet);
+            show_value(document, entry, Vec::new(), ValueRepr::Text);
+
+            document.zset_pane = Some(ZSetPane {
+                order: RangeOrder::Descending,
+                members: members
+                    .iter()
+                    .enumerate()
+                    .map(|(index, member)| ZSetMember {
+                        member: member.to_string(),
+                        score: 18_420.0 - index as f64 * 1_000.0,
+                    })
+                    .collect(),
+                total: members.len() as u64,
+                loading: false,
+            });
+            document.rebuild_cached_members(cx);
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
+
+    assert_rows_span_the_header(
+        window,
+        "kv-zset-header",
+        &["kv-zset-row-0", "kv-zset-row-1", "kv-zset-row-2"],
+    );
+}
+
+/// Every list element row spans the full width of the list, so its format
+/// badge and delete button line up with the header columns.
+#[gpui::test]
+fn list_rows_span_the_header_width(cx: &mut TestAppContext) {
+    use dbflux_core::{KeyEntry, ValueRepr};
+
+    let (_host, document, window) = open(cx);
+
+    window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            let mut entry = KeyEntry::new("queue");
+            entry.key_type = Some(KeyType::List);
+            show_value(
+                document,
+                entry,
+                br#"["a","a much longer list element value"]"#.to_vec(),
+                ValueRepr::Structured,
+            );
+            document.rebuild_cached_members(cx);
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
+
+    assert_rows_span_the_header(
+        window,
+        "kv-member-header",
+        &["kv-member-row-0", "kv-member-row-1"],
+    );
+}
+
+/// Every stream entry row spans the full width of the list, so its field
+/// cells line up with the header columns.
+#[gpui::test]
+fn stream_rows_span_the_header_width(cx: &mut TestAppContext) {
+    use dbflux_core::{KeyEntry, StreamEntry, ValueRepr};
+
+    let (_host, document, window) = open(cx);
+
+    window.update(|window, cx| {
+        document.update(cx, |document, cx| {
+            let mut entry = KeyEntry::new("events");
+            entry.key_type = Some(KeyType::Stream);
+            show_value(document, entry, Vec::new(), ValueRepr::Stream);
+
+            document.load_ranged_key("events".to_string(), KeyType::Stream, Some(window), cx);
+            let pane = document
+                .stream_pane
+                .as_mut()
+                .expect("opening a stream key creates its pane");
+            pane.entries = vec![
+                StreamEntry {
+                    id: "1700000000000-0".to_string(),
+                    fields: vec![("event".to_string(), "x".to_string())],
+                },
+                StreamEntry {
+                    id: "1700000000001-0".to_string(),
+                    fields: vec![("event".to_string(), "a much longer field value".to_string())],
+                },
+            ];
+            pane.total = 2;
+
+            document.rebuild_cached_members(cx);
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
+
+    assert_rows_span_the_header(
+        window,
+        "kv-stream-header",
+        &["kv-stream-row-0", "kv-stream-row-1"],
     );
 }

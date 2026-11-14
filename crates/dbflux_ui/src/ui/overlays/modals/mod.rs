@@ -17,7 +17,9 @@ pub use import_dashboard::{
     ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
 };
 pub use schema_drift::ModalSchemaDrift;
-pub use tunnel_auth::{ModalTunnelAuth, TunnelAuthOutcome, TunnelAuthRequest};
+pub use tunnel_auth::{
+    ConnectionPasswordRequest, ModalTunnelAuth, TunnelAuthOutcome, TunnelAuthRequest,
+};
 pub use unsaved_changes::{
     CloseAction, DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome,
     UnsavedChangesRequest,

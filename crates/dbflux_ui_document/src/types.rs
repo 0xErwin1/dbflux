@@ -38,10 +38,22 @@ pub enum DocumentKind {
     ObjectEditor,
     // Offline analysis report for a driver's native dump/export file
     DumpAnalysis,
+    // A delimited text file (CSV or TSV) opened as a table
+    Delimited,
+    // A Parquet file opened read-only as a paged table
+    Parquet,
+    // A spreadsheet workbook (xlsx, xlsm, xls, ods) opened one sheet at a time
+    Spreadsheet,
     // MCP approvals queue (agent calls parked for a person)
     McpApprovals,
     // Migrate-data wizard (table -> table, cross-connection)
     MigrateWizard,
+    // Native command console in its own tab (driver-agnostic)
+    Console,
+    // One store of a secret-store connection (DatabaseCategory::SecretStore)
+    SecretStore,
+    // One secret of a secret-store connection in its own tab
+    Secret,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -75,6 +87,8 @@ pub enum DocumentIcon {
     DumpAnalysis,
     McpApprovals,
     Migrate,
+    SecretStore,
+    Secret,
 }
 
 impl DocumentIcon {
@@ -97,6 +111,8 @@ impl DocumentIcon {
             Self::DumpAnalysis => "hard-drive",
             Self::McpApprovals => "bot",
             Self::Migrate => "arrow-up-down",
+            Self::SecretStore => "lock",
+            Self::Secret => "key-round",
         }
     }
 }

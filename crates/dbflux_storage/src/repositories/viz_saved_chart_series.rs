@@ -64,8 +64,11 @@ impl SavedChartSeriesRepository {
                 path: DB_PATH.into(),
                 source,
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
 
         Ok(rows)
     }

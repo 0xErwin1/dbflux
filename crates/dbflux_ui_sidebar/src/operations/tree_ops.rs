@@ -544,7 +544,7 @@ impl Sidebar {
                     .insert(item_id.to_string(), root_expanded);
                 self.expansion_overrides.extend(subtree_overrides);
                 self.pending_toast = Some(PendingToast {
-                    message: crate::labels::refresh_database_failed_label(&error),
+                    message: crate::labels::refresh_database_failed_label(&error.to_string()),
                     is_error: true,
                 });
                 self.refresh_tree(cx);

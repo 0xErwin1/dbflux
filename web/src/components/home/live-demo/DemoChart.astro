@@ -1,0 +1,191 @@
+---
+/** The chart document and its stats island from the IslChart board. */
+import Glyph from '../../Glyph.astro';
+
+const series = [
+  {
+    name: 'us-east',
+    color: 'var(--accent)',
+    value: '412',
+    path: 'M0 250 L60 238 L120 244 L180 210 L240 200 L300 150 L360 120 L420 132 L480 96 L540 104 L600 80 L660 110 L720 150 L780 170 L840 140 L900 118 L960 90 L1020 70 L1080 84 L1140 60',
+  },
+  {
+    name: 'eu-west',
+    color: 'var(--link)',
+    value: '288',
+    path: 'M0 290 L60 284 L120 288 L180 270 L240 262 L300 240 L360 228 L420 236 L480 214 L540 220 L600 200 L660 214 L720 236 L780 248 L840 230 L900 218 L960 204 L1020 190 L1080 198 L1140 184',
+  },
+  {
+    name: 'ap-south',
+    color: 'var(--success)',
+    value: '121',
+    path: 'M0 320 L60 318 L120 316 L180 308 L240 306 L300 296 L360 290 L420 292 L480 284 L540 286 L600 276 L660 282 L720 292 L780 298 L840 290 L900 286 L960 278 L1020 272 L1080 276 L1140 268',
+  },
+];
+
+const stats = [
+  ['Start', '09-22 14:00'],
+  ['End', '09-23 14:00'],
+  ['Points', '72'],
+  ['Max', '486 (us-east)'],
+  ['Mean', '241'],
+  ['Source', 'shop-pg / orders'],
+];
+
+const kinds = [
+  { name: 'Line', icon: 'chart-spline', on: true },
+  { name: 'Bar', icon: 'chart-column-big' },
+  { name: 'Area', icon: 'activity' },
+  { name: 'Scatter', icon: 'grid-3x3' },
+  { name: 'Number', icon: 'hash' },
+];
+---
+
+<div class="ld-island ld-island--grow c14">
+  <div class="ld-pane" data-ld-anchor="chart">
+    <div class="ld-tabs">
+      <span class="ld-tab is-on c6">
+        <Glyph name="chart-spline" size={14} class="ld-accent" />Orders per hour<Glyph
+          name="circle-x"
+          size={12}
+          class="ld-muted"
+        />
+      </span>
+      <span class="ld-muted" style="display: flex; margin-left: 4px"
+        ><Glyph name="plus" size={14} /></span
+      >
+    </div>
+    <div class="ld-body">
+      <div class="ld-chart-head">
+        <Glyph name="chart-spline" size={15} class="ld-accent" />
+        <span class="ld-strong" style="font-weight: 700; font-size: 14px"
+          >Orders per hour by region</span
+        >
+        <span
+          class="ld-chip c4"
+          style="background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success)"
+          >saved</span
+        >
+        <span class="ld-grow"></span>
+        <span class="ld-segments c6">
+          <span class="ld-segment">1h</span>
+          <span class="ld-segment">6h</span>
+          <span class="ld-segment is-on c4">24h</span>
+          <span class="ld-segment">7d</span>
+        </span>
+        <span class="ld-select c6" style="width: 140px">
+          <Glyph name="clock" size={14} class="ld-muted" />
+          <span class="ld-grow">Every 1 min</span>
+          <Glyph name="chevron-down" size={12} class="ld-muted" />
+        </span>
+        <span class="ld-segments c6">
+          {
+            kinds.map((kind) => (
+              <span class:list={['ld-segment', { 'is-on c4': kind.on }]}>
+                <Glyph name={kind.icon} size={13} />
+                {kind.name}
+              </span>
+            ))
+          }
+        </span>
+        <span class="ld-button c6"><Glyph name="sigma" size={15} />Stats</span>
+        <span class="ld-button c6"><Glyph name="download" size={15} />PNG</span>
+      </div>
+      <div class="ld-chart-axes">
+        <span class="ld-muted" style="font-size: 12px">X</span>
+        <span class="ld-select c6" style="width: 190px">
+          <Glyph name="clock" size={14} class="ld-muted" />
+          <span class="ld-grow">created_at · hour</span>
+          <Glyph name="chevron-down" size={12} class="ld-muted" />
+        </span>
+        <span class="ld-muted" style="font-size: 12px">Y</span>
+        <span class="ld-select c6" style="width: 150px">
+          <Glyph name="hash" size={14} class="ld-muted" />
+          <span class="ld-grow">count(*)</span>
+          <Glyph name="chevron-down" size={12} class="ld-muted" />
+        </span>
+        <span class="ld-muted" style="font-size: 12px">Group</span>
+        <span class="ld-select c6" style="width: 150px">
+          <Glyph name="tags" size={14} class="ld-muted" />
+          <span class="ld-grow">region</span>
+          <Glyph name="chevron-down" size={12} class="ld-muted" />
+        </span>
+        <span class="ld-grow"></span>
+        <span class="ld-mono ld-muted" style="font-size: 12px"
+          >2026-09-22 14:00 → 2026-09-23 14:00 UTC · 72 pts</span
+        >
+      </div>
+      <div class="ld-chart-plot">
+        <svg viewBox="0 0 1140 360" preserveAspectRatio="none" aria-hidden="true">
+          <path
+            d="M0 90H1140M0 180H1140M0 270H1140"
+            stroke-width="1"
+            fill="none"
+            style="stroke: var(--border)"></path>
+          {
+            series.map((line) => (
+              <path
+                class="ld-chart-line"
+                d={line.path}
+                style={`stroke: ${line.color}`}
+                pathLength="1"
+                stroke-dashoffset="0"
+                data-ld-chart-line
+              />
+            ))
+          }
+          <g data-ld-chart-tip>
+            <path
+              d="M780 0V360"
+              stroke-dasharray="4 4"
+              fill="none"
+              style="stroke: var(--border-strong)"></path>
+            <circle cx="780" cy="170" r="5" style="fill: var(--accent)"></circle>
+          </g>
+        </svg>
+        <div class="ld-chart-tip c8" data-ld-chart-tip>
+          <div class="ld-mono ld-muted" style="padding-bottom: 6px">2026-09-23 03:00</div>
+          {
+            series.map((line) => (
+              <div class="ld-chart-tip__row">
+                <span class="ld-swatch" style={`color: ${line.color}`} />
+                <span style="width: 70px; color: var(--text)">{line.name}</span>
+                <span class="ld-strong">{line.value}</span>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ld-island c14">
+  <div class="ld-pane ld-series">
+    <div
+      style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 10px"
+    >
+      <span class="ld-label">Stats</span>
+      <Glyph name="sigma" size={14} class="ld-muted" />
+    </div>
+    {
+      stats.map(([label, value]) => (
+        <div class="ld-stat">
+          <span class="ld-muted">{label}</span>
+          <span class="ld-mono ld-strong">{value}</span>
+        </div>
+      ))
+    }
+    <div style="padding-top: 16px"><span class="ld-label">Series</span></div>
+    {
+      series.map((line) => (
+        <div class="ld-series__item">
+          <span class="ld-swatch" style={`width: 10px; height: 10px; color: ${line.color}`} />
+          {line.name}
+          <span class="ld-grow" />
+          <Glyph name="eye" size={14} class="ld-muted" />
+        </div>
+      ))
+    }
+  </div>
+</div>

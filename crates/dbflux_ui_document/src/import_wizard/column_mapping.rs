@@ -23,7 +23,7 @@ const MAPPING_MODE_OPTIONS: &[TableMappingMode] = &[
 
 /// Translated (label, mode) pairs for the mapping-mode dropdown, via
 /// `crate::labels::import_mapping_mode_label`.
-pub fn mapping_mode_options(supports_truncate: bool) -> Vec<(String, TableMappingMode)> {
+pub(crate) fn mapping_mode_options(supports_truncate: bool) -> Vec<(String, TableMappingMode)> {
     MAPPING_MODE_OPTIONS
         .iter()
         .copied()
@@ -32,7 +32,7 @@ pub fn mapping_mode_options(supports_truncate: bool) -> Vec<(String, TableMappin
         .collect()
 }
 
-pub fn default_mapping_mode(target_exists: bool) -> TableMappingMode {
+pub(crate) fn default_mapping_mode(target_exists: bool) -> TableMappingMode {
     if target_exists {
         TableMappingMode::Existing
     } else {

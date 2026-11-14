@@ -26,6 +26,7 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 use std::collections::HashSet;
 
 /// Tool ids in their stable display order. Each id doubles as the catalog key
@@ -1106,17 +1107,17 @@ impl McpSection {
     fn render_mcp_detail(&self, header: impl IntoElement, body: impl IntoElement) -> Div {
         div().flex_1().min_w_0().h_full().flex().flex_col().child(
             div()
-                .id("mcp-detail-scroll")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
                 .px(SettingsMetrics::BODY_PADDING_X)
                 .pt(SettingsMetrics::DETAIL_PADDING_TOP)
                 .pb(Spacing::XL)
                 .flex()
                 .flex_col()
                 .child(header)
-                .child(body),
+                .child(body)
+                .overflow_y_scrollbar()
+                .id("mcp-detail-scroll"),
         )
     }
 

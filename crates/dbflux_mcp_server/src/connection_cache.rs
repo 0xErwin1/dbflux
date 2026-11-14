@@ -6,11 +6,11 @@ use dbflux_core::{
     CodeGenCapabilities, CodeGenerator, CodeGeneratorInfo, CollectionBrowseRequest,
     CollectionCountRequest, Connection, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind,
     DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, ExplainRequest,
-    KeyValueApi, LanguageService, OrderByColumn, QueryCancelHandle, QueryGenerator, QueryHandle,
-    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
+    KeyValueApi, LanguageService, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest,
+    QueryResult, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    TableCountRequest, TableInfo, ViewInfo,
 };
 
 pub struct CachedConnection {
@@ -256,58 +256,7 @@ impl Connection for CachedConnection {
         self.connection.generate_sql(request)
     }
 
-    fn build_select_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        filter: Option<&Value>,
-        order_by: &[OrderByColumn],
-        limit: u32,
-        offset: u32,
-    ) -> String {
-        self.connection
-            .build_select_sql(table, columns, filter, order_by, limit, offset)
-    }
-
-    fn build_insert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-    ) -> (String, Vec<Value>) {
-        self.connection.build_insert_sql(table, columns, values)
-    }
-
-    fn build_update_sql(
-        &self,
-        table: &str,
-        set: &[(String, Value)],
-        filter: Option<&Value>,
-    ) -> (String, Vec<Value>) {
-        self.connection.build_update_sql(table, set, filter)
-    }
-
-    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
-        self.connection.build_delete_sql(table, filter)
-    }
-
-    fn build_upsert_sql(
-        &self,
-        table: &str,
-        columns: &[String],
-        values: &[Value],
-        conflict_columns: &[String],
-        update_columns: &[String],
-    ) -> (String, Vec<Value>) {
-        self.connection
-            .build_upsert_sql(table, columns, values, conflict_columns, update_columns)
-    }
-
-    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
-        self.connection.build_count_sql(table, filter)
-    }
-
-    fn build_truncate_sql(&self, table: &str) -> String {
+    fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
         self.connection.build_truncate_sql(table)
     }
 
@@ -316,21 +265,17 @@ impl Connection for CachedConnection {
         index_name: &str,
         table_name: Option<&str>,
         if_exists: bool,
-    ) -> String {
+    ) -> Result<String, DbError> {
         self.connection
             .build_drop_index_sql(index_name, table_name, if_exists)
     }
 
-    fn version_query(&self) -> &'static str {
+    fn version_query(&self) -> Result<&'static str, DbError> {
         self.connection.version_query()
     }
 
     fn supports_transactional_ddl(&self) -> bool {
         self.connection.supports_transactional_ddl()
-    }
-
-    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        self.connection.translate_filter(filter)
     }
 }
 
@@ -383,21 +328,42 @@ impl ConnectionCache {
     /// This transfers ownership to the caller rather than dropping driver handles while a cache
     /// write lock is held; teardown can synchronously acquire that same lock.
     pub fn drain_connection_variants(&mut self, connection_id: &str) -> Vec<Arc<CachedConnection>> {
+        self.drain_connection_variants_with_keys(connection_id)
+            .into_iter()
+            .map(|(_, connection)| connection)
+            .collect()
+    }
+
+    /// Drains cached connections together with their exact cache keys.
+    pub fn drain_connection_variants_with_keys(
+        &mut self,
+        connection_id: &str,
+    ) -> Vec<(String, Arc<CachedConnection>)> {
         let prefix = format!("{}:", connection_id);
-        let keys: Vec<String> = self
+        let mut keys: Vec<String> = self
             .inner
             .keys()
             .filter(|key| *key == connection_id || key.starts_with(&prefix))
             .cloned()
             .collect();
+        keys.sort_unstable();
         keys.into_iter()
-            .filter_map(|key| self.inner.remove(&key))
+            .filter_map(|key| self.inner.remove(&key).map(|connection| (key, connection)))
             .collect()
     }
 
     /// Removes the base connection entry and any per-database variants.
     pub fn remove_connection_variants(&mut self, connection_id: &str) -> usize {
         self.drain_connection_variants(connection_id).len()
+    }
+
+    /// Returns the profile IDs represented by the base and per-database keys.
+    pub fn connection_ids(&self) -> Vec<String> {
+        let mut ids = std::collections::BTreeSet::new();
+        for key in self.inner.keys() {
+            ids.insert(key.split(':').next().unwrap_or(key).to_string());
+        }
+        ids.into_iter().collect()
     }
 }
 

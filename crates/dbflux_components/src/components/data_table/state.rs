@@ -3,20 +3,42 @@ use std::sync::Arc;
 
 use crate::controls::{InputEvent, InputState};
 use gpui::{
-    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
-    ScrollStrategy, Size, Subscription, UniformListScrollHandle, Window, px,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point,
+    ScrollHandle, ScrollStrategy, SharedString, Size, Subscription, UniformListScrollHandle,
+    Window, px,
 };
 
+use super::annotation::HeaderAnnotation;
 use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, KeyedPendingEdits, TableModel};
 use super::selection::{CellCoord, SelectionState};
 use super::theme::{
     AUTO_WIDTH_SAMPLE_ROWS, AUTO_WIDTH_SLACK, CELL_PADDING_X, MAX_AUTO_COLUMN_WIDTH,
-    MIN_COLUMN_WIDTH, MONO_ADVANCE_EM, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
+    MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
 };
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
+use crate::fonts;
 use crate::tokens::GridMetrics;
+
+/// Grid face and glyph advances an auto-sized column width was estimated
+/// with. A change in any of them re-estimates the auto-sized columns.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct GridTextMetrics {
+    family: SharedString,
+    cell_char_advance: f32,
+    type_char_advance: f32,
+}
+
+impl GridTextMetrics {
+    pub(super) fn current(cx: &App) -> Self {
+        Self {
+            family: fonts::grid_family(cx),
+            cell_char_advance: fonts::grid_char_advance(cx),
+            type_char_advance: fonts::grid_type_char_advance(cx),
+        }
+    }
+}
 
 /// How a model swap treats the state that is scoped to the rows being replaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +58,13 @@ pub struct DataTableState {
 
     /// Width of each column.
     column_widths: Vec<f32>,
+
+    /// Whether the user dragged each column to its width. Those widths stay
+    /// put when the grid font changes; the others are re-estimated.
+    manually_sized: Vec<bool>,
+
+    /// Metrics the auto-sized column widths were last estimated with.
+    auto_width_metrics: GridTextMetrics,
 
     /// Prefix sums of column widths for hit-testing: [0, w0, w0+w1, ...].
     column_offsets: Vec<f32>,
@@ -112,8 +141,18 @@ pub struct DataTableState {
     /// source-table columns remain editable.
     readonly_columns: HashSet<usize>,
 
-    /// Whether this table is editable (requires PK for row identification).
+    /// Whether this table is editable (requires PK for row identification,
+    /// unless `positional_rows` is set).
     is_editable: bool,
+
+    /// Whether the first row is the reference the others are compared to
+    /// (the anchor of a similar-rows search): it is marked in the gutter and
+    /// the rows under it are numbered from 1.
+    reference_row: bool,
+
+    /// Whether rows are identified by their position instead of by
+    /// `pk_columns`. Set for a source that has no key, such as a file.
+    positional_rows: bool,
 
     /// Whether this table supports INSERT operations (add/duplicate rows).
     /// True for Table and Collection sources, false for query results.
@@ -125,6 +164,10 @@ pub struct DataTableState {
     /// Document extras (column groups, presence bars, stepping into nested
     /// values). `None` for relational grids.
     document: Option<super::document::DocumentPresentation>,
+
+    /// Facts drawn under each column header, indexed like the model's
+    /// columns. Empty, or all `None`, keeps the header one line tall.
+    header_annotations: Vec<Option<HeaderAnnotation>>,
 }
 
 impl DataTableState {
@@ -133,8 +176,9 @@ impl DataTableState {
     pub fn new(model: Arc<TableModel>, cx: &mut Context<Self>) -> Self {
         let col_count = model.col_count();
         let row_count = model.row_count();
+        let auto_width_metrics = GridTextMetrics::current(cx);
         let column_widths: Vec<f32> = (0..col_count)
-            .map(|ix| Self::initial_column_width(&model, ix))
+            .map(|ix| Self::initial_column_width(&model, ix, &auto_width_metrics))
             .collect();
         let column_offsets = Self::calculate_offsets(&column_widths);
 
@@ -144,6 +188,8 @@ impl DataTableState {
         Self {
             model,
             column_widths,
+            manually_sized: vec![false; col_count],
+            auto_width_metrics,
             column_offsets,
             sort: None,
             viewport_size: Size::default(),
@@ -164,9 +210,12 @@ impl DataTableState {
             fk_columns: HashSet::new(),
             readonly_columns: HashSet::new(),
             is_editable: false,
+            reference_row: false,
+            positional_rows: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
             document: None,
+            header_annotations: Vec::new(),
         }
     }
 
@@ -192,13 +241,40 @@ impl DataTableState {
         self.document.as_ref()
     }
 
+    // --- Header annotations ---
+
+    /// Sets the facts drawn under each column header, indexed like the
+    /// model's columns. A column with `None`, or past the end of the vector,
+    /// shows no second line; with no annotation at all the header keeps its
+    /// one-line height. A document grid ignores them.
+    pub fn set_header_annotations(
+        &mut self,
+        annotations: Vec<Option<HeaderAnnotation>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.header_annotations != annotations {
+            self.header_annotations = annotations;
+            cx.notify();
+        }
+    }
+
+    pub fn header_annotation(&self, col: usize) -> Option<&HeaderAnnotation> {
+        self.header_annotations.get(col).and_then(Option::as_ref)
+    }
+
+    pub fn has_header_annotations(&self) -> bool {
+        self.header_annotations.iter().any(Option::is_some)
+    }
+
     /// Height of the whole header, a column-group row included.
-    pub fn header_height(&self) -> Pixels {
-        self.document
-            .as_ref()
-            .map_or(super::theme::HEADER_HEIGHT, |document| {
-                document.header_height()
-            })
+    pub fn header_height(&self, cx: &App) -> Pixels {
+        match &self.document {
+            Some(document) => document.header_height(cx),
+            None if self.has_header_annotations() => {
+                fonts::grid_scaled(cx, super::theme::ANNOTATED_HEADER_HEIGHT)
+            }
+            None => fonts::grid_header_height(cx),
+        }
     }
 
     /// Whether the base cell at `coord` holds a nested document or array,
@@ -222,14 +298,15 @@ impl DataTableState {
     /// wider than that still gets its full width.
     ///
     /// Text is measured by character count: header names and cells use the
-    /// monospace data face, whose advance is a fixed fraction of its size.
-    fn initial_column_width(model: &TableModel, col_ix: usize) -> f32 {
+    /// monospace data face, whose advance is a fixed fraction of its size,
+    /// taken from `metrics`.
+    fn initial_column_width(model: &TableModel, col_ix: usize, metrics: &GridTextMetrics) -> f32 {
         let Some(column) = model.columns.get(col_ix) else {
             return MIN_COLUMN_WIDTH;
         };
 
-        let cell_char = f32::from(GridMetrics::FONT) * MONO_ADVANCE_EM;
-        let type_char = f32::from(GridMetrics::TYPE_FONT) * MONO_ADVANCE_EM;
+        let cell_char = metrics.cell_char_advance;
+        let type_char = metrics.type_char_advance;
         let padding = f32::from(CELL_PADDING_X) * 2.0;
         let gap = f32::from(GridMetrics::HEADER_GAP);
 
@@ -293,10 +370,17 @@ impl DataTableState {
     /// rows that were just installed.
     pub fn set_model(&mut self, model: Arc<TableModel>, swap: ModelSwap, cx: &mut Context<Self>) {
         let previous_widths = self.column_widths_by_title();
+        let previous_titles: Vec<Arc<str>> = self
+            .model
+            .columns
+            .iter()
+            .map(|column| column.title.clone())
+            .collect();
 
         self.close_editor(false, false, cx);
         self.model = model;
         self.reload_column_widths(previous_widths);
+        self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
         self.enum_options.clear();
 
@@ -312,22 +396,81 @@ impl DataTableState {
         cx.notify();
     }
 
-    /// Width of every column, keyed by title so a reload can match columns
-    /// across models. Titles repeated within one model queue up, and a new
-    /// model consumes them in column order.
-    fn column_widths_by_title(&self) -> HashMap<Arc<str>, VecDeque<f32>> {
-        let mut widths: HashMap<Arc<str>, VecDeque<f32>> = HashMap::new();
-        for (column, width) in self.model.columns.iter().zip(&self.column_widths) {
+    /// Width of every column and whether the user set it, keyed by title so
+    /// a reload can match columns across models. Titles repeated within one
+    /// model queue up, and a new model consumes them in column order.
+    fn column_widths_by_title(&self) -> HashMap<Arc<str>, VecDeque<(f32, bool)>> {
+        let mut widths: HashMap<Arc<str>, VecDeque<(f32, bool)>> = HashMap::new();
+        let sized = self.column_widths.iter().zip(&self.manually_sized);
+
+        for (column, (width, manual)) in self.model.columns.iter().zip(sized) {
             widths
                 .entry(column.title.clone())
                 .or_default()
-                .push_back(*width);
+                .push_back((*width, *manual));
         }
+
         widths
     }
 
-    fn reload_column_widths(&mut self, mut previous: HashMap<Arc<str>, VecDeque<f32>>) {
-        self.column_widths = self
+    /// Keeps each column's annotation when the new model holds the same
+    /// columns, matched by title so a reordered column keeps its own facts.
+    /// A different column set drops them all: facts carried over by a
+    /// matching title could describe another column, and the host sets the
+    /// annotations of the new columns anyway. So does a reorder of columns
+    /// that share a title, because the title cannot tell which of them moved
+    /// where.
+    fn reload_header_annotations(&mut self, previous_titles: &[Arc<str>]) {
+        if self.header_annotations.is_empty() {
+            return;
+        }
+
+        let current_titles: Vec<Arc<str>> = self
+            .model
+            .columns
+            .iter()
+            .map(|column| column.title.clone())
+            .collect();
+
+        let mut previous_sorted = previous_titles.to_vec();
+        let mut current_sorted = current_titles.clone();
+        previous_sorted.sort();
+        current_sorted.sort();
+
+        let titles_repeat = previous_sorted
+            .windows(2)
+            .any(|pair| matches!(pair, [left, right] if left == right));
+        let reordered = previous_titles != current_titles.as_slice();
+
+        if previous_sorted != current_sorted || (titles_repeat && reordered) {
+            self.header_annotations.clear();
+            return;
+        }
+
+        let mut by_title: HashMap<Arc<str>, VecDeque<Option<HeaderAnnotation>>> = HashMap::new();
+
+        for (index, title) in previous_titles.iter().enumerate() {
+            by_title
+                .entry(title.clone())
+                .or_default()
+                .push_back(self.header_annotations.get(index).cloned().flatten());
+        }
+
+        self.header_annotations = self
+            .model
+            .columns
+            .iter()
+            .map(|column| {
+                by_title
+                    .get_mut(&column.title)
+                    .and_then(VecDeque::pop_front)
+                    .flatten()
+            })
+            .collect();
+    }
+
+    fn reload_column_widths(&mut self, mut previous: HashMap<Arc<str>, VecDeque<(f32, bool)>>) {
+        let (widths, manual): (Vec<f32>, Vec<bool>) = self
             .model
             .columns
             .iter()
@@ -336,9 +479,41 @@ impl DataTableState {
                 previous
                     .get_mut(&column.title)
                     .and_then(VecDeque::pop_front)
-                    .unwrap_or_else(|| Self::initial_column_width(&self.model, column_ix))
+                    .unwrap_or_else(|| {
+                        let width = Self::initial_column_width(
+                            &self.model,
+                            column_ix,
+                            &self.auto_width_metrics,
+                        );
+                        (width, false)
+                    })
             })
-            .collect();
+            .unzip();
+
+        self.column_widths = widths;
+        self.manually_sized = manual;
+        self.column_offsets = Self::calculate_offsets(&self.column_widths);
+    }
+
+    /// Re-estimates every column the user has not resized when the grid
+    /// face or size changed since the widths were last estimated.
+    ///
+    /// Called from `DataTable::render`, which reads the widths right after,
+    /// so it does not notify.
+    pub(super) fn sync_grid_text_metrics(&mut self, cx: &App) {
+        let metrics = GridTextMetrics::current(cx);
+        if metrics == self.auto_width_metrics {
+            return;
+        }
+
+        for (column_ix, width) in self.column_widths.iter_mut().enumerate() {
+            let manual = self.manually_sized.get(column_ix).copied().unwrap_or(false);
+            if !manual {
+                *width = Self::initial_column_width(&self.model, column_ix, &metrics);
+            }
+        }
+
+        self.auto_width_metrics = metrics;
         self.column_offsets = Self::calculate_offsets(&self.column_widths);
     }
 
@@ -400,9 +575,17 @@ impl DataTableState {
     }
 
     pub fn set_column_width(&mut self, col: usize, width: f32, cx: &mut Context<Self>) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the branch is guarded by col < self.column_widths.len()"
+        )]
         if col < self.column_widths.len() {
-            let min_width = super::theme::MIN_COLUMN_WIDTH;
-            self.column_widths[col] = width.max(min_width);
+            self.column_widths[col] = bolt::components::grid::clamp_column_width(width);
+
+            if let Some(manual) = self.manually_sized.get_mut(col) {
+                *manual = true;
+            }
+
             self.column_offsets = Self::calculate_offsets(&self.column_widths);
             cx.notify();
         }
@@ -724,11 +907,19 @@ impl DataTableState {
 
         // Columns start after the row-number column; scrolling to the first
         // column keeps the row numbers in view.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "scroll_to_column returns early above when col >= self.column_offsets.len(), and the else arm runs only when col != 0, so col is in bounds"
+        )]
         let col_left = if col == 0 {
             px(0.0)
         } else {
             ROW_NUMBER_WIDTH + px(self.column_offsets[col])
         };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "col is in bounds (early return above); the preceding bounds check makes column_offsets[col] safe, including the eager unwrap_or argument"
+        )]
         let col_right = ROW_NUMBER_WIDTH
             + px(*self
                 .column_offsets
@@ -815,15 +1006,54 @@ impl DataTableState {
 
     // --- Edit Mode ---
 
-    /// Check if the table is editable (has primary key columns).
+    /// Check if the table is editable (has primary key columns, or
+    /// identifies its rows by position).
     pub fn is_editable(&self) -> bool {
         self.is_editable
     }
 
     /// Set the primary key column indices and update editability.
+    ///
+    /// Rows are identified by these columns from here on, which ends
+    /// positional editing.
     pub fn set_pk_columns(&mut self, pk_columns: Vec<usize>) {
         self.is_editable = !pk_columns.is_empty();
+        self.positional_rows = false;
         self.pk_columns = pk_columns;
+    }
+
+    /// Set the primary key column indices of a table whose rows cannot be
+    /// edited: the key headers keep their icon, nothing is editable.
+    pub fn set_read_only_pk_columns(&mut self, pk_columns: Vec<usize>) {
+        self.set_pk_columns(pk_columns);
+        self.is_editable = false;
+    }
+
+    /// Make the table editable with rows identified by their position, for a
+    /// source whose rows have no key. No column is a key column, so no header
+    /// draws a key icon. `false` makes the table read-only.
+    ///
+    /// A pending edit then belongs to a row index. It only stays on the row it
+    /// was made on while the host keeps every row at its index: see
+    /// [`DataTableState::snapshot_pending_edits`].
+    pub fn set_positional_editing(&mut self, editable: bool) {
+        self.pk_columns.clear();
+        self.positional_rows = editable;
+        self.is_editable = editable;
+    }
+
+    /// Whether the table is editable with rows identified by their position.
+    pub fn is_positional_editing(&self) -> bool {
+        self.positional_rows
+    }
+
+    /// Marks the first row as the reference row, or clears the mark.
+    pub fn set_reference_row(&mut self, reference_row: bool) {
+        self.reference_row = reference_row;
+    }
+
+    pub fn has_reference_row(&self) -> bool {
+        self.reference_row
     }
 
     /// Get the primary key column indices.
@@ -952,6 +1182,10 @@ impl DataTableState {
             Some(VisualRowSource::Insert(insert_idx)) => {
                 if let Some(insert_data) = self.edit_buffer.get_pending_insert_by_idx(insert_idx) {
                     if coord.col < insert_data.len() {
+                        #[expect(
+                            clippy::indexing_slicing,
+                            reason = "guarded by coord.col < insert_data.len()"
+                        )]
                         let cell = &insert_data[coord.col];
                         (
                             cell.edit_text(),
@@ -1146,24 +1380,35 @@ impl DataTableState {
         self.close_editor(apply, true, cx);
     }
 
+    /// Commit the value typed into an open inline editor, the way Enter does,
+    /// without asking for focus back.
+    ///
+    /// For a host that is about to close the table or move focus away from it:
+    /// the value becomes a pending change its unsaved-changes check can see,
+    /// and focus stays wherever the host puts it, such as on its confirmation
+    /// dialog. An open enum dropdown holds no typed value, so it just closes.
+    pub fn commit_pending_edit(&mut self, cx: &mut Context<Self>) {
+        self.close_editor(true, false, cx);
+    }
+
     /// Stage a value typed for a cell of the row set the table already holds.
     ///
     /// A value that matches what the row already holds has to drop any staged
     /// value instead of staging one, or the row keeps showing the edited value
     /// and stays marked as modified.
+    ///
+    /// The match is on the values, not on the text the grid draws for them:
+    /// see [`super::model::CellValue::holds_same_value`].
     pub fn stage_base_cell_value(
         &mut self,
         base_idx: usize,
         col: usize,
         cell_value: super::model::CellValue,
     ) {
-        let base_text = self
-            .model
-            .cell(base_idx, col)
-            .map(|cell| cell.display_text().to_string())
-            .unwrap_or_default();
+        let absent_cell = super::model::CellValue::text("");
+        let base_cell = self.model.cell(base_idx, col).unwrap_or(&absent_cell);
 
-        if cell_value.display_text().as_ref() == base_text.as_str() {
+        if base_cell.holds_same_value(&cell_value) {
             self.edit_buffer.clear_cell(base_idx, col);
         } else {
             self.edit_buffer.set_cell(base_idx, col, cell_value);
@@ -1195,6 +1440,43 @@ impl DataTableState {
             Some(VisualRowSource::Insert(insert_idx)) => {
                 self.edit_buffer
                     .set_insert_cell(insert_idx, col, cell_value);
+            }
+            None => {}
+        }
+    }
+
+    /// Stage text pasted onto a cell addressed the way the table displays it.
+    ///
+    /// Copy writes a cell as [`clipboard::format_cell`] does, which turns
+    /// tabs and line breaks into spaces, so pasting a cell's copied text back
+    /// onto its row must not replace the row's line breaks: a paste that
+    /// matches the copied form of the row's own value is no change. Typed
+    /// values are not compared this way, because a typed change to
+    /// whitespace is an edit.
+    pub fn stage_pasted_text(&mut self, visual_row: usize, col: usize, text: &str) {
+        use super::model::{CellValue, VisualRowSource};
+
+        match self
+            .edit_buffer
+            .compute_visual_order()
+            .get(visual_row)
+            .copied()
+        {
+            Some(VisualRowSource::Base(base_idx)) => {
+                let is_copied_form = self
+                    .model
+                    .cell(base_idx, col)
+                    .is_some_and(|cell| clipboard::format_cell(cell) == text);
+
+                if is_copied_form {
+                    self.edit_buffer.clear_cell(base_idx, col);
+                } else {
+                    self.stage_base_cell_value(base_idx, col, CellValue::text(text));
+                }
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                self.edit_buffer
+                    .set_insert_cell(insert_idx, col, CellValue::text(text));
             }
             None => {}
         }
@@ -1274,7 +1556,15 @@ impl DataTableState {
     /// Lift the pending edits off the current rows, keyed by primary key, so
     /// [`DataTableState::restore_pending_edits`] can lay them onto the model
     /// that replaces this one.
+    ///
+    /// With positional editing the edits are keyed by row index instead, so
+    /// they are only restored onto the right rows by a model that kept every
+    /// row it already had at its index.
     pub fn snapshot_pending_edits(&self) -> KeyedPendingEdits {
+        if self.positional_rows {
+            return self.edit_buffer.snapshot_by_position(&self.model);
+        }
+
         self.edit_buffer
             .snapshot_by_identity(&self.model, &self.pk_columns)
     }
@@ -1380,6 +1670,12 @@ impl DataTableState {
     /// This applies server-side computed values (defaults, triggers) to the model.
     pub fn apply_returning_row(&mut self, row_idx: usize, values: &[dbflux_core::Value]) {
         self.model = Arc::new(self.model.with_row_updated(row_idx, values));
+    }
+
+    /// Writes the pending edits of row `row_idx` into the loaded model, for a
+    /// save whose returned row cannot be placed in the grid's columns.
+    pub fn keep_row_edits(&mut self, row_idx: usize) {
+        self.model = Arc::new(self.model.with_row_edits(row_idx, &self.edit_buffer));
     }
 }
 
@@ -2016,6 +2312,98 @@ mod tests {
         );
     }
 
+    /// Focus leaving the editor, such as a click outside the table, still
+    /// cancels: the typed value is dropped, not staged.
+    #[gpui::test]
+    fn blur_drops_the_typed_value(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use crate::controls::InputEvent;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+        window.update(|_, app| {
+            input.update(app, |_input, cx| cx.emit(InputEvent::Blur));
+        });
+
+        let (editing_cell, is_dirty) = window.update(|_, app| {
+            let state = state.read(app);
+            (
+                state.editing_cell(),
+                state.edit_buffer().is_cell_dirty(0, 1),
+            )
+        });
+
+        assert!(editing_cell.is_none(), "blur closes the editor");
+        assert!(!is_dirty, "blur must drop the typed value, not stage it");
+    }
+
+    /// A host about to close the table commits the typed value the way Enter
+    /// does, but leaves focus where it is: its confirmation dialog must keep
+    /// the keyboard.
+    #[gpui::test]
+    fn committing_a_pending_edit_stages_it_without_a_refocus(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.commit_pending_edit(cx));
+        });
+
+        let (editing_cell, changes, refocus) = window.update(|_, app| {
+            state.update(app, |s, _cx| {
+                (
+                    s.editing_cell(),
+                    s.edit_buffer()
+                        .row_changes(0)
+                        .into_iter()
+                        .map(|(col, value)| (col, value.display_text().to_string()))
+                        .collect::<Vec<_>>(),
+                    s.take_pending_refocus(),
+                )
+            })
+        });
+
+        assert!(editing_cell.is_none(), "committing closes the editor");
+        assert_eq!(
+            changes,
+            vec![(1usize, "carol".to_string())],
+            "the typed value must be a pending change"
+        );
+        assert!(!refocus, "committing for a close must not take focus back");
+    }
+
+    /// Without an open editor there is nothing to commit, and nothing changes.
+    #[gpui::test]
+    fn committing_without_an_open_editor_changes_nothing(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, _input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.stop_editing(false, cx);
+                s.take_pending_refocus();
+                s.commit_pending_edit(cx);
+            });
+        });
+
+        let (has_changes, refocus) = window.update(|_, app| {
+            state.update(app, |s, _cx| {
+                (s.has_pending_operations(), s.take_pending_refocus())
+            })
+        });
+
+        assert!(!has_changes);
+        assert!(!refocus);
+    }
+
     /// Window root that renders an input's focus handle next to a second
     /// focusable element, and counts the input's `Blur` events it receives
     /// through a window-bound `subscribe_in` subscription.
@@ -2366,7 +2754,8 @@ mod tests {
                 vec![
                     super::DataTableState::initial_column_width(
                         &model_of(&["name", "id", "email"], 1),
-                        0
+                        0,
+                        &default_metrics()
                     ),
                     210.0,
                     300.0,
@@ -2393,7 +2782,11 @@ mod tests {
             assert_eq!(
                 widths,
                 vec![
-                    super::DataTableState::initial_column_width(&model_of(&["id", "email"], 1), 0),
+                    super::DataTableState::initial_column_width(
+                        &model_of(&["id", "email"], 1),
+                        0,
+                        &default_metrics()
+                    ),
                     444.0
                 ],
                 "dropping a column must not shift another column's width into its place"
@@ -2423,12 +2816,14 @@ mod tests {
                 vec![
                     super::DataTableState::initial_column_width(
                         &model_of(&["id", "name", "extra"], 1),
-                        0
+                        0,
+                        &default_metrics()
                     ),
                     333.0,
                     super::DataTableState::initial_column_width(
                         &model_of(&["id", "name", "extra"], 1),
-                        2
+                        2,
+                        &default_metrics()
                     ),
                 ],
                 "a column the previous model did not have falls back to the heuristic"
@@ -2436,7 +2831,143 @@ mod tests {
         });
     }
 
-    use super::{CELL_PADDING_X, GridMetrics, MAX_AUTO_COLUMN_WIDTH, MONO_ADVANCE_EM};
+    fn annotation(text: &str) -> Option<super::HeaderAnnotation> {
+        Some(super::HeaderAnnotation::new(text.to_string()).trailing("0% null"))
+    }
+
+    fn annotations(
+        cx: &mut gpui::TestAppContext,
+        state: &gpui::Entity<super::DataTableState>,
+    ) -> Vec<Option<super::HeaderAnnotation>> {
+        cx.update(|cx| {
+            let state = state.read(cx);
+            (0..state.col_count())
+                .map(|col| state.header_annotation(col).cloned())
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn header_annotations_survive_set_model_by_title(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name", "email"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_header_annotations(vec![annotation("41×"), None, annotation("2.3×")], cx);
+                s.set_model(
+                    model_of(&["id", "name", "email"], 3),
+                    ModelSwap::ResetCursor,
+                    cx,
+                );
+            });
+        });
+        assert_eq!(
+            annotations(cx, &state),
+            vec![annotation("41×"), None, annotation("2.3×")],
+            "another page of the same columns keeps the annotations"
+        );
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_model(
+                    model_of(&["email", "id", "name"], 3),
+                    ModelSwap::KeepCursor,
+                    cx,
+                );
+            });
+        });
+        assert_eq!(
+            annotations(cx, &state),
+            vec![annotation("2.3×"), annotation("41×"), None],
+            "a reordered column keeps its own annotation, not the one of its old index"
+        );
+        assert!(cx.update(|cx| state.read(cx).has_header_annotations()));
+    }
+
+    #[gpui::test]
+    fn header_annotations_clear_when_columns_change(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name", "email"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_header_annotations(vec![annotation("41×"), annotation("9.7×"), None], cx);
+                s.set_model(model_of(&["id", "name"], 1), ModelSwap::ResetCursor, cx);
+            });
+        });
+
+        assert_eq!(annotations(cx, &state), vec![None, None]);
+
+        let (has_annotations, header_height) = cx.update(|cx| {
+            let state = state.read(cx);
+            (state.has_header_annotations(), state.header_height(cx))
+        });
+        assert!(
+            !has_annotations,
+            "a different column set drops every annotation, kept titles included"
+        );
+        assert_eq!(header_height, cx.update(|cx| fonts::grid_header_height(cx)));
+    }
+
+    #[gpui::test]
+    fn header_annotations_clear_when_repeated_titles_move(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["value", "id", "value"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_header_annotations(vec![annotation("41×"), None, annotation("2.3×")], cx);
+                s.set_model(
+                    model_of(&["id", "value", "value"], 1),
+                    ModelSwap::ResetCursor,
+                    cx,
+                );
+            });
+        });
+
+        assert_eq!(
+            annotations(cx, &state),
+            vec![None, None, None],
+            "a repeated title cannot tell which column moved where"
+        );
+    }
+
+    #[gpui::test]
+    fn header_annotations_with_repeated_titles_survive_a_page_of_the_same_columns(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = state_of(cx, model_of(&["value", "id", "value"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_header_annotations(vec![annotation("41×"), None, annotation("2.3×")], cx);
+                s.set_model(
+                    model_of(&["value", "id", "value"], 3),
+                    ModelSwap::KeepCursor,
+                    cx,
+                );
+            });
+        });
+
+        assert_eq!(
+            annotations(cx, &state),
+            vec![annotation("41×"), None, annotation("2.3×")]
+        );
+    }
+
+    use super::{CELL_PADDING_X, GridTextMetrics, MAX_AUTO_COLUMN_WIDTH};
+    use crate::fonts::{self, FontSettings};
+
+    /// Advances of the bundled grid face at `grid_size`.
+    fn metrics_at(grid_size: f32) -> GridTextMetrics {
+        GridTextMetrics {
+            family: crate::typography::AppFonts::MONO.into(),
+            cell_char_advance: grid_size * 0.6,
+            type_char_advance: grid_size * 0.84 * 0.6,
+        }
+    }
+
+    fn default_metrics() -> GridTextMetrics {
+        metrics_at(12.5)
+    }
 
     fn model_with_values(title: &str, values: &[&str]) -> std::sync::Arc<TableModel> {
         let columns = vec![ColumnSpec {
@@ -2458,11 +2989,16 @@ mod tests {
 
     #[test]
     fn columns_open_wide_enough_for_their_values() {
-        let header_only =
-            super::DataTableState::initial_column_width(&model_with_values("title", &["E1"]), 0);
+        let metrics = default_metrics();
+        let header_only = super::DataTableState::initial_column_width(
+            &model_with_values("title", &["E1"]),
+            0,
+            &metrics,
+        );
         let with_content = super::DataTableState::initial_column_width(
             &model_with_values("title", &["E1", "E11 — Task 1117: notes"]),
             0,
+            &metrics,
         );
 
         assert!(
@@ -2471,8 +3007,7 @@ mod tests {
         );
 
         let value_chars = "E11 — Task 1117: notes".chars().count() as f32;
-        let value_width = value_chars * f32::from(GridMetrics::FONT) * MONO_ADVANCE_EM
-            + f32::from(CELL_PADDING_X) * 2.0;
+        let value_width = value_chars * metrics.cell_char_advance + f32::from(CELL_PADDING_X) * 2.0;
         assert!(
             with_content >= value_width,
             "the value fits without being cut ({with_content} < {value_width})"
@@ -2485,9 +3020,96 @@ mod tests {
         let width = super::DataTableState::initial_column_width(
             &model_with_values("note", &[long_value.as_str()]),
             0,
+            &default_metrics(),
         );
 
         assert_eq!(width, MAX_AUTO_COLUMN_WIDTH.ceil());
+    }
+
+    #[test]
+    fn column_width_scales_with_the_grid_font_size() {
+        let model = model_with_values("title", &["medium value"]);
+
+        let default_width =
+            super::DataTableState::initial_column_width(&model, 0, &default_metrics());
+        let larger_width =
+            super::DataTableState::initial_column_width(&model, 0, &metrics_at(18.0));
+
+        let value_chars = "medium value".chars().count() as f32;
+        let expected_growth = value_chars * (18.0 - 12.5) * 0.6;
+
+        assert!(
+            larger_width - default_width >= expected_growth.floor(),
+            "a larger grid font widens the column by its glyph advance \
+             ({default_width} -> {larger_width}, expected at least +{expected_growth})"
+        );
+    }
+
+    #[gpui::test]
+    fn grid_font_change_resizes_auto_columns_and_keeps_manual_ones(cx: &mut gpui::TestAppContext) {
+        let model = model_of(&["title", "note"], 1);
+        let state = state_of(cx, model.clone());
+
+        let default_auto = cx.update(|cx| {
+            state.update(cx, |s, cx| s.set_column_width(1, 333.0, cx));
+            state.read(cx).column_widths()[0]
+        });
+
+        cx.update(|cx| {
+            fonts::set(
+                cx,
+                FontSettings {
+                    grid_size: 20.0,
+                    ..FontSettings::default()
+                },
+            );
+            state.update(cx, |s, cx| s.sync_grid_text_metrics(cx));
+        });
+
+        cx.update(|cx| {
+            let widths = state.read(cx).column_widths().to_vec();
+            let expected = super::DataTableState::initial_column_width(
+                &model,
+                0,
+                &GridTextMetrics::current(cx),
+            );
+
+            assert!(widths[0] > default_auto, "the auto-sized column grows");
+            assert_eq!(widths[0], expected);
+            assert_eq!(widths[1], 333.0, "a width the user set survives");
+        });
+    }
+
+    #[gpui::test]
+    fn manual_width_carried_by_set_model_survives_a_font_change(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_column_width(1, 333.0, cx);
+                s.set_model(model_of(&["name", "id"], 1), ModelSwap::KeepCursor, cx);
+            });
+
+            fonts::set(
+                cx,
+                FontSettings {
+                    grid_size: 20.0,
+                    ..FontSettings::default()
+                },
+            );
+            state.update(cx, |s, cx| s.sync_grid_text_metrics(cx));
+        });
+
+        cx.update(|cx| {
+            let widths = state.read(cx).column_widths().to_vec();
+            let expected_auto = super::DataTableState::initial_column_width(
+                &model_of(&["name", "id"], 1),
+                1,
+                &GridTextMetrics::current(cx),
+            );
+
+            assert_eq!(widths, vec![333.0, expected_auto]);
+        });
     }
 
     #[gpui::test]
@@ -2660,5 +3282,581 @@ mod tests {
             );
             assert_eq!(s.edit_buffer().base_row_count(), 1);
         });
+    }
+
+    // =========================================================================
+    // Positional editing — rows identified by position, no key columns
+    // =========================================================================
+
+    /// A two-row state in a window, editable by position and insertable.
+    fn positional_state(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<super::DataTableState>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(two_row_model(), cx);
+                s.set_positional_editing(true);
+                s.set_insertable(true);
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        (state, window)
+    }
+
+    #[gpui::test]
+    fn positional_editing_edits_rows_without_key_columns(cx: &mut gpui::TestAppContext) {
+        let (state, window) = positional_state(cx);
+
+        window.update(|_, app| {
+            let s = state.read(app);
+            assert!(s.is_editable());
+            assert!(s.is_positional_editing());
+            assert!(
+                s.pk_columns().is_empty(),
+                "the header and record mode draw a key icon on every key column"
+            );
+        });
+
+        let input = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(
+                    s.start_editing(CellCoord::new(1, 1), window, cx),
+                    "a base row must be editable"
+                );
+                s.cell_input().cloned().expect("cell input for the edit")
+            })
+        });
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        window.update(|_, app| {
+            state.update(app, |s, _cx| {
+                assert_eq!(
+                    s.edit_buffer()
+                        .row_changes(1)
+                        .into_iter()
+                        .map(|(col, value)| (col, value.edit_text()))
+                        .collect::<Vec<_>>(),
+                    vec![(1usize, "carol".to_string())]
+                );
+
+                s.edit_buffer_mut().mark_for_delete(0);
+                s.edit_buffer_mut()
+                    .add_pending_insert_after(1, vec![CellValue::text(""), CellValue::text("")]);
+            });
+        });
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.edit_buffer().is_pending_delete(0));
+                assert_eq!(s.row_count(), 3);
+                assert!(
+                    s.start_editing(CellCoord::new(2, 1), window, cx),
+                    "the inserted row must be editable"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn key_columns_replace_positional_editing(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, two_row_model());
+
+        cx.update(|cx| {
+            state.update(cx, |s, _cx| {
+                assert!(!s.is_editable());
+
+                s.set_positional_editing(true);
+                s.set_pk_columns(vec![0]);
+                assert!(s.is_editable());
+                assert!(!s.is_positional_editing());
+                assert_eq!(s.pk_columns(), &[0]);
+
+                s.set_positional_editing(true);
+                assert!(s.pk_columns().is_empty());
+
+                s.set_pk_columns(Vec::new());
+                assert!(
+                    !s.is_editable(),
+                    "a table given no key columns is read-only, as it always was"
+                );
+                assert!(!s.is_positional_editing());
+
+                s.set_positional_editing(true);
+                s.set_positional_editing(false);
+                assert!(!s.is_editable());
+            });
+        });
+    }
+
+    /// The model swap of a page append: every row keeps its index, so edits
+    /// keyed by position land on the rows they were made on.
+    #[gpui::test]
+    fn positional_edits_survive_a_model_swap_through_snapshot_and_restore(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = state_of(cx, model_of(&["id", "name"], 2));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_positional_editing(true);
+                s.stage_cell_value(1, 1, CellValue::text("edited"));
+                s.edit_buffer_mut().mark_for_delete(0);
+
+                let edits = s.snapshot_pending_edits();
+                s.set_model(model_of(&["id", "name"], 4), ModelSwap::KeepCursor, cx);
+                assert!(!s.has_pending_operations(), "set_model drops pending edits");
+
+                assert_eq!(s.restore_pending_edits(edits, cx), 0);
+                assert!(s.edit_buffer().is_cell_dirty(1, 1));
+                assert!(s.edit_buffer().is_pending_delete(0));
+                assert!(s.is_editable(), "a model swap keeps the editing mode");
+            });
+        });
+    }
+
+    /// The other way to carry edits over a swap that keeps every row at its
+    /// index: write the saved buffer back. Unlike a snapshot it keeps the
+    /// undo history.
+    #[gpui::test]
+    fn a_saved_edit_buffer_written_back_after_a_model_swap_keeps_edits_and_undo(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::model::VisualRowSource;
+
+        let state = state_of(cx, model_of(&["id", "name"], 2));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_positional_editing(true);
+                s.stage_cell_value(1, 1, CellValue::text("edited"));
+
+                let saved = s.edit_buffer().clone();
+                s.set_model(model_of(&["id", "name"], 4), ModelSwap::KeepCursor, cx);
+                *s.edit_buffer_mut() = saved;
+                s.edit_buffer_mut().set_base_row_count(4);
+
+                assert!(s.edit_buffer().is_cell_dirty(1, 1));
+                assert_eq!(
+                    s.edit_buffer().compute_visual_order(),
+                    (0..4).map(VisualRowSource::Base).collect::<Vec<_>>()
+                );
+
+                assert!(s.edit_buffer_mut().undo());
+                assert!(!s.has_pending_operations());
+            });
+        });
+    }
+
+    // =========================================================================
+    // A pending insert above the first row
+    // =========================================================================
+
+    #[gpui::test]
+    fn the_cursor_reaches_and_edits_a_row_inserted_above_the_first_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::events::Direction;
+        use super::super::model::InsertAnchor;
+
+        let (state, window) = positional_state(cx);
+
+        let insert_idx = window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.select_cell(CellCoord::new(0, 1), cx);
+
+                let insert_idx = s.edit_buffer_mut().add_pending_insert_at(
+                    InsertAnchor::BeforeFirst,
+                    vec![CellValue::text(""), CellValue::text("")],
+                );
+
+                assert_eq!(s.row_count(), 3);
+
+                s.move_active(Direction::Down, false, cx);
+                s.move_active(Direction::Up, false, cx);
+                insert_idx
+            })
+        });
+
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(0, 1)),
+            "the first visual row is the inserted one"
+        );
+
+        let input = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+                s.cell_input().cloned().expect("cell input for the edit")
+            })
+        });
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("top", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        window.update(|_, app| {
+            let s = state.read(app);
+            assert_eq!(
+                s.edit_buffer()
+                    .get_pending_insert_by_idx(insert_idx)
+                    .and_then(|cells| cells.get(1))
+                    .map(CellValue::edit_text)
+                    .as_deref(),
+                Some("top"),
+                "the typed value must land on the inserted row"
+            );
+            assert!(
+                !s.edit_buffer().has_changes(),
+                "no base row was edited: the first base row is now the second visual row"
+            );
+        });
+    }
+
+    // =========================================================================
+    // Staging compares the values the cells hold, not the text drawn for them
+    // =========================================================================
+
+    /// A one-column, one-row editable state whose only cell holds `cell`.
+    fn single_cell_state(
+        cx: &mut gpui::TestAppContext,
+        cell: CellValue,
+    ) -> gpui::Entity<super::DataTableState> {
+        let columns = vec![ColumnSpec {
+            id: "value".into(),
+            title: "value".into(),
+            kind: ColumnKind::Text,
+            align: TextAlign::Left,
+            type_name: "text".into(),
+        }];
+        let rows = vec![RowData { cells: vec![cell] }];
+        let state = state_of(cx, std::sync::Arc::new(TableModel::new(columns, rows)));
+
+        cx.update(|cx| state.update(cx, |s, _cx| s.set_pk_columns(vec![0])));
+
+        state
+    }
+
+    /// Stages `value` on the only cell and reports whether the cell is left
+    /// with a pending change.
+    fn stage_on_single_cell(
+        cx: &mut gpui::TestAppContext,
+        state: &gpui::Entity<super::DataTableState>,
+        value: CellValue,
+    ) -> bool {
+        cx.update(|cx| {
+            state.update(cx, |s, _cx| {
+                s.stage_cell_value(0, 0, value);
+                s.edit_buffer().is_cell_dirty(0, 0)
+            })
+        })
+    }
+
+    #[gpui::test]
+    fn a_line_break_replaced_by_a_space_is_staged(cx: &mut gpui::TestAppContext) {
+        let state = single_cell_state(cx, CellValue::text("a\nb"));
+
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("a b")),
+            "the grid draws both values as `a b`, but they are different values"
+        );
+    }
+
+    #[gpui::test]
+    fn a_whitespace_only_change_is_staged(cx: &mut gpui::TestAppContext) {
+        let state = single_cell_state(cx, CellValue::text("a\tb"));
+
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("a b")),
+            "a tab turned into a space must be staged"
+        );
+
+        let state = single_cell_state(cx, CellValue::text("a\r\nb"));
+
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("a\n\nb")),
+            "a carriage return turned into a line feed must be staged"
+        );
+    }
+
+    #[gpui::test]
+    fn a_change_in_the_tail_of_a_long_value_is_staged(cx: &mut gpui::TestAppContext) {
+        let original = "x".repeat(2_000);
+        let edited = format!("{}y", &original[..1_999]);
+        let state = single_cell_state(cx, CellValue::text(&original));
+
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text(&edited)),
+            "a change past the part of the value the grid draws must be staged"
+        );
+
+        let staged = cx.update(|cx| {
+            state
+                .read(cx)
+                .edit_buffer()
+                .row_changes(0)
+                .into_iter()
+                .map(|(_, value)| value.edit_text())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(staged, vec![edited]);
+    }
+
+    #[gpui::test]
+    fn re_entering_the_value_a_cell_holds_is_not_staged(cx: &mut gpui::TestAppContext) {
+        let long_value = "x".repeat(2_000);
+
+        for value in ["a\nb", "a\tb", " padded ", "", long_value.as_str()] {
+            let state = single_cell_state(cx, CellValue::text(value));
+
+            assert!(
+                !stage_on_single_cell(cx, &state, CellValue::text(value)),
+                "the value {value:?} was staged over itself"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn editing_a_long_value_back_to_the_original_leaves_the_cell_clean(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let original = "x".repeat(2_000);
+        let edited = format!("{}y", &original[..1_999]);
+        let state = single_cell_state(cx, CellValue::text(&original));
+
+        assert!(stage_on_single_cell(cx, &state, CellValue::text(&edited)));
+        assert!(
+            !stage_on_single_cell(cx, &state, CellValue::text(&original)),
+            "typing the original value back must drop the pending change"
+        );
+
+        cx.update(|cx| {
+            let s = state.read(cx);
+            assert!(s.edit_buffer().row_state(0).is_clean());
+            assert!(!s.has_pending_operations());
+        });
+    }
+
+    #[gpui::test]
+    fn null_and_text_are_different_values(cx: &mut gpui::TestAppContext) {
+        let state = single_cell_state(cx, CellValue::null());
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("")),
+            "an empty string over a null is a change"
+        );
+
+        let state = single_cell_state(cx, CellValue::null());
+        assert!(
+            !stage_on_single_cell(cx, &state, CellValue::null()),
+            "a null over a null is not a change"
+        );
+
+        let state = single_cell_state(cx, CellValue::text("NULL"));
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::null()),
+            "a null over the text `NULL` is a change, though both are drawn as `NULL`"
+        );
+
+        let state = single_cell_state(cx, CellValue::text(""));
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::null()),
+            "a null over an empty string is a change"
+        );
+    }
+
+    /// The inline editor hands every value back as text, so a typed cell must
+    /// recognise its own value in the text the editor opened with and in the
+    /// text the grid draws for it.
+    #[gpui::test]
+    fn a_typed_cell_recognises_its_own_value_as_text(cx: &mut gpui::TestAppContext) {
+        let cases = [
+            (CellValue::int(42), "42"),
+            (CellValue::bool(true), "true"),
+            (CellValue::float(1.0), "1"),
+            (CellValue::float(1.0), "1.0"),
+            (CellValue::float(2.5), "2.5"),
+        ];
+
+        for (cell, typed) in cases {
+            let state = single_cell_state(cx, cell.clone());
+
+            assert!(
+                !stage_on_single_cell(cx, &state, CellValue::text(typed)),
+                "{typed:?} typed over {cell:?} was staged"
+            );
+        }
+
+        let state = single_cell_state(cx, CellValue::int(42));
+        assert!(stage_on_single_cell(cx, &state, CellValue::text("43")));
+
+        let state = single_cell_state(cx, CellValue::int(42));
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("42 ")),
+            "added whitespace is a change"
+        );
+    }
+
+    /// Cells whose drawn and copied text is a placeholder, not their value.
+    fn placeholder_cells() -> Vec<CellValue> {
+        vec![
+            CellValue::bytes(16),
+            CellValue::unsupported("geometry"),
+            CellValue::auto_generated("nextval('users_id_seq')"),
+            CellValue::nested(false, 3),
+            CellValue::nested(true, 2),
+        ]
+    }
+
+    /// Staging the placeholder of a cell whose value it cannot spell out must
+    /// not write the placeholder text over that value, whether it reaches
+    /// the cell as the text copy produces or as the text the grid draws.
+    #[gpui::test]
+    fn the_placeholder_of_a_value_is_never_a_change_to_it(cx: &mut gpui::TestAppContext) {
+        use super::super::clipboard::format_cell;
+
+        for cell in placeholder_cells() {
+            for placeholder in [format_cell(&cell), cell.display_text().to_string()] {
+                let state = single_cell_state(cx, cell.clone());
+
+                assert!(
+                    !stage_on_single_cell(cx, &state, CellValue::text(&placeholder)),
+                    "{placeholder:?} staged over {cell:?}"
+                );
+
+                let other_cell_of_the_same_kind = single_cell_state(cx, cell.clone());
+
+                assert!(
+                    !stage_on_single_cell(
+                        cx,
+                        &other_cell_of_the_same_kind,
+                        CellValue::text(&placeholder)
+                    ),
+                    "{placeholder:?} staged over another {cell:?}"
+                );
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn typing_the_placeholder_of_a_bytes_cell_over_it_is_not_a_change(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = single_cell_state(cx, CellValue::bytes(4));
+
+        assert!(
+            !stage_on_single_cell(cx, &state, CellValue::text("<4 bytes>")),
+            "typing the placeholder must not stage it as the column's new bytes"
+        );
+        assert!(
+            stage_on_single_cell(cx, &state, CellValue::text("<5 bytes>")),
+            "other text over a bytes cell is still a change"
+        );
+    }
+
+    /// A cell too long for the inline editor asks the host for a modal editor
+    /// with the full value, and the host stages the result through
+    /// `stage_cell_value`.
+    #[gpui::test]
+    fn the_modal_edit_path_stages_a_tail_only_change(cx: &mut gpui::TestAppContext) {
+        use super::super::events::DataTableEvent;
+
+        let original = format!("{}\nlast line", "x".repeat(2_000));
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view({
+            let original = original.clone();
+            move |_window, cx| {
+                let columns = vec![ColumnSpec {
+                    id: "value".into(),
+                    title: "value".into(),
+                    kind: ColumnKind::Text,
+                    align: TextAlign::Left,
+                    type_name: "text".into(),
+                }];
+                let rows = vec![RowData {
+                    cells: vec![CellValue::text(&original)],
+                }];
+                let model = std::sync::Arc::new(TableModel::new(columns, rows));
+
+                let state = cx.new(|cx| {
+                    let mut s = super::DataTableState::new(model, cx);
+                    s.set_pk_columns(vec![0]);
+                    s
+                });
+                holder_clone.replace(Some(state.clone()));
+                StateHarness { state }
+            }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let requested = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _subscription = window.update(|_, app| {
+            let requested = requested.clone();
+            app.subscribe(&state, move |_state, event: &DataTableEvent, _app| {
+                if let DataTableEvent::ModalEditRequested { value, .. } = event {
+                    requested.borrow_mut().push(value.clone());
+                }
+            })
+        });
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 0), window, cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            requested.borrow().as_slice(),
+            std::slice::from_ref(&original),
+            "the modal editor must open with the full value"
+        );
+
+        let edited = format!("{}\nlast lime", "x".repeat(2_000));
+        window.update(|_, app| {
+            state.update(app, |s, _cx| {
+                s.stage_cell_value(0, 0, CellValue::text(&edited));
+            });
+        });
+
+        let staged = window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .row_changes(0)
+                .into_iter()
+                .map(|(_, value)| value.edit_text())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            staged,
+            vec![edited],
+            "a change in the tail of a long value must be staged"
+        );
     }
 }

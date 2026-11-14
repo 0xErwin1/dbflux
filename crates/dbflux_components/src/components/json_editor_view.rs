@@ -2,7 +2,6 @@ use crate::controls::Button;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, ModalMetrics};
-use crate::typography::AppFonts;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -195,7 +194,7 @@ impl JsonEditorView {
                             .readonly(self.readonly)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::MONO)
+                            .font_family(crate::fonts::editor_family(cx))
                             .text_size(ModalMetrics::CODE_FONT)
                             .text_color(ChromeColors::strong(theme)),
                     ),

@@ -1,6 +1,21 @@
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// Where a data file opened as a document lives: the identity behind
+/// [`DocumentKey::FileDocument`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileDocumentKey {
+    /// A file on the local file system.
+    Local { path: PathBuf },
+
+    /// An object in object storage.
+    Object {
+        profile_id: Uuid,
+        bucket: String,
+        key: String,
+    },
+}
+
 /// Identity key used for document deduplication.
 ///
 /// Replaces the six `is_*` methods on `DocumentHandle` with a single
@@ -32,6 +47,12 @@ pub enum DocumentKey {
 
     /// A Redis-style key-value database browser.
     KeyValueDb { profile_id: Uuid, database: String },
+
+    /// A native console tab for a database (`None`: the connection's own).
+    Console {
+        profile_id: Uuid,
+        database: Option<String>,
+    },
 
     /// A standalone chart document linked to a saved chart by ID.
     Chart { saved_chart_id: Uuid },
@@ -103,6 +124,22 @@ pub enum DocumentKey {
     /// root. Deduplicated by `profile_id` — one per connection.
     ObjectStoreBucketsRoot { profile_id: Uuid },
 
+    /// The browser of one store of a secret-store connection. Deduplicated by
+    /// `(profile_id, store_id)` — one tab per store; opening a path of a
+    /// hierarchical store navigates that tab.
+    SecretStore { profile_id: Uuid, store_id: String },
+
+    /// One secret of a secret-store connection in its own tab. The `region`
+    /// is part of the identity because names are region-scoped; `version` is
+    /// the version the tab was opened at (`None` for the current value).
+    Secret {
+        profile_id: Uuid,
+        store_id: String,
+        name: String,
+        version: Option<String>,
+        region: Option<String>,
+    },
+
     /// The prefix/object tree browser opened for a single bucket.
     /// Deduplicated by `(profile_id, bucket)` — one per bucket per connection.
     ObjectBrowser { profile_id: Uuid, bucket: String },
@@ -120,6 +157,11 @@ pub enum DocumentKey {
     /// code document). Deduplicated by `path` — analyzing the same file a
     /// second time focuses the existing tab.
     DumpAnalysis { path: PathBuf },
+
+    /// A data file (for example CSV or TSV) opened as a table. Distinct from
+    /// `File` and `ObjectEditor`, which open the same path or object as text.
+    /// Deduplicated by the local `path`, or by `(profile_id, bucket, key)`.
+    FileDocument(FileDocumentKey),
 
     /// The MCP approvals queue (singleton — at most one open at a time).
     McpApprovals,
@@ -320,6 +362,63 @@ mod tests {
             key,
             DocumentKey::DumpAnalysis { path: p } if p == path
         ));
+    }
+
+    /// `DocumentKey::FileDocument` must construct and round-trip through clone
+    /// and debug, and its identity is equal only for the same local path or
+    /// the same `(profile_id, bucket, key)`.
+    #[test]
+    fn file_document_key_constructs_clones_and_compares_by_location() {
+        let profile_id = Uuid::new_v4();
+
+        let local = FileDocumentKey::Local {
+            path: PathBuf::from("/tmp/cities.csv"),
+        };
+        let object = FileDocumentKey::Object {
+            profile_id,
+            bucket: "reports".to_string(),
+            key: "2026/cities.csv".to_string(),
+        };
+
+        let key = DocumentKey::FileDocument(local.clone());
+        let cloned = key.clone();
+        let _ = format!("{:?}", cloned);
+        assert!(matches!(key, DocumentKey::FileDocument(file) if file == local));
+
+        assert_eq!(local, local.clone());
+        assert_eq!(object, object.clone());
+        assert_ne!(local, object);
+
+        assert_ne!(
+            local,
+            FileDocumentKey::Local {
+                path: PathBuf::from("/tmp/other.csv"),
+            }
+        );
+        assert_ne!(
+            object,
+            FileDocumentKey::Object {
+                profile_id,
+                bucket: "reports".to_string(),
+                key: "2026/other.csv".to_string(),
+            }
+        );
+        assert_ne!(
+            object,
+            FileDocumentKey::Object {
+                profile_id,
+                bucket: "archive".to_string(),
+                key: "2026/cities.csv".to_string(),
+            }
+        );
+        assert_ne!(
+            object,
+            FileDocumentKey::Object {
+                profile_id: Uuid::new_v4(),
+                bucket: "reports".to_string(),
+                key: "2026/cities.csv".to_string(),
+            }
+        );
     }
 
     /// `DocumentKey::ObjectBrowser` must construct and round-trip through

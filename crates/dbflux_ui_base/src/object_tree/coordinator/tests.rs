@@ -592,6 +592,60 @@ fn failed_schema_request_releases_pending_then_retry_recovers(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn failed_outcome_does_not_survive_a_new_session(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    let profile_id = Uuid::new_v4();
+    let fake = FakeTreeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+    fake.schemas.lock().expect("schemas").insert(
+        "analytics".to_string(),
+        db_schema("analytics", vec![table(Some("analytics"), "events")]),
+    );
+    fake.schema_failures
+        .lock()
+        .expect("failures")
+        .insert("analytics".to_string(), 1);
+    connect_profile(&state, cx, profile_id, fake.clone(), None);
+
+    let key = schema_request_key(profile_id, "analytics");
+    state.update(cx, |state, cx| {
+        state.object_tree_request(key.clone(), cx);
+    });
+    cx.run_until_parked();
+    assert!(matches!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        Some(ObjectTreeOutcome::Failed(_))
+    ));
+
+    state.update(cx, |state, _| {
+        let _teardown = state.disconnect(profile_id);
+    });
+    assert_eq!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        None,
+        "a disconnected profile must not report the previous session's failure"
+    );
+
+    connect_profile(&state, cx, profile_id, fake.clone(), None);
+    assert_eq!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        None,
+        "a new session must start without the previous session's failure"
+    );
+
+    state.update(cx, |state, cx| {
+        assert_eq!(
+            state.object_tree_request(key.clone(), cx),
+            ObjectTreeRequestStatus::Dispatched,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        Some(ObjectTreeOutcome::Applied),
+    );
+}
+
+#[gpui::test]
 fn invalidated_in_flight_schema_request_is_rejected_releases_pending_and_retry_applies(
     cx: &mut TestAppContext,
 ) {

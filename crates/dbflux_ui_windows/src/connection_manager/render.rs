@@ -111,11 +111,11 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let focus = self.form_focus;
-        let password_source_is_literal = self
-            .form
-            .password_value_source_selector
-            .read(cx)
-            .is_literal(cx);
+        let password_source = self.form.password_value_source_selector.read(cx);
+        let password_source_is_literal = password_source.is_literal(cx);
+        let help_text = password_source
+            .source_hint(&self.form.input_password.read(cx).value(), cx)
+            .or(help_text);
 
         let selector_focused = show_focus && focus == FormFocus::PasswordValueSource;
         let password_focused = show_focus && focus == FormFocus::Password;
@@ -565,7 +565,7 @@ impl ConnectionManagerWindow {
         focused: bool,
         field: Option<FormFocus>,
         enabled: bool,
-        width: Option<Pixels>,
+        width: Option<Rems>,
         mono: bool,
         control: impl IntoElement,
         cx: &mut Context<Self>,
@@ -631,6 +631,33 @@ impl ConnectionManagerWindow {
                     let selector_focused = show_focus && self.form_focus == selector_focus;
                     let input_focused = show_focus && self.form_focus == input_focus;
 
+                    let show_all_databases = (field_def.id == "database"
+                        && self
+                            .form
+                            .selected_driver
+                            .as_deref()
+                            .is_some_and(Self::shows_show_all_databases))
+                    .then(|| {
+                        let focused = show_focus
+                            && self.main_extra_focus_for_show_all_databases()
+                                == Some(self.form_focus);
+
+                        layout::cursor_ring(
+                            focused,
+                            Checkbox::new("cm-show-all-databases")
+                                .checked(self.form.show_all_databases)
+                                .label(dbflux_i18n::t!(
+                                    "connection_manager.field.show_all_databases"
+                                ))
+                                .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                                    this.form.show_all_databases = *checked;
+                                    window.focus(&this.focus_handle, cx);
+                                    cx.notify();
+                                })),
+                            cx,
+                        )
+                    });
+
                     let control = layout::inline_controls()
                         .child(
                             self.cm_control_frame(
@@ -659,7 +686,8 @@ impl ConnectionManagerWindow {
                                     .disabled(!field_enabled),
                                 cx,
                             ),
-                        );
+                        )
+                        .children(show_all_databases);
 
                     return Self::field_row_cm(
                         field_def.label.clone(),
@@ -1012,6 +1040,12 @@ impl ConnectionManagerWindow {
     /// host-owned secret input (`secret_field`) is placed at that position
     /// instead and taken out of the option. When the form declares no
     /// `password` field, `secret_field` is left for the caller to place.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the loop bounds `i` by `fields.len()`, and every `i + n` or \
+                  `i - 1` index is guarded by an explicit `i + n < fields.len()` \
+                  or `i > 0` check in the same condition"
+    )]
     pub(super) fn render_form_tab(
         &mut self,
         tab: &FormTab,
@@ -1221,6 +1255,7 @@ impl ConnectionManagerWindow {
         focused: bool,
         _ring_color: Hsla,
         field: FormFocus,
+        disabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
@@ -1232,12 +1267,13 @@ impl ConnectionManagerWindow {
                 self.cm_control_frame(
                     focused,
                     Some(field),
-                    true,
+                    !disabled,
                     None,
                     true,
                     Input::new(input)
                         .id(cm_field_id(field_id))
-                        .aria_label(label.to_string()),
+                        .aria_label(label.to_string())
+                        .disabled(disabled),
                     cx,
                 ),
             )
@@ -1272,6 +1308,10 @@ impl Render for ConnectionManagerWindow {
             self.access.input_ssh_key_path.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
+        }
+
+        if let Some(index) = self.pending.ssh_config_host_selection.take() {
+            self.apply_ssh_config_host_index(index, window, cx);
         }
 
         if let Some(path) = self.pending.file_path.take()
@@ -1343,7 +1383,7 @@ impl Render for ConnectionManagerWindow {
         let show_ssh_passphrase = self.form.show_ssh_passphrase;
         let show_ssh_password = self.form.show_ssh_password;
 
-        let secret_placeholder = self.secret_field_label(cx);
+        let secret_placeholder = self.password_placeholder(password_source_is_literal, cx);
 
         self.form.input_password.update(cx, |state, cx| {
             let should_mask = password_source_is_literal && !show_password;
@@ -1448,5 +1488,6 @@ fn form_section_app_icon(icon: dbflux_core::FormSectionIcon) -> AppIcon {
         FormSectionIcon::Version => AppIcon::Tag,
         FormSectionIcon::Topology => AppIcon::Boxes,
         FormSectionIcon::Schema => AppIcon::Braces,
+        FormSectionIcon::Startup => AppIcon::SquareTerminal,
     }
 }

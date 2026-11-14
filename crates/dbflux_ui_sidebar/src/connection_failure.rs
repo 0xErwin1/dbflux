@@ -44,7 +44,7 @@ pub(crate) struct ConnectionFailure {
 }
 
 impl ConnectionFailure {
-    pub fn from_error(error: &str) -> Self {
+    pub(crate) fn from_error(error: &str) -> Self {
         let mut lines = error.lines().map(str::trim).filter(|line| !line.is_empty());
 
         let summary = lines.next().unwrap_or_default().to_string();

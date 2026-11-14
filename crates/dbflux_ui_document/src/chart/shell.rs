@@ -43,7 +43,7 @@ impl Clone for ChartShellEvent {
 use super::host::{ChartHost, HostAdapter};
 use super::metric_picker::MetricPickerState;
 use dbflux_components::chart::{
-    AxisPill, BindingSpec, ChartDetection, ChartKind, ChartSpec, ChartView, DataPointRef,
+    AggKind, AxisPill, BindingSpec, ChartDetection, ChartKind, ChartSpec, ChartView, DataPointRef,
     ManualChartSelection, SourceRowRef, YScale, detect_chart_columns,
 };
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult};
@@ -69,6 +69,13 @@ pub struct ChartShell {
     /// Subscription that triggers `cx.notify()` on this shell whenever the
     /// `ChartView` entity notifies (e.g. hover changes, focus changes).
     pub(crate) chart_view_observer: Option<Subscription>,
+
+    /// Runtime X time-domain override in epoch milliseconds, retained across
+    /// rebuilds. Hosts set this for accumulating sources; every rebuild in
+    /// `ensure_chart_view` reapplies it to the fresh `ChartView` so sparse
+    /// session samples keep rendering against the full requested window.
+    /// `None` keeps the data-derived bounds.
+    x_time_domain: Option<(i64, i64)>,
 
     // ---- column selection ----
     /// Last result used to build the current `chart_view`. Used to detect
@@ -164,6 +171,7 @@ impl ChartShell {
             host,
             chart_view: None,
             chart_view_observer: None,
+            x_time_domain: None,
             chart_detection: None,
             chart_manual_selection: None,
             chart_hidden_series: HashSet::new(),
@@ -301,6 +309,11 @@ impl ChartShell {
         match ChartView::build(result, spec) {
             Ok(chart_view) => {
                 let entity = cx.new(|_cx| chart_view);
+                // Reapply the retained runtime domain to every rebuild so the
+                // override survives `set_result` / `apply_bindings` drops.
+                if let Some(domain) = self.x_time_domain {
+                    entity.update(cx, |view, cx| view.set_x_time_domain(Some(domain), cx));
+                }
                 let observer = cx.observe(&entity, |_this, _chart, cx| cx.notify());
                 self.chart_view = Some(entity.clone());
                 self.chart_view_observer = Some(observer);
@@ -338,25 +351,41 @@ impl ChartShell {
         self.chart_view.as_ref()
     }
 
+    /// Set the runtime X time-domain override (epoch milliseconds) and apply
+    /// it to the live `ChartView`, if one is built.
+    ///
+    /// The domain is retained on the shell and reapplied by every rebuild in
+    /// `ensure_chart_view`, so rebuilds triggered by `set_result` or
+    /// `apply_bindings` keep projecting sparse samples against the requested
+    /// window. `None` restores the data-derived bounds.
+    pub fn set_x_time_domain(&mut self, domain: Option<(i64, i64)>, cx: &mut Context<Self>) {
+        self.x_time_domain = domain;
+
+        if let Some(chart_entity) = self.chart_view.clone() {
+            chart_entity.update(cx, |view, cx| view.set_x_time_domain(domain, cx));
+        }
+
+        cx.notify();
+    }
+
     /// Returns the host adapter for this shell.
     pub fn host(&self) -> &HostAdapter {
         &self.host
     }
 
-    /// Compute the `DataPointRef` for the current hover position.
+    /// Compute the `DataPointRef` of the point the pointer or the keyboard
+    /// highlights, the same point `ChartView::hovered_point` describes.
     ///
     /// Returns `None` when the cursor is outside the chart, no chart view exists,
     /// or the focused series has no usable decimated points. This is called during
     /// render to decide whether to show the PointInspector.
     pub fn hovered_data_point(&self, cx: &gpui::App) -> Option<DataPointRef> {
         let chart_entity = self.chart_view.as_ref()?;
-        let chart = chart_entity.read(cx);
-        let series_idx = chart.focused_series_idx();
-        let cursor_data_x = chart.hover_data_x()?;
-        let point_idx_in_series = chart.nearest_point_idx(series_idx, cursor_data_x)?;
+        let point = chart_entity.read(cx).hovered_point()?;
+
         Some(DataPointRef {
-            series_idx,
-            point_idx_in_series,
+            series_idx: point.series_idx,
+            point_idx_in_series: point.point_idx_in_series,
         })
     }
 
@@ -394,6 +423,23 @@ impl ChartShell {
         self.chart_hidden_series = HashSet::new();
 
         cx.notify();
+    }
+
+    /// Add (`checked`) or remove a Y column from the bindings and keep the Y
+    /// picker open, since it is a checklist where several columns are picked
+    /// in a row. Otherwise behaves like `apply_bindings`.
+    pub fn toggle_y_column(&mut self, column_index: usize, checked: bool, cx: &mut Context<Self>) {
+        let mut bindings = self.active_bindings();
+        if checked {
+            if !bindings.y.contains(&column_index) {
+                bindings.y.push(column_index);
+            }
+        } else {
+            bindings.y.retain(|&index| index != column_index);
+        }
+
+        self.apply_bindings(bindings, cx);
+        self.axis_open_pill = Some(AxisPill::Y);
     }
 
     /// The currently selected chart kind.
@@ -828,5 +874,205 @@ mod tests {
 
         assert!(out_hidden.is_empty(), "hidden series reset");
         assert_eq!(out_focused, 0, "focused series reset to 0");
+    }
+
+    /// The runtime X time-domain override must survive shell rebuilds: after
+    /// `apply_bindings` drops the view, the next `ensure_chart_view` reapplies
+    /// the retained domain so sparse samples keep projecting against the full
+    /// requested window.
+    #[gpui::test]
+    fn x_time_domain_survives_shell_rebuild(cx: &mut gpui::TestAppContext) {
+        let shell_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartShell>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_for_view = shell_holder.clone();
+        let (_, visual) = cx.add_window_view({
+            let shell_holder = shell_holder.clone();
+            move |_window, cx| {
+                let shell = cx.new(ChartShell::new_standalone);
+                shell_holder.replace(Some(shell.clone()));
+                DomainHarness { shell }
+            }
+        });
+        let _ = holder_for_view;
+
+        let shell = shell_holder.borrow().clone().expect("shell entity");
+        let result = two_series_result();
+
+        visual.update(|_, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.set_result(&result, false, cx);
+                shell.ensure_chart_view(&result, cx);
+            });
+        });
+
+        // 7-day window over samples spanning 2 seconds.
+        let domain: (i64, i64) = (0, 7 * 24 * 60 * 60_000);
+        visual.update(|_, cx| {
+            shell.update(cx, |shell, cx| shell.set_x_time_domain(Some(domain), cx));
+        });
+
+        let bounds_with_domain = shell_bounds(visual, &shell);
+        assert_eq!(
+            bounds_with_domain,
+            (domain.0 as f64, domain.1 as f64),
+            "domain override must project the axis over the requested window"
+        );
+
+        // Rebuild trigger: apply_bindings drops the view.
+        visual.update(|_, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.apply_bindings(
+                    BindingSpec {
+                        x: 0,
+                        y: vec![1],
+                        group_by: None,
+                        aggregation: AggKind::None,
+                        filter: None,
+                    },
+                    cx,
+                );
+                shell.ensure_chart_view(&result, cx);
+            });
+        });
+
+        let bounds_after_rebuild = shell_bounds(visual, &shell);
+        assert_eq!(
+            bounds_after_rebuild,
+            (domain.0 as f64, domain.1 as f64),
+            "retained domain must be reapplied after a shell rebuild"
+        );
+    }
+
+    /// With two rows at the same X, the keyboard highlight on the second one
+    /// must resolve to that point, not to the first point sharing its X.
+    #[gpui::test]
+    fn hovered_data_point_follows_the_keyboard_point_on_duplicate_x(cx: &mut gpui::TestAppContext) {
+        let shell_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartShell>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, visual) = cx.add_window_view({
+            let shell_holder = shell_holder.clone();
+            move |_window, cx| {
+                let shell = cx.new(ChartShell::new_standalone);
+                shell_holder.replace(Some(shell.clone()));
+                DomainHarness { shell }
+            }
+        });
+
+        let shell = shell_holder.borrow().clone().expect("shell entity");
+        let result = QueryResult::table(
+            vec![
+                make_col("ts", ColumnKind::Timestamp),
+                make_col("value", ColumnKind::Float),
+            ],
+            vec![
+                vec![Value::Int(0), Value::Float(1.0)],
+                vec![Value::Int(1000), Value::Float(2.0)],
+                vec![Value::Int(1000), Value::Float(3.0)],
+                vec![Value::Int(2000), Value::Float(4.0)],
+            ],
+            None,
+            Duration::ZERO,
+        );
+
+        visual.update(|_, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.set_result(&result, false, cx);
+                shell.ensure_chart_view(&result, cx);
+            });
+        });
+
+        let view = visual.update(|_, cx| {
+            shell
+                .read(cx)
+                .chart_view()
+                .cloned()
+                .expect("chart view must be built")
+        });
+        visual.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                assert!(view.step_keyboard_point(1, cx));
+                assert!(view.step_keyboard_point(1, cx));
+                assert!(view.step_keyboard_point(1, cx));
+            });
+        });
+
+        let (keyboard_point, hovered) = visual.update(|_, cx| {
+            (
+                view.read(cx).keyboard_point(),
+                shell.read(cx).hovered_data_point(cx),
+            )
+        });
+        assert_eq!(
+            keyboard_point,
+            Some(DataPointRef {
+                series_idx: 0,
+                point_idx_in_series: 2,
+            })
+        );
+        assert_eq!(hovered, keyboard_point);
+    }
+
+    fn shell_bounds(
+        visual: &mut gpui::VisualTestContext,
+        shell: &Entity<ChartShell>,
+    ) -> (f64, f64) {
+        visual.update(|_, cx| {
+            let view = shell
+                .read(cx)
+                .chart_view()
+                .cloned()
+                .expect("chart view must be built");
+            view.read(cx).data_x_bounds()
+        })
+    }
+
+    /// The Y picker is a checklist: toggling a column with the mouse applies
+    /// the new binding and leaves the picker open for the next column, while
+    /// other bindings still close it.
+    #[gpui::test]
+    fn toggling_a_y_column_keeps_the_y_picker_open(cx: &mut gpui::TestAppContext) {
+        let shell = cx.new(ChartShell::new_standalone);
+        let result = two_series_result();
+
+        shell.update(cx, |shell, cx| {
+            shell.set_result(&result, false, cx);
+            shell.ensure_chart_view(&result, cx);
+            shell.toggle_axis_pill(AxisPill::Y, cx);
+            let y_before = shell.active_bindings().y;
+
+            shell.toggle_y_column(2, !y_before.contains(&2), cx);
+
+            assert_eq!(shell.axis_open_pill, Some(AxisPill::Y));
+            assert_ne!(shell.active_bindings().y, y_before, "the column toggled");
+
+            shell.toggle_y_column(2, y_before.contains(&2), cx);
+
+            assert_eq!(shell.axis_open_pill, Some(AxisPill::Y));
+            assert_eq!(shell.active_bindings().y, y_before, "toggled back");
+
+            let mut bindings = shell.active_bindings();
+            bindings.x = 0;
+            shell.apply_bindings(bindings, cx);
+
+            assert_eq!(
+                shell.axis_open_pill, None,
+                "other bindings close the picker"
+            );
+        });
+    }
+
+    struct DomainHarness {
+        shell: Entity<ChartShell>,
+    }
+
+    impl Render for DomainHarness {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let _ = &self.shell;
+            gpui::div()
+        }
     }
 }

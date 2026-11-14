@@ -3,10 +3,16 @@
 Open a new query tab with `Ctrl+n` (`Cmd+n` on macOS), or open a script file with
 `Ctrl+o`. The editor's query language (SQL, MongoDB query syntax, Redis commands,
 etc.) is determined by the active connection's driver, which also drives syntax
-highlighting and the placeholder text.
+highlighting and the placeholder text. A `.csv` or `.tsv` file opens as a table
+instead; see [CSV and TSV Files](CSV_FILES.md).
 
 For SQL connections, the [Visual Query Builder](QUERY_BUILDER.md) composes
 queries without writing SQL.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/editor/query-result-dark.webp">
+  <img src="images/editor/query-result-light.webp" alt="A query tab with a SQL query that groups orders by country, and its result grid">
+</picture>
 
 ## Saving and closing tabs
 
@@ -32,23 +38,53 @@ instead, and **Save file as…** is offered when you close them.
 - `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) — **Run query in new tab**.
 
 If a non-empty text selection exists, only the selected text runs. With no
-selection, the full editor buffer is used.
+selection and several `;`-separated statements in the buffer, only the
+statement under the cursor runs: a cursor after a statement's `;` or in the
+blank lines below it runs that statement, and a cursor above every statement
+runs the first. To run the whole buffer, select all (`Ctrl+A`) first. A buffer
+with a single statement, or in a language without statement splitting, runs
+whole. So does a buffer with a compound block, such as the `BEGIN ... END` body
+of a procedure or trigger, since the `;` inside it does not end a statement;
+`BEGIN` that opens a transaction is not a block.
+
+Without a selection, when the statement under the cursor only opens or ends a
+transaction (`BEGIN`,
+`START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` or `ABORT`) and the buffer
+holds other statements, the editor asks first: run the entire script, which is
+the default, or run only that statement. A connection whose driver cannot run
+a whole script at once offers only that statement. Run alone, a `BEGIN` leaves a
+transaction open that later runs in the same tab silently join, and a `COMMIT`
+or `ROLLBACK` skips the rest of the script, ending at most a transaction an
+earlier run left open.
+
+Each result is captioned with the lines of the statement that produced it. A
+statement that returns no result set, such as `UPDATE` or `COMMIT`, shows
+**Statement executed** and, when the driver reports it, how many rows it
+affected, which the footer repeats in place of the row count. Notices and
+warnings the server sends while the statement runs, such as PostgreSQL's
+`WARNING: there is no transaction in progress` after a `COMMIT` outside a
+transaction, are listed under that line, or in the footer of a result with rows.
+Only drivers that report them show them; PostgreSQL does.
 
 When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
 ## Multi-statement scripts
 
-When you run with no selection and the buffer contains multiple `;`-separated
-statements, and the active driver advertises batch support, DBFlux shows a
-confirmation dialog (`Run entire script (N statements)?`) before executing. On
-confirmation each statement's result set is rendered in its own result tab.
+To run several statements as a script, select them (`Ctrl+A` selects the
+whole buffer) and press `Ctrl+Enter`. When the active driver advertises batch
+support, each statement's result set is rendered in its own result tab.
 
 Statement splitting is language-aware for SQL-family languages: separators inside
 strings, identifiers, line/block comments, and PostgreSQL dollar-quoted bodies are
 not treated as statement boundaries. Non-SQL languages remain single-statement.
 Batch support is per-driver — among the built-in SQL drivers, PostgreSQL,
 MySQL/MariaDB, SQLite, and Microsoft SQL Server support it. A selection always
-runs as-is and never triggers the script confirmation.
+runs as-is.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/editor/multi-statement-dark.webp">
+  <img src="images/editor/multi-statement-light.webp" alt="A query tab that ran three statements as a script, with one result tab per statement">
+</picture>
 
 ## Dangerous-query confirmation
 
@@ -59,6 +95,11 @@ This behavior is governed by settings: dangerous-query confirmation can be turne
 off, a `WHERE` clause can be required for `DELETE`/`UPDATE`, and Redis
 `FLUSHALL`/`FLUSHDB` can be disabled entirely (in which case those commands are
 blocked rather than confirmed).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/editor/dangerous-query-dark.webp">
+  <img src="images/editor/dangerous-query-light.webp" alt="The dangerous-query confirmation for a DELETE without a WHERE clause">
+</picture>
 
 ## Scripts (Lua / Python / Bash)
 
@@ -71,8 +112,9 @@ runtime.
 
 DBFlux keeps a history of completed queries and lets you save named queries.
 
-- `Alt+h` (in the editor), or the toolbar's History button, opens and closes the
-  query history panel beside the editor.
+- `Alt+h` (in the editor), or the History button in the action strip on the
+  editor's left edge, opens and closes the query history panel beside the
+  editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** the current query.
 - `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save file as…**.
 - `Ctrl+p` (`Cmd+p`, in the editor) — open the saved-queries browser.

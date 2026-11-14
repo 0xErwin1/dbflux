@@ -92,7 +92,7 @@ The MCP process authorizes requests through trusted-client identity, the per-con
 Safety properties are part of the boundary:
 
 - `preview_mutation` is read-governed and produces a read-only plan; it does not execute the mutation. The implementation rejects any driver-generated preview query that is not metadata/read classified ([query tool](../crates/dbflux_mcp_server/src/tools/query.rs)).
-- `select_data` currently rejects requested joins instead of silently ignoring them ([read tool](../crates/dbflux_mcp_server/src/tools/read.rs)).
+- `select_data` runs requested joins only on drivers that declare join support, and returns an explicit error on the others (document, key-value and any driver that does not declare it) instead of silently ignoring them. The join condition is parsed into column comparisons and names must be plain identifiers, so no client text reaches the database as SQL, and the generated query runs only if it classifies as a read ([join translation](../crates/dbflux_mcp_server/src/tools/join_select.rs)).
 - Mutation preview is not a DDL-preview surface. DDL operations are separate governed tools; no DDL preview tool is exposed in the current [tool catalog](../crates/dbflux_mcp/src/tool_catalog.rs).
 
 Keep classification, policy, approval, and audit decisions at the governance boundary. A handler must not weaken them because an underlying driver can perform the operation.

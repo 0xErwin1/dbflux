@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use aws_config::{AppName, BehaviorVersion, Region};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials};
-use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
@@ -22,8 +22,8 @@ use dbflux_core::{
     DriverFormDef, DriverMetadata, FormFieldKind, FormSection, FormTab, FormValues, Icon,
     KeyValueConnection, ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary,
     ObjectVersionSummary, PresignMethod, PublicAccessStatus, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot,
-    SqlDialect, TransferFamily, VersioningStatus, field, field_required,
+    QueryRequest, QueryResult, RelationalConnection, RootSectionSource, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, TransferFamily, VersioningStatus, field, field_required,
 };
 
 use crate::error_formatter::{
@@ -41,7 +41,8 @@ pub static S3_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetada
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::OBJECT_STORAGE.bits()
-            | DriverCapabilities::OBJECT_PREFIX_DELETE.bits(),
+            | DriverCapabilities::OBJECT_PREFIX_DELETE.bits()
+            | DriverCapabilities::ROOT_SECTIONS.bits(),
     ),
     default_port: None,
     uri_scheme: "s3".into(),
@@ -80,7 +81,7 @@ pub static S3_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
                         "access_key_id",
                         "Access Key ID",
                         FormFieldKind::Text,
-                        "optional — leave blank to use the profile above or the default AWS credential chain",
+                        "optional — leave blank when a profile is set, or to use the default AWS credential chain",
                     ),
                     field("password", "Secret Access Key", FormFieldKind::Password, ""),
                 ],
@@ -182,6 +183,7 @@ impl DbDriver for S3Driver {
 
         let profile = trimmed_optional(values, "profile");
         let access_key_id = trimmed_optional(values, "access_key_id");
+        ensure_single_credential_source(profile.as_deref(), access_key_id.as_deref())?;
         let endpoint = trimmed_optional(values, "endpoint");
         let path_style = values
             .get("path_style")
@@ -281,6 +283,21 @@ fn trimmed_optional(values: &FormValues, id: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// A profile and static keys are alternative credential sources; accepting
+/// both would silently ignore one of them.
+fn ensure_single_credential_source(
+    profile: Option<&str>,
+    access_key_id: Option<&str>,
+) -> Result<(), DbError> {
+    if profile.is_some() && access_key_id.is_some() {
+        return Err(DbError::InvalidProfile(
+            "Profile and Access Key ID cannot both be set: choose an AWS profile or static access keys, not both".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn profile_config(config: &DbConfig) -> Result<S3ProfileConfig, DbError> {
     let DbConfig::S3 {
         region,
@@ -302,18 +319,22 @@ fn profile_config(config: &DbConfig) -> Result<S3ProfileConfig, DbError> {
         ));
     }
 
+    let profile = profile
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let access_key_id = access_key_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    ensure_single_credential_source(profile.as_deref(), access_key_id.as_deref())?;
+
     Ok(S3ProfileConfig {
         region: trimmed_region.to_string(),
-        profile: profile
-            .as_ref()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string),
-        access_key_id: access_key_id
-            .as_ref()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string),
+        profile,
+        access_key_id,
         endpoint: endpoint
             .as_ref()
             .map(|value| value.trim())
@@ -323,11 +344,11 @@ fn profile_config(config: &DbConfig) -> Result<S3ProfileConfig, DbError> {
     })
 }
 
-/// Build an S3 client honoring the AWS SDK's own credential-provider
-/// ordering: an explicit AWS profile/SSO session (`config.profile`) takes
-/// precedence over static access-key credentials, which take precedence over
+/// Build an S3 client from exactly one credential source: an explicit AWS
+/// profile/SSO session (`config.profile`) or static access-key credentials,
+/// which `profile_config` guarantees are never both set. When neither is set
 /// the default credential chain (environment, instance role, container
-/// credentials) used when neither is set.
+/// credentials) applies.
 fn build_client(
     config: &S3ProfileConfig,
     secret_access_key: Option<&SecretString>,
@@ -349,8 +370,8 @@ fn build_client(
 
     let mut builder = S3ConfigBuilder::from(&sdk_config);
 
-    if let (None, Some(access_key_id), Some(secret_access_key)) =
-        (&config.profile, &config.access_key_id, secret_access_key)
+    if let (Some(access_key_id), Some(secret_access_key)) =
+        (&config.access_key_id, secret_access_key)
     {
         builder = builder.credentials_provider(Credentials::new(
             access_key_id,
@@ -456,6 +477,10 @@ impl Connection for S3Connection {
     }
 
     fn object_store_api(&self) -> Option<&dyn ObjectStoreConnection> {
+        Some(self)
+    }
+
+    fn root_section_source(&self) -> Option<&dyn RootSectionSource> {
         Some(self)
     }
 }
@@ -597,6 +622,22 @@ fn encryption_from_rules(rules: &[ServerSideEncryptionRule]) -> Option<BucketEnc
         }
         _ => None,
     }
+}
+
+/// Whether a `GetObject` failure means the requested byte range starts at or
+/// past the end of the object. The HTTP status is checked alongside the S3
+/// error code because S3-compatible endpoints do not all send the same code.
+fn is_range_not_satisfiable<E>(error: &SdkError<E>) -> bool
+where
+    E: ProvideErrorMetadata,
+{
+    if error.code() == Some("InvalidRange") {
+        return true;
+    }
+
+    error
+        .raw_response()
+        .is_some_and(|response| response.status().as_u16() == 416)
 }
 
 /// Encryption to report when `GetBucketEncryption` fails: a bucket without a
@@ -817,6 +858,57 @@ impl ObjectStoreConnection for S3Connection {
         })?;
 
         Ok(aggregated.into_bytes().to_vec())
+    }
+
+    /// Ranged `GetObject`: only the requested window crosses the network.
+    ///
+    /// S3 clamps a range that runs past the end on its own, but rejects one
+    /// that starts at or past the end with `InvalidRange` (HTTP 416). That
+    /// rejection is mapped to an empty vector, which keeps the trait's
+    /// clamping contract without a `HeadObject` call per read.
+    fn get_object_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        range: std::ops::Range<u64>,
+    ) -> Result<Vec<u8>, DbError> {
+        if range.start >= range.end {
+            return Ok(Vec::new());
+        }
+
+        let runtime = runtime();
+        let last_byte = range.end - 1;
+
+        let request = self
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .range(format!("bytes={}-{last_byte}", range.start));
+
+        let output = match runtime.block_on(request.send()) {
+            Ok(output) => output,
+            Err(error) if is_range_not_satisfiable(&error) => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(classify_query_error(
+                    S3_ERROR_FORMATTER.format_service_error(
+                        &error,
+                        &self.config,
+                        ErrorTarget::Object { bucket, key },
+                    ),
+                ));
+            }
+        };
+
+        let aggregated = runtime.block_on(output.body.collect()).map_err(|error| {
+            DbError::query_failed(format!("Failed to read S3 object body: {error}"))
+        })?;
+
+        Ok(aggregated.into_bytes().to_vec())
+    }
+
+    fn supports_range_reads(&self) -> bool {
+        true
     }
 
     fn download_object(
@@ -1573,7 +1665,6 @@ mod tests {
         let driver = S3Driver::new();
         let original = form_values(&[
             ("region", "eu-west-1"),
-            ("profile", "my-sso-profile"),
             ("access_key_id", "AKIAROUNDTRIP"),
             ("endpoint", "https://r2.example.com"),
             ("path_style", "true"),
@@ -1586,10 +1677,7 @@ mod tests {
             extracted.get("region").map(String::as_str),
             Some("eu-west-1")
         );
-        assert_eq!(
-            extracted.get("profile").map(String::as_str),
-            Some("my-sso-profile")
-        );
+        assert_eq!(extracted.get("profile").map(String::as_str), Some(""));
         assert_eq!(
             extracted.get("access_key_id").map(String::as_str),
             Some("AKIAROUNDTRIP")
@@ -1602,6 +1690,116 @@ mod tests {
             extracted.get("path_style").map(String::as_str),
             Some("true")
         );
+    }
+
+    fn assert_names_credential_conflict(error: &DbError) {
+        match error {
+            DbError::InvalidProfile(message) => {
+                assert!(message.contains("Profile"), "{message}");
+                assert!(message.contains("Access Key ID"), "{message}");
+            }
+            other => panic!("expected InvalidProfile, got {other:?}"),
+        }
+    }
+
+    fn conflicting_config() -> DbConfig {
+        DbConfig::S3 {
+            region: "us-east-1".to_string(),
+            profile: Some("my-sso-profile".to_string()),
+            access_key_id: Some("AKIACONFLICT".to_string()),
+            endpoint: None,
+            path_style: false,
+        }
+    }
+
+    #[test]
+    fn build_config_rejects_profile_with_static_keys() {
+        let driver = S3Driver::new();
+        let values = form_values(&[
+            ("region", "us-east-1"),
+            ("profile", "my-sso-profile"),
+            ("access_key_id", "AKIACONFLICT"),
+        ]);
+
+        let error = driver
+            .build_config(&values)
+            .expect_err("profile and static keys together should be rejected");
+        assert_names_credential_conflict(&error);
+    }
+
+    #[test]
+    fn build_config_accepts_profile_without_static_keys() {
+        let driver = S3Driver::new();
+        let values = form_values(&[
+            ("region", "us-east-1"),
+            ("profile", "my-sso-profile"),
+            ("access_key_id", "   "),
+        ]);
+
+        match driver.build_config(&values).expect("valid config") {
+            DbConfig::S3 {
+                profile,
+                access_key_id,
+                ..
+            } => {
+                assert_eq!(profile, Some("my-sso-profile".to_string()));
+                assert_eq!(access_key_id, None);
+            }
+            other => panic!("expected DbConfig::S3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connect_rejects_saved_profile_with_static_keys_before_any_aws_call() {
+        let profile = ConnectionProfile::new("conflict", conflicting_config());
+        let secret = SecretString::from("secret".to_string());
+
+        let error = match S3Driver::new().connect_object_store(&profile, Some(&secret)) {
+            Ok(_) => panic!("profile and static keys together should be rejected"),
+            Err(error) => error,
+        };
+        assert_names_credential_conflict(&error);
+
+        let error = S3Driver::new()
+            .test_connection(&profile)
+            .expect_err("profile and static keys together should be rejected");
+        assert_names_credential_conflict(&error);
+    }
+
+    fn s3_config(profile: Option<&str>, key: Option<&str>) -> DbConfig {
+        DbConfig::S3 {
+            region: "us-east-1".into(),
+            profile: profile.map(Into::into),
+            access_key_id: key.map(Into::into),
+            endpoint: None,
+            path_style: false,
+        }
+    }
+
+    #[test]
+    fn profile_config_treats_blank_profile_with_keys_as_keys_only() {
+        let resolved = profile_config(&s3_config(Some("  "), Some("AKIAX"))).expect("valid config");
+        assert_eq!(resolved.profile, None);
+        assert_eq!(resolved.access_key_id.as_deref(), Some("AKIAX"));
+    }
+
+    #[test]
+    fn profile_config_treats_blank_key_with_profile_as_profile_only() {
+        let resolved = profile_config(&s3_config(Some("p"), Some(" "))).expect("valid config");
+        assert_eq!(resolved.profile.as_deref(), Some("p"));
+        assert_eq!(resolved.access_key_id, None);
+    }
+
+    #[test]
+    fn credential_conflict_message_omits_configured_values() {
+        let text = profile_config(&s3_config(
+            Some("my-secret-profile"),
+            Some("AKIASECRETVALUE"),
+        ))
+        .expect_err("conflict rejected")
+        .to_string();
+        assert!(!text.contains("AKIASECRETVALUE") && !text.contains("my-secret-profile"));
+        assert!(text.contains("Profile") && text.contains("Access Key ID"));
     }
 
     #[test]
@@ -1824,6 +2022,31 @@ mod tests {
             public_access_from_configuration(&some_on),
             PublicAccessStatus::Partial
         );
+    }
+
+    #[test]
+    fn s3_reports_range_reads() {
+        let client = Client::from_conf(
+            S3ConfigBuilder::new()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new("us-east-1"))
+                .build(),
+        );
+
+        let connection = S3Connection {
+            client,
+            config: S3ProfileConfig {
+                region: "us-east-1".to_string(),
+                profile: None,
+                access_key_id: None,
+                endpoint: None,
+                path_style: false,
+            },
+        };
+
+        let store: &dyn ObjectStoreConnection = &connection;
+
+        assert!(store.supports_range_reads());
     }
 
     #[test]

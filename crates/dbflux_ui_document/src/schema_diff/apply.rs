@@ -223,6 +223,7 @@ fn table_info_from_ref(table: &TableRef) -> TableInfo {
         presentation: Default::default(),
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 
@@ -1129,6 +1130,7 @@ mod tests {
                 presentation: Default::default(),
                 child_items: None,
                 storage_hints: None,
+                pseudo_columns: Box::default(),
             }
         }
 
@@ -1266,6 +1268,10 @@ mod tests {
             dbflux_core::CodeGenCapabilities::ADD_COLUMN
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn generate_add_column(
             &self,
             request: &AddColumnRequest,
@@ -1303,6 +1309,10 @@ mod tests {
     }
 
     impl dbflux_core::TableAlterPlanner for FakeTableAlterPlanner {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn prepare(
             &self,
             request: &dbflux_core::TableAlterRequest,
@@ -1329,6 +1339,10 @@ mod tests {
             &self.preview
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn execute(self: Box<Self>) -> Result<dbflux_core::TableAlterOutcome, DbError> {
             self.calls
                 .lock()
@@ -1395,7 +1409,7 @@ mod tests {
                 },
                 generation_calls,
                 calls: Arc::clone(&calls),
-                managed_planner: has_managed_planner.then(|| FakeTableAlterPlanner { calls }),
+                managed_planner: has_managed_planner.then_some(FakeTableAlterPlanner { calls }),
                 fail_on_sql_containing,
                 fail_rollback,
                 supports_table_ddl,
@@ -1432,6 +1446,10 @@ mod tests {
             Ok(())
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.calls.lock().unwrap().push(req.sql.clone());
 
@@ -1480,6 +1498,10 @@ mod tests {
             self.transactional_ddl
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn generate_code_with_creation_metadata(
             &self,
             generator_id: &str,
@@ -1493,6 +1515,10 @@ mod tests {
             self.generate_code(generator_id, table)
         }
 
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn generate_code(
             &self,
             generator_id: &str,
@@ -1536,6 +1562,10 @@ mod tests {
     }
 
     impl EventSink for FakeEventSink {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "test fixture: the existing panic-on-poison policy is retained for this mutex"
+        )]
         fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
             self.records.lock().unwrap().push(event.clone());
             Ok(event)
@@ -2268,6 +2298,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let table = TableRef {
             schema: Some("public".to_string()),
@@ -2330,6 +2361,7 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         };
         let table = TableRef {
             schema: None,

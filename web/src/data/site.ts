@@ -82,6 +82,21 @@ export function docsUrl(path: string, versionPrefix = '', locale: Locale = DEFAU
   return `/${docsPath(path, versionPrefix, locale)}/`.replace(/\/+/g, '/');
 }
 
+/**
+ * A file the documentation serves, such as a screenshot, as a URL to load it from.
+ *
+ * `path` is relative to a version's documentation root. Unlike `docsUrl` it
+ * never gains a trailing slash, and it is shared by every locale. In `site`
+ * mode it names the documentation host, the only build that emits the file.
+ */
+export function docsFileUrl(path: string, versionPrefix = ''): string {
+  if (DOCS_MODE === 'site') {
+    return encodeURI(`${DOCS_ORIGIN}/${[versionPrefix, path].filter(Boolean).join('/')}`);
+  }
+
+  return encodeURI(`/${docsPath(path, versionPrefix)}`);
+}
+
 /** A landing-page URL, absolute when this build does not contain it. */
 export function siteUrl(path = '', locale: Locale = DEFAULT_LOCALE): string {
   const absolute = `/${[localeSegment(locale), path].filter(Boolean).join('/')}`.replace(

@@ -689,6 +689,14 @@ mod tests {
         }
     }
 
+    // Only the form/field methods below are exercised by the export tests; the
+    // remaining trait methods are deliberately unimplemented on this stub.
+    #[expect(
+        clippy::unimplemented,
+        reason = "export tests stub: they exercise only `form_definition`, \
+                  `extract_values` and `export_field_hint` and never call the \
+                  methods marked `unimplemented!` below"
+    )]
     impl dbflux_core::DbDriver for FakeDriver {
         fn kind(&self) -> DbKind {
             DbKind::SQLite
@@ -822,6 +830,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: dbflux_core::SshAuthMethod::Password,
+                ssh_config_host: None,
             },
         );
         s.id = id;
@@ -1224,6 +1233,7 @@ mod tests {
                 port: 22,
                 user: "ec2-user".to_string(),
                 auth_method: dbflux_core::SshAuthMethod::Password,
+                ssh_config_host: None,
             },
         );
         let proxy = ProxyProfile {
@@ -1794,6 +1804,7 @@ mod tests {
                 host: "bastion.example.com".to_string(),
                 port: 22,
                 user: "ec2-user".to_string(),
+                ssh_config_host: None,
                 auth_method: SshAuthMethodKind::Password,
                 key_embedded: false,
                 required_refs: vec![],

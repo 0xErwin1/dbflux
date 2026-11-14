@@ -26,7 +26,7 @@ pub(crate) struct FlatColumn {
 }
 
 impl FlatColumn {
-    pub fn dotted(&self) -> String {
+    pub(crate) fn dotted(&self) -> String {
         field_path_to_dotted(&self.path)
     }
 }
@@ -40,7 +40,7 @@ pub(crate) enum FlatCell {
 }
 
 impl FlatCell {
-    pub fn value(&self) -> Option<&Value> {
+    pub(crate) fn value(&self) -> Option<&Value> {
         match self {
             FlatCell::Value(value) => Some(value),
             FlatCell::Missing => None,
@@ -69,7 +69,7 @@ pub(crate) struct FlatView {
 impl FlatView {
     /// The flattened grid as a result the grid machinery understands. Missing
     /// fields read as null here; the table model keeps them apart.
-    pub fn to_query_result(
+    pub(crate) fn to_query_result(
         &self,
         source: &QueryResult,
         identity_columns: &[String],

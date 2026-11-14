@@ -27,9 +27,12 @@ use gpui::{Div, Entity, Stateful, Window};
 use ropey::Rope;
 
 use super::decorations::DecorationCollections;
-use super::lsp::{ContextMenuContent, HoverDefinition, InlineCompletion};
+use super::lsp::{
+    CompletionSelectionReader, ContextMenuContent, HoverDefinition, InlineCompletion,
+};
 use crate::input::{
-    HighlightStyleResolver, InputEdit, InputHighlighter, SyntaxContext, TextDecoration,
+    HighlightStyleResolver, InputEdit, InputHighlighter, RangeDecoration, SyntaxContext,
+    TextDecoration,
 };
 use crate::input::{HoverPopoverState, Lsp};
 use gpui::Task;
@@ -79,6 +82,11 @@ impl MultiLineMode for EditorMode {}
 pub trait InputExtras: Default + 'static {
     /// Decoration ranges to paint, innermost collection first.
     fn decoration_layers(&self) -> Vec<&[TextDecoration]> {
+        Vec::new()
+    }
+
+    /// Geometric decorations intersecting visible, non-folded buffer spans.
+    fn range_decorations(&self, _ranges: &[std::ops::Range<usize>]) -> Vec<&RangeDecoration> {
         Vec::new()
     }
 
@@ -158,6 +166,17 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
         _highlighter: &Rc<RefCell<Option<Box<dyn InputHighlighter>>>>,
         _edit: InputEdit,
         _text: &Rope,
+        _folding: bool,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
+    }
+
+    /// Drives the syntax highlighter once for several edits applied as one
+    /// change, each paired with the text right after it.
+    fn drive_highlighter_batch(
+        _highlighter: &Rc<RefCell<Option<Box<dyn InputHighlighter>>>>,
+        _edits: &[(InputEdit, Rope)],
         _folding: bool,
         _window: &mut Window,
         _cx: &mut gpui::Context<InputBaseState<Self>>,
@@ -317,11 +336,37 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
 impl InputModeKind for InputMode {
     const MULTI_LINE: bool = false;
 
-    /// A single-line field needs nothing beyond the shared engine. Masking,
-    /// validation and number stepping live there: together they are ~120 bytes
-    /// and their access sites sit inside the shared edit path, so separating
-    /// them would cost more in dispatch than it saves.
-    type Extras = ();
+    /// Masking, validation and number stepping live in the shared engine:
+    /// together they are ~120 bytes and their access sites sit inside the
+    /// shared edit path, so separating them would cost more in dispatch than it
+    /// saves. Only host text decorations are kept here.
+    type Extras = FieldExtras;
+
+    fn reset_annotations(state: &mut InputBaseState<Self>) {
+        state.extras.decorations.clear();
+    }
+
+    fn adjust_annotations(
+        state: &mut InputBaseState<Self>,
+        range: &std::ops::Range<usize>,
+        new_len: usize,
+    ) {
+        state.extras.decorations.adjust_for_edit(range, new_len);
+    }
+}
+
+/// What a single-line field adds on top of the shared engine: the text
+/// decorations a host installs with
+/// [`InputBaseState::<InputMode>::create_decorations_collection`].
+#[derive(Default)]
+pub struct FieldExtras {
+    pub(crate) decorations: DecorationCollections,
+}
+
+impl InputExtras for FieldExtras {
+    fn decoration_layers(&self) -> Vec<&[TextDecoration]> {
+        self.decorations.iter().collect()
+    }
 }
 impl InputModeKind for TextareaMode {
     const MULTI_LINE: bool = true;
@@ -336,11 +381,13 @@ impl InputModeKind for TextareaMode {
 pub struct EditorExtras {
     pub(crate) lsp: Lsp,
     pub(crate) decorations: DecorationCollections,
+    pub(crate) range_decorations: DecorationCollections<RangeDecoration>,
     pub(crate) inline_completion: InlineCompletion,
     pub(crate) context_menu_content: ContextMenuContent,
     pub(crate) hover_popover: Option<HoverPopoverState>,
     pub(crate) hover_definition: HoverDefinition,
     pub(crate) context_menu_task: Task<anyhow::Result<()>>,
+    pub(crate) completion_selection_reader: Option<CompletionSelectionReader>,
 }
 
 impl Default for EditorExtras {
@@ -348,11 +395,13 @@ impl Default for EditorExtras {
         Self {
             lsp: Lsp::default(),
             decorations: DecorationCollections::default(),
+            range_decorations: DecorationCollections::default(),
             inline_completion: InlineCompletion::default(),
             context_menu_content: ContextMenuContent::default(),
             hover_popover: None,
             hover_definition: HoverDefinition::default(),
             context_menu_task: Task::ready(Ok(())),
+            completion_selection_reader: None,
         }
     }
 }

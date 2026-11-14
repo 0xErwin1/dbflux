@@ -54,7 +54,8 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 | `Governance` | `governance` | 策略求值结果 |
 | `Config` | `config` | 配置文件变更、设置修改 |
 | `System` | `system` | 应用启动、panic、迁移 |
-| `ObjectStorage` | `object_storage` | 对象存储的增删改与变更事件（上传、删除、预签名、重命名、创建桶 / 文件夹、回写编辑） |
+| `ObjectStorage` | `object_storage` | 对象存储的增删改与变更事件（上传、下载、删除、预签名、重命名、创建桶 / 文件夹、回写编辑） |
+| `SecretStore` | `secret_store` | 密钥值读取（`secret_value_retrieved`、`secret_value_retrieve_failed`）；值本身从不被记录 |
 
 ### 执行者类型
 
@@ -80,6 +81,7 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 | `Mcp` | `actor_id`、`object_id`（工具名称） |
 | `Config` | `object_type`、`object_id` |
 | `ObjectStorage` | `connection_id`、`object_type`、`object_id` |
+| `SecretStore` | `connection_id`、`object_type`（存储库 id）、`object_id`（密钥名称） |
 | `Governance`、`System` | 无附加字段 |
 
 ## 隐私与脱敏
@@ -95,6 +97,11 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 ## 审计查看器
 
 审计查看器是查看 DBFlux 所记录全部内容的唯一入口：查询、连接、Hook、脚本、配置变更，以及 AI / MCP 治理决策。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/viewer-dark.webp">
+  <img src="../images/audit/viewer-light.webp" alt="审计查看器在筛选栏下方列出连接、查询、配置与启动事件">
+</picture>
 
 ### 打开方式
 
@@ -121,6 +128,7 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 | **治理** | 策略决策。 |
 | **配置** | 配置文件与设置的变更。 |
 | **系统** | 启动、迁移与内部日志事件。 |
+| **对象存储** | 创建与删除存储桶，以及对象的上传、下载、重命名、删除、新建文件夹、预签名 URL 和保存的编辑。 |
 
 ### 筛选
 
@@ -143,6 +151,11 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 配置后，旧事件可按保留计划清理（参见[设置 → 审计](SETTINGS.md#审计)）。除此之外，审计日志会随使用不断增长；它与其他所有数据一同存放在同一个 `dbflux.db` 中（参见[数据与隐私](PRIVACY.md#审计与隐私)）。
 
 ## 查看审计事件
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/audit/event-details-dark.webp">
+  <img src="../images/audit/event-details-light.webp" alt="展开的审计事件，显示其操作、执行者、连接、决定以及查询指纹">
+</picture>
 
 ### 在 DBFlux 界面中
 
@@ -424,6 +437,8 @@ UPDATE cfg_audit_settings SET log_capture_min_level = 'warn';
 | `kind` | `ErrorKind` 的字符串形式（`storage`、`network`、`auth`、`hook`、`driver`、`user`、`config`） |
 | `correlation_id` | UUID v7，用于将 Toast 提示与审计记录关联起来 |
 | `message` | Toast 提示中显示的可读摘要 |
+| `cause` | Toast 提示代码块中显示的底层错误文本。错误没有原因时省略；存储在 `details_json` 中 |
+| `suggested_action` | Toast 提示正文中显示的后续建议。未设置时省略；存储在 `details_json` 中 |
 
 `correlation_id` 字段由 `AuditFieldVisitor` 提取到 `EventRecord.correlation_id` 中。注意：该访问器把 `record_str`（Display 标记符 `%val`）与 `record_debug`（Debug 标记符 `?val`）都交由同一个 `record_string_by_name` 分发器处理，因此将来新增的类型化槽位无论调用方使用哪种标记符都能被识别。
 

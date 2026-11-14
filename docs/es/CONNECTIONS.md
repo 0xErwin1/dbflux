@@ -26,10 +26,13 @@ Abre el Connection Manager para crear o editar conexiones:
 
 El Connection Manager muestra un selector de drivers. Los drivers disponibles
 dependen de los features con los que se compiló el binario; el build estándar
-incluye SQLite, PostgreSQL, MySQL/MariaDB, MongoDB, Redis, DynamoDB, Microsoft
-SQL Server, e integraciones respaldadas por AWS. Los drivers RPC registrados
-externamente también aparecen aquí cuando están configurados (ver
-`docs/RPC_SERVICES_CONFIG.md`).
+incluye SQLite, PostgreSQL, MySQL/MariaDB, Microsoft SQL Server, Amazon
+Redshift, ClickHouse, TursoDB, DuckDB, MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch
+Logs, Amazon S3 y AWS Secrets. El selector agrupa los drivers por categoría:
+Relacional, Documentos, Clave-valor, Series temporales y logs, Almacenamiento de
+objetos, y Almacenes de secretos.
+Los drivers RPC registrados externamente también aparecen aquí cuando están
+configurados (ver `docs/RPC_SERVICES_CONFIG.md`).
 
 Usa `/` para filtrar la lista de drivers, `j`/`k` (o las flechas) para moverte,
 y `Enter` para seleccionar.
@@ -39,6 +42,24 @@ solo muestra los campos que ese driver realmente necesita. Los drivers
 respaldados por archivo, como SQLite, usan un formulario de ruta de archivo. La
 mayoría de los drivers relacionales también aceptan una única cadena de
 conexión; ver [Modo formulario vs. URI directa](#modo-formulario-vs-uri-directa).
+
+La sección **Seguridad** al final de la pestaña Main contiene el interruptor
+**Solo lectura**. Cuando está activado, DBFlux bloquea los cambios hechos desde la
+grilla de datos, el constructor visual de consultas y la comparación de esquemas en
+esa conexión, rechaza las sentencias del editor de consultas que cambiarían datos o
+esquema, y deniega las llamadas MCP por encima de la clase `read` (ver
+[Conexiones de solo lectura](MCP_AI_INTEGRATION.md#conexiones-de-solo-lectura)).
+Las sentencias de lectura se siguen ejecutando. En la app, activar el ajuste se aplica
+de inmediato a una conexión abierta, mientras que desactivarlo surte efecto al reconectar.
+MCP toma cualquiera de los dos cambios en su siguiente llamada. El editor clasifica cada sentencia por
+su texto, así que una función con efectos secundarios llamada desde un `SELECT`, como
+`setval` de PostgreSQL, se sigue ejecutando: las credenciales de solo lectura en la
+base de datos siguen siendo el límite más fuerte.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
+  <img src="../images/connections/driver-picker-light.webp" alt="El selector de drivers del Connection Manager, con los drivers agrupados en relacionales, de documentos, clave-valor, series temporales y almacenamiento de objetos">
+</picture>
 
 ---
 
@@ -54,6 +75,11 @@ conexión es Direct, SSH, Proxy o SSM, nunca una combinación.
 | **SSH Tunnel**          | Abre un port-forward local a través de un host SSH, y conecta a través de él.                                                                                                                       |
 | **Proxy**               | Enruta la conexión a través de un proxy SOCKS5 o HTTP/HTTPS.                                                                                                                                        |
 | **SSM Port Forwarding** | Usa AWS Systems Manager para hacer port-forward a una instancia y conecta a través del túnel. Requiere el build feature `aws`.                                                                      |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/connections/access-tab-dark.webp">
+  <img src="../images/connections/access-tab-light.webp" alt="La pestaña Access de una conexión PostgreSQL con la lista Access Method abierta en Direct, SSH Tunnel, Proxy y SSM Port Forwarding">
+</picture>
 
 ### Qué ocurre cuando pulsas Connect
 
@@ -124,6 +150,26 @@ es lo que obtienes al elegir **Private Key** y dejar la ruta de la clave vacía.
 
 **Test SSH** verifica el túnel sin guardar la conexión.
 
+### Referenciar un host de tu configuración SSH
+
+El desplegable **SSH config host** lista cada `Host` que define tu
+`~/.ssh/config`, con el usuario, el nombre de host y el puerto a los que
+resuelve cada uno. Al elegir uno se guarda el alias y no los valores a los que
+resuelve, de modo que una edición posterior de tu configuración SSH se aplica
+en la siguiente conexión sin tocar el perfil. Mientras hay un alias
+seleccionado, los campos **Host**, **Port** y **Username** no muestran nada y
+quedan deshabilitados —el alias es el destino—, y una ruta de clave vacía toma
+el `IdentityFile` que ese host indique, o el SSH agent y las claves por defecto
+si no indica ninguna. `Include`, `Match` y los tokens `%h`, `%r` y `%d` dentro
+de un `IdentityFile` se resuelven como los resuelve OpenSSH.
+
+Un host cuya configuración necesite `ProxyJump` o `ProxyCommand` aparece en la
+lista con una marca: DBFlux no puede alcanzarlo, y la conexión falla con ese
+motivo en lugar de conectar directamente al bastión. Las claves de host se
+siguen verificando contra el almacén propio de DBFlux en su directorio de
+datos, no contra tu `~/.ssh/known_hosts`, así que un host al que llevas años
+llegando desde una terminal igual te pide confirmar su clave la primera vez.
+
 ### Dónde viven los secretos SSH
 
 Las passphrases y contraseñas se guardan en el **keyring del sistema
@@ -184,6 +230,7 @@ El formulario está guiado por el provider. Para AWS SSO rellenas:
 | **SSO session**   | Referencia opcional a un perfil **AWS SSO Session**. Al fijarla, el Start URL y la región se heredan y sus campos inline se deshabilitan visualmente. |
 | **SSO Start URL** | La URL de tu portal de Identity Center (omítela si usas una sesión).                                                                                  |
 | **Region**        | p. ej. `us-east-1`.                                                                                                                                   |
+| **Endpoint URL**  | Opcional, p. ej. `http://localhost:4566` para LocalStack. Solo afecta a Secrets Manager y SSM, mediante una sección `[services]` en `~/.aws/config`. Los perfiles AWS Shared Credentials tienen el mismo campo. |
 | **Account**       | Un desplegable que se rellena **después de iniciar sesión** — lista las cuentas a las que tu sesión SSO tiene acceso.                                 |
 | **Role**          | Un desplegable que se rellena una vez elegida una cuenta.                                                                                             |
 
@@ -238,6 +285,13 @@ feature `aws`).
 El puerto **local** del túnel lo asigna automáticamente DBFlux y el sistema
 operativo — solo el puerto remoto es configurable.
 
+SSM necesita el AWS CLI y el plugin de Session Manager en el `PATH`. En macOS y
+Linux, cuando DBFlux se abre fuera de una terminal (desde Finder, el Dock o una
+entrada de escritorio), lee el `PATH` de tu shell de login al arrancar, así que
+encuentra las herramientas instaladas con Homebrew o agregadas en la
+configuración del shell. Si el shell tarda más de cinco segundos en iniciar,
+DBFlux conserva el `PATH` con el que se abrió y registra una advertencia.
+
 ---
 
 ## Fuentes de valores: Secret Manager, Parameter Store, Auth Session
@@ -250,6 +304,8 @@ selector de fuente junto a un campo y elige:
 | ------------------------ | ------------------------------------------------------------------ |
 | **Literal**              | El valor que escribes (por defecto).                               |
 | **Environment Variable** | Se lee de una variable de entorno por nombre.                      |
+| **Dotenv File**          | Se lee una clave de un archivo `.env` tuyo, escrito como `ruta#CLAVE`. |
+| **Secret File**          | Se lee un archivo tuyo completo, o una clave de un archivo JSON, escrito como `ruta` o `ruta#clave_json`. |
 | **Secret Manager**       | Se obtiene de un secret provider (AWS Secrets Manager).            |
 | **Parameter Store**      | Se obtiene de un parameter provider (AWS SSM Parameter Store).     |
 | **Auth Session Field**   | Toma un campo de la sesión/credenciales resuelta del Auth Profile. |
@@ -259,10 +315,144 @@ Notas:
 - Las fuentes Secret/Parameter pueden apuntar a una **clave JSON** dentro de un
   secreto JSON, de forma que un único documento JSON almacenado puede alimentar
   varios campos.
-- Los valores resueltos se cachean durante **5 minutos** para evitar volver a
-  obtenerlos en cada reconexión.
+- Los valores resueltos desde referencias de Secret Manager y Parameter Store se
+  cachean durante **5 minutos** para evitar volver a obtenerlos en cada
+  reconexión. Los valores de variables de entorno, archivos dotenv y archivos de
+  secretos se leen en cada uso.
 - Las fuentes Secret/Parameter respaldadas por un auth provider **requieren un
   Auth Profile** en la conexión (se valida antes de conectar).
+- Para llegar a LocalStack o a un endpoint de VPC, define **Endpoint URL** en el
+  Auth Profile de AWS. El SDK de AWS también respeta
+  `AWS_ENDPOINT_URL_SECRETS_MANAGER` y `AWS_ENDPOINT_URL_SSM`.
+
+> **Atención:** DBFlux escribe el endpoint en una sección `[services]` a la que
+> apunta el perfil, por lo que solo se aplica a Secrets Manager y SSM. Eso
+> incluye los comandos `secretsmanager` y `ssm` del AWS CLI y el port
+> forwarding de SSM que usen ese perfil. DynamoDB, S3 y CloudWatch mantienen sus
+> endpoints por defecto. Una sección `[services]` compartida con otro perfil
+> nunca se edita: DBFlux le da a este perfil su propia copia.
+
+### Variables de entorno y archivos dotenv
+
+Ambas fuentes se leen cada vez que DBFlux se conecta, así que un valor rotado se
+usa en la siguiente conexión sin reiniciar DBFlux. DBFlux guarda solo la
+referencia (el nombre de la variable, o la ruta del archivo y la clave), nunca
+el valor, y ninguna de las dos fuentes se cachea.
+
+| Entrada del campo | Fuente | Lee |
+|-------------------|--------|-----|
+| `DB_PASSWORD` | Environment Variable | `DB_PASSWORD` del entorno con el que se inició DBFlux |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv File | `DB_PASSWORD` de ese archivo |
+
+Un archivo dotenv debe cumplir estas reglas; si no, la conexión falla con un
+error que nombra el archivo y la clave pero nunca muestra un valor:
+
+- La ruta es absoluta o empieza con `~/`.
+- Es un archivo regular (se sigue un symlink a uno) de hasta 64 KiB y 1024
+  entradas, codificado en UTF-8.
+- En Linux y macOS, solo su dueño puede leerlo o escribirlo (`chmod 600`), y
+  ese dueño es el usuario con el que se ejecuta DBFlux.
+- Cada línea está vacía, es un comentario `#` o es `CLAVE=valor`, con un prefijo
+  `export` opcional. Un valor puede ir sin comillas (se quita un ` # comentario`
+  final), entre comillas simples (se toma tal cual) o entre comillas dobles (se
+  interpretan `\n`, `\t`, `\"`, `\\` y `\$`). Los valores ocupan una línea y `${VAR}` no se expande.
+  Si una clave aparece dos veces, gana la última definición.
+
+| Problema | Error |
+|----------|-------|
+| Variable no definida | `Environment variable 'DB_PASSWORD' not set` |
+| Variable definida como cadena vacía | `Environment variable 'DB_PASSWORD' is empty` |
+| Archivo inexistente | `Dotenv file '~/prod.env' does not exist` |
+| Archivo sin permiso de lectura | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| Archivo abierto a otros usuarios | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| Archivo de otro usuario | `Dotenv file '~/prod.env' is owned by another user; DBFlux only reads files owned by the user it runs as` |
+| Línea que no es una entrada | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| Clave ausente en el archivo | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| Clave con valor vacío | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+Una lectura fallida detiene la conexión. DBFlux nunca recurre a una contraseña
+guardada en el keyring para ese campo.
+
+> **Atención:** un lanzador de escritorio inicia DBFlux con el entorno de la
+> sesión, no con el de tu shell. Una variable exportada solo en `~/.zshrc` o
+> `~/.bashrc` no es visible para DBFlux abierto desde el menú de aplicaciones;
+> usa un archivo dotenv, o define la variable en el entorno de tu sesión.
+
+### Archivos de secretos
+
+Una fuente Secret File lee un archivo que escribe otra herramienta, como un
+secreto aprovisionado por sops-nix o por credenciales de systemd. DBFlux lee el
+archivo en cada conexión, así que un archivo rotado con un rename atómico o un
+cambio de symlink se usa en la siguiente conexión sin reiniciar DBFlux. Al
+cambiar de base de datos en una conexión abierta, solo el campo de contraseña se
+vuelve a leer de su archivo; los demás campos respaldados por archivos conservan
+el valor resuelto al conectar. DBFlux guarda solo la referencia,
+nunca el contenido del archivo:
+
+```json
+{"source": "file", "path": "~/.config/dbflux/db.json", "json_key": "password"}
+```
+
+| Entrada del campo | Valor |
+|-------------------|-------|
+| `/run/secrets/db_password` | El archivo completo, sin exactamente un salto de línea final (`\n` o `\r\n`) |
+| `~/.config/dbflux/db.json#password` | El campo `password` de primer nivel de un objeto JSON, que debe ser una cadena, un número o un booleano |
+
+La entrada se divide en su último `#`, y la parte de la clave es opcional.
+
+Un archivo de secretos debe cumplir estas reglas; si no, la conexión falla con
+un error que nombra el archivo y la clave pero nunca muestra su contenido:
+
+- La ruta es absoluta o empieza con `~/`.
+- Es un archivo regular (se sigue un symlink a uno; se rechazan directorios y
+  FIFOs) de hasta 64 KiB, codificado en UTF-8.
+- En Linux y macOS, solo su dueño puede leerlo o escribirlo. Se rechaza
+  cualquier bit de lectura o escritura para el grupo u otros usuarios; los modos
+  `0400` y `0600` funcionan.
+- En Linux y macOS, su dueño es el usuario con el que se ejecuta DBFlux. Se
+  rechaza un archivo de otro usuario, incluido root, aunque su modo permita
+  leerlo.
+
+| Problema | Error |
+|----------|-------|
+| Archivo inexistente | `Secret file '/run/secrets/db_password' does not exist` |
+| Archivo sin permiso de lectura | `Secret file '/run/secrets/db_password' cannot be read: permission denied` |
+| Directorio, FIFO u otro archivo no regular | `Secret file '/run/secrets/db_password' is not a regular file` |
+| Archivo demasiado grande | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
+| Contenido que no es UTF-8 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
+| Archivo abierto a otros usuarios | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| Archivo de otro usuario | `Secret file '/run/secrets/db_password' is owned by another user; DBFlux only reads files owned by the user it runs as` |
+| Archivo vacío | `Secret file '/run/secrets/db_password' is empty` |
+| Clave indicada y contenido que no es JSON válido o no es un objeto | `Secret file '~/.config/dbflux/db.json' is not a valid JSON object, so key 'password' cannot be read` |
+| Clave vacía después de `#` | `JSON key in secret file '~/.config/dbflux/db.json' is empty` |
+| Clave ausente en el objeto | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
+| Clave con un objeto, un array o null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
+| Clave con una cadena vacía | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |
+
+Un archivo inexistente, bloqueado o sin permiso detiene la conexión con un error
+visible. DBFlux nunca recurre a una contraseña guardada en el keyring para ese
+campo.
+
+#### Archivos de sops-nix, secretspec y credenciales de systemd
+
+DBFlux solo lee archivos. Estas herramientas son dueñas de los archivos y los
+descifran; DBFlux nunca las ejecuta.
+
+| Herramienta | Qué configurar |
+|-------------|----------------|
+| sops-nix (módulo de NixOS) | Los secretos aparecen en `/run/secrets/<nombre>`. Por defecto pertenecen a root, así que define el `owner` del secreto como tu usuario. Mantén el `mode = "0400"` por defecto: un modo legible por el grupo, como `0440`, se rechaza. |
+| sops-nix (módulo de Home Manager) | Los secretos viven en `$XDG_RUNTIME_DIR/secrets.d` y se exponen con symlinks en `~/.config/sops-nix/secrets/`; apunta el campo al symlink. |
+| secretspec | Escribe el secreto resuelto en un archivo tuyo con modo `0600` y apunta el campo a él. |
+| Credenciales de systemd | Ver abajo. |
+
+`LoadCredential=`, `LoadCredentialEncrypted=` y `SetCredential=` exponen
+archivos en `$CREDENTIALS_DIRECTORY` solo a los procesos de esa unidad. El
+directorio es privado del servicio: un DBFlux de escritorio iniciado fuera de esa
+unidad no puede leerlo y no debe suponer que tiene acceso. Solo un DBFlux lanzado
+dentro de la unidad, por ejemplo como servicio transitorio de
+`systemd-run --user` con `LoadCredential=`, puede usar
+`$CREDENTIALS_DIRECTORY/<nombre>`. DBFlux no expande variables de entorno en las
+rutas, así que escribe la ruta absoluta ya expandida.
 
 ---
 
@@ -292,6 +482,13 @@ interruptor **Use URI** en la pestaña Main alterna entre ambos.
 - **Los secretos viven en el keyring del sistema operativo**, nunca en la base
   de datos de DBFlux. Si el keyring no está disponible, las casillas "Save"
   desaparecen y los secretos no se conservan.
+- **Una contraseña sin guardar se pide al conectar.** Si la contraseña de una
+  conexión no está guardada en el keyring ni proviene de una fuente de valor,
+  DBFlux la pide antes de conectar, y cada base de datos que abre esa conexión
+  la usa hasta que te desconectes. Déjala vacía para servidores que no piden
+  contraseña. **Recordar hasta cerrar DBFlux** la guarda en memoria, nunca en
+  el keyring, para que las siguientes conexiones no la vuelvan a pedir;
+  Cancelar deja la conexión cerrada.
 - **Un proxy deshabilitado o una coincidencia en No-Proxy conecta directamente
   de forma silenciosa.**
 - **`No Proxy` no soporta CIDR** — lista hosts/sufijos, no rangos de IP.

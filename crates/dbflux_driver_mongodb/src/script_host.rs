@@ -37,14 +37,23 @@ pub(crate) struct MongoScriptHost<'a> {
     client: &'a Client,
     db: &'a Database,
     cancelled: Arc<AtomicBool>,
+    /// Set when the request requires read-only enforcement; such a run may
+    /// not open a change stream (see `driver::ensure_no_change_stream`).
+    read_only_required: bool,
 }
 
 impl<'a> MongoScriptHost<'a> {
-    pub(crate) fn new(client: &'a Client, db: &'a Database, cancelled: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(
+        client: &'a Client,
+        db: &'a Database,
+        cancelled: Arc<AtomicBool>,
+        read_only_required: bool,
+    ) -> Self {
         Self {
             client,
             db,
             cancelled,
+            read_only_required,
         }
     }
 }
@@ -52,6 +61,13 @@ impl<'a> MongoScriptHost<'a> {
 impl ScriptOperationHost for MongoScriptHost<'_> {
     fn dispatch(&self, op: &ScriptOperation) -> Result<ScriptOperationOutcome, DbError> {
         let operation = script_operation_to_mongo_operation(op)?;
+
+        if self.read_only_required
+            && let MongoOperation::Aggregate { pipeline } = &operation
+        {
+            crate::driver::ensure_no_change_stream(pipeline)?;
+        }
+
         dispatch_mongo_operation(
             self.client,
             self.db,

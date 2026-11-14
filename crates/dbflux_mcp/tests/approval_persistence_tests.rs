@@ -5,9 +5,19 @@ fn build_runtime(rt: &dbflux_storage::StorageRuntime) -> McpRuntime {
         "mcp_persistence_test_audit_{}.sqlite",
         uuid::Uuid::new_v4()
     ));
+    #[expect(
+        clippy::expect_used,
+        reason = "test setup: failing to initialize the audit service must abort the test \
+            loudly"
+    )]
     let audit = dbflux_audit::AuditService::new_sqlite(&audit_path)
         .expect("audit service should initialize");
 
+    #[expect(
+        clippy::expect_used,
+        reason = "test setup: failing to open the pending-execution store must abort the \
+            test loudly"
+    )]
     let store = rt
         .pending_executions()
         .expect("pending_executions store should open");

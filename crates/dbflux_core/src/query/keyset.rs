@@ -15,6 +15,15 @@ use crate::sql::dialect::{PlaceholderStyle, SqlDialect};
 /// `params` is the mutable accumulator for bound values; `param_index` starts
 /// at the current parameter counter and is incremented for each bound value
 /// appended.
+///
+/// Bounds proof: `eq_idx < prefix_len < n == pk_cols.len()` and
+/// `pk_cols.len() == last_values.len()` is the documented (debug-asserted)
+/// contract, so `pk_cols[prefix_len]`, `last_values[prefix_len]` and the
+/// `eq_idx` indexes are in range.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "eq_idx < prefix_len < n == pk_cols.len(); last_values.len() == pk_cols.len() is the documented, debug_assert-enforced contract of this function"
+)]
 pub fn lower_keyset_predicate(
     pk_cols: &[&str],
     last_values: &[Value],

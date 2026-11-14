@@ -1,12 +1,12 @@
 pub(crate) mod context;
-pub mod dashboard_import;
-pub mod dashboard_source;
-pub mod dump_analysis;
+pub(crate) mod dashboard_import;
+pub(crate) mod dashboard_source;
+pub(crate) mod dump_analysis;
 pub(crate) mod hook;
-pub mod instance_catalog;
+pub(crate) mod instance_catalog;
 pub(crate) mod item_manager;
 pub mod manager;
-pub mod metric_catalog;
+pub(crate) mod metric_catalog;
 
 pub use metric_catalog::{
     DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace,
@@ -15,6 +15,8 @@ pub(crate) mod profile;
 pub mod profile_manager;
 pub(crate) mod proxy;
 pub mod proxy_manager;
+pub(crate) mod root_section;
+pub(crate) mod secret_store;
 pub mod ssh_tunnel_manager;
 pub(crate) mod tree;
 pub mod tree_manager;
@@ -64,14 +66,15 @@ pub use manager::{
     MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
     ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews,
     ResolvedProxy, SchemaCacheKey, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
-    SwitchDatabaseResult, TableDetailsPrepareError, WritePrivilege, compose_mutation_policy,
+    SwitchDatabaseResult, SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError,
+    WritePrivilege, compose_mutation_policy,
 };
 #[allow(deprecated)]
 pub use profile::{
     ConnectionEnvironment, ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionProfile,
-    DbConfig, DbKind, InfluxVersion, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslInfo,
-    SslMode, TestConnectionResult, ssl_mode_from_id, ssl_mode_id_is_cert_active,
-    ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
+    DbConfig, DbKind, InfluxVersion, NavigatorView, SshAuthMethod, SshTunnelConfig,
+    SshTunnelProfile, SslInfo, SslMode, TestConnectionResult, ssl_mode_from_id,
+    ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
 };
 pub use profile_manager::ProfileManager;
 pub use proxy::{ProxyAuth, ProxyKind, ProxyProfile, host_matches_no_proxy};

@@ -8,11 +8,13 @@
  * renamed or removed. A surviving relative href is its own failure: it resolves
  * against whichever page happens to render it, so the same link is broken on
  * one page and not another, and checking absolute hrefs alone never sees it.
+ * Images get the same two checks, against the files in the build.
  *
  * Only same-origin links are checked. In a split deployment the landing page
  * links to the documentation host on purpose, and those targets are not in this
  * build to verify.
  */
+import { statSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,8 +57,40 @@ const pages = new Set(
   files.map((file) => `/${toPosix(file).replace(/index\.html$/, '')}`.replace(/\/$/, '/')),
 );
 
+/**
+ * Every URL an `<img src>` or `<source srcset>` loads.
+ *
+ * A screenshot is a file rather than a page, so the page set above cannot vouch
+ * for it. A `srcset` may list several candidates, each a URL and a descriptor.
+ */
+function imageSources(html: string): string[] {
+  const sources: string[] = [];
+
+  for (const [tag] of html.matchAll(/<(?:img|source)\b[^>]*>/gi)) {
+    for (const [, name, value] of tag.matchAll(/\s(src|srcset)="([^"]*)"/gi)) {
+      const candidates =
+        name.toLowerCase() === 'srcset'
+          ? value.split(',').map((candidate) => candidate.trim().split(/\s+/)[0])
+          : [value.trim()];
+
+      sources.push(...candidates.filter(Boolean));
+    }
+  }
+
+  return sources;
+}
+
+function isBuiltFile(path: string): boolean {
+  try {
+    return statSync(join(DIST, decodeURI(path))).isFile();
+  } catch {
+    return false;
+  }
+}
+
 const broken: string[] = [];
 const unrewritten: string[] = [];
+const missingImages: string[] = [];
 
 for (const file of files) {
   const html = await readFile(file, 'utf8');
@@ -83,6 +117,19 @@ for (const file of files) {
 
     if (!pages.has(target)) broken.push(`${from} -> ${path}`);
   }
+
+  for (const source of imageSources(markup(html))) {
+    if (relativeHref(source)) {
+      unrewritten.push(`${from} -> ${source}`);
+      continue;
+    }
+
+    if (!source.startsWith('/') || source.startsWith('//')) continue;
+
+    const path = source.split(/[#?]/)[0];
+
+    if (!isBuiltFile(path)) missingImages.push(`${from} -> ${path}`);
+  }
 }
 
 if (unrewritten.length > 0) {
@@ -95,6 +142,11 @@ if (broken.length > 0) {
   for (const entry of [...new Set(broken)].sort()) console.error(`  ${entry}`);
 }
 
-if (broken.length + unrewritten.length > 0) process.exit(1);
+if (missingImages.length > 0) {
+  console.error(`${missingImages.length} image(s) point at a file that is not built:\n`);
+  for (const entry of [...new Set(missingImages)].sort()) console.error(`  ${entry}`);
+}
 
-console.log(`ok: ${files.length} pages, every internal link resolves`);
+if (broken.length + unrewritten.length + missingImages.length > 0) process.exit(1);
+
+console.log(`ok: ${files.length} pages, every internal link and image resolves`);

@@ -1,8 +1,13 @@
 # 执行查询
 
-使用 `Ctrl+n`（macOS 上为 `Cmd+n`）新建查询标签页，或使用 `Ctrl+o` 打开脚本文件。编辑器的查询语言（SQL、MongoDB 查询语法、Redis 命令等）由当前活动连接的驱动决定，该驱动同时决定语法高亮方式和占位提示文本。
+使用 `Ctrl+n`（macOS 上为 `Cmd+n`）新建查询标签页，或使用 `Ctrl+o` 打开脚本文件。编辑器的查询语言（SQL、MongoDB 查询语法、Redis 命令等）由当前活动连接的驱动决定，该驱动同时决定语法高亮方式和占位提示文本。`.csv` 或 `.tsv` 文件则以表格形式打开；参见 [CSV 和 TSV 文件](CSV_FILES.md)。
 
 对于 SQL 连接，[可视化查询构建器](QUERY_BUILDER.md)可以在不编写 SQL 的情况下构建查询。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/query-result-dark.webp">
+  <img src="../images/editor/query-result-light.webp" alt="查询标签页中按国家/地区对订单分组的 SQL 查询及其结果网格">
+</picture>
 
 ## 保存与关闭标签页
 
@@ -15,19 +20,33 @@
 - `Ctrl+Enter`（`Cmd+Enter`）— **执行查询**。
 - `Ctrl+Shift+Enter`（`Cmd+Shift+Enter`）— **在新标签页中执行查询**。
 
-如果存在非空文本选区，则只执行选中的文本；如果未选中文本，则执行整个编辑器中的内容。
+如果存在非空文本选区，则只执行选中的文本。未选中文本且编辑器内容包含多个以 `;` 分隔的语句时，只执行光标所在的语句：光标位于某条语句的 `;` 之后或其下方的空行中时执行该语句，光标位于所有语句之上时执行第一条语句。要执行整个编辑器内容，请先全选（`Ctrl+A`）。只有一条语句的内容，或不支持语句分割的语言，会整体执行。包含复合块（例如过程或触发器的 `BEGIN ... END` 主体）的内容也会整体执行，因为其中的 `;` 并不结束语句；开启事务的 `BEGIN` 不算复合块。
+
+未选中文本时，若光标所在的语句只是开始或结束事务（`BEGIN`、`START TRANSACTION`、`COMMIT`、`END`、`ROLLBACK` 或 `ABORT`），且编辑器内容还包含其他语句时，编辑器会先询问：执行整个脚本（默认选项），或只执行该语句。若连接的驱动无法一次执行整个脚本，则只提供执行该语句的选项。单独执行时，`BEGIN` 会留下一个打开的事务，同一标签页中之后的执行会在不知不觉中加入该事务；而 `COMMIT` 或 `ROLLBACK` 会跳过脚本的其余部分，最多只结束之前的执行留下的事务。
+
+每个结果都以产生它的语句所在的行作为标题。不返回结果集的语句（例如 `UPDATE` 或 `COMMIT`）会显示 **语句已执行**，并在驱动报告时显示受影响的行数，页脚也会用它代替行数。语句执行期间服务器发送的通知和警告（例如在事务之外执行 `COMMIT` 后 PostgreSQL 返回的 `WARNING: there is no transaction in progress`）会列在该行下方；对于返回行的结果，则显示在页脚中。只有报告这些消息的驱动才会显示它们，PostgreSQL 会报告。
 
 执行时确实省略行后，编辑器会针对该查询显示一条警告，数据网格会标记受影响的结果集，即使未保留任何行也是如此。如果结果恰好达到限制但没有省略行，则不会发出警告。保留行数上限只限制存储的行；字节和时间限制是独立的执行控制。这并不意味着编辑器设置了默认行数上限。
 
 ## 多语句脚本
 
-当未选中文本且编辑器内容包含多个以 `;` 分隔的语句时，如果当前活动驱动声明支持批量执行，DBFlux 会在执行前显示确认对话框（**执行整个脚本**，询问是否按顺序执行全部 N 条语句）。确认后，每个语句的结果集会渲染在各自的结果标签页中。
+要将多条语句作为脚本执行，请选中它们（`Ctrl+A` 全选编辑器内容）后按 `Ctrl+Enter`。如果当前活动驱动声明支持批量执行，每个语句的结果集会渲染在各自的结果标签页中。
 
-语句分割对 SQL 系列语言是可感知语言的：字符串、标识符、单行 / 块注释以及 PostgreSQL 美元引用代码块中的分隔符不会被视为语句边界。非 SQL 语言仍按单语句处理。批量执行支持按驱动而定 — 内置 SQL 驱动中，PostgreSQL、MySQL/MariaDB、SQLite 和 Microsoft SQL Server 支持该能力。选中的文本始终按原样执行，不会触发脚本确认。
+语句分割对 SQL 系列语言是可感知语言的：字符串、标识符、单行 / 块注释以及 PostgreSQL 美元引用代码块中的分隔符不会被视为语句边界。非 SQL 语言仍按单语句处理。批量执行支持按驱动而定 — 内置 SQL 驱动中，PostgreSQL、MySQL/MariaDB、SQLite 和 Microsoft SQL Server 支持该能力。选中的文本始终按原样执行。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/multi-statement-dark.webp">
+  <img src="../images/editor/multi-statement-light.webp" alt="以脚本方式执行了三条语句的查询标签页，每条语句各有一个结果标签页">
+</picture>
 
 ## 危险查询确认
 
 DBFlux 会跨语言检测危险操作 — SQL 的 `DELETE`/`DROP`/`TRUNCATE` 以及不带 `WHERE` 的 `DELETE`/`UPDATE`、MongoDB 的 `deleteMany`/`drop`、Redis 的 `FLUSHALL`/`FLUSHDB`/`KEYS` — 并在执行前提示确认。该行为由设置控制：可以关闭 **确认危险查询**、可以要求 `DELETE`/`UPDATE` 必须带 `WHERE` 子句（**DELETE / UPDATE 需要 WHERE**），也可以完全禁用 Redis 的 `FLUSHALL`/`FLUSHDB`（此时这些命令会被直接阻止，而不是弹出确认）。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/editor/dangerous-query-dark.webp">
+  <img src="../images/editor/dangerous-query-light.webp" alt="针对不带 WHERE 子句的 DELETE 的危险查询确认对话框">
+</picture>
 
 ## 脚本（Lua / Python / Bash）
 
@@ -37,7 +56,7 @@ Lua、Python 和 Bash 文档作为脚本执行，而不是数据库查询。执�
 
 DBFlux 会保留已完成查询的历史记录，并允许你保存命名查询。
 
-- `Alt+h`（在编辑器中）或工具栏的历史按钮，打开或关闭编辑器旁的查询历史面板。
+- `Alt+h`（在编辑器中）或编辑器左边缘操作栏中的历史按钮，打开或关闭编辑器旁的查询历史面板。
 - `Ctrl+s`（`Cmd+s`）— **保存查询**。
 - `Ctrl+Shift+s`（`Cmd+Shift+s`）— **文件另存为**。
 - `Ctrl+p`（`Cmd+p`，在编辑器中）— 打开已保存查询。

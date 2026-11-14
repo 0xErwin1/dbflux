@@ -10,8 +10,8 @@ use std::sync::Arc;
 use dbflux_core::{
     AggregateFunction, AggregateRequest, AggregateSpec as CoreAggregateSpec,
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnRef, Connection,
-    DatabaseCategory, OrderByColumn, Pagination, QueryResult, SemanticRequest, SortDirection,
-    TableBrowseRequest, TableCountRequest, TableRef, parse_semantic_filter_json,
+    DatabaseCategory, OrderByColumn, Pagination, QueryResult, SemanticFilter, SemanticRequest,
+    SortDirection, TableBrowseRequest, TableCountRequest, TableRef, parse_semantic_filter_json,
 };
 use rmcp::{
     ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
@@ -23,6 +23,10 @@ use crate::{
     helper::{IntoErrorData, serialize_query_result, to_json_content},
     server::DbFluxServer,
     state::ServerState,
+    tools::{
+        join_select::{self, JoinedSelect, QueryShape},
+        not_found::{self, CallFailure, ColumnCheck, ColumnReference, FailedCall},
+    },
 };
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -36,19 +40,30 @@ pub struct OrderByItem {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct JoinSpec {
-    #[schemars(description = "Join type: 'inner', 'left', or 'right'")]
+    #[schemars(
+        description = "Join type: 'inner', 'left', 'right' or 'full'. Not every engine has 'right' and 'full'"
+    )]
     pub r#type: String,
 
-    #[schemars(description = "Table to join")]
+    #[schemars(
+        description = "Table to join: a plain name, or schema.table on connections that qualify table names with a schema"
+    )]
     pub table: String,
 
-    #[schemars(description = "Join condition (e.g., 'users.id = orders.user_id')")]
+    #[schemars(
+        description = "Join condition: column comparisons joined by AND, e.g. 'users.id = o.user_id AND users.org = o.org'. \
+                       Operators: = != < <= > >=. Each side is qualifier.column, where the qualifier is the name or alias \
+                       of the main table, of this join or of an earlier join. Nothing else is accepted: no literals, \
+                       functions, OR or parentheses"
+    )]
     pub on: String,
 
-    #[schemars(description = "Optional alias for the joined table")]
+    #[schemars(description = "Alias for the joined table. Needed to join the same table twice")]
     pub alias: Option<String>,
 
-    #[schemars(description = "Columns to select from the joined table")]
+    #[schemars(
+        description = "Columns of this table to return, named alias.column in the result. Needs the top-level columns"
+    )]
     pub columns: Option<Vec<String>>,
 }
 
@@ -75,7 +90,7 @@ pub struct SelectDataParams {
     #[schemars(description = "Columns to select (default: all columns)")]
     pub columns: Option<Vec<String>>,
 
-    #[schemars(description = "Filter conditions as JSON object")]
+    #[schemars(description = crate::tools::WHERE_FILTER_DESCRIPTION)]
     pub r#where: Option<serde_json::Value>,
 
     #[schemars(description = "Sort order")]
@@ -88,7 +103,13 @@ pub struct SelectDataParams {
     pub offset: Option<u32>,
 
     #[schemars(
-        description = "Join operations (currently rejected until select_data join support is implemented)"
+        description = "Joins to other tables. Runs only on drivers that declare join support; the others return an error. \
+                       With joins, write a column of a joined table as qualifier.column in columns, where and order_by; \
+                       a bare name is a column of the main table. Table, alias and column names must be plain identifiers. \
+                       Result columns are named as written in columns. Without columns every column of every table is \
+                       returned and a repeated name gets a numeric suffix no other result column uses (id, id_2). \
+                       where accepts $eq $ne $gt $gte $lt $lte $in $like $exists, null, $and and $or, and $ilike on \
+                       drivers that declare it. order_by direction must be asc or desc"
     )]
     pub joins: Option<Vec<JoinSpec>>,
 
@@ -119,7 +140,7 @@ pub struct CountRecordsParams {
     #[schemars(description = "Table or collection name")]
     pub table: String,
 
-    #[schemars(description = "Filter conditions as JSON object")]
+    #[schemars(description = crate::tools::WHERE_FILTER_DESCRIPTION)]
     pub r#where: Option<serde_json::Value>,
 
     #[schemars(description = "Optional database/schema name")]
@@ -134,7 +155,7 @@ pub struct AggregateDataParams {
     #[schemars(description = "Table or collection name")]
     pub table: String,
 
-    #[schemars(description = "Filter conditions as JSON object")]
+    #[schemars(description = crate::tools::WHERE_FILTER_DESCRIPTION)]
     pub r#where: Option<serde_json::Value>,
 
     #[schemars(description = "Columns to group by")]
@@ -163,6 +184,7 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<SelectDataParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        use crate::governance::AuditDetails;
         use dbflux_policy::ExecutionClassification;
 
         let state = self.state.clone();
@@ -177,12 +199,12 @@ impl DbFluxServer {
         let database = params.database.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "select_data",
                 Some(&params.connection_id),
                 ExecutionClassification::Read,
                 move || async move {
-                    let result = Self::select_data_impl(
+                    let (result, sql_text) = Self::select_data_impl(
                         state,
                         &connection_id,
                         &table,
@@ -197,7 +219,10 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
+                    Ok((
+                        CallToolResult::success(vec![to_json_content(&result)?]),
+                        AuditDetails { query: sql_text },
+                    ))
                 },
             )
             .await
@@ -291,6 +316,10 @@ impl DbFluxServer {
             .await
     }
 
+    /// Returns the result and, for a generated SELECT, the SQL that produced
+    /// it. A call with joins, or without joins but with a pseudo-column in
+    /// `columns`, runs a generated SELECT. Any other call goes through the
+    /// driver's browse path and has no query text to record.
     #[allow(clippy::too_many_arguments)]
     async fn select_data_impl(
         state: ServerState,
@@ -301,62 +330,79 @@ impl DbFluxServer {
         order_by: Option<&[OrderByItem]>,
         limit: u32,
         offset: u32,
-        _joins: Option<&[JoinSpec]>,
+        joins: Option<&[JoinSpec]>,
         database: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, Option<String>), String> {
         let semantic_filter = filter
             .map(parse_semantic_filter_json)
             .transpose()?
             .flatten();
 
-        if let Some(joins) = _joins
-            && !joins.is_empty()
+        let joins = joins.filter(|joins| !joins.is_empty());
+
+        if joins.is_some()
+            && let Some(database) = database
         {
-            return Err(
-                "select_data join operations are not implemented yet; the MCP server now rejects them explicitly instead of ignoring them"
-                    .to_string(),
-            );
+            join_select::require_safe_database_name(database, QueryShape::Joined)?;
         }
 
         let connection = if let Some(target_db) = database {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
             if target_db != current_db.as_deref().unwrap_or("") {
-                Self::connect_with_database(state, connection_id, target_db).await?
+                Self::connect_with_database(state.clone(), connection_id, target_db).await?
             } else {
-                Self::get_or_connect(state, connection_id).await?
+                Self::get_or_connect(state.clone(), connection_id).await?
             }
         } else {
-            Self::get_or_connect(state, connection_id).await?
+            Self::get_or_connect(state.clone(), connection_id).await?
         };
 
-        match connection.metadata().category {
-            DatabaseCategory::Document | DatabaseCategory::LogStream => {
-                Self::select_data_document(
-                    &connection,
-                    table,
-                    database,
-                    filter,
-                    semantic_filter.as_ref(),
-                    limit,
-                    offset,
-                )
-                .await
-            }
-            // ObjectStorage has no `select_data` support yet (bucket/object
-            // listing goes through `ObjectStoreConnection`, not `select_data`).
-            // It falls into the table-shaped path rather than a separate MCP
-            // error case so a future object-storage MCP tool can extend it.
-            DatabaseCategory::Relational
-            | DatabaseCategory::KeyValue
-            | DatabaseCategory::Graph
-            | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn
-            | DatabaseCategory::ObjectStorage => {
-                Self::select_data_table(
-                    &connection,
+        let target = Self::hint_target(&connection, table);
+
+        // Only an engine that misreads an unknown quoted identifier is checked
+        // before running. That check covers every column the post-failure hint
+        // would look up, so a checked call does not read the columns again.
+        let columns_checked = not_found::misreads_unknown_identifiers(connection.as_ref())
+            && (joins.is_some()
+                || matches!(connection.metadata().category, DatabaseCategory::Relational));
+
+        let outcome = match joins {
+            Some(joins) => Self::select_data_joined(
+                &state,
+                connection_id,
+                &connection,
+                JoinedSelect {
                     table,
                     columns,
+                    filter: semantic_filter.as_ref(),
+                    order_by,
+                    limit,
+                    offset,
+                    joins,
+                    database,
+                },
+            )
+            .await
+            .map(|(value, sql)| (value, Some(sql))),
+            None => {
+                let check = ColumnCheck {
+                    state: &state,
+                    connection_id,
+                    connection: &connection,
+                    database,
+                    references: if columns_checked {
+                        Self::checked_columns(semantic_filter.as_ref(), order_by, columns, &target)
+                    } else {
+                        Vec::new()
+                    },
+                };
+
+                Self::select_data_single_source(
+                    check,
+                    table,
+                    columns,
+                    filter,
                     semantic_filter.as_ref(),
                     order_by,
                     limit,
@@ -364,7 +410,266 @@ impl DbFluxServer {
                 )
                 .await
             }
+        };
+
+        let failure = match outcome {
+            Ok(selected) => return Ok(selected),
+            Err(failure) => failure,
+        };
+
+        let referenced = if columns_checked {
+            Vec::new()
+        } else {
+            Self::referenced_columns(semantic_filter.as_ref(), order_by, &target, &[])
+        };
+
+        Err(not_found::explain(
+            FailedCall {
+                state: &state,
+                connection_id,
+                connection: &connection,
+                target: &target,
+                database,
+                columns: referenced,
+            },
+            failure,
+        )
+        .await)
+    }
+
+    /// Handles select_data without joins through the driver's browse path,
+    /// after the column check of `check` passes, when its references were
+    /// collected because the engine misreads unknown identifiers. A call
+    /// whose `columns` names a pseudo-column of the table runs as a generated
+    /// SELECT instead, when the connection can generate one, because a browse
+    /// never returns it.
+    #[allow(clippy::too_many_arguments)]
+    async fn select_data_single_source(
+        check: ColumnCheck<'_>,
+        table: &str,
+        columns: Option<&[String]>,
+        filter: Option<&serde_json::Value>,
+        semantic_filter: Option<&SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(serde_json::Value, Option<String>), CallFailure> {
+        let connection = check.connection;
+        let database = check.database;
+
+        let pseudo_columns = not_found::check_columns(&check).await?;
+
+        let request = JoinedSelect {
+            table,
+            columns,
+            filter: semantic_filter,
+            order_by,
+            limit,
+            offset,
+            joins: &[],
+            database,
+        };
+
+        if let Some(routed) =
+            Self::route_pseudo_columns(connection, &request, &pseudo_columns).await?
+        {
+            return Ok(routed);
         }
+
+        match connection.metadata().category {
+            DatabaseCategory::Document | DatabaseCategory::LogStream => Self::select_data_document(
+                connection,
+                table,
+                database,
+                filter,
+                semantic_filter,
+                limit,
+                offset,
+            )
+            .await
+            .map(|value| (value, None)),
+            // ObjectStorage has no `select_data` support yet (bucket/object
+            // listing goes through `ObjectStoreConnection`, not `select_data`).
+            // It falls into the table-shaped path rather than a separate MCP
+            // error case so a future object-storage MCP tool can extend it.
+            DatabaseCategory::Relational
+            | DatabaseCategory::KeyValue
+            | DatabaseCategory::ReservedGraph
+            | DatabaseCategory::TimeSeries
+            | DatabaseCategory::ReservedWideColumn
+            | DatabaseCategory::ObjectStorage
+            | DatabaseCategory::SecretStore => {
+                Self::select_data_table_routed(&check, &request).await
+            }
+        }
+    }
+
+    /// Browses the table and keeps the columns the call selects. When the
+    /// engine fails loudly on unknown columns, nothing was looked up before
+    /// running, so a `columns` entry missing from the browse result is looked
+    /// up now: a pseudo-column of the table reruns the call as a generated
+    /// SELECT, and anything else keeps the browse error.
+    async fn select_data_table_routed(
+        check: &ColumnCheck<'_>,
+        request: &JoinedSelect<'_>,
+    ) -> Result<(serde_json::Value, Option<String>), CallFailure> {
+        let connection = check.connection;
+
+        let result = Self::browse_table_rows(
+            connection,
+            request.table,
+            request.filter,
+            request.order_by,
+            request.limit,
+            request.offset,
+        )
+        .await?;
+
+        if let Some(columns) = request.columns
+            && !not_found::misreads_unknown_identifiers(connection.as_ref())
+            && Self::misses_requested_column(&result, columns)
+        {
+            let target = Self::table_ref_for_connection(connection, request.table);
+            let lookup = ColumnCheck {
+                references: Self::projected_columns(columns, &target),
+                ..*check
+            };
+
+            let pseudo_columns = not_found::pseudo_columns(&lookup).await;
+
+            if let Some(routed) =
+                Self::route_pseudo_columns(connection, request, &pseudo_columns).await?
+            {
+                return Ok(routed);
+            }
+        }
+
+        Ok((
+            Self::serialize_selected_result(&result, request.columns)?,
+            None,
+        ))
+    }
+
+    /// Runs the call as a generated SELECT when its `columns` names one of
+    /// `pseudo_columns`. `None` keeps the browse path: no pseudo-column is
+    /// projected, or the connection cannot generate the query.
+    async fn route_pseudo_columns(
+        connection: &Arc<dyn Connection>,
+        request: &JoinedSelect<'_>,
+        pseudo_columns: &[ColumnReference],
+    ) -> Result<Option<(serde_json::Value, Option<String>)>, CallFailure> {
+        let Some(columns) = request.columns else {
+            return Ok(None);
+        };
+
+        if !Self::projects_pseudo_column(columns, pseudo_columns) {
+            return Ok(None);
+        }
+
+        let routed = Self::select_data_projecting_pseudo_columns(
+            connection,
+            JoinedSelect { ..*request },
+            columns,
+        )
+        .await?;
+
+        Ok(routed.map(|(value, sql)| (value, Some(sql))))
+    }
+
+    fn misses_requested_column(result: &QueryResult, columns: &[String]) -> bool {
+        columns
+            .iter()
+            .any(|column| !result.columns.iter().any(|meta| meta.name == *column))
+    }
+
+    /// Whether an entry of `columns` names one of `pseudo_columns`, the
+    /// references found to be pseudo-columns of their table.
+    fn projects_pseudo_column(columns: &[String], pseudo_columns: &[ColumnReference]) -> bool {
+        pseudo_columns.iter().any(|reference| {
+            columns.iter().any(|column| {
+                not_found::column_of_table(&ColumnRef::from_qualified(column), &reference.table)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&reference.column))
+            })
+        })
+    }
+
+    /// The `columns` entries that name a column of `target`, unqualified or
+    /// qualified with its name.
+    fn projected_columns(columns: &[String], target: &TableRef) -> Vec<ColumnReference> {
+        columns
+            .iter()
+            .filter_map(|column| {
+                not_found::column_of_table(&ColumnRef::from_qualified(column), target)
+            })
+            .map(|column| ColumnReference {
+                table: target.clone(),
+                column,
+            })
+            .collect()
+    }
+
+    /// The table or collection a failed call targeted, as the not-found hint
+    /// looks it up. Collection names are taken whole, because they may
+    /// contain dots.
+    fn hint_target(connection: &Arc<dyn Connection>, table: &str) -> TableRef {
+        match connection.metadata().category {
+            DatabaseCategory::Document | DatabaseCategory::LogStream => TableRef::new(table),
+            _ => Self::table_ref_for_connection(connection, table),
+        }
+    }
+
+    /// Column names of `target` that a call referenced in its filter and sort,
+    /// leaving out the names in `excluded` (aggregate aliases).
+    fn referenced_columns(
+        semantic_filter: Option<&SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        target: &TableRef,
+        excluded: &[String],
+    ) -> Vec<String> {
+        let sorted = order_by
+            .unwrap_or_default()
+            .iter()
+            .filter(|item| not_found::is_plain_identifier(&item.column))
+            .filter_map(|item| {
+                not_found::column_of_table(&ColumnRef::from_qualified(&item.column), target)
+            });
+
+        not_found::filter_columns(semantic_filter, target)
+            .into_iter()
+            .chain(sorted)
+            .filter(|column| !excluded.contains(column))
+            .collect()
+    }
+
+    /// Columns of `target` a call without joins names in `where`, `order_by`
+    /// and `columns`, for the check before running, whatever their
+    /// characters: SQLite reads `"frist name"` or `"lower(label)"` as a
+    /// string, not as an error. Left out are nested paths, which the SQL
+    /// rendering refuses, and names qualified with another table, which SQLite
+    /// rejects as `no such column` even with its string fallback.
+    fn checked_columns(
+        semantic_filter: Option<&SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        columns: Option<&[String]>,
+        target: &TableRef,
+    ) -> Vec<ColumnReference> {
+        let sorted = order_by.unwrap_or_default().iter().filter_map(|item| {
+            not_found::column_of_table(&ColumnRef::from_qualified(&item.column), target)
+        });
+
+        let named: Vec<String> = not_found::filter_columns(semantic_filter, target)
+            .into_iter()
+            .chain(sorted)
+            .collect();
+
+        named
+            .into_iter()
+            .map(|column| ColumnReference {
+                table: target.clone(),
+                column,
+            })
+            .chain(Self::projected_columns(columns.unwrap_or_default(), target))
+            .collect()
     }
 
     /// Handle select_data for document databases (MongoDB, DynamoDB)
@@ -376,7 +681,7 @@ impl DbFluxServer {
         semantic_filter: Option<&dbflux_core::SemanticFilter>,
         limit: u32,
         offset: u32,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, CallFailure> {
         // For document databases, database parameter is required
         #[allow(clippy::unnecessary_lazy_evaluations)]
         let db_name = database.ok_or_else(|| {
@@ -405,13 +710,22 @@ impl DbFluxServer {
         let query_result = tokio::task::spawn_blocking(move || conn.browse_collection(&request))
             .await
             .map_err(|e| format!("Blocking task failed: {}", e))?
-            .map_err(|e| format!("Select error: {}", e))?;
+            .map_err(|e| CallFailure::from_driver(format!("Select error: {}", e), &e))?;
 
         Ok(serialize_query_result(&query_result))
     }
 
     /// Handle select_data for drivers that expose table browse semantics.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
+    #[cfg_attr(
+        not(feature = "sqlite"),
+        expect(
+            dead_code,
+            reason = "only the sqlite-gated browse test calls this helper, so without that \
+                feature the test build legitimately leaves it unused"
+        )
+    )]
     async fn select_data_table(
         connection: &Arc<dyn Connection>,
         table: &str,
@@ -420,7 +734,23 @@ impl DbFluxServer {
         order_by: Option<&[OrderByItem]>,
         limit: u32,
         offset: u32,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, CallFailure> {
+        let query_result =
+            Self::browse_table_rows(connection, table, semantic_filter, order_by, limit, offset)
+                .await?;
+
+        Ok(Self::serialize_selected_result(&query_result, columns)?)
+    }
+
+    /// Browses `table` through the driver's browse path.
+    async fn browse_table_rows(
+        connection: &Arc<dyn Connection>,
+        table: &str,
+        semantic_filter: Option<&dbflux_core::SemanticFilter>,
+        order_by: Option<&[OrderByItem]>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<QueryResult, CallFailure> {
         let pagination = Pagination::Offset {
             limit,
             offset: offset as u64,
@@ -441,15 +771,14 @@ impl DbFluxServer {
         let query_result = tokio::task::spawn_blocking(move || conn.browse_table(&request))
             .await
             .map_err(|e| format!("Blocking task failed: {}", e))?
-            .map_err(|e| format!("Select error: {}", e))?;
+            .map_err(|e| CallFailure::from_driver(format!("Select error: {}", e), &e))?;
 
         log::debug!(
-            "select_data_table: query completed, serializing {} rows",
+            "select_data_table: query completed with {} rows",
             query_result.rows.len()
         );
-        let result = Self::serialize_selected_result(&query_result, columns)?;
-        log::debug!("select_data_table: serialization complete");
-        Ok(result)
+
+        Ok(query_result)
     }
 
     async fn count_records_impl(
@@ -468,15 +797,15 @@ impl DbFluxServer {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
             if target_db != current_db.as_deref().unwrap_or("") {
-                Self::connect_with_database(state, connection_id, target_db).await?
+                Self::connect_with_database(state.clone(), connection_id, target_db).await?
             } else {
-                Self::get_or_connect(state, connection_id).await?
+                Self::get_or_connect(state.clone(), connection_id).await?
             }
         } else {
-            Self::get_or_connect(state, connection_id).await?
+            Self::get_or_connect(state.clone(), connection_id).await?
         };
 
-        match connection.metadata().category {
+        let outcome: Result<u64, CallFailure> = match connection.metadata().category {
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 #[allow(clippy::unnecessary_lazy_evaluations)]
                 let db_name = database.ok_or_else(|| {
@@ -496,7 +825,7 @@ impl DbFluxServer {
                 let conn = connection.clone();
                 tokio::task::spawn_blocking(move || {
                     conn.count_collection(&request)
-                        .map_err(|e| format!("Count error: {}", e))
+                        .map_err(|e| CallFailure::from_driver(format!("Count error: {}", e), &e))
                 })
                 .await
                 .map_err(|e| format!("Blocking task failed: {}", e))?
@@ -506,10 +835,11 @@ impl DbFluxServer {
             // table-shaped branch.
             DatabaseCategory::Relational
             | DatabaseCategory::KeyValue
-            | DatabaseCategory::Graph
+            | DatabaseCategory::ReservedGraph
             | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn
-            | DatabaseCategory::ObjectStorage => {
+            | DatabaseCategory::ReservedWideColumn
+            | DatabaseCategory::ObjectStorage
+            | DatabaseCategory::SecretStore => {
                 let mut request =
                     TableCountRequest::new(Self::table_ref_for_connection(&connection, table));
 
@@ -520,15 +850,39 @@ impl DbFluxServer {
                 let conn = connection.clone();
                 tokio::task::spawn_blocking(move || {
                     conn.count_table(&request)
-                        .map_err(|e| format!("Count error: {}", e))
+                        .map_err(|e| CallFailure::from_driver(format!("Count error: {}", e), &e))
                 })
                 .await
                 .map_err(|e| format!("Blocking task failed: {}", e))?
             }
-        }
+        };
+
+        let failure = match outcome {
+            Ok(count) => return Ok(count),
+            Err(failure) => failure,
+        };
+
+        let target = Self::hint_target(&connection, table);
+        let referenced = Self::referenced_columns(semantic_filter.as_ref(), None, &target, &[]);
+
+        Err(not_found::explain(
+            FailedCall {
+                state: &state,
+                connection_id,
+                connection: &connection,
+                target: &target,
+                database,
+                columns: referenced,
+            },
+            failure,
+        )
+        .await)
     }
 
-    fn table_ref_for_connection(connection: &Arc<dyn Connection>, table: &str) -> TableRef {
+    pub(super) fn table_ref_for_connection(
+        connection: &Arc<dyn Connection>,
+        table: &str,
+    ) -> TableRef {
         let default_schema = connection
             .metadata()
             .syntax
@@ -582,7 +936,17 @@ impl DbFluxServer {
                 .iter()
                 .position(|meta| meta.name == *column)
                 .ok_or_else(|| {
-                    format!("Select error: column '{}' not found in result set", column)
+                    let available: Vec<&str> = result
+                        .columns
+                        .iter()
+                        .map(|meta| meta.name.as_str())
+                        .collect();
+
+                    not_found::with_column_hints(
+                        format!("Select error: column '{}' not found in result set", column),
+                        column,
+                        &available,
+                    )
                 })?;
             indices.push(index);
         }
@@ -594,6 +958,13 @@ impl DbFluxServer {
                 let mut object = serde_json::Map::new();
 
                 for (column, index) in columns.iter().zip(indices.iter()) {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "index is a valid position in result.columns (from \
+                            .position() above) and the driver contract is one cell per \
+                            column per row; QueryResult does not enforce that arity, so a \
+                            ragged result set would panic here"
+                    )]
                     object.insert(column.clone(), crate::helper::value_to_json(&row[*index]));
                 }
 
@@ -634,12 +1005,12 @@ impl DbFluxServer {
             let current_db = Self::get_current_database(&state, connection_id).await?;
 
             if target_db != current_db.as_deref().unwrap_or("") {
-                Self::connect_with_database(state, connection_id, target_db).await?
+                Self::connect_with_database(state.clone(), connection_id, target_db).await?
             } else {
-                Self::get_or_connect(state, connection_id).await?
+                Self::get_or_connect(state.clone(), connection_id).await?
             }
         } else {
-            Self::get_or_connect(state, connection_id).await?
+            Self::get_or_connect(state.clone(), connection_id).await?
         };
 
         let mut request = AggregateRequest::new(Self::table_ref_for_connection(&connection, table))
@@ -654,6 +1025,8 @@ impl DbFluxServer {
             .with_limit(limit)
             .with_target_database(database.map(str::to_string));
 
+        let semantic_filter_for_hint = semantic_filter.clone();
+
         if let Some(filter) = semantic_filter {
             request = request.with_filter(filter);
         }
@@ -663,22 +1036,50 @@ impl DbFluxServer {
         }
 
         let semantic_request = SemanticRequest::Aggregate(request);
-        let (result, sql_text) = Self::execute_aggregate_semantic_request(
+        let outcome = Self::execute_aggregate_semantic_request(
             connection.clone(),
             semantic_request,
             database.map(str::to_string),
         )
-        .await?;
+        .await;
 
-        Ok((serialize_query_result(&result), sql_text))
+        match outcome {
+            Ok((result, sql_text)) => Ok((serialize_query_result(&result), sql_text)),
+            Err(failure) => {
+                let target = Self::hint_target(&connection, table);
+                let aliases: Vec<String> = aggregations
+                    .iter()
+                    .map(|aggregation| aggregation.alias.clone())
+                    .collect();
+                let referenced = Self::referenced_columns(
+                    semantic_filter_for_hint.as_ref(),
+                    order_by,
+                    &target,
+                    &aliases,
+                );
+
+                Err(not_found::explain(
+                    FailedCall {
+                        state: &state,
+                        connection_id,
+                        connection: &connection,
+                        target: &target,
+                        database,
+                        columns: referenced,
+                    },
+                    failure,
+                )
+                .await)
+            }
+        }
     }
 
     async fn execute_aggregate_semantic_request(
         connection: Arc<dyn Connection>,
         semantic_request: SemanticRequest,
         target_database: Option<String>,
-    ) -> Result<(QueryResult, Option<String>), String> {
-        tokio::task::spawn_blocking(move || -> Result<_, String> {
+    ) -> Result<(QueryResult, Option<String>), CallFailure> {
+        tokio::task::spawn_blocking(move || -> Result<_, CallFailure> {
             let plan = connection
                 .plan_semantic_request(&semantic_request)
                 .map_err(|e| format!("Aggregate planning error: {}", e))?;
@@ -695,12 +1096,12 @@ impl DbFluxServer {
             #[allow(clippy::large_enum_variant)]
             let result = connection
                 .execute(&request)
-                .map_err(|e| format!("Aggregate error: {}", e))?;
+                .map_err(|e| CallFailure::from_driver(format!("Aggregate error: {}", e), &e))?;
 
             Ok((result, sql_text))
         })
         .await
-        .map_err(|e| format!("Blocking task failed: {}", e))?
+        .map_err(|e| CallFailure::from(format!("Blocking task failed: {}", e)))?
     }
 
     fn aggregate_specs(aggregations: &[AggregationSpec]) -> Result<Vec<CoreAggregateSpec>, String> {
@@ -828,6 +1229,7 @@ mod tests {
             supports_schemas: true,
             default_schema: Some("public".into()),
             case_sensitive_identifiers: true,
+            misreads_unknown_quoted_identifiers: false,
         }),
         query: Some(QueryCapabilities::default()),
         mutation: Some(MutationCapabilities::default()),
@@ -966,7 +1368,8 @@ mod tests {
             None,
         )
         .await
-        .unwrap_err();
+        .unwrap_err()
+        .message;
 
         assert!(error.contains("Aggregate planning error"));
         assert!(error.contains("aggregate semantics are not supported by this driver"));
@@ -1050,11 +1453,16 @@ mod tests {
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(driver_registry),
             auth_provider_registry: Arc::new(HashMap::new()),
+            secret_provider_registry: Arc::new(HashMap::new()),
             driver_settings: Arc::new(HashMap::new()),
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
-            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            detached_processes: Arc::new(crate::state::DetachedProcessRegistry::new()),
             secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
             mcp_enabled_by_default: true,
+            profile_store_path: None,
         }
     }
 
@@ -1107,5 +1515,165 @@ mod tests {
             "audit SQL must contain SELECT keyword; got: {}",
             sql
         );
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn select_data_impl_with_joins_returns_the_generated_sql() {
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+
+        {
+            use rusqlite::Connection as RusqliteConnection;
+            let conn = RusqliteConnection::open(&db_path).expect("open sqlite");
+            conn.execute_batch(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+                 CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, total INTEGER);
+                 INSERT INTO users (id, name) VALUES (1, 'Ada'), (2, 'Bo');
+                 INSERT INTO orders (id, user_id, total) VALUES (10, 1, 30), (11, 2, 5);",
+            )
+            .expect("seed tables");
+        }
+
+        let state = build_sqlite_state_read(&connection_id, &db_path);
+
+        let joins = vec![JoinSpec {
+            r#type: "left".to_string(),
+            table: "orders".to_string(),
+            on: "users.id = o.user_id".to_string(),
+            alias: Some("o".to_string()),
+            columns: None,
+        }];
+        let columns = vec!["name".to_string(), "o.total".to_string()];
+        let filter = serde_json::json!({ "o.total": { "$gte": 10 } });
+        let order_by = vec![OrderByItem {
+            column: "o.total".to_string(),
+            direction: Some("desc".to_string()),
+        }];
+
+        let (result, sql_text) = DbFluxServer::select_data_impl(
+            state.clone(),
+            &connection_id,
+            "users",
+            Some(&columns),
+            Some(&filter),
+            Some(&order_by),
+            50,
+            0,
+            Some(&joins),
+            None,
+        )
+        .await
+        .expect("the join runs against SQLite");
+
+        assert_eq!(
+            sql_text.as_deref(),
+            Some(
+                "SELECT \"users\".\"name\", \"o\".\"total\" AS \"o.total\"\n\
+                 FROM \"users\"\n\
+                 LEFT JOIN \"orders\" AS \"o\" ON \"users\".\"id\" = \"o\".\"user_id\"\n\
+                 WHERE \"o\".\"total\" >= 10\n\
+                 ORDER BY \"o\".\"total\" DESC\n\
+                 LIMIT 50"
+            )
+        );
+        assert_eq!(
+            result["rows"],
+            serde_json::json!([{ "name": "Ada", "o.total": 30 }])
+        );
+
+        let (_, plain_sql) = DbFluxServer::select_data_impl(
+            state,
+            &connection_id,
+            "users",
+            None,
+            None,
+            None,
+            50,
+            0,
+            None,
+            None,
+        )
+        .await
+        .expect("the plain select runs against SQLite");
+
+        assert_eq!(plain_sql, None, "a call without joins records no query");
+    }
+
+    /// The generated SELECT that returns a projected pseudo-column must give
+    /// the same JSON as the browse path. The same request, without
+    /// pseudo-columns, goes through both paths here and the results are
+    /// compared whole: keys, column order and value encoding.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn generated_select_returns_the_browse_shape() {
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+
+        {
+            use rusqlite::Connection as RusqliteConnection;
+            let conn = RusqliteConnection::open(&db_path).expect("open sqlite");
+            conn.execute_batch(
+                "CREATE TABLE things (id INTEGER PRIMARY KEY, label TEXT, amount REAL, note TEXT, \
+                 data BLOB);
+                 INSERT INTO things VALUES (1, 'alpha', 1.5, NULL, x'0102');
+                 INSERT INTO things VALUES (2, 'beta', -2.25, 'it''s', NULL);
+                 INSERT INTO things VALUES (3, 'gamma', 0, 'x', x'ff');",
+            )
+            .expect("seed the table");
+        }
+
+        let state = build_sqlite_state_read(&connection_id, &db_path);
+        let connection = DbFluxServer::get_or_connect(state, &connection_id)
+            .await
+            .expect("connect");
+
+        let columns = vec![
+            "note".to_string(),
+            "amount".to_string(),
+            "id".to_string(),
+            "data".to_string(),
+            "label".to_string(),
+        ];
+        let filter = parse_semantic_filter_json(&serde_json::json!({ "id": { "$gte": 1 } }))
+            .expect("the filter parses");
+        let order_by = vec![OrderByItem {
+            column: "label".to_string(),
+            direction: Some("desc".to_string()),
+        }];
+
+        let browsed = DbFluxServer::select_data_table(
+            &connection,
+            "things",
+            Some(&columns),
+            filter.as_ref(),
+            Some(&order_by),
+            2,
+            1,
+        )
+        .await
+        .expect("the browse runs");
+
+        let request = JoinedSelect {
+            table: "things",
+            columns: Some(&columns),
+            filter: filter.as_ref(),
+            order_by: Some(&order_by),
+            limit: 2,
+            offset: 1,
+            joins: &[],
+            database: None,
+        };
+
+        let (generated, _) =
+            DbFluxServer::select_data_projecting_pseudo_columns(&connection, request, &columns)
+                .await
+                .expect("the generated select runs")
+                .expect("SQLite generates the select");
+
+        assert_eq!(browsed["row_count"], serde_json::json!(2), "{browsed}");
+        assert_eq!(generated, browsed);
     }
 }

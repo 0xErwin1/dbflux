@@ -8,6 +8,10 @@ use std::collections::HashMap;
 // Helpers
 // =========================================================================
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn echo_hook(message: &str) -> ConnectionHook {
     serde_json::from_value(serde_json::json!({
         "command": "echo",
@@ -16,6 +20,10 @@ fn echo_hook(message: &str) -> ConnectionHook {
     .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn failing_hook_warn() -> ConnectionHook {
     serde_json::from_value(serde_json::json!({
         "command": "false",
@@ -24,6 +32,10 @@ fn failing_hook_warn() -> ConnectionHook {
     .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn failing_hook_disconnect() -> ConnectionHook {
     serde_json::from_value(serde_json::json!({
         "command": "false",
@@ -32,6 +44,10 @@ fn failing_hook_disconnect() -> ConnectionHook {
     .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn disabled_echo() -> ConnectionHook {
     serde_json::from_value(serde_json::json!({
         "command": "echo",
@@ -41,6 +57,10 @@ fn disabled_echo() -> ConnectionHook {
     .unwrap()
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Integration fixture literals must deserialize successfully"
+)]
 fn inline_script_hook(message: &str) -> ConnectionHook {
     let interpreter = if cfg!(target_os = "windows") {
         "python"
@@ -201,6 +221,26 @@ fn profile_without_bindings_uses_inline_hooks() {
         }
         other => panic!("expected Success, got {:?}", other),
     }
+}
+
+#[test]
+fn bindings_take_precedence_over_inline_hooks() {
+    let definitions = test_definitions();
+
+    let mut profile = test_profile();
+    profile.hooks = Some(ConnectionHooks {
+        pre_connect: vec![echo_hook("stale-inline")],
+        ..Default::default()
+    });
+    profile.hook_bindings = Some(ConnectionHookBindings {
+        pre_connect: vec!["setup-vpn".to_string()],
+        ..Default::default()
+    });
+
+    let hooks = ConnectionHooks::resolve_from_bindings(&profile, &definitions);
+
+    assert_eq!(hooks.pre_connect.len(), 1);
+    assert_eq!(hooks.pre_connect[0].display_command(), "echo vpn-up");
 }
 
 #[test]

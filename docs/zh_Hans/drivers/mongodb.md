@@ -33,6 +33,7 @@
 - 结果的 JSON 导出（`EXPORT_JSON`）。
 - 连接时把客户端身份上报为 `appName=dbflux/<version>`（可在服务器日志与 `db.currentOp()` 中看到），除非连接 URI 自己设置了 `appName`。
 - 写入权限探测：连接后，通过检查 `connectionStatus`（`showPrivileges: true`）中授予写权限的特权/角色，把会话判定为可写、只读或未知；当直连到不可写节点（例如从节点）时，`hello` 会把结论覆盖为只读。
+- **原生命令控制台（`NATIVE_CONSOLE`）**：集合标签页会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 针对集合所在的数据库一次运行一条 shell 命令，并使用与编辑器相同的语言服务校验与危险命令检测、审计记录和查询历史。已确认的危险命令会携带已确认的上限，因此在控制台中输入的脚本与在编辑器中运行的脚本遵循相同的上限规则。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此编辑器的行数上限会限制控制台命令中 Find、Aggregate 和集合列表的结果；其他命令的响应会完整返回。
 
 ### 实例指标
 
@@ -59,7 +60,7 @@
 
 ## 限制
 
-- 带有行数限制（包括零）或语句超时的执行请求会在分派前被拒绝，因为 MongoDB 无法保证这些保护条件。不带保护条件的请求保持原有行为。
+- `execute()` 对 Find、Aggregate 和集合列表执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`）。Find 和 Aggregate 在超出预算一个文档后停止读取游标；集合列表在读取完毕后截断，脚本结果在脚本运行后截断。脚本中的所有语句共享同一个预算，查询自身的 `.limit(n)` 仍然生效。写入、计数和命令会忽略该上限。语句超时以及实例指标或检查器查询上的行数上限仍会在分派前被拒绝。
 
 - 不支持 SQL；查询必须使用 MongoDB shell 风格语法（或 JSON 回退方式）。
 
@@ -70,8 +71,10 @@
 - 不支持 `RETURNING`；变更能力在能力层面也报告不支持批量插入、批量更新与批量删除（`supports_batch`、`supports_bulk_update`、`supports_bulk_delete` 均为 `false`），即便生成器能生成 `updateMany`/`deleteMany` 文本。
 - 解析器的覆盖范围有意限定在上面列出的受支持方法集，而非完整的交互式 shell 语言；`distinct` 未作为查询能力呈现（`supports_distinct: false`）。
 - 在查询能力层面不支持 join、子查询、union、CTE、窗口函数与 `EXPLAIN`。
-- 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务、只读事务与可延迟（deferrable）事务。
+- 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务与可延迟（deferrable）事务。
+- 只读强制由 DBFlux 按操作实现，而非由服务器实现，因为 MongoDB 没有只读会话模式。DBFlux 作为读取无人值守运行的请求（被归类为 `Read` 或 `Metadata` 的 MCP `execute_script` 脚本）在其类别的上限下运行，且不高于 `Read`：每个操作（无论在脚本中还是单条语句中）都会在发送前分类，超过上限时被拒绝。插入、更新、替换、删除、drop、`createCollection`、任何 `runCommand`/`adminCommand`，以及在任意深度包含 `$out` 或 `$merge` 阶段的 `aggregate` 都会被拒绝；解析器无法识别的操作（`findOneAndUpdate`、`bulkWrite`、`mapReduce`、`createIndex`、`renameCollection`、`getSiblingDB`、`distinct`、`watch` 等）同样会被拒绝。打开变更流（`$changeStream`）的 `aggregate` 也会被拒绝，因为它永不结束。读取中的服务器端 JavaScript（`$where`、`$function`）仍会运行，最小权限的凭据仍然是真正的边界。
 - DDL 非事务性（`transactional_ddl: false`）；不支持创建数据库、创建集合、alter、视图与触发器。
+- 脚本沙箱资源限制：每次脚本运行 64 MiB 内存、512 KiB 栈，以及 30 秒的挂钟截止时间。截止时间只计算 JavaScript 时间：正在进行的数据库调用无法中途中断。DBFlux 不在服务器端设置 `maxTimeMS`，因此这类调用会一直运行，直到服务器完成它，或在文档之间检测到连接的取消标志。
 - 聚合视图每次运行最多显示 1,000 个结果文档；在服务器上失败的阶段（未知运算符、`$merge` 写入用户无权写入的目标）会作为驱动错误报告，不会事先校验。运行前只检查阶段的形态：一个 JSON 数组，其中每个元素都指定一个 `$` 运算符。
 - 嵌入文档的字段按键名排序返回，而不是按存储顺序：值模型用有序映射保存嵌入文档。顶层字段保留文档顺序。
 - 网格无法区分值为 `null` 的顶层字段和不存在的顶层字段（浏览时会用 `null` 填充缺失的顶层字段）；嵌套字段可以区分，缺失时显示为 `missing`。出于同样原因，服务器更改检查会忽略顶层的 null。
