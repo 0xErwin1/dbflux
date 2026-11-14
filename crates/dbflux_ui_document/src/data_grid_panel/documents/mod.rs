@@ -20,7 +20,7 @@ pub(super) mod inspector;
 mod render;
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -409,6 +409,25 @@ fn without_top_level_nulls(document: &Value) -> Value {
         ),
         other => other.clone(),
     }
+}
+
+/// Whether every identity column holds the same value in the edited and the
+/// loaded fields, representation included: promoting `_id` from `1` to `1.0`
+/// is numerically equal but still an identity change, so the check cannot
+/// use `==`. A column absent from both sides keeps the identity; present on
+/// one side only does not.
+fn identity_unchanged(
+    identity_columns: &[String],
+    edited_fields: &BTreeMap<String, Value>,
+    loaded_fields: &BTreeMap<String, Value>,
+) -> bool {
+    identity_columns.iter().all(|column| {
+        match (edited_fields.get(column), loaded_fields.get(column)) {
+            (Some(edited), Some(loaded)) => edited.same_representation(loaded),
+            (None, None) => true,
+            _ => false,
+        }
+    })
 }
 
 /// Short name of a document for messages: its first short text field, or its
@@ -2280,11 +2299,7 @@ impl DataGridPanel {
             return;
         };
 
-        let identity_kept = self
-            .identity_columns()
-            .iter()
-            .all(|column| edited_fields.get(column) == loaded_fields.get(column));
-        if !identity_kept {
+        if !identity_unchanged(&self.identity_columns(), edited_fields, loaded_fields) {
             report_error(
                 UserFacingError::new(
                     ErrorKind::User,
@@ -2378,14 +2393,13 @@ impl DataGridPanel {
                 continue;
             };
 
-            let identity_kept = identity_columns
-                .iter()
-                .all(|column| edited_fields.get(column) == loaded_fields.get(column));
-            if !identity_kept {
+            if !identity_unchanged(&identity_columns, edited_fields, loaded_fields) {
                 return Err(dbflux_i18n::t!("document.collection.json.identity_changed"));
             }
 
-            if edited != loaded {
+            // Not `!=`: it promotes numerically equal values, so a field
+            // edited from `1` to `1.0` would not count as a change.
+            if !edited.same_representation(&loaded) {
                 changed.push((index, edited));
             }
         }
@@ -2512,5 +2526,289 @@ mod tests {
             entry.summary(),
             "filter { status: \"failed\" }  sort { created_at: -1 }  limit 50"
         );
+    }
+}
+
+#[cfg(test)]
+mod panel_tests {
+    use crate::data_grid_panel::tests::register_stub_connection;
+    use crate::data_grid_panel::{DataGridPanel, DataSource};
+    use crate::data_view::DataViewMode;
+    use dbflux_core::{
+        CollectionRef, ColumnKind, ColumnMeta, DatabaseCategory, DocumentFeatures,
+        DriverCapabilities, DriverMetadata, Icon as CoreIcon, Pagination, QueryLanguage,
+        QueryResult, TransferFamily, Value,
+    };
+    use dbflux_ui_base::user_error::capture::capture_user_error_events;
+    use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// A document connection whose collections offer field patches. It
+    /// answers no query, so a staged commit fails at the server check and
+    /// aborts; enough to observe what the preview guard staged.
+    struct StubPreviewConnection;
+
+    impl dbflux_core::Connection for StubPreviewConnection {
+        fn collection_facets(&self, _collection: &CollectionRef) -> Vec<dbflux_core::ObjectFacet> {
+            dbflux_core::category_collection_facets(self.metadata().category)
+        }
+
+        fn metadata(&self) -> &DriverMetadata {
+            static META: std::sync::OnceLock<DriverMetadata> = std::sync::OnceLock::new();
+            META.get_or_init(|| DriverMetadata {
+                id: "stub-preview".to_string(),
+                display_name: "Stub".to_string(),
+                description: "test stub".to_string(),
+                category: DatabaseCategory::Document,
+                transfer_family: TransferFamily::Incompatible,
+                deployment_class: None,
+                query_language: QueryLanguage::MongoQuery,
+                capabilities: DriverCapabilities::empty(),
+                default_port: None,
+                uri_scheme: "stub".to_string(),
+                icon: CoreIcon::Database,
+                syntax: None,
+                query: None,
+                mutation: None,
+                ddl: None,
+                transactions: None,
+                limits: None,
+                ssl_modes: None,
+                ssl_cert_fields: None,
+                classification_override: None,
+                default_chunk_size: None,
+                supports_lock_timeout: false,
+                editor_profile: None,
+            })
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::MongoDB
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _request: &dbflux_core::QueryRequest,
+        ) -> Result<QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+
+        fn document_features(&self) -> DocumentFeatures {
+            DocumentFeatures::FIELD_PATCH
+        }
+    }
+
+    fn preview_collection_panel(
+        cx: &mut TestAppContext,
+    ) -> (Entity<DataGridPanel>, &mut VisualTestContext) {
+        let (app_state, profile_id) = register_stub_connection(cx, Arc::new(StubPreviewConnection));
+        let window = cx.add_empty_window();
+
+        let panel = window.update(|window, cx| {
+            cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id,
+                    collection: CollectionRef::new("shop", "orders"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+                DataGridPanel::new_internal(source, app_state, Vec::new(), window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        (panel, window)
+    }
+
+    #[gpui::test]
+    fn preview_commit_rejects_a_representation_only_identity_change(cx: &mut TestAppContext) {
+        let (panel, window) = preview_collection_panel(cx);
+
+        window.update(|_, cx| {
+            panel.update(cx, |panel, cx| {
+                let id = ColumnMeta {
+                    name: "_id".to_string(),
+                    type_name: "int64".to_string(),
+                    kind: ColumnKind::Integer,
+                    nullable: false,
+                    is_primary_key: true,
+                };
+                let tier = ColumnMeta {
+                    name: "tier".to_string(),
+                    type_name: "string".to_string(),
+                    kind: ColumnKind::Text,
+                    nullable: true,
+                    is_primary_key: false,
+                };
+
+                let page = QueryResult::json(
+                    vec![id, tier],
+                    vec![vec![Value::Int(1), Value::Text("team".into())]],
+                    Duration::from_millis(1),
+                );
+                assert!(panel.apply_document_page(&page, cx));
+            });
+        });
+
+        // `_id` edited from `1` to `1.0`: numerically equal, held in a
+        // different variant — still an identity change, not a silent pass.
+        let ((), events) = capture_user_error_events(|| {
+            window.update(|_, cx| {
+                panel.update(cx, |panel, cx| {
+                    panel.commit_document_preview_edit(0, r#"{ "_id": 1.0, "tier": "team" }"#, cx);
+                });
+            })
+        });
+
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(
+            events[0].get("message").map(String::as_str),
+            Some("The JSON view cannot change or reorder document identities (_id)")
+        );
+
+        window.update(|_, cx| {
+            panel.update(cx, |panel, cx| {
+                assert!(panel.collection.queue.is_empty());
+                assert!(!panel.collection.committing);
+
+                // An edit that keeps the identity, representation included,
+                // is still staged (the stub connection then fails the
+                // server check, which only ends the commit).
+                panel.commit_document_preview_edit(0, r#"{ "_id": 1, "tier": "enterprise" }"#, cx);
+                assert!(panel.collection.committing);
+            });
+        });
+
+        window.run_until_parked();
+    }
+
+    /// Loads the page-JSON view with one document: `_id: 1`, `qty: 1`.
+    fn apply_orders_page(panel: &Entity<DataGridPanel>, window: &mut VisualTestContext) {
+        window.update(|_, cx| {
+            panel.update(cx, |panel, cx| {
+                let id = ColumnMeta {
+                    name: "_id".to_string(),
+                    type_name: "int64".to_string(),
+                    kind: ColumnKind::Integer,
+                    nullable: false,
+                    is_primary_key: true,
+                };
+                let qty = ColumnMeta {
+                    name: "qty".to_string(),
+                    type_name: "int64".to_string(),
+                    kind: ColumnKind::Integer,
+                    nullable: true,
+                    is_primary_key: false,
+                };
+
+                let page = QueryResult::json(
+                    vec![id, qty],
+                    vec![vec![Value::Int(1), Value::Int(1)]],
+                    Duration::from_millis(1),
+                );
+                assert!(panel.apply_document_page(&page, cx));
+                panel.set_document_view_mode(DataViewMode::Json, cx);
+            });
+        });
+        window.run_until_parked();
+    }
+
+    fn set_page_json(panel: &Entity<DataGridPanel>, window: &mut VisualTestContext, text: &str) {
+        let text = text.to_string();
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.collection.json_editor.update(cx, |editor, cx| {
+                    editor.set_value(&text, window, cx);
+                });
+                panel.refresh_json_draft(cx);
+            });
+        });
+    }
+
+    /// The page-JSON view stages a field edited from `1` to `1.0`:
+    /// numerically equal, but a different representation is still a change.
+    #[gpui::test]
+    fn page_json_stages_a_representation_only_field_change(cx: &mut TestAppContext) {
+        let (panel, window) = preview_collection_panel(cx);
+        apply_orders_page(&panel, window);
+
+        set_page_json(&panel, window, r#"[{ "_id": 1, "qty": 1.0 }]"#);
+
+        window.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert_eq!(
+                panel.collection.json_draft.changed, 1,
+                "a field edited from 1 to 1.0 is still a change"
+            );
+            assert!(panel.collection.json_draft.error.is_none());
+        });
+
+        // Previous behavior kept: an unchanged document is not staged.
+        set_page_json(&panel, window, r#"[{ "_id": 1, "qty": 1 }]"#);
+
+        window.update(|_, cx| {
+            assert_eq!(panel.read(cx).collection.json_draft.changed, 0);
+        });
+
+        window.run_until_parked();
+    }
+
+    /// The page-JSON view rejects `_id` edited from `1` to `1.0` as an
+    /// identity change: numerically equal, not the same identity value.
+    #[gpui::test]
+    fn page_json_rejects_a_representation_only_identity_change(cx: &mut TestAppContext) {
+        let (panel, window) = preview_collection_panel(cx);
+        apply_orders_page(&panel, window);
+
+        set_page_json(&panel, window, r#"[{ "_id": 1.0, "qty": 1 }]"#);
+
+        window.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert_eq!(
+                panel.collection.json_draft.error.as_deref(),
+                Some(dbflux_i18n::t!("document.collection.json.identity_changed").as_str()),
+                "_id edited from 1 to 1.0 is still an identity change"
+            );
+            assert_eq!(panel.collection.json_draft.changed, 0);
+        });
+
+        // Previous behavior kept: a real identity change is rejected too.
+        set_page_json(&panel, window, r#"[{ "_id": 2, "qty": 1 }]"#);
+
+        window.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert_eq!(
+                panel.collection.json_draft.error.as_deref(),
+                Some(dbflux_i18n::t!("document.collection.json.identity_changed").as_str())
+            );
+            assert_eq!(panel.collection.json_draft.changed, 0);
+        });
+
+        window.run_until_parked();
     }
 }
