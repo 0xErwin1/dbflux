@@ -101,6 +101,89 @@ impl DataGridPanel {
         cx.notify();
     }
 
+    /// Fetches the next rows when the last loaded one comes into view.
+    ///
+    /// Skipped while an in-memory sort is active, because appended
+    /// rows would land unsorted below sorted ones; re-sort after appending if
+    /// that matters.
+    fn request_next_rows(&mut self, cx: &mut Context<Self>) {
+        if self.result.rows_truncated()
+            && self.limited_rows.actions.next_rows
+            && !self.limited_rows.loading_next
+            && self.grid_table.local_sort_state.is_none()
+        {
+            self.limited_rows.loading_next = true;
+            cx.emit(DataGridEvent::NextRowsRequested);
+            cx.notify();
+        }
+    }
+
+    /// Number of rows the query result holds, before any result search hides
+    /// some of them.
+    pub(crate) fn loaded_row_count(&self) -> usize {
+        match &self.source {
+            DataSource::QueryResult { result, .. } => result.rows.len(),
+            _ => self.result.rows.len(),
+        }
+    }
+
+    /// Appends the rows of `rerun` past the ones already loaded. `rerun` is the
+    /// same query run again with a higher row limit, so its first rows are the
+    /// ones the grid holds. Column widths, scroll position and the cursor stay.
+    pub(crate) fn append_next_rows(&mut self, rerun: QueryResult, cx: &mut Context<Self>) {
+        self.limited_rows.loading_next = false;
+
+        let DataSource::QueryResult { result, .. } = &mut self.source else {
+            cx.notify();
+            return;
+        };
+
+        // Columns that changed mean the rerun is not the loaded rows carried
+        // on, so it replaces the result whole. Rows that changed mean the same,
+        // and that is common: a statement without `ORDER BY` has no guaranteed
+        // order, and a `NaN` cell is not equal to itself. Either way the page
+        // the user is reading keeps the cursor and the scroll, because jumping
+        // back to row 1 at the end of every page loses their place. A swap that
+        // keeps the cursor does not re-arm the end-of-list report, so the
+        // replacement does not fetch the next page on its own.
+        let same_columns = rerun.columns.len() == result.columns.len()
+            && rerun
+                .columns
+                .iter()
+                .zip(&result.columns)
+                .all(|(new, old)| new.name == old.name && new.type_name == old.type_name);
+        let loaded = result.rows.len();
+        let appended = same_columns && rerun.rows.get(..loaded) == Some(result.rows.as_slice());
+        let combined = if appended {
+            // Extended in place: `result` is the grid's own result, so the copy
+            // made to keep it while the swap runs is the last one.
+            let combined = Arc::make_mut(result);
+            let truncated = rerun.rows_truncated();
+            combined.rows.extend(rerun.rows.into_iter().skip(loaded));
+            combined.set_rows_truncated(truncated);
+            (**result).clone()
+        } else {
+            // The rerun replaces the rows this grid came from too, so the
+            // source and the grid never disagree about what is loaded.
+            *result = Arc::new(rerun);
+            (**result).clone()
+        };
+
+        self.grid_table.reload = if same_columns {
+            TableReload::Preserve
+        } else {
+            TableReload::NewColumns
+        };
+        self.set_result(combined, cx);
+    }
+
+    /// The host could not fetch the next rows; scrolling away from the last
+    /// row and back to it tries again.
+    pub(crate) fn next_rows_failed(&mut self, cx: &mut Context<Self>) {
+        self.limited_rows.loading_next = false;
+        cx.notify();
+    }
+
     /// Identifies the current query result, for a host to check that an
     /// asynchronous answer still belongs to it.
     pub(crate) fn result_generation(&self) -> u64 {
@@ -513,6 +596,9 @@ impl DataGridPanel {
                             dirty_rows.clone(),
                             cx,
                         );
+                    }
+                    DataTableEvent::ReachedEnd => {
+                        this.request_next_rows(cx);
                     }
                 }
             });
