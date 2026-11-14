@@ -143,24 +143,26 @@ impl Value {
             return false;
         }
 
-        if self.cmp(other) != Ordering::Equal {
-            return false;
-        }
-
+        // Containers recurse on their own contents. Asking `cmp` first would
+        // walk each subtree once more before the recursion walks it, which a
+        // deep document pays for at every level.
         match (self, other) {
-            (Value::Array(before), Value::Array(after)) => before
-                .iter()
-                .zip(after)
-                .all(|(item, other_item)| item.same_representation(other_item)),
-            (Value::Document(before), Value::Document(after)) => {
-                before
-                    .iter()
-                    .zip(after)
-                    .all(|((field, value), (other_field, other_value))| {
-                        field == other_field && value.same_representation(other_value)
-                    })
+            (Value::Array(before), Value::Array(after)) => {
+                before.len() == after.len()
+                    && before
+                        .iter()
+                        .zip(after)
+                        .all(|(item, other_item)| item.same_representation(other_item))
             }
-            _ => true,
+            (Value::Document(before), Value::Document(after)) => {
+                before.len() == after.len()
+                    && before.iter().zip(after).all(
+                        |((field, value), (other_field, other_value))| {
+                            field == other_field && value.same_representation(other_value)
+                        },
+                    )
+            }
+            _ => self.cmp(other) == Ordering::Equal,
         }
     }
 
