@@ -4374,9 +4374,15 @@ mod delete_confirm_tests {
                 section.pending_delete_profile_id, None,
                 "cancelling clears the pending delete"
             );
-            assert_eq!(
-                harness.app_state.read(cx).list_auth_profiles().len(),
-                1,
+            // The count depends on what the machine already holds; the
+            // invariant is that cancelling keeps *this* profile.
+            assert!(
+                harness
+                    .app_state
+                    .read(cx)
+                    .list_auth_profiles()
+                    .iter()
+                    .any(|candidate| candidate.id == profile.id),
                 "cancelling keeps the profile"
             );
             assert_eq!(
