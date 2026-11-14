@@ -2377,7 +2377,6 @@ fn value_to_sqlite_literal(value: &Value) -> String {
     }
 }
 
-/// Escape a string for use inside a SQLite single-quoted literal.
 /// A quoted text literal. SQLite reads a statement up to its first NUL, so
 /// text holding one is written as a hex cast, which keeps every byte and the
 /// text type; any other text stays a plain quoted literal.
@@ -2389,6 +2388,7 @@ fn sqlite_text_literal(text: &str) -> String {
     format!("'{}'", sqlite_escape_string(text))
 }
 
+/// Escape a string for use inside a SQLite single-quoted literal.
 fn sqlite_escape_string(s: &str) -> String {
     s.replace('\'', "''")
 }
