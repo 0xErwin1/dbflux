@@ -1326,6 +1326,31 @@ fn the_command_palette_opens_and_closes_from_the_keyboard(cx: &mut TestAppContex
     assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
 }
 
+/// The open palette covers the whole window. Without that, the overlay sat at
+/// its static position below the status bar, out of view, while it still held
+/// focus and the modal key context, so every shortcut stopped working (#1314).
+#[gpui::test]
+fn the_open_command_palette_covers_the_window(cx: &mut TestAppContext) {
+    let (workspace, _, window) = new_workspace(cx);
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.toggle_command_palette(window, cx)
+        })
+    });
+    window.run_until_parked();
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let overlay = window
+        .debug_bounds("command-palette-overlay")
+        .expect("the open command palette renders its overlay");
+    let viewport = window.update(|window, _| window.viewport_size());
+
+    assert_eq!(overlay.origin, gpui::Point::default());
+    assert_eq!(overlay.size, viewport);
+}
+
 fn toast_count(window: &mut VisualTestContext) -> usize {
     window.update(|_, cx| {
         cx.global::<dbflux_ui_base::toast::ToastGlobal>()
