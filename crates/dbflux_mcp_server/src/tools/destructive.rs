@@ -475,8 +475,11 @@ mod tests {
             fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
                 self.0.schema_loading_strategy()
             }
-            fn build_truncate_sql(&self, _table: &str) -> String {
-                "TRUNCATE private_fake_table".into()
+            fn build_truncate_sql(
+                &self,
+                _table: &str,
+            ) -> Result<String, dbflux_core::DbError> {
+                Ok("TRUNCATE private_fake_table".into())
             }
         }
         let state = create_test_state();

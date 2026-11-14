@@ -508,6 +508,7 @@ pub(super) struct ResultOrigin {
     connection_id: Uuid,
     context: ExecutionSessionContext,
     exec_ctx: ExecutionContext,
+    language: QueryLanguage,
 }
 
 /// The result-tab collection and its selection cursor.

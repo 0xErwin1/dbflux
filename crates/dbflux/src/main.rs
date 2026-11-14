@@ -594,6 +594,17 @@ fn run_gui() {
                 })
                 .detach();
 
+            cx.new(|cx| Root::new(workspace, window, cx))
+        });
+
+        let window_handle = match window_result {
+            Ok(handle) => handle,
+            Err(error) => {
+                log::error!("Failed to open main window: {error:#}");
+                eprintln!(
+                    "DBFlux: failed to open the main window: {error:#}\n\
+                     If this mentions GPU adapters, check that a Vulkan driver works on this \
+                     system, for example with `vulkaninfo --summary`."
                 );
                 shutdown_all_managed_hosts();
                 cx.quit();

@@ -10,7 +10,6 @@ use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use gpui_component::scroll::ScrollableElement;
 
 use super::{

@@ -289,6 +289,146 @@ mod tests {
             .collect()
     }
 
+    /// The next rows of a limited result are appended past the loaded ones,
+    /// pass through an active search, and carry the re-run's truncation.
+    #[gpui::test]
+    fn next_rows_append_past_the_loaded_rows(cx: &mut TestAppContext) {
+        let (panel, window) = rendered_result(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.limited_rows.loading_next = true;
+                panel.set_result_search("AL", cx);
+            });
+        });
+
+        let mut rerun = people();
+        rerun.rows.extend(
+            [("5", "Alan"), ("6", "Zed")]
+                .into_iter()
+                .map(|(id, name)| vec![Value::Text(id.to_string()), Value::Text(name.to_string())]),
+        );
+        rerun.set_rows_truncated(true);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.append_next_rows(rerun, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(panel.loaded_row_count(), 6);
+            assert_eq!(names(panel), vec!["Alice", "Malik", "Alan"]);
+            assert!(panel.result.rows_truncated());
+            assert!(!panel.limited_rows.loading_next);
+        });
+    }
+
+    /// A rerun whose first rows differ from the loaded ones replaces them,
+    /// rather than appending rows that shifted.
+    #[gpui::test]
+    fn next_rows_replace_the_result_when_the_prefix_changed(cx: &mut TestAppContext) {
+        let (panel, window) = rendered_result(cx);
+
+        let mut rerun = people();
+        rerun.rows.insert(
+            0,
+            vec![Value::Text("0".to_string()), Value::Text("Ada".to_string())],
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.append_next_rows(rerun, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(panel.loaded_row_count(), people().rows.len() + 1);
+            assert_eq!(names(panel).first().map(String::as_str), Some("Ada"));
+        });
+    }
+
+    /// A `NaN` cell is not equal to itself, so the prefix comparison fails on
+    /// every page and the rerun replaces the rows instead of appending past
+    /// them. Replacing keeps the grid where the user is reading, which is what
+    /// the cursor-preserving reload of `append_next_rows` is for.
+    #[gpui::test]
+    fn next_rows_replace_the_result_when_a_nan_breaks_the_prefix(cx: &mut TestAppContext) {
+        fn nan_result(rows: usize) -> QueryResult {
+            let columns = ["id", "amount"]
+                .into_iter()
+                .map(|name| ColumnMeta {
+                    name: name.to_string(),
+                    type_name: "float8".to_string(),
+                    kind: ColumnKind::Float,
+                    nullable: true,
+                    is_primary_key: false,
+                })
+                .collect();
+            let rows = (0..rows)
+                .map(|id| vec![Value::Int(id as i64), Value::Float(f64::NAN)])
+                .collect();
+
+            QueryResult::table(columns, rows, None, Duration::ZERO)
+        }
+
+        let (panel, window) = rendered_result(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_query_result(
+                    Arc::new(nan_result(4)),
+                    "SELECT id, amount FROM measurements".to_string(),
+                    None,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        // Fewer rows than the ones loaded, so appending could never produce
+        // this count: the rerun replaced the rows whole.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.append_next_rows(nan_result(2), cx));
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(panel.loaded_row_count(), 2);
+            assert!(
+                matches!(panel.result.rows[0].get(1), Some(Value::Float(value)) if value.is_nan()),
+                "the rerun's rows are shown as fetched"
+            );
+            assert!(!panel.limited_rows.loading_next);
+        });
+    }
+
+    /// A rerun whose columns were renamed replaces the result, even when its
+    /// first rows match the loaded ones.
+    #[gpui::test]
+    fn next_rows_replace_the_result_when_the_columns_changed(cx: &mut TestAppContext) {
+        let (panel, window) = rendered_result(cx);
+
+        let mut rerun = people();
+        rerun.columns[1].name = "full_name".to_string();
+        rerun.rows.push(vec![
+            Value::Text("5".to_string()),
+            Value::Text("Alan".to_string()),
+        ]);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.append_next_rows(rerun, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(panel.loaded_row_count(), people().rows.len() + 1);
+            assert_eq!(panel.result.columns[1].name, "full_name");
+        });
+    }
+
     #[gpui::test]
     fn search_keeps_only_the_rows_with_a_matching_cell(cx: &mut TestAppContext) {
         let (panel, window) = rendered_result(cx);

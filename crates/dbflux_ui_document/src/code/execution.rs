@@ -219,7 +219,13 @@ impl CodeDocument {
         self.run_query_impl(origin, false, window, cx);
     }
 
-    fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn run_query_impl(
+        &mut self,
+        origin: ExecutionOrigin,
+        in_new_tab: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.execution.load_all_rows = None;
 
         // A selection always runs as-is, without the script confirmation.
@@ -235,28 +241,31 @@ impl CodeDocument {
 
         // Without a selection, a buffer of several statements runs only the
         // one under the cursor; selecting everything runs the whole script.
+        // `statement_start` is the offset of that statement in the buffer,
+        // distinct from the `ExecutionOrigin` this run was started with.
         let cursor_statement =
             statements::cursor_statement(self.effective_language(), &query, cursor)
                 .and_then(|range| Some((range.start, query.get(range)?.to_string())));
 
-        if let Some((origin, statement)) = cursor_statement {
+        if let Some((statement_start, statement)) = cursor_statement {
             // A lone BEGIN leaves a transaction open that later runs silently
             // join; a lone COMMIT or ROLLBACK ends nothing the script did.
             if statements::is_transaction_boundary(&statement) {
                 let statement_count = self.effective_language().statement_count(&query);
                 let line = query
-                    .get(..origin)
+                    .get(..statement_start)
                     .map_or(0, |prefix| prefix.matches('\n').count())
                     + 1;
 
                 self.ask_script_confirm(
                     PendingScriptConfirm {
+                        origin,
                         query,
                         in_new_tab,
                         statement_count,
                         cursor_statement: Some(CursorStatement {
                             text: statement,
-                            origin,
+                            origin: statement_start,
                             line,
                             offers_script: statements::guard_offers_script(
                                 self.connection_capabilities(cx),
@@ -269,8 +278,8 @@ impl CodeDocument {
                 return;
             }
 
-            self.execution.query_origin = Some(origin);
-            self.run_query_text(statement, in_new_tab, window, cx);
+            self.execution.query_origin = Some(statement_start);
+            self.run_query_text(origin, statement, in_new_tab, window, cx);
             return;
         }
 
@@ -381,7 +390,13 @@ impl CodeDocument {
         self.focus(window, cx);
         cx.notify();
         self.execution.query_origin = Some(0);
-        self.run_query_text(pending.query, pending.in_new_tab, window, cx);
+        self.run_query_text(
+            pending.origin,
+            pending.query,
+            pending.in_new_tab,
+            window,
+            cx,
+        );
     }
 
     /// Runs only the transaction boundary the script confirmation was raised
@@ -400,7 +415,13 @@ impl CodeDocument {
         };
 
         self.execution.query_origin = Some(statement.origin);
-        self.run_query_text(statement.text, pending.in_new_tab, window, cx);
+        self.run_query_text(
+            pending.origin,
+            statement.text,
+            pending.in_new_tab,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn cancel_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -418,7 +439,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.run_query_text_with(query, in_new_tab, ReadOnlyEnforcement::None, window, cx);
+        self.run_query_text_with(origin, query, in_new_tab, ReadOnlyEnforcement::None, window, cx);
     }
 
     /// Runs `query` with the given read-only enforcement. Only auto-refresh
@@ -426,6 +447,7 @@ impl CodeDocument {
     /// goes through [`Self::run_query_text`].
     fn run_query_text_with(
         &mut self,
+        origin: ExecutionOrigin,
         query: String,
         in_new_tab: bool,
         read_only: ReadOnlyEnforcement,
@@ -584,7 +606,7 @@ impl CodeDocument {
         // Run the schema drift preflight check asynchronously so it does not
         // block the UI thread. The actual execution is deferred to the render
         // loop via `pending.drift_query`.
-        self.start_drift_preflight(query, in_new_tab, read_only, cx);
+        self.start_drift_preflight(origin, query, in_new_tab, read_only, cx);
     }
 
     /// Kick off the async drift preflight for `query`.
@@ -596,6 +618,7 @@ impl CodeDocument {
     /// the render loop picks it up.
     fn start_drift_preflight(
         &mut self,
+        origin: ExecutionOrigin,
         query: String,
         in_new_tab: bool,
         read_only: ReadOnlyEnforcement,
@@ -855,6 +878,13 @@ impl CodeDocument {
             || self
                 .current_execution_context(cx)
                 .is_some_and(|current| current.same_as(&session_context));
+        // A rerun keeps the language its result ran in: the editor's language
+        // may have changed since, and the rows must come from the same
+        // dialect. The new origin carries it on, so later pages inherit it.
+        let language = rerun_origin
+            .as_ref()
+            .map(|origin| origin.language.clone())
+            .unwrap_or_else(|| self.effective_language().clone());
         let exec_ctx = rerun_origin
             .map(|origin| origin.exec_ctx)
             .unwrap_or_else(|| self.source.exec_ctx.clone());
@@ -862,6 +892,7 @@ impl CodeDocument {
             connection_id: conn_id,
             context: session_context.clone(),
             exec_ctx: exec_ctx.clone(),
+            language: language.clone(),
         };
 
         if on_session {
@@ -921,7 +952,7 @@ impl CodeDocument {
             query.clone(),
             active_database,
             &exec_ctx,
-            self.effective_language().clone(),
+            language,
             row_limit,
         );
 
@@ -1152,6 +1183,14 @@ impl CodeDocument {
                     read_only,
                     result_grid,
                     origin: Some(origin),
+                    #[cfg(feature = "telemetry")]
+                    usage_ticket,
+                    #[cfg(feature = "telemetry")]
+                    usage_success: true,
+                    #[cfg(feature = "telemetry")]
+                    usage_cancel: cancel_token,
+                    #[cfg(feature = "telemetry")]
+                    usage_session_generation: Some(session_generation),
                 });
                 cx.notify();
             });
@@ -1218,6 +1257,7 @@ impl CodeDocument {
         self.focus(window, cx);
         cx.notify();
         self.execute_query_internal(
+            pending.origin,
             pending.query,
             pending.in_new_tab,
             ReadOnlyEnforcement::None,
@@ -1482,7 +1522,35 @@ impl CodeDocument {
         self.execution.load_all_rows = None;
         let (query, from_selection) = self.auto_refresh_query(cx);
         self.execution.query_origin = if from_selection { None } else { Some(0) };
-        self.run_query_text_with(query, false, ReadOnlyEnforcement::Required, window, cx);
+        self.run_query_text_with(
+            ExecutionOrigin::Automatic,
+            query,
+            false,
+            ReadOnlyEnforcement::Required,
+            window,
+            cx,
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn capture_usage_ticket(
+        &mut self,
+        origin: ExecutionOrigin,
+        cx: &mut Context<Self>,
+    ) -> Option<dbflux_core::observability::usage::UsageTicket> {
+        if origin != ExecutionOrigin::User {
+            return None;
+        }
+        self.app_state.update(cx, |state, _| {
+            let source = state.telemetry_usage_source(chrono::Utc::now())?;
+            match source.ticket() {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    log::warn!("Usage ticket capture failed: {error:?}");
+                    None
+                }
+            }
+        })
     }
 
     /// Turns auto-refresh off and tells the user why: the query cannot run
@@ -2044,6 +2112,9 @@ impl CodeDocument {
                     this.pending.load_all_rows = Some(grid.entity_id());
                     cx.notify();
                 }
+                DataGridEvent::NextRowsRequested => {
+                    this.fetch_next_rows(grid, cx);
+                }
                 DataGridEvent::ApplyVisualQuery(_)
                 | DataGridEvent::ClearVisualQuery
                 | DataGridEvent::OpenEditorWithContent { .. } => {
@@ -2108,7 +2179,55 @@ impl CodeDocument {
         LimitedRowActions {
             count: reads && *language == QueryLanguage::Sql,
             load_all: reads,
+            next_rows: reads,
         }
+    }
+
+    fn fetch_next_rows(&mut self, grid: Entity<DataGridPanel>, cx: &mut Context<Self>) {
+        let Some((query, origin)) = self.result_tab_query(&grid, cx) else {
+            grid.update(cx, |grid, cx| grid.next_rows_failed(cx));
+            return;
+        };
+
+        let generation = grid.read(cx).result_generation();
+        let page = self.app_state.read(cx).general_settings().editor_row_limit;
+        let limit = grid.read(cx).loaded_row_count().saturating_add(page);
+        let row_limit = enforces_request_row_limit(origin.context.root.as_ref()).then_some(limit);
+        let request = query_request_for_execution(
+            query,
+            origin.context.database.clone(),
+            &origin.exec_ctx,
+            origin.language.clone(),
+            row_limit,
+        );
+        let task = self.execute_in_result_context(origin.context, request, cx);
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                grid.update(cx, |grid, cx| {
+                    if grid.result_generation() != generation {
+                        return;
+                    }
+                    match result {
+                        Ok(result) => grid.append_next_rows(result, cx),
+                        Err(error) => {
+                            grid.next_rows_failed(cx);
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Driver,
+                                    dbflux_i18n::t!("document.code.execution.next_rows_failed"),
+                                )
+                                .with_cause(error.to_string()),
+                                cx,
+                            );
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
     }
 
     /// The query behind a result tab and where it ran.
@@ -2247,7 +2366,14 @@ impl CodeDocument {
             grid: grid_id,
             origin,
         });
-        self.execute_query_internal(query, false, ReadOnlyEnforcement::None, window, cx);
+        self.execute_query_internal(
+            ExecutionOrigin::User,
+            query,
+            false,
+            ReadOnlyEnforcement::None,
+            window,
+            cx,
+        );
     }
 
     /// Releases the editor when its running query task was cancelled outside
@@ -2834,6 +2960,14 @@ impl CodeDocument {
                     read_only: ReadOnlyEnforcement::None,
                     result_grid: None,
                     origin: None,
+                    #[cfg(feature = "telemetry")]
+                    usage_ticket,
+                    #[cfg(feature = "telemetry")]
+                    usage_success,
+                    #[cfg(feature = "telemetry")]
+                    usage_cancel: cancel_token,
+                    #[cfg(feature = "telemetry")]
+                    usage_session_generation: None,
                 });
                 cx.notify();
             });
@@ -2957,6 +3091,7 @@ impl CodeDocument {
                 }
 
                 self.execute_query_internal(
+                    pending.origin,
                     pending.query,
                     pending.in_new_tab,
                     pending.read_only,
@@ -2968,6 +3103,7 @@ impl CodeDocument {
             DriftAction::ContinueStale => {
                 // User chose to proceed without updating the cache.
                 self.execute_query_internal(
+                    pending.origin,
                     pending.query,
                     pending.in_new_tab,
                     pending.read_only,
@@ -4763,6 +4899,7 @@ mod auto_refresh_tests {
         window.update(|window, cx| {
             document.update(cx, |document, cx| {
                 document.pending.dangerous_query = Some(super::super::PendingDangerousQuery {
+                    origin: super::super::ExecutionOrigin::User,
                     query: "DELETE FROM users".to_string(),
                     kind: dbflux_core::DangerousQueryKind::DeleteNoWhere,
                     in_new_tab: false,

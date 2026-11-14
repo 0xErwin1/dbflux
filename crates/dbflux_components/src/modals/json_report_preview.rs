@@ -9,7 +9,6 @@ use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus};
 use crate::primitives::{Chamfer, Text};
 use crate::tokens::{ChamferCut, ChromeColors, FontSizes, ModalMetrics};
-use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -139,7 +138,7 @@ impl Render for ModalJsonReportPreview {
                                 )
                                 .child(
                                     div()
-                                        .font_family(AppFonts::MONO)
+                                        .font_family(crate::fonts::editor_family(cx))
                                         .text_size(FontSizes::SM)
                                         .text_color(ChromeColors::strong(theme))
                                         .child(display),

@@ -306,6 +306,7 @@ mod tests {
         /// enforces `QueryRequest::limit` instead of refusing a request that
         /// carries one.
         enforces_row_limit: bool,
+        show_time_window: AtomicBool,
     }
 
     impl FakeConnection {
@@ -320,6 +321,7 @@ mod tests {
                 execute_gate: None,
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: true,
+                show_time_window: AtomicBool::new(false),
             })
         }
 
@@ -340,6 +342,7 @@ mod tests {
                 execute_gate: None,
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: false,
+                show_time_window: AtomicBool::new(false),
             })
         }
 
@@ -354,6 +357,7 @@ mod tests {
                 execute_gate,
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: true,
+                show_time_window: AtomicBool::new(false),
             })
         }
     }

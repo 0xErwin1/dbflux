@@ -99,8 +99,10 @@ fn panel_with_events(
 }
 
 /// One mutation run, as its completion needs to report it.
-fn mutation_run(intent: MutationIntent) -> MutationRun {
+pub(super) fn mutation_run(intent: MutationIntent) -> MutationRun {
     MutationRun {
+        #[cfg(feature = "telemetry")]
+        usage: None,
         task_id: Uuid::new_v4(),
         mode: crate::labels::VisualMutationTaskMode::SingleTransaction,
         table_name: "orders".to_string(),

@@ -833,7 +833,49 @@ struct InspectorState {
 ///
 /// All nine fields are `pub(crate)` — external crates in the same workspace
 /// read or update them (e.g. the builder panel subscription in `mod.rs`).
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+pub(super) struct BuilderUsage {
+    ticket: dbflux_core::observability::usage::UsageTicket,
+    generation: u64,
+    profile_id: Uuid,
+    database: Option<String>,
+    table: TableRef,
+    pagination: Pagination,
+    order_by: Vec<OrderByColumn>,
+    mutation: Option<BuilderMutationUsage>,
+}
+
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+struct BuilderMutationUsage {
+    spec: dbflux_core::VisualMutationSpec,
+    draft: Option<VisualQuerySpec>,
+    owner: WeakEntity<QueryBuilderPanel>,
+}
+
+#[cfg(feature = "telemetry")]
+impl std::fmt::Debug for BuilderUsage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BuilderUsage")
+    }
+}
+
+#[cfg(feature = "telemetry")]
+struct QueuedBuilderUsage {
+    usage: BuilderUsage,
+    spec: VisualQuerySpec,
+    select: SelectQuery,
+    cancel: Option<dbflux_core::CancelToken>,
+}
+
 pub(crate) struct BuilderState {
+    #[cfg(feature = "telemetry")]
+    usage_generation: u64,
+    #[cfg(feature = "telemetry")]
+    queued_usage: Option<QueuedBuilderUsage>,
+    #[cfg(feature = "telemetry")]
+    usage_owner_is_alive: Option<Box<dyn Fn() -> bool>>,
     /// FK metadata for the current (connection, database, schema).
     pub(crate) fk_cache: FkLoadState,
     /// Current state of the relational filter bar chip and inline error area.
@@ -941,6 +983,8 @@ pub struct DataGridPanel {
 /// Pending mutation execution — holds the spec and options while the
 /// confirmation modal is open so the confirm handler can dispatch the executor.
 pub(crate) struct PendingMutationExec {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
     pub(crate) spec: dbflux_core::VisualMutationSpec,
     pub(crate) opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
     pub(crate) profile_id: uuid::Uuid,
@@ -968,6 +1012,8 @@ pub(crate) enum MutationIntent {
 /// instead of one arm per execution mode.
 #[derive(Clone, Debug)]
 pub(crate) struct MutationRun {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
     pub(crate) task_id: TaskId,
     pub(crate) mode: crate::labels::VisualMutationTaskMode,
     pub(crate) table_name: String,
@@ -1483,6 +1529,12 @@ impl DataGridPanel {
                 _value_panel_subscription: None,
             },
             builder: BuilderState {
+                #[cfg(feature = "telemetry")]
+                usage_generation: 0,
+                #[cfg(feature = "telemetry")]
+                queued_usage: None,
+                #[cfg(feature = "telemetry")]
+                usage_owner_is_alive: None,
                 fk_cache: FkLoadState::Loading,
                 relational_filter_state: filter_bar::RelationalFilterState::Inactive,
                 builder_draft_spec: None,

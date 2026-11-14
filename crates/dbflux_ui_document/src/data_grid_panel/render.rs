@@ -415,7 +415,12 @@ impl DataGridPanel {
             } else if !self.rerun_nearest_neighbors(cx) {
                 // An auto-refresh tick over similar rows reads them again;
                 // every other source reads its page.
-                self.refresh(window, cx);
+                self.refresh_with_origin(
+                    window,
+                    cx,
+                    #[cfg(feature = "telemetry")]
+                    usage,
+                );
             }
         }
 

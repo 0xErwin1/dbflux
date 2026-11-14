@@ -167,6 +167,24 @@ impl DataGridPanel {
     /// a structured SELECT), the parameterized query takes precedence over the
     /// normal `TableBrowseRequest` path.
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(feature = "telemetry")]
+        {
+            self.builder.queued_usage = None;
+        }
+        self.refresh_with_origin(
+            window,
+            cx,
+            #[cfg(feature = "telemetry")]
+            None,
+        );
+    }
+
+    pub(super) fn refresh_with_origin(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        #[cfg(feature = "telemetry")] usage_ticket: Option<super::BuilderUsage>,
+    ) {
         // A search still running is dropped by this read; its bar must not
         // come back while the table page loads.
         self.nearest.running = None;

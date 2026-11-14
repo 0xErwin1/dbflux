@@ -116,6 +116,7 @@ fn fixture_users_table() -> dbflux_core::TableInfo {
         presentation: dbflux_core::CollectionPresentation::DataGrid,
         child_items: None,
         storage_hints: None,
+        pseudo_columns: Box::default(),
     }
 }
 
@@ -328,6 +329,7 @@ impl SchemaStubConnection {
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
             storage_hints: None,
+            pseudo_columns: Box::default(),
         }
     }
 }
