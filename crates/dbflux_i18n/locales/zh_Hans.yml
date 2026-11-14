@@ -1789,7 +1789,8 @@ document:
           csv: CSV
           json_pretty: JSON（美化）
           json_compact: JSON（紧凑）
-          json_lines: "JSON（每行一个对象）"
+          json: JSON
+          json_lines: "JSON Lines（每行一个对象）"
           text: 文本
           binary: 二进制
           hex: Hex

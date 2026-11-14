@@ -11,7 +11,7 @@ use thiserror::Error;
 pub use binary::{BinaryExportMode, BinaryExporter};
 pub use csv::CsvExporter;
 pub use json::JsonExporter;
-pub use streaming::{CsvStreamWriter, JsonStreamWriter};
+pub use streaming::{CsvStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter};
 pub use text::TextExporter;
 
 #[derive(Debug, Error)]

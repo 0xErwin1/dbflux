@@ -1789,7 +1789,8 @@ document:
           csv: CSV
           json_pretty: "JSON (pretty)"
           json_compact: "JSON (compact)"
-          json_lines: "JSON (one object per line)"
+          json: JSON
+          json_lines: "JSON Lines (one object per line)"
           text: Text
           binary: Binary
           hex: Hex
