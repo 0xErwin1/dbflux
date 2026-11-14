@@ -596,6 +596,68 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The date preset applies to column values only. A date nested in an
+    /// array or document has no column type to decode it by on import, so it
+    /// keeps its tagged form and comes back as the same value.
+    #[test]
+    fn json_date_preset_keeps_nested_dates_importable() {
+        use dbflux_core::Value;
+        use dbflux_core::chrono::{TimeZone, Utc};
+        use dbflux_export::DateFormat;
+
+        let Some(moment) = Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).single() else {
+            panic!("valid timestamp");
+        };
+        let nested_array = Value::Array(vec![Value::Int(1), Value::DateTime(moment)]);
+        let nested_document = Value::Document(
+            [("k".to_string(), Value::DateTime(moment))]
+                .into_iter()
+                .collect(),
+        );
+        let columns = vec![typed_column("arr", "jsonb"), typed_column("doc", "jsonb")];
+
+        for format in [FileFormat::Json, FileFormat::JsonLines] {
+            for date_format in [DateFormat::DateTime, DateFormat::Epoch] {
+                let options = FormatOptions {
+                    date_format,
+                    ..FormatOptions::default()
+                };
+                let dir = temp_dir(&format!("nested_{}_{date_format:?}", format.extension()));
+                use crate::pipeline::RowSink;
+                let mut sink = FileSink::new(&dir, None, "t", format).with_options(options.clone());
+                sink.begin(&columns, crate::pipeline::TableMappingMode::Existing)
+                    .expect("begin");
+                sink.write_chunk(&crate::pipeline::RowChunk(vec![vec![
+                    nested_array.clone(),
+                    nested_document.clone(),
+                ]]))
+                .expect("write");
+                sink.finish().expect("finish");
+
+                let mut source = crate::file_source::FileSource::open_with(
+                    &dir.join(format!("t.{}", format.extension())),
+                    format,
+                    columns.clone(),
+                    10,
+                    None,
+                    options,
+                )
+                .expect("open");
+                let chunk =
+                    crate::pipeline::RowSource::next_chunk(&mut source, &CancelToken::new())
+                        .expect("read")
+                        .expect("one chunk");
+                std::fs::remove_dir_all(&dir).ok();
+
+                assert_eq!(
+                    chunk.0,
+                    vec![vec![nested_array.clone(), nested_document.clone()]],
+                    "{format:?} {date_format:?}"
+                );
+            }
+        }
+    }
+
     fn typed_column(name: &str, type_name: &str) -> TransferColumn {
         TransferColumn {
             name: name.to_string(),

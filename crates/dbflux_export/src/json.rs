@@ -61,9 +61,13 @@ pub(crate) fn row_to_json_object(
     serde_json::Value::Object(map)
 }
 
-/// `Value::to_serde_json`, except that dates and times follow `date_format`:
-/// epoch seconds are a JSON number and the other presets a plain string. The
-/// default keeps the tagged `{"$date": ...}` form.
+/// `Value::to_serde_json`, except that a column value that is a date or time
+/// follows `date_format`: epoch seconds are a JSON number and the other
+/// presets a plain string. The default keeps the tagged `{"$date": ...}` form.
+///
+/// Dates nested in an array or document always keep the tagged form. Import
+/// decodes a column by its type, and a nested value has none, so only the
+/// tag lets it come back as a date.
 fn value_to_json(value: &Value, date_format: DateFormat) -> serde_json::Value {
     if let Some(seconds) = date_format.epoch_seconds(value) {
         return serde_json::Value::from(seconds);
@@ -74,21 +78,7 @@ fn value_to_json(value: &Value, date_format: DateFormat) -> serde_json::Value {
         return serde_json::Value::String(text);
     }
 
-    match value {
-        Value::Array(items) => serde_json::Value::Array(
-            items
-                .iter()
-                .map(|item| value_to_json(item, date_format))
-                .collect(),
-        ),
-        Value::Document(fields) => serde_json::Value::Object(
-            fields
-                .iter()
-                .map(|(name, field)| (name.clone(), value_to_json(field, date_format)))
-                .collect(),
-        ),
-        other => Value::to_serde_json(other),
-    }
+    Value::to_serde_json(value)
 }
 
 #[cfg(test)]
