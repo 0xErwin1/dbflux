@@ -2176,6 +2176,26 @@ document:
       segment_size_hint: "파일 세그먼트당 행 수"
       segment_size_placeholder: 세그먼트 / 청크 크기
       segment_size_invalid: "1 이상의 정수여야 합니다. 이전 값을 유지했습니다."
+      delimiter_label: "구분자"
+      delimiter:
+        comma: "쉼표 ( , )"
+        semicolon: "세미콜론 ( ; )"
+        tab: "탭"
+        pipe: "파이프 ( | )"
+      encoding_label: "인코딩"
+      encoding:
+        utf8: "UTF-8"
+        utf8_bom: "UTF-8 (BOM 포함)"
+        utf16le: "UTF-16LE"
+        windows1252: "Windows-1252"
+      null_text_label: "NULL 텍스트"
+      null_text_placeholder: "비어 있음"
+      null_text_hint: "NULL 값에 기록됩니다. 비워 두면 \\N 같은 다른 텍스트를 고를 때만 NULL과 빈 문자열이 구분됩니다."
+      date_format_label: "날짜"
+      date_format:
+        rfc3339: "RFC 3339"
+        date_time: "YYYY-MM-DD HH:MM:SS"
+        epoch: "Epoch (초)"
       error:
         no_dialog_fallback_failed: "폴더 선택기를 사용할 수 없고 대체 내보내기 디렉터리를 만들 수 없습니다: %{error}"
     confirm:

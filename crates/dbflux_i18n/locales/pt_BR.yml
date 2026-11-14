@@ -2176,6 +2176,26 @@ document:
       segment_size_hint: "linhas por segmento de arquivo"
       segment_size_placeholder: Tamanho do segmento / bloco
       segment_size_invalid: "Deve ser um número inteiro maior ou igual a 1; o valor anterior foi mantido."
+      delimiter_label: "Delimitador"
+      delimiter:
+        comma: "Vírgula ( , )"
+        semicolon: "Ponto e vírgula ( ; )"
+        tab: "Tabulação"
+        pipe: "Barra vertical ( | )"
+      encoding_label: "Codificação"
+      encoding:
+        utf8: "UTF-8"
+        utf8_bom: "UTF-8 com BOM"
+        utf16le: "UTF-16LE"
+        windows1252: "Windows-1252"
+      null_text_label: "Texto para NULL"
+      null_text_placeholder: "Vazio"
+      null_text_hint: "Escrito nos valores NULL. Com o texto vazio, NULL e string vazia só se distinguem se você escolher outro texto, como \\N."
+      date_format_label: "Datas"
+      date_format:
+        rfc3339: "RFC 3339"
+        date_time: "YYYY-MM-DD HH:MM:SS"
+        epoch: "Epoch (segundos)"
       error:
         no_dialog_fallback_failed: "Nenhum seletor de pastas disponível e o diretório alternativo de exportação não pôde ser criado: %{error}"
     confirm:

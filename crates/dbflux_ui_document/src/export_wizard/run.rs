@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dbflux_core::{CancelToken, Connection, TaskId, TaskKind, TaskTarget};
+use dbflux_export::FormatOptions;
 use dbflux_transfer::TableTransferStatus;
 use dbflux_transfer::export::{
     ExportOptions, ExportOutcome, ExportTable, ExportedTable, run_export,
@@ -101,6 +102,24 @@ pub(crate) fn build_export_tables(
     Ok(export_tables)
 }
 
+/// The engine's options for one run: the wizard's format choices travel with
+/// the format and segment size, so the files and the manifest use them.
+fn build_export_options<'a>(
+    driver_id: &'a str,
+    database: &'a str,
+    format: FileFormat,
+    segment_size: u32,
+    format_options: FormatOptions,
+) -> ExportOptions<'a> {
+    ExportOptions {
+        driver_id,
+        database,
+        format,
+        segment_size,
+        format_options,
+    }
+}
+
 /// The owned inputs handed to the off-thread run task.
 pub(crate) struct ExportRunContext {
     pub(crate) connection: Arc<dyn Connection>,
@@ -110,6 +129,7 @@ pub(crate) struct ExportRunContext {
     pub(crate) output_dir: PathBuf,
     pub(crate) format: FileFormat,
     pub(crate) segment_size: u32,
+    pub(crate) format_options: FormatOptions,
     pub(crate) cancel_token: CancelToken,
 }
 
@@ -284,6 +304,7 @@ impl ExportWizard {
         let driver_id = connection.metadata().id.clone();
         let format = self.selected_format();
         let segment_size = self.segment_size;
+        let format_options = self.format_options.clone();
         let table_specs: Vec<(Option<String>, String)> = self
             .tables
             .iter()
@@ -365,6 +386,7 @@ impl ExportWizard {
                         output_dir,
                         format,
                         segment_size,
+                        format_options,
                         cancel_token,
                     },
                     task_id,
@@ -405,6 +427,7 @@ impl ExportWizard {
                 output_dir,
                 format,
                 segment_size,
+                format_options,
                 cancel_token,
             } = run;
             let output_dir_for_toast = output_dir.clone();
@@ -412,12 +435,13 @@ impl ExportWizard {
             let export_result = cx
                 .background_executor()
                 .spawn(async move {
-                    let options = ExportOptions {
-                        driver_id: &driver_id,
-                        database: &database,
+                    let options = build_export_options(
+                        &driver_id,
+                        &database,
                         format,
                         segment_size,
-                    };
+                        format_options,
+                    );
 
                     run_export(
                         &connection,
@@ -511,10 +535,41 @@ mod tests {
     // blows rustc's macro recursion limit in this crate — import only what
     // the tests need (see `import_wizard::tests` for the same constraint).
     use super::{
-        ExportOutcome, ExportedTable, RunTaskAction, itemized_status_lines, resolve_run_outcome,
-        summarize, table_status_line,
+        ExportOutcome, ExportedTable, RunTaskAction, build_export_options, itemized_status_lines,
+        resolve_run_outcome, summarize, table_status_line,
     };
-    use dbflux_transfer::{TableTransferStatus, TransferError};
+    use dbflux_export::{CsvDelimiter, DateFormat, FormatOptions, TextEncoding};
+    use dbflux_transfer::{FileFormat, TableTransferStatus, TransferError};
+
+    #[test]
+    fn the_chosen_format_options_reach_the_engine_options() {
+        let chosen = FormatOptions {
+            delimiter: CsvDelimiter::Semicolon,
+            encoding: TextEncoding::Windows1252,
+            null_text: "\\N".to_string(),
+            date_format: DateFormat::Epoch,
+        };
+
+        let options = build_export_options("postgres", "app", FileFormat::Csv, 250, chosen.clone());
+
+        assert_eq!(options.format_options, chosen);
+        assert_eq!(options.format, FileFormat::Csv);
+        assert_eq!(options.segment_size, 250);
+        assert_eq!(options.driver_id, "postgres");
+        assert_eq!(options.database, "app");
+    }
+
+    #[test]
+    fn default_choices_leave_the_engine_options_at_their_defaults() {
+        let options = build_export_options(
+            "sqlite",
+            "main",
+            FileFormat::Json,
+            500,
+            FormatOptions::default(),
+        );
+        assert!(options.format_options.is_default());
+    }
 
     fn exported(schema: Option<&str>, name: &str, status: TableTransferStatus) -> ExportedTable {
         ExportedTable {

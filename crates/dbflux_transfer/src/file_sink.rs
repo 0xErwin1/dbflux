@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use dbflux_core::{ColumnKind, ColumnMeta, TransferColumn, Value};
 use dbflux_export::{
-    CsvStreamWriter, HtmlStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter,
+    CsvStreamWriter, FormatOptions, HtmlStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter,
     MarkdownStreamWriter, XmlStreamWriter,
 };
 
@@ -79,6 +79,33 @@ impl FileFormat {
         }
     }
 
+    /// Whether the CSV delimiter and encoding options apply.
+    pub fn uses_delimiter_and_encoding(self) -> bool {
+        matches!(self, Self::Csv)
+    }
+
+    /// Whether the NULL text option applies. JSON writes `null` and XML marks
+    /// NULL with an attribute, so neither has a text to choose.
+    pub fn uses_null_text(self) -> bool {
+        matches!(self, Self::Csv | Self::Html | Self::Markdown)
+    }
+
+    /// `options` with every option this format does not use reset to its
+    /// default, so a manifest records only what shaped the file. The date
+    /// format applies to every format.
+    pub fn applicable_options(self, options: &FormatOptions) -> FormatOptions {
+        let defaults = FormatOptions::default();
+        let mut applicable = options.clone();
+        if !self.uses_delimiter_and_encoding() {
+            applicable.delimiter = defaults.delimiter;
+            applicable.encoding = defaults.encoding;
+        }
+        if !self.uses_null_text() {
+            applicable.null_text = defaults.null_text;
+        }
+        applicable
+    }
+
     /// Whether Import can read this format back. HTML and Markdown are for
     /// people to read, and XML import is not implemented yet.
     pub fn is_importable(self) -> bool {
@@ -113,6 +140,7 @@ pub struct FileSink {
     /// JSON rows that are one `Value::Document` are written as that
     /// document. CSV ignores it: its header is fixed.
     whole_documents: bool,
+    options: FormatOptions,
 }
 
 impl FileSink {
@@ -132,7 +160,15 @@ impl FileSink {
             writer: None,
             rows_written: 0,
             whole_documents: false,
+            options: FormatOptions::default(),
         }
+    }
+
+    /// Writes with the CSV delimiter and encoding, NULL text and date format
+    /// the options choose; a format ignores the options it does not use.
+    pub fn with_options(mut self, options: FormatOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Writes to exactly `path`, for a single-file export whose name the
@@ -231,12 +267,25 @@ impl RowSink for FileSink {
         let writer = BufWriter::new(file);
 
         let mut stream = match self.format {
-            FileFormat::Csv => StreamWriter::Csv(Box::new(CsvStreamWriter::new(writer))),
-            FileFormat::Json => StreamWriter::Json(JsonArrayStreamWriter::new(writer)),
-            FileFormat::JsonLines => StreamWriter::JsonLines(JsonLinesStreamWriter::new(writer)),
-            FileFormat::Html => StreamWriter::Html(HtmlStreamWriter::new(writer, self.title())),
-            FileFormat::Markdown => StreamWriter::Markdown(MarkdownStreamWriter::new(writer)),
-            FileFormat::Xml => StreamWriter::Xml(XmlStreamWriter::new(writer)),
+            FileFormat::Csv => StreamWriter::Csv(Box::new(CsvStreamWriter::with_options(
+                writer,
+                self.options.clone(),
+            ))),
+            FileFormat::Json => StreamWriter::Json(
+                JsonArrayStreamWriter::new(writer).with_date_format(self.options.date_format),
+            ),
+            FileFormat::JsonLines => StreamWriter::JsonLines(
+                JsonLinesStreamWriter::new(writer).with_date_format(self.options.date_format),
+            ),
+            FileFormat::Html => StreamWriter::Html(
+                HtmlStreamWriter::new(writer, self.title()).with_options(self.options.clone()),
+            ),
+            FileFormat::Markdown => StreamWriter::Markdown(
+                MarkdownStreamWriter::new(writer).with_options(self.options.clone()),
+            ),
+            FileFormat::Xml => {
+                StreamWriter::Xml(XmlStreamWriter::new(writer).with_options(self.options.clone()))
+            }
         };
 
         match &mut stream {
@@ -315,6 +364,7 @@ impl RowSink for FileSink {
 mod tests {
     use super::*;
     use dbflux_core::Value;
+    use dbflux_export::FormatOptions;
 
     fn column(name: &str) -> TransferColumn {
         TransferColumn {
@@ -553,5 +603,330 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn write_with_options(
+        label: &str,
+        format: FileFormat,
+        options: FormatOptions,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<Vec<u8>, TransferError> {
+        let dir = temp_dir(label);
+        let columns = vec![column("id"), column("note")];
+        let mut sink = FileSink::new(&dir, None, "t", format).with_options(options);
+        sink.begin(&columns, TableMappingMode::Existing)?;
+        sink.write_chunk(&RowChunk(rows))?;
+        sink.finish()?;
+        let bytes = std::fs::read(dir.join(format!("t.{}", format.extension())))
+            .map_err(|e| TransferError::Sink(e.to_string()))?;
+        std::fs::remove_dir_all(&dir).ok();
+        Ok(bytes)
+    }
+
+    fn note_rows() -> Vec<Vec<Value>> {
+        vec![
+            vec![Value::Int(1), Value::Text("café".to_string())],
+            vec![Value::Int(2), Value::Null],
+        ]
+    }
+
+    #[test]
+    fn default_options_write_the_same_bytes_for_every_format() {
+        for format in FileFormat::ALL {
+            let plain =
+                write_with_options("defaults_a", format, FormatOptions::default(), note_rows())
+                    .unwrap();
+
+            let dir = temp_dir("defaults_b");
+            let mut sink = FileSink::new(&dir, None, "t", format);
+            sink.begin(&[column("id"), column("note")], TableMappingMode::Existing)
+                .unwrap();
+            sink.write_chunk(&RowChunk(note_rows())).unwrap();
+            sink.finish().unwrap();
+            let without = std::fs::read(dir.join(format!("t.{}", format.extension()))).unwrap();
+            std::fs::remove_dir_all(&dir).ok();
+
+            assert_eq!(plain, without, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn csv_sink_applies_delimiter_encoding_and_null_text() {
+        let options = FormatOptions {
+            delimiter: dbflux_export::CsvDelimiter::Semicolon,
+            encoding: dbflux_export::TextEncoding::Windows1252,
+            null_text: "\\N".to_string(),
+            date_format: dbflux_export::DateFormat::default(),
+        };
+        let bytes =
+            write_with_options("csv_options", FileFormat::Csv, options, note_rows()).unwrap();
+        assert_eq!(bytes, b"id;note\n1;caf\xE9\n2;\\N\n");
+    }
+
+    #[test]
+    fn csv_sink_reports_a_character_the_encoding_cannot_represent() {
+        let options = FormatOptions {
+            encoding: dbflux_export::TextEncoding::Windows1252,
+            ..FormatOptions::default()
+        };
+        let rows = vec![vec![Value::Int(1), Value::Text("ε".to_string())]];
+        let error =
+            write_with_options("csv_unmappable", FileFormat::Csv, options, rows).unwrap_err();
+        assert!(error.to_string().contains("U+03B5"), "{error}");
+    }
+
+    #[test]
+    fn markup_sinks_apply_null_text_and_xml_and_json_do_not() {
+        let options = FormatOptions {
+            null_text: "NULL".to_string(),
+            ..FormatOptions::default()
+        };
+        let html = write_with_options("null_html", FileFormat::Html, options.clone(), note_rows())
+            .unwrap();
+        assert!(String::from_utf8(html).unwrap().contains("<td>NULL</td>"));
+        let markdown = write_with_options(
+            "null_md",
+            FileFormat::Markdown,
+            options.clone(),
+            note_rows(),
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(markdown)
+                .unwrap()
+                .contains("| 2 | NULL |")
+        );
+
+        let xml = String::from_utf8(
+            write_with_options("null_xml", FileFormat::Xml, options.clone(), note_rows()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            xml.contains("null=\"true\"") && !xml.contains("NULL"),
+            "{xml}"
+        );
+        for format in [FileFormat::Json, FileFormat::JsonLines] {
+            let json = String::from_utf8(
+                write_with_options("null_json", format, options.clone(), note_rows()).unwrap(),
+            )
+            .unwrap();
+            assert!(
+                json.contains("\"note\":null") && !json.contains("NULL"),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn options_apply_only_to_the_formats_that_use_them() {
+        assert!(FileFormat::Csv.uses_delimiter_and_encoding());
+        for format in [
+            FileFormat::Json,
+            FileFormat::JsonLines,
+            FileFormat::Html,
+            FileFormat::Markdown,
+            FileFormat::Xml,
+        ] {
+            assert!(!format.uses_delimiter_and_encoding(), "{format:?}");
+        }
+        for format in [FileFormat::Csv, FileFormat::Html, FileFormat::Markdown] {
+            assert!(format.uses_null_text(), "{format:?}");
+        }
+        for format in [FileFormat::Json, FileFormat::JsonLines, FileFormat::Xml] {
+            assert!(!format.uses_null_text(), "{format:?}");
+        }
+
+        let all = FormatOptions {
+            delimiter: dbflux_export::CsvDelimiter::Pipe,
+            encoding: dbflux_export::TextEncoding::Utf16Le,
+            null_text: "x".to_string(),
+            date_format: dbflux_export::DateFormat::Epoch,
+        };
+        let json = FileFormat::Json.applicable_options(&all);
+        assert_eq!(json.date_format, dbflux_export::DateFormat::Epoch);
+        assert_eq!(
+            FormatOptions {
+                date_format: dbflux_export::DateFormat::default(),
+                ..json
+            },
+            FormatOptions::default()
+        );
+        assert_eq!(FileFormat::Csv.applicable_options(&all), all);
+    }
+
+    fn pinned_columns() -> Vec<TransferColumn> {
+        ["id", "note", "at", "day", "tm"]
+            .into_iter()
+            .map(column)
+            .collect()
+    }
+
+    fn pinned_rows() -> Vec<Vec<Value>> {
+        use dbflux_core::chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
+        vec![
+            vec![
+                Value::Int(1),
+                Value::Text("café <&>".to_string()),
+                Value::DateTime(Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 15).unwrap()),
+                Value::Date(NaiveDate::from_ymd_opt(2026, 7, 7).unwrap()),
+                Value::Time(NaiveTime::from_hms_milli_opt(10, 30, 15, 250).unwrap()),
+            ],
+            vec![
+                Value::Int(2),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ],
+        ]
+    }
+
+    /// The expected strings are the bytes the writers produced before the
+    /// format options existed.
+    #[test]
+    fn default_options_write_the_pinned_bytes_for_every_format() {
+        let expected = [
+            (
+                FileFormat::Csv,
+                "id,note,at,day,tm\n1,café <&>,2026-07-07T10:30:15+00:00,2026-07-07,10:30:15.250\n2,,,,\n",
+            ),
+            (
+                FileFormat::Html,
+                "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>t</title>\n<style>th, td { white-space: pre-wrap; }</style>\n</head>\n<body>\n<table>\n<thead>\n<tr><th>id</th><th>note</th><th>at</th><th>day</th><th>tm</th></tr>\n</thead>\n<tbody>\n<tr><td>1</td><td>café &lt;&amp;&gt;</td><td>2026-07-07T10:30:15+00:00</td><td>2026-07-07</td><td>10:30:15.250</td></tr>\n<tr><td>2</td><td></td><td></td><td></td><td></td></tr>\n</tbody>\n</table>\n</body>\n</html>\n",
+            ),
+            (
+                FileFormat::Markdown,
+                "| id | note | at | day | tm |\n| --- | --- | --- | --- | --- |\n| 1 | café &lt;&amp;&gt; | 2026-07-07T10:30:15+00:00 | 2026-07-07 | 10:30:15.250 |\n| 2 |  |  |  |  |\n",
+            ),
+            (
+                FileFormat::Xml,
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n<row><field name=\"id\">1</field><field name=\"note\">café &lt;&amp;&gt;</field><field name=\"at\">2026-07-07T10:30:15+00:00</field><field name=\"day\">2026-07-07</field><field name=\"tm\">10:30:15.250</field></row>\n<row><field name=\"id\">2</field><field name=\"note\" null=\"true\"/><field name=\"at\" null=\"true\"/><field name=\"day\" null=\"true\"/><field name=\"tm\" null=\"true\"/></row>\n</rows>\n",
+            ),
+        ];
+
+        for (format, text) in expected {
+            let dir = temp_dir("pinned");
+            let mut sink = FileSink::new(&dir, None, "t", format);
+            sink.begin(&pinned_columns(), TableMappingMode::Existing)
+                .unwrap();
+            sink.write_chunk(&RowChunk(pinned_rows())).unwrap();
+            sink.finish().unwrap();
+            let bytes = std::fs::read(dir.join(format!("t.{}", format.extension()))).unwrap();
+            std::fs::remove_dir_all(&dir).ok();
+            assert_eq!(String::from_utf8(bytes).unwrap(), text, "{format:?}");
+        }
+    }
+
+    /// JSON object key order depends on whether serde_json's `preserve_order`
+    /// is enabled by another crate in the build, so the lines are compared as
+    /// values, not as bytes.
+    #[test]
+    fn default_options_write_the_pinned_json_lines() {
+        let dir = temp_dir("pinned_jsonl");
+        let mut sink = FileSink::new(&dir, None, "t", FileFormat::JsonLines);
+        sink.begin(&pinned_columns(), TableMappingMode::Existing)
+            .unwrap();
+        sink.write_chunk(&RowChunk(pinned_rows())).unwrap();
+        sink.finish().unwrap();
+        let text = std::fs::read_to_string(dir.join("t.jsonl")).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                serde_json::json!({"id": 1, "note": "café <&>", "at": {"$date": "2026-07-07T10:30:15+00:00"}, "day": "2026-07-07", "tm": "10:30:15.250"}),
+                serde_json::json!({"id": 2, "note": null, "at": null, "day": null, "tm": null}),
+            ]
+        );
+        assert!(text.ends_with("}\n") && text.matches('\n').count() == 2);
+        assert!(text.contains("\"at\":{\"$date\":\"2026-07-07T10:30:15+00:00\"}"));
+    }
+
+    fn null_text_options(null_text: &str) -> FormatOptions {
+        FormatOptions {
+            null_text: null_text.to_string(),
+            ..FormatOptions::default()
+        }
+    }
+
+    #[test]
+    fn a_value_equal_to_the_null_text_fails_the_export_in_every_text_format() {
+        for format in [FileFormat::Csv, FileFormat::Html, FileFormat::Markdown] {
+            let text = write_with_options(
+                "marker_text",
+                format,
+                null_text_options("NULL"),
+                vec![vec![Value::Int(1), Value::Text("NULL".to_string())]],
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                text.contains(
+                    "value 'NULL' in column 'note' equals the NULL text; choose a different NULL text"
+                ),
+                "{format:?}: {text}"
+            );
+
+            let number = write_with_options(
+                "marker_number",
+                format,
+                null_text_options("0"),
+                vec![vec![Value::Int(0), Value::Text("x".to_string())]],
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                number.contains(
+                    "value '0' in column 'id' equals the NULL text; choose a different NULL text"
+                ),
+                "{format:?}: {number}"
+            );
+        }
+    }
+
+    #[test]
+    fn values_that_differ_from_the_null_text_still_export() {
+        let rows = vec![vec![Value::Int(1), Value::Text("NULLS".to_string())]];
+        let bytes = write_with_options(
+            "marker_ok",
+            FileFormat::Csv,
+            null_text_options("NULL"),
+            rows,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"id,note\n1,NULLS\n");
+    }
+
+    #[test]
+    fn an_empty_null_text_keeps_null_and_empty_string_as_before() {
+        let rows = vec![
+            vec![Value::Int(1), Value::Text(String::new())],
+            vec![Value::Int(2), Value::Null],
+        ];
+        let bytes = write_with_options(
+            "marker_empty",
+            FileFormat::Csv,
+            FormatOptions::default(),
+            rows,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"id,note\n1,\n2,\n");
+    }
+
+    #[test]
+    fn an_empty_string_is_not_the_null_text_when_another_text_is_chosen() {
+        let rows = vec![vec![Value::Int(1), Value::Text(String::new())]];
+        let bytes = write_with_options(
+            "marker_distinct",
+            FileFormat::Csv,
+            null_text_options("\\N"),
+            rows,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"id,note\n1,\n");
     }
 }

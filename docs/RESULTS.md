@@ -244,6 +244,32 @@ that holds one of them stops at that table, which fails with a message that its
 format cannot be imported, and the tables after it are not attempted. XML writes a `<row>` per row and a `<field name="...">` per column,
 with `null="true"` for a NULL so it stays distinct from an empty value.
 
+The export wizard (**Export Table…** in the sidebar) writes each selected table
+to its own file in a new folder, next to a `manifest.json`. Its Format step
+offers the options a format uses and hides the others:
+
+- **Delimiter** (CSV only): comma, semicolon, tab or pipe.
+- **Encoding** (CSV only): UTF-8, UTF-8 with BOM, UTF-16LE (with BOM) or
+  Windows-1252. A character Windows-1252 cannot represent stops the export with
+  an error naming it, instead of being replaced.
+- **NULL text** (CSV, HTML and Markdown): the text written for NULL, empty by
+  default. JSON and JSON Lines always write `null`, and XML marks a NULL with
+  `null="true"`. A value whose text equals a non-empty NULL text would be read
+  back as NULL, so the export stops with an error naming the value and the
+  column; choose another NULL text. With the default empty NULL text, an empty
+  string and NULL are written the same way, so a CSV import reads both back as
+  NULL; set a non-empty NULL text such as `\N` to keep empty strings.
+- **Dates** (every format): RFC 3339 (the default), `YYYY-MM-DD HH:MM:SS` in
+  UTC, or epoch seconds, which JSON and JSON Lines write as a number. A date is
+  written as `YYYY-MM-DD` under the first two and as its midnight (UTC) under
+  epoch, and a time as `HH:MM:SS` under `YYYY-MM-DD HH:MM:SS` and as seconds
+  since midnight under epoch.
+
+The defaults write exactly what earlier versions wrote. The manifest records
+the options that shaped a file, so importing the folder reads it back the same
+way; a manifest without them means the defaults. **Export all rows to file**
+always uses the defaults.
+
 A document collection exported as JSON or JSON Lines writes each document
 whole, one object per line, with every field it has. As CSV, HTML, Markdown or
 XML it is written with the columns the grid shows for the first page, including

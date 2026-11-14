@@ -2176,6 +2176,26 @@ document:
       segment_size_hint: "每个文件分段的行数"
       segment_size_placeholder: 分段 / 分块大小
       segment_size_invalid: 必须为大于等于 1 的整数；已保留之前的值。
+      delimiter_label: "分隔符"
+      delimiter:
+        comma: "逗号 ( , )"
+        semicolon: "分号 ( ; )"
+        tab: "制表符"
+        pipe: "竖线 ( | )"
+      encoding_label: "编码"
+      encoding:
+        utf8: "UTF-8"
+        utf8_bom: "UTF-8（带 BOM）"
+        utf16le: "UTF-16LE"
+        windows1252: "Windows-1252"
+      null_text_label: "NULL 文本"
+      null_text_placeholder: "空"
+      null_text_hint: "写入 NULL 值的位置。留空时，只有改用其他文本（如 \\N）才能区分 NULL 和空字符串。"
+      date_format_label: "日期"
+      date_format:
+        rfc3339: "RFC 3339"
+        date_time: "YYYY-MM-DD HH:MM:SS"
+        epoch: "Epoch（秒）"
       error:
         no_dialog_fallback_failed: "没有可用的文件夹选择器且无法创建回退导出目录：%{error}"
     confirm:

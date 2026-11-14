@@ -11,33 +11,50 @@
 //! incrementally instead of buffering the whole file — see its own docs.
 
 use crate::ExportError;
-use crate::csv::value_to_csv_field;
+use crate::csv::checked_field;
+use crate::encoding::EncodingWriter;
 use crate::json::row_to_json_object;
+use crate::options::{DateFormat, FormatOptions};
 use dbflux_core::{ColumnMeta, Value};
 use std::io::Write;
 
 /// Incrementally writes a CSV document: one `write_header` call followed by
 /// any number of `write_row` calls, then `finish` to flush the underlying writer.
 pub struct CsvStreamWriter<W: Write> {
-    inner: ::csv::Writer<W>,
+    inner: ::csv::Writer<EncodingWriter<W>>,
+    options: FormatOptions,
+    column_names: Vec<String>,
 }
 
 impl<W: Write> CsvStreamWriter<W> {
     pub fn new(writer: W) -> Self {
+        Self::with_options(writer, FormatOptions::default())
+    }
+
+    /// Writes with the options' delimiter, encoding, NULL text and date
+    /// format. A character the encoding cannot represent fails the write.
+    pub fn with_options(writer: W, options: FormatOptions) -> Self {
+        let inner = ::csv::WriterBuilder::new()
+            .delimiter(options.delimiter.byte())
+            .from_writer(EncodingWriter::new(writer, options.encoding));
         Self {
-            inner: ::csv::Writer::from_writer(writer),
+            inner,
+            options,
+            column_names: Vec::new(),
         }
     }
 
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
         let headers: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
         self.inner.write_record(&headers)?;
+        self.column_names = columns.iter().map(|c| c.name.clone()).collect();
         Ok(())
     }
 
     pub fn write_row(&mut self, row: &[Value]) -> Result<(), ExportError> {
-        for value in row {
-            let field = value_to_csv_field(value);
+        for (index, value) in row.iter().enumerate() {
+            let column_name = self.column_names.get(index).map_or("", String::as_str);
+            let field = checked_field(value, &self.options, column_name)?;
             self.inner.write_field(&field)?;
         }
         self.inner.write_record(None::<&[u8]>)?;
@@ -66,11 +83,20 @@ impl<W: Write> CsvStreamWriter<W> {
 /// object as it is appended, which this streaming writer does not attempt.
 pub struct JsonLinesStreamWriter<W: Write> {
     writer: W,
+    date_format: DateFormat,
 }
 
 impl<W: Write> JsonLinesStreamWriter<W> {
     pub fn new(writer: W) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            date_format: DateFormat::default(),
+        }
+    }
+
+    pub fn with_date_format(mut self, date_format: DateFormat) -> Self {
+        self.date_format = date_format;
+        self
     }
 
     pub fn write_header(&mut self, _columns: &[ColumnMeta]) -> Result<(), ExportError> {
@@ -78,7 +104,7 @@ impl<W: Write> JsonLinesStreamWriter<W> {
     }
 
     pub fn write_row(&mut self, columns: &[ColumnMeta], row: &[Value]) -> Result<(), ExportError> {
-        let object = row_to_json_object(columns, row);
+        let object = row_to_json_object(columns, row, self.date_format);
         serde_json::to_writer(&mut self.writer, &object)?;
         self.writer.write_all(b"\n")?;
         Ok(())
@@ -97,6 +123,7 @@ impl<W: Write> JsonLinesStreamWriter<W> {
 pub struct JsonArrayStreamWriter<W: Write> {
     writer: W,
     rows_written: u64,
+    date_format: DateFormat,
 }
 
 impl<W: Write> JsonArrayStreamWriter<W> {
@@ -104,7 +131,13 @@ impl<W: Write> JsonArrayStreamWriter<W> {
         Self {
             writer,
             rows_written: 0,
+            date_format: DateFormat::default(),
         }
+    }
+
+    pub fn with_date_format(mut self, date_format: DateFormat) -> Self {
+        self.date_format = date_format;
+        self
     }
 
     pub fn write_header(&mut self, _columns: &[ColumnMeta]) -> Result<(), ExportError> {
@@ -116,7 +149,7 @@ impl<W: Write> JsonArrayStreamWriter<W> {
         if self.rows_written > 0 {
             self.writer.write_all(b",\n")?;
         }
-        let object = row_to_json_object(columns, row);
+        let object = row_to_json_object(columns, row, self.date_format);
         serde_json::to_writer(&mut self.writer, &object)?;
         self.rows_written += 1;
         Ok(())
@@ -136,6 +169,7 @@ impl<W: Write> JsonArrayStreamWriter<W> {
 mod tests {
     use super::*;
     use crate::CsvExporter;
+    use crate::{CsvDelimiter, DateFormat, FormatOptions, TextEncoding};
     use dbflux_core::{ColumnKind, QueryResult};
     use std::time::Duration;
 
@@ -278,5 +312,243 @@ mod tests {
         writer.finish().unwrap();
 
         assert_eq!(streamed, single_shot);
+    }
+
+    fn csv_with(options: FormatOptions, all_rows: &[Vec<Value>]) -> Result<Vec<u8>, ExportError> {
+        let mut streamed = Vec::new();
+        let mut writer = CsvStreamWriter::with_options(&mut streamed, options);
+        writer.write_header(&columns())?;
+        for row in all_rows {
+            writer.write_row(row)?;
+        }
+        writer.finish()?;
+        Ok(streamed)
+    }
+
+    fn csv_options(delimiter: CsvDelimiter, encoding: TextEncoding) -> FormatOptions {
+        FormatOptions {
+            delimiter,
+            encoding,
+            ..FormatOptions::default()
+        }
+    }
+
+    #[test]
+    fn csv_default_options_are_byte_identical_to_new() {
+        let mut plain = Vec::new();
+        let mut writer = CsvStreamWriter::new(&mut plain);
+        writer.write_header(&columns()).unwrap();
+        for row in rows() {
+            writer.write_row(&row).unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(csv_with(FormatOptions::default(), &rows()).unwrap(), plain);
+        assert_eq!(
+            plain,
+            b"id,name
+1,Alice
+2,Bob
+3,
+"
+        );
+    }
+
+    #[test]
+    fn csv_uses_each_delimiter_and_quotes_fields_containing_it() {
+        let data = vec![vec![Value::Int(1), Value::Text("a;b|c\td".to_string())]];
+        for (delimiter, expected) in [
+            (CsvDelimiter::Comma, "id,name\n1,a;b|c\td\n"),
+            (CsvDelimiter::Semicolon, "id;name\n1;\"a;b|c\td\"\n"),
+            (CsvDelimiter::Tab, "id\tname\n1\t\"a;b|c\td\"\n"),
+            (CsvDelimiter::Pipe, "id|name\n1|\"a;b|c\td\"\n"),
+        ] {
+            let output = csv_with(csv_options(delimiter, TextEncoding::Utf8), &data).unwrap();
+            assert_eq!(
+                String::from_utf8(output).unwrap(),
+                expected,
+                "{delimiter:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn csv_encodings_write_their_bytes() {
+        let data = vec![vec![Value::Int(1), Value::Text("é".to_string())]];
+
+        let utf8_bom = csv_with(
+            csv_options(CsvDelimiter::Comma, TextEncoding::Utf8Bom),
+            &data,
+        )
+        .unwrap();
+        assert_eq!(&utf8_bom[..3], &[0xEF, 0xBB, 0xBF]);
+        assert_eq!(&utf8_bom[3..], "id,name\n1,é\n".as_bytes());
+
+        let utf16 = csv_with(
+            csv_options(CsvDelimiter::Comma, TextEncoding::Utf16Le),
+            &data,
+        )
+        .unwrap();
+        assert_eq!(&utf16[..2], &[0xFF, 0xFE]);
+        let units: Vec<u16> = utf16[2..]
+            .chunks(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        assert_eq!(String::from_utf16(&units).unwrap(), "id,name\n1,é\n");
+
+        let latin = csv_with(
+            csv_options(CsvDelimiter::Comma, TextEncoding::Windows1252),
+            &data,
+        )
+        .unwrap();
+        assert_eq!(latin, b"id,name\n1,\xE9\n");
+    }
+
+    #[test]
+    fn csv_windows_1252_fails_clearly_on_an_unencodable_character() {
+        let data = vec![vec![Value::Int(1), Value::Text("ε".to_string())]];
+        let error = csv_with(
+            csv_options(CsvDelimiter::Comma, TextEncoding::Windows1252),
+            &data,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("U+03B5"), "{error}");
+        assert!(error.contains("Windows-1252"), "{error}");
+    }
+
+    #[test]
+    fn csv_writes_the_configured_null_text_but_keeps_empty_strings_empty() {
+        let options = FormatOptions {
+            null_text: "\\N".to_string(),
+            ..FormatOptions::default()
+        };
+        let data = vec![
+            vec![Value::Null, Value::Text(String::new())],
+            vec![Value::Int(1), Value::Null],
+        ];
+        let output = csv_with(options, &data).unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "id,name\n\\N,\n1,\\N\n");
+    }
+
+    fn date_columns() -> Vec<ColumnMeta> {
+        vec![ColumnMeta {
+            name: "at".to_string(),
+            type_name: "timestamptz".to_string(),
+            kind: ColumnKind::Timestamp,
+            nullable: true,
+            is_primary_key: false,
+        }]
+    }
+
+    fn date_row() -> Vec<Value> {
+        use dbflux_core::chrono::{NaiveDate, TimeZone, Utc};
+        vec![Value::DateTime(
+            Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 15).unwrap(),
+        )]
+        .into_iter()
+        .chain([Value::Date(NaiveDate::from_ymd_opt(2026, 7, 7).unwrap())])
+        .collect()
+    }
+
+    #[test]
+    fn csv_applies_each_date_preset() {
+        let columns = vec![date_columns().remove(0), date_columns().remove(0)];
+        for (date_format, expected) in [
+            (
+                DateFormat::Rfc3339,
+                "at,at\n2026-07-07T10:30:15+00:00,2026-07-07\n",
+            ),
+            (
+                DateFormat::DateTime,
+                "at,at\n2026-07-07 10:30:15,2026-07-07\n",
+            ),
+            (DateFormat::Epoch, "at,at\n1783420215,1783382400\n"),
+        ] {
+            let mut streamed = Vec::new();
+            let options = FormatOptions {
+                date_format,
+                ..FormatOptions::default()
+            };
+            let mut writer = CsvStreamWriter::with_options(&mut streamed, options);
+            writer.write_header(&columns).unwrap();
+            writer.write_row(&date_row()).unwrap();
+            writer.finish().unwrap();
+            assert_eq!(
+                String::from_utf8(streamed).unwrap(),
+                expected,
+                "{date_format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn json_writers_apply_each_date_preset_and_epoch_is_a_number() {
+        let mut columns = date_columns();
+        columns.push(ColumnMeta {
+            name: "day".to_string(),
+            type_name: "date".to_string(),
+            ..date_columns().remove(0)
+        });
+        for (date_format, expected) in [
+            (
+                DateFormat::Rfc3339,
+                "{\"at\":{\"$date\":\"2026-07-07T10:30:15+00:00\"},\"day\":\"2026-07-07\"}",
+            ),
+            (
+                DateFormat::DateTime,
+                "{\"at\":\"2026-07-07 10:30:15\",\"day\":\"2026-07-07\"}",
+            ),
+            (DateFormat::Epoch, "{\"at\":1783420215,\"day\":1783382400}"),
+        ] {
+            let mut streamed = Vec::new();
+            let mut writer =
+                JsonLinesStreamWriter::new(&mut streamed).with_date_format(date_format);
+            writer.write_header(&columns).unwrap();
+            writer.write_row(&columns, &date_row()).unwrap();
+            writer.finish().unwrap();
+            assert_eq!(
+                String::from_utf8(streamed).unwrap().trim_end(),
+                expected,
+                "{date_format:?}"
+            );
+        }
+
+        let single = vec![date_columns().remove(0)];
+        let row = vec![date_row().remove(0)];
+        let mut streamed = Vec::new();
+        let mut writer =
+            JsonArrayStreamWriter::new(&mut streamed).with_date_format(DateFormat::Epoch);
+        writer.write_header(&single).unwrap();
+        writer.write_row(&single, &row).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(
+            String::from_utf8(streamed).unwrap(),
+            "[\n{\"at\":1783420215}\n]\n"
+        );
+
+        let mut streamed = Vec::new();
+        let mut writer =
+            JsonLinesStreamWriter::new(&mut streamed).with_date_format(DateFormat::DateTime);
+        writer.write_header(&single).unwrap();
+        writer.write_row(&single, &row).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(
+            String::from_utf8(streamed).unwrap(),
+            "{\"at\":\"2026-07-07 10:30:15\"}\n"
+        );
+    }
+
+    #[test]
+    fn json_output_ignores_null_text() {
+        let mut streamed = Vec::new();
+        let mut writer = JsonLinesStreamWriter::new(&mut streamed);
+        writer.write_header(&columns()).unwrap();
+        writer.write_row(&columns(), &rows()[2]).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(
+            String::from_utf8(streamed).unwrap(),
+            "{\"id\":3,\"name\":null}\n"
+        );
     }
 }

@@ -110,6 +110,7 @@ fn postgres_export_streams_table_to_csv_and_manifest() -> Result<(), DbError> {
             database: "postgres",
             format: FileFormat::Csv,
             segment_size: 2,
+            format_options: Default::default(),
         };
 
         let outcome = run_export(&connection, &tables, &dir, &options, &cancel, |_, _, _| {})
@@ -184,6 +185,7 @@ fn postgres_export_then_import_round_trips_row_values() -> Result<(), DbError> {
             database: "postgres",
             format: FileFormat::Csv,
             segment_size: 2,
+            format_options: Default::default(),
         };
 
         run_export(

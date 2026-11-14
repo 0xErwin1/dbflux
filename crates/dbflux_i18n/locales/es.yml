@@ -2176,6 +2176,26 @@ document:
       segment_size_hint: "filas por segmento de archivo"
       segment_size_placeholder: Tamaño de segmento / bloque
       segment_size_invalid: "Debe ser un número entero de 1 o más; se mantuvo el valor anterior."
+      delimiter_label: "Delimitador"
+      delimiter:
+        comma: "Coma ( , )"
+        semicolon: "Punto y coma ( ; )"
+        tab: "Tabulador"
+        pipe: "Barra vertical ( | )"
+      encoding_label: "Codificación"
+      encoding:
+        utf8: "UTF-8"
+        utf8_bom: "UTF-8 con BOM"
+        utf16le: "UTF-16LE"
+        windows1252: "Windows-1252"
+      null_text_label: "Texto para NULL"
+      null_text_placeholder: "Vacío"
+      null_text_hint: "Se escribe en los valores NULL. Con el texto vacío, NULL y la cadena vacía solo se distinguen si eliges otro texto, como \\N."
+      date_format_label: "Fechas"
+      date_format:
+        rfc3339: "RFC 3339"
+        date_time: "YYYY-MM-DD HH:MM:SS"
+        epoch: "Epoch (segundos)"
       error:
         no_dialog_fallback_failed: "No hay selector de carpetas disponible y no se pudo crear la carpeta de exportación de respaldo: %{error}"
     confirm:
