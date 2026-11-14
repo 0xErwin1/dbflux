@@ -2467,6 +2467,13 @@ pub(crate) fn export_all_format_label(format: dbflux_transfer::FileFormat) -> St
         dbflux_transfer::FileFormat::Json => {
             dbflux_i18n::t!("document.data.grid.export.format.json_lines")
         }
+        dbflux_transfer::FileFormat::Html => {
+            dbflux_i18n::t!("document.data.grid.export.format.html")
+        }
+        dbflux_transfer::FileFormat::Markdown => {
+            dbflux_i18n::t!("document.data.grid.export.format.markdown")
+        }
+        dbflux_transfer::FileFormat::Xml => dbflux_i18n::t!("document.data.grid.export.format.xml"),
     }
 }
 
@@ -8653,5 +8660,11 @@ mod tests {
             super::export_all_format_label(FileFormat::Json),
             "JSON (one object per line)"
         );
+        assert_eq!(super::export_all_format_label(FileFormat::Html), "HTML");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Markdown),
+            "Markdown"
+        );
+        assert_eq!(super::export_all_format_label(FileFormat::Xml), "XML");
     }
 }

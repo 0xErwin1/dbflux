@@ -1790,6 +1790,9 @@ document:
           json_pretty: "JSON (con formato)"
           json_compact: "JSON (compacto)"
           json_lines: "JSON (un objeto por línea)"
+          html: HTML
+          markdown: Markdown
+          xml: XML
           text: Texto
           binary: Binario
           hex: Hex

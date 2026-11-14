@@ -4,6 +4,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **HTML, Markdown and XML export** — The export wizard and **Export all rows to file** can write a table as an HTML document, a Markdown table or XML, streamed page by page like CSV. XML writes a `<row>` per row and a `<field name="...">` per column and marks a NULL with `null="true"`. These formats are for reading and sharing; importing a folder that holds one fails that table with a message that the format cannot be imported (#805).
+
 ### Fixed
 
 * **A numeric edit that only changes the type is no longer dropped** — Editing a document field from `1` to `1.0`, or any other change between two numeric representations of the same value, now reaches the store instead of being read as unchanged and discarded. `Value` carried two definitions of equality: `==` compared floats as IEEE 754 while ordering promoted an integer and a float numerically, so a `NaN` was not equal to itself and the same pair could be unchanged on one path and changed on another. Equality is now exactly "orders equal", the promotion between `i64` and `f64` is exact above 2^53, and the paths that decide whether an edit is a change compare representation as well as value, so a typed edit is kept and a real change of representation is still a change (#1311).
