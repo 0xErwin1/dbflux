@@ -498,7 +498,11 @@ impl PendingDelivery {
 #[serde(deny_unknown_fields)]
 pub struct TelemetryState {
     install_id: Uuid,
-    rotated_at: DateTime<Utc>,
+    /// Legacy field: the previous release rotated the id every 90 days and
+    /// recorded when. It is still accepted on read so an existing state file
+    /// loads, and never written again.
+    #[serde(default, skip_serializing)]
+    rotated_at: Option<DateTime<Utc>>,
     disclosure_dismissed: bool,
     level: Level,
     last_basic_success: Option<DateTime<Utc>>,
@@ -510,7 +514,7 @@ impl TelemetryState {
     pub fn new(now: DateTime<Utc>) -> Self {
         Self {
             install_id: Uuid::new_v4(),
-            rotated_at: now,
+            rotated_at: None,
             disclosure_dismissed: false,
             level: Level::Minimal,
             last_basic_success: None,
@@ -660,20 +664,19 @@ impl TelemetryState {
         }
     }
 
-    pub fn rotation_due(&self, now: DateTime<Utc>) -> bool {
-        now.signed_duration_since(self.rotated_at) >= Duration::days(90)
-    }
-
     pub fn increment(&mut self, feature: Feature) {
         if self.level == Level::Basic {
             let count = self.counters.entry(feature).or_default();
             *count = count.saturating_add(1).min(10_000);
         }
     }
-    /// Reset cancels all old-identity queues; acknowledged builds remain acknowledged.
-    pub fn rotate(&mut self, now: DateTime<Utc>) {
+    /// Reset mints a new identity and cancels every old-identity queue. Only
+    /// a user asking for it, or a reset of local state, may call this: the id
+    /// never changes on its own, because a rotating id cannot count unique
+    /// installations across periods.
+    pub fn reset_identity(&mut self, _now: DateTime<Utc>) {
         self.install_id = Uuid::new_v4();
-        self.rotated_at = now;
+        self.rotated_at = None;
         self.pending.clear();
         self.counters.clear();
     }
@@ -709,11 +712,9 @@ impl TelemetryState {
         if !valid_build(build) || !(1..=9999).contains(&now.year()) {
             return Err(ProtocolError);
         }
-        // Mutate a candidate so encoding failures cannot consume snapshots or rotation.
+        // Mutate a candidate so an encoding failure cannot consume snapshots.
+        // The identity is stable: scheduling never re-mints it.
         let mut candidate = self.clone();
-        if now.signed_duration_since(candidate.rotated_at) >= Duration::days(90) {
-            candidate.rotate(now);
-        }
         if !candidate.disclosure_dismissed {
             *self = candidate;
             return Ok(());
@@ -877,20 +878,26 @@ mod tests {
         assert!(!state.pending[0].ready(now));
         assert!(state.pending[0].ready(now + Duration::days(1)));
         assert_eq!(state.pending[0].json(), original.json());
-        let old_id = state.install_id();
+        // The installation id is stable for the life of the installation:
+        // time passing never re-mints it, because a rotating id cannot count
+        // unique installations across periods.
+        let original_install = state.install_id();
         state
             .schedule(
-                now + Duration::days(90),
+                now + Duration::days(400),
                 &build,
                 Platform::Darwin,
                 Architecture::Arm64,
                 "en",
                 None,
             )
-            .expect("automatic rotation");
-        assert_ne!(state.install_id(), old_id);
+            .expect("queue after more than a year");
+        assert_eq!(
+            state.install_id(),
+            original_install,
+            "the installation id must never rotate on its own"
+        );
         assert_eq!(state.pending.len(), 1);
-        assert_ne!(state.pending[0].id, original.id);
         let ack = Acknowledgement::parse(
             200,
             br#"{"schema":"dbflux.telemetry-delivery/v1","decision":"stored"}"#,
@@ -899,7 +906,7 @@ mod tests {
         state
             .acknowledge(state.pending[0].id, &ack, now + Duration::days(90))
             .expect("acknowledge valid state");
-        state.rotate(now + Duration::days(91));
+        state.reset_identity(now + Duration::days(91));
         state
             .schedule(
                 now + Duration::days(91),
@@ -1603,7 +1610,7 @@ mod tests {
                 .acknowledge(delivery.id, &ack, now)
                 .expect("acknowledge valid state");
         }
-        state.rotate(now);
+        state.reset_identity(now);
         state
             .schedule(
                 now,

@@ -356,7 +356,7 @@ mod tests {
                 .expect("initialize")
                 .install_id();
             let failed = repository.update(now, |state| {
-                state.rotate(now);
+                state.reset_identity(now);
                 Err(TelemetryRepositoryError::Update)
             });
             assert!(failed.is_err());

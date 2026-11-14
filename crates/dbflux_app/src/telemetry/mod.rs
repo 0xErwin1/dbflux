@@ -554,9 +554,7 @@ impl TelemetryScheduler {
         let lease = &self.lease;
         let mut identity_changed = false;
         let result = self.repository.update(now, |state| {
-            if state.rotation_due(now) {
-                state.rotate(now);
-            }
+
             if state.install_id() != old_id {
                 identity_changed = true;
                 usage
@@ -693,7 +691,7 @@ impl TelemetryScheduler {
                 state.set_level(Level::Minimal);
             }
             if reset_pending {
-                state.rotate(now);
+                state.reset_identity(now);
             }
             state.set_level(level);
             Ok(())
@@ -716,7 +714,7 @@ impl TelemetryScheduler {
         self.reset_pending = true;
         self.fence(false)?;
         self.update(now, |state| {
-            state.rotate(now);
+            state.reset_identity(now);
             Ok(())
         })?;
         if let Some(lease) = &self.lease {
