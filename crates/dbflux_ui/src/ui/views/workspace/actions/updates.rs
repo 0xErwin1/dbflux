@@ -13,7 +13,8 @@ fn telemetry_startup_dialog(dialog: StartupDialog, undisclosed: bool) -> Startup
 
 #[cfg(all(test, feature = "telemetry"))]
 mod welcome_tests {
-    use super::{StartupDialog, telemetry_startup_dialog};
+    use super::{StartupDialog, telemetry_startup_dialog, updates};
+    use dbflux_app::updates::UpdateSettings;
 
     #[test]
     fn welcome_undisclosed_install_overrides_disabled_whats_new() {
@@ -29,6 +30,78 @@ mod welcome_tests {
             telemetry_startup_dialog(StartupDialog::WhatsNew { since: None }, true),
             StartupDialog::Welcome
         ));
+    }
+
+    #[test]
+    fn welcome_undisclosed_install_overrides_every_startup_dialog() {
+        let since = updates::parse_version("0.8.0");
+        assert!(since.is_some());
+
+        for dialog in [
+            StartupDialog::None,
+            StartupDialog::Welcome,
+            StartupDialog::WhatsNew { since: None },
+            StartupDialog::WhatsNew { since },
+        ] {
+            assert_eq!(
+                telemetry_startup_dialog(dialog.clone(), true),
+                StartupDialog::Welcome,
+                "undisclosed over {dialog:?}"
+            );
+            assert_eq!(
+                telemetry_startup_dialog(dialog.clone(), false),
+                dialog,
+                "a dismissed disclosure keeps the stored decision"
+            );
+        }
+    }
+
+    /// Every stored preference that suppresses a startup dialog, combined
+    /// with every version history: none of them hides the disclosure.
+    #[test]
+    fn welcome_undisclosed_install_ignores_every_suppressing_preference() {
+        const RUNNING: &str = "0.9.0";
+
+        for welcome_shown in [false, true] {
+            for show_whats_new_after_update in [false, true] {
+                for check_for_updates_on_startup in [false, true] {
+                    for last_run_version in [None, Some("0.8.0"), Some(RUNNING), Some("invalid")] {
+                        let settings = UpdateSettings {
+                            check_for_updates_on_startup,
+                            show_whats_new_after_update,
+                            last_run_version: last_run_version.map(str::to_owned),
+                            skipped_update_version: Some(RUNNING.to_owned()),
+                            welcome_shown,
+                        };
+                        let stored = updates::startup_dialog(&settings, RUNNING);
+
+                        assert_eq!(
+                            telemetry_startup_dialog(stored.clone(), true),
+                            StartupDialog::Welcome,
+                            "undisclosed with {settings:?}"
+                        );
+                        assert_eq!(
+                            telemetry_startup_dialog(stored.clone(), false),
+                            stored,
+                            "disclosed with {settings:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        let suppressed = UpdateSettings {
+            check_for_updates_on_startup: false,
+            show_whats_new_after_update: false,
+            last_run_version: Some(RUNNING.to_owned()),
+            skipped_update_version: None,
+            welcome_shown: true,
+        };
+        assert_eq!(
+            updates::startup_dialog(&suppressed, RUNNING),
+            StartupDialog::None,
+            "the stored preferences alone open nothing"
+        );
     }
 }
 

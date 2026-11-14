@@ -1,6 +1,8 @@
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId};
 use dbflux_app::keymap::Modifiers;
+#[cfg(feature = "telemetry")]
+use dbflux_app::telemetry::TelemetryLevel;
 use dbflux_app::updates::{CheckedAgo, UpdateCheckOutcome, UpdateCheckState, UpdateSettings};
 use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::AppIcon;
@@ -41,6 +43,18 @@ const ROW_PADDING_Y: Pixels = px(7.0);
 #[cfg(feature = "telemetry")]
 const USAGE_COLUMN_WIDTH: Pixels = px(72.0);
 
+/// Telemetry levels in the order of the segmented control.
+#[cfg(feature = "telemetry")]
+const TELEMETRY_LEVELS: [TelemetryLevel; 3] = [
+    TelemetryLevel::Off,
+    TelemetryLevel::Minimal,
+    TelemetryLevel::Basic,
+];
+
+/// The level staged when the saved one is unavailable, and by Reset.
+#[cfg(feature = "telemetry")]
+const DEFAULT_TELEMETRY_LEVEL: TelemetryLevel = TelemetryLevel::Minimal;
+
 /// Keyboard-navigable controls of the section, in visual order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UpdatesRow {
@@ -49,7 +63,7 @@ enum UpdatesRow {
     ShowWhatsNew,
     OpenWhatsNew,
     ShowWelcome,
-    /// The staged Off/Basic telemetry choice (a segmented field).
+    /// The staged Off/Minimal/Basic telemetry choice (a segmented field).
     #[cfg(feature = "telemetry")]
     TelemetryLevel,
     /// Opens the confirm dialog that resets the installation id.
@@ -112,9 +126,9 @@ pub(super) struct UpdatesSection {
     app_state: Entity<AppStateEntity>,
     check_on_startup: bool,
     show_whats_new: bool,
-    /// Staged Basic opt-in, applied only by Save.
+    /// Staged telemetry level, applied only by Save.
     #[cfg(feature = "telemetry")]
-    telemetry_basic: bool,
+    telemetry_level: TelemetryLevel,
     /// Confirmation of the install-id reset, opened by `InstallReset`.
     #[cfg(feature = "telemetry")]
     install_reset_confirm: Entity<ModalConfirm>,
@@ -151,7 +165,7 @@ impl UpdatesSection {
             check_on_startup: saved.check_for_updates_on_startup,
             show_whats_new: saved.show_whats_new_after_update,
             #[cfg(feature = "telemetry")]
-            telemetry_basic: false,
+            telemetry_level: DEFAULT_TELEMETRY_LEVEL,
             #[cfg(feature = "telemetry")]
             install_reset_confirm: cx.new(|cx| ModalConfirm::new(cx)),
             #[cfg(feature = "telemetry")]
@@ -165,11 +179,11 @@ impl UpdatesSection {
 
         #[cfg(feature = "telemetry")]
         {
-            section.telemetry_basic = section
+            section.telemetry_level = section
                 .app_state
                 .read(cx)
-                .telemetry_basic_level()
-                .unwrap_or(false);
+                .telemetry_level()
+                .unwrap_or(DEFAULT_TELEMETRY_LEVEL);
             section.refresh_last_report(cx);
             section._subscriptions.push(telemetry_subscription);
 
@@ -252,7 +266,7 @@ impl UpdatesSection {
         }
 
         #[cfg(feature = "telemetry")]
-        if self.app_state.read(cx).telemetry_basic_level() != Some(self.telemetry_basic) {
+        if self.app_state.read(cx).telemetry_level() != Some(self.telemetry_level) {
             return true;
         }
 
@@ -289,7 +303,7 @@ impl UpdatesSection {
         #[cfg(feature = "telemetry")]
         {
             let telemetry_result = self.app_state.update(cx, |state, _| {
-                state.set_telemetry_basic(self.telemetry_basic, Utc::now())
+                state.set_telemetry_level(self.telemetry_level, Utc::now())
             });
             if let Err(_error) = telemetry_result {
                 report_error(
@@ -316,11 +330,12 @@ impl UpdatesSection {
         let defaults = UpdateSettings::default();
         self.check_on_startup = defaults.check_for_updates_on_startup;
         self.show_whats_new = defaults.show_whats_new_after_update;
-        // Defaults stage Off only: the install id and the saved level are
-        // untouched until Save, and no telemetry write happens here.
+        // Defaults stage the default level only: the install id and the
+        // saved level are untouched until Save, and no telemetry write
+        // happens here.
         #[cfg(feature = "telemetry")]
         {
-            self.telemetry_basic = false;
+            self.telemetry_level = DEFAULT_TELEMETRY_LEVEL;
         }
         cx.notify();
     }
@@ -342,7 +357,9 @@ impl UpdatesSection {
             UpdatesRow::ShowWelcome => self.request_dialog(UpdateDialogRequest::Welcome, cx),
             #[cfg(feature = "telemetry")]
             UpdatesRow::TelemetryLevel => {
-                self.telemetry_basic = !self.telemetry_basic;
+                let next =
+                    (telemetry_level_index(self.telemetry_level) + 1) % TELEMETRY_LEVELS.len();
+                self.stage_telemetry_level_at(next);
             }
             #[cfg(feature = "telemetry")]
             UpdatesRow::InstallReset => self.open_install_reset_confirm(cx),
@@ -354,6 +371,15 @@ impl UpdatesSection {
             UpdatesRow::Save => self.save(cx),
         }
         cx.notify();
+    }
+
+    /// Stages the level at `index` of the segmented control. An index outside
+    /// the control leaves the staged level unchanged.
+    #[cfg(feature = "telemetry")]
+    fn stage_telemetry_level_at(&mut self, index: usize) {
+        if let Some(level) = TELEMETRY_LEVELS.get(index).copied() {
+            self.telemetry_level = level;
+        }
     }
 
     /// Opens the read-only viewer over the cached report; nothing renders for
@@ -585,7 +611,7 @@ impl UpdatesSection {
         body.into_any_element()
     }
 
-    /// Usage statistics: the staged Off/Basic level, what is sent, the
+    /// Usage statistics: the staged Off/Minimal/Basic level, what is sent, the
     /// install id and the last confirmed report.
     #[cfg(feature = "telemetry")]
     fn render_usage_group(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -597,16 +623,24 @@ impl UpdatesSection {
             vec![
                 SegmentedItem::new("off", dbflux_i18n::t!("updates.settings.level_off"))
                     .icon(AppIcon::EyeOff),
+                SegmentedItem::new("minimal", dbflux_i18n::t!("updates.settings.level_minimal"))
+                    .icon(AppIcon::Tag),
                 SegmentedItem::new("basic", dbflux_i18n::t!("updates.settings.level_basic"))
                     .icon(AppIcon::Columns),
             ],
-            if self.telemetry_basic { "basic" } else { "off" },
+            telemetry_level_segment(self.telemetry_level),
             {
                 let state = cx.entity();
                 move |id, _, cx| {
                     state.update(cx, |section, cx| {
-                        section.telemetry_basic = id.as_ref() == "basic";
-                        cx.notify();
+                        let index = TELEMETRY_LEVELS
+                            .iter()
+                            .position(|level| telemetry_level_segment(*level) == id.as_ref());
+
+                        if let Some(index) = index {
+                            section.stage_telemetry_level_at(index);
+                            cx.notify();
+                        }
                     });
                 }
             },
@@ -784,7 +818,7 @@ impl UpdatesSection {
     }
 
     /// One honest row of the "what is sent" table: the collected item and
-    /// whether the minimal ping / Basic level includes it.
+    /// whether the Minimal / Basic level includes it.
     #[cfg(feature = "telemetry")]
     fn collected_row(
         &self,
@@ -922,7 +956,9 @@ impl UpdatesSection {
                 if modifiers == Modifiers::none()
                     && ROWS.get(self.cursor).copied() == Some(UpdatesRow::TelemetryLevel) =>
             {
-                self.telemetry_basic = false;
+                self.stage_telemetry_level_at(
+                    telemetry_level_index(self.telemetry_level).saturating_sub(1),
+                );
                 cx.notify();
             }
             #[cfg(feature = "telemetry")]
@@ -930,7 +966,7 @@ impl UpdatesSection {
                 if modifiers == Modifiers::none()
                     && ROWS.get(self.cursor).copied() == Some(UpdatesRow::TelemetryLevel) =>
             {
-                self.telemetry_basic = true;
+                self.stage_telemetry_level_at(telemetry_level_index(self.telemetry_level) + 1);
                 cx.notify();
             }
             ("escape", modifiers) if modifiers == Modifiers::none() => {
@@ -1195,12 +1231,36 @@ fn report_time_label(epoch_ms: i64) -> String {
         .unwrap_or_default()
 }
 
-/// Readable level label of the stored `"off"`/`"basic"` marker.
+/// Segment id of a telemetry level in the Settings control.
+#[cfg(feature = "telemetry")]
+fn telemetry_level_segment(level: TelemetryLevel) -> &'static str {
+    match level {
+        TelemetryLevel::Off => "off",
+        TelemetryLevel::Minimal => "minimal",
+        TelemetryLevel::Basic => "basic",
+    }
+}
+
+/// Position of a telemetry level in the segmented control.
+#[cfg(feature = "telemetry")]
+fn telemetry_level_index(level: TelemetryLevel) -> usize {
+    match level {
+        TelemetryLevel::Off => 0,
+        TelemetryLevel::Minimal => 1,
+        TelemetryLevel::Basic => 2,
+    }
+}
+
+/// Readable level label of the marker stored with a delivered report. Rows
+/// written before the Minimal level existed marked the per-build ping
+/// `"off"`; a delivered report is never Off, so those read as Minimal.
 #[cfg(feature = "telemetry")]
 fn report_level_label(level: Option<&str>) -> String {
     match level {
         Some("basic") => dbflux_i18n::t!("updates.settings.level_basic_display"),
-        Some("off") | None => dbflux_i18n::t!("updates.settings.level_off_display"),
+        Some("minimal") | Some("off") | None => {
+            dbflux_i18n::t!("updates.settings.level_minimal_display")
+        }
         Some(other) => other.to_owned(),
     }
 }
@@ -1316,7 +1376,11 @@ mod tests {
             "updates.settings.usage_heading",
             "updates.settings.usage_level",
             "updates.settings.level_off",
+            "updates.settings.level_minimal",
             "updates.settings.level_basic",
+            "updates.settings.level_off_display",
+            "updates.settings.level_minimal_display",
+            "updates.settings.level_basic_display",
             "updates.settings.level_hint",
             "updates.settings.what_is_sent",
             "updates.settings.collected_build",
@@ -1384,7 +1448,7 @@ mod telemetry_tests {
     // Explicit imports: the parent's `gpui::*` glob would make `#[test]`
     // resolve to `gpui::test`, whose expansion recurses without bound.
     use super::{ReportState, UpdatesRow, UpdatesSection};
-    use dbflux_app::telemetry::{TelemetryConfig, TelemetryLastReport};
+    use dbflux_app::telemetry::{TelemetryConfig, TelemetryLastReport, TelemetryLevel};
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
@@ -1460,8 +1524,12 @@ mod telemetry_tests {
         (Harness { app_state, section }, window)
     }
 
-    fn saved_level(harness: &Harness, window: &mut VisualTestContext) -> Option<bool> {
-        window.update(|_, cx| harness.app_state.read(cx).telemetry_basic_level())
+    fn saved_level(harness: &Harness, window: &mut VisualTestContext) -> Option<TelemetryLevel> {
+        window.update(|_, cx| harness.app_state.read(cx).telemetry_level())
+    }
+
+    fn staged_level(harness: &Harness, window: &mut VisualTestContext) -> TelemetryLevel {
+        window.update(|_, cx| harness.section.read(cx).telemetry_level)
     }
 
     fn masked_id(harness: &Harness, window: &mut VisualTestContext) -> Option<String> {
@@ -1555,24 +1623,27 @@ mod telemetry_tests {
         window
             .update(|_, cx| {
                 app_state.update(cx, |state, _| {
-                    state.set_telemetry_basic(true, dbflux_core::chrono::Utc::now())
+                    state
+                        .set_telemetry_level(TelemetryLevel::Basic, dbflux_core::chrono::Utc::now())
                 })
             })
             .expect("saved basic");
 
         // Reopening stages the saved level.
         let (harness, window) = open_on(cx, app_state);
-        assert_eq!(saved_level(&harness, window), Some(true));
+        assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Basic));
+        assert_eq!(staged_level(&harness, window), TelemetryLevel::Basic);
 
-        // Toggling stages Off; nothing is persisted and nothing is queued.
+        // Activating cycles to Off; nothing is persisted and nothing is queued.
         window.update(|_, cx| {
             harness.section.update(cx, |section, cx| {
                 section.activate(UpdatesRow::TelemetryLevel, cx)
             });
         });
+        assert_eq!(staged_level(&harness, window), TelemetryLevel::Off);
         assert_eq!(
             saved_level(&harness, window),
-            Some(true),
+            Some(TelemetryLevel::Basic),
             "staging never writes"
         );
 
@@ -1581,11 +1652,76 @@ mod telemetry_tests {
             harness.section.update(cx, |section, cx| section.save(cx));
         });
         window.run_until_parked();
-        assert_eq!(saved_level(&harness, window), Some(false));
+        assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Off));
     }
 
     #[gpui::test]
-    fn reset_defaults_stages_off_without_touching_storage_or_the_install_id(
+    fn a_new_install_stages_minimal_and_the_keys_step_through_three_levels(
+        cx: &mut TestAppContext,
+    ) {
+        let (harness, window) = open(cx);
+        assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Minimal));
+        assert_eq!(staged_level(&harness, window), TelemetryLevel::Minimal);
+
+        let press = |window: &mut VisualTestContext, key: &str| {
+            let event = gpui::KeyDownEvent {
+                keystroke: gpui::Keystroke::parse(key).expect("keystroke"),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            window.update(|_, cx| {
+                harness.section.update(cx, |section, cx| {
+                    section.cursor = super::ROWS
+                        .iter()
+                        .position(|row| *row == UpdatesRow::TelemetryLevel)
+                        .expect("level row");
+                    section.handle_key(&event, cx);
+                });
+            });
+        };
+
+        for (key, expected) in [
+            ("right", TelemetryLevel::Basic),
+            ("right", TelemetryLevel::Basic),
+            ("left", TelemetryLevel::Minimal),
+            ("left", TelemetryLevel::Off),
+            ("left", TelemetryLevel::Off),
+            ("enter", TelemetryLevel::Minimal),
+            ("enter", TelemetryLevel::Basic),
+            ("enter", TelemetryLevel::Off),
+        ] {
+            press(window, key);
+            assert_eq!(staged_level(&harness, window), expected, "{key}");
+        }
+
+        assert_eq!(
+            saved_level(&harness, window),
+            Some(TelemetryLevel::Minimal),
+            "staging never writes"
+        );
+    }
+
+    #[gpui::test]
+    fn the_level_control_renders_three_segments(cx: &mut TestAppContext) {
+        let (_harness, window) = open(cx);
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+        window.update(|window, _| window.refresh());
+        let frame = capture.frame(window);
+
+        for id in [
+            "segmented-telemetry-level-off",
+            "segmented-telemetry-level-minimal",
+            "segmented-telemetry-level-basic",
+        ] {
+            assert!(
+                frame.nodes().any(|(_, node)| node.id() == id),
+                "{id} must be in the painted frame"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn reset_defaults_stages_minimal_without_touching_storage_or_the_install_id(
         cx: &mut TestAppContext,
     ) {
         let (harness, window) = open(cx);
@@ -1593,7 +1729,8 @@ mod telemetry_tests {
         window
             .update(|_, cx| {
                 app_state.update(cx, |state, _| {
-                    state.set_telemetry_basic(true, dbflux_core::chrono::Utc::now())
+                    state
+                        .set_telemetry_level(TelemetryLevel::Basic, dbflux_core::chrono::Utc::now())
                 })
             })
             .expect("saved basic");
@@ -1607,9 +1744,10 @@ mod telemetry_tests {
                 .update(cx, |section, cx| section.reset_to_defaults(cx));
         });
 
+        assert_eq!(staged_level(&harness, window), TelemetryLevel::Minimal);
         assert_eq!(
             saved_level(&harness, window),
-            Some(true),
+            Some(TelemetryLevel::Basic),
             "reset stages, never persists"
         );
         assert_eq!(masked_id(&harness, window), before, "reset keeps the id");
@@ -1734,6 +1872,32 @@ mod telemetry_tests {
         assert_ne!(ready, none);
     }
 
+    /// A ping delivered before the Minimal level existed is stored with the
+    /// `"off"` marker; the last-report line must not claim Off sent it.
+    #[test]
+    fn a_legacy_off_ping_row_reads_as_minimal_in_the_last_report_line() {
+        use super::report_meta_label;
+
+        let line = report_meta_label(&ReportState::Ready(TelemetryLastReport {
+            payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
+            payload_len: REPORT_PAYLOAD_FIXTURE.len(),
+            level: Some("off".to_owned()),
+            ack_at_epoch_ms: 1_767_225_600_000,
+            correlation: Some(uuid::Uuid::nil()),
+        }));
+
+        assert_eq!(
+            line,
+            dbflux_i18n::t!(
+                "updates.settings.last_sent",
+                when = super::report_time_label(1_767_225_600_000),
+                level = dbflux_i18n::t!("updates.settings.level_minimal_display"),
+                size = super::report_size_label(REPORT_PAYLOAD_FIXTURE.len())
+            )
+        );
+        assert!(!line.contains(&dbflux_i18n::t!("updates.settings.level_off_display")));
+    }
+
     #[gpui::test]
     fn a_missing_scheduler_invalidates_the_cached_report(cx: &mut TestAppContext) {
         let (harness, window) = open(cx);
@@ -1844,9 +2008,16 @@ mod telemetry_tests {
             dbflux_i18n::t!("updates.settings.level_basic_display")
         );
         assert_eq!(
-            report_level_label(None),
-            dbflux_i18n::t!("updates.settings.level_off_display")
+            report_level_label(Some("minimal")),
+            dbflux_i18n::t!("updates.settings.level_minimal_display")
         );
+        for legacy in [Some("off"), None] {
+            assert_eq!(
+                report_level_label(legacy),
+                dbflux_i18n::t!("updates.settings.level_minimal_display"),
+                "a delivered report never reads as off: {legacy:?}"
+            );
+        }
         assert_eq!(report_size_label(512), "512 B");
         assert_eq!(report_size_label(2048), "2.0 KiB");
     }

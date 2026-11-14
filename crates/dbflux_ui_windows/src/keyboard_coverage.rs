@@ -228,7 +228,7 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             "updates-show-welcome",
             KeyboardPath::Command(Command::Execute),
         ),
-        // Updates & privacy: the segmented Off/Basic level steps with Left
+        // Updates & privacy: the segmented Off/Minimal/Basic level steps with Left
         // and Right; the install-id reset, the report viewer and the audit
         // jump are entered with Enter or Space.
         (

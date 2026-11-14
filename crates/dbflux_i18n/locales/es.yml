@@ -4794,14 +4794,15 @@ updates:
     usage_heading: Estadísticas de uso
     usage_level: Nivel
     level_off: "Apagado"
+    level_minimal: "Mínimo"
     level_basic: "Básico"
-    level_hint: "Apagado no envía nada sobre tu uso. El envío necesita un destino configurado y no está disponible por defecto."
+    level_hint: "Apagado no envía nada. Mínimo, el valor predeterminado, envía un aviso por compilación. Básico agrega un informe semanal de uso. El envío necesita un destino configurado y no está disponible por defecto."
     what_is_sent: Qué se envía
     collected_build: "Compilación: versión, canal, sistema operativo, arquitectura"
     collected_language: "Idioma del sistema y país, semanal"
     collected_counts: "Recuentos de funciones (consultas, paneles, scripts, …)"
     collected_header: Recopilado
-    collected_minimal: Aviso mínimo
+    collected_minimal: Mínimo
     collected_basic: Básico
     collected_yes: "✓"
     collected_no: "—"
@@ -4818,6 +4819,7 @@ updates:
     report_load_failed: No se pudo cargar el último informe.
     last_sent: "Último envío %{when} · %{level} · %{size}"
     level_off_display: apagado
+    level_minimal_display: mínimo
     level_basic_display: básico
     view_report: Ver el último informe
     open_in_audit: Abrir en auditoría
@@ -4863,12 +4865,14 @@ updates:
     tagline: Un cliente pensado para el teclado para SQL, documentos, clave-valor, series temporales y almacenamiento de objetos.
     telemetry_save_failed: No se pudo guardar la confirmación del aviso de telemetría.
     telemetry_heading: Estadísticas de uso
-    telemetry_helper: "Ayuda a orientar el desarrollo. Las estadísticas son privadas."
+    telemetry_helper: "Ayuda al desarrollo. Mínimo es el nivel por defecto."
     telemetry_off: "Apagado"
-    telemetry_off_description: "Un aviso mínimo por compilación: versión, SO, arquitectura e ID rotativo. Sin datos de uso."
+    telemetry_off_description: "No se envía nada."
+    telemetry_minimal: "Mínimo"
+    telemetry_minimal_description: "Aviso por build: versión, canal, SO, arquitectura, ID rotativo."
     telemetry_basic: "Básico"
-    telemetry_basic_description: "Idioma del sistema, país y éxitos acotados semanales: consultas, builder, dashboards, scripts, MCP compatible y schema."
-    telemetry_privacy: "ID seudónimo rotativo. Nunca consultas, resultados, credenciales, rutas ni metadatos de conexión. Informes completos en Audit local. Solo tras Continuar con un colector configurado; si no, no se envía nada."
+    telemetry_basic_description: "Mínimo más informe semanal: idioma, país y conteos de uso."
+    telemetry_privacy: "ID seudónimo rotativo. Nunca consultas, resultados, credenciales, rutas ni metadatos de conexión. Informes completos en Audit local. Solo se envía tras elegir Empezar y con un colector configurado; si no, no se envía nada."
     whats_new: Novedades
     updates: Actualizaciones
     notify: Avisarme cuando salga una nueva versión

@@ -4792,14 +4792,15 @@ updates:
     usage_heading: 使用统计
     usage_level: 级别
     level_off: "关闭"
+    level_minimal: "最小"
     level_basic: "基本"
-    level_hint: "「关闭」不发送任何使用信息。发送需要配置端点，默认不可用。"
+    level_hint: "「关闭」不发送任何内容。「最小」是默认值，每个构建发送一次版本通知。「基本」另外发送每周使用报告。发送需要配置端点，默认不可用。"
     what_is_sent: 发送内容
     collected_build: "构建：版本、渠道、操作系统、架构"
     collected_language: "系统语言和国家，每周"
     collected_counts: "功能使用计数（查询、仪表板、脚本等）"
     collected_header: 采集内容
-    collected_minimal: 最小通知
+    collected_minimal: 最小
     collected_basic: 基本
     collected_yes: "✓"
     collected_no: "—"
@@ -4816,6 +4817,7 @@ updates:
     report_load_failed: 无法加载最近的报告。
     last_sent: "上次发送 %{when} · %{level} · %{size}"
     level_off_display: 关闭
+    level_minimal_display: 最小
     level_basic_display: 基本
     view_report: 查看最近报告
     open_in_audit: 在审计中打开
@@ -4861,12 +4863,14 @@ updates:
     tagline: 面向键盘操作的客户端，支持 SQL、文档、键值、时间序列和对象存储。
     telemetry_save_failed: 无法保存遥测提示的确认状态。
     telemetry_heading: 使用统计
-    telemetry_helper: "帮助确定开发方向。统计数据保持私密。"
+    telemetry_helper: "帮助确定开发方向。默认级别为「最小」。"
     telemetry_off: "关闭"
-    telemetry_off_description: "每个构建一次版本通知：版本、OS、架构和轮换 ID。不含使用数据。"
+    telemetry_off_description: "不发送任何内容。"
+    telemetry_minimal: "最小"
+    telemetry_minimal_description: "每个构建一次版本通知：版本、渠道、OS、架构和轮换 ID。"
     telemetry_basic: "基本"
-    telemetry_basic_description: "每周系统语言、国家和有上限成功计数：查询、构建器、仪表盘、脚本、受支持的 MCP 和 Schema。"
-    telemetry_privacy: "轮换假名 ID。绝不发送查询、结果、凭据、路径或连接元数据。完整报告保存在本地 Audit。仅在继续后且配置了收集器时发送，否则不发送任何内容。"
+    telemetry_basic_description: "在「最小」基础上发送周报：系统语言、国家和功能计数。"
+    telemetry_privacy: "轮换假名 ID。绝不发送查询、结果、凭据、路径或连接元数据。完整报告保存在本地 Audit。仅在选择「开始使用」后且配置了收集器时发送，否则不发送任何内容。"
     whats_new: 新功能
     updates: 更新
     notify: 有新版本时通知我

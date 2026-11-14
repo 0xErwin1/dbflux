@@ -51,9 +51,12 @@ pub struct Build {
     pub channel: Channel,
 }
 
+/// Consent level. `Off` sends nothing, `Minimal` sends one ping per build and
+/// `Basic` adds the weekly usage report. Persisted by variant name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Level {
     Off,
+    Minimal,
     Basic,
 }
 
@@ -509,7 +512,7 @@ impl TelemetryState {
             install_id: Uuid::new_v4(),
             rotated_at: now,
             disclosure_dismissed: false,
-            level: Level::Off,
+            level: Level::Minimal,
             last_basic_success: None,
             sent_builds: Vec::new(),
             counters: BTreeMap::new(),
@@ -553,7 +556,7 @@ impl TelemetryState {
         if !valid_uuid(self.install_id)
             || self.counters.values().any(|count| *count > 10_000)
             || self.sent_builds.iter().any(|build| !valid_build(build))
-            || (self.level == Level::Off
+            || (self.level != Level::Basic
                 && (!self.counters.is_empty()
                     || self.pending.iter().any(|delivery| delivery.basic)))
             || (!self.disclosure_dismissed && !self.pending.is_empty())
@@ -627,11 +630,21 @@ impl TelemetryState {
     pub fn dismiss_disclosure(&mut self) {
         self.disclosure_dismissed = true;
     }
+    /// Leaving Basic drops the queued report and the usage counters. Off also
+    /// drops a queued ping, so nothing is left to send.
     pub fn set_level(&mut self, level: Level) {
         self.level = level;
-        if level == Level::Off {
-            self.pending.retain(|delivery| !delivery.basic);
-            self.counters.clear();
+
+        match level {
+            Level::Off => {
+                self.pending.clear();
+                self.counters.clear();
+            }
+            Level::Minimal => {
+                self.pending.retain(|delivery| !delivery.basic);
+                self.counters.clear();
+            }
+            Level::Basic => {}
         }
     }
     /// Fixed-size foreground batch; callers persist the resulting state atomically.
@@ -702,6 +715,12 @@ impl TelemetryState {
             candidate.rotate(now);
         }
         if !candidate.disclosure_dismissed {
+            *self = candidate;
+            return Ok(());
+        }
+        if candidate.level == Level::Off {
+            // A row stored while Off still queued a ping may carry one.
+            candidate.pending.clear();
             *self = candidate;
             return Ok(());
         }
@@ -808,14 +827,14 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_off_ping_wire_and_rotation() {
+    fn telemetry_minimal_ping_wire_and_rotation() {
         let now = clock();
         let mut state = TelemetryState::new(now);
         let build = Build {
             version: "1.2.3-rc.1+metadata".into(),
             channel: Channel::Rc,
         };
-        assert_eq!(state.level(), Level::Off);
+        assert_eq!(state.level(), Level::Minimal);
         state.increment(Feature::McpTool);
         state.dismiss_disclosure();
         state
@@ -909,6 +928,155 @@ mod tests {
         assert_eq!(state.pending.len(), 1);
     }
 
+    fn fixture_build() -> Build {
+        Build {
+            version: "1.2.3".into(),
+            channel: Channel::Stable,
+        }
+    }
+
+    fn schedule_fixture(state: &mut TelemetryState, now: DateTime<Utc>) {
+        state
+            .schedule(
+                now,
+                &fixture_build(),
+                Platform::Linux,
+                Architecture::Amd64,
+                "en_US",
+                Some("US"),
+            )
+            .expect("schedule");
+    }
+
+    #[test]
+    fn telemetry_off_queues_nothing_after_the_disclosure_is_dismissed() {
+        let now = clock();
+        let mut state = TelemetryState::new(now);
+        state.dismiss_disclosure();
+        state.set_level(Level::Off);
+
+        state.increment(Feature::QueryRun);
+        schedule_fixture(&mut state, now);
+        schedule_fixture(&mut state, now + Duration::days(8));
+
+        assert!(state.pending.is_empty());
+        assert!(state.counters.is_empty());
+        state.validate().expect("valid Off state");
+    }
+
+    #[test]
+    fn telemetry_new_state_defaults_to_minimal() {
+        let state = TelemetryState::new(clock());
+
+        assert_eq!(state.level(), Level::Minimal);
+        assert!(!state.disclosure_dismissed());
+    }
+
+    #[test]
+    fn telemetry_minimal_queues_exactly_one_ping_per_build() {
+        let now = clock();
+        let mut state = TelemetryState::new(now);
+
+        schedule_fixture(&mut state, now);
+        assert!(state.pending.is_empty(), "nothing before the disclosure");
+
+        state.dismiss_disclosure();
+        state.increment(Feature::QueryRun);
+        schedule_fixture(&mut state, now);
+        schedule_fixture(&mut state, now + Duration::days(8));
+
+        assert_eq!(state.pending.len(), 1);
+        assert!(!state.pending[0].basic);
+        assert!(state.counters.is_empty(), "usage counting is Basic-only");
+        let json: serde_json::Value = serde_json::from_str(state.pending[0].json()).expect("wire");
+        assert_eq!(json["event"], "ping");
+        assert_eq!(json.as_object().expect("object").len(), 9);
+
+        let ack = Acknowledgement::parse(
+            200,
+            br#"{"schema":"dbflux.telemetry-delivery/v1","decision":"stored"}"#,
+        )
+        .expect("ack");
+        let id = state.pending[0].id;
+        state.acknowledge(id, &ack, now).expect("acknowledge");
+        schedule_fixture(&mut state, now + Duration::days(30));
+        assert!(state.pending.is_empty(), "one ping per build");
+    }
+
+    #[test]
+    fn telemetry_switching_basic_to_minimal_keeps_the_ping_and_drops_usage() {
+        let now = clock();
+        let mut state = TelemetryState::new(now);
+        state.dismiss_disclosure();
+        state.set_level(Level::Basic);
+        state.increment(Feature::QueryRun);
+        schedule_fixture(&mut state, now);
+        state.increment(Feature::ScriptRun);
+
+        state.set_level(Level::Minimal);
+
+        assert_eq!(state.pending.len(), 1);
+        assert!(!state.pending[0].basic);
+        assert!(state.counters.is_empty());
+        state.validate().expect("valid Minimal state");
+    }
+
+    #[test]
+    fn telemetry_persisted_levels_keep_their_stored_names() {
+        for (level, stored) in [
+            (Level::Off, "Off"),
+            (Level::Minimal, "Minimal"),
+            (Level::Basic, "Basic"),
+        ] {
+            let mut state = TelemetryState::new(clock());
+            state.set_level(level);
+            let mut json = serde_json::to_value(&state).expect("state");
+            assert_eq!(json["level"], stored);
+
+            json["level"] = stored.into();
+            let loaded: TelemetryState = serde_json::from_value(json).expect("stored row");
+            assert_eq!(loaded.level(), level);
+            loaded.validate().expect("valid stored row");
+        }
+    }
+
+    #[test]
+    fn telemetry_stored_off_row_with_a_queued_ping_loads_and_sends_nothing() {
+        let now = clock();
+        let mut state = TelemetryState::new(now);
+        state.dismiss_disclosure();
+        schedule_fixture(&mut state, now);
+        assert_eq!(state.pending.len(), 1);
+
+        let mut json = serde_json::to_value(&state).expect("state");
+        json["level"] = "Off".into();
+        let mut loaded: TelemetryState = serde_json::from_value(json).expect("stored row");
+        loaded
+            .validate()
+            .expect("row written before Off sent nothing");
+
+        schedule_fixture(&mut loaded, now);
+        assert!(loaded.pending.is_empty());
+    }
+
+    #[test]
+    fn telemetry_switching_to_off_clears_a_pending_ping() {
+        let now = clock();
+        let mut state = TelemetryState::new(now);
+        state.dismiss_disclosure();
+        state.set_level(Level::Basic);
+        state.increment(Feature::QueryRun);
+        schedule_fixture(&mut state, now);
+        assert_eq!(state.pending.len(), 2);
+
+        state.set_level(Level::Off);
+
+        assert!(state.pending.is_empty());
+        assert!(state.counters.is_empty());
+        schedule_fixture(&mut state, now);
+        assert!(state.pending.is_empty());
+    }
+
     #[test]
     fn telemetry_basic_snapshot_saturates_and_off_discards_prior_usage() {
         let now = clock();
@@ -985,9 +1153,11 @@ mod tests {
                 Some("US"),
             )
             .expect("weekly since success");
-        state.set_level(Level::Off);
+        state.set_level(Level::Minimal);
         assert_eq!(state.pending.len(), 1);
         assert!(!state.pending[0].basic);
+        state.set_level(Level::Off);
+        assert!(state.pending.is_empty());
         state.set_level(Level::Basic);
         state
             .schedule(

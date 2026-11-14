@@ -1,8 +1,9 @@
 # Política de privacidad
 
-DBFlux es una aplicación de escritorio local-first. La telemetría opcional puede
-enviar un aviso seudónimo de instalación y compilación y, con la activación
-separada de Básico, recuentos agregados de uso. Nunca envía identificadores de
+DBFlux es una aplicación de escritorio local-first. La telemetría opcional tiene
+tres niveles: Apagado no envía nada, Mínimo (el valor por defecto) puede enviar
+un aviso seudónimo de instalación y compilación, y Básico, una activación
+separada, suma recuentos agregados de uso. Nunca envía identificadores de
 personas, consultas, resultados ni metadatos de conexión. El sitio web del proyecto no usa
 cookies ni carga scripts de terceros. Este documento describe esos límites y
 los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
@@ -12,9 +13,10 @@ los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
 1. El tráfico de base de datos va directamente a los servidores que configuras,
    con lo necesario para ejecutar las consultas que pides; la telemetría opcional
    es independiente.
-2. La telemetría existe, pero es opcional y está apagada por defecto. El envío
-   necesita un destino configurado explícitamente, que ninguna compilación
-   publicada tiene, así que por defecto no se envía nada. Nunca envía
+2. La telemetría tiene tres niveles: Apagado, Mínimo y Básico. Mínimo es el
+   valor por defecto y Apagado no envía nada. El envío necesita un destino
+   configurado explícitamente, que ninguna compilación publicada tiene, así que
+   por defecto no se envía nada en ningún nivel. Nunca envía
    consultas, resultados, credenciales, rutas de archivos ni metadatos de
    conexión. Los detalles están en [Telemetría](#telemetría-opcional).
 3. No hay informes de fallos, analítica de uso más allá de la telemetría descrita
@@ -30,7 +32,7 @@ los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
 
 | Pregunta | Respuesta |
 |----------|-----------|
-| ¿DBFlux envía datos de uso a algún sitio? | Solo después de cerrar el aviso de bienvenida y con un destino configurado, que ninguna compilación publicada tiene. Las estadísticas de uso (Básico) son una activación separada. Ver [Telemetría](#telemetría-opcional). |
+| ¿DBFlux envía datos de uso a algún sitio? | Solo después de cerrar el aviso de bienvenida y con un destino configurado, que ninguna compilación publicada tiene. El nivel por defecto, Mínimo, envía un aviso de compilación y ningún dato de uso; las estadísticas de uso (Básico) son una activación separada y Apagado no envía nada. Ver [Telemetría](#telemetría-opcional). |
 | ¿Comprueba si hay actualizaciones? | No. Las actualizaciones se encuentran en la página de releases de GitHub. |
 | ¿Qué conexiones de red abre? | Las que configuras: servidores de base de datos, túneles SSH, proxies, APIs cloud y un destino de telemetría opcional bajo las condiciones siguientes. |
 | ¿Dónde viven mis datos? | En tu máquina, en un único archivo SQLite más el llavero del sistema operativo para los secretos. |
@@ -55,12 +57,14 @@ tiene, así que el envío no está disponible por defecto) y cerraste realmente 
 aviso de bienvenida mostrado de forma visible. Ocultarlo mediante código no
 confirma el aviso. Cerrar el aviso no es una activación de Básico: el nivel de
 estadísticas de uso es una elección separada, y sin destino configurado no se
-envía nada de ninguna manera.
+envía nada de ninguna manera. Cerrar el diálogo de bienvenida sin cambiar la
+selección mantiene Mínimo.
 
 | Nivel | Qué envía |
 |-------|-----------|
-| Apagado (por defecto) | A lo sumo un aviso mínimo de versión por instalación y compilación: sistema operativo, arquitectura, versión y canal de la app, y un identificador aleatorio. |
-| Básico (activación) | Suma un informe semanal: sistema operativo, idioma del sistema (no el de la interfaz), país (`ZZ` si se desconoce) y recuentos acotados de operaciones compatibles exitosas en las seis categorías siguientes. |
+| Apagado | Nada: ni aviso ni informe de uso. No se pone nada en cola, y elegir Apagado borra todos los envíos pendientes y los contadores de uso. |
+| Mínimo (por defecto) | A lo sumo un aviso de versión por instalación y compilación: sistema operativo, arquitectura, versión y canal de la app, y un identificador aleatorio. Sin idioma del sistema, país ni recuentos de uso. |
+| Básico (activación) | Mínimo más un informe semanal: sistema operativo, idioma del sistema (no el de la interfaz), país (`ZZ` si se desconoce) y recuentos acotados de operaciones compatibles exitosas en las seis categorías siguientes. |
 
 #### Qué operaciones cuentan
 
@@ -123,10 +127,11 @@ Datos que no cambian según el nivel:
 
 El nivel y los informes están en Configuración › Actualizaciones y
 privacidad. El nivel se aplica al guardar; reiniciar a los valores por
-defecto deja Apagado sin tocar el id de instalación. Elegir Básico o guardar no
-promete un informe de red inmediato. Apagado borra los informes Básico pendientes
-y los contadores; confirmar una instantánea enviada conserva los incrementos
-posteriores. Reiniciar o rotar invalida el trabajo de uso en curso anterior y
+defecto deja Mínimo sin tocar el id de instalación. Elegir Básico o guardar no
+promete un informe de red inmediato. Salir de Básico borra el informe Básico
+pendiente y los contadores, y Apagado también borra un aviso pendiente; un
+envío ya entregado a la red aún puede completarse. Confirmar una instantánea
+enviada conserva los incrementos posteriores. Reiniciar o rotar invalida el trabajo de uso en curso anterior y
 conserva el historial de compilaciones confirmadas.
 
 ## Tus datos en este equipo

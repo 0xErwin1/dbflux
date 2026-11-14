@@ -2191,28 +2191,28 @@ impl AppState {
         &self.audit_service
     }
 
-    /// The saved telemetry level: `Some(true)` when Basic is on, `Some(false)`
-    /// when Off, `None` when the optional telemetry module is unavailable.
-    /// UI surfaces must not branch on the transitive `Level` type.
+    /// The saved telemetry level, or `None` when the optional telemetry
+    /// module is unavailable. UI surfaces use the `TelemetryLevel` re-export
+    /// and must not depend on the protocol crate.
     #[cfg(feature = "telemetry")]
-    pub fn telemetry_basic_level(&self) -> Option<bool> {
+    pub fn telemetry_level(&self) -> Option<crate::telemetry::TelemetryLevel> {
         self.telemetry
             .as_ref()
-            .map(|scheduler| scheduler.state().level() == dbflux_telemetry::Level::Basic)
+            .map(|scheduler| scheduler.state().level())
     }
 
-    /// Persists the Basic opt-in (or Off) on the storage owner, in the
-    /// foreground. Off cancels a queued Basic delivery; it never resets the
-    /// installation identity.
+    /// Persists the telemetry level on the storage owner, in the foreground.
+    /// Leaving Basic cancels a queued Basic delivery and Off also cancels a
+    /// queued ping; it never resets the installation identity.
     #[cfg(feature = "telemetry")]
-    pub fn set_telemetry_basic(
+    pub fn set_telemetry_level(
         &mut self,
-        enabled: bool,
+        level: crate::telemetry::TelemetryLevel,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), crate::telemetry::TelemetryError> {
         self.telemetry_mut()
             .ok_or(crate::telemetry::TelemetryError::Storage)?
-            .set_basic(enabled, now)
+            .set_level(level, now)
     }
 
     /// Rotates the installation identity immediately, in the foreground.
@@ -3132,7 +3132,9 @@ mod tests {
         state
             .initialize_telemetry(crate::telemetry::TelemetryConfig::default(), now)
             .expect("initialize");
-        state.set_telemetry_basic(true, now).expect("basic");
+        state
+            .set_telemetry_level(crate::telemetry::TelemetryLevel::Basic, now)
+            .expect("basic");
         state
             .telemetry_mut()
             .expect("scheduler")

@@ -4793,14 +4793,15 @@ updates:
     usage_heading: 사용 통계
     usage_level: 수준
     level_off: "끔"
+    level_minimal: "최소"
     level_basic: "기본"
-    level_hint: "끔은 사용 정보를 보내지 않습니다. 전송에는 구성된 엔드포인트가 필요하며 기본적으로 불가능합니다."
+    level_hint: "「끔」은 아무것도 보내지 않습니다. 「최소」가 기본값이며 빌드당 핑을 한 번 보냅니다. 「기본」은 주간 사용 보고서를 추가합니다. 전송에는 구성된 엔드포인트가 필요하며 기본적으로 불가능합니다."
     what_is_sent: 전송 항목
     collected_build: "빌드: 버전, 채널, OS, 아키텍처"
     collected_language: "시스템 언어와 국가, 주간"
     collected_counts: "기능 사용 횟수 (쿼리, 대시보드, 스크립트, …)"
     collected_header: 수집 항목
-    collected_minimal: 최소 핑
+    collected_minimal: 최소
     collected_basic: 기본
     collected_yes: "✓"
     collected_no: "—"
@@ -4817,6 +4818,7 @@ updates:
     report_load_failed: 마지막 보고서를 불러오지 못했습니다.
     last_sent: "마지막 전송 %{when} · %{level} · %{size}"
     level_off_display: 끔
+    level_minimal_display: 최소
     level_basic_display: 기본
     view_report: 마지막 보고서 보기
     open_in_audit: 감사에서 열기
@@ -4862,12 +4864,14 @@ updates:
     tagline: SQL, 문서, 키-값, 시계열, 오브젝트 스토리지를 위한 키보드 중심 클라이언트입니다.
     telemetry_save_failed: 원격 측정 안내 확인을 저장하지 못했습니다.
     telemetry_heading: 사용 통계
-    telemetry_helper: "개발 방향에 도움이 됩니다. 통계는 비공개입니다."
+    telemetry_helper: "개발 방향에 도움이 됩니다. 기본값은 최소입니다."
     telemetry_off: "끔"
-    telemetry_off_description: "빌드당 버전 핑: 버전, OS, 아키텍처와 순환 ID. 사용 데이터 없음."
+    telemetry_off_description: "아무것도 전송하지 않습니다."
+    telemetry_minimal: "최소"
+    telemetry_minimal_description: "빌드당 핑 한 번: 버전, 채널, OS, 아키텍처, 순환 ID."
     telemetry_basic: "기본"
-    telemetry_basic_description: "주간 시스템 언어, 국가와 제한된 성공 횟수: 쿼리, 빌더, 대시보드, 스크립트, 지원되는 MCP, 스키마."
-    telemetry_privacy: "순환 가명 ID. 쿼리, 결과, 자격 증명, 경로, 연결 메타데이터는 전송하지 않습니다. 전체 보고서는 로컬 Audit에 기록됩니다. 계속한 후 수집기가 설정된 경우에만 전송하며, 없으면 전송하지 않습니다."
+    telemetry_basic_description: "최소에 주간 보고서 추가: 시스템 언어, 국가, 기능 사용 횟수."
+    telemetry_privacy: "순환 가명 ID. 쿼리, 결과, 자격 증명, 경로, 연결 메타데이터는 전송하지 않습니다. 전체 보고서는 로컬 Audit에 기록됩니다. 시작하기를 선택한 후 수집기가 설정된 경우에만 전송하며, 없으면 전송하지 않습니다."
     whats_new: 새로운 기능
     updates: 업데이트
     notify: 새 버전이 나오면 알림

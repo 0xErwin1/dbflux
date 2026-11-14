@@ -136,13 +136,15 @@ en stages sin guardar.
 
 ### Estadísticas de uso
 
-DBFlux tiene un módulo de telemetría opcional con dos niveles:
+DBFlux tiene un módulo de telemetría opcional con tres niveles:
 
-- **Apagado** (por defecto) — nada sobre tu uso. Incluso en Apagado, DBFlux
-  puede enviar un único aviso mínimo de versión por instalación y compilación
-  después de cerrar el aviso de bienvenida: sistema operativo, arquitectura,
-  versión, canal y un identificador aleatorio que rota.
-- **Básico** (activación separada) — suma un informe semanal con sistema
+- **Apagado** — no se envía nada: ni aviso ni informe de uso. No se pone nada
+  en cola.
+- **Mínimo** (por defecto) — a lo sumo un aviso de versión por instalación y
+  compilación después de cerrar el aviso de bienvenida: sistema operativo,
+  arquitectura, versión, canal y un identificador aleatorio que rota. Sin
+  idioma del sistema, país ni recuentos de uso.
+- **Básico** (activación separada) — Mínimo más un informe semanal con sistema
   operativo, idioma del sistema (no el de la interfaz), país (`ZZ` si se
   desconoce) y recuentos acotados de ejecuciones exitosas compatibles de
   consultas, visual builder, aperturas de dashboards, scripts, operaciones MCP
@@ -177,8 +179,9 @@ lista completa de lo que contiene un informe y los límites de cobertura.
 Básico debe estar activo y el aviso visible de bienvenida debe haberse cerrado
 realmente antes de comenzar; fuentes no disponibles o Audit desactivado o
 degradado impiden contabilizar. Guardar Básico no garantiza un envío inmediato.
-Apagado borra informes Básico pendientes y contadores; confirmar la entrega
-conserva incrementos posteriores. Los UUID de instalación y entrega son
+Salir de Básico borra el informe Básico pendiente y los contadores, y Apagado
+también borra un aviso pendiente; un envío ya entregado a la red aún puede
+completarse. Confirmar la entrega conserva incrementos posteriores. Los UUID de instalación y entrega son
 seudónimos; no se envían identificadores de operaciones, consultas, clientes o
 personas, nombres de herramientas ni estadísticas por motor. La rotación del ID
 (cada 90 días aproximadamente o al reiniciar) conserva las compilaciones
@@ -188,7 +191,7 @@ ni el envío del contenido sin procesar.
 
 | Control | Efecto |
 |---------|--------|
-| Nivel (Apagado / Básico) | El nivel en stages; Left y Right o un clic lo cambian, Save lo aplica. |
+| Nivel (Apagado / Mínimo / Básico) | El nivel en stages; Left y Right o un clic lo cambian, Save lo aplica. |
 | Id de instalación | Vista enmascarada del identificador seudónimo. **Reiniciar id** lo rota de inmediato, cancela los envíos pendientes y conserva las compilaciones confirmadas. |
 | Informes | El último informe confirmado, leído del audit log duradero. **Ver el último informe** abre un visor de solo lectura sobre el contenido almacenado; **Abrir en auditoría** abre el visor de auditoría con la correlación del informe. |
 

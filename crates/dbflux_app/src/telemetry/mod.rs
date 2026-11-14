@@ -8,6 +8,8 @@ use dbflux_core::observability::{
 };
 use dbflux_core::release_channel::ReleaseChannel;
 use dbflux_storage::repositories::telemetry::{TelemetryRepository, TelemetryRepositoryError};
+/// The consent level, re-exported so UI crates need no protocol dependency.
+pub use dbflux_telemetry::Level as TelemetryLevel;
 use dbflux_telemetry::transport::{Endpoint, Transport, TransportError};
 use dbflux_telemetry::{
     Acknowledgement, Architecture, Build, Channel, Decision, Feature, Level, Platform,
@@ -272,7 +274,7 @@ impl DeliveryJob {
         code: &str,
         outcome: EventOutcome,
     ) -> Result<(), TelemetryError> {
-        let details = serde_json::json!({ "payload": self.payload, "level": if self.level == Level::Basic { "basic" } else { "off" }, "phase": phase, "code": code, "attempt_id": self.correlation });
+        let details = serde_json::json!({ "payload": self.payload, "level": level_marker(self.level), "phase": phase, "code": code, "attempt_id": self.correlation });
         let event = EventRecord::new(
             now.timestamp_millis(),
             EventSeverity::Info,
@@ -303,6 +305,15 @@ impl DeliveryJob {
         Ok(())
     }
 }
+/// Marker of the consent level stored with each delivery audit row.
+fn level_marker(level: Level) -> &'static str {
+    match level {
+        Level::Off => "off",
+        Level::Minimal => "minimal",
+        Level::Basic => "basic",
+    }
+}
+
 enum AttemptOutcome {
     Acknowledged(Acknowledgement),
     Transport(TransportError),
@@ -369,7 +380,8 @@ impl DeliveryCompletion {
 pub struct TelemetryLastReport {
     pub payload: String,
     pub payload_len: usize,
-    /// `"off"` or `"basic"`, as stored by the delivery bridge.
+    /// `"minimal"` or `"basic"`, as stored by the delivery bridge. Rows written
+    /// before the Minimal level existed carry `"off"` for the same ping.
     pub level: Option<String>,
     /// Row creation time of the confirmed `outcome` event.
     pub ack_at_epoch_ms: i64,
@@ -660,28 +672,41 @@ impl TelemetryScheduler {
         })
     }
     pub fn set_basic(&mut self, enabled: bool, now: DateTime<Utc>) -> Result<(), TelemetryError> {
-        if !enabled {
-            self.fence(true)?;
+        self.set_level(if enabled { Level::Basic } else { Level::Off }, now)
+    }
+
+    /// Persists the consent level. Leaving Basic cancels a queued Basic
+    /// delivery; Off also cancels a queued ping. A delivery already handed to
+    /// the transport may still complete.
+    pub fn set_level(&mut self, level: Level, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+        let basic_only = level == Level::Minimal;
+
+        if level != Level::Basic {
+            self.fence(basic_only)?;
         }
+
         let recover = self.runtime_failure;
         let reset_pending = self.reset_pending;
         self.update(now, |state| {
             if recover {
-                state.set_level(Level::Off);
+                // Drops the usage of the failed epoch and keeps a queued ping.
+                state.set_level(Level::Minimal);
             }
             if reset_pending {
                 state.rotate(now);
             }
-            state.set_level(if enabled { Level::Basic } else { Level::Off });
+            state.set_level(level);
             Ok(())
         })?;
+
         self.runtime_failure = false;
         self.reset_pending = false;
         self.count_save_failed = false;
         self.sync_usage()?;
-        if !enabled
+
+        if level != Level::Basic
             && let Some(lease) = &self.lease
-            && lease.basic
+            && (!basic_only || lease.basic)
         {
             lease.cancel_queued();
         }
@@ -1622,6 +1647,90 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(basic.payload()).expect("basic");
         assert!(value["features"].as_object().expect("counts").is_empty());
     }
+    #[test]
+    fn telemetry_off_prepares_nothing_after_the_disclosure_is_dismissed() {
+        let (mut scheduler, audit, _) = configured();
+        scheduler.set_level(Level::Off, now()).expect("off");
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+
+        for time in [now(), now() + chrono::Duration::days(8)] {
+            assert!(matches!(
+                scheduler.prepare(time, "en").expect("prepare"),
+                Preparation::Skipped(SkipReason::NotDue)
+            ));
+        }
+
+        assert!(scheduler.state().pending().is_empty());
+        assert!(scheduler.usage_source(now()).expect("off").is_none());
+        let events = audit
+            .query_extended(&dbflux_audit::query::AuditQueryFilter::default())
+            .expect("audit");
+        assert!(events.is_empty(), "Off records no delivery attempt");
+    }
+
+    #[test]
+    fn telemetry_minimal_default_sends_one_ping_and_never_counts_usage() {
+        let (mut scheduler, audit, _) = configured();
+        assert_eq!(scheduler.state().level(), Level::Minimal);
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        assert!(scheduler.usage_source(now()).expect("minimal").is_none());
+
+        let ping = job(&mut scheduler, now());
+        let payload: serde_json::Value = serde_json::from_str(ping.payload()).expect("payload");
+        assert_eq!(payload["event"], "ping");
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ping");
+
+        assert!(matches!(
+            scheduler
+                .prepare(now() + chrono::Duration::days(8), "en")
+                .expect("no weekly report"),
+            Preparation::Skipped(SkipReason::NotDue)
+        ));
+        let report = last_report(&audit).expect("lookup").expect("report");
+        assert_eq!(report.level.as_deref(), Some("minimal"));
+    }
+
+    #[test]
+    fn telemetry_switching_to_off_cancels_a_queued_ping() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        let queued = job(&mut scheduler, now());
+
+        scheduler.set_level(Level::Off, now()).expect("off");
+
+        assert!(scheduler.state().pending().is_empty());
+        let completion = queued.attempt_with(now(), |_| panic!("cancelled ping must not dispatch"));
+        assert_eq!(completion.code(), "cancelled");
+        assert_eq!(
+            scheduler.complete(completion, now()).expect("stale"),
+            CompletionDisposition::Stale
+        );
+        assert!(matches!(
+            scheduler.prepare(now(), "en").expect("off"),
+            Preparation::Skipped(SkipReason::NotDue)
+        ));
+    }
+
+    #[test]
+    fn telemetry_switching_basic_to_minimal_cancels_only_the_queued_report() {
+        let (mut scheduler, _, _) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        scheduler.set_level(Level::Basic, now()).expect("basic");
+        let ping = job(&mut scheduler, now());
+        scheduler
+            .complete(acknowledged(&ping), now())
+            .expect("ping");
+        let report = job(&mut scheduler, now());
+
+        scheduler.set_level(Level::Minimal, now()).expect("minimal");
+
+        assert_eq!(report.phase.load(Ordering::SeqCst), CANCELLED);
+        assert!(scheduler.state().pending().is_empty());
+        assert!(scheduler.usage_source(now()).expect("minimal").is_none());
+    }
+
     #[test]
     fn telemetry_off_and_reset_allow_bounded_inflight_ack_without_stale_write() {
         for reset in [false, true] {

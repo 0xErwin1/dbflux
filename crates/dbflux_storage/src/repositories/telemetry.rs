@@ -242,6 +242,38 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_rows_stored_with_off_or_basic_still_load_with_their_level() {
+        for (stored, level, queued) in [("Off", Level::Off, 0), ("Basic", Level::Basic, 2)] {
+            let connection = rusqlite::Connection::open_in_memory().expect("scratch database");
+            MigrationRegistry::new()
+                .run_all(&connection)
+                .expect("migrate");
+            let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+            let initial = repository
+                .update(clock(), |state| {
+                    state.dismiss_disclosure();
+                    Ok(())
+                })
+                .expect("new row");
+            assert_eq!(initial.level(), Level::Minimal);
+
+            let mut row = serde_json::to_value(&initial).expect("state JSON");
+            row["level"] = stored.into();
+            repository
+                .connection
+                .execute(
+                    "UPDATE cfg_telemetry SET state_json = ?1 WHERE id = 1",
+                    [row.to_string()],
+                )
+                .expect("row written by an earlier build");
+
+            let loaded = repository.update(clock(), queue).expect("load stored row");
+            assert_eq!(loaded.level(), level, "{stored}");
+            assert_eq!(loaded.pending().len(), queued, "{stored}");
+        }
+    }
+
+    #[test]
     fn telemetry_racing_initialization_and_increments_are_serialized() {
         let directory = tempfile::tempdir().expect("scratch directory");
         let path = directory.path().join("telemetry.sqlite");

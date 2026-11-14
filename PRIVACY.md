@@ -1,8 +1,9 @@
 # Privacy Policy
 
-DBFlux is a local-first desktop application. Optional telemetry can send a
-pseudonymous installation/build ping and, with a separate Basic opt-in,
-aggregate usage counts. It never sends person identifiers, queries, results or
+DBFlux is a local-first desktop application. Optional telemetry has three
+levels: Off sends nothing, Minimal (the default) can send a pseudonymous
+installation/build ping, and Basic, a separate opt-in, adds aggregate usage
+counts. It never sends person identifiers, queries, results or
 connection metadata. The project website sets no cookies and loads no third-party
 scripts. This document describes those boundaries and the infrastructure
 providers that see traffic on the way to you.
@@ -11,9 +12,10 @@ providers that see traffic on the way to you.
 
 1. Database traffic goes directly to the servers you configure, with only what
    is needed to run the queries you ask for; optional telemetry is separate.
-2. Telemetry exists but is optional and off by default. Delivery needs an
-   explicitly configured endpoint, which no shipped build has, so nothing is
-   sent by default. It sends no queries, results, credentials, file paths, or
+2. Telemetry has three levels: Off, Minimal and Basic. Minimal is the default
+   and Off sends nothing. Delivery needs an explicitly configured endpoint,
+   which no shipped build has, so nothing is sent by default at any level. It
+   sends no queries, results, credentials, file paths, or
    connection metadata — ever. Details are in [Telemetry](#telemetry-optional).
 3. There is no crash reporting, no usage analytics beyond the telemetry above,
    and no account.
@@ -27,7 +29,7 @@ providers that see traffic on the way to you.
 
 | Question | Answer |
 |----------|--------|
-| Does DBFlux send usage data anywhere? | Only after you have dismissed the welcome disclosure and an endpoint is configured, which no shipped build has. Usage statistics (Basic) are a separate opt-in. See [Telemetry](#telemetry-optional). |
+| Does DBFlux send usage data anywhere? | Only after you have dismissed the welcome disclosure and an endpoint is configured, which no shipped build has. The default level, Minimal, sends a build ping and no usage data; usage statistics (Basic) are a separate opt-in, and Off sends nothing. See [Telemetry](#telemetry-optional). |
 | Does it check for updates? | No. Updates are found on the GitHub releases page. |
 | What network connections does it open? | The ones you configure: database servers, SSH tunnels, proxies, cloud APIs, and an optional telemetry endpoint under the conditions below. |
 | Where does my data live? | On your machine, in one SQLite file plus the operating system keyring for secrets. |
@@ -51,12 +53,14 @@ configured (no shipped build has one, so delivery is unavailable by default)
 and you have actually dismissed the visibly presented welcome disclosure.
 Hiding it programmatically is not acknowledgement. Dismissing the disclosure is
 not a Basic opt-in: the usage-statistics level is a separate choice, and with
-no endpoint configured nothing is delivered either way.
+no endpoint configured nothing is delivered either way. Closing the welcome
+dialog without changing the selection keeps Minimal.
 
 | Level | What it sends |
 |-------|---------------|
-| Off (default) | At most one minimal version ping per installation and build: OS, architecture, app version and channel, and a random identifier. |
-| Basic (opt-in) | Adds a weekly report: OS, system language (not the UI language), country (`ZZ` when unknown), and bounded counts of supported successful operations in the six categories below. |
+| Off | Nothing: no ping and no usage report. Nothing is queued, and choosing Off clears every pending delivery and the usage counters. |
+| Minimal (default) | At most one version ping per installation and build: OS, architecture, app version and channel, and a random identifier. No system language, country or usage counts. |
+| Basic (opt-in) | Minimal plus a weekly report: OS, system language (not the UI language), country (`ZZ` when unknown), and bounded counts of supported successful operations in the six categories below. |
 
 #### Which operations count
 
@@ -113,11 +117,13 @@ Facts that do not change with the level:
   stay acknowledged.
 
 The level and the reports live in Settings › Updates & privacy. The staged
-level applies when you save; resetting to defaults stages Off without
+level applies when you save; resetting to defaults stages Minimal without
 touching the installation id. Choosing Basic or saving does not promise an
-immediate network report. Off clears pending Basic reports and counters;
-acknowledging a sent snapshot preserves newer increments. Reset or rotation
-invalidates old in-flight usage work while preserving acknowledged-build history.
+immediate network report. Leaving Basic clears the pending Basic report and
+the counters, and Off also clears a pending ping; a delivery already handed to
+the network may still complete. Acknowledging a sent snapshot preserves newer
+increments. Reset or rotation invalidates old in-flight usage work while
+preserving acknowledged-build history.
 
 ## Your data on this machine
 

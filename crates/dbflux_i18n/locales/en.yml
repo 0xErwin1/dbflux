@@ -4794,14 +4794,15 @@ updates:
     usage_heading: Usage statistics
     usage_level: Level
     level_off: "Off"
+    level_minimal: "Minimal"
     level_basic: "Basic"
-    level_hint: "Off sends nothing about your usage. Delivery needs a configured endpoint and is unavailable by default."
+    level_hint: "Off sends nothing. Minimal, the default, sends one ping per build. Basic adds a weekly usage report. Delivery needs a configured endpoint and is unavailable by default."
     what_is_sent: What is sent
     collected_build: "Build: version, channel, OS, architecture"
     collected_language: "System language and country, weekly"
     collected_counts: "Feature counts (queries, dashboards, scripts, …)"
     collected_header: Collected
-    collected_minimal: Minimal ping
+    collected_minimal: Minimal
     collected_basic: Basic
     collected_yes: "✓"
     collected_no: "—"
@@ -4818,6 +4819,7 @@ updates:
     report_load_failed: Could not load the last report.
     last_sent: "Last sent %{when} · %{level} · %{size}"
     level_off_display: "off"
+    level_minimal_display: minimal
     level_basic_display: basic
     view_report: View last report
     open_in_audit: Open in Audit
@@ -4863,12 +4865,14 @@ updates:
     tagline: A keyboard-first client for SQL, documents, key-value, time series and object storage.
     telemetry_save_failed: Could not save the telemetry disclosure acknowledgement.
     telemetry_heading: Usage statistics
-    telemetry_helper: "Helps guide development. Statistics stay private."
+    telemetry_helper: "Helps guide development. Minimal is the default."
     telemetry_off: "Off"
-    telemetry_off_description: "One build ping: version, OS, architecture and rotating ID. No usage data."
+    telemetry_off_description: "Nothing is sent."
+    telemetry_minimal: "Minimal"
+    telemetry_minimal_description: "Ping per build: version, channel, OS, architecture, rotating ID."
     telemetry_basic: "Basic"
-    telemetry_basic_description: "Weekly system language, country and bounded success counts: queries, builder, dashboards, scripts, supported MCP and schema."
-    telemetry_privacy: "Pseudonymous rotating ID. Never queries, results, credentials, paths or connection metadata. Full reports in local Audit. Only after Continue with a configured collector; otherwise nothing is sent."
+    telemetry_basic_description: "Minimal plus a weekly report: language, country and feature counts."
+    telemetry_privacy: "Pseudonymous rotating ID. Never queries, results, credentials, paths or connection metadata. Full reports in local Audit. Sent only after you choose Get started and with a configured collector; otherwise nothing is sent."
     whats_new: What is new
     updates: Updates
     notify: Tell me when a new version is out

@@ -1,4 +1,6 @@
 use crate::keymap::{Command, ContextId};
+#[cfg(feature = "telemetry")]
+use dbflux_app::telemetry::TelemetryLevel;
 use dbflux_app::updates::{self, ChangelogRelease, SectionKind, changelog};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
@@ -49,16 +51,22 @@ const BADGE_FILL_OPACITY: f32 = 0.12;
 /// Element id of the scrolling release highlights.
 const HIGHLIGHTS_ID: &str = "welcome-whats-new-list";
 
-/// Roving index of the two telemetry level choices (0 = Off, 1 = Basic).
+/// Telemetry levels in card order; the roving index points into this list.
 #[cfg(feature = "telemetry")]
-const TELEMETRY_OFF: usize = 0;
+const TELEMETRY_LEVELS: [TelemetryLevel; 3] = [
+    TelemetryLevel::Off,
+    TelemetryLevel::Minimal,
+    TelemetryLevel::Basic,
+];
+
+/// The level shown as selected while the saved one is unavailable.
 #[cfg(feature = "telemetry")]
-const TELEMETRY_BASIC: usize = 1;
+const DEFAULT_TELEMETRY_LEVEL: TelemetryLevel = TelemetryLevel::Minimal;
 
 /// Padding of the telemetry choice cards.
 #[cfg(feature = "telemetry")]
 const TELEMETRY_CARD_PADDING: Pixels = px(8.0);
-/// Gap between the two telemetry choice cards.
+/// Gap between the telemetry choice cards.
 #[cfg(feature = "telemetry")]
 const TELEMETRY_CARD_GAP: Pixels = Spacing::SM;
 /// Gap inside a telemetry card between label and description.
@@ -125,7 +133,7 @@ pub struct WelcomeDialog {
     visible: bool,
     #[cfg(feature = "telemetry")]
     disclosure_rendered: bool,
-    /// Roving choice of the two telemetry level cards; Left and Right move
+    /// Roving choice of the three telemetry level cards; Left and Right move
     /// it (and select), clicks select directly.
     #[cfg(feature = "telemetry")]
     telemetry_roving: usize,
@@ -142,7 +150,7 @@ impl WelcomeDialog {
             #[cfg(feature = "telemetry")]
             disclosure_rendered: false,
             #[cfg(feature = "telemetry")]
-            telemetry_roving: TELEMETRY_OFF,
+            telemetry_roving: telemetry_level_index(DEFAULT_TELEMETRY_LEVEL),
             release: None,
             focus: ModalFocus::new(cx),
             highlights_scroll: ScrollHandle::new(),
@@ -166,6 +174,7 @@ impl WelcomeDialog {
         #[cfg(feature = "telemetry")]
         {
             self.disclosure_rendered = false;
+            self.telemetry_roving = telemetry_level_index(self.saved_telemetry_level(cx));
         }
         self.focus.focus_on_next_render();
         cx.notify();
@@ -358,7 +367,7 @@ impl WelcomeDialog {
             .children(self.render_telemetry_block(cx))
     }
 
-    /// Heading, the two level cards and the privacy summary. `None` without
+    /// Heading, the three level cards and the privacy summary. `None` without
     /// the optional telemetry feature.
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     fn render_telemetry_block(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -424,57 +433,64 @@ impl WelcomeDialog {
         None
     }
 
-    /// The Off / Basic level cards. Selecting one persists the level
-    /// immediately; it never prepares, enqueues or acknowledges a delivery,
-    /// and it never dismisses the disclosure.
+    /// The saved level, or the default one while telemetry is unavailable.
+    #[cfg(feature = "telemetry")]
+    fn saved_telemetry_level(&self, cx: &App) -> TelemetryLevel {
+        self.app_state
+            .read(cx)
+            .telemetry_level()
+            .unwrap_or(DEFAULT_TELEMETRY_LEVEL)
+    }
+
+    /// The Off / Minimal / Basic level cards, as three equal columns.
+    /// Selecting one persists the level immediately; it never prepares,
+    /// enqueues or acknowledges a delivery, and it never dismisses the
+    /// disclosure.
     #[cfg(feature = "telemetry")]
     fn render_telemetry_cards(&mut self, cx: &mut Context<Self>) -> Div {
-        let basic_selected = self
-            .app_state
-            .read(cx)
-            .telemetry_basic_level()
-            .unwrap_or(false);
+        let selected = self.saved_telemetry_level(cx);
 
-        let off_card = self.telemetry_card(
-            "welcome-telemetry-off",
-            TELEMETRY_OFF,
-            dbflux_i18n::t!("updates.welcome.telemetry_off"),
-            dbflux_i18n::t!("updates.welcome.telemetry_off_description"),
-            !basic_selected,
-            cx,
-        );
-        let basic_card = self.telemetry_card(
-            "welcome-telemetry-basic",
-            TELEMETRY_BASIC,
-            dbflux_i18n::t!("updates.welcome.telemetry_basic"),
-            dbflux_i18n::t!("updates.welcome.telemetry_basic_description"),
-            basic_selected,
-            cx,
-        );
+        let cards = TELEMETRY_LEVELS.map(|level| self.telemetry_card(level, level == selected, cx));
 
         div()
             .key_context("FormNavigation")
             .flex()
             .gap(TELEMETRY_CARD_GAP)
-            .child(off_card)
-            .child(basic_card)
+            .children(cards)
     }
 
     #[cfg(feature = "telemetry")]
     fn telemetry_card(
         &self,
-        id: &'static str,
-        index: usize,
-        label: String,
-        description: String,
+        level: TelemetryLevel,
         selected: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = cx.theme();
         let tint = ChromeColors::tint(theme);
         let border = if selected { tint } else { theme.border };
-        let is_roving = self.telemetry_roving == index;
-        let basic = index == TELEMETRY_BASIC;
+        let is_roving = self.telemetry_roving == telemetry_level_index(level);
+
+        let (id, icon, label, description) = match level {
+            TelemetryLevel::Off => (
+                "welcome-telemetry-off",
+                AppIcon::EyeOff,
+                dbflux_i18n::t!("updates.welcome.telemetry_off"),
+                dbflux_i18n::t!("updates.welcome.telemetry_off_description"),
+            ),
+            TelemetryLevel::Minimal => (
+                "welcome-telemetry-minimal",
+                AppIcon::Tag,
+                dbflux_i18n::t!("updates.welcome.telemetry_minimal"),
+                dbflux_i18n::t!("updates.welcome.telemetry_minimal_description"),
+            ),
+            TelemetryLevel::Basic => (
+                "welcome-telemetry-basic",
+                AppIcon::ChartNoAxesColumn,
+                dbflux_i18n::t!("updates.welcome.telemetry_basic"),
+                dbflux_i18n::t!("updates.welcome.telemetry_basic_description"),
+            ),
+        };
 
         div()
             .id(id)
@@ -506,7 +522,7 @@ impl WelcomeDialog {
             )
             .when(is_roving, |card| card.child(focus_underline(tint)))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.select_telemetry_level(basic, cx);
+                this.select_telemetry_level(level, cx);
             }))
             .child(
                 div()
@@ -521,15 +537,7 @@ impl WelcomeDialog {
                             .border_color(border)
                             .when(selected, |dot| dot.bg(tint)),
                     )
-                    .child(
-                        Icon::new(if basic {
-                            AppIcon::ChartNoAxesColumn
-                        } else {
-                            AppIcon::EyeOff
-                        })
-                        .size(px(12.0))
-                        .color(tint),
-                    )
+                    .child(Icon::new(icon).size(px(12.0)).color(tint))
                     .child(Text::label(label).font_size(px(11.0))),
             )
             .child(
@@ -543,14 +551,11 @@ impl WelcomeDialog {
     /// `TelemetryState::schedule` blocks every queue until the disclosure is
     /// dismissed, so this cannot send anything before the user acknowledges.
     #[cfg(feature = "telemetry")]
-    fn select_telemetry_level(&mut self, basic: bool, cx: &mut Context<Self>) {
-        self.telemetry_roving = if basic {
-            TELEMETRY_BASIC
-        } else {
-            TELEMETRY_OFF
-        };
+    fn select_telemetry_level(&mut self, level: TelemetryLevel, cx: &mut Context<Self>) {
+        self.telemetry_roving = telemetry_level_index(level);
+
         let result = self.app_state.update(cx, |state, _| {
-            state.set_telemetry_basic(basic, dbflux_core::chrono::Utc::now())
+            state.set_telemetry_level(level, dbflux_core::chrono::Utc::now())
         });
         if let Err(_error) = result {
             report_error(
@@ -566,9 +571,12 @@ impl WelcomeDialog {
 
     #[cfg(feature = "telemetry")]
     fn step_telemetry_choice(&mut self, step: isize, cx: &mut Context<Self>) {
-        let target = (self.telemetry_roving as isize + step).clamp(0, 1) as usize;
-        if target != self.telemetry_roving {
-            self.select_telemetry_level(target == TELEMETRY_BASIC, cx);
+        let target = self.telemetry_roving.saturating_add_signed(step);
+
+        if target != self.telemetry_roving
+            && let Some(level) = TELEMETRY_LEVELS.get(target).copied()
+        {
+            self.select_telemetry_level(level, cx);
         }
     }
 
@@ -610,6 +618,16 @@ impl WelcomeDialog {
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
+    }
+}
+
+/// Position of a telemetry level in the card row.
+#[cfg(feature = "telemetry")]
+fn telemetry_level_index(level: TelemetryLevel) -> usize {
+    match level {
+        TelemetryLevel::Off => 0,
+        TelemetryLevel::Minimal => 1,
+        TelemetryLevel::Basic => 2,
     }
 }
 
@@ -734,10 +752,12 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use crate::keymap::{Command, ContextId};
     #[cfg(feature = "telemetry")]
+    use dbflux_app::telemetry::TelemetryLevel;
+    #[cfg(feature = "telemetry")]
     use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
     use gpui::{TestAppContext, px, size};
 
-    /// Every control of the welcome dialog, including the two telemetry
+    /// Every control of the welcome dialog, including the three telemetry
     /// level cards, with the dialog chrome.
 
     #[gpui::test]
@@ -844,8 +864,8 @@ mod tests {
     fn telemetry_level(
         app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
         window: &mut gpui::VisualTestContext,
-    ) -> Option<bool> {
-        window.update(|_, cx| app_state.read(cx).telemetry_basic_level())
+    ) -> Option<TelemetryLevel> {
+        window.update(|_, cx| app_state.read(cx).telemetry_level())
     }
 
     /// Initializes the optional telemetry module on the test app state with
@@ -882,7 +902,10 @@ mod tests {
         window.simulate_keystrokes("right");
         window.run_until_parked();
 
-        assert_eq!(telemetry_level(&app_state, window), Some(true));
+        assert_eq!(
+            telemetry_level(&app_state, window),
+            Some(TelemetryLevel::Basic)
+        );
         window.update(|_, cx| {
             let scheduler = app_state.read(cx).telemetry().expect("scheduler");
             assert!(scheduler.state().pending().is_empty(), "no queue");
@@ -918,7 +941,10 @@ mod tests {
         window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.hide(cx)));
         window.run_until_parked();
         assert_eq!(acknowledgements.get(), 0);
-        assert_eq!(telemetry_level(&app_state, window), Some(true));
+        assert_eq!(
+            telemetry_level(&app_state, window),
+            Some(TelemetryLevel::Basic)
+        );
         window.update(|_, cx| {
             let scheduler = app_state.read(cx).telemetry().expect("scheduler");
             assert!(scheduler.state().pending().is_empty());
@@ -947,21 +973,18 @@ mod tests {
         window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.open(cx)));
         window.run_until_parked();
 
-        window.simulate_keystrokes("right");
-        window.run_until_parked();
-        assert_eq!(
-            telemetry_level(&app_state, window),
-            Some(true),
-            "Right picks Basic"
-        );
-
-        window.simulate_keystrokes("left");
-        window.run_until_parked();
-        assert_eq!(
-            telemetry_level(&app_state, window),
-            Some(false),
-            "Left picks Off"
-        );
+        for (key, expected) in [
+            ("right", TelemetryLevel::Basic),
+            ("right", TelemetryLevel::Basic),
+            ("left", TelemetryLevel::Minimal),
+            ("left", TelemetryLevel::Off),
+            ("left", TelemetryLevel::Off),
+            ("right", TelemetryLevel::Minimal),
+        ] {
+            window.simulate_keystrokes(key);
+            window.run_until_parked();
+            assert_eq!(telemetry_level(&app_state, window), Some(expected), "{key}");
+        }
         assert_eq!(acknowledgements.get(), 0, "stepping never acknowledges");
 
         // Enter remains the modal confirm: Get started closes and acks once.
@@ -969,6 +992,68 @@ mod tests {
         window.run_until_parked();
         assert_eq!(acknowledgements.get(), 1);
         assert!(!window.update(|_, cx| dialog.read(cx).is_visible()));
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn closing_without_changing_the_selection_keeps_minimal(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        initialize_telemetry(&app_state, cx);
+        let state_for_view = app_state.clone();
+        let (dialog, window) =
+            cx.add_window_view(move |_, cx| WelcomeDialog::new(state_for_view, cx));
+        let acknowledgements = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = window.update(|_, cx| {
+            let acknowledgements = acknowledgements.clone();
+            cx.subscribe(
+                &dialog,
+                move |_, _: &super::TelemetryDisclosureDismissed, _| {
+                    acknowledgements.set(acknowledgements.get() + 1);
+                },
+            )
+        });
+        window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.open(cx)));
+        window.run_until_parked();
+        assert_eq!(
+            telemetry_level(&app_state, window),
+            Some(TelemetryLevel::Minimal)
+        );
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+
+        assert_eq!(acknowledgements.get(), 1);
+        assert_eq!(
+            telemetry_level(&app_state, window),
+            Some(TelemetryLevel::Minimal)
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn the_roving_choice_starts_at_the_saved_level(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        initialize_telemetry(&app_state, cx);
+        cx.update(|cx| {
+            app_state.update(cx, |state, _| {
+                state.set_telemetry_level(TelemetryLevel::Off, dbflux_core::chrono::Utc::now())
+            })
+        })
+        .expect("saved off");
+        let state_for_view = app_state.clone();
+        let (dialog, window) =
+            cx.add_window_view(move |_, cx| WelcomeDialog::new(state_for_view, cx));
+        window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.open(cx)));
+        window.run_until_parked();
+
+        window.simulate_keystrokes("right");
+        window.run_until_parked();
+
+        assert_eq!(
+            telemetry_level(&app_state, window),
+            Some(TelemetryLevel::Minimal),
+            "Right from the saved Off picks Minimal"
+        );
     }
 
     /// The workspace mounts the dialog as a flow sibling after the shell.
@@ -1064,8 +1149,26 @@ mod tests {
                 "the modal host must not spill below the window, got {host_bounds:?} in {window_size:?}"
             );
 
-            for id in ["welcome-telemetry-off", "welcome-telemetry-basic"] {
-                let bounds = window.debug_bounds(id).expect("card geometry is painted");
+            let card_ids = [
+                "welcome-telemetry-off",
+                "welcome-telemetry-minimal",
+                "welcome-telemetry-basic",
+            ];
+            let card_bounds =
+                card_ids.map(|id| window.debug_bounds(id).expect("card geometry is painted"));
+            for pair in card_bounds.windows(2) {
+                assert!(
+                    (pair[0].size.width - pair[1].size.width).abs() <= px(1.0),
+                    "the level cards are equal columns: {card_bounds:?}"
+                );
+                assert_eq!(pair[0].origin.y, pair[1].origin.y, "{card_bounds:?}");
+                assert!(
+                    pair[0].origin.x + pair[0].size.width <= pair[1].origin.x,
+                    "the level cards sit side by side: {card_bounds:?}"
+                );
+            }
+
+            for (id, bounds) in card_ids.into_iter().zip(card_bounds) {
                 assert!(
                     bounds.size.height <= px(100.0),
                     "compact card {id}: {bounds:?}"
@@ -1121,7 +1224,7 @@ mod tests {
                 "privacy geometry: box={privacy:?}, text={text:?}, icon={icon:?}; footer={footer:?}"
             );
 
-            // Get started and the two level cards sit inside the host's bounds:
+            // Get started and the three level cards sit inside the host's bounds:
             // real geometry, not a visibility flag.
             let capture = FrameCapture::observe(window);
             let frame = capture.frame(window);
@@ -1134,6 +1237,7 @@ mod tests {
             for required in [
                 "welcome-get-started",
                 "welcome-telemetry-off",
+                "welcome-telemetry-minimal",
                 "welcome-telemetry-basic",
             ] {
                 assert!(
@@ -1163,7 +1267,14 @@ mod tests {
             "끔과 보내는 것이 같습니다",
             "「基本」与「关闭」发送的内容相同",
         ];
-        const MINIMAL_PING: [&str; 4] = ["ping", "aviso mínimo", "버전 핑", "版本通知"];
+        const MINIMAL_PING: [&str; 4] = ["Ping", "Aviso", "핑", "通知"];
+        const NOTHING_SENT: [&str; 4] = [
+            "Nothing is sent",
+            "No se envía nada",
+            "아무것도 전송하지 않습니다",
+            "不发送任何内容",
+        ];
+        const GET_STARTED: [&str; 4] = ["Get started", "Empezar", "시작하기", "开始使用"];
 
         for (index, locale) in ["en", "es", "ko", "zh_Hans"].iter().enumerate() {
             let basic = dbflux_i18n::t!(
@@ -1178,8 +1289,25 @@ mod tests {
 
             let off = dbflux_i18n::t!("updates.welcome.telemetry_off_description", locale = locale);
             assert!(
-                off.contains(MINIMAL_PING[index]),
-                "{locale}: Off must describe the minimal build ping, got: {off}"
+                off.contains(NOTHING_SENT[index]),
+                "{locale}: Off must say that nothing is sent, got: {off}"
+            );
+
+            let minimal = dbflux_i18n::t!(
+                "updates.welcome.telemetry_minimal_description",
+                locale = locale
+            );
+            assert!(
+                minimal.contains(MINIMAL_PING[index]),
+                "{locale}: Minimal must describe the build ping, got: {minimal}"
+            );
+
+            let button = dbflux_i18n::t!("updates.welcome.get_started", locale = locale);
+            assert_eq!(button, GET_STARTED[index]);
+            let privacy = dbflux_i18n::t!("updates.welcome.telemetry_privacy", locale = locale);
+            assert!(
+                privacy.contains(&button),
+                "{locale}: the privacy text must name the real button, got: {privacy}"
             );
         }
     }
@@ -1202,6 +1330,8 @@ mod tests {
             "updates.welcome.telemetry_heading",
             "updates.welcome.telemetry_off",
             "updates.welcome.telemetry_off_description",
+            "updates.welcome.telemetry_minimal",
+            "updates.welcome.telemetry_minimal_description",
             "updates.welcome.telemetry_basic",
             "updates.welcome.telemetry_basic_description",
             "updates.welcome.telemetry_privacy",
