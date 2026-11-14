@@ -145,7 +145,7 @@ HTML, Markdown, XML 파일은 읽기용이며 가져오기 대상이 아닙니�
 
 - **구분자**(CSV 전용): 쉼표, 세미콜론, 탭 또는 파이프.
 - **인코딩**(CSV 전용): UTF-8, UTF-8(BOM 포함), UTF-16LE(BOM 포함) 또는 Windows-1252. Windows-1252로 표현할 수 없는 문자는 대체되지 않고, 그 문자를 알려 주는 오류와 함께 내보내기가 중단됩니다.
-- **NULL 텍스트**(CSV, HTML, Markdown): NULL에 기록할 텍스트이며 기본값은 빈 문자열입니다. JSON과 JSON Lines는 항상 `null`을 기록하고, XML은 `null="true"`로 NULL을 표시합니다.
+- **NULL 텍스트**(CSV, HTML, Markdown): NULL에 기록할 텍스트이며 기본값은 빈 문자열입니다. JSON과 JSON Lines는 항상 `null`을 기록하고, XML은 `null="true"`로 NULL을 표시합니다. 비어 있지 않은 NULL 텍스트와 텍스트가 같은 값은 가져올 때 NULL로 읽히므로, 내보내기는 그 값과 열을 알려 주는 오류와 함께 중단됩니다. 다른 NULL 텍스트를 고르세요.
 - **날짜**(모든 형식): RFC 3339(기본값), UTC 기준 `YYYY-MM-DD HH:MM:SS`, 또는 epoch 초이며 JSON과 JSON Lines는 epoch를 숫자로 기록합니다. 날짜(date)는 앞의 두 형식에서는 `YYYY-MM-DD`로, epoch에서는 그날 자정(UTC)으로 기록하고, 시간(time)은 `YYYY-MM-DD HH:MM:SS`에서는 `HH:MM:SS`로, epoch에서는 자정 이후의 초로 기록합니다.
 
 기본값은 이전 버전이 기록하던 것과 정확히 같습니다. 매니페스트에는 파일을 만든 옵션이 기록되므로 그 폴더를 가져올 때 같은 방식으로 읽으며, 옵션이 없는 매니페스트는 기본값을 뜻합니다. **모든 행을 파일로 내보내기**는 항상 기본값을 사용합니다.

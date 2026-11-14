@@ -164,18 +164,49 @@ fn value_from_text(text: &str, type_name: Option<&str>, date_format: DateFormat)
 /// column's type name. A timestamp written as RFC 3339 is also accepted under
 /// any format, so files from before the option existed still read.
 fn decode_temporal(text: &str, type_name: Option<&str>, date_format: DateFormat) -> Option<Value> {
-    let type_lower = type_name.unwrap_or_default().to_ascii_lowercase();
+    match temporal_kind(type_name?) {
+        Some(TemporalKind::Timestamp) => decode_timestamp(text, date_format).map(Value::DateTime),
+        Some(TemporalKind::Date) => decode_date(text, date_format).map(Value::Date),
+        Some(TemporalKind::Time) => decode_time(text, date_format).map(Value::Time),
+        None => None,
+    }
+}
 
-    if type_lower.contains("timestamp") || type_lower.contains("datetime") {
-        return decode_timestamp(text, date_format).map(Value::DateTime);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TemporalKind {
+    Timestamp,
+    Date,
+    Time,
+}
+
+/// Classifies a driver type name as a timestamp, date or time. The base name
+/// decides, so `timestamp with time zone`, `timestamptz`, `time(3)`,
+/// `datetime2(3)` and `Nullable(DateTime)` match while a custom type such as
+/// `runtime` does not.
+fn temporal_kind(type_name: &str) -> Option<TemporalKind> {
+    let lowered = type_name.to_ascii_lowercase();
+    let mut base = lowered.trim();
+    while let Some(inner) = base
+        .strip_prefix("nullable(")
+        .or_else(|| base.strip_prefix("lowcardinality("))
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        base = inner.trim();
     }
-    if type_lower == "date" {
-        return decode_date(text, date_format).map(Value::Date);
+    let word = base
+        .split(|character: char| character == '(' || character.is_whitespace())
+        .next()
+        .unwrap_or_default();
+
+    if word.starts_with("timestamp") || word.starts_with("datetime") || word == "smalldatetime" {
+        Some(TemporalKind::Timestamp)
+    } else if matches!(word, "date" | "date32") {
+        Some(TemporalKind::Date)
+    } else if matches!(word, "time" | "timetz") {
+        Some(TemporalKind::Time)
+    } else {
+        None
     }
-    if type_lower.contains("time") {
-        return decode_time(text, date_format).map(Value::Time);
-    }
-    None
 }
 
 fn decode_timestamp(text: &str, date_format: DateFormat) -> Option<DateTime<Utc>> {
@@ -459,5 +490,80 @@ mod tests {
             ),
             instant
         );
+    }
+
+    #[test]
+    fn a_type_that_only_contains_time_stays_text_under_every_preset() {
+        for date_format in DateFormat::ALL {
+            let options = FormatOptions {
+                date_format,
+                ..FormatOptions::default()
+            };
+            for type_name in [
+                "runtime",
+                "timeline",
+                "update_date_marker",
+                "mytimestampish",
+            ] {
+                assert_eq!(
+                    value_from_csv_field("100", Some(type_name), &options),
+                    Value::Text("100".to_string()),
+                    "{type_name} under {date_format:?}"
+                );
+            }
+            assert_eq!(
+                value_from_json(&serde_json::json!(100), Some("runtime"), date_format),
+                Value::Int(100),
+                "{date_format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn temporal_type_names_with_modifiers_are_recognized() {
+        let instant = Value::DateTime(Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 15).unwrap());
+        let time = Value::Time(NaiveTime::from_hms_opt(10, 30, 15).unwrap());
+        let date = Value::Date(NaiveDate::from_ymd_opt(2026, 7, 7).unwrap());
+        let epoch = epoch_options();
+
+        for type_name in [
+            "timestamp",
+            "TIMESTAMP",
+            "timestamptz",
+            "timestamp with time zone",
+            "timestamp without time zone",
+            "TIMESTAMP(6) WITH TIME ZONE",
+            "datetime",
+            "datetime2",
+            "datetime2(3)",
+            "DateTime64(3)",
+            "Nullable(DateTime)",
+        ] {
+            assert_eq!(
+                value_from_csv_field("1783420215", Some(type_name), &epoch),
+                instant,
+                "{type_name}"
+            );
+        }
+        for type_name in [
+            "time",
+            "time(3)",
+            "time without time zone",
+            "timetz",
+            "TIME WITH TIME ZONE",
+        ] {
+            assert_eq!(
+                value_from_csv_field("37815", Some(type_name), &epoch),
+                time,
+                "{type_name}"
+            );
+        }
+        for type_name in ["date", "DATE", "date32"] {
+            assert_eq!(
+                value_from_csv_field("1783382400", Some(type_name), &epoch),
+                date,
+                "{type_name}"
+            );
+        }
     }
 }

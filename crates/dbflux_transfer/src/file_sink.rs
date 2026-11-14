@@ -753,4 +753,180 @@ mod tests {
         );
         assert_eq!(FileFormat::Csv.applicable_options(&all), all);
     }
+
+    fn pinned_columns() -> Vec<TransferColumn> {
+        ["id", "note", "at", "day", "tm"]
+            .into_iter()
+            .map(column)
+            .collect()
+    }
+
+    fn pinned_rows() -> Vec<Vec<Value>> {
+        use dbflux_core::chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
+        vec![
+            vec![
+                Value::Int(1),
+                Value::Text("café <&>".to_string()),
+                Value::DateTime(Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 15).unwrap()),
+                Value::Date(NaiveDate::from_ymd_opt(2026, 7, 7).unwrap()),
+                Value::Time(NaiveTime::from_hms_milli_opt(10, 30, 15, 250).unwrap()),
+            ],
+            vec![
+                Value::Int(2),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ],
+        ]
+    }
+
+    /// The expected strings are the bytes the writers produced before the
+    /// format options existed.
+    #[test]
+    fn default_options_write_the_pinned_bytes_for_every_format() {
+        let expected = [
+            (
+                FileFormat::Csv,
+                "id,note,at,day,tm\n1,café <&>,2026-07-07T10:30:15+00:00,2026-07-07,10:30:15.250\n2,,,,\n",
+            ),
+            (
+                FileFormat::Html,
+                "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>t</title>\n<style>th, td { white-space: pre-wrap; }</style>\n</head>\n<body>\n<table>\n<thead>\n<tr><th>id</th><th>note</th><th>at</th><th>day</th><th>tm</th></tr>\n</thead>\n<tbody>\n<tr><td>1</td><td>café &lt;&amp;&gt;</td><td>2026-07-07T10:30:15+00:00</td><td>2026-07-07</td><td>10:30:15.250</td></tr>\n<tr><td>2</td><td></td><td></td><td></td><td></td></tr>\n</tbody>\n</table>\n</body>\n</html>\n",
+            ),
+            (
+                FileFormat::Markdown,
+                "| id | note | at | day | tm |\n| --- | --- | --- | --- | --- |\n| 1 | café &lt;&amp;&gt; | 2026-07-07T10:30:15+00:00 | 2026-07-07 | 10:30:15.250 |\n| 2 |  |  |  |  |\n",
+            ),
+            (
+                FileFormat::Xml,
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n<row><field name=\"id\">1</field><field name=\"note\">café &lt;&amp;&gt;</field><field name=\"at\">2026-07-07T10:30:15+00:00</field><field name=\"day\">2026-07-07</field><field name=\"tm\">10:30:15.250</field></row>\n<row><field name=\"id\">2</field><field name=\"note\" null=\"true\"/><field name=\"at\" null=\"true\"/><field name=\"day\" null=\"true\"/><field name=\"tm\" null=\"true\"/></row>\n</rows>\n",
+            ),
+        ];
+
+        for (format, text) in expected {
+            let dir = temp_dir("pinned");
+            let mut sink = FileSink::new(&dir, None, "t", format);
+            sink.begin(&pinned_columns(), TableMappingMode::Existing)
+                .unwrap();
+            sink.write_chunk(&RowChunk(pinned_rows())).unwrap();
+            sink.finish().unwrap();
+            let bytes = std::fs::read(dir.join(format!("t.{}", format.extension()))).unwrap();
+            std::fs::remove_dir_all(&dir).ok();
+            assert_eq!(String::from_utf8(bytes).unwrap(), text, "{format:?}");
+        }
+    }
+
+    /// JSON object key order depends on whether serde_json's `preserve_order`
+    /// is enabled by another crate in the build, so the lines are compared as
+    /// values, not as bytes.
+    #[test]
+    fn default_options_write_the_pinned_json_lines() {
+        let dir = temp_dir("pinned_jsonl");
+        let mut sink = FileSink::new(&dir, None, "t", FileFormat::JsonLines);
+        sink.begin(&pinned_columns(), TableMappingMode::Existing)
+            .unwrap();
+        sink.write_chunk(&RowChunk(pinned_rows())).unwrap();
+        sink.finish().unwrap();
+        let text = std::fs::read_to_string(dir.join("t.jsonl")).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                serde_json::json!({"id": 1, "note": "café <&>", "at": {"$date": "2026-07-07T10:30:15+00:00"}, "day": "2026-07-07", "tm": "10:30:15.250"}),
+                serde_json::json!({"id": 2, "note": null, "at": null, "day": null, "tm": null}),
+            ]
+        );
+        assert!(text.ends_with("}\n") && text.matches('\n').count() == 2);
+        assert!(text.contains("\"at\":{\"$date\":\"2026-07-07T10:30:15+00:00\"}"));
+    }
+
+    fn null_text_options(null_text: &str) -> FormatOptions {
+        FormatOptions {
+            null_text: null_text.to_string(),
+            ..FormatOptions::default()
+        }
+    }
+
+    #[test]
+    fn a_value_equal_to_the_null_text_fails_the_export_in_every_text_format() {
+        for format in [FileFormat::Csv, FileFormat::Html, FileFormat::Markdown] {
+            let text = write_with_options(
+                "marker_text",
+                format,
+                null_text_options("NULL"),
+                vec![vec![Value::Int(1), Value::Text("NULL".to_string())]],
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                text.contains(
+                    "value 'NULL' in column 'note' equals the NULL text; choose a different NULL text"
+                ),
+                "{format:?}: {text}"
+            );
+
+            let number = write_with_options(
+                "marker_number",
+                format,
+                null_text_options("0"),
+                vec![vec![Value::Int(0), Value::Text("x".to_string())]],
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                number.contains(
+                    "value '0' in column 'id' equals the NULL text; choose a different NULL text"
+                ),
+                "{format:?}: {number}"
+            );
+        }
+    }
+
+    #[test]
+    fn values_that_differ_from_the_null_text_still_export() {
+        let rows = vec![vec![Value::Int(1), Value::Text("NULLS".to_string())]];
+        let bytes = write_with_options(
+            "marker_ok",
+            FileFormat::Csv,
+            null_text_options("NULL"),
+            rows,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"id,note\n1,NULLS\n");
+    }
+
+    #[test]
+    fn an_empty_null_text_keeps_null_and_empty_string_as_before() {
+        let rows = vec![
+            vec![Value::Int(1), Value::Text(String::new())],
+            vec![Value::Int(2), Value::Null],
+        ];
+        let bytes = write_with_options(
+            "marker_empty",
+            FileFormat::Csv,
+            FormatOptions::default(),
+            rows,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"id,note\n1,\n2,\n");
+    }
+
+    #[test]
+    fn an_empty_string_is_not_the_null_text_when_another_text_is_chosen() {
+        let rows = vec![vec![Value::Int(1), Value::Text(String::new())]];
+        let bytes = write_with_options(
+            "marker_distinct",
+            FileFormat::Csv,
+            null_text_options("\\N"),
+            rows,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"id,note\n1,\n");
+    }
 }

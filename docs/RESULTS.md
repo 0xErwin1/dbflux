@@ -254,7 +254,9 @@ offers the options a format uses and hides the others:
   an error naming it, instead of being replaced.
 - **NULL text** (CSV, HTML and Markdown): the text written for NULL, empty by
   default. JSON and JSON Lines always write `null`, and XML marks a NULL with
-  `null="true"`.
+  `null="true"`. A value whose text equals a non-empty NULL text would be read
+  back as NULL, so the export stops with an error naming the value and the
+  column; choose another NULL text.
 - **Dates** (every format): RFC 3339 (the default), `YYYY-MM-DD HH:MM:SS` in
   UTC, or epoch seconds, which JSON and JSON Lines write as a number. A date is
   written as `YYYY-MM-DD` under the first two and as its midnight (UTC) under

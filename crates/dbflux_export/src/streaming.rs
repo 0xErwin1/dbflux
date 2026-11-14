@@ -11,7 +11,7 @@
 //! incrementally instead of buffering the whole file — see its own docs.
 
 use crate::ExportError;
-use crate::csv::value_to_field;
+use crate::csv::checked_field;
 use crate::encoding::EncodingWriter;
 use crate::json::row_to_json_object;
 use crate::options::{DateFormat, FormatOptions};
@@ -23,6 +23,7 @@ use std::io::Write;
 pub struct CsvStreamWriter<W: Write> {
     inner: ::csv::Writer<EncodingWriter<W>>,
     options: FormatOptions,
+    column_names: Vec<String>,
 }
 
 impl<W: Write> CsvStreamWriter<W> {
@@ -36,18 +37,24 @@ impl<W: Write> CsvStreamWriter<W> {
         let inner = ::csv::WriterBuilder::new()
             .delimiter(options.delimiter.byte())
             .from_writer(EncodingWriter::new(writer, options.encoding));
-        Self { inner, options }
+        Self {
+            inner,
+            options,
+            column_names: Vec::new(),
+        }
     }
 
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
         let headers: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
         self.inner.write_record(&headers)?;
+        self.column_names = columns.iter().map(|c| c.name.clone()).collect();
         Ok(())
     }
 
     pub fn write_row(&mut self, row: &[Value]) -> Result<(), ExportError> {
-        for value in row {
-            let field = value_to_field(value, &self.options);
+        for (index, value) in row.iter().enumerate() {
+            let column_name = self.column_names.get(index).map_or("", String::as_str);
+            let field = checked_field(value, &self.options, column_name)?;
             self.inner.write_field(&field)?;
         }
         self.inner.write_record(None::<&[u8]>)?;

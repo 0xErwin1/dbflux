@@ -277,7 +277,9 @@ las demás:
   exportación con un error que lo nombra, en lugar de sustituirlo.
 - **Texto para NULL** (CSV, HTML y Markdown): el texto que se escribe para NULL,
   vacío por defecto. JSON y JSON Lines siempre escriben `null`, y XML marca un
-  NULL con `null="true"`.
+  NULL con `null="true"`. Un valor cuyo texto es igual a un texto para NULL no vacío se
+  leería como NULL, así que la exportación se detiene con un error que nombra el
+  valor y la columna; elige otro texto para NULL.
 - **Fechas** (todos los formatos): RFC 3339 (por defecto), `YYYY-MM-DD HH:MM:SS`
   en UTC o segundos epoch, que JSON y JSON Lines escriben como número. Una fecha
   se escribe como `YYYY-MM-DD` con los dos primeros y como su medianoche (UTC)

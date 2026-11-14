@@ -6,7 +6,7 @@
 //! the same rendering CSV uses, escaped for the target format.
 
 use crate::ExportError;
-use crate::csv::value_to_field;
+use crate::csv::{checked_field, value_to_field};
 use crate::options::FormatOptions;
 use dbflux_core::{ColumnMeta, Value};
 use std::io::Write;
@@ -18,6 +18,7 @@ pub struct HtmlStreamWriter<W: Write> {
     writer: W,
     title: String,
     options: FormatOptions,
+    column_names: Vec<String>,
 }
 
 impl<W: Write> HtmlStreamWriter<W> {
@@ -26,6 +27,7 @@ impl<W: Write> HtmlStreamWriter<W> {
             writer,
             title: title.into(),
             options: FormatOptions::default(),
+            column_names: Vec::new(),
         }
     }
 
@@ -36,6 +38,7 @@ impl<W: Write> HtmlStreamWriter<W> {
     }
 
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
+        self.column_names = columns.iter().map(|c| c.name.clone()).collect();
         write!(
             self.writer,
             "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>th, td {{ white-space: pre-wrap; }}</style>\n</head>\n<body>\n<table>\n<thead>\n<tr>",
@@ -50,12 +53,10 @@ impl<W: Write> HtmlStreamWriter<W> {
 
     pub fn write_row(&mut self, row: &[Value]) -> Result<(), ExportError> {
         self.writer.write_all(b"<tr>")?;
-        for value in row {
-            write!(
-                self.writer,
-                "<td>{}</td>",
-                escape_markup(&value_to_field(value, &self.options))
-            )?;
+        for (index, value) in row.iter().enumerate() {
+            let column_name = self.column_names.get(index).map_or("", String::as_str);
+            let field = checked_field(value, &self.options, column_name)?;
+            write!(self.writer, "<td>{}</td>", escape_markup(&field))?;
         }
         self.writer.write_all(b"</tr>\n")?;
         Ok(())
@@ -73,6 +74,7 @@ impl<W: Write> HtmlStreamWriter<W> {
 pub struct MarkdownStreamWriter<W: Write> {
     writer: W,
     options: FormatOptions,
+    column_names: Vec<String>,
 }
 
 impl<W: Write> MarkdownStreamWriter<W> {
@@ -80,6 +82,7 @@ impl<W: Write> MarkdownStreamWriter<W> {
         Self {
             writer,
             options: FormatOptions::default(),
+            column_names: Vec::new(),
         }
     }
 
@@ -90,6 +93,7 @@ impl<W: Write> MarkdownStreamWriter<W> {
     }
 
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
+        self.column_names = columns.iter().map(|c| c.name.clone()).collect();
         let names: Vec<String> = columns
             .iter()
             .map(|column| escape_markdown_cell(&column.name))
@@ -100,10 +104,12 @@ impl<W: Write> MarkdownStreamWriter<W> {
     }
 
     pub fn write_row(&mut self, row: &[Value]) -> Result<(), ExportError> {
-        let cells: Vec<String> = row
-            .iter()
-            .map(|value| escape_markdown_cell(&value_to_field(value, &self.options)))
-            .collect();
+        let mut cells = Vec::with_capacity(row.len());
+        for (index, value) in row.iter().enumerate() {
+            let column_name = self.column_names.get(index).map_or("", String::as_str);
+            let field = checked_field(value, &self.options, column_name)?;
+            cells.push(escape_markdown_cell(&field));
+        }
         self.write_line(&cells)
     }
 

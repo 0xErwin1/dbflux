@@ -586,11 +586,14 @@ impl ExportWizard {
                     div()
                         .w(SEGMENT_SIZE_INPUT_WIDTH)
                         .font_family(dbflux_components::fonts::editor_family(cx))
-                        .child(Input::new(&self.null_text_input).w_full().aria_label(
-                            dbflux_i18n::t!(
-                                "document.export_wizard.format_options.null_text_label"
-                            ),
-                        )),
+                        .child(
+                            Input::new(&self.null_text_input)
+                                .id("export-wizard-null-text")
+                                .w_full()
+                                .aria_label(dbflux_i18n::t!(
+                                    "document.export_wizard.format_options.null_text_label"
+                                )),
+                        ),
                     Some(hint),
                     cx,
                 )
@@ -723,9 +726,14 @@ impl ExportWizard {
                 div()
                     .w(SEGMENT_SIZE_INPUT_WIDTH)
                     .font_family(dbflux_components::fonts::editor_family(cx))
-                    .child(Input::new(&self.segment_size_input).w_full().aria_label(
-                        dbflux_i18n::t!("document.export_wizard.format_options.segment_size_label"),
-                    )),
+                    .child(
+                        Input::new(&self.segment_size_input)
+                            .id("export-wizard-segment-size")
+                            .w_full()
+                            .aria_label(dbflux_i18n::t!(
+                                "document.export_wizard.format_options.segment_size_label"
+                            )),
+                    ),
                 Some(segment_hint),
                 cx,
             ))
