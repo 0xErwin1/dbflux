@@ -547,6 +547,46 @@ pub trait QueryGenerator: Send + Sync {
         Ok(None)
     }
 
+    /// Like [`Self::generate_bulk_insert`], for an exported SQL script that
+    /// replays into an empty copy of the table. `identity_columns` names the
+    /// exported columns the database generates itself; a driver that must be
+    /// told to accept explicit values for them adds that to the statement.
+    /// The default is the plain bulk insert, so import is unaffected.
+    fn generate_bulk_insert_for_script(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        column_types: &[Option<String>],
+        _identity_columns: &[String],
+        rows: &[&[Value]],
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        self.generate_bulk_insert(schema, table, columns, column_types, rows)
+    }
+
+    /// A line written before a table's `INSERT` statements in an exported
+    /// script, when `identity_columns` (the exported columns the database
+    /// generates itself) need one. The default is none.
+    fn script_table_prologue(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+        _identity_columns: &[String],
+    ) -> Option<String> {
+        None
+    }
+
+    /// The line that undoes [`Self::script_table_prologue`], written after the
+    /// table's last statement.
+    fn script_table_epilogue(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+        _identity_columns: &[String],
+    ) -> Option<String> {
+        None
+    }
+
     /// Generate a driver-native `CREATE TABLE` from a same-engine source table's columns.
     ///
     /// The default returns `Ok(None)`, meaning "this generator has no native
@@ -572,11 +612,60 @@ pub trait QueryGenerator: Send + Sync {
 /// ```
 pub struct SqlMutationGenerator {
     dialect: &'static dyn SqlDialect,
+    identity_handling: IdentityHandling,
+}
+
+/// How an exported script lets explicit values into identity columns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IdentityHandling {
+    /// The dialect needs nothing extra.
+    None,
+    /// `INSERT ... OVERRIDING SYSTEM VALUE VALUES ...` (PostgreSQL).
+    OverridingSystemValue,
+    /// `SET IDENTITY_INSERT <table> ON;` / `OFF;` around the table (SQL Server).
+    SetIdentityInsert,
 }
 
 impl SqlMutationGenerator {
     pub const fn new(dialect: &'static dyn SqlDialect) -> Self {
-        Self { dialect }
+        Self {
+            dialect,
+            identity_handling: IdentityHandling::None,
+        }
+    }
+
+    /// A script insert into a table with identity columns carries
+    /// `OVERRIDING SYSTEM VALUE`, so a `GENERATED ALWAYS` column takes the
+    /// exported value.
+    pub const fn overriding_system_value_for_identity(mut self) -> Self {
+        self.identity_handling = IdentityHandling::OverridingSystemValue;
+        self
+    }
+
+    /// A script wraps a table with identity columns in
+    /// `SET IDENTITY_INSERT <table> ON;` and `OFF;`.
+    pub const fn set_identity_insert_for_identity(mut self) -> Self {
+        self.identity_handling = IdentityHandling::SetIdentityInsert;
+        self
+    }
+
+    fn identity_insert_line(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        identity_columns: &[String],
+        state: &str,
+    ) -> Option<String> {
+        if self.identity_handling != IdentityHandling::SetIdentityInsert
+            || identity_columns.is_empty()
+        {
+            return None;
+        }
+
+        Some(format!(
+            "SET IDENTITY_INSERT {} {state};",
+            self.dialect.qualified_table(schema, table)
+        ))
     }
 }
 
@@ -924,6 +1013,57 @@ impl QueryGenerator for SqlMutationGenerator {
                 language: QueryLanguage::Sql,
                 text,
             }))
+    }
+
+    fn generate_bulk_insert_for_script(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        column_types: &[Option<String>],
+        identity_columns: &[String],
+        rows: &[&[Value]],
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        let needs_override = self.identity_handling == IdentityHandling::OverridingSystemValue
+            && columns
+                .iter()
+                .any(|column| identity_columns.contains(column));
+        if !needs_override {
+            return self.generate_bulk_insert(schema, table, columns, column_types, rows);
+        }
+
+        let builder = SqlQueryBuilder::new(self.dialect);
+        Ok(builder
+            .build_bulk_insert_with_clause(
+                schema,
+                table,
+                columns,
+                column_types,
+                Some("OVERRIDING SYSTEM VALUE"),
+                rows,
+            )
+            .map(|text| GeneratedQuery {
+                language: QueryLanguage::Sql,
+                text,
+            }))
+    }
+
+    fn script_table_prologue(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        identity_columns: &[String],
+    ) -> Option<String> {
+        self.identity_insert_line(schema, table, identity_columns, "ON")
+    }
+
+    fn script_table_epilogue(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        identity_columns: &[String],
+    ) -> Option<String> {
+        self.identity_insert_line(schema, table, identity_columns, "OFF")
     }
 
     fn generate_create_table(
@@ -4294,6 +4434,105 @@ mod tests {
             q.sql.contains("HAVING \"total\""),
             "non-MSSQL HAVING must use the alias, got: {}",
             q.sql
+        );
+    }
+
+    fn script_rows() -> Vec<Vec<Value>> {
+        vec![
+            vec![Value::Int(1), Value::Text("a".to_string())],
+            vec![Value::Int(2), Value::Text("b".to_string())],
+        ]
+    }
+
+    fn script_insert(
+        generator: &SqlMutationGenerator,
+        identity: &[&str],
+    ) -> Option<GeneratedQuery> {
+        let rows = script_rows();
+        let refs: Vec<&[Value]> = rows.iter().map(Vec::as_slice).collect();
+        let identity: Vec<String> = identity.iter().map(|name| name.to_string()).collect();
+        generator
+            .generate_bulk_insert_for_script(
+                Some("app"),
+                "users",
+                &["id".to_string(), "name".to_string()],
+                &[None, None],
+                &identity,
+                &refs,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn script_insert_defaults_to_the_bulk_insert_and_adds_no_wrapper() {
+        let generator = SqlMutationGenerator::new(&DIALECT);
+        let rows = script_rows();
+        let refs: Vec<&[Value]> = rows.iter().map(Vec::as_slice).collect();
+        let plain = generator
+            .generate_bulk_insert(
+                Some("app"),
+                "users",
+                &["id".to_string(), "name".to_string()],
+                &[None, None],
+                &refs,
+            )
+            .unwrap();
+
+        assert_eq!(script_insert(&generator, &["id"]), plain);
+        assert_eq!(
+            generator.script_table_prologue(Some("app"), "users", &["id".to_string()]),
+            None
+        );
+        assert_eq!(
+            generator.script_table_epilogue(Some("app"), "users", &["id".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn overriding_system_value_goes_between_the_columns_and_the_values() {
+        let generator = SqlMutationGenerator::new(&DIALECT).overriding_system_value_for_identity();
+
+        let with_identity = script_insert(&generator, &["id"]).unwrap();
+        assert_eq!(
+            with_identity.text,
+            "INSERT INTO \"app\".\"users\" (\"id\", \"name\") OVERRIDING SYSTEM VALUE VALUES (1, 'a'), (2, 'b')"
+        );
+
+        let without_identity = script_insert(&generator, &[]).unwrap();
+        assert!(!without_identity.text.contains("OVERRIDING"));
+        assert_eq!(
+            generator.script_table_prologue(Some("app"), "users", &["id".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn identity_insert_wraps_the_table_and_leaves_the_statement_alone() {
+        let generator = SqlMutationGenerator::new(&DIALECT).set_identity_insert_for_identity();
+        let identity = ["id".to_string()];
+
+        assert_eq!(
+            generator.script_table_prologue(Some("app"), "users", &identity),
+            Some("SET IDENTITY_INSERT \"app\".\"users\" ON;".to_string())
+        );
+        assert_eq!(
+            generator.script_table_epilogue(Some("app"), "users", &identity),
+            Some("SET IDENTITY_INSERT \"app\".\"users\" OFF;".to_string())
+        );
+        assert_eq!(
+            generator.script_table_prologue(Some("app"), "users", &[]),
+            None
+        );
+        assert_eq!(
+            generator.script_table_epilogue(Some("app"), "users", &[]),
+            None
+        );
+        assert!(
+            !script_insert(&generator, &["id"])
+                .unwrap()
+                .text
+                .contains("OVERRIDING")
         );
     }
 }

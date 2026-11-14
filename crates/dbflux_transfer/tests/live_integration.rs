@@ -143,6 +143,104 @@ fn postgres_export_streams_table_to_csv_and_manifest() -> Result<(), DbError> {
     })
 }
 
+/// A SQL export of a `GENERATED ALWAYS AS IDENTITY` table replays into an
+/// empty copy of the table with the original ids.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let boxed_connection = connect_postgres(uri)?;
+        let create = "CREATE TABLE sql_identity (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label TEXT NOT NULL)";
+        boxed_connection.execute(&QueryRequest::new(create))?;
+        boxed_connection.execute(&QueryRequest::new(
+            "INSERT INTO sql_identity (id, label) OVERRIDING SYSTEM VALUE VALUES (10, 'ten'), (20, 'it''s twenty'), (30, 'thirty')",
+        ))?;
+
+        assert_eq!(
+            boxed_connection.identity_columns(Some("public"), "sql_identity")?,
+            vec!["id".to_string()]
+        );
+
+        let table_info =
+            boxed_connection.table_details("postgres", Some("public"), "sql_identity")?;
+        let columns: Vec<TransferColumn> = table_info
+            .columns
+            .expect("table_details must populate columns")
+            .iter()
+            .map(transfer_column)
+            .collect();
+
+        let connection: Arc<dyn Connection> = Arc::from(boxed_connection);
+        let tables = vec![ExportTable {
+            schema: Some("public".to_string()),
+            name: "sql_identity".to_string(),
+            columns,
+            estimated_total: None,
+        }];
+        let dir = std::env::temp_dir().join(format!(
+            "dbflux_transfer_live_sql_identity_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp export dir");
+        let options = ExportOptions {
+            driver_id: "postgres",
+            database: "postgres",
+            format: FileFormat::Sql,
+            segment_size: 2,
+            format_options: dbflux_export::FormatOptions {
+                sql_batch_size: 2,
+                ..Default::default()
+            },
+        };
+        let outcome = run_export(
+            &connection,
+            &tables,
+            &dir,
+            &options,
+            &CancelToken::new(),
+            |_, _, _| {},
+        )
+        .expect("run_export must succeed");
+        assert!(outcome.manifest.is_some());
+
+        let script =
+            std::fs::read_to_string(dir.join("public.sql_identity.sql")).expect("read script");
+        assert!(script.contains("OVERRIDING SYSTEM VALUE"), "{script}");
+
+        connection.execute(&QueryRequest::new("DROP TABLE sql_identity"))?;
+        connection.execute(&QueryRequest::new(create))?;
+        for statement in script.lines() {
+            connection.execute(&QueryRequest::new(statement))?;
+        }
+
+        let replayed = connection.execute(&QueryRequest::new(
+            "SELECT id::text, label FROM sql_identity ORDER BY id",
+        ))?;
+        let rows: Vec<(String, String)> = replayed
+            .rows
+            .iter()
+            .map(|row| match row.as_slice() {
+                [
+                    dbflux_core::Value::Text(id),
+                    dbflux_core::Value::Text(label),
+                ] => (id.clone(), label.clone()),
+                other => panic!("unexpected row {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("10".to_string(), "ten".to_string()),
+                ("20".to_string(), "it's twenty".to_string()),
+                ("30".to_string(), "thirty".to_string()),
+            ]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+        Ok(())
+    })
+}
+
 #[test]
 #[ignore = "requires Docker daemon"]
 fn postgres_export_then_import_round_trips_row_values() -> Result<(), DbError> {

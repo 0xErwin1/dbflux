@@ -67,6 +67,51 @@ impl QueryGenerator for RecordingGenerator {
             text: format!("INSERT {schema:?}.{table} rows={}", rows.len()),
         }))
     }
+
+    fn generate_bulk_insert_for_script(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        _columns: &[String],
+        _column_types: &[Option<String>],
+        identity_columns: &[String],
+        rows: &[&[Value]],
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        if let Ok(mut sizes) = self.batch_sizes.lock() {
+            sizes.push(rows.len());
+        }
+        if self.answers_none {
+            return Ok(None);
+        }
+
+        let identity = if identity_columns.is_empty() {
+            String::new()
+        } else {
+            format!(" identity={identity_columns:?}")
+        };
+        Ok(Some(GeneratedQuery {
+            language: QueryLanguage::Sql,
+            text: format!("INSERT {schema:?}.{table} rows={}{identity}", rows.len()),
+        }))
+    }
+
+    fn script_table_prologue(
+        &self,
+        _schema: Option<&str>,
+        table: &str,
+        identity_columns: &[String],
+    ) -> Option<String> {
+        (!identity_columns.is_empty()).then(|| format!("-- {table} ON"))
+    }
+
+    fn script_table_epilogue(
+        &self,
+        _schema: Option<&str>,
+        table: &str,
+        identity_columns: &[String],
+    ) -> Option<String> {
+        (!identity_columns.is_empty()).then(|| format!("-- {table} OFF"))
+    }
 }
 
 fn columns() -> Vec<TransferColumn> {
@@ -97,6 +142,7 @@ fn write_rows(generator: &dyn QueryGenerator, batch_size: usize, count: i64) -> 
         Some("public".to_string()),
         "notes".to_string(),
         &columns(),
+        Vec::new(),
         batch_size,
     );
     for id in 0..count {
@@ -158,7 +204,14 @@ fn a_table_with_no_rows_writes_an_empty_file() {
 fn a_generator_that_cannot_render_inserts_fails_the_export() {
     let generator = RecordingGenerator::new(true);
     let mut out = Vec::new();
-    let mut writer = SqlInsertWriter::new(&mut out, None, "notes".to_string(), &columns(), 1);
+    let mut writer = SqlInsertWriter::new(
+        &mut out,
+        None,
+        "notes".to_string(),
+        &columns(),
+        Vec::new(),
+        1,
+    );
 
     let error = writer.write_row(&generator, &row(1)).unwrap_err();
     assert_eq!(
@@ -179,6 +232,9 @@ fn the_batch_size_is_at_least_one_and_capped_by_the_driver() {
 struct FakeConnection {
     metadata: DriverMetadata,
     generator: Option<RecordingGenerator>,
+    identity: Vec<String>,
+    identity_lookups: Mutex<Vec<(Option<String>, String)>>,
+    pages: Mutex<std::collections::VecDeque<Vec<Vec<Value>>>>,
 }
 
 impl FakeConnection {
@@ -203,7 +259,22 @@ impl FakeConnection {
         Self {
             metadata,
             generator,
+            identity: Vec::new(),
+            identity_lookups: Mutex::new(Vec::new()),
+            pages: Mutex::new(std::collections::VecDeque::new()),
         }
+    }
+
+    fn with_identity(mut self, identity: &[&str]) -> Self {
+        self.identity = identity.iter().map(|name| name.to_string()).collect();
+        self
+    }
+
+    fn with_page(self, rows: Vec<Vec<Value>>) -> Self {
+        if let Ok(mut pages) = self.pages.lock() {
+            pages.push_back(rows);
+        }
+        self
     }
 }
 
@@ -224,8 +295,35 @@ impl Connection for FakeConnection {
         Ok(())
     }
 
-    fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
-        Ok(QueryResult::empty())
+    fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if req.sql.contains("COUNT(*)") {
+            return Ok(QueryResult::table(
+                Vec::new(),
+                vec![vec![Value::Int(0)]],
+                None,
+                std::time::Duration::ZERO,
+            ));
+        }
+
+        let rows = self
+            .pages
+            .lock()
+            .ok()
+            .and_then(|mut pages| pages.pop_front())
+            .unwrap_or_default();
+        Ok(QueryResult::table(
+            Vec::new(),
+            rows,
+            None,
+            std::time::Duration::ZERO,
+        ))
+    }
+
+    fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        if let Ok(mut lookups) = self.identity_lookups.lock() {
+            lookups.push((schema.map(str::to_string), table.to_string()));
+        }
+        Ok(self.identity.clone())
     }
 
     fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
@@ -393,4 +491,132 @@ fn an_export_run_hands_the_connection_to_the_sql_sink_and_records_the_format() {
         ""
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+fn write_with_identity(generator: &dyn QueryGenerator, identity: &[&str], count: i64) -> String {
+    let mut out = Vec::new();
+    let mut writer = SqlInsertWriter::new(
+        &mut out,
+        Some("public".to_string()),
+        "notes".to_string(),
+        &columns(),
+        identity.iter().map(|name| name.to_string()).collect(),
+        2,
+    );
+    for id in 0..count {
+        writer.write_row(generator, &row(id)).unwrap();
+    }
+    writer.finish(generator).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn identity_columns_wrap_the_tables_statements_and_use_the_script_variant() {
+    let generator = RecordingGenerator::new(false);
+    let text = write_with_identity(&generator, &["id"], 3);
+
+    assert_eq!(
+        text,
+        "-- notes ON\n\
+         INSERT Some(\"public\").notes rows=2 identity=[\"id\"];\n\
+         INSERT Some(\"public\").notes rows=1 identity=[\"id\"];\n\
+         -- notes OFF\n"
+    );
+}
+
+#[test]
+fn a_table_without_identity_columns_gets_no_wrapper() {
+    let generator = RecordingGenerator::new(false);
+    let text = write_with_identity(&generator, &[], 1);
+
+    assert_eq!(text, "INSERT Some(\"public\").notes rows=1;\n");
+}
+
+#[test]
+fn an_identity_table_with_no_rows_is_still_an_empty_file() {
+    let generator = RecordingGenerator::new(false);
+    assert_eq!(write_with_identity(&generator, &["id"], 0), "");
+}
+
+#[test]
+fn identity_columns_the_export_does_not_include_are_ignored() {
+    let generator = RecordingGenerator::new(false);
+    let text = write_with_identity(&generator, &["other"], 1);
+
+    assert_eq!(text, "INSERT Some(\"public\").notes rows=1;\n");
+}
+
+fn export_one_table(connection: Arc<FakeConnection>, format: FileFormat, label: &str) -> String {
+    use crate::export::{ExportOptions, ExportTable, run_export};
+
+    let dir = temp_dir(label);
+    let dyn_connection: Arc<dyn Connection> = connection;
+    let tables = [ExportTable {
+        schema: Some("public".to_string()),
+        name: "notes".to_string(),
+        columns: columns(),
+        estimated_total: None,
+    }];
+    let options = ExportOptions {
+        driver_id: "fake",
+        database: "app",
+        format,
+        segment_size: 10,
+        format_options: Default::default(),
+    };
+    let outcome = run_export(
+        &dyn_connection,
+        &tables,
+        &dir,
+        &options,
+        &dbflux_core::CancelToken::new(),
+        |_, _, _| {},
+    )
+    .unwrap();
+    assert!(outcome.manifest.is_some(), "{:?}", outcome.warnings);
+
+    let written =
+        std::fs::read_to_string(dir.join(format!("public.notes.{}", format.extension()))).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    written
+}
+
+#[test]
+fn an_export_run_looks_up_the_identity_columns_and_wraps_the_script() {
+    let connection = Arc::new(
+        FakeConnection::new(
+            DriverCapabilities::BULK_INSERT,
+            0,
+            Some(RecordingGenerator::new(false)),
+        )
+        .with_identity(&["id"])
+        .with_page(vec![row(1), row(2)]),
+    );
+
+    let written = export_one_table(connection.clone(), FileFormat::Sql, "identity_run");
+
+    assert_eq!(
+        written,
+        "-- notes ON\n\
+         INSERT Some(\"public\").notes rows=2 identity=[\"id\"];\n\
+         -- notes OFF\n"
+    );
+    assert_eq!(
+        *connection.identity_lookups.lock().unwrap(),
+        vec![(Some("public".to_string()), "notes".to_string())]
+    );
+}
+
+#[test]
+fn other_formats_never_look_up_identity_columns() {
+    let connection = Arc::new(
+        FakeConnection::new(DriverCapabilities::BULK_INSERT, 0, None)
+            .with_identity(&["id"])
+            .with_page(vec![row(1)]),
+    );
+
+    let written = export_one_table(connection.clone(), FileFormat::Csv, "identity_csv");
+
+    assert!(written.starts_with("id,note\n1,"), "{written}");
+    assert!(connection.identity_lookups.lock().unwrap().is_empty());
 }

@@ -478,6 +478,28 @@ pub struct MssqlCodeGenerator;
 
 static MSSQL_CODE_GENERATOR: MssqlCodeGenerator = MssqlCodeGenerator;
 
+/// The `IDENTITY` columns of a table, in column order.
+fn mssql_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
+    let schema = match schema {
+        Some(schema) => format!("N'{}'", MSSQL_DIALECT.escape_string(schema)),
+        None => "SCHEMA_NAME()".to_string(),
+    };
+
+    format!(
+        "SELECT c.name FROM sys.columns c \
+         JOIN sys.tables t ON t.object_id = c.object_id \
+         JOIN sys.schemas s ON s.schema_id = t.schema_id \
+         WHERE c.is_identity = 1 AND s.name = {schema} AND t.name = N'{}' \
+         ORDER BY c.column_id",
+        MSSQL_DIALECT.escape_string(table)
+    )
+}
+
+/// A script that inserts explicit values into an `IDENTITY` column must turn
+/// `IDENTITY_INSERT` on for the table first, so the generator wraps it.
+static MSSQL_QUERY_GENERATOR: SqlMutationGenerator =
+    SqlMutationGenerator::new(&MSSQL_DIALECT).set_identity_insert_for_identity();
+
 impl MssqlCodeGenerator {
     fn quote(&self, name: &str) -> String {
         MSSQL_DIALECT.quote_identifier(name)
@@ -3288,8 +3310,22 @@ impl Connection for MssqlConnection {
     }
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
-        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MSSQL_DIALECT);
-        Some(&GENERATOR)
+        Some(&MSSQL_QUERY_GENERATOR)
+    }
+
+    fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mssql_identity_columns_sql(
+            schema, table,
+        )))?;
+
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| match row.into_iter().next() {
+                Some(dbflux_core::Value::Text(name)) => Some(name),
+                _ => None,
+            })
+            .collect())
     }
 
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
@@ -6540,6 +6576,47 @@ mod tests {
         assert!(generated.text.starts_with("INSERT INTO "));
         assert!(generated.text.contains("VALUES"));
         assert_eq!(generated.text.matches("), (").count() + 1, 2);
+    }
+
+    #[test]
+    fn mssql_identity_columns_query_names_the_table_and_defaults_the_schema() {
+        let sql = super::mssql_identity_columns_sql(Some("dbo"), "it's");
+        assert!(
+            sql.contains("s.name = N'dbo' AND t.name = N'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("c.is_identity = 1"));
+        assert!(
+            super::mssql_identity_columns_sql(None, "users").contains("s.name = SCHEMA_NAME()")
+        );
+    }
+
+    #[test]
+    fn mssql_script_wraps_identity_tables_in_identity_insert() {
+        use dbflux_core::QueryGenerator;
+
+        let identity = vec!["id".to_string()];
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_prologue(Some("dbo"), "users", &identity),
+            Some("SET IDENTITY_INSERT [dbo].[users] ON;".to_string())
+        );
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_epilogue(Some("dbo"), "users", &identity),
+            Some("SET IDENTITY_INSERT [dbo].[users] OFF;".to_string())
+        );
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_prologue(Some("dbo"), "users", &[]),
+            None
+        );
+
+        let columns = vec!["id".to_string()];
+        let owned_rows = [vec![dbflux_core::Value::Int(7)]];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+        let script = MSSQL_QUERY_GENERATOR
+            .generate_bulk_insert_for_script(Some("dbo"), "users", &columns, &[], &identity, &rows)
+            .unwrap()
+            .expect("mssql renders script inserts");
+        assert_eq!(script.text, "INSERT INTO [dbo].[users] ([id]) VALUES (7)");
     }
 
     #[test]

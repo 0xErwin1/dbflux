@@ -259,7 +259,7 @@ offers the options a format uses and hides the others:
   column; choose another NULL text. With the default empty NULL text, an empty
   string and NULL are written the same way, so a CSV import reads both back as
   NULL; set a non-empty NULL text such as `\N` to keep empty strings.
-- **Dates** (every format): RFC 3339 (the default), `YYYY-MM-DD HH:MM:SS` in
+- **Dates** (every format except SQL): RFC 3339 (the default), `YYYY-MM-DD HH:MM:SS` in
   UTC, or epoch seconds, which JSON and JSON Lines write as a number. A date is
   written as `YYYY-MM-DD` under the first two and as its midnight (UTC) under
   epoch, and a time as `HH:MM:SS` under `YYYY-MM-DD HH:MM:SS` and as seconds
@@ -270,9 +270,14 @@ offers the options a format uses and hides the others:
 
 SQL is offered in the export wizard only when the source connection's driver
 can generate bulk `INSERT` statements. It writes one `<schema>.<table>.sql` file
-per table of re-runnable statements in that connection's own dialect: each
+per table of `INSERT` statements in that connection's own dialect: each
 statement holds one batch of rows, names the table the way the dialect writes
-it and ends with `;`. A table with no rows writes an empty file. The dialect
+it and ends with `;`. The script replays into an empty copy of the table;
+running it twice fails on unique keys or duplicates the rows. A PostgreSQL
+`GENERATED ALWAYS AS IDENTITY` column is written with `OVERRIDING SYSTEM VALUE`,
+and a SQL Server table with an `IDENTITY` column is wrapped in
+`SET IDENTITY_INSERT ... ON;` and `OFF;`, so the original ids are kept. A table
+with no rows writes an empty file. The dialect
 decides how NULL and dates are written, so the NULL text, delimiter, encoding
 and date options do not apply and are hidden. SQL files are not importable yet:
 importing a folder that holds one fails that table with the message that the

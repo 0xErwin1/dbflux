@@ -135,6 +135,20 @@ impl<'a> SqlQueryBuilder<'a> {
         column_types: &[Option<String>],
         rows: &[&[Value]],
     ) -> Option<String> {
+        self.build_bulk_insert_with_clause(schema, table, columns, column_types, None, rows)
+    }
+
+    /// [`Self::build_bulk_insert`] with `clause` written between the column
+    /// list and `VALUES` (for example `OVERRIDING SYSTEM VALUE`).
+    pub fn build_bulk_insert_with_clause(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        column_types: &[Option<String>],
+        clause: Option<&str>,
+        rows: &[&[Value]],
+    ) -> Option<String> {
         if rows.is_empty() {
             return None;
         }
@@ -159,8 +173,10 @@ impl<'a> SqlQueryBuilder<'a> {
             .collect::<Vec<_>>()
             .join(", ");
 
+        let clause = clause.map(|text| format!(" {text}")).unwrap_or_default();
+
         Some(format!(
-            "INSERT INTO {table_ref} ({columns_str}) VALUES {values_str}"
+            "INSERT INTO {table_ref} ({columns_str}){clause} VALUES {values_str}"
         ))
     }
 

@@ -2074,6 +2074,19 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Names of the table's columns the database generates itself (identity
+    /// columns that reject explicit values unless told otherwise). An SQL
+    /// export passes them to [`QueryGenerator::generate_bulk_insert_for_script`]
+    /// and the script prologue and epilogue hooks. Drivers without such
+    /// columns keep this default, an empty list.
+    fn identity_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
+    }
+
     fn semantic_planner(&self) -> Option<&dyn SemanticPlanner> {
         None
     }

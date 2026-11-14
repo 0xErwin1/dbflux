@@ -128,6 +128,25 @@ pub fn run_export(
         )
         .with_options(format_options.clone())
         .with_connection(Arc::clone(connection));
+        if options.format == FileFormat::Sql {
+            match connection.identity_columns(table.schema.as_deref(), &table.name) {
+                Ok(identity_columns) => {
+                    sink = sink.with_identity_columns(identity_columns);
+                }
+                Err(error) => {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "table_statuses is built one-to-one from `tables`, which this loop enumerates; its length never changes"
+                    )]
+                    {
+                        table_statuses[index].status = TableTransferStatus::Failed {
+                            error: error.to_string(),
+                        };
+                    }
+                    break;
+                }
+            }
+        }
 
         let result = run_transfer(
             &mut source,

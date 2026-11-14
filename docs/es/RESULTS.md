@@ -283,7 +283,7 @@ las demás:
   por defecto, un string vacío y NULL se escriben igual, así que al importar un
   CSV ambos vuelven como NULL; usa un texto para NULL no vacío, como `\N`, para
   conservar los strings vacíos.
-- **Fechas** (todos los formatos): RFC 3339 (por defecto), `YYYY-MM-DD HH:MM:SS`
+- **Fechas** (todos los formatos excepto SQL): RFC 3339 (por defecto), `YYYY-MM-DD HH:MM:SS`
   en UTC o segundos epoch, que JSON y JSON Lines escriben como número. Una fecha
   se escribe como `YYYY-MM-DD` con los dos primeros y como su medianoche (UTC)
   con epoch, y una hora como `HH:MM:SS` con `YYYY-MM-DD HH:MM:SS` y como
@@ -294,10 +294,14 @@ las demás:
 
 SQL se ofrece en el asistente de exportación solo cuando el driver de la
 conexión de origen puede generar sentencias `INSERT` masivas. Escribe un archivo
-`<esquema>.<tabla>.sql` por tabla con sentencias re-ejecutables en el dialecto
-de esa conexión: cada sentencia contiene un lote de filas, nombra la tabla como
-lo hace el dialecto y termina con `;`. Una tabla sin filas escribe un archivo
-vacío. El dialecto decide cómo se escriben NULL y las fechas, así que el texto
+`<esquema>.<tabla>.sql` por tabla con sentencias `INSERT` en el dialecto de esa
+conexión: cada sentencia contiene un lote de filas, nombra la tabla como lo hace
+el dialecto y termina con `;`. El script se reproduce en una copia vacía de la
+tabla; ejecutarlo dos veces falla por claves únicas o duplica las filas. Una
+columna `GENERATED ALWAYS AS IDENTITY` de PostgreSQL se escribe con
+`OVERRIDING SYSTEM VALUE`, y una tabla de SQL Server con una columna `IDENTITY`
+se envuelve en `SET IDENTITY_INSERT ... ON;` y `OFF;`, de modo que se conservan
+los ids originales. Una tabla sin filas escribe un archivo vacío. El dialecto decide cómo se escriben NULL y las fechas, así que el texto
 para NULL, el delimitador, la codificación y las opciones de fecha no se aplican
 y se ocultan. Los archivos SQL aún no se pueden importar: al importar una
 carpeta que contiene uno, esa tabla falla con el mensaje de que el formato no se

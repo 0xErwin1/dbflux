@@ -183,6 +183,8 @@ pub struct FileSink {
     options: FormatOptions,
     /// The source connection, whose generator renders SQL exports.
     connection: Option<Arc<dyn Connection>>,
+    /// The table's database-generated columns, for a SQL export.
+    identity_columns: Vec<String>,
 }
 
 impl FileSink {
@@ -204,7 +206,15 @@ impl FileSink {
             whole_documents: false,
             options: FormatOptions::default(),
             connection: None,
+            identity_columns: Vec::new(),
         }
+    }
+
+    /// The columns the database generates itself, which a SQL export lets
+    /// the script write explicit values into.
+    pub fn with_identity_columns(mut self, identity_columns: Vec<String>) -> Self {
+        self.identity_columns = identity_columns;
+        self
     }
 
     /// The source connection a SQL export renders its statements with.
@@ -457,6 +467,7 @@ impl FileSink {
             self.schema.clone(),
             self.table.clone(),
             columns,
+            self.identity_columns.clone(),
             batch_size,
         ))))
     }

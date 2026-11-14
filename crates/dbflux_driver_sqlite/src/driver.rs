@@ -2359,13 +2359,12 @@ fn value_to_sqlite_literal(value: &Value) -> String {
             // SQLite stores decimals as REAL, quote as string literal
             format!("'{}'", sqlite_escape_string(s))
         }
-        Value::Text(s) => format!("'{}'", sqlite_escape_string(s)),
-        Value::Json(s) => format!("'{}'", sqlite_escape_string(s)),
+        Value::Text(s) | Value::Json(s) => sqlite_text_literal(s),
         Value::Bytes(b) => format!("X'{}'", hex::encode(b)),
         Value::DateTime(dt) => format!("'{}'", dt.to_rfc3339()),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
-        Value::ObjectId(id) => format!("'{}'", sqlite_escape_string(id)),
+        Value::ObjectId(id) => sqlite_text_literal(id),
         Value::Unsupported(_) => "NULL".to_string(),
         Value::Array(arr) => {
             let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
@@ -2379,6 +2378,17 @@ fn value_to_sqlite_literal(value: &Value) -> String {
 }
 
 /// Escape a string for use inside a SQLite single-quoted literal.
+/// A quoted text literal. SQLite reads a statement up to its first NUL, so
+/// text holding one is written as a hex cast, which keeps every byte and the
+/// text type; any other text stays a plain quoted literal.
+fn sqlite_text_literal(text: &str) -> String {
+    if text.contains('\0') {
+        return format!("CAST(X'{}' AS TEXT)", hex::encode(text.as_bytes()));
+    }
+
+    format!("'{}'", sqlite_escape_string(text))
+}
+
 fn sqlite_escape_string(s: &str) -> String {
     s.replace('\'', "''")
 }
@@ -3889,5 +3899,58 @@ mod read_only_tests {
 
         assert!(state.lock().expect("state mutex").is_autocommit());
         assert!(!query_only_enabled(&state));
+    }
+}
+
+#[cfg(test)]
+mod nul_text_literal_tests {
+    use super::{SQLITE_DIALECT, value_to_sqlite_literal};
+    use dbflux_core::{QueryGenerator, SqlMutationGenerator, Value};
+    use rusqlite::Connection as RusqliteConnection;
+
+    #[test]
+    fn ordinary_text_literals_are_unchanged() {
+        assert_eq!(
+            value_to_sqlite_literal(&Value::Text("it's".to_string())),
+            "'it''s'"
+        );
+    }
+
+    #[test]
+    fn text_with_a_nul_byte_replays_with_its_bytes_and_text_type() {
+        let generator = SqlMutationGenerator::new(&SQLITE_DIALECT);
+        let text = "a\0b'c\0".to_string();
+        let row = [
+            Value::Int(1),
+            Value::Text(text.clone()),
+            Value::Json(text.clone()),
+        ];
+        let rows: [&[Value]; 1] = [&row];
+        let columns = ["id", "note", "doc"].map(str::to_string);
+        let statement = generator
+            .generate_bulk_insert(None, "notes", &columns, &[None, None, None], &rows)
+            .expect("generator succeeds")
+            .expect("sqlite renders inserts")
+            .text;
+        assert!(
+            !statement.contains('\0'),
+            "statement must not hold a raw NUL"
+        );
+
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        raw.execute_batch("CREATE TABLE notes (id INTEGER, note TEXT, doc TEXT)")
+            .expect("create table");
+        raw.execute_batch(&format!("{statement};")).expect("replay");
+
+        let (note, doc, note_type): (Vec<u8>, Vec<u8>, String) = raw
+            .query_row(
+                "SELECT CAST(note AS BLOB), CAST(doc AS BLOB), typeof(note) FROM notes",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read back");
+        assert_eq!(note, text.as_bytes());
+        assert_eq!(doc, text.as_bytes());
+        assert_eq!(note_type, "text");
     }
 }

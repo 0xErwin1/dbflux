@@ -52,8 +52,8 @@ use run::RunProgress;
 /// Width of the export dialog (P1Flows).
 const EXPORT_WIZARD_WIDTH: Pixels = px(620.0);
 
-/// Width of the chunk-size field. (120 px)
-const SEGMENT_SIZE_INPUT_WIDTH: Pixels = px(120.0);
+/// Width of the chunk-size, NULL-text and batch-size fields. (120 px at the base font size)
+const SEGMENT_SIZE_INPUT_WIDTH: Rems = ui(120.0);
 
 /// Height of a selected-table row on the Tables step. (36 px)
 const TABLE_ROW_HEIGHT: Rems = ui(36.0);
@@ -977,3 +977,6 @@ impl ExportWizard {
             .into_any_element()
     }
 }
+
+#[cfg(test)]
+mod tests;

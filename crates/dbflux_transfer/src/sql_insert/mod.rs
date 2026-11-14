@@ -53,15 +53,20 @@ pub(crate) fn driver_batch_cap(connection: &dyn Connection) -> Option<usize> {
     TableSink::max_bulk_insert_rows(connection.metadata())
 }
 
-/// Buffers rows and writes one `INSERT ... ;` statement per full batch.
+/// Buffers rows and writes one `INSERT ... ;` statement per full batch. When
+/// the table has identity columns, the generator's prologue and epilogue lines
+/// wrap its statements, so the script replays with the original values.
 pub(crate) struct SqlInsertWriter<W: Write> {
     out: W,
     schema: Option<String>,
     table: String,
     column_names: Vec<String>,
     column_types: Vec<Option<String>>,
+    /// The generated columns among the exported ones.
+    identity_columns: Vec<String>,
     batch_size: usize,
     pending: Vec<Vec<Value>>,
+    wrapped: bool,
 }
 
 impl<W: Write> SqlInsertWriter<W> {
@@ -70,19 +75,28 @@ impl<W: Write> SqlInsertWriter<W> {
         schema: Option<String>,
         table: String,
         columns: &[TransferColumn],
+        identity_columns: Vec<String>,
         batch_size: usize,
     ) -> Self {
+        let column_names: Vec<String> = columns.iter().map(|column| column.name.clone()).collect();
+        let identity_columns = identity_columns
+            .into_iter()
+            .filter(|name| column_names.contains(name))
+            .collect();
+
         Self {
             out,
             schema,
             table,
-            column_names: columns.iter().map(|column| column.name.clone()).collect(),
+            column_names,
+            identity_columns,
             column_types: columns
                 .iter()
                 .map(|column| column.type_name.clone())
                 .collect(),
             batch_size: batch_size.max(1),
             pending: Vec::new(),
+            wrapped: false,
         }
     }
 
@@ -104,6 +118,15 @@ impl<W: Write> SqlInsertWriter<W> {
     /// the file is empty: there is nothing to re-run.
     pub(crate) fn finish(mut self, generator: &dyn QueryGenerator) -> Result<(), TransferError> {
         self.flush_batch(generator)?;
+        if self.wrapped
+            && let Some(line) = generator.script_table_epilogue(
+                self.schema.as_deref(),
+                &self.table,
+                &self.identity_columns,
+            )
+        {
+            self.write_line(&line)?;
+        }
         self.out
             .flush()
             .map_err(|error| TransferError::Sink(error.to_string()))
@@ -114,13 +137,25 @@ impl<W: Write> SqlInsertWriter<W> {
             return Ok(());
         }
 
+        if !self.wrapped {
+            self.wrapped = true;
+            if let Some(line) = generator.script_table_prologue(
+                self.schema.as_deref(),
+                &self.table,
+                &self.identity_columns,
+            ) {
+                self.write_line(&line)?;
+            }
+        }
+
         let rows: Vec<&[Value]> = self.pending.iter().map(Vec::as_slice).collect();
         let query = generator
-            .generate_bulk_insert(
+            .generate_bulk_insert_for_script(
                 self.schema.as_deref(),
                 &self.table,
                 &self.column_names,
                 &self.column_types,
+                &self.identity_columns,
                 &rows,
             )
             .map_err(|error| TransferError::Sink(error.to_string()))?
@@ -131,10 +166,13 @@ impl<W: Write> SqlInsertWriter<W> {
                 ))
             })?;
 
-        writeln!(self.out, "{};", query.text)
-            .map_err(|error| TransferError::Sink(error.to_string()))?;
+        self.write_line(&format!("{};", query.text))?;
         self.pending.clear();
         Ok(())
+    }
+
+    fn write_line(&mut self, line: &str) -> Result<(), TransferError> {
+        writeln!(self.out, "{line}").map_err(|error| TransferError::Sink(error.to_string()))
     }
 }
 

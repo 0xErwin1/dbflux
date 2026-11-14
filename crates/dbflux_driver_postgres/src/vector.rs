@@ -138,7 +138,8 @@ pub(crate) struct PostgresQueryGenerator {
 impl PostgresQueryGenerator {
     pub(crate) const fn new() -> Self {
         Self {
-            inner: SqlMutationGenerator::new(&POSTGRES_DIALECT),
+            inner: SqlMutationGenerator::new(&POSTGRES_DIALECT)
+                .overriding_system_value_for_identity(),
         }
     }
 }
@@ -156,6 +157,25 @@ impl QueryGenerator for PostgresQueryGenerator {
 
     fn generate_template(&self, request: &MutationTemplateRequest<'_>) -> Option<GeneratedQuery> {
         self.inner.generate_template(request)
+    }
+
+    fn generate_bulk_insert_for_script(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        column_types: &[Option<String>],
+        identity_columns: &[String],
+        rows: &[&[Value]],
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        self.inner.generate_bulk_insert_for_script(
+            schema,
+            table,
+            columns,
+            column_types,
+            identity_columns,
+            rows,
+        )
     }
 
     fn generate_read_template(&self, request: &ReadTemplateRequest<'_>) -> Option<GeneratedQuery> {

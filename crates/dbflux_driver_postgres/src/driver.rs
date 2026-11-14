@@ -1690,6 +1690,26 @@ impl Drop for ActiveQueryGuard<'_> {
     }
 }
 
+/// The `GENERATED ALWAYS AS IDENTITY` columns of a table, in column order.
+/// `BY DEFAULT` identity and serial columns accept explicit values, so a
+/// script needs no special handling for them.
+fn postgres_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
+    let schema = match schema {
+        Some(schema) => pg_quote_string(schema),
+        None => "current_schema()".to_string(),
+    };
+
+    format!(
+        "SELECT a.attname::text FROM pg_attribute a \
+         JOIN pg_class c ON c.oid = a.attrelid \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = {schema} AND c.relname = {} \
+         AND a.attidentity = 'a' AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum",
+        pg_quote_string(table)
+    )
+}
+
 fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
     let schema = request.table.schema.as_deref().unwrap_or("public");
     let escaped_schema = schema.replace('\'', "''");
@@ -2721,6 +2741,21 @@ impl Connection for PostgresConnection {
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         Some(&crate::vector::POSTGRES_QUERY_GENERATOR)
+    }
+
+    fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_identity_columns_sql(
+            schema, table,
+        )))?;
+
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| match row.into_iter().next() {
+                Some(dbflux_core::Value::Text(name)) => Some(name),
+                _ => None,
+            })
+            .collect())
     }
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
@@ -8358,6 +8393,67 @@ mod tests {
         assert_eq!(
             generated.text,
             "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    #[test]
+    fn postgres_identity_columns_query_names_the_table_and_defaults_the_schema() {
+        let sql = super::postgres_identity_columns_sql(Some("app"), "it's");
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("a.attidentity = 'a'"));
+
+        let default_schema = super::postgres_identity_columns_sql(None, "users");
+        assert!(default_schema.contains("n.nspname = current_schema()"));
+    }
+
+    #[test]
+    fn postgres_script_insert_overrides_system_values_only_for_identity_columns() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = &crate::vector::POSTGRES_QUERY_GENERATOR;
+        let columns = vec!["id".to_string(), "name".to_string()];
+        let owned_rows = [
+            vec![
+                dbflux_core::Value::Int(1),
+                dbflux_core::Value::Text("a".into()),
+            ],
+            vec![
+                dbflux_core::Value::Int(2),
+                dbflux_core::Value::Text("b".into()),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+        let identity = vec!["id".to_string()];
+
+        let script = generator
+            .generate_bulk_insert_for_script(Some("app"), "users", &columns, &[], &identity, &rows)
+            .unwrap()
+            .expect("postgres renders script inserts");
+        assert_eq!(
+            script.text,
+            "INSERT INTO \"app\".\"users\" (\"id\", \"name\") OVERRIDING SYSTEM VALUE VALUES (1, 'a'), (2, 'b')"
+        );
+
+        let without_identity = generator
+            .generate_bulk_insert_for_script(Some("app"), "users", &columns, &[], &[], &rows)
+            .unwrap()
+            .expect("postgres renders script inserts");
+        assert_eq!(
+            without_identity.text,
+            "INSERT INTO \"app\".\"users\" (\"id\", \"name\") VALUES (1, 'a'), (2, 'b')"
+        );
+
+        let import_insert = generator
+            .generate_bulk_insert(Some("app"), "users", &columns, &[], &rows)
+            .unwrap()
+            .expect("postgres renders bulk inserts");
+        assert_eq!(import_insert.text, without_identity.text);
+        assert_eq!(
+            generator.script_table_prologue(Some("app"), "users", &identity),
+            None
         );
     }
 
