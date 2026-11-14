@@ -1789,7 +1789,8 @@ document:
           csv: CSV
           json_pretty: "JSON (들여쓰기)"
           json_compact: "JSON (축약)"
-          json_lines: "JSON (한 줄에 객체 하나)"
+          json: JSON
+          json_lines: "JSON Lines (한 줄에 객체 하나)"
           html: HTML
           markdown: Markdown
           xml: XML

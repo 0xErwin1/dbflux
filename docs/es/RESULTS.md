@@ -248,9 +248,9 @@ tabla son la página actual, y el aviso indica cuántas filas fueron al archivo 
 al portapapeles.
 
 Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
-menú añade **Exportar todas las filas a un archivo**, en CSV o en JSON con un
-objeto por línea, o como tabla HTML, tabla Markdown o XML para leer y compartir.
-Vuelve a leer la tabla o la colección completa con el filtro,
+menú añade **Exportar todas las filas a un archivo**, en CSV, JSON (un array
+con un objeto por línea) o JSON Lines (un objeto por línea, `.jsonl`), o como tabla HTML, tabla
+Markdown o XML para leer y compartir. Vuelve a leer la tabla o la colección completa con el filtro,
 el orden y la selección de columnas actuales de la cuadrícula, una página a la
 vez, y la escribe en el único archivo que elijas, de modo que los datos nunca
 tienen que caber en memoria. Una tabla mostrada mediante el constructor de
@@ -259,18 +259,19 @@ desplazamiento y hasta su límite cuando lo define. La exportación se ejecuta
 como una tarea en el panel de tareas, que muestra su progreso y permite
 cancelarla; el aviso indica el total de filas y la ruta.
 
-Los archivos HTML, Markdown y XML son para leer, no para importar: al importar una
-carpeta que contenga uno de ellos, esa tabla falla con un mensaje que indica que
-su formato no se puede importar.
-XML escribe un `<row>` por fila y un `<field name="...">` por columna, con
-`null="true"` para un NULL, de modo que se distingue de un valor vacío.
+Los archivos HTML, Markdown y XML son para leer, no para importar: al importar
+una carpeta que contenga uno de ellos, esa tabla falla con un mensaje que indica
+que su formato no se puede importar. XML escribe un `<row>` por fila y un
+`<field name="...">` por columna, con `null="true"` para un NULL, de modo que se
+distingue de un valor vacío.
 
-Una colección de documentos exportada como JSON escribe cada documento
-completo, un objeto por línea, con todos sus campos. Como CSV, HTML, Markdown o XML se escribe con
-las columnas que la cuadrícula muestra para la primera página, incluidos los
-objetos expandidos. Los documentos de una colección no tienen por qué
-compartir sus campos, así que en cualquiera de estos archivos un campo que
-aparece por primera vez en una página posterior no tiene columna, porque el encabezado ya está escrito; en
+Una colección de documentos exportada como JSON o JSON Lines escribe cada
+documento completo, un objeto por línea, con todos sus campos. Como CSV, HTML,
+Markdown o XML se escribe con las columnas que la cuadrícula muestra para la
+primera página, incluidos los objetos expandidos. Los documentos de una
+colección no tienen por qué compartir sus campos, así que en cualquiera de estos
+archivos un campo que aparece por primera vez en una página posterior no tiene
+columna, porque el encabezado ya está escrito; en
 ese caso la exportación nombra esos campos en una advertencia.
 
 Un resultado de consulta ofrece solo las filas cargadas, porque exportarlas

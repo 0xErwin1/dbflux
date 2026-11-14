@@ -1,9 +1,9 @@
 //! Table -> File `RowSink`: streams rows into one `schema.table.<ext>` file
 //! per table via `dbflux_export`'s streaming writers. CSV reuses the exact
 //! value-formatting single-shot export uses, so CSV output is byte-identical.
-//! JSON is written as NDJSON (one compact object per line, see
-//! `dbflux_export::JsonStreamWriter`) so `file_source::FileSource` can import
-//! it back in bounded memory instead of buffering the whole file.
+//! JSON is one array with an object per line and JSON Lines is NDJSON (see
+//! `dbflux_export::JsonArrayStreamWriter` and `JsonLinesStreamWriter`); both
+//! are read back by `file_source::FileSource` in bounded memory.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -11,7 +11,8 @@ use std::path::PathBuf;
 
 use dbflux_core::{ColumnKind, ColumnMeta, TransferColumn, Value};
 use dbflux_export::{
-    CsvStreamWriter, HtmlStreamWriter, JsonStreamWriter, MarkdownStreamWriter, XmlStreamWriter,
+    CsvStreamWriter, HtmlStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter,
+    MarkdownStreamWriter, XmlStreamWriter,
 };
 
 use crate::pipeline::TransferReport;
@@ -21,7 +22,10 @@ use crate::pipeline::{RowChunk, RowSink, TableMappingMode, TransferError, Transf
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileFormat {
     Csv,
+    /// One JSON array. Export folders written before JSON Lines existed
+    /// record NDJSON under this format, so the reader accepts both.
     Json,
+    JsonLines,
     Html,
     Markdown,
     Xml,
@@ -29,12 +33,20 @@ pub enum FileFormat {
 
 impl FileFormat {
     /// All formats the export UI can offer, in display order.
-    pub const ALL: [FileFormat; 5] = [Self::Csv, Self::Json, Self::Html, Self::Markdown, Self::Xml];
+    pub const ALL: [FileFormat; 6] = [
+        Self::Csv,
+        Self::Json,
+        Self::JsonLines,
+        Self::Html,
+        Self::Markdown,
+        Self::Xml,
+    ];
 
     pub fn extension(self) -> &'static str {
         match self {
             Self::Csv => "csv",
             Self::Json => "json",
+            Self::JsonLines => "jsonl",
             Self::Html => "html",
             Self::Markdown => "md",
             Self::Xml => "xml",
@@ -46,6 +58,7 @@ impl FileFormat {
         match self {
             Self::Csv => "CSV",
             Self::Json => "JSON",
+            Self::JsonLines => "JSON Lines",
             Self::Html => "HTML",
             Self::Markdown => "Markdown",
             Self::Xml => "XML",
@@ -58,6 +71,7 @@ impl FileFormat {
         match ext {
             "csv" => Some(Self::Csv),
             "json" => Some(Self::Json),
+            "jsonl" => Some(Self::JsonLines),
             "html" => Some(Self::Html),
             "md" => Some(Self::Markdown),
             "xml" => Some(Self::Xml),
@@ -68,13 +82,14 @@ impl FileFormat {
     /// Whether Import can read this format back. HTML and Markdown are for
     /// people to read, and XML import is not implemented yet.
     pub fn is_importable(self) -> bool {
-        matches!(self, Self::Csv | Self::Json)
+        matches!(self, Self::Csv | Self::Json | Self::JsonLines)
     }
 }
 
 enum StreamWriter {
     Csv(Box<CsvStreamWriter<BufWriter<File>>>),
-    Json(JsonStreamWriter<BufWriter<File>>),
+    Json(JsonArrayStreamWriter<BufWriter<File>>),
+    JsonLines(JsonLinesStreamWriter<BufWriter<File>>),
     Html(HtmlStreamWriter<BufWriter<File>>),
     Markdown(MarkdownStreamWriter<BufWriter<File>>),
     Xml(XmlStreamWriter<BufWriter<File>>),
@@ -217,7 +232,8 @@ impl RowSink for FileSink {
 
         let mut stream = match self.format {
             FileFormat::Csv => StreamWriter::Csv(Box::new(CsvStreamWriter::new(writer))),
-            FileFormat::Json => StreamWriter::Json(JsonStreamWriter::new(writer)),
+            FileFormat::Json => StreamWriter::Json(JsonArrayStreamWriter::new(writer)),
+            FileFormat::JsonLines => StreamWriter::JsonLines(JsonLinesStreamWriter::new(writer)),
             FileFormat::Html => StreamWriter::Html(HtmlStreamWriter::new(writer, self.title())),
             FileFormat::Markdown => StreamWriter::Markdown(MarkdownStreamWriter::new(writer)),
             FileFormat::Xml => StreamWriter::Xml(XmlStreamWriter::new(writer)),
@@ -226,6 +242,7 @@ impl RowSink for FileSink {
         match &mut stream {
             StreamWriter::Csv(w) => w.write_header(&self.columns),
             StreamWriter::Json(w) => w.write_header(&self.columns),
+            StreamWriter::JsonLines(w) => w.write_header(&self.columns),
             StreamWriter::Html(w) => w.write_header(&self.columns),
             StreamWriter::Markdown(w) => w.write_header(&self.columns),
             StreamWriter::Xml(w) => w.write_header(&self.columns),
@@ -253,6 +270,11 @@ impl RowSink for FileSink {
                     None => w.write_row(&self.columns, row),
                 }
                 .map_err(|e| TransferError::Sink(e.to_string()))?,
+                StreamWriter::JsonLines(w) => match whole_document(self.whole_documents, row) {
+                    Some((columns, values)) => w.write_row(&columns, &values),
+                    None => w.write_row(&self.columns, row),
+                }
+                .map_err(|e| TransferError::Sink(e.to_string()))?,
                 StreamWriter::Html(w) => w
                     .write_row(row)
                     .map_err(|e| TransferError::Sink(e.to_string()))?,
@@ -275,6 +297,7 @@ impl RowSink for FileSink {
             match writer {
                 StreamWriter::Csv(w) => w.finish(),
                 StreamWriter::Json(w) => w.finish(),
+                StreamWriter::JsonLines(w) => w.finish(),
                 StreamWriter::Html(w) => w.finish(),
                 StreamWriter::Markdown(w) => w.finish(),
                 StreamWriter::Xml(w) => w.finish(),
@@ -354,7 +377,45 @@ mod tests {
         let path = dir.join("widgets.json");
         assert!(path.exists());
         let contents = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "{\"id\":7}\n");
+        assert_eq!(contents, "[\n{\"id\":7}\n]\n");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn writes_json_lines_file_with_jsonl_extension() {
+        let dir = temp_dir("jsonl");
+        let columns = vec![column("id")];
+        let mut sink = FileSink::new(&dir, None, "widgets", FileFormat::JsonLines);
+
+        sink.begin(&columns, TableMappingMode::Existing).unwrap();
+        sink.write_chunk(&RowChunk(vec![vec![Value::Int(7)], vec![Value::Int(8)]]))
+            .unwrap();
+        let report = sink.finish().unwrap();
+
+        assert_eq!(report.rows_transferred, 2);
+        let contents = std::fs::read_to_string(dir.join("widgets.jsonl")).unwrap();
+        assert_eq!(contents, "{\"id\":7}\n{\"id\":8}\n");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_array_writes_whole_documents_with_their_own_fields() {
+        let dir = temp_dir("json_documents");
+        let columns = vec![column("doc")];
+        let mut sink =
+            FileSink::new(&dir, None, "docs", FileFormat::Json).writing_whole_documents();
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("a".to_string(), Value::Int(1));
+        let document = Value::Document(fields);
+
+        sink.begin(&columns, TableMappingMode::Existing).unwrap();
+        sink.write_chunk(&RowChunk(vec![vec![document]])).unwrap();
+        sink.finish().unwrap();
+
+        let contents = std::fs::read_to_string(dir.join("docs.json")).unwrap();
+        assert_eq!(contents, "[\n{\"a\":1}\n]\n");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -394,6 +455,10 @@ mod tests {
     fn from_extension_round_trips_with_extension() {
         assert_eq!(FileFormat::from_extension("csv"), Some(FileFormat::Csv));
         assert_eq!(FileFormat::from_extension("json"), Some(FileFormat::Json));
+        assert_eq!(
+            FileFormat::from_extension("jsonl"),
+            Some(FileFormat::JsonLines)
+        );
         assert_eq!(FileFormat::from_extension("xml"), Some(FileFormat::Xml));
         assert_eq!(FileFormat::from_extension("yaml"), None);
         for format in FileFormat::ALL {
@@ -408,6 +473,7 @@ mod tests {
             [
                 FileFormat::Csv,
                 FileFormat::Json,
+                FileFormat::JsonLines,
                 FileFormat::Html,
                 FileFormat::Markdown,
                 FileFormat::Xml
@@ -418,6 +484,7 @@ mod tests {
         assert_eq!(FileFormat::Xml.label(), "XML");
         assert_eq!(FileFormat::Csv.label(), "CSV");
         assert_eq!(FileFormat::Json.label(), "JSON");
+        assert_eq!(FileFormat::JsonLines.label(), "JSON Lines");
     }
 
     #[test]
@@ -451,8 +518,8 @@ mod tests {
     fn whole_document_rows_keep_each_document_s_own_fields() {
         let dir = temp_dir("whole_documents");
         std::fs::create_dir_all(&dir).expect("create temp dir");
-        let path = dir.join("events.json");
-        let mut sink = FileSink::to_file(&path, FileFormat::Json).writing_whole_documents();
+        let path = dir.join("events.jsonl");
+        let mut sink = FileSink::to_file(&path, FileFormat::JsonLines).writing_whole_documents();
 
         sink.begin(&[column("_document")], TableMappingMode::Existing)
             .expect("begin");

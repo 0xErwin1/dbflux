@@ -578,10 +578,8 @@ fn export_all_rows_as_json_keeps_fields_that_appear_after_the_first_page(cx: &mu
     window.run_until_parked();
 
     let text = std::fs::read_to_string(&target).expect("the export wrote the file");
-    let documents: Vec<serde_json::Value> = text
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("each line is one JSON object"))
-        .collect();
+    let documents: Vec<serde_json::Value> =
+        serde_json::from_str(&text).expect("the file is one JSON array");
     assert_eq!(documents.len() as i64, TABLE_ROWS);
 
     let first = documents.first().expect("a first document");
