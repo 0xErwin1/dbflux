@@ -256,6 +256,32 @@ mod tests {
     use super::*;
     use dbflux_core::chrono::TimeZone;
 
+    /// Type names the drivers emit for timestamps decode as before under the
+    /// default preset, including the ones `main` matched by substring.
+    #[test]
+    fn default_preset_temporal_names_decode_like_before() {
+        let options = FormatOptions::default();
+        for type_name in [
+            "datetimeoffset",
+            "datetimeoffset(5)",
+            "timestamp_ns",
+            "TIMESTAMP_LTZ",
+            "timestamptz(3)",
+            "datetime(6)",
+            "DateTime64(3, 'UTC')",
+            "LowCardinality(Nullable(DateTime))",
+            "TIMESTAMP(6) WITH LOCAL TIME ZONE",
+        ] {
+            assert!(
+                matches!(
+                    value_from_csv_field("2026-07-07T10:30:15+00:00", Some(type_name), &options),
+                    Value::DateTime(_)
+                ),
+                "{type_name}"
+            );
+        }
+    }
+
     #[test]
     fn empty_csv_field_decodes_as_null() {
         assert_eq!(
