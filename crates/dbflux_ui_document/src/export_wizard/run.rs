@@ -548,6 +548,7 @@ mod tests {
             encoding: TextEncoding::Windows1252,
             null_text: "\\N".to_string(),
             date_format: DateFormat::Epoch,
+            sql_batch_size: 50,
         };
 
         let options = build_export_options("postgres", "app", FileFormat::Csv, 250, chosen.clone());

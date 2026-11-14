@@ -245,6 +245,7 @@ mod tests {
             encoding: dbflux_export::TextEncoding::Windows1252,
             null_text: "\\N".to_string(),
             date_format: dbflux_export::DateFormat::Epoch,
+            ..FormatOptions::default()
         };
 
         let json = serde_json::to_string_pretty(&manifest).unwrap();

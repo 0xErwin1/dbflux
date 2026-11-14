@@ -8,8 +8,9 @@
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use dbflux_core::{ColumnKind, ColumnMeta, TransferColumn, Value};
+use dbflux_core::{ColumnKind, ColumnMeta, Connection, TransferColumn, Value};
 use dbflux_export::{
     CsvStreamWriter, FormatOptions, HtmlStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter,
     MarkdownStreamWriter, XmlStreamWriter,
@@ -17,6 +18,7 @@ use dbflux_export::{
 
 use crate::pipeline::TransferReport;
 use crate::pipeline::{RowChunk, RowSink, TableMappingMode, TransferError, TransferOutcome};
+use crate::sql_insert::{SqlInsertWriter, driver_batch_cap, effective_batch_size};
 
 /// File format written by a [`FileSink`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,10 +31,15 @@ pub enum FileFormat {
     Html,
     Markdown,
     Xml,
+    /// Re-runnable batched `INSERT` statements in the source connection's
+    /// dialect. Needs the connection ([`FileSink::with_connection`]).
+    Sql,
 }
 
 impl FileFormat {
-    /// All formats the export UI can offer, in display order.
+    /// The formats any row source can write, in display order. SQL is not
+    /// here: it also needs a source connection that can render `INSERT`s, so
+    /// callers that have one pick it from [`Self::WITH_SQL`].
     pub const ALL: [FileFormat; 6] = [
         Self::Csv,
         Self::Json,
@@ -40,6 +47,17 @@ impl FileFormat {
         Self::Html,
         Self::Markdown,
         Self::Xml,
+    ];
+
+    /// [`Self::ALL`] plus SQL, for callers that have a source connection.
+    pub const WITH_SQL: [FileFormat; 7] = [
+        Self::Csv,
+        Self::Json,
+        Self::JsonLines,
+        Self::Html,
+        Self::Markdown,
+        Self::Xml,
+        Self::Sql,
     ];
 
     pub fn extension(self) -> &'static str {
@@ -50,6 +68,7 @@ impl FileFormat {
             Self::Html => "html",
             Self::Markdown => "md",
             Self::Xml => "xml",
+            Self::Sql => "sql",
         }
     }
 
@@ -62,6 +81,7 @@ impl FileFormat {
             Self::Html => "HTML",
             Self::Markdown => "Markdown",
             Self::Xml => "XML",
+            Self::Sql => "SQL",
         }
     }
 
@@ -75,6 +95,7 @@ impl FileFormat {
             "html" => Some(Self::Html),
             "md" => Some(Self::Markdown),
             "xml" => Some(Self::Xml),
+            "sql" => Some(Self::Sql),
             _ => None,
         }
     }
@@ -84,15 +105,26 @@ impl FileFormat {
         matches!(self, Self::Csv)
     }
 
-    /// Whether the NULL text option applies. JSON writes `null` and XML marks
-    /// NULL with an attribute, so neither has a text to choose.
+    /// Whether the date format option applies. SQL literals come from the
+    /// dialect generator, so every other format honours it and SQL does not.
+    pub fn uses_date_format(self) -> bool {
+        !matches!(self, Self::Sql)
+    }
+
+    /// Whether the rows-per-`INSERT` option applies.
+    pub fn uses_sql_batch_size(self) -> bool {
+        matches!(self, Self::Sql)
+    }
+
+    /// Whether the NULL text option applies. JSON writes `null`, XML marks
+    /// NULL with an attribute and SQL writes the dialect's `NULL`, so none of
+    /// them has a text to choose.
     pub fn uses_null_text(self) -> bool {
         matches!(self, Self::Csv | Self::Html | Self::Markdown)
     }
 
     /// `options` with every option this format does not use reset to its
-    /// default, so a manifest records only what shaped the file. The date
-    /// format applies to every format.
+    /// default, so a manifest records only what shaped the file.
     pub fn applicable_options(self, options: &FormatOptions) -> FormatOptions {
         let defaults = FormatOptions::default();
         let mut applicable = options.clone();
@@ -103,11 +135,18 @@ impl FileFormat {
         if !self.uses_null_text() {
             applicable.null_text = defaults.null_text;
         }
+        if !self.uses_date_format() {
+            applicable.date_format = defaults.date_format;
+        }
+        if !self.uses_sql_batch_size() {
+            applicable.sql_batch_size = defaults.sql_batch_size;
+        }
         applicable
     }
 
     /// Whether Import can read this format back. HTML and Markdown are for
-    /// people to read, and XML import is not implemented yet.
+    /// people to read, XML import is not implemented yet, and SQL scripts are
+    /// not read through the folder manifest.
     pub fn is_importable(self) -> bool {
         matches!(self, Self::Csv | Self::Json | Self::JsonLines)
     }
@@ -120,6 +159,7 @@ enum StreamWriter {
     Html(HtmlStreamWriter<BufWriter<File>>),
     Markdown(MarkdownStreamWriter<BufWriter<File>>),
     Xml(XmlStreamWriter<BufWriter<File>>),
+    Sql(Box<SqlInsertWriter<BufWriter<File>>>),
 }
 
 /// Writes one table's rows to `<dir>/<schema>.<table>.<ext>`.
@@ -141,6 +181,8 @@ pub struct FileSink {
     /// document. CSV ignores it: its header is fixed.
     whole_documents: bool,
     options: FormatOptions,
+    /// The source connection, whose generator renders SQL exports.
+    connection: Option<Arc<dyn Connection>>,
 }
 
 impl FileSink {
@@ -161,7 +203,14 @@ impl FileSink {
             rows_written: 0,
             whole_documents: false,
             options: FormatOptions::default(),
+            connection: None,
         }
+    }
+
+    /// The source connection a SQL export renders its statements with.
+    pub fn with_connection(mut self, connection: Arc<dyn Connection>) -> Self {
+        self.connection = Some(connection);
+        self
     }
 
     /// Writes with the CSV delimiter and encoding, NULL text and date format
@@ -286,6 +335,10 @@ impl RowSink for FileSink {
             FileFormat::Xml => {
                 StreamWriter::Xml(XmlStreamWriter::new(writer).with_options(self.options.clone()))
             }
+            FileFormat::Sql => {
+                self.writer = Some(self.sql_writer(writer, columns)?);
+                return Ok(());
+            }
         };
 
         match &mut stream {
@@ -295,6 +348,7 @@ impl RowSink for FileSink {
             StreamWriter::Html(w) => w.write_header(&self.columns),
             StreamWriter::Markdown(w) => w.write_header(&self.columns),
             StreamWriter::Xml(w) => w.write_header(&self.columns),
+            StreamWriter::Sql(_) => Ok(()),
         }
         .map_err(|e| TransferError::Sink(e.to_string()))?;
 
@@ -309,8 +363,15 @@ impl RowSink for FileSink {
             ));
         };
 
+        let connection = self.connection.clone();
+        let generator = connection.as_deref().and_then(|c| c.query_generator());
+
         for row in &chunk.0 {
             match writer {
+                StreamWriter::Sql(w) => {
+                    let generator = generator.ok_or_else(missing_generator)?;
+                    w.write_row(generator, row)?;
+                }
                 StreamWriter::Csv(w) => w
                     .write_row(row)
                     .map_err(|e| TransferError::Sink(e.to_string()))?,
@@ -343,6 +404,16 @@ impl RowSink for FileSink {
 
     fn finish(&mut self) -> Result<TransferReport, TransferError> {
         if let Some(writer) = self.writer.take() {
+            if let StreamWriter::Sql(w) = writer {
+                let connection = self.connection.clone();
+                let generator = connection
+                    .as_deref()
+                    .and_then(|c| c.query_generator())
+                    .ok_or_else(missing_generator)?;
+                w.finish(generator)?;
+                return Ok(self.completed_report());
+            }
+
             match writer {
                 StreamWriter::Csv(w) => w.finish(),
                 StreamWriter::Json(w) => w.finish(),
@@ -350,13 +421,44 @@ impl RowSink for FileSink {
                 StreamWriter::Html(w) => w.finish(),
                 StreamWriter::Markdown(w) => w.finish(),
                 StreamWriter::Xml(w) => w.finish(),
+                StreamWriter::Sql(_) => Ok(()),
             }
             .map_err(|e| TransferError::Sink(e.to_string()))?;
         }
 
+        Ok(self.completed_report())
+    }
+}
+
+fn missing_generator() -> TransferError {
+    TransferError::Sink("SQL export needs a connection that generates INSERT statements".into())
+}
+
+impl FileSink {
+    fn completed_report(&self) -> TransferReport {
         let mut report = TransferReport::new(TransferOutcome::Completed);
         report.rows_transferred = self.rows_written;
-        Ok(report)
+        report
+    }
+
+    fn sql_writer(
+        &self,
+        file: BufWriter<File>,
+        columns: &[TransferColumn],
+    ) -> Result<StreamWriter, TransferError> {
+        let connection = self.connection.as_deref().ok_or_else(|| {
+            TransferError::Sink("SQL export needs the source connection".to_string())
+        })?;
+        let batch_size =
+            effective_batch_size(self.options.sql_batch_size, driver_batch_cap(connection));
+
+        Ok(StreamWriter::Sql(Box::new(SqlInsertWriter::new(
+            file,
+            self.schema.clone(),
+            self.table.clone(),
+            columns,
+            batch_size,
+        ))))
     }
 }
 
@@ -657,6 +759,7 @@ mod tests {
             encoding: dbflux_export::TextEncoding::Windows1252,
             null_text: "\\N".to_string(),
             date_format: dbflux_export::DateFormat::default(),
+            ..FormatOptions::default()
         };
         let bytes =
             write_with_options("csv_options", FileFormat::Csv, options, note_rows()).unwrap();
@@ -741,6 +844,7 @@ mod tests {
             encoding: dbflux_export::TextEncoding::Utf16Le,
             null_text: "x".to_string(),
             date_format: dbflux_export::DateFormat::Epoch,
+            ..FormatOptions::default()
         };
         let json = FileFormat::Json.applicable_options(&all);
         assert_eq!(json.date_format, dbflux_export::DateFormat::Epoch);
@@ -928,5 +1032,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bytes, b"id,note\n1,\n");
+    }
+
+    #[test]
+    fn sql_format_identity_and_options() {
+        assert_eq!(FileFormat::Sql.extension(), "sql");
+        assert_eq!(FileFormat::Sql.label(), "SQL");
+        assert_eq!(FileFormat::from_extension("sql"), Some(FileFormat::Sql));
+        assert!(!FileFormat::ALL.contains(&FileFormat::Sql));
+        assert_eq!(FileFormat::WITH_SQL[6], FileFormat::Sql);
+        assert_eq!(FileFormat::WITH_SQL[..6], FileFormat::ALL);
+        assert!(!FileFormat::Sql.is_importable());
+
+        assert!(!FileFormat::Sql.uses_delimiter_and_encoding());
+        assert!(!FileFormat::Sql.uses_null_text());
+        assert!(!FileFormat::Sql.uses_date_format());
+        assert!(FileFormat::Sql.uses_sql_batch_size());
+        for format in FileFormat::ALL {
+            assert!(format.uses_date_format(), "{format:?}");
+            assert!(!format.uses_sql_batch_size(), "{format:?}");
+        }
+    }
+
+    #[test]
+    fn sql_keeps_only_its_batch_size_and_other_formats_drop_it() {
+        let chosen = FormatOptions {
+            delimiter: dbflux_export::CsvDelimiter::Pipe,
+            encoding: dbflux_export::TextEncoding::Utf16Le,
+            null_text: "x".to_string(),
+            date_format: dbflux_export::DateFormat::Epoch,
+            sql_batch_size: 25,
+        };
+
+        assert_eq!(
+            FileFormat::Sql.applicable_options(&chosen),
+            FormatOptions {
+                sql_batch_size: 25,
+                ..FormatOptions::default()
+            }
+        );
+        assert_eq!(
+            FileFormat::Csv.applicable_options(&chosen).sql_batch_size,
+            FormatOptions::default().sql_batch_size
+        );
     }
 }

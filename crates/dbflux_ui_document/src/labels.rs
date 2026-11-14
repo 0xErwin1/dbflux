@@ -2477,6 +2477,7 @@ pub(crate) fn export_all_format_label(format: dbflux_transfer::FileFormat) -> St
             dbflux_i18n::t!("document.data.grid.export.format.markdown")
         }
         dbflux_transfer::FileFormat::Xml => dbflux_i18n::t!("document.data.grid.export.format.xml"),
+        dbflux_transfer::FileFormat::Sql => dbflux_i18n::t!("document.data.grid.export.format.sql"),
     }
 }
 
@@ -6730,6 +6731,9 @@ mod tests {
         "document.export_wizard.format_options.segment_size_label",
         "document.export_wizard.format_options.segment_size_placeholder",
         "document.export_wizard.format_options.segment_size_invalid",
+        "document.export_wizard.format_options.sql_batch_size_label",
+        "document.export_wizard.format_options.sql_batch_size_hint",
+        "document.export_wizard.format_options.sql_batch_size_invalid",
         "document.export_wizard.format_options.error.no_dialog_fallback_failed",
         "document.export_wizard.confirm.title",
         "document.export_wizard.confirm.summary",
