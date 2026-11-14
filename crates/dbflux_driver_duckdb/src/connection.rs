@@ -8,11 +8,11 @@ use dbflux_core::{
     ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionExt, ConstraintInfo, ConstraintKind,
     CrudResult, DatabaseInfo, DbError, DbKind, DbSchemaInfo, DocumentConnection, DriverMetadata,
     ExecutionSession, ExecutionSessionFactory, ExplainRequest, ForeignKeyInfo, IndexData,
-    IndexInfo, KeyValueConnection, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest,
-    QueryResult, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, TableInfo, TableProfile, TableRef, TableViewFeatures,
-    Value, ViewInfo,
+    IndexInfo, KeyValueConnection, LogErr, QueryCancelHandle, QueryGenerator, QueryHandle,
+    QueryRequest, QueryResult, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert,
+    RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
+    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableInfo, TableProfile, TableRef,
+    TableViewFeatures, Value, ViewInfo,
 };
 use duckdb::arrow::datatypes::{DataType, TimeUnit as ArrowTimeUnit};
 use duckdb::types::{TimeUnit, Value as DuckValue};
@@ -28,6 +28,10 @@ pub(crate) struct SharedDuckDb {
     interrupt: Arc<duckdb::InterruptHandle>,
     key: String,
     settings: InstanceSettings,
+    /// The catalog and schema the instance's first connection was left in by
+    /// its startup SQL. Clones restore them when they are still available.
+    startup_catalog: String,
+    startup_schema: String,
 }
 
 impl SharedDuckDb {
@@ -35,13 +39,25 @@ impl SharedDuckDb {
         connection: duckdb::Connection,
         key: String,
         settings: InstanceSettings,
+        startup_catalog: String,
+        startup_schema: String,
     ) -> Self {
         Self {
             interrupt: connection.interrupt_handle(),
             connection: Mutex::new(connection),
             key,
             settings,
+            startup_catalog,
+            startup_schema,
         }
+    }
+
+    pub(crate) fn startup_catalog(&self) -> String {
+        self.startup_catalog.clone()
+    }
+
+    pub(crate) fn startup_schema(&self) -> String {
+        self.startup_schema.clone()
     }
 
     pub(crate) fn key(&self) -> &str {
@@ -59,9 +75,17 @@ impl SharedDuckDb {
     }
 
     pub(crate) fn try_clone(&self) -> Result<duckdb::Connection, DbError> {
-        self.lock()?
-            .try_clone()
-            .map_err(|error| DbError::connection_failed(format_duckdb_error(&error)))
+        let failed = |error: duckdb::Error| DbError::connection_failed(format_duckdb_error(&error));
+        let clone = self.lock()?.try_clone().map_err(failed)?;
+        clone
+            .execute_batch(&format!(
+                "USE {}.{}",
+                DUCKDB_DIALECT.quote_identifier(&self.startup_catalog),
+                DUCKDB_DIALECT.quote_identifier(&self.startup_schema)
+            ))
+            .map_err(failed)
+            .log_err_with("DuckDB could not restore the startup catalog and schema");
+        Ok(clone)
     }
 }
 
