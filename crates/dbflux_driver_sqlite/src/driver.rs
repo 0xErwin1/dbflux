@@ -1031,7 +1031,7 @@ impl Connection for SqliteConnection {
 
         Ok(TableInfo {
             name: table.to_string(),
-            schema: _schema.map(String::from),
+            schema: None,
             columns: Some(columns),
             indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
@@ -3161,6 +3161,27 @@ mod tests {
         assert_eq!(column_names(&other_case), ["a"]);
 
         assert!(connection.table_details("main", None, "nope").is_err());
+    }
+
+    /// SQLite has no schemas, so `table_details` must not echo a schema the
+    /// caller passed: completion would offer `public.doubled`, which SQLite
+    /// reads as an attached database and fails to run.
+    #[test]
+    fn table_details_reports_no_schema_even_when_one_is_passed() {
+        use dbflux_core::Connection;
+
+        let connection = engine_names_connection();
+
+        let with_schema = connection
+            .table_details("main", Some("public"), "doubled")
+            .expect("read the table with a schema argument");
+        assert_eq!(with_schema.schema, None);
+        assert_eq!(column_names(&with_schema), ["a"]);
+
+        let without_schema = connection
+            .table_details("main", None, "doubled")
+            .expect("read the table without a schema argument");
+        assert_eq!(without_schema.schema, None);
     }
 
     // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---

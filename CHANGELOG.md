@@ -4,6 +4,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **SQLite completion no longer offers `public.<table>` after a query runs** — Running a query no longer leaves a schema-qualified copy of each table it reads in the completion list of a SQLite or Turso connection, so completion offers `users` and never `public.users`, which SQLite rejects with `no such table`. When neither the query, the cached table nor the editor names a schema, the check that runs before a query now lets the driver use its own default schema instead of `public`, so a SQL Server or DuckDB table it reads is looked up in `dbo` or `main` (#1029).
+
 ## [0.10.0] - 2026-11-12
 
 ### Added
