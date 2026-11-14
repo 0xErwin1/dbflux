@@ -183,6 +183,25 @@ enum TemporalKind {
 /// decides, so `timestamp with time zone`, `timestamptz`, `time(3)`,
 /// `datetime2(3)` and `Nullable(DateTime)` match while a custom type such as
 /// `runtime` does not.
+/// Base names of the timestamp types the drivers report, after modifiers
+/// such as `(6)` or ` with time zone` are dropped. Matching the whole name
+/// keeps a custom type such as `timestamp_label` as text.
+const TIMESTAMP_TYPE_NAMES: &[&str] = &[
+    "timestamp",
+    "timestamptz",
+    "timestamp_s",
+    "timestamp_ms",
+    "timestamp_ns",
+    "timestamp_tz",
+    "timestamp_ltz",
+    "timestamp_ntz",
+    "datetime",
+    "datetime2",
+    "datetime64",
+    "datetimeoffset",
+    "smalldatetime",
+];
+
 fn temporal_kind(type_name: &str) -> Option<TemporalKind> {
     let lowered = type_name.to_ascii_lowercase();
     let mut base = lowered.trim();
@@ -198,7 +217,7 @@ fn temporal_kind(type_name: &str) -> Option<TemporalKind> {
         .next()
         .unwrap_or_default();
 
-    if word.starts_with("timestamp") || word.starts_with("datetime") || word == "smalldatetime" {
+    if TIMESTAMP_TYPE_NAMES.contains(&word) {
         Some(TemporalKind::Timestamp)
     } else if matches!(word, "date" | "date32") {
         Some(TemporalKind::Date)
@@ -530,6 +549,8 @@ mod tests {
                 "timeline",
                 "update_date_marker",
                 "mytimestampish",
+                "timestamp_label",
+                "datetime_label",
             ] {
                 assert_eq!(
                     value_from_csv_field("100", Some(type_name), &options),
