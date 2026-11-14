@@ -658,6 +658,91 @@ mod tests {
         }
     }
 
+    /// Top-level date columns follow the preset; dates nested at any depth keep
+    /// the tagged form; every preset round-trips.
+    #[test]
+    fn json_date_presets_shape_top_level_and_keep_deep_nested_tags() {
+        use crate::pipeline::{RowChunk, RowSink, RowSource, TableMappingMode};
+        use dbflux_core::Value;
+        use dbflux_core::chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
+        use dbflux_export::DateFormat;
+
+        let Some(moment) = Utc.with_ymd_and_hms(2021, 3, 4, 5, 6, 7).single() else {
+            panic!("valid timestamp");
+        };
+        let (Some(date), Some(time)) = (
+            NaiveDate::from_ymd_opt(2021, 3, 4),
+            NaiveTime::from_hms_opt(5, 6, 7),
+        ) else {
+            panic!("valid date and time");
+        };
+        let columns = vec![
+            typed_column("ts", "timestamptz"),
+            typed_column("d", "date"),
+            typed_column("t", "time"),
+            typed_column("doc", "jsonb"),
+        ];
+        let deep = Value::Document(
+            [(
+                "deep".to_string(),
+                Value::Array(vec![Value::DateTime(moment)]),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let row = vec![
+            Value::DateTime(moment),
+            Value::Date(date),
+            Value::Time(time),
+            Value::Document([("inner".to_string(), deep)].into_iter().collect()),
+        ];
+        let cases = [
+            (DateFormat::DateTime, "\"ts\":\"2021-03-04 05:06:07\""),
+            (DateFormat::Epoch, "\"ts\":1614834367"),
+        ];
+
+        for format in [FileFormat::Json, FileFormat::JsonLines] {
+            for (date_format, top_level) in cases {
+                let options = FormatOptions {
+                    date_format,
+                    ..FormatOptions::default()
+                };
+                let dir = temp_dir(&format!("deep_{}_{date_format:?}", format.extension()));
+                let mut sink = FileSink::new(&dir, None, "t", format).with_options(options.clone());
+                sink.begin(&columns, TableMappingMode::Existing)
+                    .expect("begin");
+                sink.write_chunk(&RowChunk(vec![row.clone()]))
+                    .expect("write");
+                sink.finish().expect("finish");
+                let path = dir.join(format!("t.{}", format.extension()));
+                let text = std::fs::read_to_string(&path).expect("read file");
+                let mut source = crate::file_source::FileSource::open_with(
+                    &path,
+                    format,
+                    columns.clone(),
+                    10,
+                    None,
+                    options,
+                )
+                .expect("open");
+                let chunk = RowSource::next_chunk(&mut source, &CancelToken::new())
+                    .expect("read")
+                    .expect("one chunk");
+                std::fs::remove_dir_all(&dir).ok();
+
+                assert!(
+                    text.contains(top_level),
+                    "{format:?} {date_format:?}: {text}"
+                );
+                assert!(
+                    text.contains("\"deep\":[{\"$date\":\"2021-03-04T05:06:07+00:00\"}]"),
+                    "{format:?} {date_format:?}: {text}"
+                );
+                assert_eq!(chunk.0, vec![row.clone()], "{format:?} {date_format:?}");
+            }
+        }
+    }
+
     fn typed_column(name: &str, type_name: &str) -> TransferColumn {
         TransferColumn {
             name: name.to_string(),
