@@ -117,8 +117,14 @@ pub struct FormatOptions {
     pub null_text: String,
     pub date_format: DateFormat,
     /// Rows per `INSERT` statement in a SQL export. The driver's own limit
-    /// caps it when it sets one.
+    /// caps it when it sets one. Omitted from a manifest at its default, so a
+    /// manifest records only what shaped the file.
+    #[serde(skip_serializing_if = "is_default_sql_batch_size")]
     pub sql_batch_size: u32,
+}
+
+fn is_default_sql_batch_size(size: &u32) -> bool {
+    *size == DEFAULT_SQL_BATCH_SIZE
 }
 
 impl Default for FormatOptions {

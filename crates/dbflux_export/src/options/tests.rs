@@ -122,3 +122,24 @@ fn a_non_default_sql_batch_size_is_not_default() {
     };
     assert!(!options.is_default());
 }
+
+#[test]
+fn the_default_sql_batch_size_is_not_serialized() {
+    let options = FormatOptions {
+        date_format: DateFormat::Epoch,
+        ..FormatOptions::default()
+    };
+    let Ok(json) = serde_json::to_string(&options) else {
+        panic!("options serialize");
+    };
+    assert!(!json.contains("sql_batch_size"), "{json}");
+
+    let options = FormatOptions {
+        sql_batch_size: 100,
+        ..FormatOptions::default()
+    };
+    let Ok(json) = serde_json::to_string(&options) else {
+        panic!("options serialize");
+    };
+    assert!(json.contains("\"sql_batch_size\":100"), "{json}");
+}
