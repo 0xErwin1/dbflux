@@ -117,7 +117,7 @@ impl<W: Write> XmlStreamWriter<W> {
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
         self.column_names = columns
             .iter()
-            .map(|column| escape_markup(&column.name))
+            .map(|column| escape_xml(&column.name))
             .collect();
         self.writer
             .write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n")?;
@@ -133,7 +133,7 @@ impl<W: Write> XmlStreamWriter<W> {
                 write!(
                     self.writer,
                     "<field name=\"{name}\">{}</field>",
-                    escape_markup(&value_to_csv_field(value))
+                    escape_xml(&value_to_csv_field(value))
                 )?;
             }
         }
@@ -167,6 +167,23 @@ pub(crate) fn escape_markup(text: &str) -> String {
     escaped
 }
 
+/// Escapes text for XML content and attribute values. Tab, line feed and
+/// carriage return are written as character references: a parser normalizes
+/// them to spaces inside an attribute and folds a literal carriage return in
+/// text, so only a reference keeps the value as it was.
+fn escape_xml(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\t' => escaped.push_str("&#9;"),
+            '\n' => escaped.push_str("&#10;"),
+            '\r' => escaped.push_str("&#13;"),
+            character => escaped.push_str(&escape_markup(character.encode_utf8(&mut [0; 4]))),
+        }
+    }
+    escaped
+}
+
 fn is_xml_char(character: char) -> bool {
     matches!(
         character,
@@ -174,13 +191,33 @@ fn is_xml_char(character: char) -> bool {
     )
 }
 
-/// Keeps a value inside one Markdown table cell: a pipe would end the cell
-/// and a line break would end the row.
+/// Keeps a value inside one Markdown table cell and shows it as stored: a
+/// pipe would end the cell, a line break would end the row, HTML and entities
+/// would be rendered, and emphasis, code and link characters would format
+/// the text. Line breaks become `<br>` only after everything else is escaped.
 fn escape_markdown_cell(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('|', "\\|")
-        .replace("\r\n", "<br>")
-        .replace(['\n', '\r'], "<br>")
+    let mut escaped = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\\' | '|' | '*' | '_' | '`' | '~' | '[' | ']' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            '\r' => {
+                if characters.peek() == Some(&'\n') {
+                    characters.next();
+                }
+                escaped.push_str("<br>");
+            }
+            '\n' => escaped.push_str("<br>"),
+            character => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 #[cfg(test)]

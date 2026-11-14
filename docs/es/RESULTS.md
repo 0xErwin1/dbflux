@@ -269,8 +269,8 @@ Una colección de documentos exportada como JSON escribe cada documento
 completo, un objeto por línea, con todos sus campos. Como CSV, HTML, Markdown o XML se escribe con
 las columnas que la cuadrícula muestra para la primera página, incluidos los
 objetos expandidos. Los documentos de una colección no tienen por qué
-compartir sus campos, así que en un CSV un campo que aparece por primera vez en
-una página posterior no tiene columna, porque el encabezado ya está escrito; en
+compartir sus campos, así que en cualquiera de estos archivos un campo que
+aparece por primera vez en una página posterior no tiene columna, porque el encabezado ya está escrito; en
 ese caso la exportación nombra esos campos en una advertencia.
 
 Un resultado de consulta ofrece solo las filas cargadas, porque exportarlas

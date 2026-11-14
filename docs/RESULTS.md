@@ -247,8 +247,8 @@ it stays distinct from an empty value.
 A document collection exported as JSON writes each document whole, one object
 per line, with every field it has. As CSV, HTML, Markdown or XML it is written with the columns the
 grid shows for the first page, including expanded objects. Documents of one
-collection need not share their fields, so in a CSV file a field that first
-appears on a later page has no column, because the header is already written;
+collection need not share their fields, so in any of these files a field that
+first appears on a later page has no column, because the header is already written;
 the export then names those fields in a warning.
 
 A query result offers only the loaded rows, because exporting all of them would

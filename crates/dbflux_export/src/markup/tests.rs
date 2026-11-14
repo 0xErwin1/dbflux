@@ -76,7 +76,7 @@ fn html_with_no_rows_still_closes_the_document() {
 fn markdown_writes_a_table_with_header_separator_and_rows() {
     assert_eq!(
         markdown(&columns(), &rows()),
-        "| id | note |\n| --- | --- |\n| 1 | a <b> & \"c\" |\n| 2 |  |\n"
+        "| id | note |\n| --- | --- |\n| 1 | a &lt;b&gt; &amp; \"c\" |\n| 2 |  |\n"
     );
 }
 
@@ -86,6 +86,46 @@ fn markdown_keeps_pipes_and_line_breaks_inside_the_cell() {
     assert_eq!(
         markdown(&columns(), &rows),
         "| id | note |\n| --- | --- |\n| 1 | x \\| y<br>z\\\\w |\n"
+    );
+}
+
+#[test]
+fn markdown_escapes_html_entities_and_formatting_so_the_text_renders_as_stored() {
+    let rows = vec![vec![
+        Value::Int(1),
+        Value::Text("<b>t</b> &copy; **x** _y_ `z` ~w~ [l](u)\r\nnext".to_string()),
+    ]];
+    assert_eq!(
+        markdown(&columns(), &rows),
+        "| id | note |\n| --- | --- |\n\
+| 1 | &lt;b&gt;t&lt;/b&gt; &amp;copy; \\*\\*x\\*\\* \\_y\\_ \\`z\\` \\~w\\~ \\[l\\](u)<br>next |\n"
+    );
+}
+
+#[test]
+fn markdown_escapes_column_names_too() {
+    let columns = vec![column("a|b"), column("*c*")];
+    let output = markdown(&columns, &[]);
+    assert!(output.starts_with("| a\\|b | \\*c\\* |\n"), "{output}");
+}
+
+#[test]
+fn xml_writes_tab_line_feed_and_carriage_return_as_references() {
+    let columns = vec![column("a\nb"), column("a b"), column("c")];
+    let rows = vec![vec![
+        Value::Int(1),
+        Value::Int(2),
+        Value::Text("x\r\ny\tz".to_string()),
+    ]];
+    let output = xml(&columns, &rows);
+    assert!(
+        output.contains("<field name=\"a&#10;b\">1</field>"),
+        "{output}"
+    );
+    assert!(output.contains("<field name=\"a b\">2</field>"), "{output}");
+    assert!(
+        output.contains("<field name=\"c\">x&#13;&#10;y&#9;z</field>"),
+        "{output}"
     );
 }
 
