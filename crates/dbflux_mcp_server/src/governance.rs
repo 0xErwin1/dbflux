@@ -1215,7 +1215,17 @@ pub(crate) mod tests {
             }).await;
             assert_eq!(result.is_error, Some(false));
             let value = serde_json::from_str::<serde_json::Value>(&result.content[0].as_text().expect("text").text).expect("JSON");
-            assert_eq!(value, if listing { serde_json::json!([]) } else { serde_json::json!({"inserted": 1, "records": []}) });
+            // `list_scripts` reads the machine's real scripts directory, so the
+            // assertion is about shape, not about an empty machine. The subject
+            // of this test is that neither call earns telemetry credit.
+            if listing {
+                assert!(
+                    value.is_array(),
+                    "list_scripts answers an array, whatever the machine holds"
+                );
+            } else {
+                assert_eq!(value, serde_json::json!({"inserted": 1, "records": []}));
+            }
             assert_eq!(counts, [0; 6], "opaque contracts never earn credit");
             assert_eq!(begins, 0);
             assert!(finishes.is_empty());

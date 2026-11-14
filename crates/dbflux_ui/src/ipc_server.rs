@@ -860,8 +860,10 @@ mod tests {
         drop(foreground);
     }
 
+    /// The identity is stable, so time passing is not an epoch change and a
+    /// reservation survives it. An explicit reset is what reclaims the ledger.
     #[gpui::test]
-    fn ipc_rotation_invalidates_and_reclaims_ledger(cx: &mut TestAppContext) {
+    fn ipc_stable_identity_keeps_the_ledger_and_reset_reclaims_it(cx: &mut TestAppContext) {
         let app = owner(cx, "basic");
         let mut route = Route::new(&app);
         let session = Uuid::new_v4();
@@ -873,7 +875,15 @@ mod tests {
             })
         });
         route.tick(cx);
-        assert_eq!(route.slots(), 0, "rotation reclaims stale tickets");
+        assert_eq!(route.slots(), 1, "a stable identity keeps the reservation");
+        cx.update(|cx| {
+            app.update(cx, |app, _| {
+                app.reset_telemetry_install_id(chrono::Utc::now())
+                    .expect("reset");
+            })
+        });
+        route.tick(cx);
+        assert_eq!(route.slots(), 0, "a reset reclaims stale tickets");
         assert!(!route.finish(session, capability, true, cx));
         assert_counts(&app, cx, 0);
     }
