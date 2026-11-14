@@ -105,6 +105,9 @@ enum EventSchema {
 #[serde(tag = "event", rename_all = "lowercase")]
 enum Payload {
     Ping,
+    /// Minimal-level weekly signal: identity and platform only, which is why
+    /// it is a separate kind rather than a `basic` without the dimensions.
+    Active,
     Basic {
         system_language: String,
         country: String,
@@ -393,6 +396,7 @@ struct WireEvent {
 #[serde(rename_all = "lowercase")]
 enum EventKind {
     Ping,
+    Active,
     Basic,
 }
 
@@ -415,6 +419,8 @@ pub fn validate_payload(json: &str) -> Result<(), ProtocolError> {
     }
     match wire.event {
         EventKind::Ping if keys == 9 => Ok(()),
+        // Active carries exactly the ping shape: identity and platform only.
+        EventKind::Active if keys == 9 => Ok(()),
         EventKind::Basic if keys == 12 => {
             let language = wire.system_language.ok_or(ProtocolError)?;
             let country = wire.country.ok_or(ProtocolError)?;
@@ -478,11 +484,21 @@ pub struct PendingDelivery {
     id: Uuid,
     build: Build,
     basic: bool,
+    /// A state file written before the `active` kind existed has no such key;
+    /// those deliveries were pings or Basic heartbeats, so `false` is right.
+    #[serde(default)]
+    active: bool,
     json: String,
     retry_at: DateTime<Utc>,
     failures: u8,
 }
 impl PendingDelivery {
+    /// Whether this delivery is the weekly `active` signal rather than a
+    /// build ping or a Basic heartbeat. Hosts that assert per-build behaviour
+    /// need it, because a Minimal queue holds both a ping and an active.
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
     pub fn id(&self) -> Uuid {
         self.id
     }
@@ -506,18 +522,21 @@ pub struct TelemetryState {
     disclosure_dismissed: bool,
     level: Level,
     last_basic_success: Option<DateTime<Utc>>,
+    #[serde(default)]
+    last_active_success: Option<DateTime<Utc>>,
     sent_builds: Vec<Build>,
     counters: BTreeMap<Feature, u16>,
     pending: Vec<PendingDelivery>,
 }
 impl TelemetryState {
-    pub fn new(now: DateTime<Utc>) -> Self {
+    pub fn new(_now: DateTime<Utc>) -> Self {
         Self {
             install_id: Uuid::new_v4(),
             rotated_at: None,
             disclosure_dismissed: false,
             level: Level::Minimal,
             last_basic_success: None,
+            last_active_success: None,
             sent_builds: Vec::new(),
             counters: BTreeMap::new(),
             pending: Vec::new(),
@@ -540,7 +559,7 @@ impl TelemetryState {
             if !delivery_ids.insert(delivery.id) {
                 return Err(ProtocolError);
             }
-            if !delivery.basic {
+            if !delivery.basic && !delivery.active {
                 if self.sent_builds.contains(&delivery.build)
                     || ping_builds.contains(&&delivery.build)
                 {
@@ -570,6 +589,12 @@ impl TelemetryState {
                 .filter(|delivery| delivery.basic)
                 .count()
                 > 1
+            || self
+                .pending
+                .iter()
+                .filter(|delivery| delivery.active)
+                .count()
+                > 1
         {
             return Err(ProtocolError);
         }
@@ -594,9 +619,10 @@ impl TelemetryState {
             {
                 return Err(ProtocolError);
             }
-            match (wire.event, delivery.basic) {
-                (EventKind::Ping, false) if keys == 9 => {}
-                (EventKind::Basic, true) if keys == 12 => {
+            match (wire.event, delivery.basic, delivery.active) {
+                (EventKind::Ping, false, false) if keys == 9 => {}
+                (EventKind::Active, false, true) if keys == 9 => {}
+                (EventKind::Basic, true, false) if keys == 12 => {
                     let language = wire.system_language.ok_or(ProtocolError)?;
                     let country = wire.country.ok_or(ProtocolError)?;
                     let features = wire.features.ok_or(ProtocolError)?;
@@ -692,6 +718,8 @@ impl TelemetryState {
             let delivery = self.pending.remove(index);
             if delivery.basic {
                 self.last_basic_success = Some(now);
+            } else if delivery.active {
+                self.last_active_success = Some(now);
             } else if !self.sent_builds.contains(&delivery.build) {
                 self.sent_builds.push(delivery.build);
             }
@@ -729,9 +757,17 @@ impl TelemetryState {
             && !candidate
                 .pending
                 .iter()
-                .any(|delivery| !delivery.basic && &delivery.build == build)
+                .any(|delivery| !delivery.basic && !delivery.active && &delivery.build == build)
         {
             candidate.queue(now, build, os, arch, Payload::Ping)?;
+        }
+        if candidate.level == Level::Minimal
+            && !candidate.pending.iter().any(|delivery| delivery.active)
+            && candidate
+                .last_active_success
+                .is_none_or(|last| now.signed_duration_since(last) >= Duration::days(7))
+        {
+            candidate.queue(now, build, os, arch, Payload::Active)?;
         }
         if candidate.level == Level::Basic
             && !candidate.pending.iter().any(|delivery| delivery.basic)
@@ -771,6 +807,7 @@ impl TelemetryState {
     ) -> Result<(), ProtocolError> {
         let id = Uuid::new_v4();
         let basic = matches!(payload, Payload::Basic { .. });
+        let active = matches!(payload, Payload::Active);
         let event = Event {
             schema: EventSchema::V1,
             install_id: self.install_id,
@@ -791,6 +828,7 @@ impl TelemetryState {
             id,
             build: build.clone(),
             basic,
+            active,
             json,
             retry_at: now,
             failures: 0,
@@ -802,6 +840,16 @@ impl TelemetryState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pings only: at Minimal the queue also holds a weekly `active`, so a
+    /// per-build assertion must not count deliveries.
+    fn pending_pings(state: &TelemetryState) -> usize {
+        state
+            .pending
+            .iter()
+            .filter(|delivery| !delivery.basic && !delivery.active)
+            .count()
+    }
 
     fn clock() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
@@ -827,6 +875,86 @@ mod tests {
         }
     }
 
+    /// Minimal is the default level, so it must be able to report activity.
+    /// It sends `active` weekly — never `basic`, which carries the opted-in
+    /// dimensions — and Basic replaces it with the full heartbeat.
+    #[test]
+    fn minimal_sends_active_weekly_and_basic_replaces_it() {
+        let now = clock();
+        let build = Build {
+            version: "1.5.0".into(),
+            channel: Channel::Stable,
+        };
+        let mut state = TelemetryState::new(now);
+        state.dismiss_disclosure();
+        state
+            .schedule(now, &build, Platform::Linux, Architecture::Amd64, "en", None)
+            .expect("schedule at Minimal");
+
+        let kinds: Vec<&str> = state
+            .pending
+            .iter()
+            .map(|delivery| {
+                if delivery.basic {
+                    "basic"
+                } else if delivery.active {
+                    "active"
+                } else {
+                    "ping"
+                }
+            })
+            .collect();
+        assert_eq!(kinds, vec!["ping", "active"], "Minimal sends ping plus active");
+
+        let active = state
+            .pending
+            .iter()
+            .find(|delivery| delivery.active)
+            .expect("active queued");
+        let wire: serde_json::Value = serde_json::from_str(active.json()).expect("wire");
+        assert_eq!(wire["event"], "active");
+        assert_eq!(wire.as_object().expect("object").len(), 9);
+
+        let ack = Acknowledgement::parse(
+            200,
+            br#"{"schema":"dbflux.telemetry-delivery/v1","decision":"stored"}"#,
+        )
+        .expect("ack");
+        let active_id = active.id;
+        state
+            .acknowledge(active_id, &ack, now + Duration::hours(1))
+            .expect("acknowledge");
+        state
+            .schedule(
+                now + Duration::days(1),
+                &build,
+                Platform::Linux,
+                Architecture::Amd64,
+                "en",
+                None,
+            )
+            .expect("second schedule");
+        assert!(
+            !state.pending.iter().any(|delivery| delivery.active),
+            "active must not repeat within the week"
+        );
+
+        let mut basic = TelemetryState::new(now);
+        basic.dismiss_disclosure();
+        basic.set_level(Level::Basic);
+        basic
+            .schedule(now, &build, Platform::Linux, Architecture::Amd64, "en", None)
+            .expect("schedule at Basic");
+        assert!(
+            basic.pending.iter().any(|delivery| delivery.basic),
+            "Basic queues its heartbeat"
+        );
+        assert!(
+            !basic.pending.iter().any(|delivery| delivery.active),
+            "Basic must not also queue an active event"
+        );
+    }
+
     #[test]
     fn telemetry_minimal_ping_wire_and_rotation() {
         let now = clock();
@@ -848,7 +976,7 @@ mod tests {
                 Some("bad"),
             )
             .expect("queue");
-        assert_eq!(state.pending.len(), 1);
+        assert_eq!(pending_pings(&state), 1);
         let original = state.pending[0].clone();
         let json: serde_json::Value = serde_json::from_str(original.json()).expect("wire");
         let object = json.as_object().expect("object");
@@ -897,7 +1025,7 @@ mod tests {
             original_install,
             "the installation id must never rotate on its own"
         );
-        assert_eq!(state.pending.len(), 1);
+        assert_eq!(pending_pings(&state), 1);
         let ack = Acknowledgement::parse(
             200,
             br#"{"schema":"dbflux.telemetry-delivery/v1","decision":"stored"}"#,
@@ -917,7 +1045,7 @@ mod tests {
                 None,
             )
             .expect("acknowledged build");
-        assert!(state.pending.is_empty());
+        assert_eq!(pending_pings(&state), 0, "an acknowledged build never pings again");
         let other_build = Build {
             version: "1.2.3-rc.1+other".into(),
             channel: Channel::Rc,
@@ -932,7 +1060,7 @@ mod tests {
                 None,
             )
             .expect("exact metadata build");
-        assert_eq!(state.pending.len(), 1);
+        assert_eq!(pending_pings(&state), 1, "a new build pings once");
     }
 
     fn fixture_build() -> Build {
@@ -992,7 +1120,7 @@ mod tests {
         schedule_fixture(&mut state, now);
         schedule_fixture(&mut state, now + Duration::days(8));
 
-        assert_eq!(state.pending.len(), 1);
+        assert_eq!(pending_pings(&state), 1);
         assert!(!state.pending[0].basic);
         assert!(state.counters.is_empty(), "usage counting is Basic-only");
         let json: serde_json::Value = serde_json::from_str(state.pending[0].json()).expect("wire");
@@ -1007,7 +1135,7 @@ mod tests {
         let id = state.pending[0].id;
         state.acknowledge(id, &ack, now).expect("acknowledge");
         schedule_fixture(&mut state, now + Duration::days(30));
-        assert!(state.pending.is_empty(), "one ping per build");
+        assert_eq!(pending_pings(&state), 0, "one ping per build");
     }
 
     #[test]
@@ -1053,7 +1181,7 @@ mod tests {
         let mut state = TelemetryState::new(now);
         state.dismiss_disclosure();
         schedule_fixture(&mut state, now);
-        assert_eq!(state.pending.len(), 1);
+        assert_eq!(pending_pings(&state), 1);
 
         let mut json = serde_json::to_value(&state).expect("state");
         json["level"] = "Off".into();

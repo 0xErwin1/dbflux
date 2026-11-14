@@ -924,6 +924,16 @@ mod tests {
                 .expect("config"),
         )
     }
+    /// Deliveries that are build pings: a Minimal queue also holds the weekly
+    /// `active`, so a per-build assertion must not count every delivery.
+    fn pending_pings(scheduler: &TelemetryScheduler) -> usize {
+        scheduler
+            .state()
+            .pending()
+            .iter()
+            .filter(|delivery| !delivery.is_active())
+            .count()
+    }
     fn job(scheduler: &mut TelemetryScheduler, time: DateTime<Utc>) -> DeliveryJob {
         let Preparation::Job(job) = scheduler.prepare(time, "es_AR").expect("prepare") else {
             panic!("expected job");
@@ -991,7 +1001,7 @@ mod tests {
             scheduler.prepare(now(), "en"),
             Err(TelemetryError::Audit)
         ));
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
     }
     #[test]
     fn telemetry_bridge_batches_six_once_and_ack_preserves_newer_credits() {
@@ -1203,7 +1213,7 @@ mod tests {
         scheduler
             .complete(acknowledged(&basic), now())
             .expect("ack clears the basic delivery");
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
 
         // Reopen the real scratch-backed service: the report must survive in
         // the durable audit, not in any in-memory state.
@@ -1431,8 +1441,22 @@ mod tests {
         )
         .expect("restart");
         assert!(restarted.is_disclosure_dismissed());
-        let later = job(&mut restarted, now());
-        assert!(later.payload().contains("1.2.4"));
+        // A Minimal queue holds the new build's ping and the weekly active, in
+        // either order: walk it until the new build is the one prepared.
+        let mut saw_new_build = false;
+        for _ in 0..4 {
+            let Ok(Preparation::Job(job)) = restarted.prepare(now(), "en") else {
+                break;
+            };
+            if job.payload().contains("1.2.4") {
+                saw_new_build = true;
+                break;
+            }
+            restarted
+                .complete(acknowledged(&job), now())
+                .expect("clear the other delivery");
+        }
+        assert!(saw_new_build, "the new build must be prepared");
     }
 
     #[test]
@@ -1509,7 +1533,7 @@ mod tests {
                 scheduler.prepare(now(), "en"),
                 Ok(Preparation::Skipped(SkipReason::UnsupportedBuild))
             ));
-            assert!(scheduler.state().pending().is_empty());
+            assert_eq!(pending_pings(&scheduler), 0);
         }
     }
     #[test]
@@ -1675,7 +1699,7 @@ mod tests {
             ));
         }
 
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
         assert!(scheduler.usage_source(now()).expect("off").is_none());
         let events = audit
             .query_extended(&dbflux_audit::query::AuditQueryFilter::default())
@@ -1697,12 +1721,16 @@ mod tests {
             .complete(acknowledged(&ping), now())
             .expect("ping");
 
-        assert!(matches!(
-            scheduler
-                .prepare(now() + chrono::Duration::days(8), "en")
-                .expect("no weekly report"),
-            Preparation::Skipped(SkipReason::NotDue)
-        ));
+        // Eight days later the weekly signal is due, and at Minimal it is
+        // `active`, never a Basic report.
+        let weekly = scheduler
+            .prepare(now() + chrono::Duration::days(8), "en")
+            .expect("weekly");
+        let Preparation::Job(weekly) = weekly else {
+            panic!("the weekly signal is due at Minimal");
+        };
+        let wire: serde_json::Value = serde_json::from_str(weekly.payload()).expect("wire");
+        assert_eq!(wire["event"], "active");
         let report = last_report(&audit).expect("lookup").expect("report");
         assert_eq!(report.level.as_deref(), Some("minimal"));
     }
@@ -1715,7 +1743,7 @@ mod tests {
 
         scheduler.set_level(Level::Off, now()).expect("off");
 
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
         let completion = queued.attempt_with(now(), |_| panic!("cancelled ping must not dispatch"));
         assert_eq!(completion.code(), "cancelled");
         assert_eq!(
@@ -1742,7 +1770,7 @@ mod tests {
         scheduler.set_level(Level::Minimal, now()).expect("minimal");
 
         assert_eq!(report.phase.load(Ordering::SeqCst), CANCELLED);
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
         assert!(scheduler.usage_source(now()).expect("minimal").is_none());
     }
 
@@ -1834,7 +1862,7 @@ mod tests {
             scheduler.complete(completion, now()),
             Err(TelemetryError::Audit)
         );
-        assert_eq!(scheduler.state().pending().len(), 1);
+        assert_eq!(pending_pings(&scheduler), 1);
     }
     #[test]
     fn telemetry_failed_outcome_audit_does_not_acknowledge() {
@@ -1882,7 +1910,7 @@ mod tests {
         scheduler
             .complete(completion, now())
             .expect("foreground completion");
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
     }
     #[test]
     fn telemetry_dropped_owner_update_releases_finished_completion_lease() {
@@ -1904,15 +1932,19 @@ mod tests {
         assert_eq!(retry.delivery_id(), id);
         assert_eq!(retry.payload(), payload);
         assert!(!Arc::ptr_eq(&phase, &retry.phase));
-        assert_eq!(scheduler.state().pending().len(), 1);
+        assert_eq!(pending_pings(&scheduler), 1);
         scheduler
             .complete(acknowledged(&retry), now())
             .expect("retry completion");
-        assert!(scheduler.state().pending().is_empty());
-        assert!(matches!(
-            scheduler.prepare(now(), "en"),
-            Ok(Preparation::Skipped(SkipReason::NotDue))
-        ));
+        assert_eq!(pending_pings(&scheduler), 0);
+        // The ping is settled; what remains due is the weekly active.
+        match scheduler.prepare(now(), "en") {
+            Ok(Preparation::Job(job)) => assert!(
+                job.payload().contains("active"),
+                "only the weekly signal may still be due"
+            ),
+            _ => panic!("unexpected preparation"),
+        }
     }
 
     #[test]
@@ -1933,7 +1965,7 @@ mod tests {
         scheduler
             .complete(acknowledged(&replacement), now())
             .expect("replacement completion");
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
     }
 
     #[test]
@@ -1961,7 +1993,7 @@ mod tests {
         scheduler
             .complete(acknowledged(&current), now())
             .expect("current completion");
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
     }
 
     #[test]
@@ -1977,7 +2009,14 @@ mod tests {
                 .expect("ping completion"),
             CompletionDisposition::Applied
         );
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
+        // The weekly active queued at Minimal is unrelated to the next Basic
+        // delivery, so clear it before switching levels.
+        if let Ok(Preparation::Job(weekly)) = scheduler.prepare(now(), "en") {
+            scheduler
+                .complete(acknowledged(&weekly), now())
+                .expect("weekly active");
+        }
         scheduler.set_basic(true, now()).expect("basic");
         let basic = job(&mut scheduler, now());
         assert!(!Arc::ptr_eq(&old_phase, &basic.phase));
@@ -1986,7 +2025,7 @@ mod tests {
         scheduler
             .complete(acknowledged(&basic), now())
             .expect("basic completion");
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
     }
 
     #[test]
@@ -2047,11 +2086,16 @@ mod tests {
         scheduler
             .complete(completion, now())
             .expect("permanent rejection");
-        assert!(matches!(
-            scheduler.prepare(now() + chrono::Duration::days(1), "en"),
-            Ok(Preparation::Skipped(SkipReason::NotDue))
-        ));
-        assert_eq!(scheduler.state().pending().len(), 1);
+        // The rejected ping is not retried; the weekly active is unrelated and
+        // may still be prepared.
+        match scheduler.prepare(now() + chrono::Duration::days(1), "en") {
+            Ok(Preparation::Job(job)) => assert!(
+                job.payload().contains("active"),
+                "a permanently rejected ping must not be prepared again"
+            ),
+            _ => panic!("unexpected preparation"),
+        }
+        assert_eq!(pending_pings(&scheduler), 1);
     }
     #[test]
     fn telemetry_default_endpoint_is_unavailable() {
@@ -2061,6 +2105,6 @@ mod tests {
             scheduler.prepare(now(), "en").expect("no endpoint"),
             Preparation::Skipped(SkipReason::NoEndpoint)
         ));
-        assert!(scheduler.state().pending().is_empty());
+        assert_eq!(pending_pings(&scheduler), 0);
     }
 }
