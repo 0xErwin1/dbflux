@@ -190,6 +190,13 @@ impl FileSource {
             }
             FileFormat::Json => open_json(file)?,
             FileFormat::JsonLines => open_json_lines(BufReader::new(file)),
+            FileFormat::Html | FileFormat::Markdown | FileFormat::Xml => {
+                return Err(TransferError::Source(format!(
+                    "{}: {} files cannot be imported",
+                    path.display(),
+                    format.label()
+                )));
+            }
         };
 
         Ok(Self {
@@ -329,6 +336,27 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[test]
+    fn open_rejects_formats_import_cannot_read() {
+        let dir = temp_dir("not_importable");
+        let path = dir.join("t.html");
+        std::fs::write(&path, "<table></table>").unwrap();
+
+        for format in [FileFormat::Html, FileFormat::Markdown, FileFormat::Xml] {
+            assert!(!format.is_importable());
+            let Err(TransferError::Source(message)) =
+                FileSource::open(&path, format, vec![column("id", "int4")], 10, None)
+            else {
+                panic!("{format:?} must not open for import");
+            };
+            assert!(
+                message.ends_with(&format!("{} files cannot be imported", format.label())),
+                "{message}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod binary;
 mod csv;
 mod json;
+mod markup;
 mod streaming;
 mod text;
 
@@ -11,6 +12,7 @@ use thiserror::Error;
 pub use binary::{BinaryExportMode, BinaryExporter};
 pub use csv::CsvExporter;
 pub use json::JsonExporter;
+pub use markup::{HtmlStreamWriter, MarkdownStreamWriter, XmlStreamWriter};
 pub use streaming::{CsvStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter};
 pub use text::TextExporter;
 

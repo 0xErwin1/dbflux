@@ -10,7 +10,10 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 
 use dbflux_core::{ColumnKind, ColumnMeta, TransferColumn, Value};
-use dbflux_export::{CsvStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter};
+use dbflux_export::{
+    CsvStreamWriter, HtmlStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter,
+    MarkdownStreamWriter, XmlStreamWriter,
+};
 
 use crate::pipeline::TransferReport;
 use crate::pipeline::{RowChunk, RowSink, TableMappingMode, TransferError, TransferOutcome};
@@ -23,17 +26,30 @@ pub enum FileFormat {
     /// record NDJSON under this format, so the reader accepts both.
     Json,
     JsonLines,
+    Html,
+    Markdown,
+    Xml,
 }
 
 impl FileFormat {
     /// All formats the export UI can offer, in display order.
-    pub const ALL: [FileFormat; 3] = [Self::Csv, Self::Json, Self::JsonLines];
+    pub const ALL: [FileFormat; 6] = [
+        Self::Csv,
+        Self::Json,
+        Self::JsonLines,
+        Self::Html,
+        Self::Markdown,
+        Self::Xml,
+    ];
 
     pub fn extension(self) -> &'static str {
         match self {
             Self::Csv => "csv",
             Self::Json => "json",
             Self::JsonLines => "jsonl",
+            Self::Html => "html",
+            Self::Markdown => "md",
+            Self::Xml => "xml",
         }
     }
 
@@ -43,6 +59,9 @@ impl FileFormat {
             Self::Csv => "CSV",
             Self::Json => "JSON",
             Self::JsonLines => "JSON Lines",
+            Self::Html => "HTML",
+            Self::Markdown => "Markdown",
+            Self::Xml => "XML",
         }
     }
 
@@ -53,8 +72,17 @@ impl FileFormat {
             "csv" => Some(Self::Csv),
             "json" => Some(Self::Json),
             "jsonl" => Some(Self::JsonLines),
+            "html" => Some(Self::Html),
+            "md" => Some(Self::Markdown),
+            "xml" => Some(Self::Xml),
             _ => None,
         }
+    }
+
+    /// Whether Import can read this format back. HTML and Markdown are for
+    /// people to read, and XML import is not implemented yet.
+    pub fn is_importable(self) -> bool {
+        matches!(self, Self::Csv | Self::Json | Self::JsonLines)
     }
 }
 
@@ -62,6 +90,9 @@ enum StreamWriter {
     Csv(Box<CsvStreamWriter<BufWriter<File>>>),
     Json(JsonArrayStreamWriter<BufWriter<File>>),
     JsonLines(JsonLinesStreamWriter<BufWriter<File>>),
+    Html(HtmlStreamWriter<BufWriter<File>>),
+    Markdown(MarkdownStreamWriter<BufWriter<File>>),
+    Xml(XmlStreamWriter<BufWriter<File>>),
 }
 
 /// Writes one table's rows to `<dir>/<schema>.<table>.<ext>`.
@@ -136,6 +167,14 @@ impl FileSink {
         }
     }
 
+    /// Document title for formats that carry one: `schema.table`.
+    fn title(&self) -> String {
+        match &self.schema {
+            Some(schema) => format!("{schema}.{}", self.table),
+            None => self.table.clone(),
+        }
+    }
+
     fn path(&self) -> PathBuf {
         if let Some(path) = &self.target_path {
             return path.clone();
@@ -195,19 +234,20 @@ impl RowSink for FileSink {
             FileFormat::Csv => StreamWriter::Csv(Box::new(CsvStreamWriter::new(writer))),
             FileFormat::Json => StreamWriter::Json(JsonArrayStreamWriter::new(writer)),
             FileFormat::JsonLines => StreamWriter::JsonLines(JsonLinesStreamWriter::new(writer)),
+            FileFormat::Html => StreamWriter::Html(HtmlStreamWriter::new(writer, self.title())),
+            FileFormat::Markdown => StreamWriter::Markdown(MarkdownStreamWriter::new(writer)),
+            FileFormat::Xml => StreamWriter::Xml(XmlStreamWriter::new(writer)),
         };
 
         match &mut stream {
-            StreamWriter::Csv(w) => w
-                .write_header(&self.columns)
-                .map_err(|e| TransferError::Sink(e.to_string()))?,
-            StreamWriter::Json(w) => w
-                .write_header(&self.columns)
-                .map_err(|e| TransferError::Sink(e.to_string()))?,
-            StreamWriter::JsonLines(w) => w
-                .write_header(&self.columns)
-                .map_err(|e| TransferError::Sink(e.to_string()))?,
+            StreamWriter::Csv(w) => w.write_header(&self.columns),
+            StreamWriter::Json(w) => w.write_header(&self.columns),
+            StreamWriter::JsonLines(w) => w.write_header(&self.columns),
+            StreamWriter::Html(w) => w.write_header(&self.columns),
+            StreamWriter::Markdown(w) => w.write_header(&self.columns),
+            StreamWriter::Xml(w) => w.write_header(&self.columns),
         }
+        .map_err(|e| TransferError::Sink(e.to_string()))?;
 
         self.writer = Some(stream);
         Ok(())
@@ -235,6 +275,15 @@ impl RowSink for FileSink {
                     None => w.write_row(&self.columns, row),
                 }
                 .map_err(|e| TransferError::Sink(e.to_string()))?,
+                StreamWriter::Html(w) => w
+                    .write_row(row)
+                    .map_err(|e| TransferError::Sink(e.to_string()))?,
+                StreamWriter::Markdown(w) => w
+                    .write_row(row)
+                    .map_err(|e| TransferError::Sink(e.to_string()))?,
+                StreamWriter::Xml(w) => w
+                    .write_row(row)
+                    .map_err(|e| TransferError::Sink(e.to_string()))?,
             }
         }
 
@@ -246,16 +295,14 @@ impl RowSink for FileSink {
     fn finish(&mut self) -> Result<TransferReport, TransferError> {
         if let Some(writer) = self.writer.take() {
             match writer {
-                StreamWriter::Csv(w) => {
-                    w.finish().map_err(|e| TransferError::Sink(e.to_string()))?
-                }
-                StreamWriter::Json(w) => {
-                    w.finish().map_err(|e| TransferError::Sink(e.to_string()))?
-                }
-                StreamWriter::JsonLines(w) => {
-                    w.finish().map_err(|e| TransferError::Sink(e.to_string()))?
-                }
+                StreamWriter::Csv(w) => w.finish(),
+                StreamWriter::Json(w) => w.finish(),
+                StreamWriter::JsonLines(w) => w.finish(),
+                StreamWriter::Html(w) => w.finish(),
+                StreamWriter::Markdown(w) => w.finish(),
+                StreamWriter::Xml(w) => w.finish(),
             }
+            .map_err(|e| TransferError::Sink(e.to_string()))?;
         }
 
         let mut report = TransferReport::new(TransferOutcome::Completed);
@@ -374,6 +421,31 @@ mod tests {
     }
 
     #[test]
+    fn writes_markup_files_named_schema_table_with_their_extension() {
+        let dir = temp_dir("markup");
+        let columns = vec![column("id")];
+
+        for (format, expected) in [
+            (FileFormat::Html, "<title>public.users</title>"),
+            (FileFormat::Markdown, "| id |\n| --- |\n| 7 |\n"),
+            (FileFormat::Xml, "<row><field name=\"id\">7</field></row>\n"),
+        ] {
+            let mut sink = FileSink::new(&dir, Some("public".to_string()), "users", format);
+            sink.begin(&columns, TableMappingMode::Existing).unwrap();
+            sink.write_chunk(&RowChunk(vec![vec![Value::Int(7)]]))
+                .unwrap();
+            let report = sink.finish().unwrap();
+            assert_eq!(report.rows_transferred, 1);
+
+            let path = dir.join(format!("public.users.{}", format.extension()));
+            let contents = std::fs::read_to_string(&path).unwrap();
+            assert!(contents.contains(expected), "{format:?}: {contents}");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn file_name_omits_schema_when_none() {
         let sink = FileSink::new("/tmp/whatever", None, "orders", FileFormat::Csv);
         assert_eq!(sink.file_name(), "orders.csv");
@@ -387,7 +459,8 @@ mod tests {
             FileFormat::from_extension("jsonl"),
             Some(FileFormat::JsonLines)
         );
-        assert_eq!(FileFormat::from_extension("xml"), None);
+        assert_eq!(FileFormat::from_extension("xml"), Some(FileFormat::Xml));
+        assert_eq!(FileFormat::from_extension("yaml"), None);
         for format in FileFormat::ALL {
             assert_eq!(FileFormat::from_extension(format.extension()), Some(format));
         }
@@ -397,8 +470,18 @@ mod tests {
     fn all_lists_every_format_with_a_label() {
         assert_eq!(
             FileFormat::ALL,
-            [FileFormat::Csv, FileFormat::Json, FileFormat::JsonLines]
+            [
+                FileFormat::Csv,
+                FileFormat::Json,
+                FileFormat::JsonLines,
+                FileFormat::Html,
+                FileFormat::Markdown,
+                FileFormat::Xml
+            ]
         );
+        assert_eq!(FileFormat::Html.label(), "HTML");
+        assert_eq!(FileFormat::Markdown.label(), "Markdown");
+        assert_eq!(FileFormat::Xml.label(), "XML");
         assert_eq!(FileFormat::Csv.label(), "CSV");
         assert_eq!(FileFormat::Json.label(), "JSON");
         assert_eq!(FileFormat::JsonLines.label(), "JSON Lines");

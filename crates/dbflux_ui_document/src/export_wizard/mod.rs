@@ -64,6 +64,9 @@ fn format_icon(format: FileFormat) -> AppIcon {
     match format {
         FileFormat::Csv => AppIcon::FileSpreadsheet,
         FileFormat::Json | FileFormat::JsonLines => AppIcon::Braces,
+        FileFormat::Html => AppIcon::Code,
+        FileFormat::Markdown => AppIcon::ScrollText,
+        FileFormat::Xml => AppIcon::FileCode,
     }
 }
 

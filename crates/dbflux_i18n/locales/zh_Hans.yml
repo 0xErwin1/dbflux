@@ -1791,6 +1791,9 @@ document:
           json_compact: JSON（紧凑）
           json: JSON
           json_lines: "JSON Lines（每行一个对象）"
+          html: HTML
+          markdown: Markdown
+          xml: XML
           text: 文本
           binary: 二进制
           hex: Hex

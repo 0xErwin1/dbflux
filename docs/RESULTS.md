@@ -229,7 +229,8 @@ and the toast states how many rows went into the file or the clipboard.
 
 When the grid shows a table or a collection read page by page, the menu adds
 **Export all rows to file**, in CSV, JSON (one array with an object per
-line) or JSON Lines (one object per line, `.jsonl`). It
+line) or JSON Lines (one object per line, `.jsonl`), or as an HTML table, a
+Markdown table or XML for reading and sharing. It
 reads the whole table or collection again with the grid's current filter, sort
 and column selection, one page at a time, and streams it into the one file you
 choose, so the data never has to fit in memory. A table shown through the query
@@ -238,11 +239,16 @@ offset and stopping at its limit when it sets one. The export runs as a task in
 the Tasks panel, which shows its progress and can cancel it; the toast states
 the total row count and the path.
 
+HTML, Markdown and XML files are for reading, not for import: importing a folder
+that holds one of them stops at that table, which fails with a message that its
+format cannot be imported, and the tables after it are not attempted. XML writes a `<row>` per row and a `<field name="...">` per column,
+with `null="true"` for a NULL so it stays distinct from an empty value.
+
 A document collection exported as JSON or JSON Lines writes each document
-whole, one object per line, with every field it has. As CSV it is written with the columns the
-grid shows for the first page, including expanded objects. Documents of one
-collection need not share their fields, so in a CSV file a field that first
-appears on a later page has no column, because the header is already written;
+whole, one object per line, with every field it has. As CSV, HTML, Markdown or
+XML it is written with the columns the grid shows for the first page, including
+expanded objects. Documents of one collection need not share their fields, so in
+any of these files a field that first appears on a later page has no column, because the header is already written;
 the export then names those fields in a warning.
 
 A query result offers only the loaded rows, because exporting all of them would

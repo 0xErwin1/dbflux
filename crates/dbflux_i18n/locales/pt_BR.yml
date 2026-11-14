@@ -1791,6 +1791,9 @@ document:
           json_compact: "JSON (compacto)"
           json: JSON
           json_lines: "JSON Lines (um objeto por linha)"
+          html: HTML
+          markdown: Markdown
+          xml: XML
           text: Texto
           binary: Binário
           hex: Hex
