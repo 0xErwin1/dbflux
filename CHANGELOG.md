@@ -4,6 +4,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **JSON Lines export, and JSON export as one array** — The export wizard and **Export all rows to file** now offer JSON Lines, which writes one object per line to a `.jsonl` file. JSON now writes a single valid JSON array, with one object per line, instead of one object per line under a `.json` name. Import reads either shape from a `.json` file, so export folders written by earlier versions still import (#805).
+
 ### Fixed
 
 * **A numeric edit that only changes the type is no longer dropped** — Editing a document field from `1` to `1.0`, or any other change between two numeric representations of the same value, now reaches the store instead of being read as unchanged and discarded. `Value` carried two definitions of equality: `==` compared floats as IEEE 754 while ordering promoted an integer and a float numerically, so a `NaN` was not equal to itself and the same pair could be unchanged on one path and changed on another. Equality is now exactly "orders equal", the promotion between `i64` and `f64` is exact above 2^53, and the paths that decide whether an edit is a change compare representation as well as value, so a typed edit is kept and a real change of representation is still a change (#1311).

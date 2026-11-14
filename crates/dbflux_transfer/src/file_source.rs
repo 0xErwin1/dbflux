@@ -2,14 +2,15 @@
 //! file back into row chunks for Import, recovering typed `Value`s via
 //! `value_codec` guided by the manifest's per-column `type_name`.
 //!
-//! Both CSV and JSON are read incrementally in bounded-memory chunks: CSV via
-//! `csv::Reader`, JSON via `serde_json::Deserializer::into_iter`, which
-//! parses one whitespace/newline-delimited top-level value at a time from the
-//! NDJSON `dbflux_export::JsonStreamWriter` writes (see `file_sink`). Neither
-//! path ever holds the whole file's rows resident in memory at once.
+//! Every format is read incrementally in bounded-memory chunks: CSV via
+//! `csv::Reader`, JSON Lines via `serde_json::Deserializer::into_iter`, and a
+//! JSON array one element at a time (see [`JsonArrayStream`]). A `json` file
+//! whose first token is not `[` is read as NDJSON, because export folders
+//! written before JSON Lines existed stored NDJSON under that format. No path
+//! ever holds the whole file's rows resident in memory at once.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use dbflux_core::{CancelToken, TransferColumn, Value};
@@ -27,6 +28,81 @@ type JsonValueStream = serde_json::StreamDeserializer<
 enum SourceReader {
     Csv(Box<csv::Reader<BufReader<File>>>),
     Json(Box<JsonValueStream>),
+    JsonArray(Box<JsonArrayStream>),
+}
+
+/// Yields the elements of one top-level JSON array without parsing the
+/// whole array, so a large JSON export imports in bounded memory.
+struct JsonArrayStream {
+    reader: BufReader<File>,
+    finished: bool,
+}
+
+impl JsonArrayStream {
+    fn next_value(&mut self) -> Result<Option<serde_json::Value>, TransferError> {
+        if self.finished {
+            return Ok(None);
+        }
+
+        loop {
+            match next_non_whitespace(&mut self.reader)? {
+                Some(b',') => self.reader.consume(1),
+                Some(b']') => {
+                    self.reader.consume(1);
+                    self.finished = true;
+                    return Ok(None);
+                }
+                Some(_) => break,
+                None => {
+                    return Err(TransferError::Source(
+                        "invalid JSON: the array is not closed".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let mut deserializer = serde_json::Deserializer::from_reader(&mut self.reader);
+        let value = serde::Deserialize::deserialize(&mut deserializer)
+            .map_err(|e| TransferError::Source(format!("invalid JSON: {e}")))?;
+        Ok(Some(value))
+    }
+}
+
+/// Skips whitespace and a UTF-8 byte order mark, returning the next byte
+/// without consuming it.
+fn next_non_whitespace(reader: &mut BufReader<File>) -> Result<Option<u8>, TransferError> {
+    loop {
+        let buffer = reader
+            .fill_buf()
+            .map_err(|e| TransferError::Source(e.to_string()))?;
+        let Some(&byte) = buffer.first() else {
+            return Ok(None);
+        };
+        if byte.is_ascii_whitespace() {
+            reader.consume(1);
+        } else if buffer.starts_with(b"\xEF\xBB\xBF") {
+            reader.consume(3);
+        } else {
+            return Ok(Some(byte));
+        }
+    }
+}
+
+fn open_json(file: File) -> Result<SourceReader, TransferError> {
+    let mut reader = BufReader::new(file);
+    if next_non_whitespace(&mut reader)? == Some(b'[') {
+        reader.consume(1);
+        return Ok(SourceReader::JsonArray(Box::new(JsonArrayStream {
+            reader,
+            finished: false,
+        })));
+    }
+    Ok(open_json_lines(reader))
+}
+
+fn open_json_lines(reader: BufReader<File>) -> SourceReader {
+    let stream = serde_json::Deserializer::from_reader(reader).into_iter::<serde_json::Value>();
+    SourceReader::Json(Box::new(stream))
 }
 
 pub struct FileSource {
@@ -54,11 +130,8 @@ impl FileSource {
                     .from_reader(BufReader::new(file));
                 SourceReader::Csv(Box::new(csv_reader))
             }
-            FileFormat::Json => {
-                let stream = serde_json::Deserializer::from_reader(BufReader::new(file))
-                    .into_iter::<serde_json::Value>();
-                SourceReader::Json(Box::new(stream))
-            }
+            FileFormat::Json => open_json(file)?,
+            FileFormat::JsonLines => open_json_lines(BufReader::new(file)),
         };
 
         Ok(Self {
@@ -114,6 +187,23 @@ fn read_json_chunk(
     Ok(rows)
 }
 
+fn read_json_array_chunk(
+    array: &mut JsonArrayStream,
+    columns: &[TransferColumn],
+    segment_size: usize,
+) -> Result<Vec<Vec<Value>>, TransferError> {
+    let mut rows = Vec::with_capacity(segment_size);
+
+    while rows.len() < segment_size {
+        match array.next_value()? {
+            Some(value) => rows.push(json_row_to_values(&value, columns)),
+            None => break,
+        }
+    }
+
+    Ok(rows)
+}
+
 fn json_row_to_values(value: &serde_json::Value, columns: &[TransferColumn]) -> Vec<Value> {
     let serde_json::Value::Object(map) = value else {
         return columns.iter().map(|_| Value::Null).collect();
@@ -143,6 +233,9 @@ impl RowSource for FileSource {
             SourceReader::Csv(reader) => read_csv_chunk(reader, &self.columns, self.segment_size)?,
             SourceReader::Json(values) => {
                 read_json_chunk(values, &self.columns, self.segment_size)?
+            }
+            SourceReader::JsonArray(array) => {
+                read_json_array_chunk(array, &self.columns, self.segment_size)?
             }
         };
 
@@ -298,6 +391,87 @@ mod tests {
         );
 
         assert!(source.next_chunk(&cancel).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_source_reads_a_json_array_in_chunks() {
+        let dir = temp_dir("json_array_chunks");
+        let path = dir.join("public.widgets.json");
+        std::fs::write(
+            &path,
+            " \n[\n{\"id\":1,\"price\":\"9.99\"},\n{\"id\":2,\"price\":\"5.00\"}\n]\n",
+        )
+        .unwrap();
+
+        let columns = vec![column("id", "int4"), column("price", "numeric")];
+        let mut source =
+            FileSource::open(&path, FileFormat::Json, columns, 1, Some(2)).expect("open json");
+        let cancel = CancelToken::new();
+
+        let chunk1 = source.next_chunk(&cancel).unwrap().unwrap();
+        assert_eq!(
+            chunk1.0,
+            vec![vec![Value::Int(1), Value::Decimal("9.99".to_string())]]
+        );
+        let chunk2 = source.next_chunk(&cancel).unwrap().unwrap();
+        assert_eq!(
+            chunk2.0,
+            vec![vec![Value::Int(2), Value::Decimal("5.00".to_string())]]
+        );
+        assert!(source.next_chunk(&cancel).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_source_reads_an_empty_json_array_as_no_rows() {
+        let dir = temp_dir("json_array_empty");
+        let path = dir.join("t.json");
+        std::fs::write(&path, "[\n]\n").unwrap();
+
+        let mut source =
+            FileSource::open(&path, FileFormat::Json, vec![column("id", "int4")], 5, None)
+                .expect("open json");
+
+        assert!(source.next_chunk(&CancelToken::new()).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_source_reports_an_unterminated_array() {
+        let dir = temp_dir("json_array_unterminated");
+        let path = dir.join("t.json");
+        std::fs::write(&path, "[{\"id\":1},").unwrap();
+
+        let mut source =
+            FileSource::open(&path, FileFormat::Json, vec![column("id", "int4")], 5, None)
+                .expect("open json");
+
+        let result = source.next_chunk(&CancelToken::new());
+        assert!(
+            result.is_err(),
+            "a truncated array must not import silently"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_lines_source_reads_one_object_per_line() {
+        let dir = temp_dir("jsonl_chunks");
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, "{\"id\":1}\n{\"id\":2}\n").unwrap();
+
+        let mut source = FileSource::open(
+            &path,
+            FileFormat::JsonLines,
+            vec![column("id", "int4")],
+            5,
+            None,
+        )
+        .expect("open jsonl");
+
+        let chunk = source.next_chunk(&CancelToken::new()).unwrap().unwrap();
+        assert_eq!(chunk.0, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
         std::fs::remove_dir_all(&dir).ok();
     }
 
