@@ -259,7 +259,9 @@ impl DocumentPatch {
 }
 
 fn diff_into(patch: &mut DocumentPatch, path: &mut FieldPath, original: &Value, edited: &Value) {
-    if original == edited {
+    // Not `==`: it promotes numerically equal values, so a change only in
+    // the representation (`1` to `1.0`) would disappear from the patch.
+    if original.same_representation(edited) {
         return;
     }
 
@@ -812,6 +814,17 @@ mod tests {
     fn diff_of_identical_documents_is_empty() {
         let original = document(&[("a", Value::Int(1))]);
         assert!(DocumentPatch::diff(&original, &original.clone()).is_empty());
+    }
+
+    #[test]
+    fn diff_records_a_representation_only_numeric_change() {
+        let original = document(&[("qty", Value::Int(1))]);
+        let edited = document(&[("qty", Value::Float(1.0))]);
+
+        let patch = DocumentPatch::diff(&original, &edited);
+
+        assert_eq!(patch.set, vec![(path("qty"), Value::Float(1.0))]);
+        assert!(patch.unset.is_empty());
     }
 
     #[test]

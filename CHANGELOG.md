@@ -6,6 +6,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **A numeric edit that only changes the type is no longer dropped** — Editing a document field from `1` to `1.0`, or any other change between two numeric representations of the same value, now reaches the store instead of being read as unchanged and discarded. `Value` carried two definitions of equality: `==` compared floats as IEEE 754 while ordering promoted an integer and a float numerically, so a `NaN` was not equal to itself and the same pair could be unchanged on one path and changed on another. Equality is now exactly "orders equal", the promotion between `i64` and `f64` is exact above 2^53, and the paths that decide whether an edit is a change compare representation as well as value, so a typed edit is kept and a real change of representation is still a change (#1311).
 * **SQLite completion no longer offers `public.<table>` after a query runs** — Running a query no longer leaves a schema-qualified copy of each table it reads in the completion list of a SQLite or Turso connection, so completion offers `users` and never `public.users`, which SQLite rejects with `no such table`. When neither the query, the cached table nor the editor names a schema, the check that runs before a query now lets the driver use its own default schema instead of `public`, so a SQL Server or DuckDB table it reads is looked up in `dbo` or `main` (#1029).
 
 ## [0.10.0] - 2026-11-12
