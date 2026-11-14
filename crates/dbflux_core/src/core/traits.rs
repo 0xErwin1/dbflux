@@ -2087,6 +2087,19 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Names of the table's columns the database computes and rejects explicit
+    /// values for (stored generated columns, computed columns, row-version
+    /// columns). An SQL export leaves them out of its `INSERT` statements so
+    /// the database computes them again on replay. Drivers without such
+    /// columns keep this default, an empty list.
+    fn generated_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
+    }
+
     fn semantic_planner(&self) -> Option<&dyn SemanticPlanner> {
         None
     }

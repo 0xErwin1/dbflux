@@ -478,8 +478,36 @@ pub struct MssqlCodeGenerator;
 
 static MSSQL_CODE_GENERATOR: MssqlCodeGenerator = MssqlCodeGenerator;
 
+/// The text values of a result's first column.
+fn first_column_text(result: QueryResult) -> Vec<String> {
+    result
+        .rows
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(dbflux_core::Value::Text(name)) => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The `IDENTITY` columns of a table, in column order.
 fn mssql_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
+    mssql_column_lookup_sql(schema, table, "c.is_identity = 1")
+}
+
+/// The columns SQL Server computes and rejects explicit values for: computed
+/// columns and `rowversion` (`timestamp`) columns, in column order. The type
+/// is matched by its base system type, so an alias type over `rowversion` is
+/// found too.
+fn mssql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    mssql_column_lookup_sql(
+        schema,
+        table,
+        "(c.is_computed = 1 OR ty.name IN (N'timestamp', N'rowversion'))",
+    )
+}
+
+fn mssql_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -> String {
     let schema = match schema {
         Some(schema) => format!("N'{}'", MSSQL_DIALECT.escape_string(schema)),
         None => "SCHEMA_NAME()".to_string(),
@@ -489,7 +517,8 @@ fn mssql_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
         "SELECT c.name FROM sys.columns c \
          JOIN sys.tables t ON t.object_id = c.object_id \
          JOIN sys.schemas s ON s.schema_id = t.schema_id \
-         WHERE c.is_identity = 1 AND s.name = {schema} AND t.name = N'{}' \
+         JOIN sys.types ty ON ty.user_type_id = c.system_type_id \
+         WHERE {predicate} AND s.name = {schema} AND t.name = N'{}' \
          ORDER BY c.column_id",
         MSSQL_DIALECT.escape_string(table)
     )
@@ -3317,15 +3346,14 @@ impl Connection for MssqlConnection {
         let result = self.execute(&QueryRequest::new(mssql_identity_columns_sql(
             schema, table,
         )))?;
+        Ok(first_column_text(result))
+    }
 
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|row| match row.into_iter().next() {
-                Some(dbflux_core::Value::Text(name)) => Some(name),
-                _ => None,
-            })
-            .collect())
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mssql_generated_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
     }
 
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
@@ -6588,6 +6616,25 @@ mod tests {
         assert!(sql.contains("c.is_identity = 1"));
         assert!(
             super::mssql_identity_columns_sql(None, "users").contains("s.name = SCHEMA_NAME()")
+        );
+    }
+
+    #[test]
+    fn mssql_generated_columns_query_selects_computed_and_rowversion_columns() {
+        let sql = super::mssql_generated_columns_sql(Some("dbo"), "it's");
+        assert!(
+            sql.contains("s.name = N'dbo' AND t.name = N'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("c.is_computed = 1"), "{sql}");
+        assert!(
+            sql.contains("ty.name IN (N'timestamp', N'rowversion')"),
+            "{sql}"
+        );
+        assert!(!sql.contains("is_identity"), "{sql}");
+        assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
+        assert!(
+            super::mssql_generated_columns_sql(None, "users").contains("s.name = SCHEMA_NAME()")
         );
     }
 

@@ -73,6 +73,23 @@ pub struct ExportOutcome {
     pub cancelled: bool,
 }
 
+/// The identity and generated columns of `table`, which a SQL export needs
+/// and no other format reads.
+fn script_column_traits(
+    connection: &dyn Connection,
+    table: &ExportTable,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let schema = table.schema.as_deref();
+    let identity = connection
+        .identity_columns(schema, &table.name)
+        .map_err(|error| error.to_string())?;
+    let generated = connection
+        .generated_columns(schema, &table.name)
+        .map_err(|error| error.to_string())?;
+
+    Ok((identity, generated))
+}
+
 /// Exports every table in `tables` from `connection` into `output_dir`,
 /// writing one `schema.table.<ext>` file per table plus a `manifest.json`
 /// (unless cancelled or a table failed), and returns the outcome.
@@ -129,9 +146,11 @@ pub fn run_export(
         .with_options(format_options.clone())
         .with_connection(Arc::clone(connection));
         if options.format == FileFormat::Sql {
-            match connection.identity_columns(table.schema.as_deref(), &table.name) {
-                Ok(identity_columns) => {
-                    sink = sink.with_identity_columns(identity_columns);
+            match script_column_traits(connection.as_ref(), table) {
+                Ok((identity_columns, generated_columns)) => {
+                    sink = sink
+                        .with_identity_columns(identity_columns)
+                        .with_generated_columns(generated_columns);
                 }
                 Err(error) => {
                     #[expect(
@@ -139,9 +158,7 @@ pub fn run_export(
                         reason = "table_statuses is built one-to-one from `tables`, which this loop enumerates; its length never changes"
                     )]
                     {
-                        table_statuses[index].status = TableTransferStatus::Failed {
-                            error: error.to_string(),
-                        };
+                        table_statuses[index].status = TableTransferStatus::Failed { error };
                     }
                     break;
                 }

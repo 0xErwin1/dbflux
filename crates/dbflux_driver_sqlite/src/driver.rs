@@ -2378,17 +2378,23 @@ fn value_to_sqlite_literal(value: &Value) -> String {
 }
 
 /// A quoted text literal. SQLite reads a statement up to its first NUL, so
-/// text holding one is written as a hex cast, which keeps every byte and the
-/// text type; any other text stays a plain quoted literal.
+/// text holding one is written as its quoted segments joined with
+/// `char(0)`. Unlike a hex cast, this does not depend on the database's text
+/// encoding (UTF-8, UTF-16LE or UTF-16BE); text without a NUL stays a plain
+/// quoted literal.
 fn sqlite_text_literal(text: &str) -> String {
-    if text.contains('\0') {
-        return format!("CAST(X'{}' AS TEXT)", hex::encode(text.as_bytes()));
+    if !text.contains('\0') {
+        return format!("'{}'", sqlite_escape_string(text));
     }
 
-    format!("'{}'", sqlite_escape_string(text))
+    let segments: Vec<String> = text
+        .split('\0')
+        .map(|segment| format!("'{}'", sqlite_escape_string(segment)))
+        .collect();
+
+    format!("({})", segments.join(" || char(0) || "))
 }
 
-/// Escape a string for use inside a SQLite single-quoted literal.
 fn sqlite_escape_string(s: &str) -> String {
     s.replace('\'', "''")
 }
@@ -2936,9 +2942,9 @@ mod tests {
     };
     use dbflux_core::{
         ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, DriverCapabilities,
-        FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
-        SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily, Value,
-        WhereOperator,
+        FormValues, MutationRequest, QueryGenerator, QueryLanguage, RowInsert, SemanticRequest,
+        SqlDialect, SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily,
+        Value, WhereOperator,
     };
 
     /// The generated truncate, drop-index and version statements must stay
@@ -3742,6 +3748,84 @@ mod tests {
             "NUL refusal erased an existing cancellation"
         );
     }
+
+    #[test]
+    fn ordinary_text_literals_are_unchanged() {
+        assert_eq!(
+            super::value_to_sqlite_literal(&Value::Text("it's".to_string())),
+            "'it''s'"
+        );
+    }
+
+    #[test]
+    fn text_with_nul_bytes_is_written_as_segments_joined_with_char_zero() {
+        let literal = |text: &str| super::value_to_sqlite_literal(&Value::Text(text.to_string()));
+
+        assert_eq!(literal("a\0b"), "('a' || char(0) || 'b')");
+        assert_eq!(literal("\0a"), "('' || char(0) || 'a')");
+        assert_eq!(literal("a\0"), "('a' || char(0) || '')");
+        assert_eq!(
+            literal("a\0\0b"),
+            "('a' || char(0) || '' || char(0) || 'b')"
+        );
+        assert_eq!(literal("\0"), "('' || char(0) || '')");
+        assert_eq!(literal("it's\0"), "('it''s' || char(0) || '')");
+    }
+
+    fn replay_text_with_nul_bytes(encoding: &str) {
+        let generator = SqlMutationGenerator::new(&super::SQLITE_DIALECT);
+        let text = "\0a\0\0b'c é\u{1F600}\0".to_string();
+        let row = [
+            Value::Int(1),
+            Value::Text(text.clone()),
+            Value::Json(text.clone()),
+        ];
+        let rows: [&[Value]; 1] = [&row];
+        let columns = ["id", "note", "doc"].map(str::to_string);
+        let statement = generator
+            .generate_bulk_insert(None, "notes", &columns, &[None, None, None], &rows)
+            .expect("generator succeeds")
+            .expect("sqlite renders inserts")
+            .text;
+        assert!(
+            !statement.contains('\0'),
+            "statement must not hold a raw NUL"
+        );
+
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        raw.execute_batch(&format!("PRAGMA encoding = '{encoding}'"))
+            .expect("set encoding");
+        raw.execute_batch("CREATE TABLE notes (id INTEGER, note TEXT, doc TEXT)")
+            .expect("create table");
+        raw.execute_batch(&format!("{statement};")).expect("replay");
+
+        let (note, doc, note_type, doc_type): (String, String, String, String) = raw
+            .query_row(
+                "SELECT note, doc, typeof(note), typeof(doc) FROM notes",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read back");
+        assert_eq!(note, text, "{encoding}");
+        assert_eq!(doc, text, "{encoding}");
+        assert_eq!(note_type, "text", "{encoding}");
+        assert_eq!(doc_type, "text", "{encoding}");
+    }
+
+    #[test]
+    fn text_with_nul_bytes_replays_in_utf8_databases() {
+        replay_text_with_nul_bytes("UTF-8");
+    }
+
+    #[test]
+    fn text_with_nul_bytes_replays_in_utf16le_databases() {
+        replay_text_with_nul_bytes("UTF-16le");
+    }
+
+    #[test]
+    fn text_with_nul_bytes_replays_in_utf16be_databases() {
+        replay_text_with_nul_bytes("UTF-16be");
+    }
 }
 
 #[cfg(test)]
@@ -3899,58 +3983,5 @@ mod read_only_tests {
 
         assert!(state.lock().expect("state mutex").is_autocommit());
         assert!(!query_only_enabled(&state));
-    }
-}
-
-#[cfg(test)]
-mod nul_text_literal_tests {
-    use super::{SQLITE_DIALECT, value_to_sqlite_literal};
-    use dbflux_core::{QueryGenerator, SqlMutationGenerator, Value};
-    use rusqlite::Connection as RusqliteConnection;
-
-    #[test]
-    fn ordinary_text_literals_are_unchanged() {
-        assert_eq!(
-            value_to_sqlite_literal(&Value::Text("it's".to_string())),
-            "'it''s'"
-        );
-    }
-
-    #[test]
-    fn text_with_a_nul_byte_replays_with_its_bytes_and_text_type() {
-        let generator = SqlMutationGenerator::new(&SQLITE_DIALECT);
-        let text = "a\0b'c\0".to_string();
-        let row = [
-            Value::Int(1),
-            Value::Text(text.clone()),
-            Value::Json(text.clone()),
-        ];
-        let rows: [&[Value]; 1] = [&row];
-        let columns = ["id", "note", "doc"].map(str::to_string);
-        let statement = generator
-            .generate_bulk_insert(None, "notes", &columns, &[None, None, None], &rows)
-            .expect("generator succeeds")
-            .expect("sqlite renders inserts")
-            .text;
-        assert!(
-            !statement.contains('\0'),
-            "statement must not hold a raw NUL"
-        );
-
-        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
-        raw.execute_batch("CREATE TABLE notes (id INTEGER, note TEXT, doc TEXT)")
-            .expect("create table");
-        raw.execute_batch(&format!("{statement};")).expect("replay");
-
-        let (note, doc, note_type): (Vec<u8>, Vec<u8>, String) = raw
-            .query_row(
-                "SELECT CAST(note AS BLOB), CAST(doc AS BLOB), typeof(note) FROM notes",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .expect("read back");
-        assert_eq!(note, text.as_bytes());
-        assert_eq!(doc, text.as_bytes());
-        assert_eq!(note_type, "text");
     }
 }

@@ -276,7 +276,9 @@ it and ends with `;`. The script replays into an empty copy of the table;
 running it twice fails on unique keys or duplicates the rows. A PostgreSQL
 `GENERATED ALWAYS AS IDENTITY` column is written with `OVERRIDING SYSTEM VALUE`,
 and a SQL Server table with an `IDENTITY` column is wrapped in
-`SET IDENTITY_INSERT ... ON;` and `OFF;`, so the original ids are kept. A table
+`SET IDENTITY_INSERT ... ON;` and `OFF;`, so the original ids are kept. Columns the database computes (PostgreSQL
+generated columns, SQL Server computed and `rowversion` columns) are left out of
+the statements so the database computes them again on replay. A table
 with no rows writes an empty file. The dialect
 decides how NULL and dates are written, so the NULL text, delimiter, encoding
 and date options do not apply and are hidden. SQL files are not importable yet:

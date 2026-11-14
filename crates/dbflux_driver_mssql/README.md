@@ -76,7 +76,7 @@ Microsoft SQL Server driver for DBFlux, built on the
   capped at 1000 rows per statement per T-SQL's `VALUES` row limit, exposed
   via `DriverLimits::max_bulk_insert_rows`) and driver-native `CREATE TABLE`
   DDL from a source table's columns (`TRUNCATE_TABLE` is also supported).
-- SQL export: a table with an `IDENTITY` column is wrapped in `SET IDENTITY_INSERT [schema].[table] ON;` and `OFF;`, so the script replays into an empty copy of the table with the original ids (`Connection::identity_columns` reads them from `sys.columns`).
+- SQL export: a table with an `IDENTITY` column is wrapped in `SET IDENTITY_INSERT [schema].[table] ON;` and `OFF;`, so the script replays into an empty copy of the table with the original ids (`Connection::identity_columns` reads them from `sys.columns`). Computed columns and `rowversion` (`timestamp`) columns are left out of the statements so the server computes them again (`Connection::generated_columns`).
 - Batched primary-key row lookup (`fetch_rows_by_pks`): one
   `WHERE pk IN (...)` statement per chunk of at most 100 values, with an
   optional column projection; used to resolve foreign-key labels in the data

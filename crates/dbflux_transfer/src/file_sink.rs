@@ -185,6 +185,8 @@ pub struct FileSink {
     connection: Option<Arc<dyn Connection>>,
     /// The table's database-generated columns, for a SQL export.
     identity_columns: Vec<String>,
+    /// The table's computed columns, which a SQL export leaves out.
+    generated_columns: Vec<String>,
 }
 
 impl FileSink {
@@ -207,7 +209,15 @@ impl FileSink {
             options: FormatOptions::default(),
             connection: None,
             identity_columns: Vec::new(),
+            generated_columns: Vec::new(),
         }
+    }
+
+    /// The columns the database computes, which a SQL export leaves out so
+    /// the database computes them again on replay.
+    pub fn with_generated_columns(mut self, generated_columns: Vec<String>) -> Self {
+        self.generated_columns = generated_columns;
+        self
     }
 
     /// The columns the database generates itself, which a SQL export lets
@@ -468,6 +478,7 @@ impl FileSink {
             self.table.clone(),
             columns,
             self.identity_columns.clone(),
+            self.generated_columns.clone(),
             batch_size,
         ))))
     }

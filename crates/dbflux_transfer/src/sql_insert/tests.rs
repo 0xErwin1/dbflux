@@ -16,6 +16,8 @@ static REAL_GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&DIALECT
 /// Records the row count of every batch it is asked to render.
 struct RecordingGenerator {
     batch_sizes: Mutex<Vec<usize>>,
+    /// The column names and each row's width of every script batch.
+    shapes: Mutex<Vec<(Vec<String>, Vec<usize>)>>,
     answers_none: bool,
 }
 
@@ -23,6 +25,7 @@ impl RecordingGenerator {
     fn new(answers_none: bool) -> Self {
         Self {
             batch_sizes: Mutex::new(Vec::new()),
+            shapes: Mutex::new(Vec::new()),
             answers_none,
         }
     }
@@ -72,13 +75,16 @@ impl QueryGenerator for RecordingGenerator {
         &self,
         schema: Option<&str>,
         table: &str,
-        _columns: &[String],
+        columns: &[String],
         _column_types: &[Option<String>],
         identity_columns: &[String],
         rows: &[&[Value]],
     ) -> Result<Option<GeneratedQuery>, GeneratorError> {
         if let Ok(mut sizes) = self.batch_sizes.lock() {
             sizes.push(rows.len());
+        }
+        if let Ok(mut shapes) = self.shapes.lock() {
+            shapes.push((columns.to_vec(), rows.iter().map(|row| row.len()).collect()));
         }
         if self.answers_none {
             return Ok(None);
@@ -142,6 +148,7 @@ fn write_rows(generator: &dyn QueryGenerator, batch_size: usize, count: i64) -> 
         Some("public".to_string()),
         "notes".to_string(),
         &columns(),
+        Vec::new(),
         Vec::new(),
         batch_size,
     );
@@ -210,6 +217,7 @@ fn a_generator_that_cannot_render_inserts_fails_the_export() {
         "notes".to_string(),
         &columns(),
         Vec::new(),
+        Vec::new(),
         1,
     );
 
@@ -233,6 +241,8 @@ struct FakeConnection {
     metadata: DriverMetadata,
     generator: Option<RecordingGenerator>,
     identity: Vec<String>,
+    generated: Vec<String>,
+    generated_lookups: Mutex<Vec<(Option<String>, String)>>,
     identity_lookups: Mutex<Vec<(Option<String>, String)>>,
     pages: Mutex<std::collections::VecDeque<Vec<Vec<Value>>>>,
 }
@@ -260,6 +270,8 @@ impl FakeConnection {
             metadata,
             generator,
             identity: Vec::new(),
+            generated: Vec::new(),
+            generated_lookups: Mutex::new(Vec::new()),
             identity_lookups: Mutex::new(Vec::new()),
             pages: Mutex::new(std::collections::VecDeque::new()),
         }
@@ -267,6 +279,11 @@ impl FakeConnection {
 
     fn with_identity(mut self, identity: &[&str]) -> Self {
         self.identity = identity.iter().map(|name| name.to_string()).collect();
+        self
+    }
+
+    fn with_generated(mut self, generated: &[&str]) -> Self {
+        self.generated = generated.iter().map(|name| name.to_string()).collect();
         self
     }
 
@@ -317,6 +334,13 @@ impl Connection for FakeConnection {
             None,
             std::time::Duration::ZERO,
         ))
+    }
+
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        if let Ok(mut lookups) = self.generated_lookups.lock() {
+            lookups.push((schema.map(str::to_string), table.to_string()));
+        }
+        Ok(self.generated.clone())
     }
 
     fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
@@ -501,6 +525,7 @@ fn write_with_identity(generator: &dyn QueryGenerator, identity: &[&str], count:
         "notes".to_string(),
         &columns(),
         identity.iter().map(|name| name.to_string()).collect(),
+        Vec::new(),
         2,
     );
     for id in 0..count {
@@ -619,4 +644,95 @@ fn other_formats_never_look_up_identity_columns() {
 
     assert!(written.starts_with("id,note\n1,"), "{written}");
     assert!(connection.identity_lookups.lock().unwrap().is_empty());
+}
+
+fn write_omitting(generator: &dyn QueryGenerator, identity: &[&str], generated: &[&str]) -> String {
+    let mut out = Vec::new();
+    let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect();
+    let mut writer = SqlInsertWriter::new(
+        &mut out,
+        Some("public".to_string()),
+        "notes".to_string(),
+        &columns(),
+        names(identity),
+        names(generated),
+        10,
+    );
+    writer.write_row(generator, &row(1)).unwrap();
+    writer.write_row(generator, &row(2)).unwrap();
+    writer.finish(generator).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn generated_columns_are_left_out_of_the_column_list_and_every_row() {
+    let generator = RecordingGenerator::new(false);
+    write_omitting(&generator, &[], &["note"]);
+
+    let shapes = generator.shapes.lock().unwrap();
+    assert_eq!(*shapes, vec![(vec!["id".to_string()], vec![1, 1])]);
+}
+
+#[test]
+fn a_generated_column_that_is_also_identity_is_not_wrapped() {
+    let generator = RecordingGenerator::new(false);
+    let text = write_omitting(&generator, &["note"], &["note"]);
+
+    assert_eq!(text, "INSERT Some(\"public\").notes rows=2;\n");
+}
+
+#[test]
+fn a_table_with_only_generated_columns_cannot_be_exported() {
+    let generator = RecordingGenerator::new(false);
+    let mut out = Vec::new();
+    let mut writer = SqlInsertWriter::new(
+        &mut out,
+        None,
+        "notes".to_string(),
+        &columns(),
+        Vec::new(),
+        vec!["id".to_string(), "note".to_string()],
+        10,
+    );
+
+    let error = writer.write_row(&generator, &row(1)).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "sink error: every column of 'notes' is generated by the database, so there is nothing to insert"
+    );
+}
+
+#[test]
+fn an_export_run_omits_the_generated_columns_for_sql_only() {
+    let connection = Arc::new(
+        FakeConnection::new(
+            DriverCapabilities::BULK_INSERT,
+            0,
+            Some(RecordingGenerator::new(false)),
+        )
+        .with_generated(&["note"])
+        .with_page(vec![row(1), row(2)]),
+    );
+
+    let written = export_one_table(connection.clone(), FileFormat::Sql, "generated_run");
+
+    assert_eq!(written, "INSERT Some(\"public\").notes rows=2;\n");
+    let generator = connection.generator.as_ref().unwrap();
+    assert_eq!(
+        *generator.shapes.lock().unwrap(),
+        vec![(vec!["id".to_string()], vec![1, 1])]
+    );
+    assert_eq!(
+        *connection.generated_lookups.lock().unwrap(),
+        vec![(Some("public".to_string()), "notes".to_string())]
+    );
+
+    let csv_connection = Arc::new(
+        FakeConnection::new(DriverCapabilities::BULK_INSERT, 0, None)
+            .with_generated(&["note"])
+            .with_page(vec![row(1)]),
+    );
+    let csv = export_one_table(csv_connection.clone(), FileFormat::Csv, "generated_csv");
+    assert!(csv.starts_with("id,note\n1,"), "{csv}");
+    assert!(csv_connection.generated_lookups.lock().unwrap().is_empty());
 }

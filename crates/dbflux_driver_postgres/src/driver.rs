@@ -1694,20 +1694,51 @@ impl Drop for ActiveQueryGuard<'_> {
 /// `BY DEFAULT` identity and serial columns accept explicit values, so a
 /// script needs no special handling for them.
 fn postgres_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
-    let schema = match schema {
-        Some(schema) => pg_quote_string(schema),
-        None => "current_schema()".to_string(),
+    postgres_column_lookup_sql(schema, table, "a.attidentity = 'a'")
+}
+
+/// The generated columns of a table (`GENERATED ALWAYS AS (...) STORED`, and
+/// PostgreSQL 18's virtual ones), in column order. They accept only `DEFAULT`.
+fn postgres_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    postgres_column_lookup_sql(schema, table, "a.attgenerated IN ('s', 'v')")
+}
+
+/// The names of the table's columns matching `predicate`. With a schema the
+/// table is found by name inside it; without one the relation is resolved the
+/// way the server resolves an unqualified name, through `search_path`, rather
+/// than assuming `current_schema()`.
+fn postgres_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -> String {
+    let relation = match schema {
+        Some(schema) => format!(
+            "JOIN pg_class c ON c.oid = a.attrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = {} AND c.relname = {}",
+            pg_quote_string(schema),
+            pg_quote_string(table)
+        ),
+        None => format!(
+            "WHERE a.attrelid = to_regclass({})",
+            pg_quote_string(&pg_quote_ident(table))
+        ),
     };
 
     format!(
-        "SELECT a.attname::text FROM pg_attribute a \
-         JOIN pg_class c ON c.oid = a.attrelid \
-         JOIN pg_namespace n ON n.oid = c.relnamespace \
-         WHERE n.nspname = {schema} AND c.relname = {} \
-         AND a.attidentity = 'a' AND a.attnum > 0 AND NOT a.attisdropped \
-         ORDER BY a.attnum",
-        pg_quote_string(table)
+        "SELECT a.attname::text FROM pg_attribute a {relation} \
+         AND {predicate} AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum"
     )
+}
+
+/// The text values of a result's first column.
+fn first_column_text(result: QueryResult) -> Vec<String> {
+    result
+        .rows
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(dbflux_core::Value::Text(name)) => Some(name),
+            _ => None,
+        })
+        .collect()
 }
 
 fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
@@ -2747,15 +2778,14 @@ impl Connection for PostgresConnection {
         let result = self.execute(&QueryRequest::new(postgres_identity_columns_sql(
             schema, table,
         )))?;
+        Ok(first_column_text(result))
+    }
 
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|row| match row.into_iter().next() {
-                Some(dbflux_core::Value::Text(name)) => Some(name),
-                _ => None,
-            })
-            .collect())
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_generated_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
     }
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
@@ -8404,9 +8434,49 @@ mod tests {
             "{sql}"
         );
         assert!(sql.contains("a.attidentity = 'a'"));
+    }
 
-        let default_schema = super::postgres_identity_columns_sql(None, "users");
-        assert!(default_schema.contains("n.nspname = current_schema()"));
+    #[test]
+    fn postgres_column_lookups_resolve_an_unqualified_table_through_the_search_path() {
+        for sql in [
+            super::postgres_identity_columns_sql(None, "users"),
+            super::postgres_generated_columns_sql(None, "users"),
+        ] {
+            assert!(
+                sql.contains("a.attrelid = to_regclass('\"users\"')"),
+                "{sql}"
+            );
+            assert!(!sql.contains("current_schema"), "{sql}");
+            assert!(!sql.contains("pg_namespace"), "{sql}");
+        }
+    }
+
+    #[test]
+    fn postgres_column_lookups_quote_hostile_names() {
+        let hostile = "a\"b'c; DROP TABLE x --";
+        let sql = super::postgres_generated_columns_sql(None, hostile);
+        assert!(
+            sql.contains("to_regclass('\"a\"\"b''c; DROP TABLE x --\"')"),
+            "{sql}"
+        );
+
+        let qualified = super::postgres_generated_columns_sql(Some("s'x"), hostile);
+        assert!(
+            qualified.contains("n.nspname = 's''x' AND c.relname = 'a\"b''c; DROP TABLE x --'"),
+            "{qualified}"
+        );
+    }
+
+    #[test]
+    fn postgres_generated_columns_query_selects_stored_and_virtual_generated_columns() {
+        let sql = super::postgres_generated_columns_sql(Some("app"), "users");
+        assert!(sql.contains("a.attgenerated IN ('s', 'v')"), "{sql}");
+        assert!(!sql.contains("attidentity"), "{sql}");
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'users'"),
+            "{sql}"
+        );
+        assert!(sql.ends_with("ORDER BY a.attnum"), "{sql}");
     }
 
     #[test]

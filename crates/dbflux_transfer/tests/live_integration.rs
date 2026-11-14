@@ -150,7 +150,7 @@ fn postgres_export_streams_table_to_csv_and_manifest() -> Result<(), DbError> {
 fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbError> {
     containers::with_postgres_url(|uri| {
         let boxed_connection = connect_postgres(uri)?;
-        let create = "CREATE TABLE sql_identity (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label TEXT NOT NULL)";
+        let create = "CREATE TABLE sql_identity (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label TEXT NOT NULL, doubled INT GENERATED ALWAYS AS (id * 2) STORED)";
         boxed_connection.execute(&QueryRequest::new(create))?;
         boxed_connection.execute(&QueryRequest::new(
             "INSERT INTO sql_identity (id, label) OVERRIDING SYSTEM VALUE VALUES (10, 'ten'), (20, 'it''s twenty'), (30, 'thirty')",
@@ -159,6 +159,10 @@ fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbE
         assert_eq!(
             boxed_connection.identity_columns(Some("public"), "sql_identity")?,
             vec!["id".to_string()]
+        );
+        assert_eq!(
+            boxed_connection.generated_columns(None, "sql_identity")?,
+            vec!["doubled".to_string()]
         );
 
         let table_info =
@@ -206,6 +210,7 @@ fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbE
         let script =
             std::fs::read_to_string(dir.join("public.sql_identity.sql")).expect("read script");
         assert!(script.contains("OVERRIDING SYSTEM VALUE"), "{script}");
+        assert!(!script.contains("doubled"), "{script}");
 
         connection.execute(&QueryRequest::new("DROP TABLE sql_identity"))?;
         connection.execute(&QueryRequest::new(create))?;
@@ -214,7 +219,7 @@ fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbE
         }
 
         let replayed = connection.execute(&QueryRequest::new(
-            "SELECT id::text, label FROM sql_identity ORDER BY id",
+            "SELECT id::text, label || ':' || doubled::text FROM sql_identity ORDER BY id",
         ))?;
         let rows: Vec<(String, String)> = replayed
             .rows
@@ -230,9 +235,9 @@ fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbE
         assert_eq!(
             rows,
             vec![
-                ("10".to_string(), "ten".to_string()),
-                ("20".to_string(), "it's twenty".to_string()),
-                ("30".to_string(), "thirty".to_string()),
+                ("10".to_string(), "ten:20".to_string()),
+                ("20".to_string(), "it's twenty:40".to_string()),
+                ("30".to_string(), "thirty:60".to_string()),
             ]
         );
 

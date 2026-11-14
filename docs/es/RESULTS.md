@@ -301,7 +301,10 @@ tabla; ejecutarlo dos veces falla por claves únicas o duplica las filas. Una
 columna `GENERATED ALWAYS AS IDENTITY` de PostgreSQL se escribe con
 `OVERRIDING SYSTEM VALUE`, y una tabla de SQL Server con una columna `IDENTITY`
 se envuelve en `SET IDENTITY_INSERT ... ON;` y `OFF;`, de modo que se conservan
-los ids originales. Una tabla sin filas escribe un archivo vacío. El dialecto decide cómo se escriben NULL y las fechas, así que el texto
+los ids originales. Las columnas que calcula la base de datos (columnas
+generadas de PostgreSQL, columnas calculadas y `rowversion` de SQL Server) se
+omiten de las sentencias para que la base de datos las calcule de nuevo al
+reproducir el script. Una tabla sin filas escribe un archivo vacío. El dialecto decide cómo se escriben NULL y las fechas, así que el texto
 para NULL, el delimitador, la codificación y las opciones de fecha no se aplican
 y se ocultan. Los archivos SQL aún no se pueden importar: al importar una
 carpeta que contiene uno, esa tabla falla con el mensaje de que el formato no se
