@@ -35,37 +35,85 @@ enum SourceReader {
 /// whole array, so a large JSON export imports in bounded memory.
 struct JsonArrayStream {
     reader: BufReader<File>,
-    finished: bool,
+    position: ArrayPosition,
+}
+
+/// Where the reader stands inside the array, so separators are enforced:
+/// exactly one comma between elements, none before the first or after the
+/// last.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArrayPosition {
+    /// After `[`: an element or `]`.
+    Start,
+    /// After an element: `,` or `]`.
+    AfterElement,
+    /// After `,`: an element.
+    AfterComma,
+    /// After `]` and the whitespace that may follow it.
+    Finished,
 }
 
 impl JsonArrayStream {
-    fn next_value(&mut self) -> Result<Option<serde_json::Value>, TransferError> {
-        if self.finished {
-            return Ok(None);
+    fn new(reader: BufReader<File>) -> Self {
+        Self {
+            reader,
+            position: ArrayPosition::Start,
         }
+    }
 
+    fn next_value(&mut self) -> Result<Option<serde_json::Value>, TransferError> {
         loop {
-            match next_non_whitespace(&mut self.reader)? {
-                Some(b',') => self.reader.consume(1),
-                Some(b']') => {
+            if self.position == ArrayPosition::Finished {
+                return Ok(None);
+            }
+            let next = next_non_whitespace(&mut self.reader)?;
+            match (self.position, next) {
+                (_, None) => return Err(invalid_json("the array is not closed")),
+                (ArrayPosition::AfterElement, Some(b',')) => {
                     self.reader.consume(1);
-                    self.finished = true;
-                    return Ok(None);
+                    self.position = ArrayPosition::AfterComma;
                 }
-                Some(_) => break,
-                None => {
-                    return Err(TransferError::Source(
-                        "invalid JSON: the array is not closed".to_string(),
-                    ));
+                (ArrayPosition::Start | ArrayPosition::AfterElement, Some(b']')) => {
+                    self.reader.consume(1);
+                    self.expect_end_of_file()?;
+                    self.position = ArrayPosition::Finished;
+                }
+                (ArrayPosition::Start | ArrayPosition::AfterComma, Some(b'{')) => {
+                    let value = self.read_element()?;
+                    self.position = ArrayPosition::AfterElement;
+                    return Ok(Some(value));
+                }
+                (ArrayPosition::Start | ArrayPosition::AfterComma, Some(b',' | b']')) => {
+                    return Err(invalid_json("expected an object, found a separator"));
+                }
+                (ArrayPosition::Start | ArrayPosition::AfterComma, Some(_)) => {
+                    return Err(invalid_json("each array element must be an object"));
+                }
+                (_, Some(_)) => {
+                    return Err(invalid_json("expected `,` or `]` after an array element"));
                 }
             }
         }
-
-        let mut deserializer = serde_json::Deserializer::from_reader(&mut self.reader);
-        let value = serde::Deserialize::deserialize(&mut deserializer)
-            .map_err(|e| TransferError::Source(format!("invalid JSON: {e}")))?;
-        Ok(Some(value))
     }
+
+    /// Reads one object. An object ends at its `}`, so the deserializer
+    /// reads nothing past it and the next separator stays in the reader.
+    fn read_element(&mut self) -> Result<serde_json::Value, TransferError> {
+        let mut deserializer = serde_json::Deserializer::from_reader(&mut self.reader);
+        serde::Deserialize::deserialize(&mut deserializer)
+            .map_err(|e| TransferError::Source(format!("invalid JSON: {e}")))
+    }
+
+    fn expect_end_of_file(&mut self) -> Result<(), TransferError> {
+        match next_non_whitespace(&mut self.reader)? {
+            None => Ok(()),
+            Some(_) => Err(invalid_json("unexpected content after the array")),
+        }
+    }
+}
+
+fn invalid_json(reason: &str) -> TransferError {
+    TransferError::Source(format!("invalid JSON: {reason}"))
 }
 
 /// Skips whitespace and a UTF-8 byte order mark, returning the next byte
@@ -92,10 +140,9 @@ fn open_json(file: File) -> Result<SourceReader, TransferError> {
     let mut reader = BufReader::new(file);
     if next_non_whitespace(&mut reader)? == Some(b'[') {
         reader.consume(1);
-        return Ok(SourceReader::JsonArray(Box::new(JsonArrayStream {
+        return Ok(SourceReader::JsonArray(Box::new(JsonArrayStream::new(
             reader,
-            finished: false,
-        })));
+        ))));
     }
     Ok(open_json_lines(reader))
 }
@@ -452,6 +499,52 @@ mod tests {
             result.is_err(),
             "a truncated array must not import silently"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_source_rejects_malformed_arrays() {
+        let dir = temp_dir("json_array_malformed");
+        let path = dir.join("t.json");
+        let cases = [
+            (
+                "[{\"id\":1}{\"id\":2}]",
+                "expected `,` or `]` after an array element",
+            ),
+            ("[,{\"id\":1}]", "expected an object, found a separator"),
+            ("[{\"id\":1},]", "expected an object, found a separator"),
+            (
+                "[{\"id\":1},,{\"id\":2}]",
+                "expected an object, found a separator",
+            ),
+            (
+                "[{\"id\":1}][{\"id\":2}]",
+                "unexpected content after the array",
+            ),
+            (
+                "[{\"id\":1}] trailing",
+                "unexpected content after the array",
+            ),
+            ("[1]", "each array element must be an object"),
+        ];
+
+        for (contents, reason) in cases {
+            std::fs::write(&path, contents).unwrap();
+            let mut source = FileSource::open(
+                &path,
+                FileFormat::Json,
+                vec![column("id", "int4")],
+                10,
+                None,
+            )
+            .expect("open json");
+            match source.next_chunk(&CancelToken::new()) {
+                Err(TransferError::Source(message)) => {
+                    assert_eq!(message, format!("invalid JSON: {reason}"), "{contents}")
+                }
+                other => panic!("{contents} must be rejected, got {other:?}"),
+            }
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 
