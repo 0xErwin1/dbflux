@@ -100,10 +100,12 @@ details, never telemetry payload fields.
 
 Facts that do not change with the level:
 
-- The installation identifier is a random UUID that rotates about every 90
-  days. It is **pseudonymous, not anonymous**: it identifies an installation,
-  not a person or a unique device. Reports also have a delivery UUID. Rotation
-  sends no retirement notice or link between old and new identifiers.
+- The installation identifier is a random UUID created on first run and kept
+  for the life of the installation: it never rotates on a schedule. It is
+  **pseudonymous, not anonymous**: it identifies an installation, not a person
+  or a unique device. Reports also have a delivery UUID, which is unique per
+  report. Resetting the identifier in Settings destroys the old one and mints a
+  new random one; nothing links the two.
 - Never sent: operation, query, client or person identifiers, tool names,
   queries, results, credentials, file paths, connection metadata, cross-process
   actor data or unrestricted error text. There are no Extended reports, public
@@ -112,7 +114,7 @@ Facts that do not change with the level:
   in the local [audit log](#audit-and-privacy). Readable display labels do not
   change raw storage, copy, export or wire contents. Reports go only to the
   configured private collector to help guide development.
-- Resetting the installation id in Settings › Updates & privacy rotates the
+- Resetting the installation id in Settings › Updates & privacy replaces the
   identifier at once and cancels pending sends; already-acknowledged builds
   stay acknowledged.
 
@@ -122,8 +124,8 @@ touching the installation id. Choosing Basic or saving does not promise an
 immediate network report. Leaving Basic clears the pending Basic report and
 the counters, and Off also clears a pending ping; a delivery already handed to
 the network may still complete. Acknowledging a sent snapshot preserves newer
-increments. Reset or rotation invalidates old in-flight usage work while
-preserving acknowledged-build history.
+increments. A reset invalidates old in-flight usage work while preserving
+acknowledged-build history.
 
 ## Your data on this machine
 

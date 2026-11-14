@@ -106,11 +106,12 @@ de cobertura, nunca campos del contenido de telemetría.
 
 Datos que no cambian según el nivel:
 
-- El identificador de instalación es un UUID aleatorio que rota cada 90 días
-  aproximadamente. Es **seudónimo, no anónimo**: identifica una instalación, no
-  una persona ni un dispositivo único. Cada informe también tiene un UUID de
-  entrega. La rotación no envía avisos de retirada ni vínculos entre IDs viejos
-  y nuevos.
+- El identificador de instalación es un UUID aleatorio creado en el primer
+  arranque y se conserva mientras exista la instalación: no rota por calendario.
+  Es **seudónimo, no anónimo**: identifica una instalación, no una persona ni un
+  dispositivo único. Cada informe también tiene un UUID de entrega, único por
+  informe. Restablecer el identificador en Ajustes destruye el anterior y genera
+  uno nuevo aleatorio; nada vincula a los dos.
 - Nunca se envían: identificadores de operaciones, consultas, clientes o personas,
   nombres de herramientas, consultas, resultados, credenciales, rutas de archivos,
   metadatos de conexión, datos de actores entre procesos ni texto de error sin
@@ -122,7 +123,7 @@ Datos que no cambian según el nivel:
   el contenido enviado sin procesar. Los informes solo van al colector privado
   configurado para ayudar a orientar el desarrollo.
 - Reiniciar el id de instalación en Configuración › Actualizaciones y
-  privacidad rota el identificador de inmediato y cancela los envíos
+  privacidad reemplaza el identificador de inmediato y cancela los envíos
   pendientes; las compilaciones ya confirmadas siguen confirmadas.
 
 El nivel y los informes están en Configuración › Actualizaciones y
@@ -131,8 +132,8 @@ defecto deja Mínimo sin tocar el id de instalación. Elegir Básico o guardar n
 promete un informe de red inmediato. Salir de Básico borra el informe Básico
 pendiente y los contadores, y Apagado también borra un aviso pendiente; un
 envío ya entregado a la red aún puede completarse. Confirmar una instantánea
-enviada conserva los incrementos posteriores. Reiniciar o rotar invalida el trabajo de uso en curso anterior y
-conserva el historial de compilaciones confirmadas.
+enviada conserva los incrementos posteriores. Reiniciar invalida el trabajo de
+uso en curso anterior y conserva el historial de compilaciones confirmadas.
 
 ## Tus datos en este equipo
 
