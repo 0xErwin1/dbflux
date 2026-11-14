@@ -279,7 +279,10 @@ las demás:
   vacío por defecto. JSON y JSON Lines siempre escriben `null`, y XML marca un
   NULL con `null="true"`. Un valor cuyo texto es igual a un texto para NULL no vacío se
   leería como NULL, así que la exportación se detiene con un error que nombra el
-  valor y la columna; elige otro texto para NULL.
+  valor y la columna; elige otro texto para NULL. Con el texto para NULL vacío
+  por defecto, un string vacío y NULL se escriben igual, así que al importar un
+  CSV ambos vuelven como NULL; usa un texto para NULL no vacío, como `\N`, para
+  conservar los strings vacíos.
 - **Fechas** (todos los formatos): RFC 3339 (por defecto), `YYYY-MM-DD HH:MM:SS`
   en UTC o segundos epoch, que JSON y JSON Lines escriben como número. Una fecha
   se escribe como `YYYY-MM-DD` con los dos primeros y como su medianoche (UTC)

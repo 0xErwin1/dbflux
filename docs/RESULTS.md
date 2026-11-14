@@ -256,7 +256,9 @@ offers the options a format uses and hides the others:
   default. JSON and JSON Lines always write `null`, and XML marks a NULL with
   `null="true"`. A value whose text equals a non-empty NULL text would be read
   back as NULL, so the export stops with an error naming the value and the
-  column; choose another NULL text.
+  column; choose another NULL text. With the default empty NULL text, an empty
+  string and NULL are written the same way, so a CSV import reads both back as
+  NULL; set a non-empty NULL text such as `\N` to keep empty strings.
 - **Dates** (every format): RFC 3339 (the default), `YYYY-MM-DD HH:MM:SS` in
   UTC, or epoch seconds, which JSON and JSON Lines write as a number. A date is
   written as `YYYY-MM-DD` under the first two and as its midnight (UTC) under

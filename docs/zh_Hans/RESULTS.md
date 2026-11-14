@@ -165,7 +165,7 @@ HTML、Markdown 和 XML 文件用于阅读，不能导入：导入包含这类�
 
 - **分隔符**（仅 CSV）：逗号、分号、制表符或竖线。
 - **编码**（仅 CSV）：UTF-8、带 BOM 的 UTF-8、UTF-16LE（带 BOM）或 Windows-1252。Windows-1252 无法表示的字符不会被替换，而是让导出以指明该字符的错误中止。
-- **NULL 文本**（CSV、HTML 和 Markdown）：为 NULL 写入的文本，默认为空。JSON 和 JSON Lines 始终写入 `null`，XML 用 `null="true"` 标记 NULL。文本与非空 NULL 文本相同的值在导入时会被读成 NULL，因此导出会以指明该值和列的错误中止；请选择其他 NULL 文本。
+- **NULL 文本**（CSV、HTML 和 Markdown）：为 NULL 写入的文本，默认为空。JSON 和 JSON Lines 始终写入 `null`，XML 用 `null="true"` 标记 NULL。文本与非空 NULL 文本相同的值在导入时会被读成 NULL，因此导出会以指明该值和列的错误中止；请选择其他 NULL 文本。使用默认的空 NULL 文本时，空字符串和 NULL 的写法相同，因此导入 CSV 时两者都会读回为 NULL；如需保留空字符串，请设置非空的 NULL 文本，例如 `\N`。
 - **日期**（所有格式）：RFC 3339（默认）、UTC 的 `YYYY-MM-DD HH:MM:SS`，或 epoch 秒（JSON 和 JSON Lines 将其写为数字）。日期在前两种格式下写为 `YYYY-MM-DD`，在 epoch 下写为当天午夜（UTC）；时间在 `YYYY-MM-DD HH:MM:SS` 下写为 `HH:MM:SS`，在 epoch 下写为自午夜起的秒数。
 
 默认值写出的内容与早期版本完全一致。清单会记录塑造了文件的选项，因此导入该文件夹时会以同样的方式读取；没有这些选项的清单表示使用默认值。**将所有行导出到文件** 始终使用默认值。
