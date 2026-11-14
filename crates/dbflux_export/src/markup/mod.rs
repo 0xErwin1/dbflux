@@ -10,7 +10,9 @@ use crate::csv::value_to_csv_field;
 use dbflux_core::{ColumnMeta, Value};
 use std::io::Write;
 
-/// Writes one HTML document holding a single table.
+/// Writes one HTML document holding a single table. Cells keep their line
+/// breaks and repeated spaces (`white-space: pre-wrap`), so a multiline value
+/// reads as stored.
 pub struct HtmlStreamWriter<W: Write> {
     writer: W,
     title: String,
@@ -27,7 +29,7 @@ impl<W: Write> HtmlStreamWriter<W> {
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
         write!(
             self.writer,
-            "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n</head>\n<body>\n<table>\n<thead>\n<tr>",
+            "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>th, td {{ white-space: pre-wrap; }}</style>\n</head>\n<body>\n<table>\n<thead>\n<tr>",
             escape_markup(&self.title)
         )?;
         for column in columns {

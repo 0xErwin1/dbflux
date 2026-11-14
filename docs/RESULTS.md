@@ -240,8 +240,8 @@ the Tasks panel, which shows its progress and can cancel it; the toast states
 the total row count and the path.
 
 HTML, Markdown and XML files are for reading, not for import: importing a folder
-that holds one of them fails that table with a message that its format cannot be
-imported. XML writes a `<row>` per row and a `<field name="...">` per column,
+that holds one of them stops at that table, which fails with a message that its
+format cannot be imported, and the tables after it are not attempted. XML writes a `<row>` per row and a `<field name="...">` per column,
 with `null="true"` for a NULL so it stays distinct from an empty value.
 
 A document collection exported as JSON or JSON Lines writes each document

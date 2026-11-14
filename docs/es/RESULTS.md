@@ -260,8 +260,9 @@ como una tarea en el panel de tareas, que muestra su progreso y permite
 cancelarla; el aviso indica el total de filas y la ruta.
 
 Los archivos HTML, Markdown y XML son para leer, no para importar: al importar
-una carpeta que contenga uno de ellos, esa tabla falla con un mensaje que indica
-que su formato no se puede importar. XML escribe un `<row>` por fila y un
+una carpeta que contenga uno de ellos, la importación se detiene en esa tabla,
+que falla con un mensaje que indica que su formato no se puede importar, y las
+tablas siguientes no se intentan. XML escribe un `<row>` por fila y un
 `<field name="...">` por columna, con `null="true"` para un NULL, de modo que se
 distingue de un valor vacío.
 

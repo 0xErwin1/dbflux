@@ -7,7 +7,7 @@ All notable changes to DBFlux will be documented in this file.
 ### Added
 
 * **JSON Lines export, and JSON export as one array** — The export wizard and **Export all rows to file** now offer JSON Lines, which writes one object per line to a `.jsonl` file. JSON now writes a single valid JSON array, with one object per line, instead of one object per line under a `.json` name. Import reads either shape from a `.json` file, so export folders written by earlier versions still import (#805).
-* **HTML, Markdown and XML export** — The export wizard and **Export all rows to file** can write a table as an HTML document, a Markdown table or XML, streamed page by page like CSV. XML writes a `<row>` per row and a `<field name="...">` per column and marks a NULL with `null="true"`. These formats are for reading and sharing; importing a folder that holds one fails that table with a message that the format cannot be imported (#805).
+* **HTML, Markdown and XML export** — The export wizard and **Export all rows to file** can write a table as an HTML document, a Markdown table or XML, streamed page by page like CSV. XML writes a `<row>` per row and a `<field name="...">` per column and marks a NULL with `null="true"`. These formats are for reading and sharing; importing a folder that holds one stops at that table with a message that the format cannot be imported (#805).
 
 ### Fixed
 

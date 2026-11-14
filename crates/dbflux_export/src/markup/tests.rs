@@ -59,11 +59,22 @@ fn xml(columns: &[ColumnMeta], rows: &[Vec<Value>]) -> String {
 fn html_writes_one_escaped_table_document() {
     assert_eq!(
         html(&columns(), &rows()),
-        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>public.notes</title>\n</head>\n<body>\n<table>\n<thead>\n<tr><th>id</th><th>note</th></tr>\n</thead>\n<tbody>\n\
+        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>public.notes</title>\n<style>th, td { white-space: pre-wrap; }</style>\n</head>\n<body>\n<table>\n<thead>\n<tr><th>id</th><th>note</th></tr>\n</thead>\n<tbody>\n\
 <tr><td>1</td><td>a &lt;b&gt; &amp; &quot;c&quot;</td></tr>\n\
 <tr><td>2</td><td></td></tr>\n\
 </tbody>\n</table>\n</body>\n</html>\n"
     );
+}
+
+#[test]
+fn html_keeps_multiline_values_in_one_cell_with_whitespace_preserved() {
+    let rows = vec![vec![
+        Value::Int(1),
+        Value::Text("first\nsecond  end".to_string()),
+    ]];
+    let output = html(&columns(), &rows);
+    assert!(output.contains("<style>th, td { white-space: pre-wrap; }</style>"));
+    assert!(output.contains("<tr><td>1</td><td>first\nsecond  end</td></tr>\n"));
 }
 
 #[test]
