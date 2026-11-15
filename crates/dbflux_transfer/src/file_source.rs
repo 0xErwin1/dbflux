@@ -205,10 +205,27 @@ pub(crate) fn sample_object_keys(
     format: FileFormat,
     limit: usize,
 ) -> Result<Vec<Vec<String>>, TransferError> {
+    let mut records = Vec::new();
+    for_each_object_keys(path, format, limit, |keys| records.push(keys))?;
+    Ok(records)
+}
+
+/// Reads every record of a JSON (array or JSON Lines) file, failing on the
+/// first one that is not an object, without holding the records in memory.
+pub(crate) fn check_json_records(path: &Path, format: FileFormat) -> Result<(), TransferError> {
+    for_each_object_keys(path, format, usize::MAX, |_| {})
+}
+
+fn for_each_object_keys(
+    path: &Path,
+    format: FileFormat,
+    limit: usize,
+    mut visit: impl FnMut(Vec<String>),
+) -> Result<(), TransferError> {
     let file =
         File::open(path).map_err(|e| TransferError::Source(format!("{}: {e}", path.display())))?;
     let mut reader = BufReader::new(file);
-    let mut records = Vec::new();
+    let mut seen = 0usize;
 
     // A `json` file whose first token is not `[` is JSON Lines, as when it is
     // imported.
@@ -220,21 +237,22 @@ pub(crate) fn sample_object_keys(
     if is_array {
         reader.consume(1);
         let mut array = JsonArrayStream::new(reader);
-        while records.len() < limit {
+        while seen < limit {
             match array.next_element::<ObjectKeys>()? {
-                Some(record) => records.push(record.0),
+                Some(record) => visit(record.0),
                 None => break,
             }
+            seen += 1;
         }
     } else {
         let stream = serde_json::Deserializer::from_reader(reader).into_iter::<ObjectKeys>();
         for record in stream.take(limit) {
             let record = record.map_err(|e| invalid_json(&e.to_string()))?;
-            records.push(record.0);
+            visit(record.0);
         }
     }
 
-    Ok(records)
+    Ok(())
 }
 
 pub struct FileSource {

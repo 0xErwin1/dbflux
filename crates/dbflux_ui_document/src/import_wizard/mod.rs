@@ -547,6 +547,10 @@ impl ImportWizard {
     }
 
     fn continue_from_configure(&mut self, cx: &mut Context<Self>) {
+        if self.defer_continue_for_typed_table(cx) {
+            cx.notify();
+            return;
+        }
         let has_destructive = self.rows.iter().any(|row| row.config.is_destructive());
         if has_destructive {
             self.step = WizardStep::Confirm;

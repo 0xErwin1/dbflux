@@ -22,7 +22,7 @@ use dbflux_core::{CancelToken, Connection, TransferColumn};
 use dbflux_export::{FormatOptions, decode_to_utf8};
 
 use crate::file_sink::FileFormat;
-use crate::file_source::{FileSource, sample_object_keys};
+use crate::file_source::{FileSource, check_json_records, sample_object_keys};
 use crate::import::{ImportOptions, ImportOutcome, ImportTablePlan, TableFile, run_plans};
 use crate::manifest::ManifestTable;
 use crate::pipeline::{RowSource, TransferError};
@@ -172,6 +172,11 @@ fn check_readable(
     segment_size: u32,
     cancel: &CancelToken,
 ) -> Result<(), TransferError> {
+    if file.format != FileFormat::Csv {
+        // A record that is not an object would otherwise import as a row of NULLs.
+        check_json_records(&file.path, file.format)?;
+    }
+
     let mut source = FileSource::open_with(
         &file.path,
         file.format,

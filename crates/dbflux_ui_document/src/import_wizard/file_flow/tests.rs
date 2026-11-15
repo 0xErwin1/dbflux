@@ -38,6 +38,7 @@ fn file_state(format: FileFormat, error: Option<&str>) -> FileImportState {
         options: FormatOptions::default(),
         error: error.map(str::to_string),
         generation: 0,
+        continue_after_read: false,
     }
 }
 
@@ -158,4 +159,87 @@ fn the_run_reads_the_picked_file_else_the_picked_folder(cx: &mut gpui::TestAppCo
             assert_eq!(options.delimiter, CsvDelimiter::Semicolon);
         },
     );
+}
+
+#[gpui::test]
+fn continuing_applies_a_target_table_typed_without_confirming_it(cx: &mut gpui::TestAppContext) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::migrate_wizard::source_target::shared_coordinator_tests::{
+        PickerFakeConnection, connect_profile,
+    };
+    use dbflux_core::SchemaLoadingStrategy;
+
+    init_test_runtime(cx);
+    let app_state = isolated_test_app_state(cx);
+    let profile_id = Uuid::new_v4();
+    connect_profile(
+        &app_state,
+        cx,
+        profile_id,
+        PickerFakeConnection::new(SchemaLoadingStrategy::SingleDatabase),
+        None,
+    );
+    let directory = std::env::temp_dir().join(format!(
+        "dbflux_import_wizard_typed_table_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("create scratch dir");
+    let path = directory.join("people.csv");
+    std::fs::write(&path, "id,name\n1,Ada\n").expect("write csv");
+
+    let slot: Rc<RefCell<Option<Entity<ImportWizard>>>> = Rc::default();
+    let capture = Rc::clone(&slot);
+    let file_path = path.clone();
+    let (_root, window) = cx.add_window_view(move |window, cx| {
+        let wizard = cx.new(|cx| ImportWizard::new(app_state, cx));
+        wizard.update(cx, |this, cx| {
+            this.open(profile_id, None, window, cx);
+            this.file_import = Some(FileImportState {
+                path: file_path,
+                format: FileFormat::Csv,
+                options: FormatOptions::default(),
+                error: None,
+                generation: 0,
+                continue_after_read: false,
+            });
+            let file = dbflux_transfer::import_file::ImportFile::inspect(
+                &this.file_import.as_ref().expect("state").path,
+                FileFormat::Csv,
+                FormatOptions::default(),
+            )
+            .expect("inspect");
+            this.build_rows(
+                vec![crate::import_wizard::TableImportConfig::new(
+                    &file.manifest_table(),
+                    false,
+                    Vec::new(),
+                )],
+                cx,
+            );
+            this.step = WizardStep::Configure;
+            if let Some(inputs) = &this.file_inputs {
+                inputs
+                    .target_table
+                    .update(cx, |input, cx| input.set_value("renamed", window, cx));
+            }
+        });
+        *capture.borrow_mut() = Some(wizard.clone());
+        gpui_component::Root::new(wizard, window, cx)
+    });
+    let wizard = slot.borrow().clone().expect("wizard");
+
+    wizard.update(window, |this, cx| this.continue_from_configure(cx));
+    window.run_until_parked();
+
+    window.update(|_, cx| {
+        let wizard = wizard.read(cx);
+        assert_eq!(wizard.rows[0].config.target_table, "renamed");
+        assert!(
+            !matches!(wizard.step, WizardStep::Configure),
+            "continuing runs the import once the typed table is applied"
+        );
+    });
+    std::fs::remove_dir_all(&directory).ok();
 }

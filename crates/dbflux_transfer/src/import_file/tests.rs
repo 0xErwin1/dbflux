@@ -627,7 +627,7 @@ fn a_malformed_json_line_past_the_sample_rejects_the_import_and_leaves_the_table
         &plan(&file, TableMappingMode::Existing, "people"),
     );
 
-    assert!(message.starts_with("invalid NDJSON:"), "{message}");
+    assert!(message.starts_with("invalid JSON:"), "{message}");
     assert_eq!(
         rows(&connection, "SELECT id FROM people"),
         Vec::<Vec<Value>>::new()
@@ -681,5 +681,128 @@ fn an_unconfirmed_destructive_plan_is_rejected_before_touching_the_table() {
     assert_eq!(
         rows(&connection, "SELECT id FROM people"),
         vec![vec![Value::Int(100)]]
+    );
+}
+
+#[test]
+fn folder_import_keeps_a_manifest_column_without_a_type_untyped() {
+    use crate::import::run_import;
+    use crate::manifest::{ManifestSource, TransferManifest};
+
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    scratch.write("t.jsonl", b"{\"id\":1,\"n\":42}\n");
+    let manifest = TransferManifest {
+        version: TransferManifest::CURRENT_VERSION,
+        source: ManifestSource {
+            driver: "sqlite".to_string(),
+            database: "main".to_string(),
+            schema: None,
+        },
+        created_at: "2026-07-07T10:00:00+00:00".to_string(),
+        tables: vec![ManifestTable {
+            schema: None,
+            name: "t".to_string(),
+            file: "t.jsonl".to_string(),
+            format: "jsonl".to_string(),
+            columns: vec![
+                TransferColumn {
+                    name: "id".to_string(),
+                    type_name: Some("INTEGER".to_string()),
+                    nullable: true,
+                    is_primary_key: false,
+                },
+                TransferColumn {
+                    name: "n".to_string(),
+                    type_name: None,
+                    nullable: true,
+                    is_primary_key: false,
+                },
+            ],
+            row_count: 1,
+            fk_order_index: 0,
+            options: FormatOptions::default(),
+        }],
+    };
+    scratch.write(
+        "manifest.json",
+        serde_json::to_string(&manifest)
+            .expect("manifest")
+            .as_bytes(),
+    );
+    let plans = [ImportTablePlan {
+        source_table: "t".to_string(),
+        target_schema: None,
+        target_table: "t".to_string(),
+        mapping_mode: TableMappingMode::Create,
+        column_overrides: None,
+    }];
+
+    run_import(
+        &connection,
+        &scratch.0,
+        &plans,
+        &import_options(500),
+        &CancelToken::new(),
+        |_, _, _| {},
+    )
+    .expect("the import runs");
+
+    assert_eq!(
+        rows(&connection, "SELECT typeof(n) FROM t"),
+        vec![vec![text("integer")]]
+    );
+}
+
+#[test]
+fn a_new_table_from_a_loose_file_declares_its_untyped_columns_as_text() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    let path = scratch.write("events.csv", b"id,label\n1,start\n");
+    let file = inspect(&path, FileFormat::Csv).expect("inspect");
+
+    import(
+        &connection,
+        &file,
+        &plan(&file, TableMappingMode::Create, "events"),
+        500,
+    );
+
+    assert_eq!(
+        rows(
+            &connection,
+            "SELECT name, type FROM pragma_table_info('events') ORDER BY cid"
+        ),
+        vec![
+            vec![text("id"), text("TEXT")],
+            vec![text("label"), text("TEXT")]
+        ]
+    );
+}
+
+#[test]
+fn a_non_object_json_record_after_the_sample_rejects_the_import_with_the_target_unchanged() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(&connection, PEOPLE);
+    let mut lines = String::new();
+    for id in 1..=120 {
+        lines.push_str(&format!("{{\"id\":{id},\"name\":\"n\"}}\n"));
+    }
+    lines.push_str("5\n");
+    let path = scratch.write("people.jsonl", lines.as_bytes());
+    let file = inspect(&path, FileFormat::JsonLines).expect("inspect");
+    let before = std::fs::read(scratch.0.join("target.db")).expect("db bytes");
+
+    let message = rejection(
+        &connection,
+        &file,
+        &plan(&file, TableMappingMode::Existing, "people"),
+    );
+
+    assert!(message.contains("expected a JSON object"), "{message}");
+    assert_eq!(
+        std::fs::read(scratch.0.join("target.db")).expect("db bytes"),
+        before
     );
 }

@@ -89,6 +89,9 @@ pub(super) struct FileImportState {
     error: Option<String>,
     /// Identifies the latest read, so a slower earlier one cannot overwrite it.
     generation: u64,
+    /// Continue to the run as soon as the read in flight finishes: the user
+    /// pressed Continue with a typed table name that was not applied yet.
+    continue_after_read: bool,
 }
 
 /// The text fields of the file entry. Created when the wizard opens, because
@@ -295,6 +298,33 @@ impl ImportWizard {
         self.read_file(connection, path, format, options, typed, cx);
     }
 
+    /// When the target table field holds a name the table row does not use
+    /// yet, reads the file again for that name and continues to the run once
+    /// it is read. Returns whether Continue waits for that read.
+    pub(super) fn defer_continue_for_typed_table(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(typed) = self
+            .file_inputs
+            .as_ref()
+            .map(|inputs| inputs.target_table.read(cx).value().trim().to_string())
+            .filter(|name| !name.is_empty())
+        else {
+            return false;
+        };
+        let applied = self
+            .rows
+            .first()
+            .is_some_and(|row| row.config.target_table == typed);
+        if self.file_import.is_none() || applied {
+            return false;
+        }
+
+        self.reload_file(cx);
+        if let Some(state) = self.file_import.as_mut() {
+            state.continue_after_read = true;
+        }
+        true
+    }
+
     pub(super) fn apply_target_table(&mut self, cx: &mut Context<Self>) {
         self.reload_file(cx);
     }
@@ -322,6 +352,7 @@ impl ImportWizard {
             options: options.clone(),
             error: None,
             generation,
+            continue_after_read: false,
         });
         cx.notify();
 
@@ -363,12 +394,19 @@ impl ImportWizard {
             return;
         }
         self.loading = false;
+        let continue_now = self
+            .file_import
+            .as_mut()
+            .is_some_and(|state| std::mem::take(&mut state.continue_after_read));
 
         match loaded {
             Ok(LoadedFile { config }) => {
                 self.supports_truncate = supports_truncate;
                 self.build_rows(vec![config], cx);
                 self.step = WizardStep::Configure;
+                if continue_now {
+                    self.continue_from_configure(cx);
+                }
             }
             Err(error) => {
                 let message = dbflux_i18n::t!(

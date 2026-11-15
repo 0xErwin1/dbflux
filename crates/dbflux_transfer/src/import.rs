@@ -253,8 +253,21 @@ fn import_one_table(
     cancel: &CancelToken,
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<crate::pipeline::TransferReport, TransferError> {
-    let target_columns =
+    let mut target_columns =
         resolve_target_columns(connection, plan, &file.columns, &options.target_database)?;
+    if file.loose
+        && matches!(
+            plan.mapping_mode,
+            TableMappingMode::Create | TableMappingMode::Recreate
+        )
+    {
+        // A table created from a loose file has no source types to copy, so
+        // each column is text in the target engine's own spelling.
+        let text_type = connection.dialect().text_column_type();
+        for column in target_columns.iter_mut().filter(|c| c.type_name.is_none()) {
+            column.type_name = Some(text_type.to_string());
+        }
+    }
 
     let column_map = match &plan.column_overrides {
         Some(overrides) => AutoColumnMap::with_overrides(&file.columns, &target_columns, overrides),
