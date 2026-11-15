@@ -307,7 +307,8 @@ valores exportados (`setval`): al mayor si la secuencia es ascendente y al menor
 si es descendente, de modo que una inserción por defecto posterior a la
 reproducción no reutilice un id; SQL Server avanza por sí mismo la semilla de
 identidad al insertar valores explícitos. Las columnas que calcula la base de datos (columnas
-generadas de PostgreSQL, columnas calculadas y `rowversion` de SQL Server) se
+generadas de PostgreSQL y MySQL/MariaDB, columnas calculadas, `rowversion` y columnas
+de período temporal `GENERATED ALWAYS AS ROW START/END` de SQL Server) se
 omiten de las sentencias para que la base de datos las calcule de nuevo al
 reproducir el script. Una tabla sin filas escribe un archivo vacío. El dialecto decide cómo se escriben NULL y las fechas, así que el texto
 para NULL, el delimitador, la codificación y las opciones de fecha no se aplican

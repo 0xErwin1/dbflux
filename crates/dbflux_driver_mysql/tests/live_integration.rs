@@ -114,6 +114,44 @@ fn mysql_fetch_dependents_lists_views_and_foreign_key_children() -> Result<(), D
     })
 }
 
+/// `generated_columns` names the stored and virtual generated columns, leaves
+/// out expression defaults (`DEFAULT_GENERATED`), and an `INSERT` that omits
+/// the generated columns replays.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_generated_columns_exclude_defaults_and_replay() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE gen_cols (
+                id INT PRIMARY KEY,
+                price INT NOT NULL,
+                doubled INT GENERATED ALWAYS AS (price * 2) STORED,
+                tripled INT GENERATED ALWAYS AS (price * 3) VIRTUAL,
+                label VARCHAR(40) DEFAULT (CONCAT('n', 1))
+            )",
+        ))?;
+
+        let expected = vec!["doubled".to_string(), "tripled".to_string()];
+        assert_eq!(connection.generated_columns(None, "gen_cols")?, expected);
+        assert_eq!(
+            connection.generated_columns(Some("testdb"), "gen_cols")?,
+            expected
+        );
+
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO gen_cols (id, price) VALUES (1, 5)",
+        ))?;
+        let replayed =
+            connection.execute(&QueryRequest::new("SELECT doubled, tripled FROM gen_cols"))?;
+        assert_eq!(replayed.rows, vec![vec![Value::Int(10), Value::Int(15)]]);
+
+        Ok(())
+    })
+}
+
 #[test]
 #[ignore = "requires Docker daemon"]
 fn mysql_schema_introspection() -> Result<(), DbError> {

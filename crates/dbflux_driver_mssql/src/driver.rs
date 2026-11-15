@@ -496,7 +496,8 @@ fn mssql_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
 }
 
 /// The columns SQL Server computes and rejects explicit values for: computed
-/// columns and `rowversion` (`timestamp`) columns, in column order.
+/// columns, `rowversion` (`timestamp`) columns and the `GENERATED ALWAYS AS
+/// ROW START/END` period columns of a temporal table, in column order.
 /// `rowversion` is matched by its system type id (189), which an alias type
 /// over it shares. There is no join on `sys.types`: a CLR type such as
 /// `geography` has no row whose `user_type_id` equals its system type id, so
@@ -505,24 +506,32 @@ fn mssql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
     mssql_column_lookup_sql(
         schema,
         table,
-        "(c.is_computed = 1 OR c.system_type_id = 189)",
+        "(c.is_computed = 1 OR c.system_type_id = 189 OR c.generated_always_type <> 0)",
     )
 }
 
+/// The names of the table's columns matching `predicate`. With a schema the
+/// table is found by name inside it; without one the object is resolved the
+/// way the server resolves an unqualified name, through `OBJECT_ID`, rather
+/// than assuming `SCHEMA_NAME()` (the default schema).
 fn mssql_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -> String {
-    let schema = match schema {
-        Some(schema) => format!("N'{}'", MSSQL_DIALECT.escape_string(schema)),
-        None => "SCHEMA_NAME()".to_string(),
-    };
-
-    format!(
-        "SELECT c.name FROM sys.columns c \
-         JOIN sys.tables t ON t.object_id = c.object_id \
-         JOIN sys.schemas s ON s.schema_id = t.schema_id \
-         WHERE {predicate} AND s.name = {schema} AND t.name = N'{}' \
-         ORDER BY c.column_id",
-        MSSQL_DIALECT.escape_string(table)
-    )
+    match schema {
+        Some(schema) => format!(
+            "SELECT c.name FROM sys.columns c \
+             JOIN sys.tables t ON t.object_id = c.object_id \
+             JOIN sys.schemas s ON s.schema_id = t.schema_id \
+             WHERE {predicate} AND s.name = N'{}' AND t.name = N'{}' \
+             ORDER BY c.column_id",
+            MSSQL_DIALECT.escape_string(schema),
+            MSSQL_DIALECT.escape_string(table)
+        ),
+        None => format!(
+            "SELECT c.name FROM sys.columns c \
+             WHERE {predicate} AND c.object_id = OBJECT_ID(N'{}') \
+             ORDER BY c.column_id",
+            MSSQL_DIALECT.escape_string(&MSSQL_DIALECT.quote_identifier(table))
+        ),
+    }
 }
 
 /// A script that inserts explicit values into an `IDENTITY` column must turn
@@ -6615,9 +6624,24 @@ mod tests {
             "{sql}"
         );
         assert!(sql.contains("c.is_identity = 1"));
-        assert!(
-            super::mssql_identity_columns_sql(None, "users").contains("s.name = SCHEMA_NAME()")
-        );
+        assert!(!sql.contains("OBJECT_ID"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_unqualified_lookups_resolve_the_object_id_of_the_quoted_name() {
+        let hostile = "we]ird'name";
+        for sql in [
+            super::mssql_identity_columns_sql(None, hostile),
+            super::mssql_generated_columns_sql(None, hostile),
+        ] {
+            assert!(
+                sql.contains("c.object_id = OBJECT_ID(N'[we]]ird''name]')"),
+                "{sql}"
+            );
+            assert!(!sql.contains("SCHEMA_NAME()"), "{sql}");
+            assert!(!sql.contains("sys.schemas"), "{sql}");
+            assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
+        }
     }
 
     #[test]
@@ -6635,9 +6659,12 @@ mod tests {
         );
         assert!(!sql.contains("is_identity"), "{sql}");
         assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
-        assert!(
-            super::mssql_generated_columns_sql(None, "users").contains("s.name = SCHEMA_NAME()")
-        );
+    }
+
+    #[test]
+    fn mssql_generated_columns_query_includes_temporal_period_columns() {
+        let sql = super::mssql_generated_columns_sql(Some("dbo"), "history");
+        assert!(sql.contains("c.generated_always_type <> 0"), "{sql}");
     }
 
     #[test]

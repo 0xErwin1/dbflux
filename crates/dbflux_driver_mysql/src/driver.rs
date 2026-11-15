@@ -2924,6 +2924,21 @@ impl Connection for MysqlConnection {
         Some(&GENERATOR)
     }
 
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mysql_generated_columns_sql(
+            schema, table,
+        )))?;
+
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| match row.into_iter().next() {
+                Some(Value::Text(name)) => Some(name),
+                _ => None,
+            })
+            .collect())
+    }
+
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
         plan_mysql_semantic_request(request)
     }
@@ -3977,6 +3992,27 @@ fn mysql_text_literal(s: &str) -> String {
     }
 }
 
+/// The columns MySQL and MariaDB compute and reject explicit values for
+/// (`GENERATED ALWAYS AS (...) STORED|VIRTUAL`), in column order. `EXTRA`
+/// reads `STORED GENERATED` / `VIRTUAL GENERATED`, and MariaDB may report
+/// `PERSISTENT`. A bare `%GENERATED%` match would also catch
+/// `DEFAULT_GENERATED`, an expression default that accepts explicit values.
+fn mysql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    let schema = match schema {
+        Some(schema) => mysql_text_literal(schema),
+        None => "DATABASE()".to_string(),
+    };
+
+    format!(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS \
+         WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = {} \
+         AND (EXTRA LIKE '%STORED GENERATED%' OR EXTRA LIKE '%VIRTUAL GENERATED%' \
+         OR EXTRA LIKE '%PERSISTENT%') \
+         ORDER BY ORDINAL_POSITION",
+        mysql_text_literal(table)
+    )
+}
+
 fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
     let query = r"
         SELECT table_name
@@ -4823,6 +4859,33 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value, WritePrivilege,
     };
     use mysql::{Conn, Opts, OptsBuilder};
+
+    #[test]
+    fn mysql_generated_columns_query_selects_stored_virtual_and_persistent_columns() {
+        let sql = super::mysql_generated_columns_sql(Some("app"), "users");
+        assert!(sql.contains("TABLE_SCHEMA = 'app'"), "{sql}");
+        assert!(sql.contains("TABLE_NAME = 'users'"), "{sql}");
+        assert!(sql.contains("STORED GENERATED"), "{sql}");
+        assert!(sql.contains("VIRTUAL GENERATED"), "{sql}");
+        assert!(sql.contains("PERSISTENT"), "{sql}");
+        assert!(
+            !sql.contains("'%GENERATED%'"),
+            "DEFAULT_GENERATED columns accept explicit values: {sql}"
+        );
+        assert!(sql.ends_with("ORDER BY ORDINAL_POSITION"), "{sql}");
+        assert!(
+            super::mysql_generated_columns_sql(None, "users").contains("TABLE_SCHEMA = DATABASE()")
+        );
+    }
+
+    #[test]
+    fn mysql_generated_columns_query_encodes_hostile_names_as_hex() {
+        let hostile = "a'; DROP TABLE x; --\\";
+        let sql = super::mysql_generated_columns_sql(Some(hostile), hostile);
+        let encoded = hex::encode(hostile.as_bytes());
+        assert_eq!(sql.matches(&format!("X'{encoded}'")).count(), 2, "{sql}");
+        assert!(!sql.contains("DROP TABLE"), "{sql}");
+    }
 
     #[test]
     fn dependents_from_rows_lists_views_then_deduplicated_foreign_key_children() {

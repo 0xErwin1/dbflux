@@ -2392,7 +2392,27 @@ fn sqlite_text_literal(text: &str) -> String {
         .map(|segment| format!("'{}'", sqlite_escape_string(segment)))
         .collect();
 
-    format!("({})", segments.join(" || char(0) || "))
+    format!("({})", sqlite_join_with_nul(&segments))
+}
+
+/// The most segments joined in one flat `||` chain. SQLite parses a chain as a
+/// left-deep tree and refuses one deeper than its expression depth limit
+/// (1000 by default), so a longer run is split into parenthesized halves.
+const SQLITE_MAX_FLAT_SEGMENTS: usize = 64;
+
+fn sqlite_join_with_nul(segments: &[String]) -> String {
+    const SEPARATOR: &str = " || char(0) || ";
+
+    if segments.len() <= SQLITE_MAX_FLAT_SEGMENTS {
+        return segments.join(SEPARATOR);
+    }
+
+    let (left, right) = segments.split_at(segments.len() / 2);
+    format!(
+        "({}){SEPARATOR}({})",
+        sqlite_join_with_nul(left),
+        sqlite_join_with_nul(right)
+    )
 }
 
 fn sqlite_escape_string(s: &str) -> String {
@@ -3773,8 +3793,12 @@ mod tests {
     }
 
     fn replay_text_with_nul_bytes(encoding: &str) {
+        replay_text(encoding, "\0a\0\0b'c é\u{1F600}\0");
+    }
+
+    fn replay_text(encoding: &str, text: &str) {
         let generator = SqlMutationGenerator::new(&super::SQLITE_DIALECT);
-        let text = "\0a\0\0b'c é\u{1F600}\0".to_string();
+        let text = text.to_string();
         let row = [
             Value::Int(1),
             Value::Text(text.clone()),
@@ -3810,6 +3834,57 @@ mod tests {
         assert_eq!(doc, text, "{encoding}");
         assert_eq!(note_type, "text", "{encoding}");
         assert_eq!(doc_type, "text", "{encoding}");
+    }
+
+    fn long_text_with_nul_runs() -> String {
+        format!(
+            "head'{}middle é{}\0tail{}",
+            "\0".repeat(2_000),
+            "\0x".repeat(700),
+            "\0".repeat(600)
+        )
+    }
+
+    #[test]
+    fn long_nul_runs_build_a_shallow_expression() {
+        let literal = super::value_to_sqlite_literal(&Value::Text("\0".repeat(2_000)));
+        let mut operators_per_level = vec![0usize];
+        let mut widest = 0usize;
+        for part in literal.split_inclusive(['(', ')', '|']) {
+            match part.chars().last() {
+                Some('(') => operators_per_level.push(0),
+                Some(')') => {
+                    operators_per_level.pop();
+                }
+                Some('|') => {
+                    if let Some(count) = operators_per_level.last_mut() {
+                        *count += 1;
+                        widest = widest.max(*count);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(widest <= 260, "{widest} pipes chained at one level");
+        assert!(
+            literal.matches(" || ").count() >= 4_000,
+            "every NUL still needs its separators"
+        );
+    }
+
+    #[test]
+    fn long_nul_runs_replay_in_utf8_databases() {
+        replay_text("UTF-8", &long_text_with_nul_runs());
+    }
+
+    #[test]
+    fn long_nul_runs_replay_in_utf16le_databases() {
+        replay_text("UTF-16le", &long_text_with_nul_runs());
+    }
+
+    #[test]
+    fn long_nul_runs_replay_in_utf16be_databases() {
+        replay_text("UTF-16be", &long_text_with_nul_runs());
     }
 
     #[test]

@@ -282,7 +282,8 @@ identity or serial column past the exported values (`setval`): to the largest
 for an ascending sequence and to the smallest for a descending one, so a default
 insert after the replay does not reuse an id; SQL Server advances an identity
 seed by itself when explicit values are inserted. Columns the database computes (PostgreSQL
-generated columns, SQL Server computed and `rowversion` columns) are left out of
+and MySQL/MariaDB generated columns, SQL Server computed, `rowversion` and temporal
+period `GENERATED ALWAYS AS ROW START/END` columns) are left out of
 the statements so the database computes them again on replay. A table
 with no rows writes an empty file. The dialect
 decides how NULL and dates are written, so the NULL text, delimiter, encoding
