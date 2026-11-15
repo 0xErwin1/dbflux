@@ -101,8 +101,8 @@ pub(super) struct FileImportState {
 /// The text fields of the file entry. Created when the wizard opens, because
 /// an input needs a window.
 pub(super) struct FileInputs {
-    target_table: Entity<InputState>,
-    null_text: Entity<InputState>,
+    pub(super) target_table: Entity<InputState>,
+    pub(super) null_text: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 

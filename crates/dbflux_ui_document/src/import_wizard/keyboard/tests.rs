@@ -335,3 +335,86 @@ fn escape_still_closes_the_dialog(cx: &mut TestAppContext) {
 
     window.update(|_, cx| assert!(!wizard.read(cx).is_visible()));
 }
+
+fn focus_input(
+    wizard: &Entity<ImportWizard>,
+    window: &mut VisualTestContext,
+    pick: fn(
+        &crate::import_wizard::file_flow::FileInputs,
+    ) -> Entity<dbflux_components::controls::InputState>,
+) {
+    let input = window.update(|_, cx| pick(wizard.read(cx).file_inputs.as_ref().expect("inputs")));
+    window.update(|window, cx| input.update(cx, |input, cx| input.focus(window, cx)));
+    window.run_until_parked();
+}
+
+fn assert_comma_and_columns(wizard: &Entity<ImportWizard>, window: &mut VisualTestContext) {
+    window.update(|_, cx| {
+        let options = &wizard.read(cx).file_import.as_ref().expect("file").options;
+        assert_eq!(options.delimiter, CsvDelimiter::Comma);
+    });
+    assert_eq!(source_names(wizard, window), ["id", "name"]);
+}
+
+/// Enter in the target table field belongs to the field, not the cursor.
+#[gpui::test]
+fn enter_in_the_target_table_field_keeps_the_csv_delimiter(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("enter_target", "people.csv", b"id,name\n1,Ada\n");
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path);
+    focus_input(&wizard, window, |inputs| inputs.target_table.clone());
+
+    press(window, "enter");
+
+    assert_comma_and_columns(&wizard, window);
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[gpui::test]
+fn enter_in_the_null_text_field_keeps_the_csv_delimiter(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("enter_null", "people.csv", b"id,name\n1,Ada\n");
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path);
+    focus_input(&wizard, window, |inputs| inputs.null_text.clone());
+
+    press(window, "enter");
+
+    assert_comma_and_columns(&wizard, window);
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[gpui::test]
+fn enter_in_a_text_field_does_not_open_the_cursors_dropdown(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("enter_dropdown", "people.csv", b"id,name\n1,Ada\n");
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path);
+    window.update(|_, cx| {
+        wizard.update(cx, |this, _| this.field_cursor = 2);
+    });
+    focus_input(&wizard, window, |inputs| inputs.target_table.clone());
+
+    press(window, "enter");
+
+    window.update(|_, cx| {
+        let wizard = wizard.read(cx);
+        assert!(!wizard.rows[0].mapping_mode_dropdown.read(cx).is_open());
+        assert!(!wizard.rows[0].rebind_target_dropdown.read(cx).is_open());
+    });
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// Cursor moves outside the configure step change nothing.
+#[gpui::test]
+fn the_cursor_does_not_move_outside_the_configure_step(cx: &mut TestAppContext) {
+    let (wizard, window) = open_wizard(cx);
+    wizard.update(window, |this, cx| {
+        this.build_rows(vec![rebind_row()], cx);
+        this.step = WizardStep::Confirm;
+        cx.notify();
+    });
+    window.run_until_parked();
+
+    press(window, "j j");
+
+    window.update(|_, cx| assert_eq!(wizard.read(cx).field_cursor, 0));
+}

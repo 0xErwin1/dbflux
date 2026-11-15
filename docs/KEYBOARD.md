@@ -839,7 +839,7 @@ On the configure step, a cursor walks the choices that take no focus of their ow
 | `Enter` | On the delimiter or encoding: pick the next one. On a mapping mode, target column or source column: open its dropdown, which then takes `j` / `k` and `Enter` as in [Dropdowns](#dropdowns) |
 | `Escape` | Close the wizard |
 
-The keys stay with a text field or an open dropdown. They are listed under the Import Wizard context in Settings > Keybindings.
+While a text field or an open dropdown has focus, these keys (including `Enter`) act on that field, not on the cursor. They are listed under the Import Wizard context in Settings > Keybindings.
 
 ## Text fields
 

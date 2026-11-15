@@ -93,6 +93,10 @@ impl ImportWizard {
     }
 
     fn move_cursor(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.step != WizardStep::Configure {
+            return;
+        }
+
         let count = self.configure_fields().len();
         if count == 0 {
             return;
@@ -158,6 +162,13 @@ impl ImportWizard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Enter and the cursor keys reach here from a focused text field or an
+        // open dropdown too (the dialog hands them to its owner); they act on
+        // that control, never on the cursor.
+        if command != Command::Cancel && !self.focus_handle.is_focused(window) {
+            return;
+        }
+
         match command {
             Command::Cancel => self.close(cx),
             Command::SelectNext => self.move_cursor(true, cx),
