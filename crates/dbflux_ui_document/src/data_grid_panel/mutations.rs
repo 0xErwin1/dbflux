@@ -1,4 +1,4 @@
-use super::utils::{extract_pk_columns, value_to_json};
+use super::utils::{document_id_filter, extract_pk_columns, value_to_json};
 use super::*;
 use super::{
     DataGridEvent, DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm,
@@ -268,22 +268,9 @@ impl DataGridPanel {
         let pk_columns = extract_pk_columns(&self.result);
 
         let filter = if pk_columns.is_empty() {
-            // MongoDB fallback: use _id column
-            let id_col_idx = self
-                .result
-                .columns
-                .iter()
-                .position(|c| c.name == "_id")
-                .unwrap_or(0);
-
-            let id_value = row.get(id_col_idx).cloned().unwrap_or(Value::Null);
-
-            match &id_value {
-                Value::ObjectId(oid) => {
-                    DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))
-                }
-                Value::Text(value) => DocumentFilter::new(serde_json::json!({"_id": value})),
-                _ => {
+            match document_id_filter(&self.result.columns, |index| row.get(index).cloned()) {
+                Some(filter) => filter,
+                None => {
                     report_error(
                         UserFacingError::new(
                             ErrorKind::User,
@@ -672,25 +659,13 @@ impl DataGridPanel {
         let pk_columns = extract_pk_columns(&self.result);
 
         let filter = if pk_columns.is_empty() {
-            // MongoDB fallback: use _id column
-            let id_col_idx = self
-                .result
-                .columns
-                .iter()
-                .position(|c| c.name == "_id")
-                .unwrap_or(0);
+            let id_filter = document_id_filter(&self.result.columns, |index| {
+                model.cell(row_idx, index).map(|cell| cell.to_value())
+            });
 
-            let id_value = model
-                .cell(row_idx, id_col_idx)
-                .map(|c| c.to_value())
-                .unwrap_or(Value::Null);
-
-            match &id_value {
-                Value::ObjectId(oid) => {
-                    DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))
-                }
-                Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
-                _ => {
+            match id_filter {
+                Some(filter) => filter,
+                None => {
                     if batch_owned {
                         self.abandon_close_apply(cx);
                     }
@@ -1308,29 +1283,17 @@ impl DataGridPanel {
         let pk_columns = extract_pk_columns(&self.result);
 
         let filter = if pk_columns.is_empty() {
-            // MongoDB fallback: use _id column
-            let id_col_idx = self
-                .result
-                .columns
-                .iter()
-                .position(|c| c.name == "_id")
-                .unwrap_or(0);
-
-            let id_value = {
+            let id_filter = {
                 let state = table_state.read(cx);
                 let model = state.model();
-                model
-                    .cell(row_idx, id_col_idx)
-                    .map(|c| c.to_value())
-                    .unwrap_or(Value::Null)
+                document_id_filter(&self.result.columns, |index| {
+                    model.cell(row_idx, index).map(|cell| cell.to_value())
+                })
             };
 
-            match &id_value {
-                Value::ObjectId(oid) => {
-                    dbflux_core::DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))
-                }
-                Value::Text(s) => dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s})),
-                _ => {
+            match id_filter {
+                Some(filter) => filter,
+                None => {
                     report_error(
                         UserFacingError::new(
                             ErrorKind::User,
@@ -1949,26 +1912,13 @@ impl DataGridPanel {
 
             for &row_idx in &row_indices {
                 let filter = if pk_columns.is_empty() {
-                    let id_col_idx = self
-                        .result
-                        .columns
-                        .iter()
-                        .position(|c| c.name == "_id")
-                        .unwrap_or(0);
+                    let id_filter = document_id_filter(&self.result.columns, |index| {
+                        model.cell(row_idx, index).map(|cell| cell.to_value())
+                    });
 
-                    let id_value = model
-                        .cell(row_idx, id_col_idx)
-                        .map(|c| c.to_value())
-                        .unwrap_or(Value::Null);
-
-                    match &id_value {
-                        Value::ObjectId(oid) => dbflux_core::DocumentFilter::new(
-                            serde_json::json!({"_id": {"$oid": oid}}),
-                        ),
-                        Value::Text(s) => {
-                            dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s}))
-                        }
-                        _ => {
+                    match id_filter {
+                        Some(filter) => filter,
+                        None => {
                             log::warn!(
                                 "[BULK DELETE] Invalid _id value for document at row {}",
                                 row_idx
