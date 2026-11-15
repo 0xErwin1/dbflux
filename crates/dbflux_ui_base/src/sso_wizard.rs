@@ -262,8 +262,9 @@ impl SsoWizard {
 
         let this = cx.entity().clone();
         let task = cx.background_executor().spawn(async move {
-            let _ = login_sso_blocking(Uuid::nil(), &profile_name, &start_url);
-            list_sso_accounts_blocking(&profile_name, &region, &start_url)
+            let login = login_sso_blocking(Uuid::nil(), &profile_name, &start_url).map(|_| ());
+            let accounts = list_sso_accounts_blocking(&profile_name, &region, &start_url);
+            accounts_or_login_error(login, accounts)
         });
 
         cx.spawn(async move |_entity, cx| {
@@ -437,6 +438,27 @@ fn discovered_row(
                     .child(detail),
             )
         })
+}
+
+/// Account discovery may still succeed after a failed login when the SSO cache
+/// already holds a valid token for the start URL. When both fail, the login
+/// error is the cause the user can act on, so it wins over the listing error.
+#[cfg(any(feature = "aws", test))]
+fn accounts_or_login_error<T, E: std::fmt::Display>(
+    login: Result<(), E>,
+    accounts: Result<T, E>,
+) -> Result<T, E> {
+    match (login, accounts) {
+        (Ok(()), accounts) => accounts,
+        (Err(login_error), Ok(accounts)) => {
+            log::warn!("AWS SSO login failed, using the cached token: {login_error}");
+            Ok(accounts)
+        }
+        (Err(login_error), Err(list_error)) => {
+            log::warn!("AWS SSO account listing failed after a failed login: {list_error}");
+            Err(login_error)
+        }
+    }
 }
 
 /// A 12-digit AWS account id in groups of four (`1234 5678 9012`); any
@@ -799,7 +821,9 @@ impl SsoWizard {
 mod tests {
     #[cfg(feature = "aws")]
     use super::{AwsSsoAccount, DISCOVERED_LIST_MAX_HEIGHT};
-    use super::{SsoWizard, WizardStep, grouped_account_id, sso_rail_items};
+    use super::{
+        SsoWizard, WizardStep, accounts_or_login_error, grouped_account_id, sso_rail_items,
+    };
     #[cfg(feature = "aws")]
     use gpui::FrameAction;
     use gpui::{AccessibilityFrame, FrameObserver, Role, TestAppContext};
@@ -947,6 +971,21 @@ mod tests {
                 step.label()
             );
         }
+    }
+
+    #[test]
+    fn account_discovery_reports_the_login_error_when_both_fail() {
+        let both_failed: Result<Vec<u8>, String> =
+            accounts_or_login_error(Err("login".to_string()), Err("list".to_string()));
+        assert_eq!(both_failed, Err("login".to_string()));
+
+        let cached_token: Result<Vec<u8>, String> =
+            accounts_or_login_error(Err("login".to_string()), Ok(vec![1]));
+        assert_eq!(cached_token, Ok(vec![1]));
+
+        let list_failed: Result<Vec<u8>, String> =
+            accounts_or_login_error(Ok(()), Err("list".to_string()));
+        assert_eq!(list_failed, Err("list".to_string()));
     }
 
     #[test]
