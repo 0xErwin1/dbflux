@@ -114,9 +114,6 @@ fn mysql_fetch_dependents_lists_views_and_foreign_key_children() -> Result<(), D
     })
 }
 
-/// `generated_columns` names the stored and virtual generated columns, leaves
-/// out expression defaults (`DEFAULT_GENERATED`), and an `INSERT` that omits
-/// the generated columns replays.
 /// The text type MySQL uses for an untyped column holds a value longer than
 /// `TEXT`'s 65,535-byte limit, in strict mode.
 #[test]
@@ -143,6 +140,9 @@ fn mysql_text_column_type_holds_values_longer_than_text() -> Result<(), DbError>
     })
 }
 
+/// `generated_columns` names the stored and virtual generated columns, leaves
+/// out expression defaults (`DEFAULT_GENERATED`), and an `INSERT` that omits
+/// the generated columns replays.
 #[test]
 #[ignore = "requires Docker daemon"]
 fn mysql_generated_columns_exclude_defaults_and_replay() -> Result<(), DbError> {
