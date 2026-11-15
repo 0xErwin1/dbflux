@@ -165,6 +165,11 @@ struct LoadedFile {
 /// it does hold, a listing that cannot be read, or a listing that cannot say (not a
 /// relational schema) returns the original lookup error, because treating it
 /// as a miss would offer to create a table over one that exists.
+///
+/// SQL Server and Redshift answer a lookup of a missing table with no
+/// columns instead of an error, so that answer is undecided: a listing
+/// without the table makes it a miss, and otherwise it stays an existing
+/// table with no columns.
 fn existing_table_columns(
     lookup: Result<TableInfo, DbError>,
     table: &str,
@@ -172,18 +177,26 @@ fn existing_table_columns(
 ) -> Result<Option<Vec<TransferColumn>>, TransferError> {
     let error = match lookup {
         Ok(info) => {
-            return Ok(Some(
-                info.columns
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|column| TransferColumn {
-                        name: column.name,
-                        type_name: Some(column.type_name),
-                        nullable: column.nullable,
-                        is_primary_key: column.is_primary_key,
-                    })
-                    .collect(),
-            ));
+            let columns: Vec<TransferColumn> = info
+                .columns
+                .unwrap_or_default()
+                .into_iter()
+                .map(|column| TransferColumn {
+                    name: column.name,
+                    type_name: Some(column.type_name),
+                    nullable: column.nullable,
+                    is_primary_key: column.is_primary_key,
+                })
+                .collect();
+
+            if !columns.is_empty() {
+                return Ok(Some(columns));
+            }
+
+            return Ok(match listing() {
+                Some(snapshot) if !snapshot_may_hold(&snapshot, table) => None,
+                _ => Some(columns),
+            });
         }
         Err(DbError::ObjectNotFound(_)) => return Ok(None),
         Err(error) => error,
