@@ -4797,6 +4797,7 @@ settings:
       add_panel_picker: "Add Panel Picker"
       mcp_approvals: "MCP Approvals"
       migrate_wizard: "Migrate Wizard"
+      import_wizard: "Import Wizard"
       vim_normal: "Vim Normal"
     category:
       global: Global

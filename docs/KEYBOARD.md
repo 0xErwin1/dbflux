@@ -828,6 +828,19 @@ The keys are listed under the MCP Approvals context in Settings > Keybindings.
 
 The keys are listed under the Migrate Wizard context in Settings > Keybindings.
 
+## Import wizard
+
+On the configure step, a cursor walks the choices that take no focus of their own: the CSV delimiter and encoding of an imported file, then each table's mapping mode, target column and source column. `Tab` still reaches the buttons (**Use table**, **Apply mapping**, **Continue**).
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` | Move the cursor to the next / previous choice |
+| `l` / `h` (or `Right` / `Left`) | On the delimiter or encoding: pick the next / previous one and read the file again |
+| `Enter` | On the delimiter or encoding: pick the next one. On a mapping mode, target column or source column: open its dropdown, which then takes `j` / `k` and `Enter` as in [Dropdowns](#dropdowns) |
+| `Escape` | Close the wizard |
+
+The keys stay with a text field or an open dropdown. They are listed under the Import Wizard context in Settings > Keybindings.
+
 ## Text fields
 
 | Keys | Action |

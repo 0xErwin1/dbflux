@@ -32,6 +32,7 @@ use super::file_options::{
     encoding_from_segment_id, encoding_label, encoding_segment_id, picker_extensions,
     visible_file_options,
 };
+use super::keyboard::ConfigureField;
 use super::{ImportWizard, WizardStep};
 
 /// Width of the target table and NULL text fields. (220 px at the base font size)
@@ -85,8 +86,8 @@ impl ImportJob {
 /// The file picked for import and the options it is read with.
 pub(super) struct FileImportState {
     path: PathBuf,
-    format: FileFormat,
-    options: FormatOptions,
+    pub(super) format: FileFormat,
+    pub(super) options: FormatOptions,
     /// Set when the file could not be read with these options, so the user can
     /// change them; the run stays unavailable until it is read again.
     error: Option<String>,
@@ -355,7 +356,7 @@ impl ImportWizard {
         .detach();
     }
 
-    fn open_picked_file(
+    pub(super) fn open_picked_file(
         &mut self,
         connection: Arc<dyn Connection>,
         path: PathBuf,
@@ -544,7 +545,7 @@ impl ImportWizard {
         cx.notify();
     }
 
-    fn select_delimiter(&mut self, segment_id: &str, cx: &mut Context<Self>) {
+    pub(super) fn select_delimiter(&mut self, segment_id: &str, cx: &mut Context<Self>) {
         let Some(delimiter) = delimiter_from_segment_id(segment_id) else {
             return;
         };
@@ -554,7 +555,7 @@ impl ImportWizard {
         self.reload_file(cx);
     }
 
-    fn select_encoding(&mut self, segment_id: &str, cx: &mut Context<Self>) {
+    pub(super) fn select_encoding(&mut self, segment_id: &str, cx: &mut Context<Self>) {
         let Some(encoding) = encoding_from_segment_id(segment_id) else {
             return;
         };
@@ -672,7 +673,9 @@ impl ImportWizard {
 
         modal_form_row(
             dbflux_i18n::t!("document.export_wizard.format_options.delimiter_label"),
-            div().flex().child(picker),
+            div()
+                .flex()
+                .child(self.with_cursor_ring(ConfigureField::Delimiter, picker, cx)),
             None,
             cx,
         )
@@ -700,7 +703,9 @@ impl ImportWizard {
 
         modal_form_row(
             dbflux_i18n::t!("document.export_wizard.format_options.encoding_label"),
-            div().flex().child(picker),
+            div()
+                .flex()
+                .child(self.with_cursor_ring(ConfigureField::Encoding, picker, cx)),
             None,
             cx,
         )

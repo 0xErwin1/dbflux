@@ -12,6 +12,7 @@
 mod column_mapping;
 mod file_flow;
 mod file_options;
+mod keyboard;
 
 use dbflux_core::keymap_types::ContextId;
 use std::path::PathBuf;
@@ -33,6 +34,7 @@ use dbflux_transfer::import::{
 use dbflux_transfer::manifest::read_manifest;
 use dbflux_transfer::{TableTransferStatus, TransferError};
 use dbflux_ui_base::app_state_entity::{AppStateChanged, AppStateEntity};
+use dbflux_ui_base::keymap::{RunCommand, run_command};
 use dbflux_ui_base::toast::Toast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
@@ -44,8 +46,9 @@ use crate::progress_forwarding::spawn_task_progress_forwarder;
 pub use column_mapping::TableImportConfig;
 use column_mapping::mapping_mode_options;
 use file_flow::{FileImportState, FileInputs};
+use keyboard::ConfigureField;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WizardStep {
     PickFolder,
     Configure,
@@ -220,6 +223,9 @@ pub struct ImportWizard {
     /// Id of the latest file read; never reset, see `next_file_read_request`.
     file_read_request: u64,
     rows: Vec<TableImportRow>,
+    /// Index into the configure step's choices (see
+    /// `keyboard::ConfigureField`) the keyboard cursor rests on.
+    field_cursor: usize,
     supports_truncate: bool,
     /// Set only by the Confirm step's "Yes, proceed" click; reset on
     /// open()/cancel/back. This — not a derived `rows.any(is_destructive)` —
@@ -255,6 +261,7 @@ impl ImportWizard {
             pending_file_inputs: None,
             file_read_request: 0,
             rows: Vec::new(),
+            field_cursor: 0,
             supports_truncate: false,
             confirmed_destructive: false,
             loading: false,
@@ -290,6 +297,7 @@ impl ImportWizard {
         self.pending_file_inputs = None;
         self.next_file_read_request();
         self.rows.clear();
+        self.field_cursor = 0;
         self._row_subscriptions.clear();
         self.confirmed_destructive = false;
         self.loading = false;
@@ -439,6 +447,7 @@ impl ImportWizard {
 
     fn build_rows(&mut self, configs: Vec<TableImportConfig>, cx: &mut Context<Self>) {
         self.rows.clear();
+        self.field_cursor = 0;
         self._row_subscriptions.clear();
         let supports_truncate = self.supports_truncate;
 
@@ -796,13 +805,26 @@ impl Render for ImportWizard {
             .id("import-wizard")
             .focus_handle(&self.focus_handle)
             .on_close(close)
-            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
+            .key_context(ContextId::ImportWizard.as_gpui_context())
+            .defer_keys_to_owner()
             .icon(AppIcon::Download)
             .width(WIZARD_MODAL_WIDTH)
             .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION);
 
         frame = frame.child(self.render_body(cx));
-        frame.into_any_element()
+
+        // The keymap's `ImportWizard` context runs its commands through this
+        // handler; the dialog hands Escape and Enter to it as well.
+        div()
+            .absolute()
+            .inset_0()
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                if let Some(command) = run_command(action) {
+                    this.run_import_command(command, window, cx);
+                }
+            }))
+            .child(frame)
+            .into_any_element()
     }
 }
 
@@ -902,9 +924,21 @@ impl ImportWizard {
                     div()
                         .flex()
                         .gap(Spacing::SM)
-                        .child(row.mapping_mode_dropdown.clone())
-                        .child(row.rebind_target_dropdown.clone())
-                        .child(row.rebind_source_dropdown.clone())
+                        .child(self.with_cursor_ring(
+                            ConfigureField::Mode(table_index),
+                            row.mapping_mode_dropdown.clone(),
+                            cx,
+                        ))
+                        .child(self.with_cursor_ring(
+                            ConfigureField::Target(table_index),
+                            row.rebind_target_dropdown.clone(),
+                            cx,
+                        ))
+                        .child(self.with_cursor_ring(
+                            ConfigureField::Source(table_index),
+                            row.rebind_source_dropdown.clone(),
+                            cx,
+                        ))
                         .child(
                             Button::new(
                                 SharedString::from(format!("import-apply-mapping-{table_index}")),

@@ -4796,6 +4796,7 @@ settings:
       add_panel_picker: "패널 추가 선택기"
       mcp_approvals: "MCP 승인"
       migrate_wizard: "마이그레이션 마법사"
+      import_wizard: "가져오기 마법사"
       vim_normal: "Vim 노멀 모드"
     category:
       global: 전역
