@@ -1697,6 +1697,19 @@ fn postgres_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
     postgres_column_lookup_sql(schema, table, "a.attidentity = 'a'")
 }
 
+/// The columns a sequence feeds, in column order: identity columns of either
+/// kind and serial columns. Explicit values do not advance the sequence, so a
+/// script resyncs these after replaying. `pg_get_serial_sequence` is the one
+/// signal that covers all three, since it answers for any sequence the column
+/// owns.
+fn postgres_sequence_columns_sql(schema: Option<&str>, table: &str) -> String {
+    postgres_column_lookup_sql(
+        schema,
+        table,
+        "pg_get_serial_sequence(a.attrelid::regclass::text, a.attname) IS NOT NULL",
+    )
+}
+
 /// The generated columns of a table (`GENERATED ALWAYS AS (...) STORED`, and
 /// PostgreSQL 18's virtual ones), in column order. They accept only `DEFAULT`.
 fn postgres_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
@@ -2776,6 +2789,13 @@ impl Connection for PostgresConnection {
 
     fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
         let result = self.execute(&QueryRequest::new(postgres_identity_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
+    }
+
+    fn sequence_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_sequence_columns_sql(
             schema, table,
         )))?;
         Ok(first_column_text(result))
@@ -8477,6 +8497,85 @@ mod tests {
             "{sql}"
         );
         assert!(sql.ends_with("ORDER BY a.attnum"), "{sql}");
+    }
+
+    #[test]
+    fn postgres_sequence_columns_query_selects_every_column_a_sequence_feeds() {
+        let sql = super::postgres_sequence_columns_sql(Some("app"), "it's");
+        assert!(
+            sql.contains(
+                "pg_get_serial_sequence(a.attrelid::regclass::text, a.attname) IS NOT NULL"
+            ),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'it''s'"),
+            "{sql}"
+        );
+        assert!(!sql.contains("attidentity"), "{sql}");
+        assert!(sql.ends_with("ORDER BY a.attnum"), "{sql}");
+
+        let unqualified = super::postgres_sequence_columns_sql(None, "users");
+        assert!(
+            unqualified.contains("a.attrelid = to_regclass('\"users\"')"),
+            "{unqualified}"
+        );
+    }
+
+    fn resync(schema: Option<&str>, table: &str, columns: &[&str]) -> Option<String> {
+        use dbflux_core::QueryGenerator;
+
+        let columns: Vec<String> = columns.iter().map(|name| name.to_string()).collect();
+        crate::vector::POSTGRES_QUERY_GENERATOR
+            .script_table_sequence_resync(schema, table, &columns)
+    }
+
+    #[test]
+    fn postgres_sequence_resync_sets_the_sequence_to_the_exported_maximum() {
+        assert_eq!(
+            resync(Some("app"), "users", &["id"]).as_deref(),
+            Some(
+                "SELECT setval(pg_get_serial_sequence('\"app\".\"users\"', 'id'), COALESCE(MAX(\"id\"), 1), MAX(\"id\") IS NOT NULL) FROM \"app\".\"users\";"
+            )
+        );
+        assert_eq!(
+            resync(None, "users", &["id"]).as_deref(),
+            Some(
+                "SELECT setval(pg_get_serial_sequence('\"users\"', 'id'), COALESCE(MAX(\"id\"), 1), MAX(\"id\") IS NOT NULL) FROM \"users\";"
+            )
+        );
+    }
+
+    #[test]
+    fn postgres_sequence_resync_writes_one_statement_per_column() {
+        let text = resync(Some("app"), "users", &["id", "ticket"]).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(
+            lines[0].contains("'id'") && lines[0].contains("MAX(\"id\")"),
+            "{text}"
+        );
+        assert!(
+            lines[1].contains("'ticket'") && lines[1].contains("MAX(\"ticket\")"),
+            "{text}"
+        );
+        assert!(lines.iter().all(|line| line.ends_with(';')), "{text}");
+    }
+
+    #[test]
+    fn postgres_sequence_resync_quotes_hostile_names() {
+        let text = resync(Some("s\"x'y"), "t\"a'b", &["c\"d'e"]).unwrap();
+
+        assert_eq!(
+            text,
+            "SELECT setval(pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e'), COALESCE(MAX(\"c\"\"d'e\"), 1), MAX(\"c\"\"d'e\") IS NOT NULL) FROM \"s\"\"x'y\".\"t\"\"a'b\";"
+        );
+    }
+
+    #[test]
+    fn postgres_sequence_resync_is_absent_without_sequence_columns() {
+        assert_eq!(resync(Some("app"), "users", &[]), None);
     }
 
     #[test]

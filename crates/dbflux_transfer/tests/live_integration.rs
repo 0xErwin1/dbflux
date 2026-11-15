@@ -144,21 +144,26 @@ fn postgres_export_streams_table_to_csv_and_manifest() -> Result<(), DbError> {
 }
 
 /// A SQL export of a `GENERATED ALWAYS AS IDENTITY` table replays into an
-/// empty copy of the table with the original ids.
+/// empty copy of the table with the original ids, and leaves its identity and
+/// serial sequences past the replayed values.
 #[test]
 #[ignore = "requires Docker daemon"]
 fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbError> {
     containers::with_postgres_url(|uri| {
         let boxed_connection = connect_postgres(uri)?;
-        let create = "CREATE TABLE sql_identity (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label TEXT NOT NULL, doubled INT GENERATED ALWAYS AS (id * 2) STORED)";
+        let create = "CREATE TABLE sql_identity (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label TEXT NOT NULL, doubled INT GENERATED ALWAYS AS (id * 2) STORED, ticket SERIAL)";
         boxed_connection.execute(&QueryRequest::new(create))?;
         boxed_connection.execute(&QueryRequest::new(
-            "INSERT INTO sql_identity (id, label) OVERRIDING SYSTEM VALUE VALUES (10, 'ten'), (20, 'it''s twenty'), (30, 'thirty')",
+            "INSERT INTO sql_identity (id, label, ticket) OVERRIDING SYSTEM VALUE VALUES (10, 'ten', 100), (20, 'it''s twenty', 200), (30, 'thirty', 300)",
         ))?;
 
         assert_eq!(
             boxed_connection.identity_columns(Some("public"), "sql_identity")?,
             vec!["id".to_string()]
+        );
+        assert_eq!(
+            boxed_connection.sequence_columns(Some("public"), "sql_identity")?,
+            vec!["id".to_string(), "ticket".to_string()]
         );
         assert_eq!(
             boxed_connection.generated_columns(None, "sql_identity")?,
@@ -211,6 +216,7 @@ fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbE
             std::fs::read_to_string(dir.join("public.sql_identity.sql")).expect("read script");
         assert!(script.contains("OVERRIDING SYSTEM VALUE"), "{script}");
         assert!(!script.contains("doubled"), "{script}");
+        assert!(script.contains("setval("), "{script}");
 
         connection.execute(&QueryRequest::new("DROP TABLE sql_identity"))?;
         connection.execute(&QueryRequest::new(create))?;
@@ -239,6 +245,18 @@ fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbE
                 ("20".to_string(), "it's twenty:40".to_string()),
                 ("30".to_string(), "thirty:60".to_string()),
             ]
+        );
+
+        let next = connection.execute(&QueryRequest::new(
+            "INSERT INTO sql_identity (label) VALUES ('next') RETURNING id::text, ticket::text",
+        ))?;
+        assert_eq!(
+            next.rows,
+            vec![vec![
+                dbflux_core::Value::Text("31".to_string()),
+                dbflux_core::Value::Text("301".to_string()),
+            ]],
+            "a default insert after replay must continue past the replayed values"
         );
 
         std::fs::remove_dir_all(&dir).ok();

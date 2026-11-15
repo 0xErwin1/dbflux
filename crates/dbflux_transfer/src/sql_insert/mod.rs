@@ -67,6 +67,8 @@ pub(crate) struct SqlInsertWriter<W: Write> {
     kept_positions: Vec<usize>,
     /// The identity columns among the written ones.
     identity_columns: Vec<String>,
+    /// The sequence-backed columns among the written ones.
+    sequence_columns: Vec<String>,
     batch_size: usize,
     pending: Vec<Vec<Value>>,
     wrapped: bool,
@@ -100,6 +102,7 @@ impl<W: Write> SqlInsertWriter<W> {
             table,
             column_names,
             identity_columns,
+            sequence_columns: Vec::new(),
             kept_positions: kept.iter().map(|(position, _)| *position).collect(),
             column_types: kept
                 .iter()
@@ -109,6 +112,16 @@ impl<W: Write> SqlInsertWriter<W> {
             pending: Vec::new(),
             wrapped: false,
         }
+    }
+
+    /// The columns whose values come from a sequence; those the export does
+    /// not write are dropped. The script resyncs them after the last batch.
+    pub(crate) fn with_sequence_columns(mut self, sequence_columns: Vec<String>) -> Self {
+        self.sequence_columns = sequence_columns
+            .into_iter()
+            .filter(|name| self.column_names.contains(name))
+            .collect();
+        self
     }
 
     pub(crate) fn write_row(
@@ -137,8 +150,9 @@ impl<W: Write> SqlInsertWriter<W> {
         Ok(())
     }
 
-    /// Writes the last partial batch. A table with no rows writes nothing, so
-    /// the file is empty: there is nothing to re-run.
+    /// Writes the last partial batch, then the table's closing lines. A table
+    /// with no rows writes nothing, so the file is empty: there is nothing to
+    /// re-run and no sequence to move, since replay inserts no explicit value.
     pub(crate) fn finish(mut self, generator: &dyn QueryGenerator) -> Result<(), TransferError> {
         self.flush_batch(generator)?;
         if self.wrapped
@@ -149,6 +163,15 @@ impl<W: Write> SqlInsertWriter<W> {
             )
         {
             self.write_line(&line)?;
+        }
+        if self.wrapped
+            && let Some(text) = generator.script_table_sequence_resync(
+                self.schema.as_deref(),
+                &self.table,
+                &self.sequence_columns,
+            )
+        {
+            self.write_line(&text)?;
         }
         self.out
             .flush()

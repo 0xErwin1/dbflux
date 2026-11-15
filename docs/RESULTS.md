@@ -276,7 +276,11 @@ it and ends with `;`. The script replays into an empty copy of the table;
 running it twice fails on unique keys or duplicates the rows. A PostgreSQL
 `GENERATED ALWAYS AS IDENTITY` column is written with `OVERRIDING SYSTEM VALUE`,
 and a SQL Server table with an `IDENTITY` column is wrapped in
-`SET IDENTITY_INSERT ... ON;` and `OFF;`, so the original ids are kept. Columns the database computes (PostgreSQL
+`SET IDENTITY_INSERT ... ON;` and `OFF;`, so the original ids are kept. After a
+PostgreSQL table's last statement the script moves the sequence of every
+identity or serial column to the largest exported value (`setval`), so a default
+insert after the replay does not reuse an id; SQL Server advances an identity
+seed by itself when explicit values are inserted. Columns the database computes (PostgreSQL
 generated columns, SQL Server computed and `rowversion` columns) are left out of
 the statements so the database computes them again on replay. A table
 with no rows writes an empty file. The dialect

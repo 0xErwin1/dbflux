@@ -3,8 +3,9 @@
 use dbflux_core::{
     CreateTableSpec, GeneratedMutation, GeneratedQuery, GeneratorError, MutationCategory,
     MutationRequest, MutationTemplateRequest, NearestNeighborRequest, ObjectFacet, QueryGenError,
-    QueryGenerator, QueryLanguage, ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
-    TableInfo, Value, VectorDistance, VectorFacet, VisualMutationSpec, VisualQuerySpec,
+    QueryGenerator, QueryLanguage, ReadTemplateRequest, SelectQuery, SqlDialect,
+    SqlMutationGenerator, TableInfo, Value, VectorDistance, VectorFacet, VisualMutationSpec,
+    VisualQuerySpec,
 };
 
 use crate::driver::{POSTGRES_DIALECT, pg_quote_ident, pg_quote_string, value_to_pg_literal};
@@ -176,6 +177,35 @@ impl QueryGenerator for PostgresQueryGenerator {
             identity_columns,
             rows,
         )
+    }
+
+    /// One `setval` per column, moving its sequence to the largest value the
+    /// script wrote. An empty table leaves the sequence at its start
+    /// (`is_called` false), though the writer never emits this for one.
+    fn script_table_sequence_resync(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        sequence_columns: &[String],
+    ) -> Option<String> {
+        if sequence_columns.is_empty() {
+            return None;
+        }
+
+        let qualified = POSTGRES_DIALECT.qualified_table(schema, table);
+        let statements: Vec<String> = sequence_columns
+            .iter()
+            .map(|column| {
+                let quoted = pg_quote_ident(column);
+                format!(
+                    "SELECT setval(pg_get_serial_sequence({}, {}), COALESCE(MAX({quoted}), 1), MAX({quoted}) IS NOT NULL) FROM {qualified};",
+                    pg_quote_string(&qualified),
+                    pg_quote_string(column),
+                )
+            })
+            .collect();
+
+        Some(statements.join("\n"))
     }
 
     fn generate_read_template(&self, request: &ReadTemplateRequest<'_>) -> Option<GeneratedQuery> {

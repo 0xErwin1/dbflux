@@ -2087,6 +2087,19 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Names of the table's columns whose values come from a sequence (identity
+    /// columns of either kind, serial columns). Explicit values written by an
+    /// SQL export do not advance a sequence, so the script's epilogue hook
+    /// resyncs them. Drivers without sequences keep this default, an empty
+    /// list.
+    fn sequence_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
+    }
+
     /// Names of the table's columns the database computes and rejects explicit
     /// values for (stored generated columns, computed columns, row-version
     /// columns). An SQL export leaves them out of its `INSERT` statements so

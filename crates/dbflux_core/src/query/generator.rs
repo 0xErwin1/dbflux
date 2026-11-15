@@ -587,6 +587,21 @@ pub trait QueryGenerator: Send + Sync {
         None
     }
 
+    /// The statements written after a table's last batch to repair state that
+    /// explicit values leave behind. `sequence_columns` names the exported
+    /// columns whose values come from a sequence, which explicit inserts do
+    /// not advance, so a replayed script would hand a later default insert an
+    /// id that is already taken. Written after
+    /// [`Self::script_table_epilogue`]; the default is none.
+    fn script_table_sequence_resync(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+        _sequence_columns: &[String],
+    ) -> Option<String> {
+        None
+    }
+
     /// Generate a driver-native `CREATE TABLE` from a same-engine source table's columns.
     ///
     /// The default returns `Ok(None)`, meaning "this generator has no native

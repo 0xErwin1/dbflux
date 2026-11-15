@@ -118,6 +118,15 @@ impl QueryGenerator for RecordingGenerator {
     ) -> Option<String> {
         (!identity_columns.is_empty()).then(|| format!("-- {table} OFF"))
     }
+
+    fn script_table_sequence_resync(
+        &self,
+        _schema: Option<&str>,
+        table: &str,
+        sequence_columns: &[String],
+    ) -> Option<String> {
+        (!sequence_columns.is_empty()).then(|| format!("-- {table} RESYNC {sequence_columns:?}"))
+    }
 }
 
 fn columns() -> Vec<TransferColumn> {
@@ -241,6 +250,8 @@ struct FakeConnection {
     metadata: DriverMetadata,
     generator: Option<RecordingGenerator>,
     identity: Vec<String>,
+    sequences: Vec<String>,
+    sequence_lookups: Mutex<Vec<(Option<String>, String)>>,
     generated: Vec<String>,
     generated_lookups: Mutex<Vec<(Option<String>, String)>>,
     identity_lookups: Mutex<Vec<(Option<String>, String)>>,
@@ -270,6 +281,8 @@ impl FakeConnection {
             metadata,
             generator,
             identity: Vec::new(),
+            sequences: Vec::new(),
+            sequence_lookups: Mutex::new(Vec::new()),
             generated: Vec::new(),
             generated_lookups: Mutex::new(Vec::new()),
             identity_lookups: Mutex::new(Vec::new()),
@@ -279,6 +292,11 @@ impl FakeConnection {
 
     fn with_identity(mut self, identity: &[&str]) -> Self {
         self.identity = identity.iter().map(|name| name.to_string()).collect();
+        self
+    }
+
+    fn with_sequences(mut self, sequences: &[&str]) -> Self {
+        self.sequences = sequences.iter().map(|name| name.to_string()).collect();
         self
     }
 
@@ -341,6 +359,13 @@ impl Connection for FakeConnection {
             lookups.push((schema.map(str::to_string), table.to_string()));
         }
         Ok(self.generated.clone())
+    }
+
+    fn sequence_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        if let Ok(mut lookups) = self.sequence_lookups.lock() {
+            lookups.push((schema.map(str::to_string), table.to_string()));
+        }
+        Ok(self.sequences.clone())
     }
 
     fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
@@ -735,4 +760,105 @@ fn an_export_run_omits_the_generated_columns_for_sql_only() {
     let csv = export_one_table(csv_connection.clone(), FileFormat::Csv, "generated_csv");
     assert!(csv.starts_with("id,note\n1,"), "{csv}");
     assert!(csv_connection.generated_lookups.lock().unwrap().is_empty());
+}
+
+fn write_with_sequences(
+    generator: &dyn QueryGenerator,
+    identity: &[&str],
+    sequences: &[&str],
+    generated: &[&str],
+    count: i64,
+) -> String {
+    let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect();
+    let mut out = Vec::new();
+    let mut writer = SqlInsertWriter::new(
+        &mut out,
+        Some("public".to_string()),
+        "notes".to_string(),
+        &columns(),
+        names(identity),
+        names(generated),
+        2,
+    )
+    .with_sequence_columns(names(sequences));
+    for id in 0..count {
+        writer.write_row(generator, &row(id)).unwrap();
+    }
+    writer.finish(generator).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn sequence_columns_are_resynced_after_the_last_batch() {
+    let generator = RecordingGenerator::new(false);
+    let text = write_with_sequences(&generator, &[], &["id"], &[], 3);
+
+    assert_eq!(
+        text,
+        "INSERT Some(\"public\").notes rows=2;\n\
+         INSERT Some(\"public\").notes rows=1;\n\
+         -- notes RESYNC [\"id\"]\n"
+    );
+}
+
+#[test]
+fn the_resync_follows_the_identity_epilogue() {
+    let generator = RecordingGenerator::new(false);
+    let text = write_with_sequences(&generator, &["id"], &["id"], &[], 1);
+
+    assert_eq!(
+        text,
+        "-- notes ON\n\
+         INSERT Some(\"public\").notes rows=1 identity=[\"id\"];\n\
+         -- notes OFF\n\
+         -- notes RESYNC [\"id\"]\n"
+    );
+}
+
+#[test]
+fn a_table_with_no_rows_gets_no_resync() {
+    let generator = RecordingGenerator::new(false);
+    assert_eq!(write_with_sequences(&generator, &[], &["id"], &[], 0), "");
+}
+
+#[test]
+fn sequence_columns_the_export_does_not_write_are_not_resynced() {
+    let generator = RecordingGenerator::new(false);
+    let text = write_with_sequences(&generator, &[], &["other", "note"], &["note"], 1);
+
+    assert_eq!(text, "INSERT Some(\"public\").notes rows=1;\n");
+}
+
+#[test]
+fn an_export_run_looks_up_the_sequence_columns_for_sql_only() {
+    let connection = Arc::new(
+        FakeConnection::new(
+            DriverCapabilities::BULK_INSERT,
+            0,
+            Some(RecordingGenerator::new(false)),
+        )
+        .with_sequences(&["id"])
+        .with_page(vec![row(1), row(2)]),
+    );
+
+    let written = export_one_table(connection.clone(), FileFormat::Sql, "sequence_run");
+
+    assert_eq!(
+        written,
+        "INSERT Some(\"public\").notes rows=2;\n\
+         -- notes RESYNC [\"id\"]\n"
+    );
+    assert_eq!(
+        *connection.sequence_lookups.lock().unwrap(),
+        vec![(Some("public".to_string()), "notes".to_string())]
+    );
+
+    let csv_connection = Arc::new(
+        FakeConnection::new(DriverCapabilities::BULK_INSERT, 0, None)
+            .with_sequences(&["id"])
+            .with_page(vec![row(1)]),
+    );
+    let csv = export_one_table(csv_connection.clone(), FileFormat::Csv, "sequence_csv");
+    assert!(csv.starts_with("id,note\n1,"), "{csv}");
+    assert!(csv_connection.sequence_lookups.lock().unwrap().is_empty());
 }

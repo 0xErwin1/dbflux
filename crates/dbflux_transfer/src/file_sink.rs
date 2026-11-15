@@ -185,6 +185,8 @@ pub struct FileSink {
     connection: Option<Arc<dyn Connection>>,
     /// The table's database-generated columns, for a SQL export.
     identity_columns: Vec<String>,
+    /// The table's sequence-backed columns, resynced after a SQL export.
+    sequence_columns: Vec<String>,
     /// The table's computed columns, which a SQL export leaves out.
     generated_columns: Vec<String>,
 }
@@ -209,6 +211,7 @@ impl FileSink {
             options: FormatOptions::default(),
             connection: None,
             identity_columns: Vec::new(),
+            sequence_columns: Vec::new(),
             generated_columns: Vec::new(),
         }
     }
@@ -224,6 +227,13 @@ impl FileSink {
     /// the script write explicit values into.
     pub fn with_identity_columns(mut self, identity_columns: Vec<String>) -> Self {
         self.identity_columns = identity_columns;
+        self
+    }
+
+    /// The columns a sequence feeds, which the SQL script resyncs after the
+    /// replayed values.
+    pub fn with_sequence_columns(mut self, sequence_columns: Vec<String>) -> Self {
+        self.sequence_columns = sequence_columns;
         self
     }
 
@@ -472,15 +482,18 @@ impl FileSink {
         let batch_size =
             effective_batch_size(self.options.sql_batch_size, driver_batch_cap(connection));
 
-        Ok(StreamWriter::Sql(Box::new(SqlInsertWriter::new(
-            file,
-            self.schema.clone(),
-            self.table.clone(),
-            columns,
-            self.identity_columns.clone(),
-            self.generated_columns.clone(),
-            batch_size,
-        ))))
+        Ok(StreamWriter::Sql(Box::new(
+            SqlInsertWriter::new(
+                file,
+                self.schema.clone(),
+                self.table.clone(),
+                columns,
+                self.identity_columns.clone(),
+                self.generated_columns.clone(),
+                batch_size,
+            )
+            .with_sequence_columns(self.sequence_columns.clone()),
+        )))
     }
 }
 

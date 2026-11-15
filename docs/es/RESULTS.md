@@ -301,7 +301,11 @@ tabla; ejecutarlo dos veces falla por claves únicas o duplica las filas. Una
 columna `GENERATED ALWAYS AS IDENTITY` de PostgreSQL se escribe con
 `OVERRIDING SYSTEM VALUE`, y una tabla de SQL Server con una columna `IDENTITY`
 se envuelve en `SET IDENTITY_INSERT ... ON;` y `OFF;`, de modo que se conservan
-los ids originales. Las columnas que calcula la base de datos (columnas
+los ids originales. Tras la última sentencia de una tabla de PostgreSQL, el
+script mueve la secuencia de cada columna de identidad o serial al mayor valor
+exportado (`setval`), de modo que una inserción por defecto posterior a la
+reproducción no reutilice un id; SQL Server avanza por sí mismo la semilla de
+identidad al insertar valores explícitos. Las columnas que calcula la base de datos (columnas
 generadas de PostgreSQL, columnas calculadas y `rowversion` de SQL Server) se
 omiten de las sentencias para que la base de datos las calcule de nuevo al
 reproducir el script. Una tabla sin filas escribe un archivo vacío. El dialecto decide cómo se escriben NULL y las fechas, así que el texto
