@@ -1,5 +1,5 @@
 use super::DataGridPanel;
-use dbflux_core::{QueryResult, Value};
+use dbflux_core::{ColumnMeta, DocumentFilter, QueryResult, Value};
 use gpui::{App, Context};
 
 /// Returns `(column_index, column_name)` for every column marked as a primary key.
@@ -12,6 +12,27 @@ pub(super) fn extract_pk_columns(result: &QueryResult) -> Vec<(usize, String)> {
         .filter(|(_, col)| col.is_primary_key)
         .map(|(idx, col)| (idx, col.name.clone()))
         .collect()
+}
+
+/// Filter that keys a document by its `_id` column, read through `value_at`.
+/// `None` when the result has no `_id` column or the value cannot key a
+/// document (null, nested, binary).
+pub(super) fn document_id_filter(
+    columns: &[ColumnMeta],
+    value_at: impl FnOnce(usize) -> Option<Value>,
+) -> Option<DocumentFilter> {
+    let index = columns.iter().position(|column| column.name == "_id")?;
+
+    let id = match value_at(index)? {
+        Value::ObjectId(oid) => serde_json::json!({ "$oid": oid }),
+        Value::Text(text) => serde_json::json!(text),
+        Value::Int(number) => serde_json::json!(number),
+        Value::Float(number) => serde_json::json!(number),
+        Value::Bool(flag) => serde_json::json!(flag),
+        _ => return None,
+    };
+
+    Some(DocumentFilter::new(serde_json::json!({ "_id": id })))
 }
 
 /// Joins a multi-line query onto one line, collapsing every whitespace run to
@@ -161,7 +182,39 @@ impl DataGridPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::single_line;
+    use super::{document_id_filter, single_line};
+    use dbflux_core::{ColumnKind, ColumnMeta, Value};
+
+    fn column(name: &str) -> ColumnMeta {
+        ColumnMeta {
+            name: name.to_string(),
+            type_name: String::new(),
+            kind: ColumnKind::Unknown,
+            nullable: true,
+            is_primary_key: false,
+        }
+    }
+
+    #[test]
+    fn document_id_filter_keys_a_numeric_id() {
+        let columns = [column("name"), column("_id")];
+        let row = [Value::Text("first".into()), Value::Int(7)];
+
+        let filter = document_id_filter(&columns, |index| row.get(index).cloned());
+
+        assert_eq!(
+            filter.map(|filter| filter.filter),
+            Some(serde_json::json!({ "_id": 7 }))
+        );
+    }
+
+    #[test]
+    fn document_id_filter_needs_an_id_column() {
+        let columns = [column("name")];
+        let row = [Value::Text("first".into())];
+
+        assert!(document_id_filter(&columns, |index| row.get(index).cloned()).is_none());
+    }
 
     #[test]
     fn single_line_collapses_a_multi_line_query() {

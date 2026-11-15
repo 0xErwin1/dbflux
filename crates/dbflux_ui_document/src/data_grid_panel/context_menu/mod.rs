@@ -1,4 +1,4 @@
-use super::utils::{extract_pk_columns, value_to_json};
+use super::utils::{document_id_filter, extract_pk_columns, value_to_json};
 use super::{
     ContextMenuItem, DataGridEvent, DataGridPanel, DataSource, EditState, PendingDeleteConfirm,
     PendingDocumentPreview, PendingModalOpen, PendingToast, SqlGenerateKind, TableContextMenu,
@@ -4163,23 +4163,7 @@ impl DataGridPanel {
             }
         }
 
-        // Fallback to _id column if no PK columns found
-        let id_col_idx = self
-            .result
-            .columns
-            .iter()
-            .position(|c| c.name == "_id")
-            .unwrap_or(0);
-
-        let id_value = row_values.get(id_col_idx).cloned().unwrap_or(Value::Null);
-
-        match &id_value {
-            Value::ObjectId(oid) => Some(DocumentFilter::new(
-                serde_json::json!({"_id": {"$oid": oid}}),
-            )),
-            Value::Text(s) => Some(DocumentFilter::new(serde_json::json!({"_id": s}))),
-            _ => None,
-        }
+        document_id_filter(&self.result.columns, |index| row_values.get(index).cloned())
     }
 
     fn build_document_mutation(
@@ -4255,13 +4239,7 @@ impl DataGridPanel {
 
                 // Fallback to _id if no PK columns
                 let id_col_idx = if pk_indices.is_empty() {
-                    Some(
-                        self.result
-                            .columns
-                            .iter()
-                            .position(|c| c.name == "_id")
-                            .unwrap_or(0),
-                    )
+                    self.result.columns.iter().position(|c| c.name == "_id")
                 } else {
                     None
                 };
