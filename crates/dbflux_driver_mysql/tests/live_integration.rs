@@ -130,11 +130,18 @@ fn mysql_generated_columns_exclude_defaults_and_replay() -> Result<(), DbError> 
                 price INT NOT NULL,
                 doubled INT GENERATED ALWAYS AS (price * 2) STORED,
                 tripled INT GENERATED ALWAYS AS (price * 3) VIRTUAL,
+                `123` INT GENERATED ALWAYS AS (price + 1) STORED,
+                `0123` INT GENERATED ALWAYS AS (price + 2) STORED,
                 label VARCHAR(40) DEFAULT (CONCAT('n', 1))
             )",
         ))?;
 
-        let expected = vec!["doubled".to_string(), "tripled".to_string()];
+        let expected = vec![
+            "doubled".to_string(),
+            "tripled".to_string(),
+            "123".to_string(),
+            "0123".to_string(),
+        ];
         assert_eq!(connection.generated_columns(None, "gen_cols")?, expected);
         assert_eq!(
             connection.generated_columns(Some("testdb"), "gen_cols")?,
@@ -144,9 +151,18 @@ fn mysql_generated_columns_exclude_defaults_and_replay() -> Result<(), DbError> 
         connection.execute(&QueryRequest::new(
             "INSERT INTO gen_cols (id, price) VALUES (1, 5)",
         ))?;
-        let replayed =
-            connection.execute(&QueryRequest::new("SELECT doubled, tripled FROM gen_cols"))?;
-        assert_eq!(replayed.rows, vec![vec![Value::Int(10), Value::Int(15)]]);
+        let replayed = connection.execute(&QueryRequest::new(
+            "SELECT doubled, tripled, `123`, `0123` FROM gen_cols",
+        ))?;
+        assert_eq!(
+            replayed.rows,
+            vec![vec![
+                Value::Int(10),
+                Value::Int(15),
+                Value::Int(6),
+                Value::Int(7)
+            ]]
+        );
 
         Ok(())
     })

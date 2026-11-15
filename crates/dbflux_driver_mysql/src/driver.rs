@@ -2929,14 +2929,7 @@ impl Connection for MysqlConnection {
             schema, table,
         )))?;
 
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|row| match row.into_iter().next() {
-                Some(Value::Text(name)) => Some(name),
-                _ => None,
-            })
-            .collect())
+        Ok(generated_column_names(result.rows))
     }
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
@@ -3992,11 +3985,31 @@ fn mysql_text_literal(s: &str) -> String {
     }
 }
 
+const GENERATED_COLUMN_NAME_PREFIX: &str = "c:";
+
+/// Column names from the rows of [`mysql_generated_columns_sql`], with the
+/// guard prefix removed. A row that is not prefixed text is skipped.
+fn generated_column_names(rows: Vec<Vec<Value>>) -> Vec<String> {
+    rows.into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(Value::Text(prefixed)) => prefixed
+                .strip_prefix(GENERATED_COLUMN_NAME_PREFIX)
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The columns MySQL and MariaDB compute and reject explicit values for
 /// (`GENERATED ALWAYS AS (...) STORED|VIRTUAL`), in column order. `EXTRA`
 /// reads `STORED GENERATED` / `VIRTUAL GENERATED`, and MariaDB may report
 /// `PERSISTENT`. A bare `%GENERATED%` match would also catch
 /// `DEFAULT_GENERATED`, an expression default that accepts explicit values.
+///
+/// Each name is selected behind [`GENERATED_COLUMN_NAME_PREFIX`]: the result
+/// reader decodes a text cell that looks like a number into an integer, which
+/// would drop a column named `123` and lose the zero of `0123`. A prefixed
+/// value can never parse as a number, so it always comes back as text.
 fn mysql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
     let schema = match schema {
         Some(schema) => mysql_text_literal(schema),
@@ -4004,7 +4017,8 @@ fn mysql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
     };
 
     format!(
-        "SELECT COLUMN_NAME FROM information_schema.COLUMNS \
+        "SELECT CONCAT('{GENERATED_COLUMN_NAME_PREFIX}', COLUMN_NAME) \
+         FROM information_schema.COLUMNS \
          WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = {} \
          AND (EXTRA LIKE '%STORED GENERATED%' OR EXTRA LIKE '%VIRTUAL GENERATED%' \
          OR EXTRA LIKE '%PERSISTENT%') \
@@ -4875,6 +4889,32 @@ mod tests {
         assert!(sql.ends_with("ORDER BY ORDINAL_POSITION"), "{sql}");
         assert!(
             super::mysql_generated_columns_sql(None, "users").contains("TABLE_SCHEMA = DATABASE()")
+        );
+    }
+
+    #[test]
+    fn mysql_generated_columns_query_prefixes_names_so_they_stay_text() {
+        let sql = super::mysql_generated_columns_sql(None, "users");
+        assert!(
+            sql.starts_with("SELECT CONCAT('c:', COLUMN_NAME) FROM"),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn generated_column_names_strips_the_prefix_and_keeps_numeric_names() {
+        let rows = vec![
+            vec![Value::Text("c:123".to_string())],
+            vec![Value::Text("c:0123".to_string())],
+            vec![Value::Text("c:doubled".to_string())],
+            vec![Value::Int(7)],
+            vec![Value::Text("unprefixed".to_string())],
+            vec![],
+        ];
+
+        assert_eq!(
+            super::generated_column_names(rows),
+            vec!["123".to_string(), "0123".to_string(), "doubled".to_string()]
         );
     }
 
