@@ -942,3 +942,35 @@ fn a_non_object_json_record_after_the_sample_rejects_the_import_with_the_target_
         before
     );
 }
+
+/// A cancelled token stops the JSON preflight before it reads the file: the
+/// import returns the cancelled outcome a cancelled import returns, with the
+/// target untouched, instead of scanning (and rejecting) the file.
+#[test]
+fn a_cancelled_json_import_stops_before_the_preflight_scan_and_writes_nothing() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(&connection, PEOPLE);
+    let path = scratch.write("people.jsonl", b"{\"id\":1,\"name\":\"Ada\"}\n");
+    let file = inspect(&path, FileFormat::Json).expect("inspect");
+    scratch.write("people.jsonl", b"{\"id\":1}\n[1,2]\n{broken\n");
+
+    let cancel = CancelToken::new();
+    cancel.cancel();
+
+    let outcome = run_file_import(
+        &connection,
+        &file,
+        &plan(&file, TableMappingMode::Existing, "people"),
+        &import_options(1),
+        &cancel,
+        |_, _| {},
+    )
+    .expect("a cancelled import is an outcome, not an error");
+
+    assert!(outcome.cancelled);
+    assert!(
+        rows(&connection, "SELECT id FROM people").is_empty(),
+        "nothing is written"
+    );
+}

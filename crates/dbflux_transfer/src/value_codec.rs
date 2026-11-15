@@ -171,6 +171,7 @@ fn value_from_text(text: &str, type_name: Option<&str>, date_format: DateFormat)
 
     if (type_lower.contains("int") || type_lower.contains("serial"))
         && !type_lower.contains("point")
+        && !type_lower.contains("interval")
         && let Ok(n) = text.parse::<i64>()
     {
         return Value::Int(n);
@@ -349,6 +350,25 @@ mod tests {
         assert_eq!(
             value_from_csv_field("42", Some("INTEGER"), &FormatOptions::default()),
             Value::Int(42)
+        );
+    }
+
+    #[test]
+    fn csv_field_stays_text_for_interval_types() {
+        for type_name in [
+            "interval",
+            "INTERVAL DAY TO SECOND",
+            "interval year to month",
+        ] {
+            assert_eq!(
+                value_from_csv_field("123", Some(type_name), &FormatOptions::default()),
+                Value::Text("123".to_string()),
+                "{type_name}"
+            );
+        }
+        assert_eq!(
+            value_from_csv_field("7", Some("bigint"), &FormatOptions::default()),
+            Value::Int(7)
         );
     }
 

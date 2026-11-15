@@ -174,7 +174,7 @@ fn check_readable(
 ) -> Result<(), TransferError> {
     if file.format != FileFormat::Csv {
         // A record that is not an object would otherwise import as a row of NULLs.
-        check_json_records(&file.path, file.format)?;
+        check_json_records(&file.path, file.format, cancel)?;
     }
 
     let mut source = FileSource::open_with(

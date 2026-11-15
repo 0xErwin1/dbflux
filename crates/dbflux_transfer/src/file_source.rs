@@ -206,22 +206,34 @@ pub(crate) fn sample_object_keys(
     limit: usize,
 ) -> Result<Vec<Vec<String>>, TransferError> {
     let mut records = Vec::new();
-    for_each_object_keys(path, format, limit, |keys| records.push(keys))?;
+    for_each_object_keys(path, format, limit, None, |keys| records.push(keys))?;
     Ok(records)
 }
 
 /// Reads every record of a JSON (array or JSON Lines) file, failing on the
 /// first one that is not an object, without holding the records in memory.
-pub(crate) fn check_json_records(path: &Path, format: FileFormat) -> Result<(), TransferError> {
-    for_each_object_keys(path, format, usize::MAX, |_| {})
+/// The scan stops quietly, with `Ok`, as soon as `cancel` is cancelled.
+pub(crate) fn check_json_records(
+    path: &Path,
+    format: FileFormat,
+    cancel: &CancelToken,
+) -> Result<(), TransferError> {
+    for_each_object_keys(path, format, usize::MAX, Some(cancel), |_| {})
 }
 
 fn for_each_object_keys(
     path: &Path,
     format: FileFormat,
     limit: usize,
+    cancel: Option<&CancelToken>,
     mut visit: impl FnMut(Vec<String>),
 ) -> Result<(), TransferError> {
+    let is_cancelled = || cancel.is_some_and(CancelToken::is_cancelled);
+
+    if is_cancelled() {
+        return Ok(());
+    }
+
     let file =
         File::open(path).map_err(|e| TransferError::Source(format!("{}: {e}", path.display())))?;
     let mut reader = BufReader::new(file);
@@ -237,7 +249,7 @@ fn for_each_object_keys(
     if is_array {
         reader.consume(1);
         let mut array = JsonArrayStream::new(reader);
-        while seen < limit {
+        while seen < limit && !is_cancelled() {
             match array.next_element::<ObjectKeys>()? {
                 Some(record) => visit(record.0),
                 None => break,
@@ -247,6 +259,9 @@ fn for_each_object_keys(
     } else {
         let stream = serde_json::Deserializer::from_reader(reader).into_iter::<ObjectKeys>();
         for record in stream.take(limit) {
+            if is_cancelled() {
+                break;
+            }
             let record = record.map_err(|e| invalid_json(&e.to_string()))?;
             visit(record.0);
         }
