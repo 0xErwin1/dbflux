@@ -79,16 +79,6 @@ impl ProxyFormNav {
         rows
     }
 
-    pub(super) fn tab_next(&mut self) {
-        let rows = self.form_rows();
-        self.nav.tab_next(&rows);
-    }
-
-    pub(super) fn tab_prev(&mut self) {
-        let rows = self.form_rows();
-        self.nav.tab_prev(&rows);
-    }
-
     pub(super) fn validate_field(&mut self) {
         let rows = self.form_rows();
         self.nav.validate(&rows, ProxyFormField::Name);
@@ -876,14 +866,6 @@ mod tests {
         assert_eq!(nav.field(), ProxyFormField::KindSocks5);
         nav.move_right();
         assert_eq!(nav.field(), ProxyFormField::KindSocks5);
-    }
-
-    #[test]
-    fn tab_next_crosses_row_boundary() {
-        let mut nav = nav_no_auth_new();
-        nav.set_field(ProxyFormField::Port);
-        nav.tab_next();
-        assert_eq!(nav.field(), ProxyFormField::AuthNone);
     }
 
     #[test]
