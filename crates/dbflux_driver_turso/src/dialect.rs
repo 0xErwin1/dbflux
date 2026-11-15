@@ -101,6 +101,43 @@ pub(crate) fn escape_string(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// A quoted text literal. SQLite reads a statement up to its first NUL, so
+/// text holding one is written as its quoted segments joined with
+/// `char(0)`. Unlike a hex cast, this does not depend on the database's text
+/// encoding; text without a NUL stays a plain quoted literal.
+fn text_literal(text: &str) -> String {
+    if !text.contains('\0') {
+        return format!("'{}'", escape_string(text));
+    }
+
+    let segments: Vec<String> = text
+        .split('\0')
+        .map(|segment| format!("'{}'", escape_string(segment)))
+        .collect();
+
+    format!("({})", join_with_nul(&segments))
+}
+
+/// The most segments joined in one flat `||` chain. SQLite parses a chain as a
+/// left-deep tree and refuses one deeper than its expression depth limit
+/// (1000 by default), so a longer run is split into parenthesized halves.
+const MAX_FLAT_SEGMENTS: usize = 64;
+
+fn join_with_nul(segments: &[String]) -> String {
+    const SEPARATOR: &str = " || char(0) || ";
+
+    if segments.len() <= MAX_FLAT_SEGMENTS {
+        return segments.join(SEPARATOR);
+    }
+
+    let (left, right) = segments.split_at(segments.len() / 2);
+    format!(
+        "({}){SEPARATOR}({})",
+        join_with_nul(left),
+        join_with_nul(right)
+    )
+}
+
 /// Renders a value as a SQLite literal for statements that inline values.
 pub(crate) fn value_to_literal(value: &Value) -> String {
     match value {
@@ -115,13 +152,12 @@ pub(crate) fn value_to_literal(value: &Value) -> String {
             }
         }
         Value::Decimal(s) => format!("'{}'", escape_string(s)),
-        Value::Text(s) => format!("'{}'", escape_string(s)),
-        Value::Json(s) => format!("'{}'", escape_string(s)),
+        Value::Text(s) | Value::Json(s) => text_literal(s),
         Value::Bytes(b) => format!("X'{}'", hex::encode(b)),
         Value::DateTime(dt) => format!("'{}'", dt.to_rfc3339()),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
-        Value::ObjectId(id) => format!("'{}'", escape_string(id)),
+        Value::ObjectId(id) => text_literal(id),
         Value::Unsupported(_) => "NULL".to_string(),
         Value::Array(_) | Value::Document(_) => {
             format!("'{}'", escape_string(&value.to_json_string()))
@@ -191,6 +227,11 @@ pub(crate) fn kind_from_decltype(decl: Option<&str>) -> ColumnKind {
         || decl.contains("DECIMAL")
     {
         return ColumnKind::Float;
+    }
+    // A time of day has no absolute instant, so the chart engine cannot plot
+    // it; the other drivers report it as Unknown too.
+    if decl.starts_with("TIME") && !decl.starts_with("TIMESTAMP") {
+        return ColumnKind::Unknown;
     }
     if decl.contains("DATE") || decl.contains("TIME") || decl.contains("STAMP") {
         return ColumnKind::Timestamp;
@@ -390,6 +431,70 @@ mod tests {
         assert_eq!(kind_from_decltype(Some("BLOB")), ColumnKind::Unknown);
         assert_eq!(kind_from_decltype(Some("")), ColumnKind::Unknown);
         assert_eq!(kind_from_decltype(None), ColumnKind::Unknown);
+    }
+
+    #[test]
+    fn decltype_time_of_day_is_unknown() {
+        assert_eq!(kind_from_decltype(Some("TIME")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("time")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("TIME(3)")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("TIMETZ")), ColumnKind::Unknown);
+        assert_eq!(
+            kind_from_decltype(Some("TIME WITH TIME ZONE")),
+            ColumnKind::Unknown
+        );
+        assert_eq!(kind_from_decltype(Some("TIMESTAMP")), ColumnKind::Timestamp);
+        assert_eq!(
+            kind_from_decltype(Some("TIMESTAMP WITH TIME ZONE")),
+            ColumnKind::Timestamp
+        );
+    }
+
+    #[test]
+    fn text_with_nul_bytes_is_written_as_segments_joined_with_char_zero() {
+        let literal = |text: &str| value_to_literal(&Value::Text(text.to_string()));
+
+        assert_eq!(literal("a\0b"), "('a' || char(0) || 'b')");
+        assert_eq!(literal("\0a"), "('' || char(0) || 'a')");
+        assert_eq!(literal("a\0"), "('a' || char(0) || '')");
+        assert_eq!(
+            literal("a\0\0b"),
+            "('a' || char(0) || '' || char(0) || 'b')"
+        );
+        assert_eq!(literal("\0"), "('' || char(0) || '')");
+        assert_eq!(literal("it's\0"), "('it''s' || char(0) || '')");
+        assert_eq!(
+            value_to_literal(&Value::Json("a\0b".to_string())),
+            "('a' || char(0) || 'b')"
+        );
+    }
+
+    #[test]
+    fn long_nul_runs_build_a_shallow_expression() {
+        let literal = value_to_literal(&Value::Text("\0".repeat(2_000)));
+        let mut operators_per_level = vec![0usize];
+        let mut widest = 0usize;
+        for part in literal.split_inclusive(['(', ')', '|']) {
+            match part.chars().last() {
+                Some('(') => operators_per_level.push(0),
+                Some(')') => {
+                    operators_per_level.pop();
+                }
+                Some('|') => {
+                    if let Some(count) = operators_per_level.last_mut() {
+                        *count += 1;
+                        widest = widest.max(*count);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(widest <= 260, "{widest} pipes chained at one level");
+        assert!(
+            literal.matches(" || ").count() >= 4_000,
+            "every NUL still needs its separators"
+        );
+        assert!(!literal.contains('\0'));
     }
 
     #[test]

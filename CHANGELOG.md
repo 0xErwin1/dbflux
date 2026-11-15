@@ -13,6 +13,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Turso writes text with a NUL byte intact and stops charting TIME columns** — A text value holding a NUL byte is now written as its quoted segments joined with `char(0)` instead of a literal that ends the statement at the NUL, as SQLite already does. A `TIME` column is reported as an unknown kind, so the chart engine no longer offers a time of day as an x-axis.
 * **SQLite text with a NUL byte is written intact** — A text value that contains a NUL byte was written as a quoted literal holding the raw byte, which SQLite reads as the end of the statement. It is now written as its quoted segments joined with `char(0)`, so SQL export and import keep every byte and the text type in UTF-8, UTF-16LE and UTF-16BE databases. A long run of NUL bytes is grouped in parentheses so the expression stays within SQLite's depth limit; text without a NUL is written as before (#805).
 
 ## [0.10.1] - 2026-11-14
