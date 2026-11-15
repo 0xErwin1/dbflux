@@ -302,8 +302,9 @@ columna `GENERATED ALWAYS AS IDENTITY` de PostgreSQL se escribe con
 `OVERRIDING SYSTEM VALUE`, y una tabla de SQL Server con una columna `IDENTITY`
 se envuelve en `SET IDENTITY_INSERT ... ON;` y `OFF;`, de modo que se conservan
 los ids originales. Tras la última sentencia de una tabla de PostgreSQL, el
-script mueve la secuencia de cada columna de identidad o serial al mayor valor
-exportado (`setval`), de modo que una inserción por defecto posterior a la
+script mueve la secuencia de cada columna de identidad o serial más allá de los
+valores exportados (`setval`): al mayor si la secuencia es ascendente y al menor
+si es descendente, de modo que una inserción por defecto posterior a la
 reproducción no reutilice un id; SQL Server avanza por sí mismo la semilla de
 identidad al insertar valores explícitos. Las columnas que calcula la base de datos (columnas
 generadas de PostgreSQL, columnas calculadas y `rowversion` de SQL Server) se

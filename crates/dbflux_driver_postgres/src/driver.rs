@@ -8535,13 +8535,13 @@ mod tests {
         assert_eq!(
             resync(Some("app"), "users", &["id"]).as_deref(),
             Some(
-                "SELECT setval(pg_get_serial_sequence('\"app\".\"users\"', 'id'), COALESCE(MAX(\"id\"), 1), MAX(\"id\") IS NOT NULL) FROM \"app\".\"users\";"
+                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END) FROM \"app\".\"users\" AS src CROSS JOIN pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"app\".\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
             )
         );
         assert_eq!(
             resync(None, "users", &["id"]).as_deref(),
             Some(
-                "SELECT setval(pg_get_serial_sequence('\"users\"', 'id'), COALESCE(MAX(\"id\"), 1), MAX(\"id\") IS NOT NULL) FROM \"users\";"
+                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END) FROM \"users\" AS src CROSS JOIN pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
             )
         );
     }
@@ -8553,11 +8553,11 @@ mod tests {
 
         assert_eq!(lines.len(), 2, "{text}");
         assert!(
-            lines[0].contains("'id'") && lines[0].contains("MAX(\"id\")"),
+            lines[0].contains("'id'") && lines[0].contains("MAX(src.\"id\")"),
             "{text}"
         );
         assert!(
-            lines[1].contains("'ticket'") && lines[1].contains("MAX(\"ticket\")"),
+            lines[1].contains("'ticket'") && lines[1].contains("MAX(src.\"ticket\")"),
             "{text}"
         );
         assert!(lines.iter().all(|line| line.ends_with(';')), "{text}");
@@ -8569,8 +8569,23 @@ mod tests {
 
         assert_eq!(
             text,
-            "SELECT setval(pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e'), COALESCE(MAX(\"c\"\"d'e\"), 1), MAX(\"c\"\"d'e\") IS NOT NULL) FROM \"s\"\"x'y\".\"t\"\"a'b\";"
+            "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"c\"\"d'e\") ELSE MIN(src.\"c\"\"d'e\") END) FROM \"s\"\"x'y\".\"t\"\"a'b\" AS src CROSS JOIN pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
         );
+    }
+
+    /// A descending sequence continues below the smallest restored value, so
+    /// the resync takes `MIN` when the increment is negative.
+    #[test]
+    fn postgres_sequence_resync_follows_the_increment_direction() {
+        let text = resync(Some("app"), "users", &["id"]).unwrap();
+
+        assert!(
+            text.contains(
+                "CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("CROSS JOIN pg_sequence AS seq"), "{text}");
     }
 
     #[test]

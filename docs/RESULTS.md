@@ -278,7 +278,8 @@ running it twice fails on unique keys or duplicates the rows. A PostgreSQL
 and a SQL Server table with an `IDENTITY` column is wrapped in
 `SET IDENTITY_INSERT ... ON;` and `OFF;`, so the original ids are kept. After a
 PostgreSQL table's last statement the script moves the sequence of every
-identity or serial column to the largest exported value (`setval`), so a default
+identity or serial column past the exported values (`setval`): to the largest
+for an ascending sequence and to the smallest for a descending one, so a default
 insert after the replay does not reuse an id; SQL Server advances an identity
 seed by itself when explicit values are inserted. Columns the database computes (PostgreSQL
 generated columns, SQL Server computed and `rowversion` columns) are left out of

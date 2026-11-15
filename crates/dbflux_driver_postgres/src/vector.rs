@@ -179,9 +179,11 @@ impl QueryGenerator for PostgresQueryGenerator {
         )
     }
 
-    /// One `setval` per column, moving its sequence to the largest value the
-    /// script wrote. An empty table leaves the sequence at its start
-    /// (`is_called` false), though the writer never emits this for one.
+    /// One `setval` per column, moving its sequence past the values the
+    /// script wrote: to the largest for an ascending sequence and to the
+    /// smallest for a descending one, read from `pg_sequence.seqincrement`.
+    /// An empty table produces no row, so the sequence is left as it is; the
+    /// writer never emits this for one anyway.
     fn script_table_sequence_resync(
         &self,
         schema: Option<&str>,
@@ -198,7 +200,10 @@ impl QueryGenerator for PostgresQueryGenerator {
             .map(|column| {
                 let quoted = pg_quote_ident(column);
                 format!(
-                    "SELECT setval(pg_get_serial_sequence({}, {}), COALESCE(MAX({quoted}), 1), MAX({quoted}) IS NOT NULL) FROM {qualified};",
+                    "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.{quoted}) ELSE MIN(src.{quoted}) END) \
+                     FROM {qualified} AS src CROSS JOIN pg_sequence AS seq \
+                     WHERE seq.seqrelid = pg_get_serial_sequence({}, {})::regclass \
+                     GROUP BY seq.seqrelid, seq.seqincrement;",
                     pg_quote_string(&qualified),
                     pg_quote_string(column),
                 )
