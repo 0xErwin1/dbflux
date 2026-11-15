@@ -2,6 +2,15 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.10.1] - 2026-11-14
+
+### Fixed
+
+* **The command palette opens again, and shortcuts keep working after it** — `Ctrl+Shift+P` and a click on the search bar now show the command palette. In 0.10.0 the palette opened below the bottom edge of the window, out of view, while it still held focus and its key context, so no global shortcut ran until the app was restarted. The palette overlay covers the window again, as it did in 0.9.0 (#1314).
+* **A numeric edit that only changes the type is no longer dropped** — Editing a document field from `1` to `1.0`, or any other change between two numeric representations of the same value, now reaches the store instead of being read as unchanged and discarded. `Value` carried two definitions of equality: `==` compared floats as IEEE 754 while ordering promoted an integer and a float numerically, so a `NaN` was not equal to itself and the same pair could be unchanged on one path and changed on another. Equality is now exactly "orders equal", the promotion between `i64` and `f64` is exact above 2^53, and the paths that decide whether an edit is a change compare representation as well as value, so a typed edit is kept and a real change of representation is still a change (#1311).
+* **SQLite completion no longer offers `public.<table>` after a query runs** — Running a query no longer leaves a schema-qualified copy of each table it reads in the completion list of a SQLite or Turso connection, so completion offers `users` and never `public.users`, which SQLite rejects with `no such table`. When neither the query, the cached table nor the editor names a schema, the check that runs before a query now lets the driver use its own default schema instead of `public`, so a SQL Server or DuckDB table it reads is looked up in `dbo` or `main` (#1029).
+* **DuckDB keeps the Init SQL catalog after a reconnect** — A `USE` in a DuckDB connection's Init SQL applied only to the first connection: after a refresh reconnected while an editor session still held the instance, queries ran against `memory` and failed with "schema ... does not exist". Every connection to the instance now switches to the catalog and schema the startup SQL left it in (#1188).
+
 ## [0.10.0] - 2026-11-12
 
 ### Added
