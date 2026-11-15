@@ -2166,6 +2166,7 @@ document:
       run: Executar
     tables:
       selected_count: "%{count} tabela(s) selecionada(s) para exportação"
+      required: "Selecione pelo menos uma tabela para exportar."
     format_options:
       format_label: Formato
       output_folder_label: "Pasta"
@@ -2203,6 +2204,8 @@ document:
         epoch: "Epoch (segundos)"
       error:
         no_dialog_fallback_failed: "Nenhum seletor de pastas disponível e o diretório alternativo de exportação não pôde ser criado: %{error}"
+      sql_unavailable: "SQL não está disponível para esta conexão: o driver dela não consegue gerar instruções INSERT. Exporte como CSV ou JSON."
+      folder_required: "Escolha a pasta onde os arquivos serão gravados."
     confirm:
       title: Revisar plano de exportação
       summary: "%{count} tabela(s) como %{format} em %{folder}"
@@ -2234,10 +2237,18 @@ document:
       failed: "%{table}: FALHOU — %{error}"
       not_attempted: "%{table}: não tentada"
       cancelled: "%{table}: cancelada após %{rows} linha(s)"
+      not_attempted_after_failure: "%{table}: não tentada: a exportação parou na tabela que falhou"
     footer:
       back: Voltar
       continue: Continuar
       close: Fechar
+      reason:
+        tables: "Continuar fica desativado até que uma tabela seja selecionada."
+        folder: "Continuar fica desativado até que você escolha uma pasta."
+        batch_size: "Continuar fica desativado até que Linhas por INSERT seja válido."
+        segment_size: "Continuar fica desativado até que Tamanho do bloco seja válido."
+    done:
+      closing_failed: "Feche este diálogo, corrija a causa indicada acima e exporte novamente. Os arquivos já gravados permanecem na pasta. Sem um manifest.json a pasta não pode ser importada inteira, mas cada arquivo CSV ou JSON concluído ainda pode ser importado com Escolher arquivo."
   file:
     error:
       source_changed: "O arquivo foi alterado em outro lugar desde que foi aberto, então nada foi salvo e suas edições foram mantidas. Para ver o novo conteúdo, descarte suas edições e escolha Recarregar do arquivo, e depois refaça-as."

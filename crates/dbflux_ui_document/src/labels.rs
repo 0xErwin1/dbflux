@@ -1973,6 +1973,15 @@ pub(crate) fn export_running_position_label(current_index: usize, total_tables: 
             index = current_index + 1,
             total = total_tables
         )
+/// The result row of a table the export never reached because an earlier one
+/// failed, saying why it was skipped.
+pub(crate) fn export_not_attempted_after_failure_line(label: &str) -> String {
+    dbflux_i18n::t!(
+        "document.export_wizard.status_line.not_attempted_after_failure",
+        table = label
+    )
+}
+
     } else {
         dbflux_i18n::t!("document.export_wizard.running.position.preparing")
     }
@@ -6785,6 +6794,15 @@ mod tests {
     /// diverges between locales.
     #[test]
     fn export_wizard_keys_differ_between_locales() {
+        "document.export_wizard.format_options.sql_unavailable",
+        "document.export_wizard.format_options.folder_required",
+        "document.export_wizard.tables.required",
+        "document.export_wizard.footer.reason.tables",
+        "document.export_wizard.footer.reason.folder",
+        "document.export_wizard.footer.reason.batch_size",
+        "document.export_wizard.footer.reason.segment_size",
+        "document.export_wizard.status_line.not_attempted_after_failure",
+        "document.export_wizard.done.closing_failed",
         for key in [
             "document.export_wizard.title",
             "document.export_wizard.format_options.choose_folder",

@@ -316,6 +316,19 @@ y se ocultan. Los archivos SQL aún no se pueden importar: al importar una
 carpeta que contiene uno, esa tabla falla con el mensaje de que el formato no se
 puede importar. **Exportar todas las filas a un archivo** no ofrece SQL.
 
+Cuando la conexión de origen no puede escribir SQL, el paso Formato no lo
+lista y explica el motivo bajo el selector de formato: su driver no puede
+generar sentencias `INSERT`, así que exporta como CSV o JSON. Cada estado que
+desactiva **Continuar** explica por qué. El pie nombra qué corregir (**Filas por
+INSERT**, **Tamaño de bloque**, la carpeta o una selección de tablas vacía), y
+un campo no válido muestra un marco de peligro, un icono de alerta y una
+pista. Cuando termina la ejecución, el diálogo lista una fila por tabla con su
+resultado. Una tabla que la ejecución no alcanzó tras un fallo lo indica, y una
+ejecución fallida dice qué hacer a continuación: los archivos ya escritos
+permanecen en la carpeta, una ejecución fallida no escribe `manifest.json`, así
+que la carpeta no se puede importar completa, y cada archivo CSV o JSON
+terminado todavía se puede importar con **Elegir archivo…**.
+
 Los valores por defecto escriben exactamente lo que escribían las versiones
 anteriores. El manifiesto registra las opciones que dieron forma a un archivo,
 de modo que importar la carpeta lo lee igual; un manifiesto sin ellas significa

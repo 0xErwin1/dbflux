@@ -2166,6 +2166,7 @@ document:
       run: 执行
     tables:
       selected_count: "已选择 %{count} 张表用于导出"
+      required: "请至少选择一张要导出的表。"
     format_options:
       format_label: 格式
       output_folder_label: "文件夹"
@@ -2203,6 +2204,8 @@ document:
         epoch: "Epoch（秒）"
       error:
         no_dialog_fallback_failed: "没有可用的文件夹选择器且无法创建回退导出目录：%{error}"
+      sql_unavailable: "此连接不提供 SQL：其驱动无法生成 INSERT 语句。请改为导出 CSV 或 JSON。"
+      folder_required: "请选择文件的写入文件夹。"
     confirm:
       title: 查看导出计划
       summary: "%{count} 张表，格式 %{format}，导出到 %{folder}"
@@ -2234,10 +2237,18 @@ document:
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
       cancelled: "%{table}：已在 %{rows} 行后取消"
+      not_attempted_after_failure: "%{table}：未尝试：导出在失败的表处停止"
     footer:
       back: 返回
       continue: 继续
       close: 关闭
+      reason:
+        tables: "选择一张表之前，“继续”不可用。"
+        folder: "选择文件夹之前，“继续”不可用。"
+        batch_size: "“每条 INSERT 的行数”有效之前，“继续”不可用。"
+        segment_size: "“分块大小”有效之前，“继续”不可用。"
+    done:
+      closing_failed: "请关闭此对话框，修复上述原因后重新导出。已写入的文件会保留在文件夹中。没有 manifest.json 时无法将整个文件夹导入，但每个已完成的 CSV 或 JSON 文件仍可通过“选择文件”导入。"
   file:
     error:
       source_changed: "文件在打开后已在别处被修改，因此未保存任何内容，你的编辑仍然保留。要查看新内容，请放弃编辑并选择从文件重新加载，然后重新编辑。"

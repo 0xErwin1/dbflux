@@ -2166,6 +2166,7 @@ document:
       run: Ejecutar
     tables:
       selected_count: "%{count} tabla(s) seleccionada(s) para exportar"
+      required: "Selecciona al menos una tabla para exportar."
     format_options:
       format_label: Formato
       output_folder_label: "Carpeta"
@@ -2203,6 +2204,8 @@ document:
         epoch: "Epoch (segundos)"
       error:
         no_dialog_fallback_failed: "No hay selector de carpetas disponible y no se pudo crear la carpeta de exportación de respaldo: %{error}"
+      sql_unavailable: "SQL no está disponible para esta conexión: su driver no puede generar sentencias INSERT. Exporta como CSV o JSON."
+      folder_required: "Elige la carpeta donde se escriben los archivos."
     confirm:
       title: Revisar plan de exportación
       summary: "%{count} tabla(s) como %{format} hacia %{folder}"
@@ -2234,10 +2237,18 @@ document:
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
       cancelled: "%{table}: cancelada tras %{rows} fila(s)"
+      not_attempted_after_failure: "%{table}: no intentada: la exportación se detuvo en la tabla que falló"
     footer:
       back: Atrás
       continue: Continuar
       close: Cerrar
+      reason:
+        tables: "Continuar está desactivado hasta que selecciones una tabla."
+        folder: "Continuar está desactivado hasta que elijas una carpeta."
+        batch_size: "Continuar está desactivado hasta que Filas por INSERT sea válido."
+        segment_size: "Continuar está desactivado hasta que Tamaño de bloque sea válido."
+    done:
+      closing_failed: "Cierra este diálogo, corrige la causa indicada arriba y exporta de nuevo. Los archivos ya escritos permanecen en la carpeta. Sin un manifest.json la carpeta no se puede importar completa, pero cada archivo CSV o JSON terminado todavía se puede importar con Elegir archivo."
   file:
     error:
       source_changed: "El archivo cambió en otro lugar desde que se abrió, así que no se guardó nada y tus cambios se conservan. Para ver su contenido nuevo, descarta tus cambios y elige Recargar desde el archivo, y luego repítelos."
