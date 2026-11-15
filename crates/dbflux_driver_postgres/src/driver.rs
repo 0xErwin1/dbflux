@@ -8535,13 +8535,13 @@ mod tests {
         assert_eq!(
             resync(Some("app"), "users", &["id"]).as_deref(),
             Some(
-                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END) FROM \"app\".\"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"app\".\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
+                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") >= seq.seqmin ELSE MIN(src.\"id\") <= seq.seqmax END) FROM \"app\".\"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"app\".\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
             )
         );
         assert_eq!(
             resync(None, "users", &["id"]).as_deref(),
             Some(
-                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END) FROM \"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
+                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") >= seq.seqmin ELSE MIN(src.\"id\") <= seq.seqmax END) FROM \"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
             )
         );
     }
@@ -8569,8 +8569,27 @@ mod tests {
 
         assert_eq!(
             text,
-            "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"c\"\"d'e\") ELSE MIN(src.\"c\"\"d'e\") END) FROM \"s\"\"x'y\".\"t\"\"a'b\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
+            "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"c\"\"d'e\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"c\"\"d'e\"), seq.seqmin), seq.seqmax) END, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"c\"\"d'e\") >= seq.seqmin ELSE MIN(src.\"c\"\"d'e\") <= seq.seqmax END) FROM \"s\"\"x'y\".\"t\"\"a'b\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
         );
+    }
+
+    /// A restored value outside the sequence's bounds is clamped to them, and
+    /// `is_called` is false when every value precedes the sequence's first
+    /// value, so `setval` never rejects the script and the next value is valid.
+    #[test]
+    fn postgres_sequence_resync_keeps_the_value_within_the_sequence_bounds() {
+        let text = resync(Some("app"), "users", &["id"]).unwrap();
+
+        assert!(
+            text.contains("LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax)"),
+            "{text}"
+        );
+        assert!(text.contains("MAX(src.\"id\") >= seq.seqmin"), "{text}");
+        assert!(
+            text.contains("LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax)"),
+            "{text}"
+        );
+        assert!(text.contains("MIN(src.\"id\") <= seq.seqmax"), "{text}");
     }
 
     /// A descending sequence continues below the smallest restored value, so
@@ -8581,7 +8600,7 @@ mod tests {
 
         assert!(
             text.contains(
-                "CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END"
+                "CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END"
             ),
             "{text}"
         );

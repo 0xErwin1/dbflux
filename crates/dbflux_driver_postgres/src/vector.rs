@@ -182,6 +182,9 @@ impl QueryGenerator for PostgresQueryGenerator {
     /// One `setval` per column, moving its sequence past the values the
     /// script wrote: to the largest for an ascending sequence and to the
     /// smallest for a descending one, read from `pg_sequence.seqincrement`.
+    /// The value is clamped to the sequence's bounds, and when every restored
+    /// value precedes the sequence's first value `is_called` is false, so the
+    /// next value is that first value rather than a rejected `setval`.
     /// An empty table produces no row, so the sequence is left as it is; the
     /// writer never emits this for one anyway.
     fn script_table_sequence_resync(
@@ -200,10 +203,14 @@ impl QueryGenerator for PostgresQueryGenerator {
             .map(|column| {
                 let quoted = pg_quote_ident(column);
                 format!(
-                    "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.{quoted}) ELSE MIN(src.{quoted}) END) \
+                    "SELECT setval(seq.seqrelid, \
+                     CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.{quoted}), seq.seqmin), seq.seqmax) \
+                     ELSE LEAST(GREATEST(MIN(src.{quoted}), seq.seqmin), seq.seqmax) END, \
+                     CASE WHEN seq.seqincrement > 0 THEN MAX(src.{quoted}) >= seq.seqmin \
+                     ELSE MIN(src.{quoted}) <= seq.seqmax END) \
                      FROM {qualified} AS src CROSS JOIN pg_catalog.pg_sequence AS seq \
                      WHERE seq.seqrelid = pg_get_serial_sequence({}, {})::regclass \
-                     GROUP BY seq.seqrelid, seq.seqincrement;",
+                     GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;",
                     pg_quote_string(&qualified),
                     pg_quote_string(column),
                 )
