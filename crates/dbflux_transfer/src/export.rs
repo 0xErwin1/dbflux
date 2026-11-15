@@ -73,6 +73,37 @@ pub struct ExportOutcome {
     pub cancelled: bool,
 }
 
+/// The identity, sequence-backed and generated columns of a table.
+struct ScriptColumnTraits {
+    identity: Vec<String>,
+    sequences: Vec<String>,
+    generated: Vec<String>,
+}
+
+/// The column traits of `table`, which a SQL export needs and no other format
+/// reads.
+fn script_column_traits(
+    connection: &dyn Connection,
+    table: &ExportTable,
+) -> Result<ScriptColumnTraits, String> {
+    let schema = table.schema.as_deref();
+    let identity = connection
+        .identity_columns(schema, &table.name)
+        .map_err(|error| error.to_string())?;
+    let sequences = connection
+        .sequence_columns(schema, &table.name)
+        .map_err(|error| error.to_string())?;
+    let generated = connection
+        .generated_columns(schema, &table.name)
+        .map_err(|error| error.to_string())?;
+
+    Ok(ScriptColumnTraits {
+        identity,
+        sequences,
+        generated,
+    })
+}
+
 /// Exports every table in `tables` from `connection` into `output_dir`,
 /// writing one `schema.table.<ext>` file per table plus a `manifest.json`
 /// (unless cancelled or a table failed), and returns the outcome.
@@ -126,7 +157,28 @@ pub fn run_export(
             table.name.clone(),
             options.format,
         )
-        .with_options(format_options.clone());
+        .with_options(format_options.clone())
+        .with_connection(Arc::clone(connection));
+        if options.format == FileFormat::Sql {
+            match script_column_traits(connection.as_ref(), table) {
+                Ok(traits) => {
+                    sink = sink
+                        .with_identity_columns(traits.identity)
+                        .with_sequence_columns(traits.sequences)
+                        .with_generated_columns(traits.generated);
+                }
+                Err(error) => {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "table_statuses is built one-to-one from `tables`, which this loop enumerates; its length never changes"
+                    )]
+                    {
+                        table_statuses[index].status = TableTransferStatus::Failed { error };
+                    }
+                    break;
+                }
+            }
+        }
 
         let result = run_transfer(
             &mut source,
@@ -836,6 +888,7 @@ mod tests {
             encoding: TextEncoding::Windows1252,
             null_text: "\\N".to_string(),
             date_format: DateFormat::Epoch,
+            ..FormatOptions::default()
         };
 
         let (manifest, _) =

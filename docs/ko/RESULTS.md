@@ -146,7 +146,10 @@ HTML, Markdown, XML 파일은 읽기용이며 가져오기 대상이 아닙니�
 - **구분자**(CSV 전용): 쉼표, 세미콜론, 탭 또는 파이프.
 - **인코딩**(CSV 전용): UTF-8, UTF-8(BOM 포함), UTF-16LE(BOM 포함) 또는 Windows-1252. Windows-1252로 표현할 수 없는 문자는 대체되지 않고, 그 문자를 알려 주는 오류와 함께 내보내기가 중단됩니다.
 - **NULL 텍스트**(CSV, HTML, Markdown): NULL에 기록할 텍스트이며 기본값은 빈 문자열입니다. JSON과 JSON Lines는 항상 `null`을 기록하고, XML은 `null="true"`로 NULL을 표시합니다. 비어 있지 않은 NULL 텍스트와 텍스트가 같은 값은 가져올 때 NULL로 읽히므로, 내보내기는 그 값과 열을 알려 주는 오류와 함께 중단됩니다. 다른 NULL 텍스트를 고르세요. 기본값인 빈 NULL 텍스트에서는 빈 문자열과 NULL이 똑같이 기록되므로 CSV를 가져오면 둘 다 NULL로 읽힙니다. 빈 문자열을 유지하려면 `\N`처럼 비어 있지 않은 NULL 텍스트를 지정하세요.
-- **날짜**(모든 형식): RFC 3339(기본값), UTC 기준 `YYYY-MM-DD HH:MM:SS`, 또는 epoch 초이며 JSON과 JSON Lines는 epoch를 숫자로 기록합니다. 날짜(date)는 앞의 두 형식에서는 `YYYY-MM-DD`로, epoch에서는 그날 자정(UTC)으로 기록하고, 시간(time)은 `YYYY-MM-DD HH:MM:SS`에서는 `HH:MM:SS`로, epoch에서는 자정 이후의 초로 기록합니다.
+- **날짜**(SQL을 제외한 모든 형식): RFC 3339(기본값), UTC 기준 `YYYY-MM-DD HH:MM:SS`, 또는 epoch 초이며 JSON과 JSON Lines는 epoch를 숫자로 기록합니다. 날짜(date)는 앞의 두 형식에서는 `YYYY-MM-DD`로, epoch에서는 그날 자정(UTC)으로 기록하고, 시간(time)은 `YYYY-MM-DD HH:MM:SS`에서는 `HH:MM:SS`로, epoch에서는 자정 이후의 초로 기록합니다.
+- **INSERT당 행 수**(SQL 전용): 각 `INSERT` 문에 담는 행 수이며 기본값은 500, 최솟값은 1입니다. SQL Server(1000)처럼 문당 행 수를 제한하는 드라이버는 그 한도로 값을 제한합니다.
+
+SQL은 원본 연결의 드라이버가 대량 `INSERT` 문을 생성할 수 있을 때만 내보내기 마법사에서 제공됩니다. 테이블마다 `<스키마>.<테이블>.sql` 파일 하나에 그 연결의 방언으로 `INSERT` 문을 기록합니다. 각 문은 행 한 묶음을 담고, 방언이 쓰는 방식대로 테이블 이름을 쓰며, `;`로 끝납니다. 스크립트는 빈 테이블 복사본에 재생하는 용도이며, 두 번 실행하면 고유 키 오류가 나거나 행이 중복됩니다. PostgreSQL의 `GENERATED ALWAYS AS IDENTITY` 열은 `OVERRIDING SYSTEM VALUE`와 함께 기록되고, `IDENTITY` 열이 있는 SQL Server 테이블은 `SET IDENTITY_INSERT ... ON;`과 `OFF;`로 감싸므로 원래 id가 유지됩니다. PostgreSQL 테이블은 마지막 문 뒤에서 스크립트가 모든 IDENTITY 열과 serial 열의 시퀀스를 내보낸 값 너머로, 즉 오름차순 시퀀스는 가장 큰 값으로, 내림차순 시퀀스는 가장 작은 값으로 옮기므로(`setval`), 재생 후 기본값으로 삽입해도 id가 재사용되지 않습니다. SQL Server는 명시적 값을 삽입하면 IDENTITY 시드를 스스로 앞으로 옮깁니다. 데이터베이스가 계산하는 열(PostgreSQL과 MySQL/MariaDB 생성 열, SQL Server 계산 열, `rowversion` 열, 시간 테이블의 기간 열 `GENERATED ALWAYS AS ROW START/END`)은 문에서 제외되어 재생할 때 데이터베이스가 다시 계산합니다. 행이 없는 테이블은 빈 파일을 기록합니다. NULL과 날짜는 방언이 기록 방식을 정하므로 NULL 텍스트, 구분자, 인코딩, 날짜 옵션은 적용되지 않으며 숨겨집니다. SQL 파일은 아직 가져올 수 없습니다. SQL 파일이 있는 폴더를 가져오면 해당 테이블은 형식을 가져올 수 없다는 메시지와 함께 실패합니다. **모든 행을 파일로 내보내기**에서는 SQL을 제공하지 않습니다.
 
 기본값은 이전 버전이 기록하던 것과 정확히 같습니다. 매니페스트에는 파일을 만든 옵션이 기록되므로 그 폴더를 가져올 때 같은 방식으로 읽으며, 옵션이 없는 매니페스트는 기본값을 뜻합니다. **모든 행을 파일로 내보내기**는 항상 기본값을 사용합니다.
 

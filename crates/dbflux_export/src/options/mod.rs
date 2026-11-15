@@ -108,7 +108,7 @@ impl DateFormat {
 
 /// Everything an export can vary per file. A format ignores the options it
 /// does not use.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FormatOptions {
     pub delimiter: CsvDelimiter,
@@ -116,7 +116,31 @@ pub struct FormatOptions {
     /// Text written for NULL in CSV, HTML and Markdown. Empty by default.
     pub null_text: String,
     pub date_format: DateFormat,
+    /// Rows per `INSERT` statement in a SQL export. The driver's own limit
+    /// caps it when it sets one. Omitted from a manifest at its default, so a
+    /// manifest records only what shaped the file.
+    #[serde(skip_serializing_if = "is_default_sql_batch_size")]
+    pub sql_batch_size: u32,
 }
+
+fn is_default_sql_batch_size(size: &u32) -> bool {
+    *size == DEFAULT_SQL_BATCH_SIZE
+}
+
+impl Default for FormatOptions {
+    fn default() -> Self {
+        Self {
+            delimiter: CsvDelimiter::default(),
+            encoding: TextEncoding::default(),
+            null_text: String::new(),
+            date_format: DateFormat::default(),
+            sql_batch_size: DEFAULT_SQL_BATCH_SIZE,
+        }
+    }
+}
+
+/// Rows per `INSERT` statement unless the export chooses another size.
+pub const DEFAULT_SQL_BATCH_SIZE: u32 = 500;
 
 impl FormatOptions {
     pub fn is_default(&self) -> bool {

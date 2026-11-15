@@ -7,7 +7,8 @@ fn options_a_format_does_not_use_are_hidden() {
         VisibleOptions {
             delimiter_and_encoding: true,
             null_text: true,
-            date_format: true
+            date_format: true,
+            sql_batch_size: false
         }
     );
     for format in [FileFormat::Html, FileFormat::Markdown] {
@@ -16,7 +17,8 @@ fn options_a_format_does_not_use_are_hidden() {
             VisibleOptions {
                 delimiter_and_encoding: false,
                 null_text: true,
-                date_format: true
+                date_format: true,
+                sql_batch_size: false
             },
             "{format:?}"
         );
@@ -27,7 +29,8 @@ fn options_a_format_does_not_use_are_hidden() {
             VisibleOptions {
                 delimiter_and_encoding: false,
                 null_text: false,
-                date_format: true
+                date_format: true,
+                sql_batch_size: false
             },
             "{format:?}"
         );
@@ -77,6 +80,10 @@ fn every_choice_label_resolves_in_every_locale() {
         "null_text_placeholder",
         "null_text_hint",
         "date_format_label",
+        "sql_batch_size_label",
+        "sql_batch_size_placeholder",
+        "sql_batch_size_hint",
+        "sql_batch_size_invalid",
     ];
     for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
         for key in keys {
@@ -90,5 +97,35 @@ fn every_choice_label_resolves_in_every_locale() {
                 "{full} missing in {locale}"
             );
         }
+    }
+}
+
+#[test]
+fn sql_shows_only_the_batch_size() {
+    assert_eq!(
+        visible_options(FileFormat::Sql),
+        VisibleOptions {
+            delimiter_and_encoding: false,
+            null_text: false,
+            date_format: false,
+            sql_batch_size: true
+        }
+    );
+}
+
+#[test]
+fn sql_is_offered_only_when_the_source_connection_supports_it() {
+    assert_eq!(available_formats(true), FileFormat::WITH_SQL.to_vec());
+    assert_eq!(available_formats(false), FileFormat::ALL.to_vec());
+    assert!(!available_formats(false).contains(&FileFormat::Sql));
+}
+
+#[test]
+fn the_sql_segment_id_is_its_extension_and_the_label_resolves_in_every_locale() {
+    assert_eq!(FileFormat::Sql.extension(), "sql");
+    for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+        let key = "document.data.grid.export.format.sql";
+        let value = dbflux_i18n::t!(key, locale = locale);
+        assert_eq!(value, "SQL", "{locale}");
     }
 }

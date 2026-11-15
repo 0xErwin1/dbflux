@@ -478,6 +478,67 @@ pub struct MssqlCodeGenerator;
 
 static MSSQL_CODE_GENERATOR: MssqlCodeGenerator = MssqlCodeGenerator;
 
+/// The text values of a result's first column.
+fn first_column_text(result: QueryResult) -> Vec<String> {
+    result
+        .rows
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(dbflux_core::Value::Text(name)) => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The `IDENTITY` columns of a table, in column order.
+fn mssql_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
+    mssql_column_lookup_sql(schema, table, "c.is_identity = 1")
+}
+
+/// The columns SQL Server computes and rejects explicit values for: computed
+/// columns, `rowversion` (`timestamp`) columns and the `GENERATED ALWAYS AS
+/// ROW START/END` period columns of a temporal table, in column order.
+/// `rowversion` is matched by its system type id (189), which an alias type
+/// over it shares. There is no join on `sys.types`: a CLR type such as
+/// `geography` has no row whose `user_type_id` equals its system type id, so
+/// a join would drop a computed column of that type.
+fn mssql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    mssql_column_lookup_sql(
+        schema,
+        table,
+        "(c.is_computed = 1 OR c.system_type_id = 189 OR c.generated_always_type <> 0)",
+    )
+}
+
+/// The names of the table's columns matching `predicate`. With a schema the
+/// table is found by name inside it; without one the object is resolved the
+/// way the server resolves an unqualified name, through `OBJECT_ID`, rather
+/// than assuming `SCHEMA_NAME()` (the default schema).
+fn mssql_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -> String {
+    match schema {
+        Some(schema) => format!(
+            "SELECT c.name FROM sys.columns c \
+             JOIN sys.tables t ON t.object_id = c.object_id \
+             JOIN sys.schemas s ON s.schema_id = t.schema_id \
+             WHERE {predicate} AND s.name = N'{}' AND t.name = N'{}' \
+             ORDER BY c.column_id",
+            MSSQL_DIALECT.escape_string(schema),
+            MSSQL_DIALECT.escape_string(table)
+        ),
+        None => format!(
+            "SELECT c.name FROM sys.columns c \
+             WHERE {predicate} AND c.object_id = OBJECT_ID(N'{}') \
+             ORDER BY c.column_id",
+            MSSQL_DIALECT.escape_string(&MSSQL_DIALECT.quote_identifier(table))
+        ),
+    }
+}
+
+/// A script that inserts explicit values into an `IDENTITY` column must turn
+/// `IDENTITY_INSERT` on for the table first, so the generator wraps it.
+static MSSQL_QUERY_GENERATOR: SqlMutationGenerator =
+    SqlMutationGenerator::new(&MSSQL_DIALECT).set_identity_insert_for_identity();
+
 impl MssqlCodeGenerator {
     fn quote(&self, name: &str) -> String {
         MSSQL_DIALECT.quote_identifier(name)
@@ -3288,8 +3349,21 @@ impl Connection for MssqlConnection {
     }
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
-        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MSSQL_DIALECT);
-        Some(&GENERATOR)
+        Some(&MSSQL_QUERY_GENERATOR)
+    }
+
+    fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mssql_identity_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
+    }
+
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mssql_generated_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
     }
 
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
@@ -6540,6 +6614,85 @@ mod tests {
         assert!(generated.text.starts_with("INSERT INTO "));
         assert!(generated.text.contains("VALUES"));
         assert_eq!(generated.text.matches("), (").count() + 1, 2);
+    }
+
+    #[test]
+    fn mssql_identity_columns_query_names_the_table_and_defaults_the_schema() {
+        let sql = super::mssql_identity_columns_sql(Some("dbo"), "it's");
+        assert!(
+            sql.contains("s.name = N'dbo' AND t.name = N'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("c.is_identity = 1"));
+        assert!(!sql.contains("OBJECT_ID"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_unqualified_lookups_resolve_the_object_id_of_the_quoted_name() {
+        let hostile = "we]ird'name";
+        for sql in [
+            super::mssql_identity_columns_sql(None, hostile),
+            super::mssql_generated_columns_sql(None, hostile),
+        ] {
+            assert!(
+                sql.contains("c.object_id = OBJECT_ID(N'[we]]ird''name]')"),
+                "{sql}"
+            );
+            assert!(!sql.contains("SCHEMA_NAME()"), "{sql}");
+            assert!(!sql.contains("sys.schemas"), "{sql}");
+            assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
+        }
+    }
+
+    #[test]
+    fn mssql_generated_columns_query_selects_computed_and_rowversion_columns() {
+        let sql = super::mssql_generated_columns_sql(Some("dbo"), "it's");
+        assert!(
+            sql.contains("s.name = N'dbo' AND t.name = N'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("c.is_computed = 1"), "{sql}");
+        assert!(sql.contains("c.system_type_id = 189"), "{sql}");
+        assert!(
+            !sql.contains("JOIN sys.types"),
+            "a computed column of a CLR type has no matching sys.types row: {sql}"
+        );
+        assert!(!sql.contains("is_identity"), "{sql}");
+        assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_generated_columns_query_includes_temporal_period_columns() {
+        let sql = super::mssql_generated_columns_sql(Some("dbo"), "history");
+        assert!(sql.contains("c.generated_always_type <> 0"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_script_wraps_identity_tables_in_identity_insert() {
+        use dbflux_core::QueryGenerator;
+
+        let identity = vec!["id".to_string()];
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_prologue(Some("dbo"), "users", &identity),
+            Some("SET IDENTITY_INSERT [dbo].[users] ON;".to_string())
+        );
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_epilogue(Some("dbo"), "users", &identity),
+            Some("SET IDENTITY_INSERT [dbo].[users] OFF;".to_string())
+        );
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_prologue(Some("dbo"), "users", &[]),
+            None
+        );
+
+        let columns = vec!["id".to_string()];
+        let owned_rows = [vec![dbflux_core::Value::Int(7)]];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+        let script = MSSQL_QUERY_GENERATOR
+            .generate_bulk_insert_for_script(Some("dbo"), "users", &columns, &[], &identity, &rows)
+            .unwrap()
+            .expect("mssql renders script inserts");
+        assert_eq!(script.text, "INSERT INTO [dbo].[users] ([id]) VALUES (7)");
     }
 
     #[test]

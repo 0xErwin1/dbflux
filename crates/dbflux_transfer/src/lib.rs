@@ -18,6 +18,7 @@ pub mod import;
 pub mod manifest;
 pub mod migration;
 mod pipeline;
+mod sql_insert;
 mod table_sink;
 mod table_source;
 mod value_codec;
@@ -34,5 +35,6 @@ pub use pipeline::{
     ColumnMap, RowChunk, RowSink, RowSource, TableMappingMode, TableTransferStatus, TransferError,
     TransferOutcome, TransferReport, run_transfer,
 };
+pub use sql_insert::supports_sql_export;
 pub use table_sink::TableSink;
 pub use table_source::TableSource;

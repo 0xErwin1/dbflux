@@ -96,10 +96,50 @@ fn options_round_trip_through_json() {
         encoding: TextEncoding::Windows1252,
         null_text: "\\N".to_string(),
         date_format: DateFormat::Epoch,
+        sql_batch_size: 25,
     };
     let json = serde_json::to_string(&options).unwrap();
     assert_eq!(
         serde_json::from_str::<FormatOptions>(&json).unwrap(),
         options
     );
+}
+
+#[test]
+fn sql_batch_size_defaults_to_five_hundred_and_older_manifests_read_it_back() {
+    assert_eq!(FormatOptions::default().sql_batch_size, 500);
+
+    let parsed: FormatOptions = serde_json::from_str(r#"{"null_text":"NA"}"#).unwrap();
+    assert_eq!(parsed.sql_batch_size, 500);
+    assert_eq!(parsed.null_text, "NA");
+}
+
+#[test]
+fn a_non_default_sql_batch_size_is_not_default() {
+    let options = FormatOptions {
+        sql_batch_size: 50,
+        ..FormatOptions::default()
+    };
+    assert!(!options.is_default());
+}
+
+#[test]
+fn the_default_sql_batch_size_is_not_serialized() {
+    let options = FormatOptions {
+        date_format: DateFormat::Epoch,
+        ..FormatOptions::default()
+    };
+    let Ok(json) = serde_json::to_string(&options) else {
+        panic!("options serialize");
+    };
+    assert!(!json.contains("sql_batch_size"), "{json}");
+
+    let options = FormatOptions {
+        sql_batch_size: 100,
+        ..FormatOptions::default()
+    };
+    let Ok(json) = serde_json::to_string(&options) else {
+        panic!("options serialize");
+    };
+    assert!(json.contains("\"sql_batch_size\":100"), "{json}");
 }

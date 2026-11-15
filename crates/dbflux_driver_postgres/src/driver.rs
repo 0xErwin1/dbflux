@@ -1690,6 +1690,70 @@ impl Drop for ActiveQueryGuard<'_> {
     }
 }
 
+/// The `GENERATED ALWAYS AS IDENTITY` columns of a table, in column order.
+/// `BY DEFAULT` identity and serial columns accept explicit values, so a
+/// script needs no special handling for them.
+fn postgres_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
+    postgres_column_lookup_sql(schema, table, "a.attidentity = 'a'")
+}
+
+/// The columns a sequence feeds, in column order: identity columns of either
+/// kind and serial columns. Explicit values do not advance the sequence, so a
+/// script resyncs these after replaying. `pg_get_serial_sequence` is the one
+/// signal that covers all three, since it answers for any sequence the column
+/// owns.
+fn postgres_sequence_columns_sql(schema: Option<&str>, table: &str) -> String {
+    postgres_column_lookup_sql(
+        schema,
+        table,
+        "pg_get_serial_sequence(a.attrelid::regclass::text, a.attname) IS NOT NULL",
+    )
+}
+
+/// The generated columns of a table (`GENERATED ALWAYS AS (...) STORED`, and
+/// PostgreSQL 18's virtual ones), in column order. They accept only `DEFAULT`.
+fn postgres_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    postgres_column_lookup_sql(schema, table, "a.attgenerated IN ('s', 'v')")
+}
+
+/// The names of the table's columns matching `predicate`. With a schema the
+/// table is found by name inside it; without one the relation is resolved the
+/// way the server resolves an unqualified name, through `search_path`, rather
+/// than assuming `current_schema()`.
+fn postgres_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -> String {
+    let relation = match schema {
+        Some(schema) => format!(
+            "JOIN pg_class c ON c.oid = a.attrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = {} AND c.relname = {}",
+            pg_quote_string(schema),
+            pg_quote_string(table)
+        ),
+        None => format!(
+            "WHERE a.attrelid = to_regclass({})",
+            pg_quote_string(&pg_quote_ident(table))
+        ),
+    };
+
+    format!(
+        "SELECT a.attname::text FROM pg_attribute a {relation} \
+         AND {predicate} AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum"
+    )
+}
+
+/// The text values of a result's first column.
+fn first_column_text(result: QueryResult) -> Vec<String> {
+    result
+        .rows
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(dbflux_core::Value::Text(name)) => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
 fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
     let schema = request.table.schema.as_deref().unwrap_or("public");
     let escaped_schema = schema.replace('\'', "''");
@@ -2721,6 +2785,27 @@ impl Connection for PostgresConnection {
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         Some(&crate::vector::POSTGRES_QUERY_GENERATOR)
+    }
+
+    fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_identity_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
+    }
+
+    fn sequence_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_sequence_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
+    }
+
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_generated_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
     }
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
@@ -8358,6 +8443,232 @@ mod tests {
         assert_eq!(
             generated.text,
             "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    #[test]
+    fn postgres_identity_columns_query_names_the_table_and_defaults_the_schema() {
+        let sql = super::postgres_identity_columns_sql(Some("app"), "it's");
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("a.attidentity = 'a'"));
+    }
+
+    #[test]
+    fn postgres_column_lookups_resolve_an_unqualified_table_through_the_search_path() {
+        for sql in [
+            super::postgres_identity_columns_sql(None, "users"),
+            super::postgres_generated_columns_sql(None, "users"),
+        ] {
+            assert!(
+                sql.contains("a.attrelid = to_regclass('\"users\"')"),
+                "{sql}"
+            );
+            assert!(!sql.contains("current_schema"), "{sql}");
+            assert!(!sql.contains("pg_namespace"), "{sql}");
+        }
+    }
+
+    #[test]
+    fn postgres_column_lookups_quote_hostile_names() {
+        let hostile = "a\"b'c; DROP TABLE x --";
+        let sql = super::postgres_generated_columns_sql(None, hostile);
+        assert!(
+            sql.contains("to_regclass('\"a\"\"b''c; DROP TABLE x --\"')"),
+            "{sql}"
+        );
+
+        let qualified = super::postgres_generated_columns_sql(Some("s'x"), hostile);
+        assert!(
+            qualified.contains("n.nspname = 's''x' AND c.relname = 'a\"b''c; DROP TABLE x --'"),
+            "{qualified}"
+        );
+    }
+
+    #[test]
+    fn postgres_generated_columns_query_selects_stored_and_virtual_generated_columns() {
+        let sql = super::postgres_generated_columns_sql(Some("app"), "users");
+        assert!(sql.contains("a.attgenerated IN ('s', 'v')"), "{sql}");
+        assert!(!sql.contains("attidentity"), "{sql}");
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'users'"),
+            "{sql}"
+        );
+        assert!(sql.ends_with("ORDER BY a.attnum"), "{sql}");
+    }
+
+    #[test]
+    fn postgres_sequence_columns_query_selects_every_column_a_sequence_feeds() {
+        let sql = super::postgres_sequence_columns_sql(Some("app"), "it's");
+        assert!(
+            sql.contains(
+                "pg_get_serial_sequence(a.attrelid::regclass::text, a.attname) IS NOT NULL"
+            ),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'it''s'"),
+            "{sql}"
+        );
+        assert!(!sql.contains("attidentity"), "{sql}");
+        assert!(sql.ends_with("ORDER BY a.attnum"), "{sql}");
+
+        let unqualified = super::postgres_sequence_columns_sql(None, "users");
+        assert!(
+            unqualified.contains("a.attrelid = to_regclass('\"users\"')"),
+            "{unqualified}"
+        );
+    }
+
+    fn resync(schema: Option<&str>, table: &str, columns: &[&str]) -> Option<String> {
+        use dbflux_core::QueryGenerator;
+
+        let columns: Vec<String> = columns.iter().map(|name| name.to_string()).collect();
+        crate::vector::POSTGRES_QUERY_GENERATOR
+            .script_table_sequence_resync(schema, table, &columns)
+    }
+
+    #[test]
+    fn postgres_sequence_resync_sets_the_sequence_to_the_exported_maximum() {
+        assert_eq!(
+            resync(Some("app"), "users", &["id"]).as_deref(),
+            Some(
+                "SELECT setval(seq.seqrelid, (CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END)::bigint, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") >= seq.seqmin ELSE MIN(src.\"id\") <= seq.seqmax END) FROM \"app\".\"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"app\".\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
+            )
+        );
+        assert_eq!(
+            resync(None, "users", &["id"]).as_deref(),
+            Some(
+                "SELECT setval(seq.seqrelid, (CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END)::bigint, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") >= seq.seqmin ELSE MIN(src.\"id\") <= seq.seqmax END) FROM \"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
+            )
+        );
+    }
+
+    #[test]
+    fn postgres_sequence_resync_writes_one_statement_per_column() {
+        let text = resync(Some("app"), "users", &["id", "ticket"]).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(
+            lines[0].contains("'id'") && lines[0].contains("MAX(src.\"id\")"),
+            "{text}"
+        );
+        assert!(
+            lines[1].contains("'ticket'") && lines[1].contains("MAX(src.\"ticket\")"),
+            "{text}"
+        );
+        assert!(lines.iter().all(|line| line.ends_with(';')), "{text}");
+    }
+
+    #[test]
+    fn postgres_sequence_resync_quotes_hostile_names() {
+        let text = resync(Some("s\"x'y"), "t\"a'b", &["c\"d'e"]).unwrap();
+
+        assert_eq!(
+            text,
+            "SELECT setval(seq.seqrelid, (CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"c\"\"d'e\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"c\"\"d'e\"), seq.seqmin), seq.seqmax) END)::bigint, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"c\"\"d'e\") >= seq.seqmin ELSE MIN(src.\"c\"\"d'e\") <= seq.seqmax END) FROM \"s\"\"x'y\".\"t\"\"a'b\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
+        );
+    }
+
+    /// The clamped value is cast to `bigint`, because a sequence owned by a
+    /// `numeric` column would otherwise hand `setval` a `numeric`.
+    #[test]
+    fn postgres_sequence_resync_casts_the_value_to_bigint() {
+        let text = resync(Some("app"), "users", &["id"]).unwrap();
+
+        assert!(text.contains("END)::bigint, CASE"), "{text}");
+    }
+
+    /// A restored value outside the sequence's bounds is clamped to them, and
+    /// `is_called` is false when every value lies outside the near bound, so
+    /// `setval` never rejects the script and the next value is valid.
+    #[test]
+    fn postgres_sequence_resync_keeps_the_value_within_the_sequence_bounds() {
+        let text = resync(Some("app"), "users", &["id"]).unwrap();
+
+        assert!(
+            text.contains("LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax)"),
+            "{text}"
+        );
+        assert!(text.contains("MAX(src.\"id\") >= seq.seqmin"), "{text}");
+        assert!(
+            text.contains("LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax)"),
+            "{text}"
+        );
+        assert!(text.contains("MIN(src.\"id\") <= seq.seqmax"), "{text}");
+    }
+
+    /// A descending sequence continues below the smallest restored value, so
+    /// the resync takes `MIN` when the increment is negative.
+    #[test]
+    fn postgres_sequence_resync_follows_the_increment_direction() {
+        let text = resync(Some("app"), "users", &["id"]).unwrap();
+
+        assert!(
+            text.contains(
+                "CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("CROSS JOIN pg_catalog.pg_sequence AS seq"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn postgres_sequence_resync_is_absent_without_sequence_columns() {
+        assert_eq!(resync(Some("app"), "users", &[]), None);
+    }
+
+    #[test]
+    fn postgres_script_insert_overrides_system_values_only_for_identity_columns() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = &crate::vector::POSTGRES_QUERY_GENERATOR;
+        let columns = vec!["id".to_string(), "name".to_string()];
+        let owned_rows = [
+            vec![
+                dbflux_core::Value::Int(1),
+                dbflux_core::Value::Text("a".into()),
+            ],
+            vec![
+                dbflux_core::Value::Int(2),
+                dbflux_core::Value::Text("b".into()),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+        let identity = vec!["id".to_string()];
+
+        let script = generator
+            .generate_bulk_insert_for_script(Some("app"), "users", &columns, &[], &identity, &rows)
+            .unwrap()
+            .expect("postgres renders script inserts");
+        assert_eq!(
+            script.text,
+            "INSERT INTO \"app\".\"users\" (\"id\", \"name\") OVERRIDING SYSTEM VALUE VALUES (1, 'a'), (2, 'b')"
+        );
+
+        let without_identity = generator
+            .generate_bulk_insert_for_script(Some("app"), "users", &columns, &[], &[], &rows)
+            .unwrap()
+            .expect("postgres renders script inserts");
+        assert_eq!(
+            without_identity.text,
+            "INSERT INTO \"app\".\"users\" (\"id\", \"name\") VALUES (1, 'a'), (2, 'b')"
+        );
+
+        let import_insert = generator
+            .generate_bulk_insert(Some("app"), "users", &columns, &[], &rows)
+            .unwrap()
+            .expect("postgres renders bulk inserts");
+        assert_eq!(import_insert.text, without_identity.text);
+        assert_eq!(
+            generator.script_table_prologue(Some("app"), "users", &identity),
+            None
         );
     }
 

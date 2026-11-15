@@ -16,7 +16,7 @@ pub use csv::CsvExporter;
 pub use encoding::{DecodingReader, decode_to_utf8};
 pub use json::JsonExporter;
 pub use markup::{HtmlStreamWriter, MarkdownStreamWriter, XmlStreamWriter};
-pub use options::{CsvDelimiter, DateFormat, FormatOptions, TextEncoding};
+pub use options::{CsvDelimiter, DEFAULT_SQL_BATCH_SIZE, DateFormat, FormatOptions, TextEncoding};
 pub use streaming::{CsvStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter};
 pub use text::TextExporter;
 

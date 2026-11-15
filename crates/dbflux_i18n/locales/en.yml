@@ -1794,6 +1794,7 @@ document:
           html: HTML
           markdown: Markdown
           xml: XML
+          sql: SQL
           text: Text
           binary: Binary
           hex: Hex
@@ -2191,6 +2192,10 @@ document:
       null_text_label: "NULL text"
       null_text_placeholder: "Empty"
       null_text_hint: "Written for NULL values. With empty text, NULL and an empty string only differ if you choose another text, such as \\N."
+      sql_batch_size_label: "Rows per INSERT"
+      sql_batch_size_placeholder: "500"
+      sql_batch_size_hint: "Rows written in each INSERT statement. A driver with a lower limit caps this value."
+      sql_batch_size_invalid: "Must be a whole number of 1 or more."
       date_format_label: "Dates"
       date_format:
         rfc3339: "RFC 3339"

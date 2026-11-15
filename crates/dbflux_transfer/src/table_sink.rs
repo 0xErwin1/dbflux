@@ -138,7 +138,7 @@ impl TableSink {
     /// `DriverLimits::max_bulk_insert_rows` interpreted as "0 = unlimited" —
     /// treating it as a literal zero-row cap would silently bulk-insert
     /// nothing.
-    fn max_bulk_insert_rows(metadata: &DriverMetadata) -> Option<usize> {
+    pub(crate) fn max_bulk_insert_rows(metadata: &DriverMetadata) -> Option<usize> {
         let cap = metadata
             .limits
             .as_ref()

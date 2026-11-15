@@ -283,11 +283,38 @@ las demás:
   por defecto, un string vacío y NULL se escriben igual, así que al importar un
   CSV ambos vuelven como NULL; usa un texto para NULL no vacío, como `\N`, para
   conservar los strings vacíos.
-- **Fechas** (todos los formatos): RFC 3339 (por defecto), `YYYY-MM-DD HH:MM:SS`
+- **Fechas** (todos los formatos excepto SQL): RFC 3339 (por defecto), `YYYY-MM-DD HH:MM:SS`
   en UTC o segundos epoch, que JSON y JSON Lines escriben como número. Una fecha
   se escribe como `YYYY-MM-DD` con los dos primeros y como su medianoche (UTC)
   con epoch, y una hora como `HH:MM:SS` con `YYYY-MM-DD HH:MM:SS` y como
   segundos desde medianoche con epoch.
+- **Filas por INSERT** (solo SQL): cuántas filas entran en cada sentencia
+  `INSERT`, 500 por defecto y como mínimo 1. Un driver que limita las filas por
+  sentencia, como SQL Server con 1000, acota el valor.
+
+SQL se ofrece en el asistente de exportación solo cuando el driver de la
+conexión de origen puede generar sentencias `INSERT` masivas. Escribe un archivo
+`<esquema>.<tabla>.sql` por tabla con sentencias `INSERT` en el dialecto de esa
+conexión: cada sentencia contiene un lote de filas, nombra la tabla como lo hace
+el dialecto y termina con `;`. El script se reproduce en una copia vacía de la
+tabla; ejecutarlo dos veces falla por claves únicas o duplica las filas. Una
+columna `GENERATED ALWAYS AS IDENTITY` de PostgreSQL se escribe con
+`OVERRIDING SYSTEM VALUE`, y una tabla de SQL Server con una columna `IDENTITY`
+se envuelve en `SET IDENTITY_INSERT ... ON;` y `OFF;`, de modo que se conservan
+los ids originales. Tras la última sentencia de una tabla de PostgreSQL, el
+script mueve la secuencia de cada columna de identidad o serial más allá de los
+valores exportados (`setval`): al mayor si la secuencia es ascendente y al menor
+si es descendente, de modo que una inserción por defecto posterior a la
+reproducción no reutilice un id; SQL Server avanza por sí mismo la semilla de
+identidad al insertar valores explícitos. Las columnas que calcula la base de datos (columnas
+generadas de PostgreSQL y MySQL/MariaDB, columnas calculadas, `rowversion` y columnas
+de período temporal `GENERATED ALWAYS AS ROW START/END` de SQL Server) se
+omiten de las sentencias para que la base de datos las calcule de nuevo al
+reproducir el script. Una tabla sin filas escribe un archivo vacío. El dialecto decide cómo se escriben NULL y las fechas, así que el texto
+para NULL, el delimitador, la codificación y las opciones de fecha no se aplican
+y se ocultan. Los archivos SQL aún no se pueden importar: al importar una
+carpeta que contiene uno, esa tabla falla con el mensaje de que el formato no se
+puede importar. **Exportar todas las filas a un archivo** no ofrece SQL.
 
 Los valores por defecto escriben exactamente lo que escribían las versiones
 anteriores. El manifiesto registra las opciones que dieron forma a un archivo,

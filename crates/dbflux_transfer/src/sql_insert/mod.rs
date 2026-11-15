@@ -1,0 +1,226 @@
+//! SQL export: batched, re-runnable `INSERT` statements rendered by the source
+//! connection's own [`QueryGenerator::generate_bulk_insert`], so the dialect,
+//! quoting and literals are the driver's, not a second implementation here.
+
+use std::io::Write;
+
+use dbflux_core::{Connection, DriverCapabilities, QueryGenerator, TransferColumn, Value};
+
+use crate::pipeline::TransferError;
+use crate::table_sink::TableSink;
+
+/// Whether `connection` can write SQL exports: it declares
+/// [`DriverCapabilities::BULK_INSERT`] and its generator renders an `INSERT`.
+///
+/// The capability alone is not enough: it is a driver-level flag, while the
+/// generator is what actually produces the text, and a generator may still
+/// answer `None` (the engine's per-row fallback). Probing the generator with a
+/// one-row sample is pure and cheap, and is the same call the export makes, so
+/// the format is offered exactly when the export can succeed.
+pub fn supports_sql_export(connection: &dyn Connection) -> bool {
+    if !connection.supports(DriverCapabilities::BULK_INSERT) {
+        return false;
+    }
+
+    connection
+        .query_generator()
+        .is_some_and(generator_renders_inserts)
+}
+
+fn generator_renders_inserts(generator: &dyn QueryGenerator) -> bool {
+    let sample = [Value::Null];
+    let rows: [&[Value]; 1] = [&sample];
+
+    matches!(
+        generator.generate_bulk_insert(None, "probe", &["probe".to_string()], &[None], &rows),
+        Ok(Some(_))
+    )
+}
+
+/// Rows per `INSERT` for a run: the requested size (at least one), capped at
+/// the driver's `max_bulk_insert_rows` when it sets one.
+pub(crate) fn effective_batch_size(requested: u32, driver_cap: Option<usize>) -> usize {
+    let requested = usize::try_from(requested).unwrap_or(usize::MAX).max(1);
+
+    match driver_cap {
+        Some(cap) => requested.min(cap.max(1)),
+        None => requested,
+    }
+}
+
+/// Driver cap on rows per bulk insert, from the connection's metadata.
+pub(crate) fn driver_batch_cap(connection: &dyn Connection) -> Option<usize> {
+    TableSink::max_bulk_insert_rows(connection.metadata())
+}
+
+/// Buffers rows and writes one `INSERT ... ;` statement per full batch. When
+/// the table has identity columns, the generator's prologue and epilogue lines
+/// wrap its statements, so the script replays with the original values.
+pub(crate) struct SqlInsertWriter<W: Write> {
+    out: W,
+    schema: Option<String>,
+    table: String,
+    /// The columns written: the exported ones without the generated ones.
+    column_names: Vec<String>,
+    column_types: Vec<Option<String>>,
+    /// Which positions of an exported row the statements keep.
+    kept_positions: Vec<usize>,
+    /// The identity columns among the written ones.
+    identity_columns: Vec<String>,
+    /// The sequence-backed columns among the written ones.
+    sequence_columns: Vec<String>,
+    batch_size: usize,
+    pending: Vec<Vec<Value>>,
+    wrapped: bool,
+}
+
+impl<W: Write> SqlInsertWriter<W> {
+    pub(crate) fn new(
+        out: W,
+        schema: Option<String>,
+        table: String,
+        columns: &[TransferColumn],
+        identity_columns: Vec<String>,
+        generated_columns: Vec<String>,
+        batch_size: usize,
+    ) -> Self {
+        let kept: Vec<(usize, &TransferColumn)> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| !generated_columns.contains(&column.name))
+            .collect();
+        let column_names: Vec<String> =
+            kept.iter().map(|(_, column)| column.name.clone()).collect();
+        let identity_columns = identity_columns
+            .into_iter()
+            .filter(|name| column_names.contains(name))
+            .collect();
+
+        Self {
+            out,
+            schema,
+            table,
+            column_names,
+            identity_columns,
+            sequence_columns: Vec::new(),
+            kept_positions: kept.iter().map(|(position, _)| *position).collect(),
+            column_types: kept
+                .iter()
+                .map(|(_, column)| column.type_name.clone())
+                .collect(),
+            batch_size: batch_size.max(1),
+            pending: Vec::new(),
+            wrapped: false,
+        }
+    }
+
+    /// The columns whose values come from a sequence; those the export does
+    /// not write are dropped. The script resyncs them after the last batch.
+    pub(crate) fn with_sequence_columns(mut self, sequence_columns: Vec<String>) -> Self {
+        self.sequence_columns = sequence_columns
+            .into_iter()
+            .filter(|name| self.column_names.contains(name))
+            .collect();
+        self
+    }
+
+    pub(crate) fn write_row(
+        &mut self,
+        generator: &dyn QueryGenerator,
+        row: &[Value],
+    ) -> Result<(), TransferError> {
+        if self.column_names.is_empty() {
+            return Err(TransferError::Sink(format!(
+                "every column of '{}' is generated by the database, so there is nothing to insert",
+                self.table
+            )));
+        }
+
+        self.pending.push(
+            self.kept_positions
+                .iter()
+                .filter_map(|position| row.get(*position).cloned())
+                .collect(),
+        );
+
+        if self.pending.len() >= self.batch_size {
+            self.flush_batch(generator)?;
+        }
+
+        Ok(())
+    }
+
+    /// Writes the last partial batch, then the table's closing lines. A table
+    /// with no rows writes nothing, so the file is empty: there is nothing to
+    /// re-run and no sequence to move, since replay inserts no explicit value.
+    pub(crate) fn finish(mut self, generator: &dyn QueryGenerator) -> Result<(), TransferError> {
+        self.flush_batch(generator)?;
+        if self.wrapped
+            && let Some(line) = generator.script_table_epilogue(
+                self.schema.as_deref(),
+                &self.table,
+                &self.identity_columns,
+            )
+        {
+            self.write_line(&line)?;
+        }
+        if self.wrapped
+            && let Some(text) = generator.script_table_sequence_resync(
+                self.schema.as_deref(),
+                &self.table,
+                &self.sequence_columns,
+            )
+        {
+            self.write_line(&text)?;
+        }
+        self.out
+            .flush()
+            .map_err(|error| TransferError::Sink(error.to_string()))
+    }
+
+    fn flush_batch(&mut self, generator: &dyn QueryGenerator) -> Result<(), TransferError> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+
+        if !self.wrapped {
+            self.wrapped = true;
+            if let Some(line) = generator.script_table_prologue(
+                self.schema.as_deref(),
+                &self.table,
+                &self.identity_columns,
+            ) {
+                self.write_line(&line)?;
+            }
+        }
+
+        let rows: Vec<&[Value]> = self.pending.iter().map(Vec::as_slice).collect();
+        let query = generator
+            .generate_bulk_insert_for_script(
+                self.schema.as_deref(),
+                &self.table,
+                &self.column_names,
+                &self.column_types,
+                &self.identity_columns,
+                &rows,
+            )
+            .map_err(|error| TransferError::Sink(error.to_string()))?
+            .ok_or_else(|| {
+                TransferError::Sink(format!(
+                    "the driver cannot generate INSERT statements for '{}'",
+                    self.table
+                ))
+            })?;
+
+        self.write_line(&format!("{};", query.text))?;
+        self.pending.clear();
+        Ok(())
+    }
+
+    fn write_line(&mut self, line: &str) -> Result<(), TransferError> {
+        writeln!(self.out, "{line}").map_err(|error| TransferError::Sink(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests;

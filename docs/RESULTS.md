@@ -259,11 +259,37 @@ offers the options a format uses and hides the others:
   column; choose another NULL text. With the default empty NULL text, an empty
   string and NULL are written the same way, so a CSV import reads both back as
   NULL; set a non-empty NULL text such as `\N` to keep empty strings.
-- **Dates** (every format): RFC 3339 (the default), `YYYY-MM-DD HH:MM:SS` in
+- **Dates** (every format except SQL): RFC 3339 (the default), `YYYY-MM-DD HH:MM:SS` in
   UTC, or epoch seconds, which JSON and JSON Lines write as a number. A date is
   written as `YYYY-MM-DD` under the first two and as its midnight (UTC) under
   epoch, and a time as `HH:MM:SS` under `YYYY-MM-DD HH:MM:SS` and as seconds
   since midnight under epoch.
+- **Rows per INSERT** (SQL only): how many rows go into each `INSERT`
+  statement, 500 by default and at least 1. A driver that limits rows per
+  statement, such as SQL Server with 1000, caps the value.
+
+SQL is offered in the export wizard only when the source connection's driver
+can generate bulk `INSERT` statements. It writes one `<schema>.<table>.sql` file
+per table of `INSERT` statements in that connection's own dialect: each
+statement holds one batch of rows, names the table the way the dialect writes
+it and ends with `;`. The script replays into an empty copy of the table;
+running it twice fails on unique keys or duplicates the rows. A PostgreSQL
+`GENERATED ALWAYS AS IDENTITY` column is written with `OVERRIDING SYSTEM VALUE`,
+and a SQL Server table with an `IDENTITY` column is wrapped in
+`SET IDENTITY_INSERT ... ON;` and `OFF;`, so the original ids are kept. After a
+PostgreSQL table's last statement the script moves the sequence of every
+identity or serial column past the exported values (`setval`): to the largest
+for an ascending sequence and to the smallest for a descending one, so a default
+insert after the replay does not reuse an id; SQL Server advances an identity
+seed by itself when explicit values are inserted. Columns the database computes (PostgreSQL
+and MySQL/MariaDB generated columns, SQL Server computed, `rowversion` and temporal
+period `GENERATED ALWAYS AS ROW START/END` columns) are left out of
+the statements so the database computes them again on replay. A table
+with no rows writes an empty file. The dialect
+decides how NULL and dates are written, so the NULL text, delimiter, encoding
+and date options do not apply and are hidden. SQL files are not importable yet:
+importing a folder that holds one fails that table with the message that the
+format cannot be imported. **Export all rows to file** does not offer SQL.
 
 The defaults write exactly what earlier versions wrote. The manifest records
 the options that shaped a file, so importing the folder reads it back the same

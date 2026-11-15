@@ -1734,3 +1734,108 @@ fn mssql_probe_write_privilege_sa_is_writable() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+const TEMPORAL_TABLE_DDL: &str = "CREATE TABLE dbo.{name} (
+    id INT IDENTITY(1, 1) PRIMARY KEY,
+    label NVARCHAR(40) NOT NULL,
+    ValidFrom DATETIME2 GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+    ValidTo DATETIME2 GENERATED ALWAYS AS ROW END HIDDEN NOT NULL,
+    PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)
+) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.{name}_history))";
+
+/// A populated system-versioned temporal table reports its period columns as
+/// generated and its `IDENTITY` column as identity, with and without a
+/// schema, and the exported `INSERT` (period columns omitted, wrapped in
+/// `IDENTITY_INSERT`) replays into an empty copy keeping the original ids.
+/// The test drives the driver's generator and metadata directly; the
+/// transfer writer lives in `dbflux_transfer`, which this crate does not
+/// depend on.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_temporal_table_export_script_replays_into_an_empty_copy() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        for name in ["temporal_src", "temporal_dst"] {
+            connection.execute(&QueryRequest::new(
+                TEMPORAL_TABLE_DDL.replace("{name}", name),
+            ))?;
+        }
+        connection.execute(&QueryRequest::new(
+            "SET IDENTITY_INSERT dbo.temporal_src ON;
+             INSERT INTO dbo.temporal_src (id, label) VALUES (10, N'first'), (25, N'second');
+             SET IDENTITY_INSERT dbo.temporal_src OFF;",
+        ))?;
+
+        let period_columns = vec!["ValidFrom".to_string(), "ValidTo".to_string()];
+        let identity_columns = vec!["id".to_string()];
+        assert_eq!(
+            connection.generated_columns(None, "temporal_src")?,
+            period_columns
+        );
+        assert_eq!(
+            connection.generated_columns(Some("dbo"), "temporal_src")?,
+            period_columns
+        );
+        assert_eq!(
+            connection.identity_columns(None, "temporal_src")?,
+            identity_columns
+        );
+        assert_eq!(
+            connection.identity_columns(Some("dbo"), "temporal_src")?,
+            identity_columns
+        );
+
+        let source_rows = connection.execute(&QueryRequest::new(
+            "SELECT id, label FROM dbo.temporal_src ORDER BY id",
+        ))?;
+        assert_eq!(source_rows.rows.len(), 2);
+
+        let generator = connection
+            .query_generator()
+            .ok_or_else(|| DbError::query_failed("SQL Server exposes a query generator"))?;
+        let columns = vec!["id".to_string(), "label".to_string()];
+        let column_types = vec![None, None];
+        let row_slices: Vec<&[Value]> = source_rows.rows.iter().map(Vec::as_slice).collect();
+
+        let insert = generator
+            .generate_bulk_insert_for_script(
+                Some("dbo"),
+                "temporal_dst",
+                &columns,
+                &column_types,
+                &identity_columns,
+                &row_slices,
+            )
+            .map_err(|error| DbError::query_failed(error.to_string()))?
+            .ok_or_else(|| DbError::query_failed("bulk insert is supported"))?;
+        let prologue = generator
+            .script_table_prologue(Some("dbo"), "temporal_dst", &identity_columns)
+            .ok_or_else(|| DbError::query_failed("identity prologue is generated"))?;
+        let epilogue = generator
+            .script_table_epilogue(Some("dbo"), "temporal_dst", &identity_columns)
+            .ok_or_else(|| DbError::query_failed("identity epilogue is generated"))?;
+
+        assert!(prologue.contains("IDENTITY_INSERT"), "{prologue}");
+        assert!(!insert.text.contains("ValidFrom"), "{}", insert.text);
+
+        connection.execute(&QueryRequest::new(format!(
+            "{prologue}\n{}\n{epilogue}",
+            insert.text
+        )))?;
+
+        let replayed = connection.execute(&QueryRequest::new(
+            "SELECT id, label FROM dbo.temporal_dst ORDER BY id",
+        ))?;
+        assert_eq!(replayed.rows, source_rows.rows);
+        assert_eq!(
+            replayed.rows,
+            vec![
+                vec![Value::Int(10), Value::Text("first".to_string())],
+                vec![Value::Int(25), Value::Text("second".to_string())],
+            ]
+        );
+
+        Ok(())
+    })
+}

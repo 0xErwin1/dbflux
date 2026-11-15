@@ -12,13 +12,25 @@ pub(super) struct VisibleOptions {
     pub(super) delimiter_and_encoding: bool,
     pub(super) null_text: bool,
     pub(super) date_format: bool,
+    pub(super) sql_batch_size: bool,
+}
+
+/// The formats the picker offers. SQL needs a source connection whose driver
+/// can render `INSERT` statements, so it appears only when `sql_supported`.
+pub(super) fn available_formats(sql_supported: bool) -> Vec<FileFormat> {
+    if sql_supported {
+        FileFormat::WITH_SQL.to_vec()
+    } else {
+        FileFormat::ALL.to_vec()
+    }
 }
 
 pub(super) fn visible_options(format: FileFormat) -> VisibleOptions {
     VisibleOptions {
         delimiter_and_encoding: format.uses_delimiter_and_encoding(),
         null_text: format.uses_null_text(),
-        date_format: true,
+        date_format: format.uses_date_format(),
+        sql_batch_size: format.uses_sql_batch_size(),
     }
 }
 
