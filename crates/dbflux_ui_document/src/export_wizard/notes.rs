@@ -96,7 +96,54 @@ pub(crate) fn footer_reason(
     .into_any_element()
 }
 
-/// A control with the danger edge drawn over its frame when `invalid`.
+/// Width of the label column of a wizard form row. Wide enough for the longest
+/// label ("Rows per INSERT") on one line at any UI font size the shared
+/// 120 px column wraps it at. (140 px at the base font size)
+const FORM_LABEL_WIDTH: Rems = ui(140.0);
+
+/// A wizard form row: the label in a fixed column that never wraps, the
+/// control and its optional hint beside it. Same layout as the shared
+/// `modal_form_row`, with a column that fits every label of the export and
+/// import wizards. The label is addressed `form-label-<label>`.
+pub(crate) fn form_row(
+    label: impl Into<SharedString>,
+    control: impl IntoElement,
+    hint: Option<AnyElement>,
+    cx: &App,
+) -> Div {
+    let label: SharedString = label.into();
+    let selector = format!("form-label-{label}");
+
+    div()
+        .flex()
+        .items_start()
+        .gap(ModalMetrics::FORM_ROW_GAP)
+        .py(ModalMetrics::FORM_ROW_PADDING_Y)
+        .child(
+            div()
+                .debug_selector(move || selector)
+                .w(FORM_LABEL_WIDTH)
+                .flex_shrink_0()
+                .pt(ModalMetrics::FORM_LABEL_OFFSET)
+                .whitespace_nowrap()
+                .text_color(cx.theme().foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(ModalMetrics::FIELD_GAP)
+                .child(control)
+                .children(hint),
+        )
+}
+
+/// A control with the danger edge drawn over its frame when `invalid`. The
+/// wrapper takes the control's own width, so the edge wraps the input and
+/// not the row.
 pub(crate) fn with_danger_edge(control: impl IntoElement, invalid: bool, cx: &App) -> Div {
     let danger = cx.theme().danger;
 

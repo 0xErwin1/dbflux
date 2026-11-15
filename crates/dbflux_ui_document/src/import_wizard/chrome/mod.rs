@@ -377,6 +377,7 @@ impl ImportWizard {
             .flex_1()
             .min_w_0()
             .items_center()
+            .justify_end()
             .gap(ModalMetrics::FOOTER_GAP)
             .when_some(reason, |footer, reason| {
                 footer.child(footer_reason(reason, "import-wizard-footer-reason", cx))

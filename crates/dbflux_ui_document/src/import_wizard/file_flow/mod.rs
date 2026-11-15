@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
-use dbflux_components::modals::{modal_form_row, modal_hint};
+use dbflux_components::modals::modal_hint;
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Spacing, ui};
 use dbflux_core::{
@@ -36,7 +36,7 @@ use super::file_options::{
 };
 use super::keyboard::{ConfigureField, with_cursor_ring};
 use super::{ImportWizard, WizardStep};
-use crate::export_wizard::notes::info_line;
+use crate::export_wizard::notes::{form_row, info_line};
 
 /// Width of the target table and NULL text fields. (220 px at the base font size)
 const FILE_INPUT_WIDTH: Rems = ui(220.0);
@@ -630,7 +630,7 @@ impl ImportWizard {
                 format = state.format.label()
             ))
             .into_any_element(),
-            modal_form_row(
+            form_row(
                 dbflux_i18n::t!("document.import_wizard.file.target_table_label"),
                 div()
                     .flex()
@@ -716,7 +716,7 @@ impl ImportWizard {
         )
         .group("import-file-delimiter");
 
-        modal_form_row(
+        form_row(
             dbflux_i18n::t!("document.export_wizard.format_options.delimiter_label"),
             div().flex().child(with_cursor_ring(
                 active,
@@ -754,7 +754,7 @@ impl ImportWizard {
         )
         .group("import-file-encoding");
 
-        modal_form_row(
+        form_row(
             dbflux_i18n::t!("document.export_wizard.format_options.encoding_label"),
             div().flex().child(with_cursor_ring(
                 active,
@@ -774,7 +774,7 @@ impl ImportWizard {
             cx,
         );
 
-        modal_form_row(
+        form_row(
             dbflux_i18n::t!("document.export_wizard.format_options.null_text_label"),
             div()
                 .debug_selector(|| "import-wizard-file-null-text".to_string())

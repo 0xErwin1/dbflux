@@ -228,10 +228,12 @@ impl ExportWizard {
         let reason = self.continue_block_reason();
 
         div()
+            .debug_selector(|| "export-wizard-footer".to_string())
             .flex()
             .flex_1()
             .min_w_0()
             .items_center()
+            .justify_end()
             .gap(ModalMetrics::FOOTER_GAP)
             .when_some(reason, |footer, reason| {
                 footer.child(footer_reason(
@@ -239,6 +241,15 @@ impl ExportWizard {
                     "export-wizard-footer-reason",
                     cx,
                 ))
+            })
+            .when(self.phase == ExportPhase::Tables, |footer| {
+                footer.child(
+                    Button::new(
+                        "export-wizard-dismiss",
+                        dbflux_i18n::t!("document.export_wizard.running.cancel"),
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
+                )
             })
             .when(shows_back, |footer| {
                 footer.child(

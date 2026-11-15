@@ -29,9 +29,7 @@ use dbflux_components::composites::{
 };
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::{
-    Modal, modal_form_row, modal_frame, modal_hint, modal_lead, modal_value_field,
-};
+use dbflux_components::modals::{Modal, modal_frame, modal_hint, modal_lead, modal_value_field};
 use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{ChromeColors, ModalMetrics, ui};
 use dbflux_components::typography::AppFonts;

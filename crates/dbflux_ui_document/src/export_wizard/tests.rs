@@ -268,4 +268,92 @@ mod states {
             "a clean run has nothing to fix"
         );
     }
+
+    /// The Tables step has the shared footer: Cancel and Continue inside the
+    /// footer row, with the reason on the left when Continue is off.
+    #[gpui::test]
+    fn the_tables_step_footer_has_cancel_and_continue(cx: &mut TestAppContext) {
+        let (_wizard, window) = open_wizard(cx, three_tables());
+
+        let footer = window
+            .debug_bounds("export-wizard-footer")
+            .expect("the footer row");
+        let cancel = window
+            .debug_bounds("export-wizard-dismiss")
+            .expect("Cancel on the Tables step");
+        let proceed = window
+            .debug_bounds("export-wizard-continue")
+            .expect("Continue on the Tables step");
+
+        for button in [cancel, proceed] {
+            assert!(footer.contains(&button.origin), "{button:?} in {footer:?}");
+        }
+        assert!(cancel.right() <= proceed.left(), "Cancel precedes Continue");
+        assert!(
+            proceed.right() >= footer.right() - px(2.0),
+            "Continue ends the row on the right: {proceed:?} in {footer:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn the_empty_tables_footer_puts_the_reason_left_of_the_buttons(cx: &mut TestAppContext) {
+        let (_wizard, window) = open_wizard(cx, Vec::new());
+
+        let reason = window
+            .debug_bounds("export-wizard-footer-reason")
+            .expect("the reason");
+        let cancel = window
+            .debug_bounds("export-wizard-dismiss")
+            .expect("Cancel");
+
+        assert!(
+            reason.right() <= cancel.left(),
+            "{reason:?} before {cancel:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn the_invalid_field_edges_wrap_their_input(cx: &mut TestAppContext) {
+        let (wizard, window) = open_wizard(cx, three_tables());
+        format_step(&wizard, window);
+        update(&wizard, window, |this| {
+            this.sql_export_available = true;
+            this.selected_format = FileFormat::Sql;
+            this.sql_batch_size_invalid = true;
+            this.segment_size_invalid = true;
+        });
+
+        for selector in [
+            "export-wizard-batch-size-edge",
+            "export-wizard-segment-size-edge",
+        ] {
+            let edge = window.debug_bounds(selector).expect(selector);
+            assert!(
+                edge.size.width <= px(130.0),
+                "{selector} must size to its 120 px input, not the row: {edge:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn the_longest_label_fits_on_one_line(cx: &mut TestAppContext) {
+        let (wizard, window) = open_wizard(cx, three_tables());
+        format_step(&wizard, window);
+        update(&wizard, window, |this| {
+            this.sql_export_available = true;
+            this.selected_format = FileFormat::Sql;
+        });
+
+        let label = window
+            .debug_bounds("form-label-Rows per INSERT")
+            .expect("the label");
+        let short = window
+            .debug_bounds("form-label-Folder")
+            .expect("Folder label");
+
+        assert_eq!(
+            label.size.height, short.size.height,
+            "{label:?} vs {short:?}"
+        );
+    }
 }

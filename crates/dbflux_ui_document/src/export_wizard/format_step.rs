@@ -3,7 +3,7 @@
 
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::{modal_form_row, modal_hint, modal_value_field};
+use dbflux_components::modals::{modal_hint, modal_value_field};
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
 use dbflux_components::tokens::ModalMetrics;
 use gpui::*;
@@ -12,7 +12,7 @@ use super::format_options::{
     self, available_formats, date_format_label, date_format_segment_id, delimiter_label,
     delimiter_segment_id, encoding_label, encoding_segment_id, visible_options,
 };
-use super::notes::{alert_hint, info_line, with_danger_edge};
+use super::notes::{alert_hint, form_row, info_line, with_danger_edge};
 use super::{ExportWizard, SEGMENT_SIZE_INPUT_WIDTH, format_icon, format_segment_id};
 
 impl ExportWizard {
@@ -43,7 +43,7 @@ impl ExportWizard {
             )
             .group("export-format-delimiter");
             rows.push(
-                modal_form_row(
+                form_row(
                     dbflux_i18n::t!("document.export_wizard.format_options.delimiter_label"),
                     div().flex().child(picker),
                     None,
@@ -70,7 +70,7 @@ impl ExportWizard {
             )
             .group("export-format-encoding");
             rows.push(
-                modal_form_row(
+                form_row(
                     dbflux_i18n::t!("document.export_wizard.format_options.encoding_label"),
                     div().flex().child(picker),
                     None,
@@ -86,7 +86,7 @@ impl ExportWizard {
                 cx,
             );
             rows.push(
-                modal_form_row(
+                form_row(
                     dbflux_i18n::t!("document.export_wizard.format_options.null_text_label"),
                     div()
                         .w(SEGMENT_SIZE_INPUT_WIDTH)
@@ -120,7 +120,7 @@ impl ExportWizard {
                 )
             };
             rows.push(
-                modal_form_row(
+                form_row(
                     dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_label"),
                     with_danger_edge(
                         div()
@@ -136,7 +136,9 @@ impl ExportWizard {
                             ),
                         self.sql_batch_size_invalid,
                         cx,
-                    ),
+                    )
+                    .w(SEGMENT_SIZE_INPUT_WIDTH)
+                    .debug_selector(|| "export-wizard-batch-size-edge".to_string()),
                     Some(hint),
                     cx,
                 )
@@ -166,7 +168,7 @@ impl ExportWizard {
             )
             .group("export-format-date");
             rows.push(
-                modal_form_row(
+                form_row(
                     dbflux_i18n::t!("document.export_wizard.format_options.date_format_label"),
                     div().flex().child(picker),
                     None,
@@ -270,20 +272,20 @@ impl ExportWizard {
         div()
             .flex()
             .flex_col()
-            .child(modal_form_row(
+            .child(form_row(
                 dbflux_i18n::t!("document.export_wizard.format_options.format_label"),
                 format_picker,
                 format_hint,
                 cx,
             ))
             .children(option_rows)
-            .child(modal_form_row(
+            .child(form_row(
                 dbflux_i18n::t!("document.export_wizard.format_options.output_folder_label"),
                 folder_control,
                 folder_hint,
                 cx,
             ))
-            .child(modal_form_row(
+            .child(form_row(
                 dbflux_i18n::t!("document.export_wizard.format_options.segment_size_label"),
                 with_danger_edge(
                     div()
@@ -299,7 +301,9 @@ impl ExportWizard {
                         ),
                     self.segment_size_invalid,
                     cx,
-                ),
+                )
+                .w(SEGMENT_SIZE_INPUT_WIDTH)
+                .debug_selector(|| "export-wizard-segment-size-edge".to_string()),
                 Some(segment_hint),
                 cx,
             ))
