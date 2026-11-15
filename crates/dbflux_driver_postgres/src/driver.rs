@@ -8585,7 +8585,10 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(text.contains("CROSS JOIN pg_catalog.pg_sequence AS seq"), "{text}");
+        assert!(
+            text.contains("CROSS JOIN pg_catalog.pg_sequence AS seq"),
+            "{text}"
+        );
     }
 
     #[test]
