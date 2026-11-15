@@ -187,7 +187,9 @@ pub(crate) fn connect_with_ssl_mode(
 /// a pinned private CA is added when [`RedshiftTlsCerts::root_cert_path`] is set, and a
 /// client identity for mutual TLS is applied when both client cert and key
 /// paths are set. Loading a cert never weakens validation: the root CA is
-/// *added* to the trust store, not substituted for validation.
+/// *added* to the trust store, not substituted for validation. Modes that do
+/// not validate the chain skip the root CA: it would change nothing, and a
+/// stale path hidden by the form in those modes must not break the connection.
 fn build_tls_connector(
     verification: TlsVerification,
     tls_certs: &RedshiftTlsCerts,
@@ -197,8 +199,12 @@ fn build_tls_connector(
         .danger_accept_invalid_certs(!verification.chain)
         .danger_accept_invalid_hostnames(!verification.hostname);
 
-    if let Some(path) = tls_certs.root_cert_path.as_deref() {
-        builder.add_root_certificate(load_root_certificate(path)?);
+    if verification.chain
+        && let Some(path) = tls_certs.root_cert_path.as_deref()
+    {
+        for certificate in load_root_certificates(path)? {
+            builder.add_root_certificate(certificate);
+        }
     }
 
     if let Some(identity) = load_client_identity(tls_certs)? {
@@ -210,22 +216,31 @@ fn build_tls_connector(
         .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {e}").into()))
 }
 
-/// Reads and parses a PEM root CA certificate from `path`.
+/// Reads and parses every PEM certificate in the root CA file at `path`, so a
+/// CA bundle such as AWS's `redshift-ca-bundle.crt` trusts all of its CAs.
 ///
-/// A missing/unreadable file or an invalid PEM surfaces as a clear
-/// [`DbError::ConnectionFailed`] rather than a panic or a silent fallback to
-/// the system trust store. Only the path (never file contents) appears in the
-/// error message.
-pub(crate) fn load_root_certificate(path: &str) -> Result<native_tls::Certificate, DbError> {
+/// A missing/unreadable file, an invalid PEM block or a file without any
+/// certificate surfaces as a clear [`DbError::ConnectionFailed`] rather than a
+/// panic or a silent fallback to the system trust store. Only the path (never
+/// file contents) appears in the error message.
+pub(crate) fn load_root_certificates(path: &str) -> Result<Vec<native_tls::Certificate>, DbError> {
     let pem = std::fs::read(path).map_err(|e| {
         DbError::ConnectionFailed(
             format!("Failed to read TLS root certificate '{path}': {e}").into(),
         )
     })?;
 
-    native_tls::Certificate::from_pem(&pem).map_err(|e| {
+    let certificates = native_tls::Certificate::stack_from_pem(&pem).map_err(|e| {
         DbError::ConnectionFailed(format!("Invalid TLS root certificate '{path}': {e}").into())
-    })
+    })?;
+
+    if certificates.is_empty() {
+        return Err(DbError::ConnectionFailed(
+            format!("Invalid TLS root certificate '{path}': no PEM certificates found").into(),
+        ));
+    }
+
+    Ok(certificates)
 }
 
 /// Builds a client [`native_tls::Identity`] for mutual TLS from the PEM
@@ -1102,7 +1117,8 @@ fn redshift_value_to_value(row: &postgres::Row, idx: usize) -> Value {
 mod tests {
     use super::{
         RedshiftConnectParams, RedshiftSslMode, RedshiftTlsCerts, TlsVerification,
-        build_base_config, ensure_read_only, load_client_identity, load_root_certificate,
+        build_base_config, build_tls_connector, ensure_read_only, load_client_identity,
+        load_root_certificates,
     };
     use dbflux_core::DbError;
     use postgres::config::SslMode;
@@ -1385,23 +1401,71 @@ mod tests {
     }
 
     #[test]
-    fn load_root_certificate_reads_a_valid_pem_file() {
+    fn load_root_certificates_reads_a_valid_pem_file() {
         let path = write_temp_file("ca", TEST_CA_PEM.as_bytes());
 
-        let result = load_root_certificate(&path.to_string_lossy());
+        let result = load_root_certificates(&path.to_string_lossy());
 
         let removed = std::fs::remove_file(&path);
-        if let Err(error) = result {
-            panic!("valid CA PEM should load: {error:?}");
+        match result {
+            Ok(certificates) => assert_eq!(certificates.len(), 1),
+            Err(error) => panic!("valid CA PEM should load: {error:?}"),
         }
         assert!(removed.is_ok());
+    }
+
+    #[test]
+    fn load_root_certificates_adds_every_certificate_of_a_bundle() {
+        let path = write_temp_file(
+            "ca_bundle",
+            format!("{TEST_CA_PEM}{TEST_CA_PEM}").as_bytes(),
+        );
+
+        let result = load_root_certificates(&path.to_string_lossy());
+
+        let removed = std::fs::remove_file(&path);
+        match result {
+            Ok(certificates) => assert_eq!(certificates.len(), 2),
+            Err(error) => panic!("CA bundle should load: {error:?}"),
+        }
+        assert!(removed.is_ok());
+    }
+
+    #[test]
+    fn load_root_certificates_errors_on_an_empty_file() {
+        let path = write_temp_file("empty_ca", b"");
+
+        let result = load_root_certificates(&path.to_string_lossy());
+
+        let removed = std::fs::remove_file(&path);
+        assert!(matches!(result, Err(DbError::ConnectionFailed(_))));
+        assert!(removed.is_ok());
+    }
+
+    #[test]
+    fn build_tls_connector_ignores_a_stale_root_certificate_without_chain_validation() {
+        let missing = std::env::temp_dir().join("dbflux_redshift_tls_stale_ca_does_not_exist");
+        let certs = RedshiftTlsCerts {
+            root_cert_path: Some(missing.to_string_lossy().to_string()),
+            client_cert_path: None,
+            client_key_path: None,
+        };
+
+        let require = build_tls_connector(RedshiftSslMode::Require.tls_verification(), &certs);
+        assert!(
+            require.is_ok(),
+            "require must not load the root certificate"
+        );
+
+        let verify_ca = build_tls_connector(RedshiftSslMode::VerifyCa.tls_verification(), &certs);
+        assert!(matches!(verify_ca, Err(DbError::ConnectionFailed(_))));
     }
 
     #[test]
     fn load_root_certificate_errors_on_missing_path() {
         let missing = std::env::temp_dir().join("dbflux_redshift_tls_missing_ca_does_not_exist");
 
-        let result = load_root_certificate(&missing.to_string_lossy());
+        let result = load_root_certificates(&missing.to_string_lossy());
 
         assert!(matches!(result, Err(DbError::ConnectionFailed(_))));
     }
@@ -1410,7 +1474,7 @@ mod tests {
     fn load_root_certificate_errors_on_garbage_pem() {
         let path = write_temp_file("garbage_ca", b"not a certificate at all");
 
-        let result = load_root_certificate(&path.to_string_lossy());
+        let result = load_root_certificates(&path.to_string_lossy());
 
         let _removed = std::fs::remove_file(&path);
         assert!(matches!(result, Err(DbError::ConnectionFailed(_))));

@@ -33,9 +33,10 @@ directamente sobre el cliente de wire protocol
   URI de conexión (`redshift://...`, normalizado internamente a
   `postgresql://...`), y túnel SSH. Como en libpq, `verify-ca` valida solo la
   cadena de certificados y `verify-full` además comprueba el nombre del host.
-- Confianza TLS personalizada y TLS mutuo: para los modos con TLS habilitado se
-  agrega una CA raíz privada fijada (PEM) al almacén de confianza además de las
-  raíces del sistema, y un certificado de cliente + clave privada (PEM/PKCS#8)
+- Confianza TLS personalizada y TLS mutuo: para `verify-ca`/`verify-full` se
+  agrega un archivo de CA raíz privada fijada (PEM) al almacén de confianza además de las
+  raíces del sistema, incluido cada certificado de un bundle como
+  `redshift-ca-bundle.crt` de AWS (los modos que no validan la cadena lo ignoran), y un certificado de cliente + clave privada (PEM/PKCS#8)
   habilitan el TLS mutuo. El material del certificado se carga por conexión
   desde las rutas configuradas en el formulario; la validación nunca se debilita
   (`verify-ca`/`verify-full` siguen rechazando un certificado no confiable). Un
