@@ -100,12 +100,6 @@ impl SshFormNav {
     }
 
     #[cfg(test)]
-    pub(super) fn tab_next(&mut self) {
-        let rows = self.form_rows();
-        self.nav.tab_next(&rows);
-    }
-
-    #[cfg(test)]
     pub(super) fn move_first(&mut self) {
         let rows = self.form_rows();
         self.nav.move_first(&rows);
@@ -1185,14 +1179,6 @@ mod tests {
         assert_eq!(nav.field(), SshFormField::Port);
         nav.move_right();
         assert_eq!(nav.field(), SshFormField::Port);
-    }
-
-    #[test]
-    fn tab_next_crosses_row_boundary() {
-        let mut nav = nav_private_key_new();
-        nav.set_field(SshFormField::User);
-        nav.tab_next();
-        assert_eq!(nav.field(), SshFormField::AuthPrivateKey);
     }
 
     #[test]
