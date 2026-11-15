@@ -21,6 +21,7 @@ use dbflux_components::components::value_format::ValueFormat;
 use dbflux_components::composites::{MenuItem, menu_row, render_separator};
 use dbflux_components::icons::AppIcon;
 use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -853,7 +854,7 @@ impl DataGridPanel {
                     // parent document's TimeRangeChanged subscription re-runs.
                     let applied = panel.update(cx, |panel, cx| panel.apply_custom_range(cx));
                     if let Err(error) = applied {
-                        log::debug!("custom range not applied: {error}");
+                        report_error(UserFacingError::new(ErrorKind::User, error), cx);
                     }
                 }
             }

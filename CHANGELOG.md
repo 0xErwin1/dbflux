@@ -13,6 +13,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **A rejected custom time range says why** — Applying a custom time range in a data grid's chart source or in the query editor's context bar did nothing when the range was invalid, for example a start after its end. It now shows the validation error, as the chart document already did.
 * **Connection URIs with IPv6 hosts, encoded database names or a password fill the form correctly** — Switching a PostgreSQL, MySQL/MariaDB, SQL Server or MongoDB connection from URI to form fields now reads a bracketed IPv6 host (`[::1]`) without its brackets, percent-decodes the database name and keeps the URI's password, as SQL Server already did. Switching back writes the IPv6 host in brackets and percent-encodes the database name, so the URI parses again.
 * **Turso writes text with a NUL byte intact and stops charting TIME columns** — A text value holding a NUL byte is now written as its quoted segments joined with `char(0)` instead of a literal that ends the statement at the NUL, as SQLite already does. A `TIME` column is reported as an unknown kind, so the chart engine no longer offers a time of day as an x-axis.
 * **Tab wraps around the Proxies and Services settings forms** — Tab on the last field of the Proxies or Services form now moves to the first field, and Shift+Tab on the first field moves to the last, as in every other settings form. Before, both keys stopped at the ends of these two forms.
