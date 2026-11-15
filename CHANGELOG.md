@@ -13,6 +13,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **CloudWatch and DynamoDB recognise an IPv6 loopback endpoint as local** — A custom endpoint such as `http://[::1]:4566` now gets the dummy local credentials that `localhost` and `127.0.0.1` get when no AWS credentials are configured, instead of failing for lack of credentials.
 * **Turso writes text with a NUL byte intact and stops charting TIME columns** — A text value holding a NUL byte is now written as its quoted segments joined with `char(0)` instead of a literal that ends the statement at the NUL, as SQLite already does. A `TIME` column is reported as an unknown kind, so the chart engine no longer offers a time of day as an x-axis.
 * **Tab wraps around the Proxies and Services settings forms** — Tab on the last field of the Proxies or Services form now moves to the first field, and Shift+Tab on the first field moves to the last, as in every other settings form. Before, both keys stopped at the ends of these two forms.
 * **The AWS SSO wizard shows why the login failed** — When account discovery in the AWS SSO wizard fails because the SSO login failed (for example the AWS CLI is missing or the device authorization timed out), the wizard now shows the login error instead of a generic "login required" message from the account listing. A login that fails while a cached token still lists the accounts is logged and discovery continues as before.

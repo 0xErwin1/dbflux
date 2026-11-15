@@ -3780,12 +3780,13 @@ fn endpoint_looks_local(endpoint: &str) -> bool {
         .unwrap_or(endpoint);
 
     let host_with_port = without_scheme.split('/').next().unwrap_or_default();
-    let host = host_with_port.split(':').next().unwrap_or_default();
+    // An IPv6 host is bracketed (`[::1]:4566`), so the first ':' is inside it.
+    let host = match host_with_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+        None => host_with_port.split(':').next().unwrap_or_default(),
+    };
 
-    host.eq_ignore_ascii_case("localhost")
-        || host == "127.0.0.1"
-        || host == "::1"
-        || host == "[::1]"
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
 }
 
 fn probe_connection(client: &Client, config: &DynamoProfileConfig) -> Result<(), DbError> {
@@ -4537,6 +4538,28 @@ pub fn unsupported_mvp_message(flow: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn endpoint_looks_local_recognises_loopback_hosts() {
+        for endpoint in [
+            "http://localhost:4566",
+            "http://LOCALHOST",
+            "http://127.0.0.1:4566/",
+            "http://[::1]:4566",
+            "https://[::1]/path",
+            "[::1]:4566",
+        ] {
+            assert!(super::endpoint_looks_local(endpoint), "{endpoint}");
+        }
+
+        for endpoint in [
+            "https://logs.us-east-1.amazonaws.com",
+            "http://[2001:db8::1]:4566",
+            "http://10.0.0.5:4566",
+        ] {
+            assert!(!super::endpoint_looks_local(endpoint), "{endpoint}");
+        }
+    }
     use super::{
         DYNAMODB_DEFAULT_DATABASE, DYNAMODB_FORM, DYNAMODB_METADATA, DynamoDriver,
         DynamoErrorFormatter, DynamoFilterFallbackPolicy, DynamoIndexKind, DynamoKeyComponent,
