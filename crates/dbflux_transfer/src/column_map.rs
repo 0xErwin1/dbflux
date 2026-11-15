@@ -100,17 +100,25 @@ impl AutoColumnMap {
             .iter()
             .enumerate()
             .map(|(source_index, source)| {
-                let target = self
+                let mut target_types = self
                     .target_from_source
                     .iter()
-                    .position(|bound| *bound == Some(source_index))
-                    .and_then(|target_index| self.target_columns.get(target_index));
+                    .zip(&self.target_columns)
+                    .filter(|(bound, _)| **bound == Some(source_index))
+                    .map(|(_, target)| &target.type_name);
+
+                // A source decoded under one target's type would hand that
+                // decoded value to every target, so a source bound to targets
+                // of different types keeps its own type and each target
+                // receives the raw value.
+                let type_name = match target_types.next() {
+                    None => source.type_name.clone(),
+                    Some(first) if target_types.all(|other| other == first) => first.clone(),
+                    Some(_) => source.type_name.clone(),
+                };
 
                 TransferColumn {
-                    type_name: target.map_or_else(
-                        || source.type_name.clone(),
-                        |target| target.type_name.clone(),
-                    ),
+                    type_name,
                     ..source.clone()
                 }
             })
@@ -329,6 +337,54 @@ mod tests {
             ],
             "an unmapped source column keeps its own type"
         );
+    }
+
+    /// A source column bound to targets of different types keeps its own
+    /// (absent) type, so its raw text reaches every target instead of being
+    /// decoded once under the first target's type.
+    #[test]
+    fn a_source_column_feeding_targets_of_different_types_stays_untyped() {
+        let source = vec![typed("code", None)];
+        let target = vec![
+            typed("numeric_code", Some("integer")),
+            typed("original_code", Some("text")),
+        ];
+        let overrides = vec![
+            ColumnMappingOverride {
+                target_column: "numeric_code".to_string(),
+                source_column: Some("code".to_string()),
+            },
+            ColumnMappingOverride {
+                target_column: "original_code".to_string(),
+                source_column: Some("code".to_string()),
+            },
+        ];
+
+        let typed_sources = AutoColumnMap::with_overrides(&source, &target, &overrides)
+            .typed_source_columns(&source);
+
+        assert_eq!(typed_sources[0].type_name, None);
+    }
+
+    #[test]
+    fn a_source_column_feeding_targets_of_the_same_type_takes_that_type() {
+        let source = vec![typed("code", None)];
+        let target = vec![typed("a", Some("integer")), typed("b", Some("integer"))];
+        let overrides = vec![
+            ColumnMappingOverride {
+                target_column: "a".to_string(),
+                source_column: Some("code".to_string()),
+            },
+            ColumnMappingOverride {
+                target_column: "b".to_string(),
+                source_column: Some("code".to_string()),
+            },
+        ];
+
+        let typed_sources = AutoColumnMap::with_overrides(&source, &target, &overrides)
+            .typed_source_columns(&source);
+
+        assert_eq!(typed_sources[0].type_name.as_deref(), Some("integer"));
     }
 
     #[test]

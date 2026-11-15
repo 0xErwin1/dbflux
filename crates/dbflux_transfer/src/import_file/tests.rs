@@ -5,6 +5,7 @@ use dbflux_driver_sqlite::SqliteDriver;
 use dbflux_export::{CsvDelimiter, TextEncoding};
 
 use super::*;
+use crate::column_map::ColumnMappingOverride;
 use crate::pipeline::{TableMappingMode, TableTransferStatus};
 
 /// A scratch directory under the system temp dir, removed when dropped.
@@ -364,6 +365,41 @@ fn import(
 
 const PEOPLE: &str = "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, \
                       score REAL, note TEXT)";
+
+/// One CSV column mapped onto an integer and a text column keeps its leading
+/// zeros in the text column.
+#[test]
+fn one_source_column_mapped_onto_two_target_types_keeps_its_text() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(
+        &connection,
+        "CREATE TABLE codes (numeric_code INTEGER, original_code TEXT)",
+    );
+    let path = scratch.write("codes.csv", b"code\n00123\n");
+    let file = inspect(&path, FileFormat::Csv).expect("inspect");
+    let mut plan = plan(&file, TableMappingMode::Existing, "codes");
+    plan.column_overrides = Some(vec![
+        ColumnMappingOverride {
+            target_column: "numeric_code".to_string(),
+            source_column: Some("code".to_string()),
+        },
+        ColumnMappingOverride {
+            target_column: "original_code".to_string(),
+            source_column: Some("code".to_string()),
+        },
+    ]);
+
+    import(&connection, &file, &plan, 10);
+
+    assert_eq!(
+        rows(
+            &connection,
+            "SELECT typeof(numeric_code), numeric_code, original_code FROM codes"
+        ),
+        vec![vec![text("integer"), Value::Int(123), text("00123")]]
+    );
+}
 
 #[test]
 fn csv_loads_into_an_existing_table_decoded_by_its_column_types() {
