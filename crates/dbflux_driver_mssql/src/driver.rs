@@ -30,6 +30,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
+use dbflux_core::{decode_uri_component, split_uri_host_port, uri_host};
 use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
 use tokio::net::TcpStream;
@@ -839,7 +840,7 @@ impl DbDriver for MssqlDriver {
         };
 
         let db_part = if !database.is_empty() {
-            format!("/{}", database)
+            format!("/{}", urlencoding::encode(database))
         } else {
             String::new()
         };
@@ -855,7 +856,11 @@ impl DbDriver for MssqlDriver {
 
         Some(format!(
             "sqlserver://{}{}:{}{}{}",
-            credentials, host, port, db_part, query_part
+            credentials,
+            uri_host(host),
+            port,
+            db_part,
+            query_part
         ))
     }
 
@@ -901,21 +906,12 @@ impl DbDriver for MssqlDriver {
             Some((db, q)) => (db, q),
             None => (after_host, ""),
         };
-        values.insert("database".to_string(), database.to_string());
+        values.insert("database".to_string(), decode_uri_component(database));
 
-        // Split host_port into host[\instance][:port]. SSMS-style
-        // `host\instance` plus an optional `:port` suffix.
-        let (host_and_instance, port_str) = match host_port.rfind(':') {
-            Some(colon) => (&host_port[..colon], &host_port[colon + 1..]),
-            None => (host_port, "1433"),
-        };
-        let (host, instance) = match host_and_instance.find('\\') {
-            Some(bs) => (&host_and_instance[..bs], &host_and_instance[bs + 1..]),
-            None => (host_and_instance, ""),
-        };
+        let (host, instance, port) = split_mssql_host_port(host_port);
         values.insert("host".to_string(), host.to_string());
-        values.insert("port".to_string(), port_str.to_string());
-        if !instance.is_empty() {
+        values.insert("port".to_string(), port.unwrap_or("1433").to_string());
+        if let Some(instance) = instance.filter(|instance| !instance.is_empty()) {
             values.insert("instance".to_string(), instance.to_string());
         }
 
@@ -4532,6 +4528,24 @@ struct UriQueryParams {
     application_name: Option<String>,
 }
 
+/// Splits an SSMS-style `host[\instance][:port]` authority into its host,
+/// instance and port. A bracketed IPv6 host is returned without brackets.
+fn split_mssql_host_port(host_port: &str) -> (&str, Option<&str>, Option<&str>) {
+    match host_port.split_once('\\') {
+        Some((host, instance_and_port)) => {
+            let (instance, port) = match instance_and_port.rsplit_once(':') {
+                Some((instance, port)) => (instance, Some(port)),
+                None => (instance_and_port, None),
+            };
+            (split_uri_host_port(host).0, Some(instance), port)
+        }
+        None => {
+            let (host, port) = split_uri_host_port(host_port);
+            (host, None, port)
+        }
+    }
+}
+
 fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Error> {
     let stripped = uri
         .strip_prefix("sqlserver://")
@@ -4555,25 +4569,17 @@ fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Err
         None => (query_part, ""),
     };
 
-    let (host_and_instance, explicit_port) = match host_port.rfind(':') {
-        Some(colon) => {
-            let port: u16 = host_port[colon + 1..].parse().map_err(|_| {
+    // The trailing `?instance=…` may also set the instance and wins if both
+    // are supplied (resolved by the caller).
+    let (host, instance_from_host, port) = split_mssql_host_port(host_port);
+    let explicit_port = port
+        .map(|port| {
+            port.parse::<u16>().map_err(|_| {
                 tiberius::error::Error::Conversion("invalid SQL Server URI port".into())
-            })?;
-            (&host_port[..colon], Some(port))
-        }
-        None => (host_port, None),
-    };
-
-    // SSMS-style `host\instance`. The trailing `?instance=…` may also set
-    // it and wins if both are supplied (resolved by the caller).
-    let (host, instance_from_host) = match host_and_instance.find('\\') {
-        Some(bs) => (
-            &host_and_instance[..bs],
-            Some(host_and_instance[bs + 1..].to_string()),
-        ),
-        None => (host_and_instance, None),
-    };
+            })
+        })
+        .transpose()?;
+    let instance_from_host = instance_from_host.map(str::to_string);
 
     Ok(ParsedMssqlUri {
         credentials,
@@ -6036,6 +6042,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_uri_handles_ipv6_hosts_encoded_databases_and_passwords() {
+        let driver = MssqlDriver;
+
+        let parsed = driver
+            .parse_uri("sqlserver://alice:p%40ss@[::1]:1433/my%20db")
+            .expect("IPv6 URI should parse");
+        assert_eq!(parsed.get("host").map(String::as_str), Some("::1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("1433"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("my db"));
+        assert_eq!(parsed.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(parsed.get("password").map(String::as_str), Some("p@ss"));
+
+        let without_port = driver
+            .parse_uri("sqlserver://[2001:db8::7]/app")
+            .expect("IPv6 URI without port should parse");
+        assert_eq!(
+            without_port.get("host").map(String::as_str),
+            Some("2001:db8::7")
+        );
+        assert_eq!(without_port.get("port").map(String::as_str), Some("1433"));
+
+        let mut values = parsed.clone();
+        values.remove("password");
+        let built = driver.build_uri(&values, "p@ss").expect("URI should build");
+        assert_eq!(built, "sqlserver://alice:p%40ss@[::1]:1433/my%20db");
+    }
+
+    #[test]
     fn parse_uri_omits_password_when_credentials_have_no_colon() {
         let driver = MssqlDriver;
         let parsed = driver
@@ -6216,6 +6250,20 @@ mod tests {
             parsed.get("instance").map(String::as_str),
             Some("MSSQLSERVER2019")
         );
+    }
+
+    #[test]
+    fn split_mssql_uri_unbrackets_ipv6_hosts() {
+        let parsed = super::split_mssql_uri("sqlserver://sa:pw@[::1]:1433/app").expect("parsed");
+        assert_eq!(parsed.host, "::1");
+        assert_eq!(parsed.explicit_port, Some(1433));
+        assert_eq!(parsed.instance_from_host, None);
+
+        let parsed =
+            super::split_mssql_uri("sqlserver://sa:pw@[::1]\\SQLEXPRESS:1500/").expect("parsed");
+        assert_eq!(parsed.host, "::1");
+        assert_eq!(parsed.explicit_port, Some(1500));
+        assert_eq!(parsed.instance_from_host.as_deref(), Some("SQLEXPRESS"));
     }
 
     #[test]

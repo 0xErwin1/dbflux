@@ -35,6 +35,7 @@ use dbflux_components::tokens::{
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -1916,12 +1917,13 @@ impl DataGridPanel {
                         )
                         .disabled(!can_apply)
                         .on_click(move |_, _, cx| {
-                            panel_clone.update(cx, |p, cx| {
-                                // The returned bounds are intentionally discarded:
-                                // the parent CodeDocument's TimeRangeChanged
-                                // subscription drives re-execution.
-                                let _ = p.apply_custom_range(cx);
-                            });
+                            // The returned bounds are intentionally discarded:
+                            // the parent CodeDocument's TimeRangeChanged
+                            // subscription drives re-execution.
+                            let applied = panel_clone.update(cx, |p, cx| p.apply_custom_range(cx));
+                            if let Err(error) = applied {
+                                report_error(UserFacingError::new(ErrorKind::User, error), cx);
+                            }
                         }),
                     );
 

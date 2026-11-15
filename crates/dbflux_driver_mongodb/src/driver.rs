@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use bson::{Bson, Document, doc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
+use dbflux_core::{decode_uri_component, split_uri_host_port, uri_host};
 
 use crate::language_service::MongoLanguageService;
 use dbflux_core::{
@@ -447,7 +448,7 @@ impl DbDriver for MongoDriver {
         };
 
         let db_part = if !database.is_empty() {
-            format!("/{}", database)
+            format!("/{}", urlencoding::encode(database))
         } else {
             String::new()
         };
@@ -460,7 +461,11 @@ impl DbDriver for MongoDriver {
 
         Some(format!(
             "mongodb://{}{}:{}{}{}",
-            credentials, host, port, db_part, query
+            credentials,
+            uri_host(host),
+            port,
+            db_part,
+            query
         ))
     }
 
@@ -484,6 +489,10 @@ impl DbDriver for MongoDriver {
                     .unwrap_or_default()
                     .into_owned();
                 values.insert("user".to_string(), user);
+                let password = decode_uri_component(&credentials[colon + 1..]);
+                if !password.is_empty() {
+                    values.insert("password".to_string(), password);
+                }
             } else {
                 let user = urlencoding::decode(credentials)
                     .unwrap_or_default()
@@ -506,15 +515,11 @@ impl DbDriver for MongoDriver {
             (host_port_db, "")
         };
 
-        values.insert("database".to_string(), database.to_string());
+        values.insert("database".to_string(), decode_uri_component(database));
 
-        if let Some(colon) = host_port.rfind(':') {
-            values.insert("host".to_string(), host_port[..colon].to_string());
-            values.insert("port".to_string(), host_port[colon + 1..].to_string());
-        } else {
-            values.insert("host".to_string(), host_port.to_string());
-            values.insert("port".to_string(), "27017".to_string());
-        }
+        let (host, port) = split_uri_host_port(host_port);
+        values.insert("host".to_string(), host.to_string());
+        values.insert("port".to_string(), port.unwrap_or("27017").to_string());
 
         let mut found_auth_source = false;
         if let Some(query_str) = query {
@@ -1059,6 +1064,10 @@ fn parse_srv_uri(uri: &str) -> FormValues {
                 .unwrap_or_default()
                 .into_owned();
             values.insert("user".to_string(), user);
+            let password = decode_uri_component(&credentials[colon + 1..]);
+            if !password.is_empty() {
+                values.insert("password".to_string(), password);
+            }
         } else {
             let user = urlencoding::decode(credentials)
                 .unwrap_or_default()
@@ -1078,7 +1087,7 @@ fn parse_srv_uri(uri: &str) -> FormValues {
     if let Some(slash) = host_port_db.find('/') {
         values.insert(
             "database".to_string(),
-            host_port_db[slash + 1..].to_string(),
+            decode_uri_component(&host_port_db[slash + 1..]),
         );
     } else {
         values.insert("database".to_string(), String::new());
@@ -4851,6 +4860,34 @@ mod tests {
         assert_eq!(values.get("user").map(String::as_str), Some(""));
         assert_eq!(values.get("database").map(String::as_str), Some("mydb"));
         assert_eq!(values.get("auth_database").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn parse_uri_handles_ipv6_hosts_encoded_databases_and_passwords() {
+        let driver = MongoDriver::new();
+
+        let parsed = driver
+            .parse_uri("mongodb://alice:p%40ss@[::1]:27017/my%20db")
+            .expect("IPv6 URI should parse");
+        assert_eq!(parsed.get("host").map(String::as_str), Some("::1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("27017"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("my db"));
+        assert_eq!(parsed.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(parsed.get("password").map(String::as_str), Some("p@ss"));
+
+        let without_port = driver
+            .parse_uri("mongodb://[2001:db8::7]/app")
+            .expect("IPv6 URI without port should parse");
+        assert_eq!(
+            without_port.get("host").map(String::as_str),
+            Some("2001:db8::7")
+        );
+        assert_eq!(without_port.get("port").map(String::as_str), Some("27017"));
+
+        let mut values = parsed.clone();
+        values.remove("password");
+        let built = driver.build_uri(&values, "p@ss").expect("URI should build");
+        assert_eq!(built, "mongodb://alice:p%40ss@[::1]:27017/my%20db");
     }
 
     #[test]
