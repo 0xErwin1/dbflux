@@ -182,6 +182,9 @@ impl<'a> SqlQueryBuilder<'a> {
 
     /// Build a `CREATE TABLE` statement from a same-engine [`CreateTableSpec`].
     ///
+    /// A column without a type name (from a loose CSV or JSON file) takes the
+    /// dialect's [`SqlDialect::text_column_type`].
+    ///
     /// Column type, nullability, and primary-key membership map 1:1 from
     /// `spec.columns` since the source and target share the same SQL dialect
     /// family; no cross-dialect type coercion is attempted.
@@ -222,7 +225,11 @@ impl<'a> SqlQueryBuilder<'a> {
                         type_name
                     )
                 }
-                None => format!("    {}", self.dialect.quote_identifier(&column.name)),
+                None => format!(
+                    "    {} {}",
+                    self.dialect.quote_identifier(&column.name),
+                    self.dialect.text_column_type()
+                ),
             };
 
             if !column.nullable {
@@ -827,6 +834,89 @@ mod tests {
         assert_eq!(
             sql,
             "CREATE TABLE \"public\".\"users\" (\n    \"id\" integer NOT NULL,\n    \"name\" text,\n    PRIMARY KEY (\"id\")\n);"
+        );
+    }
+
+    #[test]
+    fn test_build_create_table_gives_an_untyped_column_the_dialect_text_type() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let spec = CreateTableSpec {
+            schema: None,
+            table: "events".to_string(),
+            columns: vec![
+                crate::TransferColumn {
+                    name: "id".to_string(),
+                    type_name: Some("integer".to_string()),
+                    nullable: false,
+                    is_primary_key: true,
+                },
+                crate::TransferColumn {
+                    name: "label".to_string(),
+                    type_name: None,
+                    nullable: true,
+                    is_primary_key: false,
+                },
+            ],
+            if_not_exists: false,
+        };
+
+        assert_eq!(
+            builder.build_create_table(&spec).unwrap(),
+            "CREATE TABLE \"events\" (\n    \"id\" integer NOT NULL,\n    \"label\" TEXT,\n    PRIMARY KEY (\"id\")\n);"
+        );
+    }
+
+    #[test]
+    fn test_build_create_table_uses_the_text_type_a_dialect_overrides() {
+        struct WideTextDialect;
+
+        impl SqlDialect for WideTextDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{name}\"")
+            }
+
+            fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+                self.quote_identifier(table)
+            }
+
+            fn value_to_literal(&self, _value: &Value) -> String {
+                String::new()
+            }
+
+            fn escape_string(&self, s: &str) -> String {
+                s.to_string()
+            }
+
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::QuestionMark
+            }
+
+            fn text_column_type(&self) -> &'static str {
+                "VARCHAR(MAX)"
+            }
+        }
+
+        let dialect = WideTextDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+        let spec = CreateTableSpec {
+            schema: None,
+            table: "events".to_string(),
+            columns: vec![crate::TransferColumn {
+                name: "label".to_string(),
+                type_name: None,
+                nullable: true,
+                is_primary_key: false,
+            }],
+            if_not_exists: false,
+        };
+
+        assert!(
+            builder
+                .build_create_table(&spec)
+                .unwrap()
+                .contains("\"label\" VARCHAR(MAX)")
         );
     }
 

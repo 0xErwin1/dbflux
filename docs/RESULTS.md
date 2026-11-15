@@ -321,8 +321,9 @@ name and choose **Use Table** (or press Enter) to point the import at an
 existing table. The column mapping and the table modes (create, existing,
 recreate, truncate, skip) are the same as for a folder. A file carries no column
 types, so values going into an existing table are read as that table's column
-types, and a new table is created with columns that have no declared type, which
-only some databases accept; import into an existing table otherwise.
+types, and a new table is created with a text column for every field (`TEXT`, or the
+engine's own wide text type such as `NVARCHAR(MAX)` on SQL Server), so values
+are stored as their text.
 
 A CSV file offers the delimiter, the encoding and the text that stands for NULL,
 the same choices as the export wizard; JSON and JSON Lines have no options.

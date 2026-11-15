@@ -518,7 +518,7 @@ fn csv_loads_into_a_new_table_keeping_the_text_it_holds() {
 }
 
 #[test]
-fn json_lines_load_into_a_new_table_keeping_the_json_scalars() {
+fn json_lines_load_into_a_new_table_as_text_columns() {
     let scratch = Scratch::new();
     let connection = sqlite(&scratch);
     let path = scratch.write(
@@ -540,9 +540,10 @@ fn json_lines_load_into_a_new_table_keeping_the_json_scalars() {
             "SELECT id, ratio, label FROM events ORDER BY id"
         ),
         vec![
-            vec![Value::Int(1), Value::Float(0.5), text("start")],
-            vec![Value::Int(2), Value::Float(1.5), Value::Null]
-        ]
+            vec![text("1"), text("0.5"), text("start")],
+            vec![text("2"), text("1.5"), Value::Null]
+        ],
+        "a new table's columns have the dialect's text type, so every scalar is stored as its text"
     );
 }
 

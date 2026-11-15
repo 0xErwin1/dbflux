@@ -289,6 +289,10 @@ pub struct MssqlDialect;
 static MSSQL_DIALECT: MssqlDialect = MssqlDialect;
 
 impl SqlDialect for MssqlDialect {
+    fn text_column_type(&self) -> &'static str {
+        "NVARCHAR(MAX)"
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         // SQL Server uses [bracket] quoting. Any closing bracket inside the
         // identifier must be doubled to be safe.
@@ -6614,6 +6618,47 @@ mod tests {
         assert!(generated.text.starts_with("INSERT INTO "));
         assert!(generated.text.contains("VALUES"));
         assert_eq!(generated.text.matches("), (").count() + 1, 2);
+    }
+
+    #[test]
+    fn mssql_untyped_column_is_created_as_nvarchar_max() {
+        use dbflux_core::QueryGenerator;
+
+        let spec = dbflux_core::CreateTableSpec {
+            schema: None,
+            table: "events".to_string(),
+            columns: vec![
+                dbflux_core::TransferColumn {
+                    name: "id".to_string(),
+                    type_name: Some("INT".to_string()),
+                    nullable: false,
+                    is_primary_key: true,
+                },
+                dbflux_core::TransferColumn {
+                    name: "label".to_string(),
+                    type_name: None,
+                    nullable: true,
+                    is_primary_key: false,
+                },
+            ],
+            if_not_exists: false,
+        };
+
+        let generated = SqlMutationGenerator::new(&MSSQL_DIALECT)
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("the generator creates tables");
+
+        assert!(
+            generated.text.contains("[label] NVARCHAR(MAX)"),
+            "{}",
+            generated.text
+        );
+        assert!(
+            generated.text.contains("INT NOT NULL"),
+            "{}",
+            generated.text
+        );
     }
 
     #[test]
