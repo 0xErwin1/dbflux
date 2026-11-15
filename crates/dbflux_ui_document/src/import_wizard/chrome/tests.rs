@@ -306,3 +306,29 @@ fn a_finished_import_lists_one_row_per_table_and_a_failed_one_says_what_to_do(
     window.run_until_parked();
     assert!(!present(window, "import-wizard-closing-line"));
 }
+
+/// With the reason shown on Configure, Cancel and Continue stay inside the
+/// dialog and to the right of the reason.
+#[gpui::test]
+fn a_footer_reason_leaves_the_buttons_inside_the_dialog(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("footer_reason", "people.csv", b"pr\xe9nom,id\nAda,1\n");
+    let (wizard, window) = open_wizard(cx);
+    pick(&wizard, window, path);
+
+    let dialog = window.debug_bounds("modal-body").expect("the dialog");
+    let reason = window
+        .debug_bounds("import-wizard-footer-reason")
+        .expect("the reason");
+    for id in ["import-wizard-cancel", "import-wizard-continue"] {
+        let button = window.debug_bounds(id).expect(id);
+        assert!(
+            button.right() <= dialog.right(),
+            "{id} {button:?} must end inside the dialog {dialog:?}"
+        );
+        assert!(
+            reason.right() <= button.left(),
+            "the reason {reason:?} must end before {id} {button:?}"
+        );
+    }
+    std::fs::remove_dir_all(&directory).ok();
+}

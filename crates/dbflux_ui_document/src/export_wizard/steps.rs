@@ -242,69 +242,78 @@ impl ExportWizard {
                     cx,
                 ))
             })
-            .when(self.phase == ExportPhase::Tables, |footer| {
-                footer.child(
-                    Button::new(
-                        "export-wizard-dismiss",
-                        dbflux_i18n::t!("document.export_wizard.running.cancel"),
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
-                )
-            })
-            .when(shows_back, |footer| {
-                footer.child(
-                    Button::new(
-                        "export-wizard-back",
-                        dbflux_i18n::t!("document.export_wizard.footer.back"),
-                    )
-                    .icon(AppIcon::ChevronLeft)
-                    .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
-                )
-            })
-            .when(shows_continue, |footer| {
-                footer.child(
-                    Button::new(
-                        "export-wizard-continue",
-                        dbflux_i18n::t!("document.export_wizard.footer.continue"),
-                    )
-                    .primary()
-                    .icon(AppIcon::ChevronRight)
-                    .disabled(!continue_enabled)
-                    .on_click(cx.listener(|this, _event, _window, cx| this.advance(cx))),
-                )
-            })
-            .when(shows_start, |footer| {
-                footer.child(
-                    Button::new(
-                        "export-wizard-start",
-                        dbflux_i18n::t!("document.export_wizard.confirm.start_export"),
-                    )
-                    .primary()
-                    .icon(AppIcon::Play)
-                    .on_click(cx.listener(|this, _event, _window, cx| this.start_export(cx))),
-                )
-            })
-            .when(running, |footer| {
-                footer.child(
-                    Button::new(
-                        "export-wizard-cancel",
-                        dbflux_i18n::t!("document.export_wizard.running.cancel"),
-                    )
-                    .danger()
-                    .icon(AppIcon::CircleX)
-                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
-                )
-            })
-            .when(done, |footer| {
-                footer.child(
-                    Button::new(
-                        "export-wizard-close",
-                        dbflux_i18n::t!("document.export_wizard.footer.close"),
-                    )
-                    .primary()
-                    .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
-                )
-            })
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(ModalMetrics::FOOTER_GAP)
+                    .when(self.phase == ExportPhase::Tables, |footer| {
+                        footer.child(
+                            Button::new(
+                                "export-wizard-dismiss",
+                                dbflux_i18n::t!("document.export_wizard.running.cancel"),
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
+                        )
+                    })
+                    .when(shows_back, |footer| {
+                        footer.child(
+                            Button::new(
+                                "export-wizard-back",
+                                dbflux_i18n::t!("document.export_wizard.footer.back"),
+                            )
+                            .icon(AppIcon::ChevronLeft)
+                            .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
+                        )
+                    })
+                    .when(shows_continue, |footer| {
+                        footer.child(
+                            Button::new(
+                                "export-wizard-continue",
+                                dbflux_i18n::t!("document.export_wizard.footer.continue"),
+                            )
+                            .primary()
+                            .icon(AppIcon::ChevronRight)
+                            .disabled(!continue_enabled)
+                            .on_click(cx.listener(|this, _event, _window, cx| this.advance(cx))),
+                        )
+                    })
+                    .when(shows_start, |footer| {
+                        footer.child(
+                            Button::new(
+                                "export-wizard-start",
+                                dbflux_i18n::t!("document.export_wizard.confirm.start_export"),
+                            )
+                            .primary()
+                            .icon(AppIcon::Play)
+                            .on_click(
+                                cx.listener(|this, _event, _window, cx| this.start_export(cx)),
+                            ),
+                        )
+                    })
+                    .when(running, |footer| {
+                        footer.child(
+                            Button::new(
+                                "export-wizard-cancel",
+                                dbflux_i18n::t!("document.export_wizard.running.cancel"),
+                            )
+                            .danger()
+                            .icon(AppIcon::CircleX)
+                            .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
+                        )
+                    })
+                    .when(done, |footer| {
+                        footer.child(
+                            Button::new(
+                                "export-wizard-close",
+                                dbflux_i18n::t!("document.export_wizard.footer.close"),
+                            )
+                            .primary()
+                            .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
+                        )
+                    }),
+            )
             .into_any_element()
     }
 }

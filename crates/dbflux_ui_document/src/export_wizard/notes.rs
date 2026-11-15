@@ -90,7 +90,7 @@ pub(crate) fn footer_reason(
         theme.muted_foreground,
         text,
     )
-    .mr_auto()
+    .flex_1()
     .min_w_0()
     .debug_selector(|| selector.to_string())
     .into_any_element()

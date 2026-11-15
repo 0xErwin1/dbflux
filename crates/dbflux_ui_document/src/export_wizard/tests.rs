@@ -356,4 +356,33 @@ mod states {
             "{label:?} vs {short:?}"
         );
     }
+
+    /// With a reason on the left, every footer button stays inside the dialog
+    /// and to the right of the reason.
+    #[gpui::test]
+    fn a_footer_reason_leaves_the_buttons_inside_the_dialog(cx: &mut TestAppContext) {
+        let (wizard, window) = open_wizard(cx, three_tables());
+        format_step(&wizard, window);
+        update(&wizard, window, |this| {
+            this.sql_export_available = true;
+            this.selected_format = FileFormat::Sql;
+            this.sql_batch_size_invalid = true;
+        });
+
+        let dialog = window.debug_bounds("modal-body").expect("the dialog");
+        let reason = window
+            .debug_bounds("export-wizard-footer-reason")
+            .expect("the reason");
+        for id in ["export-wizard-back", "export-wizard-continue"] {
+            let button = window.debug_bounds(id).expect(id);
+            assert!(
+                button.right() <= dialog.right(),
+                "{id} {button:?} must end inside the dialog {dialog:?}"
+            );
+            assert!(
+                reason.right() <= button.left(),
+                "the reason {reason:?} must end before {id} {button:?}"
+            );
+        }
+    }
 }
