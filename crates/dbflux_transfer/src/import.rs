@@ -254,8 +254,9 @@ fn import_one_table(
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<crate::pipeline::TransferReport, TransferError> {
     // A folder file is opened before the target is resolved, so a missing
-    // file is reported ahead of a missing target table. A loose file has to
-    // wait: its source column types come from the column map.
+    // file is reported ahead of a missing target table, as before loose-file
+    // import shared this function. A loose file is read untyped and opened
+    // below; its values are decoded per target by `DecodingColumnMap`.
     let folder_source = if file.loose {
         None
     } else {
