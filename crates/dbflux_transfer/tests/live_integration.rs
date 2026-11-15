@@ -143,9 +143,6 @@ fn postgres_export_streams_table_to_csv_and_manifest() -> Result<(), DbError> {
     })
 }
 
-/// A SQL export of a `GENERATED ALWAYS AS IDENTITY` table replays into an
-/// empty copy of the table with the original ids, and leaves its identity and
-/// serial sequences past the replayed values.
 /// A descending identity sequence continues below the smallest replayed id.
 #[test]
 #[ignore = "requires Docker daemon"]
@@ -217,6 +214,9 @@ fn postgres_sql_export_resyncs_a_descending_sequence() -> Result<(), DbError> {
     })
 }
 
+/// A SQL export of a `GENERATED ALWAYS AS IDENTITY` table replays into an
+/// empty copy of the table with the original ids, and leaves its identity and
+/// serial sequences past the replayed values.
 #[test]
 #[ignore = "requires Docker daemon"]
 fn postgres_sql_export_replays_generated_always_identity_ids() -> Result<(), DbError> {

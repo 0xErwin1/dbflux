@@ -8535,13 +8535,13 @@ mod tests {
         assert_eq!(
             resync(Some("app"), "users", &["id"]).as_deref(),
             Some(
-                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END) FROM \"app\".\"users\" AS src CROSS JOIN pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"app\".\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
+                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END) FROM \"app\".\"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"app\".\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
             )
         );
         assert_eq!(
             resync(None, "users", &["id"]).as_deref(),
             Some(
-                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END) FROM \"users\" AS src CROSS JOIN pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
+                "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") ELSE MIN(src.\"id\") END) FROM \"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
             )
         );
     }
@@ -8569,7 +8569,7 @@ mod tests {
 
         assert_eq!(
             text,
-            "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"c\"\"d'e\") ELSE MIN(src.\"c\"\"d'e\") END) FROM \"s\"\"x'y\".\"t\"\"a'b\" AS src CROSS JOIN pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
+            "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"c\"\"d'e\") ELSE MIN(src.\"c\"\"d'e\") END) FROM \"s\"\"x'y\".\"t\"\"a'b\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e')::regclass GROUP BY seq.seqrelid, seq.seqincrement;"
         );
     }
 
@@ -8585,7 +8585,7 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(text.contains("CROSS JOIN pg_sequence AS seq"), "{text}");
+        assert!(text.contains("CROSS JOIN pg_catalog.pg_sequence AS seq"), "{text}");
     }
 
     #[test]

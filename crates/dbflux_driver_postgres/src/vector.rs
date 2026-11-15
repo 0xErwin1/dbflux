@@ -201,7 +201,7 @@ impl QueryGenerator for PostgresQueryGenerator {
                 let quoted = pg_quote_ident(column);
                 format!(
                     "SELECT setval(seq.seqrelid, CASE WHEN seq.seqincrement > 0 THEN MAX(src.{quoted}) ELSE MIN(src.{quoted}) END) \
-                     FROM {qualified} AS src CROSS JOIN pg_sequence AS seq \
+                     FROM {qualified} AS src CROSS JOIN pg_catalog.pg_sequence AS seq \
                      WHERE seq.seqrelid = pg_get_serial_sequence({}, {})::regclass \
                      GROUP BY seq.seqrelid, seq.seqincrement;",
                     pg_quote_string(&qualified),
