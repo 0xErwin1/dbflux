@@ -14,7 +14,9 @@ use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::modals::{modal_form_row, modal_hint};
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Spacing, ui};
-use dbflux_core::{CancelToken, Connection, DriverCapabilities, TransferColumn};
+use dbflux_core::{
+    CancelToken, Connection, DbError, DriverCapabilities, TableInfo, TransferColumn,
+};
 use dbflux_export::{CsvDelimiter, FormatOptions, TextEncoding};
 use dbflux_transfer::import::{ImportOptions, ImportOutcome, ImportTablePlan, run_import};
 use dbflux_transfer::import_file::{ImportFile, run_file_import};
@@ -153,6 +155,32 @@ struct LoadedFile {
     config: TableImportConfig,
 }
 
+/// The columns of the target table, `None` when the lookup confirms the table
+/// does not exist. Any other failure is returned, because treating it as a
+/// missing table would offer to create a table over one that exists.
+fn existing_table_columns(
+    lookup: Result<TableInfo, DbError>,
+) -> Result<Option<Vec<TransferColumn>>, TransferError> {
+    match lookup {
+        Ok(info) => Ok(Some(
+            info.columns
+                .unwrap_or_default()
+                .into_iter()
+                .map(|column| TransferColumn {
+                    name: column.name,
+                    type_name: Some(column.type_name),
+                    nullable: column.nullable,
+                    is_primary_key: column.is_primary_key,
+                })
+                .collect(),
+        )),
+        Err(DbError::ObjectNotFound(_)) => Ok(None),
+        Err(error) => Err(TransferError::Source(format!(
+            "could not look up the target table: {error}"
+        ))),
+    }
+}
+
 /// Reads the file's columns and looks up the target table, off the UI thread.
 fn load_file_config(
     connection: &Arc<dyn Connection>,
@@ -166,21 +194,8 @@ fn load_file_config(
     let source_table = file.table_name();
     let target_table = target_table.unwrap_or_else(|| source_table.clone());
 
-    let existing_columns = connection
-        .table_details(target_database, None, &target_table)
-        .ok()
-        .map(|info| {
-            info.columns
-                .unwrap_or_default()
-                .into_iter()
-                .map(|column| TransferColumn {
-                    name: column.name,
-                    type_name: Some(column.type_name),
-                    nullable: column.nullable,
-                    is_primary_key: column.is_primary_key,
-                })
-                .collect::<Vec<_>>()
-        });
+    let existing_columns =
+        existing_table_columns(connection.table_details(target_database, None, &target_table))?;
     let target_exists = existing_columns.is_some();
 
     let mut manifest_table = file.manifest_table();
@@ -340,10 +355,7 @@ impl ImportWizard {
     ) {
         let target_database = self.target_database(&connection);
         let supports_truncate = connection.supports(DriverCapabilities::TRUNCATE_TABLE);
-        let generation = self
-            .file_import
-            .as_ref()
-            .map_or(0, |state| state.generation + 1);
+        let generation = self.next_file_read_request();
 
         self.loading = true;
         self.file_import = Some(FileImportState {
@@ -377,6 +389,14 @@ impl ImportWizard {
             .ok();
         })
         .detach();
+    }
+
+    /// A new read request id. The counter belongs to the wizard and is never
+    /// reset, so a read that finishes after the wizard was reopened cannot
+    /// match the id of a read of the new session.
+    pub(super) fn next_file_read_request(&mut self) -> u64 {
+        self.file_read_request += 1;
+        self.file_read_request
     }
 
     fn finish_file_read(
@@ -415,16 +435,15 @@ impl ImportWizard {
                 );
                 report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
 
-                if self.step == WizardStep::PickFolder {
-                    self.file_import = None;
-                    self.manifest_error = Some(message);
-                } else {
-                    self.rows.clear();
-                    self._row_subscriptions.clear();
-                    if let Some(state) = self.file_import.as_mut() {
-                        state.error = Some(message);
-                    }
+                // The file stays picked and the user lands on the configure
+                // step, where the options (a CSV's encoding) can be changed
+                // and the file read again.
+                self.rows.clear();
+                self._row_subscriptions.clear();
+                if let Some(state) = self.file_import.as_mut() {
+                    state.error = Some(message);
                 }
+                self.step = WizardStep::Configure;
             }
         }
         cx.notify();

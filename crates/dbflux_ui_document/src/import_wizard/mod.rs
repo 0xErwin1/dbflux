@@ -217,6 +217,8 @@ pub struct ImportWizard {
     /// Target table name a fresh file pick sets on its text field, applied at
     /// the next render because setting an input's text needs the window.
     pending_file_inputs: Option<String>,
+    /// Id of the latest file read; never reset, see `next_file_read_request`.
+    file_read_request: u64,
     rows: Vec<TableImportRow>,
     supports_truncate: bool,
     /// Set only by the Confirm step's "Yes, proceed" click; reset on
@@ -251,6 +253,7 @@ impl ImportWizard {
             file_import: None,
             file_inputs: None,
             pending_file_inputs: None,
+            file_read_request: 0,
             rows: Vec::new(),
             supports_truncate: false,
             confirmed_destructive: false,
@@ -285,6 +288,7 @@ impl ImportWizard {
         self.file_import = None;
         self.file_inputs = Some(FileInputs::new(window, cx));
         self.pending_file_inputs = None;
+        self.next_file_read_request();
         self.rows.clear();
         self._row_subscriptions.clear();
         self.confirmed_destructive = false;

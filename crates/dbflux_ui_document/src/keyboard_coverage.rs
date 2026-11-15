@@ -1426,3 +1426,44 @@ pub(crate) const MIGRATE_WIZARD: SurfaceRegistry = SurfaceRegistry {
         ),
     ],
 };
+
+/// The import wizard, a dialog: every control is a Tab stop inside it, and
+/// Escape closes it (the dialog chrome's close button).
+pub(crate) const IMPORT_WIZARD: SurfaceRegistry = SurfaceRegistry {
+    name: "import wizard",
+    contexts: &[ContextId::SqlPreviewModal, ContextId::Modal],
+    entries: &[
+        ("import-wizard-choose-folder", KeyboardPath::TabStop),
+        ("import-wizard-choose-file", KeyboardPath::TabStop),
+        ("import-wizard-file-apply-target", KeyboardPath::TabStop),
+        ("import-wizard-continue", KeyboardPath::TabStop),
+        ("import-wizard-cancel-confirm", KeyboardPath::TabStop),
+        ("import-wizard-confirm-destructive", KeyboardPath::TabStop),
+        ("import-wizard-cancel-run", KeyboardPath::TabStop),
+        ("import-wizard-close", KeyboardPath::TabStop),
+        ("import-apply-mapping-*", KeyboardPath::TabStop),
+        // The dropdown triggers and segments take no focus inside the
+        // dialog, so Tab never reaches them: the mapping mode, the column
+        // rebinding and the CSV delimiter and encoding have no key yet.
+        (
+            "import-mode-*.dropdown-trigger",
+            KeyboardPath::MouseOnly("gap: the dropdown takes no focus in the dialog"),
+        ),
+        (
+            "import-target-*.dropdown-trigger",
+            KeyboardPath::MouseOnly("gap: the dropdown takes no focus in the dialog"),
+        ),
+        (
+            "import-source-*.dropdown-trigger",
+            KeyboardPath::MouseOnly("gap: the dropdown takes no focus in the dialog"),
+        ),
+        (
+            "segmented-import-file-delimiter-*",
+            KeyboardPath::MouseOnly("gap: the segments take no focus in the dialog"),
+        ),
+        (
+            "segmented-import-file-encoding-*",
+            KeyboardPath::MouseOnly("gap: the segments take no focus in the dialog"),
+        ),
+    ],
+};
