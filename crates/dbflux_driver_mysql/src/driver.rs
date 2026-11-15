@@ -370,6 +370,11 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
 pub struct MysqlDialect;
 
 impl SqlDialect for MysqlDialect {
+    /// `TEXT` holds at most 65,535 bytes, which a long CSV field can exceed.
+    fn text_column_type(&self) -> &'static str {
+        "LONGTEXT"
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         mysql_quote_ident(name)
     }
@@ -2987,6 +2992,13 @@ const VERSION_QUERY: &str = "SELECT VERSION()";
 #[cfg(test)]
 mod sql_statement_tests {
     use super::*;
+
+    /// `TEXT` holds at most 65,535 bytes in MySQL, so a column created for an
+    /// untyped source uses `LONGTEXT`, which a long CSV field still fits.
+    #[test]
+    fn untyped_columns_are_created_as_longtext() {
+        assert_eq!(MYSQL_DIALECT.text_column_type(), "LONGTEXT");
+    }
 
     #[test]
     fn truncate_table_statement_matches_the_driver_contract() {

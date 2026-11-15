@@ -322,7 +322,7 @@ existing table. The column mapping and the table modes (create, existing,
 recreate, truncate, skip) are the same as for a folder. A file carries no column
 types, so values going into an existing table are read as that table's column
 types, and a new table is created with a text column for every field (`TEXT`, or the
-engine's own wide text type such as `NVARCHAR(MAX)` on SQL Server), so values
+engine's own wide text type such as `NVARCHAR(MAX)` on SQL Server or `LONGTEXT` on MySQL), so values
 are stored as their text.
 
 A CSV file offers the delimiter, the encoding and the text that stands for NULL,

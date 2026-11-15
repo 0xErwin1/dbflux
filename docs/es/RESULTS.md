@@ -352,7 +352,7 @@ existente, recrear, truncar, omitir) son los mismos que para una carpeta. Un
 archivo no trae tipos de columna, así que los valores que van a una tabla
 existente se leen según los tipos de esa tabla, y una tabla nueva se crea con
 una columna de texto por cada campo (`TEXT`, o el tipo de texto amplio propio del
-motor, como `NVARCHAR(MAX)` en SQL Server), de modo que los valores se guardan
+motor, como `NVARCHAR(MAX)` en SQL Server o `LONGTEXT` en MySQL), de modo que los valores se guardan
 como texto.
 
 Un archivo CSV ofrece el delimitador, la codificación y el texto que representa
