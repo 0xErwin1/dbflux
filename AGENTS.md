@@ -73,6 +73,26 @@ which uses the system library when a `freetype2.pc` of at least the required
 version is present and otherwise compiles its vendored sources, so a missing
 development package costs build time rather than breaking the build.
 
+## Design Before Visual Changes
+
+Every visual change is designed and approved before it is implemented. This
+covers new screens, documents, dialogs and wizard steps, new or moved
+controls, layout changes, and new states (empty, loading, error) that the
+user sees.
+
+1. Draw the change as artboards under `design/<slug>/`, one dark and one light
+   folder, following the `design/redesign-islands-*` naming and the Bolt
+   Byzantium app system in `design/redesign-design-system/`. Use the real
+   labels from the code and the locale files, and show every state the change
+   adds. Agents use the gentle-design skill and its `gentle_design` tool.
+2. Get the maintainer's explicit approval of those artboards. Do not write
+   production UI code before it.
+3. Implement from the approved artboard, and name it in the pull request so
+   reviewers can compare the result with it.
+
+A change that only fixes a defect without altering what the user sees needs no
+artboard. When in doubt, design it first.
+
 ## Verifying UI Changes with UI Automation
 
 A build with the `ui-automation` feature exposes every DBFlux window to a local
