@@ -1400,10 +1400,9 @@ impl AppState {
         let tunnel_name = removed.name.clone();
         let tunnel_id = removed.id.to_string();
 
-        let save_result = crate::config_loader::save_ssh_tunnels(
-            &self.storage_runtime,
-            &self.facade.ssh_tunnels.items,
-        );
+        // `save_ssh_tunnels` only upserts the remaining tunnels, so the
+        // removed row has to be deleted explicitly or it reappears on restart.
+        let save_result = self.storage_runtime.ssh_tunnels().delete(&tunnel_id);
 
         let (outcome, error_msg) = match &save_result {
             Ok(()) => (EventOutcome::Success, None),
@@ -1420,7 +1419,7 @@ impl AppState {
         );
 
         if let Err(e) = save_result {
-            log::error!("Failed to save SSH tunnel profiles after remove: {}", e);
+            log::error!("Failed to delete SSH tunnel profile: {}", e);
         }
         Some(removed)
     }
@@ -1497,10 +1496,9 @@ impl AppState {
         let proxy_name = removed.name.clone();
         let proxy_id = removed.id.to_string();
 
-        let save_result = crate::config_loader::save_proxy_profiles(
-            &self.storage_runtime,
-            &self.facade.proxies.items,
-        );
+        // `save_proxy_profiles` only upserts the remaining proxies, so the
+        // removed row has to be deleted explicitly or it reappears on restart.
+        let save_result = self.storage_runtime.proxy_profiles().delete(&proxy_id);
 
         let (outcome, error_msg) = match &save_result {
             Ok(()) => (EventOutcome::Success, None),
@@ -1517,7 +1515,7 @@ impl AppState {
         );
 
         if let Err(e) = save_result {
-            log::error!("Failed to save proxy profiles after remove: {}", e);
+            log::error!("Failed to delete proxy profile: {}", e);
         }
         Some(removed)
     }
@@ -4587,6 +4585,57 @@ mod tests {
                 dbflux_core::HookKind::Command { command, .. } if command == "echo hi"
             ),
             "resolved hook must carry the seeded command"
+        );
+    }
+
+    #[test]
+    fn removed_proxy_and_ssh_tunnel_stay_deleted_after_reload() {
+        let mut state = state_for_task_tests();
+
+        let proxy = dbflux_core::ProxyProfile {
+            id: Uuid::new_v4(),
+            name: "corporate".to_string(),
+            kind: dbflux_core::ProxyKind::Http,
+            host: "proxy.example.com".to_string(),
+            port: 8080,
+            auth: dbflux_core::ProxyAuth::None,
+            no_proxy: None,
+            enabled: true,
+            save_secret: false,
+        };
+        let tunnel = SshTunnelProfile {
+            id: Uuid::new_v4(),
+            name: "bastion".to_string(),
+            config: dbflux_core::SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "deploy".to_string(),
+                auth_method: dbflux_core::SshAuthMethod::Password,
+                ssh_config_host: None,
+            },
+            save_secret: false,
+        };
+
+        state.add_proxy(proxy.clone());
+        state.add_ssh_tunnel(tunnel.clone());
+
+        let loaded =
+            crate::config_loader::load_config(state.storage_runtime()).expect("load configuration");
+        assert_eq!(loaded.proxy_profiles.len(), 1, "proxy must be persisted");
+        assert_eq!(loaded.ssh_tunnels.len(), 1, "tunnel must be persisted");
+
+        state.remove_proxy(0).expect("remove proxy");
+        state.remove_ssh_tunnel(0).expect("remove tunnel");
+
+        let loaded =
+            crate::config_loader::load_config(state.storage_runtime()).expect("load configuration");
+        assert!(
+            loaded.proxy_profiles.is_empty(),
+            "removed proxy must not come back from storage"
+        );
+        assert!(
+            loaded.ssh_tunnels.is_empty(),
+            "removed SSH tunnel must not come back from storage"
         );
     }
 
