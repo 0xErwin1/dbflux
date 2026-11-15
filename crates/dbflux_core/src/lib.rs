@@ -78,6 +78,8 @@ pub use connection::{
     ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
 };
 
+pub use connection::{decode_uri_component, split_uri_host_port, uri_host};
+
 pub use connection::{
     DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace,
 };
