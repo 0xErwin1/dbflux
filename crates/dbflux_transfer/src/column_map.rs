@@ -87,6 +87,37 @@ impl AutoColumnMap {
     }
 }
 
+impl AutoColumnMap {
+    /// `source_columns` with each one that maps onto a target column taking
+    /// that column's type name, so values read from a file without type
+    /// names decode as the column they land in. A source column no target
+    /// column reads keeps its own type name.
+    pub(crate) fn typed_source_columns(
+        &self,
+        source_columns: &[TransferColumn],
+    ) -> Vec<TransferColumn> {
+        source_columns
+            .iter()
+            .enumerate()
+            .map(|(source_index, source)| {
+                let target = self
+                    .target_from_source
+                    .iter()
+                    .position(|bound| *bound == Some(source_index))
+                    .and_then(|target_index| self.target_columns.get(target_index));
+
+                TransferColumn {
+                    type_name: target.map_or_else(
+                        || source.type_name.clone(),
+                        |target| target.type_name.clone(),
+                    ),
+                    ..source.clone()
+                }
+            })
+            .collect()
+    }
+}
+
 fn auto_map(
     source_columns: &[TransferColumn],
     target_columns: &[TransferColumn],
@@ -264,5 +295,54 @@ mod tests {
             ]
         );
         assert!(map.warnings().is_empty());
+    }
+
+    fn typed(name: &str, type_name: Option<&str>) -> TransferColumn {
+        TransferColumn {
+            name: name.to_string(),
+            type_name: type_name.map(str::to_string),
+            nullable: true,
+            is_primary_key: false,
+        }
+    }
+
+    #[test]
+    fn source_columns_take_the_type_of_the_target_column_they_map_onto() {
+        let source = vec![
+            typed("a", None),
+            typed("b", None),
+            typed("loose", Some("text")),
+        ];
+        let target = vec![typed("b", Some("integer")), typed("a", Some("real"))];
+
+        let typed_sources = AutoColumnMap::new(&source, &target).typed_source_columns(&source);
+
+        assert_eq!(
+            typed_sources
+                .iter()
+                .map(|c| (c.name.as_str(), c.type_name.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("a", Some("real")),
+                ("b", Some("integer")),
+                ("loose", Some("text"))
+            ],
+            "an unmapped source column keeps its own type"
+        );
+    }
+
+    #[test]
+    fn an_override_decides_which_target_type_a_source_column_takes() {
+        let source = vec![typed("first_name", None)];
+        let target = vec![typed("name", Some("varchar(40)"))];
+        let overrides = vec![ColumnMappingOverride {
+            target_column: "name".to_string(),
+            source_column: Some("first_name".to_string()),
+        }];
+
+        let typed_sources = AutoColumnMap::with_overrides(&source, &target, &overrides)
+            .typed_source_columns(&source);
+
+        assert_eq!(typed_sources[0].type_name.as_deref(), Some("varchar(40)"));
     }
 }

@@ -3896,6 +3896,7 @@ dependencies = [
  "csv",
  "dbflux_core",
  "dbflux_driver_postgres",
+ "dbflux_driver_sqlite",
  "dbflux_export",
  "dbflux_test_support",
  "serde",
