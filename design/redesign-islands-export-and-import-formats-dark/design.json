@@ -27,9 +27,9 @@
     {
       "file": "04-isl-import-options-mapping.html",
       "title": "Import wizard: CSV options, JSON variant and column mapping",
-      "tradeoff": "Islands, dark: Draws the mapping controls exactly as the app has them, one pair rebind at a time, instead of proposing a column list the code does not have.",
+      "tradeoff": "Islands, dark: Draws the mapping controls exactly as the app has them, one pair rebind at a time, instead of proposing a column list the code does not have; also shows the keyboard cursor with the design system focus state and a key legend.",
       "width": 1400,
-      "height": 1440
+      "height": 2130
     },
     {
       "file": "05-isl-import-errors.html",
