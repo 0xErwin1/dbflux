@@ -1431,7 +1431,7 @@ pub(crate) const MIGRATE_WIZARD: SurfaceRegistry = SurfaceRegistry {
 /// Escape closes it (the dialog chrome's close button).
 pub(crate) const IMPORT_WIZARD: SurfaceRegistry = SurfaceRegistry {
     name: "import wizard",
-    contexts: &[ContextId::SqlPreviewModal, ContextId::Modal],
+    contexts: &[ContextId::Modal],
     entries: &[
         ("import-wizard-choose-folder", KeyboardPath::TabStop),
         ("import-wizard-choose-file", KeyboardPath::TabStop),

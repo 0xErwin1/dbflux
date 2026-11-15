@@ -15,7 +15,7 @@ use dbflux_components::modals::{modal_form_row, modal_hint};
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Spacing, ui};
 use dbflux_core::{
-    CancelToken, Connection, DbError, DriverCapabilities, TableInfo, TransferColumn,
+    CancelToken, Connection, DbError, DriverCapabilities, SchemaSnapshot, TableInfo, TransferColumn,
 };
 use dbflux_export::{CsvDelimiter, FormatOptions, TextEncoding};
 use dbflux_transfer::import::{ImportOptions, ImportOutcome, ImportTablePlan, run_import};
@@ -155,30 +155,60 @@ struct LoadedFile {
     config: TableImportConfig,
 }
 
-/// The columns of the target table, `None` when the lookup confirms the table
-/// does not exist. Any other failure is returned, because treating it as a
-/// missing table would offer to create a table over one that exists.
+/// The columns of the target table, `None` when the table is not there.
+///
+/// A lookup that reports the table as not found is a miss. Drivers hosted
+/// over RPC flatten their errors, so for any other failure `listing` (the
+/// connection's schema) decides: a table it does not hold is a miss. A table
+/// it does hold, a listing that cannot be read, or a listing that cannot say (not a
+/// relational schema) returns the original lookup error, because treating it
+/// as a miss would offer to create a table over one that exists.
 fn existing_table_columns(
     lookup: Result<TableInfo, DbError>,
+    table: &str,
+    listing: impl FnOnce() -> Option<SchemaSnapshot>,
 ) -> Result<Option<Vec<TransferColumn>>, TransferError> {
-    match lookup {
-        Ok(info) => Ok(Some(
-            info.columns
-                .unwrap_or_default()
-                .into_iter()
-                .map(|column| TransferColumn {
-                    name: column.name,
-                    type_name: Some(column.type_name),
-                    nullable: column.nullable,
-                    is_primary_key: column.is_primary_key,
-                })
-                .collect(),
-        )),
-        Err(DbError::ObjectNotFound(_)) => Ok(None),
-        Err(error) => Err(TransferError::Source(format!(
+    let error = match lookup {
+        Ok(info) => {
+            return Ok(Some(
+                info.columns
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|column| TransferColumn {
+                        name: column.name,
+                        type_name: Some(column.type_name),
+                        nullable: column.nullable,
+                        is_primary_key: column.is_primary_key,
+                    })
+                    .collect(),
+            ));
+        }
+        Err(DbError::ObjectNotFound(_)) => return Ok(None),
+        Err(error) => error,
+    };
+
+    match listing() {
+        Some(snapshot) if !snapshot_may_hold(&snapshot, table) => Ok(None),
+        _ => Err(TransferError::Source(format!(
             "could not look up the target table: {error}"
         ))),
     }
+}
+
+/// Whether the schema may hold a table or view named `table`, in any schema
+/// and ignoring case. A schema that is not relational cannot rule it out.
+fn snapshot_may_hold(snapshot: &SchemaSnapshot, table: &str) -> bool {
+    let Some(relational) = snapshot.as_relational() else {
+        return true;
+    };
+    let named = |name: &str| name.eq_ignore_ascii_case(table);
+
+    relational.tables.iter().any(|entry| named(&entry.name))
+        || relational.views.iter().any(|entry| named(&entry.name))
+        || relational.schemas.iter().any(|schema| {
+            schema.tables.iter().any(|entry| named(&entry.name))
+                || schema.views.iter().any(|entry| named(&entry.name))
+        })
 }
 
 /// Reads the file's columns and looks up the target table, off the UI thread.
@@ -194,8 +224,12 @@ fn load_file_config(
     let source_table = file.table_name();
     let target_table = target_table.unwrap_or_else(|| source_table.clone());
 
-    let existing_columns =
-        existing_table_columns(connection.table_details(target_database, None, &target_table))?;
+    let existing_columns = existing_table_columns(
+        connection.table_details(target_database, None, &target_table),
+        &target_table,
+        // A listing that cannot be read leaves the lookup error standing.
+        || connection.schema().ok(),
+    )?;
     let target_exists = existing_columns.is_some();
 
     let mut manifest_table = file.manifest_table();
@@ -435,15 +469,27 @@ impl ImportWizard {
                 );
                 report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
 
-                // The file stays picked and the user lands on the configure
-                // step, where the options (a CSV's encoding) can be changed
-                // and the file read again.
-                self.rows.clear();
-                self._row_subscriptions.clear();
-                if let Some(state) = self.file_import.as_mut() {
-                    state.error = Some(message);
+                let options_can_fix_it = self
+                    .file_import
+                    .as_ref()
+                    .is_some_and(|state| state.format == FileFormat::Csv);
+
+                if self.step == WizardStep::PickFolder && !options_can_fix_it {
+                    // Nothing on the configure step could fix this file, and
+                    // that step has no way back: the picker shows the error.
+                    self.file_import = None;
+                    self.manifest_error = Some(message);
+                } else {
+                    // A CSV stays picked and the user lands on the configure
+                    // step, where the delimiter and encoding can be changed
+                    // and the file read again.
+                    self.rows.clear();
+                    self._row_subscriptions.clear();
+                    if let Some(state) = self.file_import.as_mut() {
+                        state.error = Some(message);
+                    }
+                    self.step = WizardStep::Configure;
                 }
-                self.step = WizardStep::Configure;
             }
         }
         cx.notify();

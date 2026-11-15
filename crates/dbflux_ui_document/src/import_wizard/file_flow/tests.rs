@@ -422,22 +422,82 @@ fn table_info(columns: Option<Vec<dbflux_core::ColumnInfo>>) -> dbflux_core::Tab
     info
 }
 
+fn snapshot_with(table: &str) -> dbflux_core::SchemaSnapshot {
+    let mut schema = dbflux_core::RelationalSchema::default();
+    schema.schemas.push(dbflux_core::DbSchemaInfo {
+        name: "public".to_string(),
+        tables: vec![
+            crate::migrate_wizard::source_target::shared_coordinator_tests::test_table(
+                Some("public"),
+                table,
+            ),
+        ],
+        views: Vec::new(),
+        custom_types: None,
+    });
+    dbflux_core::SchemaSnapshot::relational(schema)
+}
+
+fn lookup_error(message: &str) -> dbflux_core::DbError {
+    dbflux_core::DbError::query_failed(message)
+}
+
 #[test]
-fn only_a_confirmed_missing_table_is_treated_as_absent() {
+fn a_found_table_gives_its_columns_and_a_confirmed_missing_one_is_absent() {
     use dbflux_core::DbError;
 
     assert!(matches!(
-        super::existing_table_columns(Err(DbError::object_not_found("people"))),
-        Ok(None)
-    ));
-    assert!(matches!(
-        super::existing_table_columns(Ok(table_info(Some(Vec::new())))),
+        super::existing_table_columns(
+            Ok(table_info(Some(Vec::new()))),
+            "people",
+            || panic!("the listing is not consulted for a found table")
+        ),
         Ok(Some(columns)) if columns.is_empty()
     ));
+    assert!(matches!(
+        super::existing_table_columns(
+            Err(DbError::object_not_found("people")),
+            "people",
+            || panic!("the listing is not consulted for a confirmed miss")
+        ),
+        Ok(None)
+    ));
+}
 
-    let failure = super::existing_table_columns(Err(DbError::connection_failed("link down")))
-        .expect_err("a lookup failure is not a missing table");
-    assert!(failure.to_string().contains("link down"), "{failure}");
+/// A driver that flattens its errors fails the lookup with a generic error:
+/// the schema listing decides whether the table is there.
+#[test]
+fn a_failed_lookup_of_a_table_the_listing_does_not_hold_is_absent() {
+    let result = super::existing_table_columns(
+        Err(lookup_error("relation does not exist")),
+        "people",
+        || Some(snapshot_with("orders")),
+    );
+
+    assert!(matches!(result, Ok(None)), "{result:?}");
+}
+
+#[test]
+fn a_failed_lookup_of_a_table_the_listing_holds_keeps_the_original_error() {
+    let failure =
+        super::existing_table_columns(Err(lookup_error("permission glitch")), "people", || {
+            Some(snapshot_with("People"))
+        })
+        .expect_err("the table exists, so the lookup failure is real");
+
+    assert!(
+        failure.to_string().contains("permission glitch"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_failed_lookup_with_a_failed_listing_keeps_the_original_error() {
+    let failure = super::existing_table_columns(Err(lookup_error("link down")), "people", || None)
+        .expect_err("nothing confirms the table is absent");
+
+    let message = failure.to_string();
+    assert!(message.contains("link down"), "{message}");
 }
 
 /// A read from a previous session finishing after the wizard was reopened is
@@ -481,4 +541,28 @@ fn a_read_from_the_previous_session_is_ignored(cx: &mut gpui::TestAppContext) {
         assert!(wizard.loading, "the new session's read is still pending");
         assert!(wizard.step == WizardStep::PickFolder);
     });
+}
+
+/// A JSON file has no option that could fix a failed read, so the wizard
+/// stays on the picker step, which has the way back, with the error shown and
+/// the file forgotten.
+#[gpui::test]
+fn a_broken_json_file_stays_on_the_picker_step_with_its_error(cx: &mut gpui::TestAppContext) {
+    let (directory, path) = scratch_file("broken_json", "people.json", b"[{\"id\": 1}, {oops");
+    let (wizard, window) = wizard_on_fake_connection(cx);
+
+    wizard.update(window, |this, cx| {
+        let connection = this.resolve_connection(cx).expect("connection");
+        this.open_picked_file(connection, path, cx);
+    });
+    window.run_until_parked();
+
+    window.update(|_, cx| {
+        let wizard = wizard.read(cx);
+        assert!(wizard.step == WizardStep::PickFolder);
+        assert!(wizard.file_import.is_none(), "the file state is cleared");
+        assert!(wizard.manifest_error.is_some(), "the error is shown");
+        assert!(!wizard.loading);
+    });
+    std::fs::remove_dir_all(&directory).ok();
 }
