@@ -14,6 +14,7 @@ All notable changes to DBFlux will be documented in this file.
 ### Fixed
 
 * **SQLite text with a NUL byte is written intact** — A text value that contains a NUL byte was written as a quoted literal holding the raw byte, which SQLite reads as the end of the statement. It is now written as its quoted segments joined with `char(0)`, so SQL export and import keep every byte and the text type in UTF-8, UTF-16LE and UTF-16BE databases. A long run of NUL bytes is grouped in parentheses so the expression stays within SQLite's depth limit; text without a NUL is written as before (#805).
+* **A failed configuration read no longer deletes saved connection data** — When reading a connection's hooks, value references, settings or governance from `dbflux.db` failed at startup, the connection loaded without them and the next edit to any connection deleted them from storage; a failed read of the auth profiles let the next auth profile edit delete every stored auth profile. A connection whose stored rows cannot be read is now left out and logged, with its rows untouched, and a failed read of the connection, auth profile, proxy or SSH tunnel lists stops startup with the storage error instead of continuing with an empty list.
 
 ## [0.10.1] - 2026-11-14
 
