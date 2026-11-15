@@ -253,6 +253,15 @@ fn import_one_table(
     cancel: &CancelToken,
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<crate::pipeline::TransferReport, TransferError> {
+    // A folder file is opened before the target is resolved, so a missing
+    // file is reported ahead of a missing target table. A loose file has to
+    // wait: its source column types come from the column map.
+    let folder_source = if file.loose {
+        None
+    } else {
+        Some(open_table_file(file, file.columns.clone(), options)?)
+    };
+
     let mut target_columns =
         resolve_target_columns(connection, plan, &file.columns, &options.target_database)?;
     if file.loose
@@ -274,20 +283,15 @@ fn import_one_table(
         None => AutoColumnMap::new(&file.columns, &target_columns),
     };
 
-    let source_columns = if file.loose {
-        column_map.typed_source_columns(&file.columns)
-    } else {
-        file.columns.clone()
+    let mut source = match folder_source {
+        Some(source) => source,
+        None => open_table_file(
+            file,
+            column_map.typed_source_columns(&file.columns),
+            options,
+        )?
+        .nested_json_as_text(true),
     };
-    let mut source = FileSource::open_with(
-        &file.path,
-        file.format,
-        source_columns,
-        options.segment_size,
-        file.estimated_total,
-        file.options.clone(),
-    )?
-    .nested_json_as_text(file.loose);
 
     let mut sink = TableSink::new(
         Arc::clone(connection),
@@ -303,6 +307,21 @@ fn import_one_table(
         plan.mapping_mode,
         cancel,
         &mut on_progress,
+    )
+}
+
+fn open_table_file(
+    file: &TableFile,
+    columns: Vec<TransferColumn>,
+    options: &ImportOptions,
+) -> Result<FileSource, TransferError> {
+    FileSource::open_with(
+        &file.path,
+        file.format,
+        columns,
+        options.segment_size,
+        file.estimated_total,
+        file.options.clone(),
     )
 }
 
