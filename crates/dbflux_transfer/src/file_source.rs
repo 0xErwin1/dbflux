@@ -63,6 +63,10 @@ impl JsonArrayStream {
     }
 
     fn next_value(&mut self) -> Result<Option<serde_json::Value>, TransferError> {
+        self.next_element()
+    }
+
+    fn next_element<T: serde::de::DeserializeOwned>(&mut self) -> Result<Option<T>, TransferError> {
         loop {
             if self.position == ArrayPosition::Finished {
                 return Ok(None);
@@ -99,7 +103,7 @@ impl JsonArrayStream {
 
     /// Reads one object. An object ends at its `}`, so the deserializer
     /// reads nothing past it and the next separator stays in the reader.
-    fn read_element(&mut self) -> Result<serde_json::Value, TransferError> {
+    fn read_element<T: serde::de::DeserializeOwned>(&mut self) -> Result<T, TransferError> {
         let mut deserializer = serde_json::Deserializer::from_reader(&mut self.reader);
         serde::Deserialize::deserialize(&mut deserializer)
             .map_err(|e| TransferError::Source(format!("invalid JSON: {e}")))
@@ -164,12 +168,115 @@ fn open_json_lines(reader: BufReader<File>) -> SourceReader {
     SourceReader::Json(Box::new(stream))
 }
 
+/// The keys of one JSON object in the order they appear, read without
+/// building the object (a `serde_json::Map` sorts its keys unless the
+/// `preserve_order` feature is on).
+struct ObjectKeys(Vec<String>);
+
+impl<'de> serde::Deserialize<'de> for ObjectKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(ObjectKeysVisitor)
+    }
+}
+
+struct ObjectKeysVisitor;
+
+impl<'de> serde::de::Visitor<'de> for ObjectKeysVisitor {
+    type Value = ObjectKeys;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON object")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut keys = Vec::new();
+        while let Some(key) = map.next_key::<String>()? {
+            map.next_value::<serde::de::IgnoredAny>()?;
+            keys.push(key);
+        }
+        Ok(ObjectKeys(keys))
+    }
+}
+
+/// The object keys of the first `limit` records of a JSON (array or JSON
+/// Lines) file, one list per record, each in its own key order.
+pub(crate) fn sample_object_keys(
+    path: &Path,
+    format: FileFormat,
+    limit: usize,
+) -> Result<Vec<Vec<String>>, TransferError> {
+    let mut records = Vec::new();
+    for_each_object_keys(path, format, limit, None, |keys| records.push(keys))?;
+    Ok(records)
+}
+
+/// Reads every record of a JSON (array or JSON Lines) file, failing on the
+/// first one that is not an object, without holding the records in memory.
+/// The scan stops quietly, with `Ok`, as soon as `cancel` is cancelled.
+pub(crate) fn check_json_records(
+    path: &Path,
+    format: FileFormat,
+    cancel: &CancelToken,
+) -> Result<(), TransferError> {
+    for_each_object_keys(path, format, usize::MAX, Some(cancel), |_| {})
+}
+
+fn for_each_object_keys(
+    path: &Path,
+    format: FileFormat,
+    limit: usize,
+    cancel: Option<&CancelToken>,
+    mut visit: impl FnMut(Vec<String>),
+) -> Result<(), TransferError> {
+    let is_cancelled = || cancel.is_some_and(CancelToken::is_cancelled);
+
+    if is_cancelled() {
+        return Ok(());
+    }
+
+    let file =
+        File::open(path).map_err(|e| TransferError::Source(format!("{}: {e}", path.display())))?;
+    let mut reader = BufReader::new(file);
+    let mut seen = 0usize;
+
+    // A `json` file whose first token is not `[` is JSON Lines, as when it is
+    // imported.
+    let is_array = format == FileFormat::Json && {
+        skip_byte_order_mark(&mut reader)?;
+        next_non_whitespace(&mut reader)? == Some(b'[')
+    };
+
+    if is_array {
+        reader.consume(1);
+        let mut array = JsonArrayStream::new(reader);
+        while seen < limit && !is_cancelled() {
+            match array.next_element::<ObjectKeys>()? {
+                Some(record) => visit(record.0),
+                None => break,
+            }
+            seen += 1;
+        }
+    } else {
+        let stream = serde_json::Deserializer::from_reader(reader).into_iter::<ObjectKeys>();
+        for record in stream.take(limit) {
+            if is_cancelled() {
+                break;
+            }
+            let record = record.map_err(|e| invalid_json(&e.to_string()))?;
+            visit(record.0);
+        }
+    }
+
+    Ok(())
+}
+
 pub struct FileSource {
     reader: SourceReader,
     columns: Vec<TransferColumn>,
     segment_size: usize,
     estimated_total: Option<u64>,
     options: FormatOptions,
+    nested_json_as_text: bool,
 }
 
 impl FileSource {
@@ -230,7 +337,15 @@ impl FileSource {
             segment_size: segment_size.max(1) as usize,
             estimated_total,
             options,
+            nested_json_as_text: false,
         })
+    }
+
+    /// Reads a JSON object or array value as its JSON text instead of a
+    /// document or array value, for files imported into a relational table.
+    pub(crate) fn nested_json_as_text(mut self, enabled: bool) -> Self {
+        self.nested_json_as_text = enabled;
+        self
     }
 }
 
@@ -266,12 +381,18 @@ fn read_json_chunk(
     columns: &[TransferColumn],
     segment_size: usize,
     date_format: DateFormat,
+    nested_as_text: bool,
 ) -> Result<Vec<Vec<Value>>, TransferError> {
     let mut rows = Vec::with_capacity(segment_size);
 
     for _ in 0..segment_size {
         match values.next() {
-            Some(Ok(value)) => rows.push(json_row_to_values(&value, columns, date_format)),
+            Some(Ok(value)) => rows.push(json_row_to_values(
+                &value,
+                columns,
+                date_format,
+                nested_as_text,
+            )),
             Some(Err(e)) => return Err(TransferError::Source(format!("invalid NDJSON: {e}"))),
             None => break,
         }
@@ -285,12 +406,18 @@ fn read_json_array_chunk(
     columns: &[TransferColumn],
     segment_size: usize,
     date_format: DateFormat,
+    nested_as_text: bool,
 ) -> Result<Vec<Vec<Value>>, TransferError> {
     let mut rows = Vec::with_capacity(segment_size);
 
     while rows.len() < segment_size {
         match array.next_value()? {
-            Some(value) => rows.push(json_row_to_values(&value, columns, date_format)),
+            Some(value) => rows.push(json_row_to_values(
+                &value,
+                columns,
+                date_format,
+                nested_as_text,
+            )),
             None => break,
         }
     }
@@ -302,6 +429,7 @@ fn json_row_to_values(
     value: &serde_json::Value,
     columns: &[TransferColumn],
     date_format: DateFormat,
+    nested_as_text: bool,
 ) -> Vec<Value> {
     let serde_json::Value::Object(map) = value else {
         return columns.iter().map(|_| Value::Null).collect();
@@ -311,7 +439,14 @@ fn json_row_to_values(
         .iter()
         .map(|col| {
             map.get(&col.name)
-                .map(|v| value_from_json(v, col.type_name.as_deref(), date_format))
+                .map(|v| match v {
+                    serde_json::Value::Object(_) | serde_json::Value::Array(_)
+                        if nested_as_text =>
+                    {
+                        Value::Text(v.to_string())
+                    }
+                    _ => value_from_json(v, col.type_name.as_deref(), date_format),
+                })
                 .unwrap_or(Value::Null)
         })
         .collect()
@@ -336,12 +471,14 @@ impl RowSource for FileSource {
                 &self.columns,
                 self.segment_size,
                 self.options.date_format,
+                self.nested_json_as_text,
             )?,
             SourceReader::JsonArray(array) => read_json_array_chunk(
                 array,
                 &self.columns,
                 self.segment_size,
                 self.options.date_format,
+                self.nested_json_as_text,
             )?,
         };
 

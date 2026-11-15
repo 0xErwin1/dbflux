@@ -2437,7 +2437,7 @@ document:
       one: "导入 %{count} 张表"
       many: "导入 %{count} 张表"
     rail:
-      pick_folder: 选择文件夹
+      pick_folder: 选择来源
       configure: 配置
       confirm: 确认
       run: 执行
@@ -2458,6 +2458,21 @@ document:
       apply_mapping: 应用映射
       continue: 继续
       unmatched_source: "未匹配的源列将被跳过，除非重新映射：%{names}"
+    pick_file:
+      description: "或将单个 CSV、JSON 或 JSON Lines 文件导入到一张表。"
+      choose_file: "选择文件…"
+      reading_file: "正在读取文件…"
+      dialog_title: "选择要导入的文件"
+      filter_label: "CSV、JSON 和 JSON Lines"
+      error:
+        unsupported: "只能导入 .csv、.json 和 .jsonl 文件。"
+        invalid_file: "无法读取文件：%{error}"
+    file:
+      source: "文件：%{file}（%{format}）"
+      target_table_label: "目标表"
+      target_table_placeholder: "表名（默认为文件名）"
+      use_table: "使用该表"
+      null_text_hint: "文件中表示 NULL 的文本。文本为空时，空字段即为 NULL。"
     mapping_mode:
       create: 创建
       existing: 已存在（仅插入）
@@ -4782,6 +4797,7 @@ settings:
       add_panel_picker: "添加面板选择器"
       mcp_approvals: "MCP 审批"
       migrate_wizard: "迁移向导"
+      import_wizard: "导入向导"
       vim_normal: "Vim 普通模式"
     category:
       global: 全局

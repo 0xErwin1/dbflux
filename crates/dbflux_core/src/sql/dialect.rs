@@ -55,6 +55,13 @@ pub trait SqlDialect: Send + Sync {
         self.value_to_literal(value)
     }
 
+    /// The column type for text of any length, used when a table is created
+    /// from columns that carry no type name (a loose CSV or JSON file).
+    /// `TEXT` unless the engine has no such type or truncates it.
+    fn text_column_type(&self) -> &'static str {
+        "TEXT"
+    }
+
     /// Escape a string for use inside a single-quoted literal.
     fn escape_string(&self, s: &str) -> String;
 

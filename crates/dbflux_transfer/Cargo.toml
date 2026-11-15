@@ -26,3 +26,4 @@ csv.workspace = true
 [dev-dependencies]
 dbflux_test_support.workspace = true
 dbflux_driver_postgres.workspace = true
+dbflux_driver_sqlite.workspace = true

@@ -114,6 +114,32 @@ fn mysql_fetch_dependents_lists_views_and_foreign_key_children() -> Result<(), D
     })
 }
 
+/// The text type MySQL uses for an untyped column holds a value longer than
+/// `TEXT`'s 65,535-byte limit, in strict mode.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_text_column_type_holds_values_longer_than_text() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        let text_type = connection.dialect().text_column_type();
+        connection.execute(&QueryRequest::new(
+            "SET SESSION sql_mode = 'STRICT_ALL_TABLES'",
+        ))?;
+        connection.execute(&QueryRequest::new(format!(
+            "CREATE TABLE long_text (v {text_type})"
+        )))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO long_text (v) VALUES (REPEAT('x', 65536))",
+        ))?;
+
+        let length =
+            connection.execute(&QueryRequest::new("SELECT CHAR_LENGTH(v) FROM long_text"))?;
+        assert_eq!(length.rows, vec![vec![dbflux_core::Value::Int(65536)]]);
+        Ok(())
+    })
+}
+
 /// `generated_columns` names the stored and virtual generated columns, leaves
 /// out expression defaults (`DEFAULT_GENERATED`), and an `INSERT` that omits
 /// the generated columns replays.

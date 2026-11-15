@@ -15,6 +15,7 @@ pub mod export;
 mod file_sink;
 mod file_source;
 pub mod import;
+pub mod import_file;
 pub mod manifest;
 pub mod migration;
 mod pipeline;

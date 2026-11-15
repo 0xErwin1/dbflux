@@ -306,3 +306,27 @@ the export then names those fields in a warning.
 A query result offers only the loaded rows, because exporting all of them would
 mean running the query again. So does a nearest-neighbor search: it returns a
 fixed number of the closest rows, and the grid already holds all of them.
+
+## Importing a file
+
+The import wizard also reads one loose file. Choose **Choose File…** on its
+first step, next to the folder picker, and pick a `.csv`, `.json` or `.jsonl`
+file; HTML, Markdown, XML and SQL files are not offered. The wizard reads the
+columns from the CSV header row, or from the keys of the first 100 JSON records
+(all the keys seen, in the order they first appear). A nested object or array
+is imported as JSON text.
+
+The target table defaults to the file name without its extension; type another
+name and choose **Use Table** (or press Enter) to point the import at an
+existing table. The column mapping and the table modes (create, existing,
+recreate, truncate, skip) are the same as for a folder. A file carries no column
+types, so values going into an existing table are read as that table's column
+types, and a new table is created with a text column for every field (`TEXT`, or the
+engine's own wide text type such as `NVARCHAR(MAX)` on SQL Server or `LONGTEXT` on MySQL), so values
+are stored as their text.
+
+A CSV file offers the delimiter, the encoding and the text that stands for NULL,
+the same choices as the export wizard; JSON and JSON Lines have no options.
+Changing the delimiter or encoding reads the file again. The whole file is read
+once before anything is written, so a malformed row or record stops the import
+with the target unchanged.

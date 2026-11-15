@@ -3,6 +3,10 @@ use dbflux_core::{PlaceholderStyle, SqlDialect, Value};
 pub struct ClickHouseDialect;
 
 impl SqlDialect for ClickHouseDialect {
+    fn text_column_type(&self) -> &'static str {
+        "String"
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`"))
     }
@@ -73,6 +77,11 @@ pub static CLICKHOUSE_DIALECT: ClickHouseDialect = ClickHouseDialect;
 mod tests {
     use super::CLICKHOUSE_DIALECT;
     use dbflux_core::{PlaceholderStyle, SqlDialect, Value};
+
+    #[test]
+    fn untyped_columns_use_the_string_type() {
+        assert_eq!(CLICKHOUSE_DIALECT.text_column_type(), "String");
+    }
 
     #[test]
     fn quotes_clickhouse_identifiers() {

@@ -1776,7 +1776,7 @@ pub(crate) fn import_mapping_mode_label(mode: dbflux_transfer::TableMappingMode)
     }
 }
 
-/// The import wizard's four rail entries (Pick Folder / Configure / Confirm
+/// The import wizard's four rail entries (Pick Source / Configure / Confirm
 /// / Run), in `WizardStep` render order, resolved once through the
 /// translation catalog rather than a `&'static str` array.
 pub(crate) fn import_rail_labels() -> [String; 4] {

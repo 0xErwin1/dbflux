@@ -335,3 +335,28 @@ Un resultado de consulta ofrece solo las filas cargadas, porque exportarlas
 todas implicaría volver a ejecutar la consulta. Lo mismo ocurre con una búsqueda
 de vecinos más cercanos: devuelve un número fijo de las filas más próximas, y la
 cuadrícula ya las tiene todas.
+
+## Importar un archivo
+
+El asistente de importación también lee un archivo suelto. Elige **Elegir
+archivo…** en su primer paso, junto al selector de carpeta, y selecciona un
+archivo `.csv`, `.json` o `.jsonl`; los archivos HTML, Markdown, XML y SQL no se
+ofrecen. El asistente lee las columnas de la fila de encabezado del CSV, o de
+las claves de los primeros 100 registros JSON (todas las claves vistas, en el
+orden en que aparecen). Un objeto o array anidado se importa como texto JSON.
+
+La tabla de destino es por defecto el nombre del archivo sin extensión; escribe
+otro nombre y elige **Usar tabla** (o pulsa Enter) para apuntar la importación a
+una tabla existente. El mapeo de columnas y los modos de tabla (crear,
+existente, recrear, truncar, omitir) son los mismos que para una carpeta. Un
+archivo no trae tipos de columna, así que los valores que van a una tabla
+existente se leen según los tipos de esa tabla, y una tabla nueva se crea con
+una columna de texto por cada campo (`TEXT`, o el tipo de texto amplio propio del
+motor, como `NVARCHAR(MAX)` en SQL Server o `LONGTEXT` en MySQL), de modo que los valores se guardan
+como texto.
+
+Un archivo CSV ofrece el delimitador, la codificación y el texto que representa
+NULL, las mismas opciones que el asistente de exportación; JSON y JSON Lines no
+tienen opciones. Cambiar el delimitador o la codificación vuelve a leer el
+archivo. Todo el archivo se lee una vez antes de escribir nada, así que una fila
+o registro mal formado detiene la importación sin tocar el destino.

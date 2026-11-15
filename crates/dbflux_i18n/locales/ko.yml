@@ -2437,7 +2437,7 @@ document:
       one: "테이블 %{count}개 가져오기"
       many: "테이블 %{count}개 가져오기"
     rail:
-      pick_folder: 폴더 선택
+      pick_folder: 원본 선택
       configure: 구성
       confirm: 확인
       run: 실행
@@ -2458,6 +2458,21 @@ document:
       apply_mapping: 매핑 적용
       continue: 계속
       unmatched_source: "매핑되지 않은 소스 열은 다시 매핑하지 않으면 건너뜁니다: %{names}"
+    pick_file:
+      description: "또는 CSV, JSON, JSON Lines 파일 하나를 테이블 하나로 가져옵니다."
+      choose_file: "파일 선택…"
+      reading_file: "파일 읽는 중…"
+      dialog_title: "가져올 파일 선택"
+      filter_label: "CSV, JSON 및 JSON Lines"
+      error:
+        unsupported: ".csv, .json, .jsonl 파일만 가져올 수 있습니다."
+        invalid_file: "파일을 읽을 수 없습니다: %{error}"
+    file:
+      source: "파일: %{file} (%{format})"
+      target_table_label: "대상 테이블"
+      target_table_placeholder: "테이블 이름 (기본값: 파일 이름)"
+      use_table: "테이블 사용"
+      null_text_hint: "파일에서 NULL을 나타내는 텍스트입니다. 비워 두면 빈 필드가 NULL입니다."
     mapping_mode:
       create: 만들기
       existing: 기존 (삽입만)
@@ -4781,6 +4796,7 @@ settings:
       add_panel_picker: "패널 추가 선택기"
       mcp_approvals: "MCP 승인"
       migrate_wizard: "마이그레이션 마법사"
+      import_wizard: "가져오기 마법사"
       vim_normal: "Vim 노멀 모드"
     category:
       global: 전역

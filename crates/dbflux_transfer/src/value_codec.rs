@@ -55,6 +55,10 @@ pub(crate) fn value_from_json(
             }
             if let Some(i) = n.as_i64() {
                 Value::Int(i)
+            } else if n.is_u64() {
+                // Past `i64::MAX` an integer would lose digits through `f64`,
+                // so it is kept as its exact decimal text.
+                Value::Decimal(n.to_string())
             } else if let Some(f) = n.as_f64() {
                 Value::Float(f)
             } else {
@@ -113,6 +117,33 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, std::num::ParseIntError> {
         .collect()
 }
 
+/// Decodes a value read without a type (a loose file's CSV text or JSON
+/// scalar) by the type of the column it is bound to, the way the typed
+/// readers decode it. Text goes through the same text decoder as a typed CSV
+/// field or JSON string, except that empty text stays empty text as it does
+/// for CSV. A number stands for a date only under the epoch format, as in
+/// `value_from_json`. Every other value, including a JSON number or boolean
+/// bound to a column of another type, is kept as read.
+pub(crate) fn decode_for_type(
+    value: Value,
+    type_name: Option<&str>,
+    date_format: DateFormat,
+) -> Value {
+    match value {
+        Value::Text(text) if text.is_empty() => Value::Text(text),
+        Value::Text(text) => value_from_text(&text, type_name, date_format),
+        Value::Int(_) | Value::Float(_) if date_format == DateFormat::Epoch => {
+            let rendered = match &value {
+                Value::Int(number) => number.to_string(),
+                Value::Float(number) => number.to_string(),
+                _ => return value,
+            };
+            decode_temporal(&rendered, type_name, date_format).unwrap_or(value)
+        }
+        other => other,
+    }
+}
+
 /// Type-name-directed text decoder shared by CSV fields and JSON's lossy
 /// string cases. Anything not recognized from `type_name` falls back to
 /// `Value::Text` — a conservative default that never fails the transfer,
@@ -140,6 +171,7 @@ fn value_from_text(text: &str, type_name: Option<&str>, date_format: DateFormat)
 
     if (type_lower.contains("int") || type_lower.contains("serial"))
         && !type_lower.contains("point")
+        && !type_lower.contains("interval")
         && let Ok(n) = text.parse::<i64>()
     {
         return Value::Int(n);
@@ -322,6 +354,25 @@ mod tests {
     }
 
     #[test]
+    fn csv_field_stays_text_for_interval_types() {
+        for type_name in [
+            "interval",
+            "INTERVAL DAY TO SECOND",
+            "interval year to month",
+        ] {
+            assert_eq!(
+                value_from_csv_field("123", Some(type_name), &FormatOptions::default()),
+                Value::Text("123".to_string()),
+                "{type_name}"
+            );
+        }
+        assert_eq!(
+            value_from_csv_field("7", Some("bigint"), &FormatOptions::default()),
+            Value::Int(7)
+        );
+    }
+
+    #[test]
     fn csv_field_decodes_as_bool_when_type_name_says_bool() {
         assert_eq!(
             value_from_csv_field("true", Some("boolean"), &FormatOptions::default()),
@@ -370,6 +421,17 @@ mod tests {
         assert_eq!(
             value_from_csv_field("42", None, &FormatOptions::default()),
             Value::Text("42".to_string())
+        );
+    }
+
+    /// An integer past `i64::MAX` is kept exactly instead of being rounded
+    /// through `f64`.
+    #[test]
+    fn json_integer_beyond_i64_is_kept_exact() {
+        let json: serde_json::Value = serde_json::from_str("9223372036854775809").expect("parse");
+        assert_eq!(
+            value_from_json(&json, None, DateFormat::default()),
+            Value::Decimal("9223372036854775809".to_string())
         );
     }
 

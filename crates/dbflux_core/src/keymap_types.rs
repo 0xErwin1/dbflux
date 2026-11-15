@@ -1368,6 +1368,10 @@ pub enum ContextId {
     /// The table migration wizard document (its steps and footer).
     MigrateWizard,
 
+    /// The import wizard dialog: its configure step's choices (the CSV
+    /// delimiter and encoding, each table's mapping mode and columns).
+    ImportWizard,
+
     /// An editor with Vim mode in Normal or Visual mode, where the leader
     /// key starts a sequence (`<leader> a`).
     VimNormal,
@@ -1415,6 +1419,7 @@ impl ContextId {
             ContextId::AddPanelPicker => None,
             ContextId::McpApprovals => Some(ContextId::Global),
             ContextId::MigrateWizard => Some(ContextId::Global),
+            ContextId::ImportWizard => None,
             ContextId::VimNormal => None,
         }
     }
@@ -1453,6 +1458,7 @@ impl ContextId {
                 | ContextId::TextInput
                 | ContextId::Dropdown
                 | ContextId::SqlPreviewModal
+                | ContextId::ImportWizard
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
                 | ContextId::ContextMenu
@@ -1507,6 +1513,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "Add Panel Picker",
             ContextId::McpApprovals => "MCP Approvals",
             ContextId::MigrateWizard => "Migrate Wizard",
+            ContextId::ImportWizard => "Import Wizard",
             ContextId::VimNormal => "Vim Normal",
         }
     }
@@ -1549,6 +1556,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "add_panel_picker",
             ContextId::McpApprovals => "mcp_approvals",
             ContextId::MigrateWizard => "migrate_wizard",
+            ContextId::ImportWizard => "import_wizard",
             ContextId::VimNormal => "vim_normal",
         }
     }
@@ -1591,6 +1599,7 @@ impl ContextId {
             ContextId::AddPanelPicker,
             ContextId::McpApprovals,
             ContextId::MigrateWizard,
+            ContextId::ImportWizard,
             ContextId::VimNormal,
         ]
     }
@@ -1633,6 +1642,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "AddPanelPicker",
             ContextId::McpApprovals => "McpApprovals",
             ContextId::MigrateWizard => "MigrateWizard",
+            ContextId::ImportWizard => "ImportWizard",
             ContextId::VimNormal => "VimNormal",
         }
     }
@@ -1671,6 +1681,9 @@ impl ContextId {
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",
             ContextId::SqlPreviewModal => "SqlPreviewModal && !Input",
+            // A dialog: its keys stay out of a text field and of an open
+            // dropdown, which answer their own.
+            ContextId::ImportWizard => "ImportWizard && !Input && !Dropdown",
             // An editor inside a dialog takes the leader too: the Vim wrapper
             // hands its commands to the dialog, never to the document behind.
             ContextId::VimNormal => "VimNormal",
@@ -1707,6 +1720,7 @@ impl ContextId {
                 | ContextId::Modal
                 | ContextId::KeyValue
                 | ContextId::SqlPreviewModal
+                | ContextId::ImportWizard
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
                 | ContextId::VimNormal

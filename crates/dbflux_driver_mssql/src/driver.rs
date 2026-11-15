@@ -290,6 +290,10 @@ pub struct MssqlDialect;
 static MSSQL_DIALECT: MssqlDialect = MssqlDialect;
 
 impl SqlDialect for MssqlDialect {
+    fn text_column_type(&self) -> &'static str {
+        "NVARCHAR(MAX)"
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         // SQL Server uses [bracket] quoting. Any closing bracket inside the
         // identifier must be doubled to be safe.
@@ -6662,6 +6666,11 @@ mod tests {
         assert!(generated.text.starts_with("INSERT INTO "));
         assert!(generated.text.contains("VALUES"));
         assert_eq!(generated.text.matches("), (").count() + 1, 2);
+    }
+
+    #[test]
+    fn mssql_untyped_columns_use_nvarchar_max() {
+        assert_eq!(MSSQL_DIALECT.text_column_type(), "NVARCHAR(MAX)");
     }
 
     #[test]

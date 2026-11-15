@@ -10,6 +10,11 @@ use dbflux_core::{PlaceholderStyle, SqlDialect, Value};
 pub struct RedshiftDialect;
 
 impl SqlDialect for RedshiftDialect {
+    /// Redshift's `TEXT` is `VARCHAR(256)`, which truncates longer values.
+    fn text_column_type(&self) -> &'static str {
+        "VARCHAR(65535)"
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         format!("\"{}\"", name.replace('"', "\"\""))
     }
@@ -147,6 +152,11 @@ mod tests {
                 .expect("a plain drop builds"),
             "DROP TABLE \"public\".\"orders\""
         );
+    }
+
+    #[test]
+    fn untyped_columns_use_a_full_width_varchar_because_text_is_varchar_256() {
+        assert_eq!(REDSHIFT_DIALECT.text_column_type(), "VARCHAR(65535)");
     }
 
     #[test]

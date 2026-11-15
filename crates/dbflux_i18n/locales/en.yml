@@ -2437,7 +2437,7 @@ document:
       one: "Import %{count} table"
       many: "Import %{count} tables"
     rail:
-      pick_folder: Pick Folder
+      pick_folder: Pick Source
       configure: Configure
       confirm: Confirm
       run: Run
@@ -2458,6 +2458,21 @@ document:
       apply_mapping: Apply Mapping
       continue: Continue
       unmatched_source: "Unmatched source column(s), will be skipped unless remapped: %{names}"
+    pick_file:
+      description: "Or import a single CSV, JSON or JSON Lines file into one table."
+      choose_file: "Choose File…"
+      reading_file: "Reading file…"
+      dialog_title: "Choose File to Import"
+      filter_label: "CSV, JSON and JSON Lines"
+      error:
+        unsupported: "Only .csv, .json and .jsonl files can be imported."
+        invalid_file: "Cannot read the file: %{error}"
+    file:
+      source: "File: %{file} (%{format})"
+      target_table_label: "Target table"
+      target_table_placeholder: "Table name (defaults to the file name)"
+      use_table: "Use Table"
+      null_text_hint: "Text in the file that stands for NULL. With empty text, an empty field is NULL."
     mapping_mode:
       create: Create
       existing: Existing (insert only)
@@ -4782,6 +4797,7 @@ settings:
       add_panel_picker: "Add Panel Picker"
       mcp_approvals: "MCP Approvals"
       migrate_wizard: "Migrate Wizard"
+      import_wizard: "Import Wizard"
       vim_normal: "Vim Normal"
     category:
       global: Global

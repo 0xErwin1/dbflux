@@ -24,8 +24,10 @@ use dbflux_core::{
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
 use dbflux_transfer::FileFormat;
+use dbflux_transfer::TableMappingMode;
 use dbflux_transfer::export::{ExportOptions, ExportTable, run_export};
 use dbflux_transfer::import::{ImportOptions, ImportTablePlan, run_import};
+use dbflux_transfer::import_file::{ImportFile, run_file_import};
 use dbflux_transfer::migration::{
     MigrationOptions, MigrationOutcome, MigrationTablePlan, run_migration,
 };
@@ -674,6 +676,62 @@ fn postgres_migration_orders_parent_before_child_via_real_fk_constraint() -> Res
             ))
             .expect("read back the migrated child rows");
         assert_eq!(child_rows.rows.len(), 3);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_loose_csv_file_loads_into_a_new_table() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let connection: Arc<dyn Connection> = Arc::from(connect_postgres(uri)?);
+
+        let dir = std::env::temp_dir().join(format!(
+            "dbflux_transfer_live_import_file_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("loose_events.csv");
+        std::fs::write(&path, "id,label\n1,start\n2,stop\n").expect("write csv");
+
+        let file = ImportFile::inspect(&path, FileFormat::Csv, Default::default())
+            .expect("inspect the csv");
+        let plan = ImportTablePlan {
+            source_table: file.table_name(),
+            target_schema: Some("public".to_string()),
+            target_table: "loose_events".to_string(),
+            mapping_mode: TableMappingMode::Create,
+            column_overrides: None,
+        };
+        let options = ImportOptions {
+            segment_size: 500,
+            target_database: "postgres".to_string(),
+            destructive_confirmed: false,
+        };
+
+        let outcome = run_file_import(
+            &connection,
+            &file,
+            &plan,
+            &options,
+            &CancelToken::new(),
+            |_, _| {},
+        )
+        .expect("the import runs");
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(
+            outcome.tables[0].status,
+            dbflux_transfer::TableTransferStatus::Completed { rows: 2 },
+            "{:?}",
+            outcome.tables[0].status
+        );
+        let stored = connection.execute(&QueryRequest::new(
+            "SELECT id, label FROM public.loose_events ORDER BY id",
+        ))?;
+        assert_eq!(stored.rows.len(), 2);
+        assert_eq!(stored.rows[1][1].as_display_string(), "stop");
 
         Ok(())
     })
