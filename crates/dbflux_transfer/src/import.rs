@@ -26,12 +26,12 @@ use std::sync::Arc;
 use dbflux_core::{CancelToken, Connection, TransferColumn};
 use dbflux_export::FormatOptions;
 
-use crate::column_map::{AutoColumnMap, ColumnMappingOverride};
+use crate::column_map::{AutoColumnMap, ColumnMappingOverride, DecodingColumnMap};
 use crate::file_sink::FileFormat;
 use crate::file_source::FileSource;
 use crate::manifest::read_manifest;
 use crate::pipeline::{
-    TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
+    ColumnMap, TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
 };
 use crate::table_sink::TableSink;
 
@@ -278,19 +278,19 @@ fn import_one_table(
         }
     }
 
-    let column_map = match &plan.column_overrides {
+    let auto_map = match &plan.column_overrides {
         Some(overrides) => AutoColumnMap::with_overrides(&file.columns, &target_columns, overrides),
         None => AutoColumnMap::new(&file.columns, &target_columns),
     };
 
-    let mut source = match folder_source {
-        Some(source) => source,
-        None => open_table_file(
-            file,
-            column_map.typed_source_columns(&file.columns),
-            options,
-        )?
-        .nested_json_as_text(true),
+    // A folder file keeps the manifest's source types. A loose file has none:
+    // its values are read raw and each one is decoded by its target's type.
+    let (mut source, column_map): (FileSource, Box<dyn ColumnMap>) = match folder_source {
+        Some(source) => (source, Box::new(auto_map)),
+        None => (
+            open_table_file(file, file.columns.clone(), options)?.nested_json_as_text(true),
+            Box::new(DecodingColumnMap::new(auto_map, file.options.date_format)),
+        ),
     };
 
     let mut sink = TableSink::new(
@@ -302,7 +302,7 @@ fn import_one_table(
     let mut on_progress = on_progress;
     run_transfer(
         &mut source,
-        &column_map,
+        column_map.as_ref(),
         &mut sink,
         plan.mapping_mode,
         cancel,

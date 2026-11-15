@@ -113,6 +113,33 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, std::num::ParseIntError> {
         .collect()
 }
 
+/// Decodes a value read without a type (a loose file's CSV text or JSON
+/// scalar) by the type of the column it is bound to, the way the typed
+/// readers decode it. Text goes through the same text decoder as a typed CSV
+/// field or JSON string, except that empty text stays empty text as it does
+/// for CSV. A number stands for a date only under the epoch format, as in
+/// `value_from_json`. Every other value, including a JSON number or boolean
+/// bound to a column of another type, is kept as read.
+pub(crate) fn decode_for_type(
+    value: Value,
+    type_name: Option<&str>,
+    date_format: DateFormat,
+) -> Value {
+    match value {
+        Value::Text(text) if text.is_empty() => Value::Text(text),
+        Value::Text(text) => value_from_text(&text, type_name, date_format),
+        Value::Int(_) | Value::Float(_) if date_format == DateFormat::Epoch => {
+            let rendered = match &value {
+                Value::Int(number) => number.to_string(),
+                Value::Float(number) => number.to_string(),
+                _ => return value,
+            };
+            decode_temporal(&rendered, type_name, date_format).unwrap_or(value)
+        }
+        other => other,
+    }
+}
+
 /// Type-name-directed text decoder shared by CSV fields and JSON's lossy
 /// string cases. Anything not recognized from `type_name` falls back to
 /// `Value::Text` — a conservative default that never fails the transfer,

@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, QueryRequest, Value};
 use dbflux_driver_sqlite::SqliteDriver;
-use dbflux_export::{CsvDelimiter, TextEncoding};
+use dbflux_export::{CsvDelimiter, DateFormat, TextEncoding};
 
 use super::*;
 use crate::column_map::ColumnMappingOverride;
@@ -399,6 +399,84 @@ fn one_source_column_mapped_onto_two_target_types_keeps_its_text() {
         ),
         vec![vec![text("integer"), Value::Int(123), text("00123")]]
     );
+}
+
+fn map_code_onto(plan: &mut ImportTablePlan, targets: &[&str]) {
+    plan.column_overrides = Some(
+        targets
+            .iter()
+            .map(|target| ColumnMappingOverride {
+                target_column: (*target).to_string(),
+                source_column: Some("code".to_string()),
+            })
+            .collect(),
+    );
+}
+
+/// Each binding of one source column decodes by its own target's type: `true`
+/// is `1` in a BOOLEAN column and stays `'true'` in a TEXT column.
+#[test]
+fn one_source_column_mapped_onto_boolean_and_text_decodes_each_binding() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(
+        &connection,
+        "CREATE TABLE flags (flag BOOLEAN, original TEXT)",
+    );
+    let path = scratch.write("flags.csv", b"code\ntrue\nfalse\n");
+    let file = inspect(&path, FileFormat::Csv).expect("inspect");
+    let mut plan = plan(&file, TableMappingMode::Existing, "flags");
+    map_code_onto(&mut plan, &["flag", "original"]);
+
+    import(&connection, &file, &plan, 10);
+
+    assert_eq!(
+        rows(
+            &connection,
+            "SELECT typeof(flag), flag, original FROM flags ORDER BY rowid"
+        ),
+        vec![
+            vec![text("integer"), Value::Int(1), text("true")],
+            vec![text("integer"), Value::Int(0), text("false")],
+        ]
+    );
+}
+
+fn timestamp_and_text_import(options: FormatOptions, content: &[u8]) -> Vec<Vec<Value>> {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(
+        &connection,
+        "CREATE TABLE events (happened TIMESTAMP, original TEXT)",
+    );
+    let path = scratch.write("events.csv", content);
+    let file = ImportFile::inspect(&path, FileFormat::Csv, options).expect("inspect");
+    let mut plan = plan(&file, TableMappingMode::Existing, "events");
+    map_code_onto(&mut plan, &["happened", "original"]);
+
+    import(&connection, &file, &plan, 10);
+
+    rows(&connection, "SELECT happened, original FROM events")
+}
+
+#[test]
+fn one_source_column_mapped_onto_timestamp_and_text_decodes_the_date_preset_per_binding() {
+    let decoded =
+        timestamp_and_text_import(FormatOptions::default(), b"code\n2024-03-05T10:20:30Z\n");
+    let epoch = timestamp_and_text_import(
+        FormatOptions {
+            date_format: DateFormat::Epoch,
+            ..FormatOptions::default()
+        },
+        b"code\n1709634030\n",
+    );
+
+    // The same instant decodes to the same stored timestamp under either
+    // preset; the TEXT column keeps whatever the file held.
+    assert_eq!(decoded[0][0], epoch[0][0]);
+    assert_ne!(decoded[0][0], text("2024-03-05T10:20:30Z"));
+    assert_eq!(decoded[0][1], text("2024-03-05T10:20:30Z"));
+    assert_eq!(epoch[0][1], text("1709634030"));
 }
 
 #[test]
