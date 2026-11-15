@@ -448,11 +448,18 @@ fn a_found_table_gives_its_columns_and_a_confirmed_missing_one_is_absent() {
 
     assert!(matches!(
         super::existing_table_columns(
-            Ok(table_info(Some(Vec::new()))),
+            Ok(table_info(Some(vec![dbflux_core::ColumnInfo {
+                name: "id".to_string(),
+                type_name: "int".to_string(),
+                nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                enum_values: None,
+            }]))),
             "people",
             || panic!("the listing is not consulted for a found table")
         ),
-        Ok(Some(columns)) if columns.is_empty()
+        Ok(Some(columns)) if columns.len() == 1
     ));
     assert!(matches!(
         super::existing_table_columns(
@@ -659,4 +666,73 @@ fn a_complete_snapshot_is_used_as_it_is() {
         })
     });
     assert!(matches!(absent, Ok(None)), "{absent:?}");
+}
+
+/// PostgreSQL lists schemas with no tables for an empty database: the
+/// database listing decides, and an unsupported one keeps the error (Redshift).
+#[test]
+fn a_snapshot_of_empty_schemas_defers_to_the_database_listing() {
+    let mut schema = dbflux_core::RelationalSchema::default();
+    schema.schemas.push(dbflux_core::DbSchemaInfo {
+        name: "public".to_string(),
+        tables: Vec::new(),
+        views: Vec::new(),
+        custom_types: None,
+    });
+    let snapshot = || Some(dbflux_core::SchemaSnapshot::relational(schema.clone()));
+
+    let mut empty = database_schema("orders");
+    empty.tables.clear();
+    let absent = lookup_with_listing(snapshot(), false, Some(empty));
+    assert!(matches!(absent, Ok(None)), "{absent:?}");
+
+    let unsupported = lookup_with_listing(snapshot(), false, None);
+    assert!(unsupported.is_err(), "{unsupported:?}");
+}
+
+/// SQL Server and Redshift answer a lookup of a missing table with no
+/// columns instead of an error: the listing decides whether it is there.
+#[test]
+fn a_lookup_with_no_columns_is_decided_by_the_listing() {
+    for columns in [None, Some(Vec::new())] {
+        let absent =
+            super::existing_table_columns(Ok(table_info(columns.clone())), "people", || {
+                Some(snapshot_with("orders"))
+            });
+        assert!(matches!(absent, Ok(None)), "{absent:?}");
+
+        let present =
+            super::existing_table_columns(Ok(table_info(columns.clone())), "people", || {
+                Some(snapshot_with("People"))
+            });
+        assert!(
+            matches!(&present, Ok(Some(found)) if found.is_empty()),
+            "{present:?}"
+        );
+
+        let undecided = super::existing_table_columns(Ok(table_info(columns)), "people", || None);
+        assert!(
+            matches!(&undecided, Ok(Some(found)) if found.is_empty()),
+            "{undecided:?}"
+        );
+    }
+}
+
+#[test]
+fn a_lookup_with_columns_does_not_consult_the_listing() {
+    let column = dbflux_core::ColumnInfo {
+        name: "id".to_string(),
+        type_name: "int".to_string(),
+        nullable: false,
+        is_primary_key: true,
+        default_value: None,
+        enum_values: None,
+    };
+    let found = super::existing_table_columns(Ok(table_info(Some(vec![column]))), "people", || {
+        panic!("the listing is not consulted when the lookup has columns")
+    });
+    assert!(
+        matches!(&found, Ok(Some(columns)) if columns.len() == 1),
+        "{found:?}"
+    );
 }
