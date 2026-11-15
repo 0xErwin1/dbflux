@@ -2437,7 +2437,7 @@ document:
       one: "테이블 %{count}개 가져오기"
       many: "테이블 %{count}개 가져오기"
     rail:
-      pick_folder: 폴더 선택
+      pick_folder: 원본 선택
       configure: 구성
       confirm: 확인
       run: 실행

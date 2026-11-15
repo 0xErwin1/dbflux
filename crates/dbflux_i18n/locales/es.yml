@@ -2437,7 +2437,7 @@ document:
       one: "Importar %{count} tabla"
       many: "Importar %{count} tablas"
     rail:
-      pick_folder: Elegir carpeta
+      pick_folder: Elegir origen
       configure: Configurar
       confirm: Confirmar
       run: Ejecutar

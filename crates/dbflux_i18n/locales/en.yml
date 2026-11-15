@@ -2437,7 +2437,7 @@ document:
       one: "Import %{count} table"
       many: "Import %{count} tables"
     rail:
-      pick_folder: Pick Folder
+      pick_folder: Pick Source
       configure: Configure
       confirm: Confirm
       run: Run

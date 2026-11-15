@@ -2437,7 +2437,7 @@ document:
       one: "导入 %{count} 张表"
       many: "导入 %{count} 张表"
     rail:
-      pick_folder: 选择文件夹
+      pick_folder: 选择来源
       configure: 配置
       confirm: 确认
       run: 执行
