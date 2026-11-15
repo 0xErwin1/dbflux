@@ -12,31 +12,31 @@
     },
     {
       "file": "02-isl-light-export-states.html",
-      "title": "Export wizard: states (SQL not offered, invalid batch size, encoding error)",
-      "tradeoff": "Islands, light: Puts three edge states on one board so they can be compared; each is a full dialog, which makes the board wide.",
+      "title": "Export wizard: unavailable, blocked and failed states (SQL not offered, invalid batch size, no folder, no tables, encoding error)",
+      "tradeoff": "Islands, light: Puts every state where an option is missing or Continue is blocked on one board so each reason can be compared; each is a full dialog, which makes the board wide and tall.",
       "width": 1720,
-      "height": 1430
+      "height": 2130
     },
     {
       "file": "03-isl-light-import-source.html",
       "title": "Import wizard: Pick Source and a picked file",
       "tradeoff": "Islands, light: Treats the file entry as a second source on the existing step rather than a separate wizard; the source buttons stay plain, so the two sources read as equals.",
       "width": 1400,
-      "height": 1350
+      "height": 1480
     },
     {
       "file": "04-isl-light-import-options-mapping.html",
       "title": "Import wizard: CSV options, JSON variant and column mapping",
       "tradeoff": "Islands, light: Draws the mapping controls exactly as the app has them, one pair rebind at a time, instead of proposing a column list the code does not have.",
       "width": 1400,
-      "height": 1360
+      "height": 1440
     },
     {
       "file": "05-isl-light-import-errors.html",
       "title": "Import wizard: error states (header decode, broken JSON, lookup failure)",
-      "tradeoff": "Islands, light: Uses one error block for the picker and for Configure, so the two places an unreadable file can land look alike; the code styles them differently today.",
+      "tradeoff": "Islands, light: Uses one error block for the picker and for Configure, so the two places an unreadable file can land look alike; the code styles them differently today; every block ends with the next step.",
       "width": 1400,
-      "height": 1550
+      "height": 1620
     }
   ]
 }
