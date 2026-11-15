@@ -13,6 +13,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **The AWS SSO wizard shows why the login failed** — When account discovery in the AWS SSO wizard fails because the SSO login failed (for example the AWS CLI is missing or the device authorization timed out), the wizard now shows the login error instead of a generic "login required" message from the account listing. A login that fails while a cached token still lists the accounts is logged and discovery continues as before.
 * **SQLite text with a NUL byte is written intact** — A text value that contains a NUL byte was written as a quoted literal holding the raw byte, which SQLite reads as the end of the statement. It is now written as its quoted segments joined with `char(0)`, so SQL export and import keep every byte and the text type in UTF-8, UTF-16LE and UTF-16BE databases. A long run of NUL bytes is grouped in parentheses so the expression stays within SQLite's depth limit; text without a NUL is written as before (#805).
 
 ## [0.10.1] - 2026-11-14
