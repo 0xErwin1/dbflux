@@ -2458,6 +2458,21 @@ document:
       apply_mapping: Aplicar mapeamento
       continue: Continuar
       unmatched_source: "Coluna(s) de origem sem correspondência, serão ignoradas a menos que sejam remapeadas: %{names}"
+    pick_file:
+      description: "Ou importe um único arquivo CSV, JSON ou JSON Lines em uma tabela."
+      choose_file: "Escolher arquivo…"
+      reading_file: "Lendo arquivo…"
+      dialog_title: "Escolher arquivo para importar"
+      filter_label: "CSV, JSON e JSON Lines"
+      error:
+        unsupported: "Somente arquivos .csv, .json e .jsonl podem ser importados."
+        invalid_file: "Não foi possível ler o arquivo: %{error}"
+    file:
+      source: "Arquivo: %{file} (%{format})"
+      target_table_label: "Tabela de destino"
+      target_table_placeholder: "Nome da tabela (padrão: nome do arquivo)"
+      use_table: "Usar tabela"
+      null_text_hint: "Texto do arquivo que representa NULL. Com texto vazio, um campo vazio é NULL."
     mapping_mode:
       create: Criar
       existing: Existente (somente inserir)

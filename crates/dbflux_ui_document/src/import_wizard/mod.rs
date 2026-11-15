@@ -10,6 +10,8 @@
 //! by definition already connected.
 
 mod column_mapping;
+mod file_flow;
+mod file_options;
 
 use dbflux_core::keymap_types::ContextId;
 use std::path::PathBuf;
@@ -41,6 +43,7 @@ use crate::progress_forwarding::spawn_task_progress_forwarder;
 
 pub use column_mapping::TableImportConfig;
 use column_mapping::mapping_mode_options;
+use file_flow::{FileImportState, FileInputs};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WizardStep {
@@ -207,6 +210,13 @@ pub struct ImportWizard {
     step: WizardStep,
     manifest_dir: Option<PathBuf>,
     manifest_error: Option<String>,
+    /// The loose file picked with "Import file"; takes the place of
+    /// `manifest_dir` as the import's source while set.
+    file_import: Option<FileImportState>,
+    file_inputs: Option<FileInputs>,
+    /// Target table name a fresh file pick sets on its text field, applied at
+    /// the next render because setting an input's text needs the window.
+    pending_file_inputs: Option<String>,
     rows: Vec<TableImportRow>,
     supports_truncate: bool,
     /// Set only by the Confirm step's "Yes, proceed" click; reset on
@@ -238,6 +248,9 @@ impl ImportWizard {
             step: WizardStep::PickFolder,
             manifest_dir: None,
             manifest_error: None,
+            file_import: None,
+            file_inputs: None,
+            pending_file_inputs: None,
             rows: Vec::new(),
             supports_truncate: false,
             confirmed_destructive: false,
@@ -269,6 +282,9 @@ impl ImportWizard {
         self.step = WizardStep::PickFolder;
         self.manifest_dir = None;
         self.manifest_error = None;
+        self.file_import = None;
+        self.file_inputs = Some(FileInputs::new(window, cx));
+        self.pending_file_inputs = None;
         self.rows.clear();
         self._row_subscriptions.clear();
         self.confirmed_destructive = false;
@@ -405,6 +421,7 @@ impl ImportWizard {
 
             this.update(cx, |this, cx| {
                 this.loading = false;
+                this.file_import = None;
                 this.manifest_dir = Some(dir);
                 this.supports_truncate = supports_truncate;
                 this.build_rows(configs, cx);
@@ -562,7 +579,7 @@ impl ImportWizard {
             self.return_to_configure();
             return;
         };
-        let Some(manifest_dir) = self.manifest_dir.clone() else {
+        let Some(job) = self.import_job() else {
             self.return_to_configure();
             return;
         };
@@ -630,13 +647,12 @@ impl ImportWizard {
                         destructive_confirmed,
                     };
 
-                    run_import(
+                    job.run(
                         &connection,
-                        &manifest_dir,
                         &plans,
                         &options,
                         &cancel_token,
-                        move |_index, rows_done, estimated_total| {
+                        move |rows_done, estimated_total| {
                             if let Ok(mut guard) = progress.lock() {
                                 *guard = (rows_done, estimated_total);
                             }
@@ -757,10 +773,11 @@ impl ImportWizard {
 }
 
 impl Render for ImportWizard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+        self.apply_pending_file_inputs(window, cx);
 
         let close_entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
@@ -836,10 +853,30 @@ impl ImportWizard {
                 .disabled(self.loading)
                 .on_click(cx.listener(|this, _, _, cx| this.choose_folder(cx))),
             )
+            .child(Text::body(dbflux_i18n::t!(
+                "document.import_wizard.pick_file.description"
+            )))
+            .child(
+                div()
+                    .debug_selector(|| "import-wizard-choose-file".to_string())
+                    .child(
+                        Button::new(
+                            "import-wizard-choose-file",
+                            if self.loading {
+                                dbflux_i18n::t!("document.import_wizard.pick_file.reading_file")
+                            } else {
+                                dbflux_i18n::t!("document.import_wizard.pick_file.choose_file")
+                            },
+                        )
+                        .disabled(self.loading)
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_file(cx))),
+                    ),
+            )
             .into_any_element()
     }
 
     fn render_configure(&self, cx: &mut Context<Self>) -> AnyElement {
+        let file_options = self.render_file_options(cx);
         let rows = self.rows.iter().enumerate().map(|(table_index, row)| {
             let unmatched = row.config.unmatched_source_names();
 
@@ -889,6 +926,7 @@ impl ImportWizard {
             .min_h(px(0.0))
             .gap(Spacing::MD)
             .p(Spacing::MD)
+            .when_some(file_options, |d, options| d.child(options))
             .child(
                 div()
                     .id("import-wizard-tables")
@@ -906,6 +944,7 @@ impl ImportWizard {
                     "import-wizard-continue",
                     dbflux_i18n::t!("document.import_wizard.configure.continue"),
                 )
+                .disabled(self.file_import_blocked())
                 .on_click(cx.listener(|this, _, _, cx| this.continue_from_configure(cx))),
             )
             .into_any_element()
