@@ -142,7 +142,7 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
             report: None,
             toast_success: false,
             summary: dbflux_i18n::t!("document.export_wizard.toast.cancelled"),
-            warnings: Vec::new(),
+            warnings: itemized_status_lines(&outcome.tables, &outcome.warnings),
         },
         Ok(outcome) => {
             let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
@@ -219,15 +219,18 @@ fn summarize(outcome: &ExportOutcome) -> String {
 }
 
 /// Renders one status line per planned table when the run left any table
-/// `Failed` or `NotStarted`, so the user sees exactly which tables succeeded,
-/// which one failed with what error, and which were never attempted — not
+/// `Failed`, `Cancelled` or `NotStarted`, so the user sees exactly which
+/// tables succeeded, which one failed with what error, which one a cancel
+/// stopped partway, and which were never attempted — not
 /// just the last error swallowed into a single toast (R4-002/B-007). On a
 /// fully successful/skipped run, only the engine's own warnings are shown.
 fn itemized_status_lines(tables: &[ExportedTable], engine_warnings: &[String]) -> Vec<String> {
     let has_issue = tables.iter().any(|t| {
         matches!(
             t.status,
-            TableTransferStatus::Failed { .. } | TableTransferStatus::NotStarted
+            TableTransferStatus::Failed { .. }
+                | TableTransferStatus::Cancelled { .. }
+                | TableTransferStatus::NotStarted
         )
     });
 
@@ -540,7 +543,11 @@ mod tests {
     #[test]
     fn resolve_run_outcome_cancelled_run_skips_task_error_and_toast() {
         let result = Ok(outcome(
-            vec![exported(None, "users", TableTransferStatus::NotStarted)],
+            vec![
+                exported(None, "users", TableTransferStatus::Completed { rows: 4 }),
+                exported(None, "orders", TableTransferStatus::Cancelled { rows: 2 }),
+                exported(None, "items", TableTransferStatus::NotStarted),
+            ],
             Vec::new(),
             true,
         ));
@@ -552,7 +559,9 @@ mod tests {
         assert!(resolution.report.is_none());
         assert!(!resolution.toast_success);
         assert_eq!(resolution.summary, "Export cancelled");
-        assert!(resolution.warnings.is_empty());
+        assert_eq!(resolution.warnings.len(), 3);
+        assert!(resolution.warnings[1].contains("orders"));
+        assert!(resolution.warnings[1].contains('2'));
     }
 
     #[test]
