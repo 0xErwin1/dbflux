@@ -567,28 +567,6 @@ fn a_broken_json_file_stays_on_the_picker_step_with_its_error(cx: &mut gpui::Tes
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// MySQL, SQL Server, DuckDB and ClickHouse list only databases in their
-/// snapshot, so it cannot rule a table out: the lookup error stands.
-#[test]
-fn a_failed_lookup_with_a_listing_that_holds_no_tables_keeps_the_original_error() {
-    let mut schema = dbflux_core::RelationalSchema::default();
-    schema.databases.push(dbflux_core::DatabaseInfo {
-        name: "shop".to_string(),
-        is_current: true,
-    });
-
-    let failure =
-        super::existing_table_columns(Err(lookup_error("lock wait timeout")), "people", || {
-            Some(dbflux_core::SchemaSnapshot::relational(schema))
-        })
-        .expect_err("a listing without tables cannot confirm the table is absent");
-
-    assert!(
-        failure.to_string().contains("lock wait timeout"),
-        "{failure}"
-    );
-}
-
 fn databases_only_snapshot() -> dbflux_core::SchemaSnapshot {
     let mut schema = dbflux_core::RelationalSchema::default();
     schema.databases.push(dbflux_core::DatabaseInfo {
@@ -643,14 +621,24 @@ fn a_databases_only_snapshot_defers_to_the_target_databases_listing() {
 }
 
 #[test]
-fn a_databases_only_snapshot_with_an_unreadable_or_empty_database_listing_keeps_the_error() {
+fn a_databases_only_snapshot_with_an_unreadable_database_listing_keeps_the_error() {
     let unreadable = lookup_with_listing(Some(databases_only_snapshot()), false, None);
     assert!(unreadable.is_err(), "{unreadable:?}");
+}
 
+/// A database listing that was read enumerates the database: when it holds
+/// no tables at all, the table is absent (the first table of an empty
+/// database on an RPC connection).
+#[test]
+fn an_empty_enumerated_database_listing_makes_the_table_absent() {
     let mut empty = database_schema("orders");
     empty.tables.clear();
-    let empty = lookup_with_listing(Some(databases_only_snapshot()), false, Some(empty));
-    assert!(empty.is_err(), "{empty:?}");
+
+    let absent = lookup_with_listing(Some(databases_only_snapshot()), false, Some(empty.clone()));
+    assert!(matches!(absent, Ok(None)), "{absent:?}");
+
+    let lazy = lookup_with_listing(None, true, Some(empty));
+    assert!(lazy.is_err(), "no snapshot at all rules nothing out");
 }
 
 #[test]

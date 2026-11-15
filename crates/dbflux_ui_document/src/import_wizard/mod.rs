@@ -46,7 +46,7 @@ use crate::progress_forwarding::spawn_task_progress_forwarder;
 pub use column_mapping::TableImportConfig;
 use column_mapping::mapping_mode_options;
 use file_flow::{FileImportState, FileInputs};
-use keyboard::ConfigureField;
+use keyboard::{ConfigureField, with_cursor_ring};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WizardStep {
@@ -297,7 +297,6 @@ impl ImportWizard {
         self.pending_file_inputs = None;
         self.next_file_read_request();
         self.rows.clear();
-        self.field_cursor = 0;
         self._row_subscriptions.clear();
         self.confirmed_destructive = false;
         self.loading = false;
@@ -436,6 +435,7 @@ impl ImportWizard {
                 this.file_import = None;
                 this.manifest_dir = Some(dir);
                 this.supports_truncate = supports_truncate;
+                this.field_cursor = 0;
                 this.build_rows(configs, cx);
                 this.step = WizardStep::Configure;
                 cx.notify();
@@ -447,9 +447,12 @@ impl ImportWizard {
 
     fn build_rows(&mut self, configs: Vec<TableImportConfig>, cx: &mut Context<Self>) {
         self.rows.clear();
-        self.field_cursor = 0;
         self._row_subscriptions.clear();
         let supports_truncate = self.supports_truncate;
+        // A read with other options keeps the cursor where it was.
+        self.field_cursor = self
+            .field_cursor
+            .min(Self::field_count(self.file_import.as_ref(), configs.len()).saturating_sub(1));
 
         for (table_index, config) in configs.into_iter().enumerate() {
             let mode_options = mapping_mode_options(supports_truncate);
@@ -906,7 +909,8 @@ impl ImportWizard {
     }
 
     fn render_configure(&self, cx: &mut Context<Self>) -> AnyElement {
-        let file_options = self.render_file_options(cx);
+        let active = self.cursor_field();
+        let file_options = self.render_file_options(active, cx);
         let rows = self.rows.iter().enumerate().map(|(table_index, row)| {
             let unmatched = row.config.unmatched_source_names();
 
@@ -924,17 +928,20 @@ impl ImportWizard {
                     div()
                         .flex()
                         .gap(Spacing::SM)
-                        .child(self.with_cursor_ring(
+                        .child(with_cursor_ring(
+                            active,
                             ConfigureField::Mode(table_index),
                             row.mapping_mode_dropdown.clone(),
                             cx,
                         ))
-                        .child(self.with_cursor_ring(
+                        .child(with_cursor_ring(
+                            active,
                             ConfigureField::Target(table_index),
                             row.rebind_target_dropdown.clone(),
                             cx,
                         ))
-                        .child(self.with_cursor_ring(
+                        .child(with_cursor_ring(
+                            active,
                             ConfigureField::Source(table_index),
                             row.rebind_source_dropdown.clone(),
                             cx,

@@ -32,7 +32,7 @@ use super::file_options::{
     encoding_from_segment_id, encoding_label, encoding_segment_id, picker_extensions,
     visible_file_options,
 };
-use super::keyboard::ConfigureField;
+use super::keyboard::{ConfigureField, with_cursor_ring};
 use super::{ImportWizard, WizardStep};
 
 /// Width of the target table and NULL text fields. (220 px at the base font size)
@@ -208,15 +208,13 @@ fn lists_objects(relational: &RelationalSchema) -> bool {
 }
 
 /// Whether the schema may hold a table or view named `table`, in any schema
-/// and ignoring case. A schema that is not relational, or that lists no
-/// tables at all (a snapshot of databases only), cannot rule it out.
+/// and ignoring case. A schema that is not relational cannot rule it out. The
+/// schema is otherwise taken as an enumeration of the objects, which
+/// [`complete_listing`] guarantees, so an empty one rules the table out.
 fn snapshot_may_hold(snapshot: &SchemaSnapshot, table: &str) -> bool {
     let Some(relational) = snapshot.as_relational() else {
         return true;
     };
-    if !lists_objects(relational) {
-        return true;
-    }
     let named = |name: &str| name.eq_ignore_ascii_case(table);
 
     relational.tables.iter().any(|entry| named(&entry.name))
@@ -231,9 +229,10 @@ fn snapshot_may_hold(snapshot: &SchemaSnapshot, table: &str) -> bool {
 /// connection's schema snapshot. MySQL, SQL Server, DuckDB, ClickHouse and
 /// lazily loading RPC drivers list only databases there, and tables load per
 /// database; so a snapshot with no tables, or any snapshot of a `lazy`
-/// connection, is replaced by the target database's listing. When that is
-/// unreadable or lists no tables either, nothing can confirm a miss and the
-/// answer is a listing that rules nothing out.
+/// connection, is replaced by the target database's listing. A listing that
+/// was read enumerates the database, even when it is empty (the first table
+/// of an empty database). When it is unreadable nothing can confirm a miss,
+/// and the answer is `None`.
 fn complete_listing(
     first: Option<SchemaSnapshot>,
     lazy: bool,
@@ -376,6 +375,7 @@ impl ImportWizard {
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.pending_file_inputs = Some(stem);
+        self.field_cursor = 0;
         self.read_file(connection, path, format, FormatOptions::default(), None, cx);
     }
 
@@ -588,7 +588,11 @@ impl ImportWizard {
     }
 
     /// The file's target table and format options, above the table list.
-    pub(super) fn render_file_options(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_file_options(
+        &self,
+        active: Option<ConfigureField>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let state = self.file_import.as_ref()?;
         let inputs = self.file_inputs.as_ref()?;
         let visible = visible_file_options(state.format);
@@ -631,8 +635,8 @@ impl ImportWizard {
         ];
 
         if visible.delimiter_and_encoding {
-            rows.push(self.render_delimiter_row(state.options.delimiter, cx));
-            rows.push(self.render_encoding_row(state.options.encoding, cx));
+            rows.push(self.render_delimiter_row(state.options.delimiter, active, cx));
+            rows.push(self.render_encoding_row(state.options.encoding, active, cx));
         }
         if visible.null_text {
             rows.push(Self::render_null_text_row(inputs, cx));
@@ -652,7 +656,12 @@ impl ImportWizard {
         )
     }
 
-    fn render_delimiter_row(&self, selected: CsvDelimiter, cx: &mut Context<Self>) -> AnyElement {
+    fn render_delimiter_row(
+        &self,
+        selected: CsvDelimiter,
+        active: Option<ConfigureField>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let entity = cx.entity().downgrade();
         let items: Vec<SegmentedItem> = CsvDelimiter::ALL
             .into_iter()
@@ -673,16 +682,24 @@ impl ImportWizard {
 
         modal_form_row(
             dbflux_i18n::t!("document.export_wizard.format_options.delimiter_label"),
-            div()
-                .flex()
-                .child(self.with_cursor_ring(ConfigureField::Delimiter, picker, cx)),
+            div().flex().child(with_cursor_ring(
+                active,
+                ConfigureField::Delimiter,
+                picker,
+                cx,
+            )),
             None,
             cx,
         )
         .into_any_element()
     }
 
-    fn render_encoding_row(&self, selected: TextEncoding, cx: &mut Context<Self>) -> AnyElement {
+    fn render_encoding_row(
+        &self,
+        selected: TextEncoding,
+        active: Option<ConfigureField>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let entity = cx.entity().downgrade();
         let items: Vec<SegmentedItem> = TextEncoding::ALL
             .into_iter()
@@ -703,9 +720,12 @@ impl ImportWizard {
 
         modal_form_row(
             dbflux_i18n::t!("document.export_wizard.format_options.encoding_label"),
-            div()
-                .flex()
-                .child(self.with_cursor_ring(ConfigureField::Encoding, picker, cx)),
+            div().flex().child(with_cursor_ring(
+                active,
+                ConfigureField::Encoding,
+                picker,
+                cx,
+            )),
             None,
             cx,
         )

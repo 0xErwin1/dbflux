@@ -14,6 +14,7 @@ use dbflux_core::keymap_types::Command;
 use dbflux_export::{CsvDelimiter, TextEncoding};
 use gpui::*;
 
+use super::file_flow::FileImportState;
 use super::file_options::{delimiter_segment_id, encoding_segment_id, visible_file_options};
 use super::{ImportWizard, WizardStep};
 
@@ -39,7 +40,33 @@ fn cycled<T: Copy + PartialEq>(all: &[T], current: T, forward: bool) -> Option<T
     all.get(next).copied()
 }
 
+/// Wraps `control` in the keyboard cursor's ring when `active` is `field`.
+pub(super) fn with_cursor_ring(
+    active: Option<ConfigureField>,
+    field: ConfigureField,
+    control: impl IntoElement,
+    cx: &App,
+) -> Div {
+    focus_ring(
+        active == Some(field),
+        FocusShape::Chamfer(ChamferCut::CONTROL),
+        None,
+        control,
+        cx,
+    )
+}
+
 impl ImportWizard {
+    /// How many choices the cursor visits for a file and a number of rows.
+    pub(super) fn field_count(file: Option<&FileImportState>, rows: usize) -> usize {
+        let file_fields = match file {
+            Some(state) if visible_file_options(state.format).delimiter_and_encoding => 2,
+            _ => 0,
+        };
+
+        file_fields + rows * 3
+    }
+
     /// The choices the cursor visits, in reading order: the CSV delimiter and
     /// encoding when the picked file has them, then each row's mapping mode,
     /// target column and source column.
@@ -69,27 +96,6 @@ impl ImportWizard {
         }
 
         self.configure_fields().get(self.field_cursor).copied()
-    }
-
-    /// Whether the cursor rests on `field`, for the ring drawn around it.
-    pub(super) fn cursor_on(&self, field: ConfigureField) -> bool {
-        self.cursor_field() == Some(field)
-    }
-
-    /// Wraps `control` in the keyboard cursor's ring when it rests on `field`.
-    pub(super) fn with_cursor_ring(
-        &self,
-        field: ConfigureField,
-        control: impl IntoElement,
-        cx: &App,
-    ) -> Div {
-        focus_ring(
-            self.cursor_on(field),
-            FocusShape::Chamfer(ChamferCut::CONTROL),
-            None,
-            control,
-            cx,
-        )
     }
 
     fn move_cursor(&mut self, forward: bool, cx: &mut Context<Self>) {

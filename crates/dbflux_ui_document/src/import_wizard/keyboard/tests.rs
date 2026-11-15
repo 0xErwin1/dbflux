@@ -418,3 +418,47 @@ fn the_cursor_does_not_move_outside_the_configure_step(cx: &mut TestAppContext) 
 
     window.update(|_, cx| assert_eq!(wizard.read(cx).field_cursor, 0));
 }
+
+/// Choosing an encoding reads the file again; the cursor stays on it, so the
+/// next `l` changes the encoding again instead of the delimiter.
+#[gpui::test]
+fn the_cursor_stays_on_the_encoding_after_a_reload(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("cursor_reload", "people.csv", b"id,name\n1,Ada\n");
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path);
+
+    press(window, "j l");
+    window.update(|_, cx| {
+        let wizard = wizard.read(cx);
+        let options = &wizard.file_import.as_ref().expect("file").options;
+        assert_eq!(options.encoding, TextEncoding::Utf8Bom);
+        assert_eq!(wizard.cursor_field(), Some(ConfigureField::Encoding));
+    });
+
+    press(window, "l");
+    window.update(|_, cx| {
+        let options = &wizard.read(cx).file_import.as_ref().expect("file").options;
+        assert_eq!(options.encoding, TextEncoding::Utf16Le);
+        assert_eq!(options.delimiter, CsvDelimiter::Comma);
+    });
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// A new file starts the cursor over.
+#[gpui::test]
+fn picking_another_file_resets_the_cursor(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("cursor_new", "people.csv", b"id,name\n1,Ada\n");
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path.clone());
+    press(window, "j");
+
+    pick_file(&wizard, window, path);
+
+    window.update(|_, cx| {
+        assert_eq!(
+            wizard.read(cx).cursor_field(),
+            Some(ConfigureField::Delimiter)
+        );
+    });
+    std::fs::remove_dir_all(&directory).ok();
+}
