@@ -1,0 +1,42 @@
+{
+  "title": "DBFlux redesign: Export and import formats · light",
+  "brief": "Design catch-up for the export wizard (PRs #1316 HTML, Markdown and XML, #1317 per-format options, #1318 SQL INSERT export) and the import wizard file entry (open PR #1321). Shows what the app does now, in the Bolt Byzantium app system; differences from the code are marked on the boards.",
+  "feature": "odd/tasks/805-export-import-formats.md",
+  "artboards": [
+    {
+      "file": "01-isl-light-export-format.html",
+      "title": "Export wizard: Format step with per-format options",
+      "tradeoff": "Islands, light: Shows every option set and its visibility rule on one board; the CSV dialog is complete, the other formats are compact, so the exact dialog height of each format is not drawn.",
+      "width": 1360,
+      "height": 1540
+    },
+    {
+      "file": "02-isl-light-export-states.html",
+      "title": "Export wizard: unavailable, blocked and failed states (SQL not offered, invalid batch size, no folder, no tables, encoding error)",
+      "tradeoff": "Islands, light: Puts every state where an option is missing or Continue is blocked on one board so each reason can be compared; each is a full dialog, which makes the board wide and tall.",
+      "width": 1720,
+      "height": 2130
+    },
+    {
+      "file": "03-isl-light-import-source.html",
+      "title": "Import wizard: Pick Source and a picked file",
+      "tradeoff": "Islands, light: Treats the file entry as a second source on the existing step rather than a separate wizard; the source buttons stay plain, so the two sources read as equals.",
+      "width": 1400,
+      "height": 1480
+    },
+    {
+      "file": "04-isl-light-import-options-mapping.html",
+      "title": "Import wizard: CSV options, JSON variant and column mapping",
+      "tradeoff": "Islands, light: Draws the mapping controls exactly as the app has them, one pair rebind at a time, instead of proposing a column list the code does not have; also shows the keyboard cursor with the design system focus state and a key legend.",
+      "width": 1400,
+      "height": 2130
+    },
+    {
+      "file": "05-isl-light-import-errors.html",
+      "title": "Import wizard: error states (header decode, broken JSON, lookup failure)",
+      "tradeoff": "Islands, light: Uses one error block for the picker and for Configure, so the two places an unreadable file can land look alike; the code styles them differently today; every block ends with the next step.",
+      "width": 1400,
+      "height": 1620
+    }
+  ]
+}
