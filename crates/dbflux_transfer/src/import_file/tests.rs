@@ -366,6 +366,28 @@ fn import(
 const PEOPLE: &str = "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, \
                       score REAL, note TEXT)";
 
+/// A JSON integer past `i64::MAX` reaches a text column with every digit.
+#[test]
+fn json_integer_beyond_i64_keeps_its_digits_in_a_text_column() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(&connection, "CREATE TABLE big (id TEXT)");
+    let path = scratch.write("big.jsonl", b"{\"id\":9223372036854775809}\n");
+    let file = inspect(&path, FileFormat::JsonLines).expect("inspect");
+
+    import(
+        &connection,
+        &file,
+        &plan(&file, TableMappingMode::Existing, "big"),
+        10,
+    );
+
+    assert_eq!(
+        rows(&connection, "SELECT id FROM big"),
+        vec![vec![text("9223372036854775809")]]
+    );
+}
+
 /// One CSV column mapped onto an integer and a text column keeps its leading
 /// zeros in the text column.
 #[test]

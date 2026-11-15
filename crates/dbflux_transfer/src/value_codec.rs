@@ -55,6 +55,10 @@ pub(crate) fn value_from_json(
             }
             if let Some(i) = n.as_i64() {
                 Value::Int(i)
+            } else if n.is_u64() {
+                // Past `i64::MAX` an integer would lose digits through `f64`,
+                // so it is kept as its exact decimal text.
+                Value::Decimal(n.to_string())
             } else if let Some(f) = n.as_f64() {
                 Value::Float(f)
             } else {
@@ -397,6 +401,17 @@ mod tests {
         assert_eq!(
             value_from_csv_field("42", None, &FormatOptions::default()),
             Value::Text("42".to_string())
+        );
+    }
+
+    /// An integer past `i64::MAX` is kept exactly instead of being rounded
+    /// through `f64`.
+    #[test]
+    fn json_integer_beyond_i64_is_kept_exact() {
+        let json: serde_json::Value = serde_json::from_str("9223372036854775809").expect("parse");
+        assert_eq!(
+            value_from_json(&json, None, DateFormat::default()),
+            Value::Decimal("9223372036854775809".to_string())
         );
     }
 
