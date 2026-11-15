@@ -373,3 +373,19 @@ NULL, las mismas opciones que el asistente de exportación; JSON y JSON Lines no
 tienen opciones. Cambiar el delimitador o la codificación vuelve a leer el
 archivo. Todo el archivo se lee una vez antes de escribir nada, así que una fila
 o registro mal formado detiene la importación sin tocar el destino.
+
+El diálogo de importación usa el mismo indicador de pasos superior y el mismo
+pie que el asistente de exportación: **Cancelar** en los dos primeros pasos,
+**Atrás** y **Cancelar** en la confirmación, y **Continuar** como botón
+principal. Un archivo o una carpeta que no se puede leer muestra un único bloque
+de peligro con el error y qué hacer a continuación. Un CSV cuyo encabezado no se
+decodifica se queda en Configurar, donde otro delimitador o codificación lo lee
+de nuevo; un JSON roto se queda en el primer paso hasta que se elige otro
+archivo; y una consulta fallida de la tabla de destino lo indica y se reintenta
+con **Usar tabla**. El pie explica por qué **Continuar** está desactivado (se
+está leyendo un archivo o no se pudo leer). JSON y JSON Lines muestran una línea
+que dice que no tienen opciones, y en una conexión que no puede truncar tablas
+una línea explica por qué Truncate no aparece. En los campos de texto, `Escape`
+sale del campo y devuelve las teclas al diálogo; un segundo `Escape` cierra el
+asistente. Cuando termina la ejecución, una fila por tabla lista su resultado, y
+una ejecución fallida dice qué hacer a continuación.

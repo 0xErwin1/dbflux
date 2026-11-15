@@ -36,7 +36,10 @@ fn file_state(format: FileFormat, error: Option<&str>) -> FileImportState {
         path: PathBuf::from("/data/people.csv"),
         format,
         options: FormatOptions::default(),
-        error: error.map(str::to_string),
+        error: error.map(|message| crate::import_wizard::errors::ErrorBlock {
+            message: message.to_string(),
+            next_step: "next".to_string(),
+        }),
         generation: 0,
         continue_after_read: false,
     }
@@ -507,6 +510,52 @@ fn a_failed_lookup_with_a_failed_listing_keeps_the_original_error() {
     assert!(message.contains("link down"), "{message}");
 }
 
+/// A failed target-table lookup keeps the file picked on Configure and names
+/// the lookup, not the file, in the danger block that tells the user to press
+/// Use Table again.
+#[gpui::test]
+fn a_failed_target_lookup_names_the_lookup_in_the_error_block(cx: &mut gpui::TestAppContext) {
+    use crate::import_wizard::errors::FileLoadError;
+
+    let (wizard, window) = wizard_on_fake_connection(cx);
+    let generation = wizard.update(window, |this, _| {
+        let generation = this.next_file_read_request();
+        let mut state = file_state(FileFormat::Csv, None);
+        state.generation = generation;
+        this.file_import = Some(state);
+        this.loading = true;
+        generation
+    });
+
+    wizard.update(window, |this, cx| {
+        this.finish_file_read(
+            generation,
+            false,
+            Err(FileLoadError::Lookup("Permission denied".to_string())),
+            cx,
+        );
+    });
+
+    window.update(|_, cx| {
+        let wizard = wizard.read(cx);
+        assert!(wizard.step == WizardStep::Configure);
+        assert!(wizard.file_import_blocked());
+        let block = wizard
+            .file_import
+            .as_ref()
+            .and_then(|state| state.error.clone())
+            .expect("the lookup error is shown");
+        assert_eq!(
+            block.message,
+            "Could not look up the target table: Permission denied"
+        );
+        assert_eq!(
+            block.next_step,
+            "Check the table name and your access to the connection, then press Use Table again."
+        );
+    });
+}
+
 /// A read from a previous session finishing after the wizard was reopened is
 /// ignored, even while the new session has a read in flight.
 #[gpui::test]
@@ -600,7 +649,7 @@ fn lookup_with_listing(
     first: Option<dbflux_core::SchemaSnapshot>,
     lazy: bool,
     for_database: Option<dbflux_core::DbSchemaInfo>,
-) -> Result<Option<Vec<dbflux_core::TransferColumn>>, dbflux_transfer::TransferError> {
+) -> Result<Option<Vec<dbflux_core::TransferColumn>>, super::TargetLookupError> {
     super::existing_table_columns(Err(lookup_error("lock wait timeout")), "people", || {
         super::complete_listing(first, lazy, || for_database)
     })

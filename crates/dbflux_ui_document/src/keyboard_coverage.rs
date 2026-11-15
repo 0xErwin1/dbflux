@@ -1441,6 +1441,7 @@ pub(crate) const IMPORT_WIZARD: SurfaceRegistry = SurfaceRegistry {
         ("import-wizard-choose-file", KeyboardPath::TabStop),
         ("import-wizard-file-apply-target", KeyboardPath::TabStop),
         ("import-wizard-continue", KeyboardPath::TabStop),
+        ("import-wizard-cancel", KeyboardPath::TabStop),
         ("import-wizard-cancel-confirm", KeyboardPath::TabStop),
         ("import-wizard-confirm-destructive", KeyboardPath::TabStop),
         ("import-wizard-cancel-run", KeyboardPath::TabStop),

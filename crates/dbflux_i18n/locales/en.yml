@@ -2461,6 +2461,10 @@ document:
         no_connection: No active connection for this profile
         no_dialog: No folder picker available on this platform
         invalid_bundle: "Invalid import bundle: %{error}"
+        no_connection_next: "Connect to the profile, then open the import again."
+        no_dialog_next: "Start DBFlux in a desktop session that offers a file dialog, then try again."
+        invalid_bundle_next: "Choose the folder Export wrote: it holds manifest.json. To import a single file, use Choose File… instead."
+      reading_hint: "Reading the manifest. Both buttons are off until it finishes."
     configure:
       mode_placeholder: Mode
       target_placeholder: Target column
@@ -2469,6 +2473,7 @@ document:
       apply_mapping: Apply Mapping
       continue: Continue
       unmatched_source: "Unmatched source column(s), will be skipped unless remapped: %{names}"
+      truncate_unavailable: "This connection can't truncate tables, so Truncate isn't listed. Choose Recreate to replace the table instead."
     pick_file:
       description: "Or import a single CSV, JSON or JSON Lines file into one table."
       choose_file: "Choose File…"
@@ -2478,12 +2483,19 @@ document:
       error:
         unsupported: "Only .csv, .json and .jsonl files can be imported."
         invalid_file: "Cannot read the file: %{error}"
+        unsupported_next: "Choose a file with one of those extensions."
+        lookup_failed: "Could not look up the target table: %{error}"
+        next_csv: "Choose another encoding or delimiter above: the file is read again as soon as you pick one."
+        next_json: "Fix the JSON in the file and choose it again, or choose another file."
+        next_lookup: "Check the table name and your access to the connection, then press Use Table again."
+      reading_hint: "Reading the file. Both buttons are off until it finishes."
     file:
       source: "File: %{file} (%{format})"
       target_table_label: "Target table"
       target_table_placeholder: "Table name (defaults to the file name)"
       use_table: "Use Table"
       null_text_hint: "Text in the file that stands for NULL. With empty text, an empty field is NULL."
+      json_no_options: "JSON and JSON Lines have no import options: the file itself defines the columns and the NULLs."
     mapping_mode:
       create: Create
       existing: Existing (insert only)
@@ -2504,6 +2516,7 @@ document:
     done:
       cancelled_rows: "%{rows} row(s) were imported before the import stopped."
       close: Close
+      closing_failed: "Close this dialog and fix the cause above. Tables listed as completed stay in the target; choose Skip for them if you import again."
     error:
       no_connection: No active connection for this import
     toast:
@@ -2520,6 +2533,11 @@ document:
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
       cancelled: "%{table}: cancelled after %{rows} row(s)"
+      not_attempted_after_failure: "%{table}: not attempted: the import stopped at the failed table"
+    footer:
+      reason:
+        file_read: "Continue is off until the file has been read."
+      cancel: "Cancel"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"
     connection_not_found: Connection not found

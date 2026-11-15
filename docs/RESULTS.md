@@ -342,3 +342,17 @@ the same choices as the export wizard; JSON and JSON Lines have no options.
 Changing the delimiter or encoding reads the file again. The whole file is read
 once before anything is written, so a malformed row or record stops the import
 with the target unchanged.
+
+The import dialog uses the same top stepper and footer as the export wizard:
+**Cancel** on the first two steps, **Back** and **Cancel** on the confirmation,
+and **Continue** as the primary button. A file or folder that cannot be read
+shows one danger block with the error and what to do next. A CSV whose header
+does not decode stays on Configure, where another delimiter or encoding reads it
+again; broken JSON stays on the first step until another file is chosen; and a
+failed look-up of the target table says so and is retried with **Use Table**.
+The footer says why **Continue** is off (a file is being read, or could not be
+read). JSON and JSON Lines show a line saying they have no options, and on a
+connection that cannot truncate tables a line explains why Truncate is not
+listed. In the text fields, `Escape` leaves the field and returns the keys to
+the dialog; a second `Escape` closes the wizard. When the run ends, one row per
+table lists its outcome, and a failed run says what to do next.

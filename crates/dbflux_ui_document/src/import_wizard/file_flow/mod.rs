@@ -26,7 +26,9 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
+use super::chrome::error_block;
 use super::column_mapping::TableImportConfig;
+use super::errors::{ErrorBlock, FileLoadError};
 use super::file_options::{
     delimiter_from_segment_id, delimiter_label, delimiter_segment_id, detect_format,
     encoding_from_segment_id, encoding_label, encoding_segment_id, picker_extensions,
@@ -34,6 +36,7 @@ use super::file_options::{
 };
 use super::keyboard::{ConfigureField, with_cursor_ring};
 use super::{ImportWizard, WizardStep};
+use crate::export_wizard::notes::info_line;
 
 /// Width of the target table and NULL text fields. (220 px at the base font size)
 const FILE_INPUT_WIDTH: Rems = ui(220.0);
@@ -90,7 +93,7 @@ pub(super) struct FileImportState {
     pub(super) options: FormatOptions,
     /// Set when the file could not be read with these options, so the user can
     /// change them; the run stays unavailable until it is read again.
-    error: Option<String>,
+    error: Option<ErrorBlock>,
     /// Identifies the latest read, so a slower earlier one cannot overwrite it.
     generation: u64,
     /// Continue to the run as soon as the read in flight finishes: the user
@@ -157,6 +160,17 @@ struct LoadedFile {
     config: TableImportConfig,
 }
 
+/// The target table could not be looked up. Carries the lookup's own error
+/// text, which the wizard shows after naming the lookup.
+#[derive(Debug)]
+struct TargetLookupError(String);
+
+impl std::fmt::Display for TargetLookupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// The columns of the target table, `None` when the table is not there.
 ///
 /// A lookup that reports the table as not found is a miss. Drivers hosted
@@ -174,7 +188,7 @@ fn existing_table_columns(
     lookup: Result<TableInfo, DbError>,
     table: &str,
     listing: impl FnOnce() -> Option<SchemaSnapshot>,
-) -> Result<Option<Vec<TransferColumn>>, TransferError> {
+) -> Result<Option<Vec<TransferColumn>>, TargetLookupError> {
     let error = match lookup {
         Ok(info) => {
             let columns: Vec<TransferColumn> = info
@@ -204,9 +218,7 @@ fn existing_table_columns(
 
     match listing() {
         Some(snapshot) if !snapshot_may_hold(&snapshot, table) => Ok(None),
-        _ => Err(TransferError::Source(format!(
-            "could not look up the target table: {error}"
-        ))),
+        _ => Err(TargetLookupError(error.to_string())),
     }
 }
 
@@ -272,8 +284,8 @@ fn load_file_config(
     format: FileFormat,
     options: FormatOptions,
     target_table: Option<String>,
-) -> Result<LoadedFile, TransferError> {
-    let file = ImportFile::inspect(path, format, options)?;
+) -> Result<LoadedFile, FileLoadError> {
+    let file = ImportFile::inspect(path, format, options).map_err(FileLoadError::Read)?;
     let source_table = file.table_name();
     let target_table = target_table.unwrap_or_else(|| source_table.clone());
 
@@ -291,7 +303,8 @@ fn load_file_config(
                 || connection.schema_for_database(target_database).ok(),
             )
         },
-    )?;
+    )
+    .map_err(|error| FileLoadError::Lookup(error.0))?;
     let target_exists = existing_columns.is_some();
 
     let mut manifest_table = file.manifest_table();
@@ -328,14 +341,13 @@ impl ImportWizard {
 
     pub(super) fn choose_file(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.resolve_connection(cx) else {
-            self.manifest_error = Some(dbflux_i18n::t!(
-                "document.import_wizard.pick_folder.error.no_connection"
-            ));
+            self.manifest_error = Some(ErrorBlock::no_connection());
             cx.notify();
             return;
         };
 
         self.loading = true;
+        self.loading_folder = false;
         self.manifest_error = None;
         cx.notify();
 
@@ -376,9 +388,7 @@ impl ImportWizard {
     ) {
         let Some(format) = detect_format(&path) else {
             self.loading = false;
-            self.manifest_error = Some(dbflux_i18n::t!(
-                "document.import_wizard.pick_file.error.unsupported"
-            ));
+            self.manifest_error = Some(ErrorBlock::unsupported_file());
             cx.notify();
             return;
         };
@@ -455,6 +465,7 @@ impl ImportWizard {
         let generation = self.next_file_read_request();
 
         self.loading = true;
+        self.loading_folder = false;
         self.file_import = Some(FileImportState {
             path: path.clone(),
             format,
@@ -500,7 +511,7 @@ impl ImportWizard {
         &mut self,
         generation: u64,
         supports_truncate: bool,
-        loaded: Result<LoadedFile, TransferError>,
+        loaded: Result<LoadedFile, FileLoadError>,
         cx: &mut Context<Self>,
     ) {
         if self
@@ -525,23 +536,25 @@ impl ImportWizard {
                     self.continue_from_configure(cx);
                 }
             }
-            Err(error) => {
-                let message = dbflux_i18n::t!(
-                    "document.import_wizard.pick_file.error.invalid_file",
-                    error = error.to_string()
-                );
-                report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
-
-                let options_can_fix_it = self
+            Err(failure) => {
+                let format = self
                     .file_import
                     .as_ref()
-                    .is_some_and(|state| state.format == FileFormat::Csv);
+                    .map_or(FileFormat::Csv, |state| state.format);
+                let block = ErrorBlock::file_load_failure(&failure, format);
+                report_error(
+                    UserFacingError::new(ErrorKind::User, block.message.clone()),
+                    cx,
+                );
+
+                let options_can_fix_it =
+                    format == FileFormat::Csv || matches!(failure, FileLoadError::Lookup(_));
 
                 if self.step == WizardStep::PickFolder && !options_can_fix_it {
                     // Nothing on the configure step could fix this file, and
                     // that step has no way back: the picker shows the error.
                     self.file_import = None;
-                    self.manifest_error = Some(message);
+                    self.manifest_error = Some(block);
                 } else {
                     // A CSV stays picked and the user lands on the configure
                     // step, where the delimiter and encoding can be changed
@@ -549,7 +562,7 @@ impl ImportWizard {
                     self.rows.clear();
                     self._row_subscriptions.clear();
                     if let Some(state) = self.file_import.as_mut() {
-                        state.error = Some(message);
+                        state.error = Some(block);
                     }
                     self.step = WizardStep::Configure;
                 }
@@ -647,6 +660,16 @@ impl ImportWizard {
             .into_any_element(),
         ];
 
+        if !visible.delimiter_and_encoding && !visible.null_text {
+            rows.insert(
+                1,
+                info_line(
+                    dbflux_i18n::t!("document.import_wizard.file.json_no_options"),
+                    "import-wizard-json-no-options",
+                    cx,
+                ),
+            );
+        }
         if visible.delimiter_and_encoding {
             rows.push(self.render_delimiter_row(state.options.delimiter, active, cx));
             rows.push(self.render_encoding_row(state.options.encoding, active, cx));
@@ -654,8 +677,8 @@ impl ImportWizard {
         if visible.null_text {
             rows.push(Self::render_null_text_row(inputs, cx));
         }
-        if let Some(error) = state.error.clone() {
-            rows.push(Text::caption(error).danger().into_any_element());
+        if let Some(error) = state.error.as_ref() {
+            rows.push(error_block(error, "import-wizard-error"));
         }
 
         Some(
