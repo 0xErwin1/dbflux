@@ -15,7 +15,8 @@ use dbflux_components::modals::{modal_form_row, modal_hint};
 use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Spacing, ui};
 use dbflux_core::{
-    CancelToken, Connection, DbError, DriverCapabilities, SchemaSnapshot, TableInfo, TransferColumn,
+    CancelToken, Connection, DbError, DbSchemaInfo, DriverCapabilities, RelationalSchema,
+    SchemaLoadingStrategy, SchemaSnapshot, TableInfo, TransferColumn,
 };
 use dbflux_export::{CsvDelimiter, FormatOptions, TextEncoding};
 use dbflux_transfer::import::{ImportOptions, ImportOutcome, ImportTablePlan, run_import};
@@ -195,12 +196,26 @@ fn existing_table_columns(
     }
 }
 
+/// Whether the relational schema lists any table or view.
+fn lists_objects(relational: &RelationalSchema) -> bool {
+    !relational.tables.is_empty()
+        || !relational.views.is_empty()
+        || relational
+            .schemas
+            .iter()
+            .any(|schema| !schema.tables.is_empty() || !schema.views.is_empty())
+}
+
 /// Whether the schema may hold a table or view named `table`, in any schema
-/// and ignoring case. A schema that is not relational cannot rule it out.
+/// and ignoring case. A schema that is not relational, or that lists no
+/// tables at all (a snapshot of databases only), cannot rule it out.
 fn snapshot_may_hold(snapshot: &SchemaSnapshot, table: &str) -> bool {
     let Some(relational) = snapshot.as_relational() else {
         return true;
     };
+    if !lists_objects(relational) {
+        return true;
+    }
     let named = |name: &str| name.eq_ignore_ascii_case(table);
 
     relational.tables.iter().any(|entry| named(&entry.name))
@@ -209,6 +224,31 @@ fn snapshot_may_hold(snapshot: &SchemaSnapshot, table: &str) -> bool {
             schema.tables.iter().any(|entry| named(&entry.name))
                 || schema.views.iter().any(|entry| named(&entry.name))
         })
+}
+
+/// The listing a missing table is checked against. `first` is the
+/// connection's schema snapshot. MySQL, SQL Server, DuckDB, ClickHouse and
+/// lazily loading RPC drivers list only databases there, and tables load per
+/// database; so a snapshot with no tables, or any snapshot of a `lazy`
+/// connection, is replaced by the target database's listing. When that is
+/// unreadable or lists no tables either, nothing can confirm a miss and the
+/// answer is a listing that rules nothing out.
+fn complete_listing(
+    first: Option<SchemaSnapshot>,
+    lazy: bool,
+    for_database: impl FnOnce() -> Option<DbSchemaInfo>,
+) -> Option<SchemaSnapshot> {
+    let snapshot = first?;
+    let complete = snapshot.as_relational().is_none_or(lists_objects) && !lazy;
+    if complete {
+        return Some(snapshot);
+    }
+
+    let database = for_database()?;
+    let mut schema = RelationalSchema::default();
+    schema.schemas.push(database);
+
+    Some(SchemaSnapshot::relational(schema))
 }
 
 /// Reads the file's columns and looks up the target table, off the UI thread.
@@ -228,7 +268,16 @@ fn load_file_config(
         connection.table_details(target_database, None, &target_table),
         &target_table,
         // A listing that cannot be read leaves the lookup error standing.
-        || connection.schema().ok(),
+        || {
+            complete_listing(
+                connection.schema().ok(),
+                matches!(
+                    connection.schema_loading_strategy(),
+                    SchemaLoadingStrategy::LazyPerDatabase
+                ),
+                || connection.schema_for_database(target_database).ok(),
+            )
+        },
     )?;
     let target_exists = existing_columns.is_some();
 

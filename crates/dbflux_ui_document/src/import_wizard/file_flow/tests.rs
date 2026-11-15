@@ -566,3 +566,109 @@ fn a_broken_json_file_stays_on_the_picker_step_with_its_error(cx: &mut gpui::Tes
     });
     std::fs::remove_dir_all(&directory).ok();
 }
+
+/// MySQL, SQL Server, DuckDB and ClickHouse list only databases in their
+/// snapshot, so it cannot rule a table out: the lookup error stands.
+#[test]
+fn a_failed_lookup_with_a_listing_that_holds_no_tables_keeps_the_original_error() {
+    let mut schema = dbflux_core::RelationalSchema::default();
+    schema.databases.push(dbflux_core::DatabaseInfo {
+        name: "shop".to_string(),
+        is_current: true,
+    });
+
+    let failure =
+        super::existing_table_columns(Err(lookup_error("lock wait timeout")), "people", || {
+            Some(dbflux_core::SchemaSnapshot::relational(schema))
+        })
+        .expect_err("a listing without tables cannot confirm the table is absent");
+
+    assert!(
+        failure.to_string().contains("lock wait timeout"),
+        "{failure}"
+    );
+}
+
+fn databases_only_snapshot() -> dbflux_core::SchemaSnapshot {
+    let mut schema = dbflux_core::RelationalSchema::default();
+    schema.databases.push(dbflux_core::DatabaseInfo {
+        name: "shop".to_string(),
+        is_current: true,
+    });
+    dbflux_core::SchemaSnapshot::relational(schema)
+}
+
+fn database_schema(table: &str) -> dbflux_core::DbSchemaInfo {
+    dbflux_core::DbSchemaInfo {
+        name: "shop".to_string(),
+        tables: vec![
+            crate::migrate_wizard::source_target::shared_coordinator_tests::test_table(None, table),
+        ],
+        views: Vec::new(),
+        custom_types: None,
+    }
+}
+
+/// The lookup that fails with a generic error, decided from the listing the
+/// production closure composes.
+fn lookup_with_listing(
+    first: Option<dbflux_core::SchemaSnapshot>,
+    lazy: bool,
+    for_database: Option<dbflux_core::DbSchemaInfo>,
+) -> Result<Option<Vec<dbflux_core::TransferColumn>>, dbflux_transfer::TransferError> {
+    super::existing_table_columns(Err(lookup_error("lock wait timeout")), "people", || {
+        super::complete_listing(first, lazy, || for_database)
+    })
+}
+
+#[test]
+fn a_databases_only_snapshot_defers_to_the_target_databases_listing() {
+    let absent = lookup_with_listing(
+        Some(databases_only_snapshot()),
+        false,
+        Some(database_schema("orders")),
+    );
+    assert!(matches!(absent, Ok(None)), "{absent:?}");
+
+    let present = lookup_with_listing(
+        Some(databases_only_snapshot()),
+        false,
+        Some(database_schema("people")),
+    )
+    .expect_err("the table is listed, so the lookup failure is real");
+    assert!(
+        present.to_string().contains("lock wait timeout"),
+        "{present}"
+    );
+}
+
+#[test]
+fn a_databases_only_snapshot_with_an_unreadable_or_empty_database_listing_keeps_the_error() {
+    let unreadable = lookup_with_listing(Some(databases_only_snapshot()), false, None);
+    assert!(unreadable.is_err(), "{unreadable:?}");
+
+    let mut empty = database_schema("orders");
+    empty.tables.clear();
+    let empty = lookup_with_listing(Some(databases_only_snapshot()), false, Some(empty));
+    assert!(empty.is_err(), "{empty:?}");
+}
+
+#[test]
+fn a_lazily_loading_connection_defers_to_the_database_listing_even_with_tables() {
+    let absent = lookup_with_listing(
+        Some(snapshot_with("people")),
+        true,
+        Some(database_schema("orders")),
+    );
+    assert!(matches!(absent, Ok(None)), "{absent:?}");
+}
+
+#[test]
+fn a_complete_snapshot_is_used_as_it_is() {
+    let absent = super::existing_table_columns(Err(lookup_error("gone")), "people", || {
+        super::complete_listing(Some(snapshot_with("orders")), false, || {
+            panic!("a complete listing needs no second one")
+        })
+    });
+    assert!(matches!(absent, Ok(None)), "{absent:?}");
+}
