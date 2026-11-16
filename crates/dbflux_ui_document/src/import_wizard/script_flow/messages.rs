@@ -3,7 +3,7 @@
 //! to do next. Pure text and data, no GPUI.
 
 use dbflux_transfer::sql_script::{
-    Disposition, RunEnd, ScriptError, ScriptReport, StatementFailure,
+    Disposition, RunEnd, ScriptError, ScriptReport, ScriptTransaction, StatementFailure,
 };
 
 use super::super::RunTaskAction;
@@ -119,6 +119,19 @@ pub(in crate::import_wizard) fn load_error_block(error: &ScriptError) -> ErrorBl
             ),
             dbflux_i18n::t!("document.import_wizard.script.error.psql_meta_next"),
         ),
+        ScriptError::SessionCommitMode {
+            change,
+            statement,
+            line,
+        } => (
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.session_commit",
+                change = session_change_label(change),
+                statement = statement,
+                line = grouped(*line)
+            ),
+            dbflux_i18n::t!("document.import_wizard.script.error.session_commit_next"),
+        ),
         ScriptError::SelfManagedTransaction { keyword, line } => (
             dbflux_i18n::t!(
                 "document.import_wizard.script.error.self_managed",
@@ -136,22 +149,89 @@ pub(in crate::import_wizard) fn load_error_block(error: &ScriptError) -> ErrorBl
     ErrorBlock { message, next_step }
 }
 
+/// What a statement that switches the session's commit mode does, in words.
+/// A change this flow does not know is shown as the engine names it.
+fn session_change_label(change: &str) -> String {
+    match change {
+        "turns off autocommit" => {
+            dbflux_i18n::t!("document.import_wizard.script.error.session_change_autocommit")
+        }
+        "turns on implicit transactions" => {
+            dbflux_i18n::t!("document.import_wizard.script.error.session_change_implicit")
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Whether the run ended with a transaction that may still be open: the
+/// engine's own, or one the script opened.
+pub(in crate::import_wizard) fn is_unresolved(report: &ScriptReport) -> bool {
+    report.disposition == Disposition::Unresolved
+        || report.script_transaction == ScriptTransaction::LeftOpen
+}
+
 /// The Done step of a finished run. `transaction_offered` says whether the
 /// connection could have run it in one transaction, which decides whether
 /// the next step suggests it.
+#[cfg(test)]
 pub(in crate::import_wizard) fn done_view(
     report: &ScriptReport,
     transaction_offered: bool,
 ) -> DoneView {
-    if report.disposition == Disposition::Unresolved {
+    done_view_at(report, transaction_offered, None)
+}
+
+/// [`done_view`] with the file line of the statement that committed on its
+/// own, which the report only carries as a position.
+pub(in crate::import_wizard) fn done_view_at(
+    report: &ScriptReport,
+    transaction_offered: bool,
+    implicit_commit_line: Option<usize>,
+) -> DoneView {
+    if is_unresolved(report) {
         return unresolved_view(report);
     }
 
-    match report.end {
-        RunEnd::Finished if report.failures.is_empty() => finished_view(report),
+    let mut view = match report.end {
+        RunEnd::Finished if report.failures.is_empty() => {
+            finished_view(report, transaction_offered)
+        }
         RunEnd::Finished => continued_view(report),
         RunEnd::Cancelled => cancelled_view(report),
         RunEnd::StoppedOnError => stopped_view(report, transaction_offered),
+    };
+
+    if report.disposition == Disposition::PartiallyKept {
+        view.outcome = Some(partially_kept_text(report, implicit_commit_line));
+        view.next_step = Some(dbflux_i18n::t!(
+            "document.import_wizard.script.done.partially_kept_next"
+        ));
+    } else if report.script_transaction == ScriptTransaction::RolledBack {
+        let note = dbflux_i18n::t!("document.import_wizard.script.done.script_rolled_back");
+        view.outcome = Some(match view.outcome.take() {
+            Some(outcome) => format!("{outcome} {note}"),
+            None => note,
+        });
+    }
+
+    view
+}
+
+/// Everything up to the statement that committed on its own was saved, and
+/// the ones after it may have been: never "nothing was saved".
+fn partially_kept_text(report: &ScriptReport, line: Option<usize>) -> String {
+    let index = grouped(report.first_implicit_commit.unwrap_or_default());
+
+    match line {
+        Some(line) => dbflux_i18n::t!(
+            "document.import_wizard.script.done.partially_kept",
+            index = index,
+            line = grouped(line)
+        ),
+        None => dbflux_i18n::t!(
+            "document.import_wizard.script.done.partially_kept_no_line",
+            index = index
+        ),
     }
 }
 
@@ -168,7 +248,11 @@ fn plain_view(headline: String, tone: DoneTone) -> DoneView {
     }
 }
 
-fn finished_view(report: &ScriptReport) -> DoneView {
+fn finished_view(report: &ScriptReport, transaction_offered: bool) -> DoneView {
+    if report.script_transaction == ScriptTransaction::EndedWithoutCommit {
+        return ended_without_commit_view(report, transaction_offered);
+    }
+
     let mut view = plain_view(
         counted(
             "document.import_wizard.script.done.finished",
@@ -182,6 +266,29 @@ fn finished_view(report: &ScriptReport) -> DoneView {
             dbflux_i18n::t!("document.import_wizard.script.done.committed")
         }
         _ => dbflux_i18n::t!("document.import_wizard.script.done.saved_as_run"),
+    });
+
+    view
+}
+
+/// The script opened a transaction and never ended it: the engine rolled it
+/// back, so what it changed there was not saved.
+fn ended_without_commit_view(report: &ScriptReport, transaction_offered: bool) -> DoneView {
+    let mut view = plain_view(
+        counted(
+            "document.import_wizard.script.done.finished",
+            report.ran,
+            &[("elapsed", elapsed_label(report.elapsed))],
+        ),
+        DoneTone::Warning,
+    );
+    view.outcome = Some(dbflux_i18n::t!(
+        "document.import_wizard.script.done.ended_without_commit"
+    ));
+    view.next_step = Some(if transaction_offered {
+        dbflux_i18n::t!("document.import_wizard.script.done.ended_without_commit_next_or")
+    } else {
+        dbflux_i18n::t!("document.import_wizard.script.done.ended_without_commit_next")
     });
 
     view
@@ -366,6 +473,25 @@ fn commit_failed_view(report: &ScriptReport) -> DoneView {
 
 fn unresolved_view(report: &ScriptReport) -> DoneView {
     let error = report.finish_error.clone().unwrap_or_default();
+
+    if report.script_transaction == ScriptTransaction::LeftOpen
+        && report.disposition != Disposition::Unresolved
+    {
+        let mut view = plain_view(
+            dbflux_i18n::t!("document.import_wizard.script.done.left_open"),
+            DoneTone::Danger,
+        );
+        view.block = Some(ErrorBlock {
+            message: dbflux_i18n::t!(
+                "document.import_wizard.script.done.left_open_message",
+                error = error
+            ),
+            next_step: dbflux_i18n::t!("document.import_wizard.script.done.left_open_next"),
+        });
+
+        return view;
+    }
+
     let mut view = plain_view(
         dbflux_i18n::t!("document.import_wizard.script.done.unresolved"),
         DoneTone::Danger,
@@ -423,18 +549,38 @@ pub(in crate::import_wizard) struct ScriptResolution {
     pub(in crate::import_wizard) toast_success: bool,
 }
 
+#[cfg(test)]
 pub(in crate::import_wizard) fn resolve_script_outcome(
     result: Result<ScriptReport, ScriptError>,
     transaction_offered: bool,
+) -> ScriptResolution {
+    resolve_script_outcome_at(result, transaction_offered, None)
+}
+
+/// [`resolve_script_outcome`] with the line of the statement that committed
+/// on its own.
+pub(in crate::import_wizard) fn resolve_script_outcome_at(
+    result: Result<ScriptReport, ScriptError>,
+    transaction_offered: bool,
+    implicit_commit_line: Option<usize>,
 ) -> ScriptResolution {
     let report = match result {
         Ok(report) => report,
         Err(error) => return not_run_resolution(&error),
     };
-    let view = done_view(&report, transaction_offered);
-    let succeeded = report.end == RunEnd::Finished
-        && report.failures.is_empty()
-        && report.disposition != Disposition::Unresolved;
+    let view = done_view_at(&report, transaction_offered, implicit_commit_line);
+    let succeeded =
+        report.end == RunEnd::Finished && report.failures.is_empty() && !is_unresolved(&report);
+    let saved = succeeded && report.script_transaction != ScriptTransaction::EndedWithoutCommit;
+
+    if succeeded && !saved {
+        return ScriptResolution {
+            view,
+            task_action: RunTaskAction::Complete,
+            report: None,
+            toast_success: false,
+        };
+    }
 
     if succeeded {
         return ScriptResolution {
@@ -444,7 +590,7 @@ pub(in crate::import_wizard) fn resolve_script_outcome(
             toast_success: true,
         };
     }
-    if report.end == RunEnd::Cancelled && report.disposition != Disposition::Unresolved {
+    if report.end == RunEnd::Cancelled && !is_unresolved(&report) {
         return ScriptResolution {
             view,
             task_action: RunTaskAction::Cancel,

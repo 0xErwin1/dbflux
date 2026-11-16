@@ -15,7 +15,7 @@ use gpui::*;
 
 use super::super::{ImportWizard, RunTaskAction, WizardStep};
 use super::audit::{AuditTarget, RunFacts, record_events, run_events};
-use super::messages::{ScriptResolution, resolve_script_outcome};
+use super::messages::{ScriptResolution, resolve_script_outcome_at};
 use crate::progress_forwarding::spawn_task_progress_forwarder;
 
 /// Everything the worker and the finishing step need, captured when the run
@@ -169,6 +169,7 @@ impl ImportWizard {
                 facts,
             } = plan;
 
+            let lines = Arc::clone(&script);
             let result = cx
                 .background_executor()
                 .spawn(async move {
@@ -183,7 +184,14 @@ impl ImportWizard {
                 .await;
 
             let events = run_events(&audit, &facts, &result, now_millis());
-            let resolution = resolve_script_outcome(result, transaction_offered);
+            let implicit_commit_line = result
+                .as_ref()
+                .ok()
+                .and_then(|report| report.first_implicit_commit)
+                .and_then(|index| lines.statements().get(index.saturating_sub(1)))
+                .map(|statement| statement.line);
+            let resolution =
+                resolve_script_outcome_at(result, transaction_offered, implicit_commit_line);
             finalize_task(&app_state, task_id, &resolution, events, cx);
 
             this.update(cx, |this, cx| {

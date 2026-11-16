@@ -1,10 +1,12 @@
 use std::time::Duration;
 
 use dbflux_transfer::sql_script::{
-    Disposition, RunEnd, ScriptError, ScriptReport, StatementFailure,
+    Disposition, RunEnd, ScriptError, ScriptReport, ScriptTransaction, StatementFailure,
 };
 
-use super::super::messages::{DoneTone, done_view, load_error_block, resolve_script_outcome};
+use super::super::messages::{
+    DoneTone, done_view, done_view_at, load_error_block, resolve_script_outcome,
+};
 use crate::import_wizard::RunTaskAction;
 
 fn report(end: RunEnd, disposition: Disposition) -> ScriptReport {
@@ -17,6 +19,8 @@ fn report(end: RunEnd, disposition: Disposition) -> ScriptReport {
         stopped_at: None,
         transaction_used: disposition != Disposition::Kept,
         ddl_not_transactional: false,
+        first_implicit_commit: None,
+        script_transaction: ScriptTransaction::None,
         finish_error: None,
         elapsed: Duration::from_millis(8_400),
     }
@@ -307,7 +311,7 @@ fn each_load_error_explains_and_gives_a_next_step() {
                 limit: 100 * 1024 * 1024,
             },
             "This script is 240 MB, over the 100 MB limit for running a script here.",
-            "Run it with the database's own command-line client instead, or split it into smaller files.",
+            "Run it with the database's own command-line client instead. Splitting it into smaller files also works, but each file runs on its own: a later file that fails cannot undo an earlier one.",
         ),
         (
             ScriptError::NotUtf8 { position: 1_204 },
@@ -425,7 +429,7 @@ fn each_refused_script_content_has_localized_copy_and_a_next_step() {
         (
             ScriptError::CopyFromStdin { line: 48 },
             "This script has a COPY … FROM stdin data block (line 48), which only the psql command-line client can load.",
-            "Run it with psql, or re-create the dump with INSERT statements (pg_dump --inserts).",
+            "Run it with psql instead.",
         ),
         (
             ScriptError::PsqlMetaCommand {
@@ -478,5 +482,148 @@ fn continue_with_failures_says_to_reconcile_before_running_the_fixed_statements(
         Some(
             "The statements that ran were kept; the 1 that failed were skipped. Review the failed statements and the ones after them that depend on them, and reconcile the partial run, and keep or restore the session settings the script needs (for example SET search_path or SET NAMES), before running the fixed statements again: a later statement may have run against data that a failed one should have changed."
         )
+    );
+}
+
+const PARTLY: &str = "Partly saved: everything up to statement 7 (line 9) was saved, because it commits on its own on this connection, and later statements may have been saved too.";
+const PARTLY_NEXT: &str = "Check the database and reconcile what was saved before you run the script again, or the statements that were saved run twice.";
+
+fn partially_kept(end: RunEnd) -> ScriptReport {
+    ScriptReport {
+        ddl_not_transactional: true,
+        first_implicit_commit: Some(7),
+        ran: 7,
+        stopped_at: Some(8),
+        ..report(end, Disposition::PartiallyKept)
+    }
+}
+
+#[test]
+fn a_partial_commit_never_says_nothing_was_saved() {
+    for end in [RunEnd::Cancelled, RunEnd::StoppedOnError] {
+        let mut report = partially_kept(end);
+        if end == RunEnd::StoppedOnError {
+            report.failures = vec![failure(8, 10, "INSERT INTO t VALUES (1)", "boom")];
+        }
+        let view = done_view_at(&report, true, Some(9));
+        let outcome = view.outcome.clone().unwrap_or_default();
+
+        assert_eq!(outcome, PARTLY, "{end:?}");
+        assert_eq!(view.next_step.as_deref(), Some(PARTLY_NEXT), "{end:?}");
+        assert!(!outcome.contains("nothing was saved"));
+    }
+}
+
+#[test]
+fn a_partial_commit_without_a_known_line_omits_it() {
+    let view = done_view(&partially_kept(RunEnd::Cancelled), true);
+
+    assert_eq!(
+        view.outcome.as_deref(),
+        Some(
+            "Partly saved: everything up to statement 7 was saved, because it commits on its own on this connection, and later statements may have been saved too."
+        )
+    );
+}
+
+#[test]
+fn a_script_that_ends_without_commit_says_it_was_rolled_back() {
+    let ended = ScriptReport {
+        script_transaction: ScriptTransaction::EndedWithoutCommit,
+        ..report(RunEnd::Finished, Disposition::Kept)
+    };
+    let view = done_view(&ended, false);
+
+    assert_eq!(view.tone, DoneTone::Warning);
+    assert_eq!(
+        view.outcome.as_deref(),
+        Some("The script ended without COMMIT, so its open transaction was rolled back.")
+    );
+    assert_eq!(
+        view.next_step.as_deref(),
+        Some("Add a COMMIT at the end of the script to save its changes.")
+    );
+    assert_eq!(
+        done_view(&ended, true).next_step.as_deref(),
+        Some(
+            "Add a COMMIT at the end of the script to save its changes, or turn on “Run in one transaction”."
+        )
+    );
+
+    let resolution = resolve_script_outcome(Ok(ended), false);
+    assert!(
+        !resolution.toast_success,
+        "nothing was saved: no success toast"
+    );
+}
+
+#[test]
+fn a_stop_inside_the_scripts_own_transaction_says_it_was_rolled_back() {
+    let rolled = ScriptReport {
+        script_transaction: ScriptTransaction::RolledBack,
+        ..stopped(Disposition::Kept)
+    };
+    let outcome = done_view(&rolled, false).outcome.unwrap_or_default();
+
+    assert!(
+        outcome.ends_with(
+            "The script's open transaction was rolled back, so what it had changed there was not saved."
+        ),
+        "{outcome}"
+    );
+}
+
+#[test]
+fn a_script_transaction_that_could_not_be_rolled_back_is_a_danger_block() {
+    let open = ScriptReport {
+        script_transaction: ScriptTransaction::LeftOpen,
+        finish_error: Some("Rollback failed: connection reset".to_string()),
+        ..report(RunEnd::Finished, Disposition::Kept)
+    };
+    let view = done_view(&open, false);
+    let block = view.block.expect("danger block");
+
+    assert_eq!(view.tone, DoneTone::Danger);
+    assert_eq!(view.headline, "Script ended with a transaction left open");
+    assert_eq!(
+        block.message,
+        "The script's transaction could not be rolled back: Rollback failed: connection reset"
+    );
+    assert_eq!(
+        block.next_step,
+        "A transaction may still be open on this connection. Disconnect and reconnect to end it, and check the state of the database before you run anything else."
+    );
+
+    let resolution = resolve_script_outcome(Ok(open), false);
+    assert!(matches!(resolution.task_action, RunTaskAction::Fail(_)));
+    assert!(resolution.report.is_some());
+}
+
+#[test]
+fn a_script_that_switches_off_autocommit_is_refused_with_localized_copy() {
+    let block = load_error_block(&ScriptError::SessionCommitMode {
+        change: "turns off autocommit",
+        statement: "SET autocommit = 0".to_string(),
+        line: 4,
+    });
+
+    assert_eq!(
+        block.message,
+        "This script turns off autocommit on line 4 (SET autocommit = 0), which would leave this connection in manual-commit mode after the run."
+    );
+    assert_eq!(
+        block.next_step,
+        "Remove that statement, or run the script with the database's own command-line client."
+    );
+
+    let implicit = load_error_block(&ScriptError::SessionCommitMode {
+        change: "turns on implicit transactions",
+        statement: "SET IMPLICIT_TRANSACTIONS ON".to_string(),
+        line: 1,
+    });
+    assert!(
+        implicit
+            .message
+            .starts_with("This script turns on implicit transactions on line 1")
     );
 }

@@ -406,10 +406,14 @@ ocurre con un script que usa algo que solo ejecuta un cliente de línea de
 comandos: una línea `DELIMITER` o un separador de lotes `GO`, un cuerpo de rutina
 (procedimiento, función o disparador) cuyas sentencias terminan con `;` y que no
 tiene delimitadores de cliente alrededor, un bloque de datos `COPY … FROM stdin`
-o un metacomando de psql con barra invertida como `\connect`. Cada uno se
+o un metacomando de psql con barra invertida como `\connect`, o una sentencia que
+desactiva autocommit (`SET autocommit = 0`) o activa las transacciones
+implícitas, lo que dejaría la conexión en modo de confirmación manual. Cada uno se
 rechaza antes de ejecutar nada, con la línea y qué hacer a continuación: ejecutar
 el script con el cliente de línea de comandos de la propia base de datos o
-reescribirlo (por ejemplo con `pg_dump --inserts`).
+reescribirlo (psql para un bloque `COPY … FROM stdin`). Un script de más de 100 MB
+también se puede dividir en archivos más pequeños, pero cada archivo se ejecuta
+por separado: un archivo posterior que falle no puede deshacer uno anterior.
 
 **Configurar** muestra el número de sentencias y el tamaño, cuántas sentencias
 hay en cada clasificación (las clases que usan el editor y el visor de auditoría,
@@ -429,7 +433,11 @@ una conexión de solo lectura las rechaza. Tiene dos opciones:
   gestiona sus propias transacciones (`BEGIN`, `START TRANSACTION`, `COMMIT`,
   `END`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`, `SET autocommit`) también la
   desactiva, indicando la sentencia y su línea: el script se ejecuta tal cual y
-  su propio `COMMIT` guarda los cambios anteriores.
+  su propio `COMMIT` guarda los cambios anteriores. Una transacción que el script
+  abre y nunca termina se deshace al acabar el script, y el diálogo lo dice:
+  añade un `COMMIT` al final para guardar sus cambios. Si ese rollback falla, el
+  diálogo dice que puede seguir abierta una transacción y que hay que
+  desconectarse y volver a conectar.
 
 En una conexión que confirma por sí sola las sentencias de esquema (MySQL y
 MariaDB), `CREATE`, `ALTER` y `DROP` se guardan al ejecutarse y también guardan

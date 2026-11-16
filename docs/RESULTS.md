@@ -372,9 +372,11 @@ next. So does a script that uses something only a command-line client runs: a
 `DELIMITER` line or a `GO` batch separator, a routine body (a procedure,
 function or trigger) whose statements end with `;` and that has no client
 delimiters around it, a `COPY … FROM stdin` data block, or a psql backslash
-meta-command such as `\connect`. Each is refused before anything runs, with the
+meta-command such as `\connect`, or a statement that switches off autocommit
+(`SET autocommit = 0`) or switches on implicit transactions, which would leave
+the connection in manual-commit mode. Each is refused before anything runs, with the
 line and a next step: run the script with the database's own command-line
-client, or rewrite it (for example with `pg_dump --inserts`).
+client (psql for a `COPY … FROM stdin` block), or rewrite it. A script over 100 MB can also be split into smaller files, but each file runs on its own: a later file that fails cannot undo an earlier one.
 
 **Configure** shows the statement count and size, how many statements fall in
 each classification (the classes the editor and the audit viewer use, Admin
@@ -393,7 +395,10 @@ included), and the first six statements with their classification; a `DELETE` or
   transactions (`BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`,
   `SAVEPOINT`, `RELEASE`, `SET autocommit`) turns it off too, naming the
   statement and its line: the script runs as written, and its own `COMMIT`
-  saves the changes before it.
+  saves the changes before it. A transaction the script opens and never ends is
+rolled back when the script finishes, and the dialog says so: add a `COMMIT` at
+the end to save its changes. If that rollback fails the dialog says a transaction
+may still be open and to disconnect and reconnect.
 
 On a connection that commits schema statements on its own (MySQL and MariaDB),
 `CREATE`, `ALTER` and `DROP` are saved as they run and also save every statement

@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use dbflux_transfer::sql_script::{
-    Disposition, OnError, RunEnd, RunOptions, ScriptError, ScriptReport, StatementFailure,
+    Disposition, OnError, RunEnd, RunOptions, ScriptError, ScriptReport, ScriptTransaction,
+    StatementFailure,
 };
 
 use super::super::audit::{AuditTarget, RunFacts, run_events};
@@ -37,6 +38,8 @@ fn report(end: RunEnd, disposition: Disposition) -> ScriptReport {
         stopped_at: None,
         transaction_used: true,
         ddl_not_transactional: false,
+        first_implicit_commit: None,
+        script_transaction: ScriptTransaction::None,
         finish_error: None,
         elapsed: Duration::from_millis(1_500),
     }

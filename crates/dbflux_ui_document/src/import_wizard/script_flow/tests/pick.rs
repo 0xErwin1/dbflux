@@ -95,7 +95,7 @@ fn a_script_over_the_limit_is_refused_before_it_is_read(cx: &mut gpui::TestAppCo
     );
     assert_eq!(
         next_step,
-        "Run it with the database's own command-line client instead, or split it into smaller files."
+        "Run it with the database's own command-line client instead. Splitting it into smaller files also works, but each file runs on its own: a later file that fails cannot undo an earlier one."
     );
 }
 

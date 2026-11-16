@@ -15,6 +15,8 @@ use dbflux_transfer::sql_script::{
 };
 use uuid::Uuid;
 
+use super::messages::is_unresolved;
+
 /// The most failed statements recorded for one run, so a script that fails
 /// everywhere cannot flood the log.
 const MAX_FAILURE_EVENTS: usize = 50;
@@ -124,7 +126,7 @@ fn classify(facts: &RunFacts, result: &Result<ScriptReport, ScriptError>) -> Cla
             format!("SQL script {} did not run", facts.file_name),
             error.to_string(),
         ),
-        Ok(report) if report.disposition == Disposition::Unresolved => failed(
+        Ok(report) if is_unresolved(report) => failed(
             format!(
                 "SQL script {} ended with an unresolved transaction",
                 facts.file_name
@@ -192,6 +194,14 @@ fn run_details(facts: &RunFacts, result: &Result<ScriptReport, ScriptError>) -> 
         map.insert(
             "disposition".to_string(),
             format!("{:?}", report.disposition).into(),
+        );
+        map.insert(
+            "script_transaction".to_string(),
+            format!("{:?}", report.script_transaction).into(),
+        );
+        map.insert(
+            "first_implicit_commit".to_string(),
+            report.first_implicit_commit.into(),
         );
     }
 
