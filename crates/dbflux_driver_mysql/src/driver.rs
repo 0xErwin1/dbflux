@@ -4174,7 +4174,21 @@ fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError
 }
 
 fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
-    type ColumnMetadataRow = (String, String, String, Option<String>, Option<String>);
+    type ColumnMetadataRow = (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+
+    let server_version: Option<String> = conn
+        .query_first("SELECT VERSION()")
+        .map_err(|e| format_mysql_query_error(&e))?;
+    let server_quotes_literal_defaults = server_version
+        .as_deref()
+        .is_some_and(|version| version.to_ascii_lowercase().contains("mariadb"));
 
     let query = r"
         SELECT
@@ -4182,7 +4196,8 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
             column_type,
             is_nullable,
             column_default,
-            column_key
+            column_key,
+            extra
         FROM information_schema.columns
         WHERE table_schema = ?
           AND table_name = ?
@@ -4202,7 +4217,7 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
 
     Ok(rows
         .into_iter()
-        .map(|(name, type_name, nullable, default, key)| {
+        .map(|(name, type_name, nullable, default, key, extra)| {
             let is_pk = key.as_deref() == Some("PRI");
             if is_pk {
                 log::info!(
@@ -4218,12 +4233,45 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
                 name,
                 type_name,
                 nullable: nullable == "YES",
-                default_value: default,
+                default_value: column_default_as_sql(
+                    default,
+                    extra.as_deref().unwrap_or_default(),
+                    server_quotes_literal_defaults,
+                ),
                 is_primary_key: is_pk,
                 enum_values,
             }
         })
         .collect())
+}
+
+/// Returns a column default as SQL text, the form `ColumnInfo::default_value`
+/// holds for every driver.
+///
+/// MySQL 8 reports a literal default unquoted (`pending`, `00123`) and marks an
+/// expression default with `DEFAULT_GENERATED` in `EXTRA`; MySQL 5.7 has no
+/// such marker but only allows `CURRENT_TIMESTAMP` as an expression default.
+/// MariaDB 10.2.7+ already quotes literals and writes expressions bare.
+fn column_default_as_sql(
+    default: Option<String>,
+    extra: &str,
+    server_quotes_literal_defaults: bool,
+) -> Option<String> {
+    let default = default?;
+
+    if server_quotes_literal_defaults || extra.to_ascii_uppercase().contains("DEFAULT_GENERATED") {
+        return Some(default);
+    }
+
+    let upper = default.to_ascii_uppercase();
+    let is_timestamp_function = ["CURRENT_TIMESTAMP", "NOW(", "LOCALTIME"]
+        .iter()
+        .any(|prefix| upper.starts_with(prefix));
+    if is_timestamp_function {
+        return Some(default);
+    }
+
+    Some(format!("'{}'", default.replace('\'', "''")))
 }
 
 fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<IndexInfo>, DbError> {
@@ -4950,6 +4998,47 @@ fn resolve_write_privilege(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn column_defaults_are_returned_as_sql_text() {
+        use super::column_default_as_sql;
+
+        let own = |value: &str| Some(value.to_string());
+
+        assert_eq!(column_default_as_sql(None, "", false), None);
+        assert_eq!(
+            column_default_as_sql(own("pending"), "", false),
+            own("'pending'")
+        );
+        assert_eq!(
+            column_default_as_sql(own("00123"), "", false),
+            own("'00123'")
+        );
+        assert_eq!(
+            column_default_as_sql(own("it's"), "", false),
+            own("'it''s'")
+        );
+        assert_eq!(
+            column_default_as_sql(own("uuid()"), "DEFAULT_GENERATED", false),
+            own("uuid()")
+        );
+        assert_eq!(
+            column_default_as_sql(
+                own("CURRENT_TIMESTAMP"),
+                "on update CURRENT_TIMESTAMP",
+                false
+            ),
+            own("CURRENT_TIMESTAMP")
+        );
+        assert_eq!(
+            column_default_as_sql(own("'pending'"), "", true),
+            own("'pending'")
+        );
+        assert_eq!(
+            column_default_as_sql(own("uuid()"), "", true),
+            own("uuid()")
+        );
+    }
+
     #[test]
     fn mysql_type_value_expressions() {
         use dbflux_core::SqlDialect as _;
