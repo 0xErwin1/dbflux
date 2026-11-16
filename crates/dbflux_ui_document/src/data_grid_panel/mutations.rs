@@ -1,3 +1,4 @@
+use super::expression_gate::HeldSave;
 use super::utils::{extract_pk_columns, value_to_json};
 use super::*;
 use super::{
@@ -15,6 +16,21 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use gpui::*;
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+/// The assignment a grid cell stages: its expression, written verbatim, or
+/// its value, bound.
+fn cell_assignment(
+    name: &str,
+    type_name: &str,
+    cell: &dbflux_components::components::data_table::model::CellValue,
+) -> ColumnAssignment {
+    ColumnAssignment {
+        name: name.to_string(),
+        value: cell.to_value(),
+        type_name: Some(type_name.to_string()),
+        expression: cell.as_expression().map(str::to_owned),
+    }
+}
 
 fn parse_inline_document_value(input: &str) -> serde_json::Value {
     let trimmed = input.trim();
@@ -444,6 +460,10 @@ impl DataGridPanel {
             &dbflux_components::components::data_table::model::CellValue,
         )> = changes.iter().map(|(idx, cell)| (*idx, cell)).collect();
 
+        if self.hold_save_for_expression_confirm(HeldSave::Row(row_idx), batch_owned, cx) {
+            return;
+        }
+
         match &self.source {
             DataSource::Table {
                 profile_id,
@@ -552,12 +572,10 @@ impl DataGridPanel {
         let change_values: Vec<ColumnAssignment> = changes
             .iter()
             .filter_map(|&(col_idx, cell_value)| {
-                model.columns.get(col_idx).map(|col| ColumnAssignment {
-                    name: col.title.to_string(),
-                    value: cell_value.to_value(),
-                    type_name: Some(col.type_name.to_string()),
-                    expression: None,
-                })
+                model
+                    .columns
+                    .get(col_idx)
+                    .map(|col| cell_assignment(&col.title, &col.type_name, cell_value))
             })
             .collect();
 
@@ -900,6 +918,10 @@ impl DataGridPanel {
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.hold_save_for_expression_confirm(HeldSave::Insert(insert_idx), batch_owned, cx) {
+            return;
+        }
+
         match &self.source {
             DataSource::Collection {
                 profile_id,
@@ -1088,19 +1110,14 @@ impl DataGridPanel {
             let mut assignments = Vec::new();
 
             for (col_idx, cell) in cells.iter().enumerate() {
-                let value = cell.to_value();
-
-                if matches!(value, Value::Null) {
+                // An expression is a value of its own: it is written even
+                // though its bound value is NULL.
+                if matches!(cell.to_value(), Value::Null) && cell.as_expression().is_none() {
                     continue;
                 }
 
                 if let Some(col) = model.columns.get(col_idx) {
-                    assignments.push(ColumnAssignment {
-                        name: col.title.to_string(),
-                        value,
-                        type_name: Some(col.type_name.to_string()),
-                        expression: None,
-                    });
+                    assignments.push(cell_assignment(&col.title, &col.type_name, cell));
                 }
             }
 
@@ -2123,7 +2140,7 @@ impl DataGridPanel {
             // A write is already running; it chains the rows it still holds.
             return true;
         }
-        if self.pending_delete_confirm.is_some() {
+        if self.pending_delete_confirm.is_some() || self.pending_expression_confirm.is_some() {
             return true;
         }
         if self.pending_batch_remaining.is_some() {

@@ -692,6 +692,21 @@ impl DataGridPanel {
             }
         }
 
+        // A save that writes SQL expressions waits for the user.
+        if self.pending_expression_confirm.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_expressions(window, cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_expressions(window, cx);
+                    return true;
+                }
+                _ => return true,
+            }
+        }
+
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);

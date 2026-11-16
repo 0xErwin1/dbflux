@@ -750,12 +750,14 @@ impl DataGridPanel {
 
         let column_details = self.get_column_details(cx);
         let enum_options = enum_options_for_result(&self.result, column_details.as_deref());
+        let suggestion_source = self.expression_suggestion_source();
 
         table_state.update(cx, |state, cx| {
             state.set_model(Arc::new(model), ModelSwap::KeepCursor, cx);
             for (col_ix, options) in enum_options {
                 state.set_enum_options(col_ix, options);
             }
+            state.set_expression_suggestion_source(suggestion_source);
         });
 
         cx.notify();

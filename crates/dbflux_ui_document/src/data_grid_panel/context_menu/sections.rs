@@ -1,4 +1,7 @@
-use super::{ContextMenuItem, DataGridEvent, DataGridPanel, FilterBackend, TableContextMenu};
+use super::{
+    ContextMenuItem, DataGridEvent, DataGridPanel, FilterBackend, SetValueEntry, SetValueFlyout,
+    TableContextMenu,
+};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::components::data_table::{ContextMenuAction, context_menu_keystroke};
 use dbflux_components::composites::{
@@ -19,6 +22,7 @@ const FILTER_SUBMENU_WIDTH: Pixels = px(280.0);
 const ORDER_SUBMENU_WIDTH: Pixels = px(220.0);
 const GENERATE_SQL_SUBMENU_WIDTH: Pixels = px(180.0);
 const COPY_QUERY_SUBMENU_WIDTH: Pixels = px(160.0);
+const SET_VALUE_SUBMENU_WIDTH: Pixels = px(300.0);
 
 /// The frame a submenu hangs in.
 ///
@@ -239,6 +243,7 @@ impl DataGridPanel {
     pub(super) fn render_menu_item_rows(
         selected_index: usize,
         visible_items: &[ContextMenuItem],
+        set_value: &SetValueFlyout,
         menu_items: &mut Vec<AnyElement>,
         visual_index: &mut usize,
         cx: &mut Context<Self>,
@@ -256,6 +261,18 @@ impl DataGridPanel {
             };
 
             let current_index = *visual_index;
+
+            if action == ContextMenuAction::SetValueMenu {
+                menu_items.push(Self::render_set_value_trigger(
+                    item,
+                    set_value,
+                    current_index,
+                    selected_index,
+                    cx,
+                ));
+                *visual_index += 1;
+                continue;
+            }
 
             let mut row_item = MenuItem::new(item.label.clone());
             if let Some(icon) = item.icon {
@@ -302,6 +319,107 @@ impl DataGridPanel {
 
             *visual_index += 1;
         }
+    }
+
+    /// The "Set value" trigger row and, when open, its flyout.
+    fn render_set_value_trigger(
+        item: &ContextMenuItem,
+        set_value: &SetValueFlyout,
+        index: usize,
+        selected_index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let open = set_value.open;
+        let mut trigger = MenuItem::new(item.label.clone()).submenu();
+        if let Some(icon) = item.icon {
+            trigger = trigger.icon(icon);
+        }
+
+        menu_row(
+            "set-value-trigger",
+            &trigger,
+            selected_index == index || open,
+            cx,
+        )
+        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+            if let Some(ref mut menu) = this.context_menu
+                && !(menu.selected_index == index && menu.set_value_submenu_open)
+            {
+                menu.selected_index = index;
+                menu.close_submenus();
+                menu.set_value_submenu_open = true;
+                menu.submenu_selected_index = 0;
+                cx.notify();
+            }
+        }))
+        .on_click(cx.listener(|this, _, _, cx| {
+            if let Some(ref mut menu) = this.context_menu {
+                let open = !menu.set_value_submenu_open;
+                menu.close_submenus();
+                menu.set_value_submenu_open = open;
+                menu.submenu_selected_index = 0;
+                cx.notify();
+            }
+        }))
+        .when(open, |d: Stateful<Div>| {
+            d.child(submenu_frame(
+                set_value.open_left,
+                Self::build_set_value_flyout(&set_value.entries, set_value.selected, cx),
+            ))
+        })
+        .into_any_element()
+    }
+
+    /// The flyout of the "Set value" submenu. A disabled row says why under
+    /// its label, as the artboard does.
+    fn build_set_value_flyout(
+        entries: &[SetValueEntry],
+        selected: usize,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let mut rows: Vec<AnyElement> = Vec::new();
+
+        for (index, entry) in entries.iter().enumerate() {
+            if let Some(header) = &entry.header {
+                rows.push(render_separator(cx).into_any_element());
+                rows.push(
+                    render_menu_header(&MenuItem::header(header.clone()).icon(AppIcon::Code), cx)
+                        .into_any_element(),
+                );
+            }
+
+            let mut row_item = MenuItem::new(entry.label.clone()).icon(if entry.is_expression {
+                AppIcon::Code
+            } else {
+                AppIcon::CircleX
+            });
+            if let Some(detail) = &entry.detail {
+                row_item = row_item.detail(detail.clone());
+            }
+            if entry.disabled {
+                row_item = row_item.disabled();
+            }
+
+            let id = SharedString::from(format!("set-value-entry-{index}"));
+            let row = if entry.disabled {
+                menu_row(id, &row_item, index == selected, cx)
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.submenu_selected_index != index
+                        {
+                            menu.submenu_selected_index = index;
+                            cx.notify();
+                        }
+                    }))
+                    .into_any_element()
+            } else {
+                Self::submenu_action_row(id, &row_item, index, selected, entry.action, cx)
+                    .into_any_element()
+            };
+            rows.push(row);
+        }
+
+        submenu_flyout(SET_VALUE_SUBMENU_WIDTH, cx).children(rows)
     }
 
     /// Renders the "Filter" submenu trigger and, when open, its flyout of
