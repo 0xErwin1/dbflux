@@ -3,7 +3,8 @@ use dbflux_core::{
     classify_query_for_language_with_service,
 };
 
-use super::SqlScript;
+use super::routine::changes_a_sequence;
+use super::{SqlScript, TransactionControl};
 
 /// Order in which [`ScriptSummary::by_classification`] lists the classes.
 const CLASSIFICATION_ORDER: [ExecutionClassification; 7] = [
@@ -58,6 +59,10 @@ pub struct ScriptSummary {
     /// its own, so a rollback cannot undo them
     /// (`Connection::supports_transactional_ddl` is false).
     pub ddl_commits_on_its_own: bool,
+    /// The first statement that controls transactions itself. A script with
+    /// one cannot run in one transaction (see
+    /// [`ScriptError::SelfManagedTransaction`](super::ScriptError)).
+    pub transaction_control: Option<TransactionControl>,
     /// The first statements of the script, for the preview.
     pub preview: Vec<StatementInfo>,
     /// The first destructive statements, in script order.
@@ -138,6 +143,7 @@ impl SqlScript {
             changing_count,
             ddl_count,
             ddl_commits_on_its_own: ddl_count > 0 && !connection.supports_transactional_ddl(),
+            transaction_control: self.transaction_control(),
             preview,
             first_destructive,
         }
@@ -157,7 +163,14 @@ pub(super) fn classify_all(
         .statements()
         .iter()
         .map(|statement| {
-            classify_query_for_language_with_service(language, &statement.text, Some(service))
+            let classification =
+                classify_query_for_language_with_service(language, &statement.text, Some(service));
+
+            if changes_data(classification) || !changes_a_sequence(&statement.text) {
+                classification
+            } else {
+                ExecutionClassification::Write
+            }
         })
         .collect()
 }

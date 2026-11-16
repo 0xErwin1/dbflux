@@ -30,13 +30,18 @@
 //!   statement stopped, calling `Connection::cancel_active`. A statement
 //!   that ends with `DbError::Cancelled` is a cancellation, not a failure.
 
+mod control;
+mod directives;
 mod load;
+mod psql;
+mod routine;
 mod run;
 mod summary;
 
 #[cfg(test)]
 mod tests;
 
+pub use control::TransactionControl;
 pub use load::{MAX_SCRIPT_BYTES, load_script};
 pub use run::{
     Disposition, OnError, RunEnd, RunOptions, ScriptProgress, ScriptReport, StatementFailure,
@@ -85,6 +90,11 @@ impl SqlScript {
     /// The statements in file order. Never empty.
     pub fn statements(&self) -> &[ScriptStatement] {
         &self.statements
+    }
+
+    /// The first statement that controls transactions itself, if any.
+    pub fn transaction_control(&self) -> Option<TransactionControl> {
+        control::first_transaction_control(&self.statements)
     }
 
     pub fn statement_count(&self) -> usize {
@@ -143,6 +153,31 @@ pub enum ScriptError {
         "This connection is read-only, and {changing} statements in the script change data or structure. Open a read-write connection to run it. A script that only reads can run here."
     )]
     ReadOnlyProfile { changing: usize },
+
+    #[error(
+        "The script uses the {directive} directive on line {line}. It is a command of a command-line client, not SQL, so it cannot be run here. Remove it and end each statement with \";\", or run the script with the database's own command-line client."
+    )]
+    ClientDirective { directive: String, line: usize },
+
+    #[error(
+        "The script manages its own transactions ({keyword} on line {line}), so it cannot run in one transaction. Turn off \"Run in one transaction\"; the script's own statements then decide what is saved."
+    )]
+    SelfManagedTransaction { keyword: String, line: usize },
+
+    #[error(
+        "The script has a routine body starting on line {line} whose statements end with \";\", so it cannot be split into statements here. Run the script with the database's own command-line client."
+    )]
+    SplitRoutineBody { line: usize },
+
+    #[error(
+        "The script has a COPY … FROM stdin data block on line {line}, which only the psql command-line client can load. Run it with psql, or re-create the dump with INSERT statements (pg_dump --inserts)."
+    )]
+    CopyFromStdin { line: usize },
+
+    #[error(
+        "The script uses the psql command {command} on line {line}, which only the psql command-line client understands. Remove it, or run the script with psql."
+    )]
+    PsqlMetaCommand { command: String, line: usize },
 
     #[error("Could not start the transaction, so nothing ran: {message}")]
     TransactionStart { message: String },

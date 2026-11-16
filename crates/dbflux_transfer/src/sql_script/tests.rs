@@ -583,3 +583,336 @@ fn a_read_only_profile_refuses_a_script_that_changes_data() {
         .expect("a reading script runs");
     assert_eq!(report.ran, 1);
 }
+
+// ------------------------------------------------- client directives
+
+fn refused(text: &str) -> (String, usize) {
+    match SqlScript::from_text(text, &QueryLanguage::Sql) {
+        Err(ScriptError::ClientDirective { directive, line }) => (directive, line),
+        other => panic!("expected a client directive error for {text:?}, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_delimiter_directive_is_refused_naming_it_and_its_line() {
+    let text =
+        "SELECT 1;\n  delimiter //\nCREATE PROCEDURE p() BEGIN SELECT 1; END//\nDELIMITER ;\n";
+
+    assert_eq!(refused(text), ("DELIMITER".to_string(), 2));
+}
+
+#[test]
+fn a_go_batch_separator_is_refused_with_or_without_a_count() {
+    assert_eq!(refused("SELECT 1\nGO\nSELECT 2\n"), ("GO".to_string(), 2));
+    assert_eq!(refused("SELECT 1;\n\n go 5 \n"), ("GO".to_string(), 3));
+    assert_eq!(refused("SELECT 1\r\ngo\r\n"), ("GO".to_string(), 2));
+}
+
+#[test]
+fn directive_words_inside_text_are_not_directives() {
+    let text = "SELECT 'a\nGO\nb';\n\
+                -- GO\n\
+                /* DELIMITER //\nGO\n*/\n\
+                SELECT $$\nGO\n$$;\n\
+                SELECT go, delimiter FROM t WHERE go = 1;\n\
+                SELECT\n  gopher\nFROM t;\n";
+
+    let script = SqlScript::from_text(text, &QueryLanguage::Sql).expect("no directive");
+
+    assert_eq!(script.statement_count(), 4);
+}
+
+#[test]
+fn the_directive_error_message_says_what_to_do() {
+    let error = ScriptError::ClientDirective {
+        directive: "DELIMITER".to_string(),
+        line: 7,
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "The script uses the DELIMITER directive on line 7. It is a command of a command-line client, not SQL, so it cannot be run here. Remove it and end each statement with \";\", or run the script with the database's own command-line client."
+    );
+}
+
+// ------------------------------------------ self-managed transactions
+
+fn control_of(text: &str) -> Option<(usize, usize, &'static str)> {
+    script(text)
+        .transaction_control()
+        .map(|control| (control.index, control.line, control.keyword))
+}
+
+#[test]
+fn transaction_control_statements_are_detected_case_insensitively_after_comments() {
+    let cases = [
+        ("BEGIN;", "BEGIN"),
+        ("begin transaction;", "BEGIN"),
+        ("BEGIN IMMEDIATE;", "BEGIN"),
+        ("-- go\n/* x */ Start   Transaction;", "START TRANSACTION"),
+        ("commit;", "COMMIT"),
+        ("END;", "END"),
+        ("end transaction;", "END"),
+        ("ROLLBACK TO sp;", "ROLLBACK"),
+        ("SAVEPOINT sp;", "SAVEPOINT"),
+        ("release savepoint sp;", "RELEASE"),
+        ("SET autocommit = 0;", "SET autocommit"),
+        ("set @@session.autocommit=1;", "SET autocommit"),
+        ("SET SESSION autocommit = 0;", "SET autocommit"),
+        ("SET IMPLICIT_TRANSACTIONS ON;", "SET IMPLICIT_TRANSACTIONS"),
+    ];
+
+    for (sql, keyword) in cases {
+        let text = format!("SELECT 1;\n{sql}\n");
+        let found = control_of(&text);
+        assert_eq!(found.map(|(_, _, k)| k), Some(keyword), "{sql}");
+    }
+}
+
+#[test]
+fn the_first_transaction_control_statement_reports_its_index_and_line() {
+    let found = control_of("SELECT 1;\n\nINSERT INTO t VALUES (1);\n-- c\nCOMMIT;\nROLLBACK;\n");
+
+    assert_eq!(found, Some((3, 5, "COMMIT")));
+}
+
+#[test]
+fn compound_bodies_and_ordinary_statements_are_not_transaction_control() {
+    for text in [
+        "BEGIN\n  INSERT INTO t VALUES (1)\nEND;",
+        "SET search_path = public;",
+        "SET NAMES utf8;",
+        "SELECT 'commit';",
+        "INSERT INTO commit_log VALUES (1);",
+        "SELECT 1 AS begin_value;",
+    ] {
+        assert_eq!(control_of(text), None, "{text}");
+    }
+}
+
+#[test]
+fn the_summary_exposes_the_first_transaction_control_statement() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+
+    let with = script("SELECT 1;\nBEGIN;\nCOMMIT;").summarize(connection.as_ref(), 3);
+    let without = script("SELECT 1;").summarize(connection.as_ref(), 3);
+
+    let control = with.transaction_control.expect("detected");
+    assert_eq!(
+        (control.index, control.line, control.keyword),
+        (2, 2, "BEGIN")
+    );
+    assert_eq!(without.transaction_control, None);
+}
+
+#[test]
+fn a_script_that_manages_its_own_transactions_is_refused_in_one_transaction() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("INSERT INTO t VALUES (1);\nBEGIN;\nINSERT INTO t VALUES (2);\nCOMMIT;\n");
+
+    let error = run(
+        connection.as_ref(),
+        &script,
+        RunOptions {
+            transaction: true,
+            ..RunOptions::default()
+        },
+    )
+    .expect_err("refused");
+
+    assert_eq!(
+        error,
+        ScriptError::SelfManagedTransaction {
+            keyword: "BEGIN".to_string(),
+            line: 2
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "The script manages its own transactions (BEGIN on line 2), so it cannot run in one transaction. Turn off \"Run in one transaction\"; the script's own statements then decide what is saved."
+    );
+    assert_eq!(row_count(connection.as_ref(), "t"), 0, "nothing ran");
+}
+
+#[test]
+fn a_script_that_manages_its_own_transactions_runs_as_written_without_one() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("BEGIN;\nINSERT INTO t VALUES (1);\nCOMMIT;\n");
+
+    let report = run(connection.as_ref(), &script, RunOptions::default()).expect("run");
+
+    assert_eq!(report.end, RunEnd::Finished);
+    assert_eq!(report.disposition, Disposition::Kept);
+    assert_eq!(row_count(connection.as_ref(), "t"), 1);
+}
+
+// ------------------------------------------------ split routine bodies
+
+fn split_body_line(text: &str) -> Option<usize> {
+    match SqlScript::from_text(text, &QueryLanguage::Sql) {
+        Err(ScriptError::SplitRoutineBody { line }) => Some(line),
+        Ok(_) => None,
+        Err(other) => panic!("unexpected error for {text:?}: {other:?}"),
+    }
+}
+
+#[test]
+fn a_procedure_body_cut_at_its_semicolons_is_refused_with_its_line() {
+    let text = "SELECT 1;\n\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\n  SELECT 2;\nEND;\n";
+
+    assert_eq!(split_body_line(text), Some(4));
+    assert_eq!(
+        ScriptError::SplitRoutineBody { line: 12 }.to_string(),
+        "The script has a routine body starting on line 12 whose statements end with \";\", so it cannot be split into statements here. Run the script with the database's own command-line client."
+    );
+}
+
+#[test]
+fn trigger_bodies_are_refused_too() {
+    let text = "CREATE TRIGGER x AFTER INSERT ON t BEGIN INSERT INTO log VALUES (1); END;";
+
+    assert_eq!(split_body_line(text), Some(1));
+}
+
+#[test]
+fn a_dollar_quoted_function_is_accepted() {
+    let text = "CREATE FUNCTION f() RETURNS int AS $$ BEGIN PERFORM 1; RETURN 1; END; $$ LANGUAGE plpgsql;";
+
+    assert_eq!(split_body_line(text), None);
+}
+
+#[test]
+fn transaction_scripts_and_lookalikes_are_not_split_bodies() {
+    for text in [
+        "BEGIN TRANSACTION;\nINSERT INTO t VALUES (1);\nCOMMIT;",
+        "BEGIN;\nINSERT INTO t VALUES (1);\nEND;",
+        "BEGIN IMMEDIATE;\nSELECT 1;\nCOMMIT;",
+        "SELECT CASE WHEN a THEN 1 ELSE 2 END FROM t;\nSELECT CASE a WHEN 1 THEN 'begin' END;",
+        "SELECT 'BEGIN';\n-- BEGIN\n/* BEGIN */ SELECT \"begin\";",
+        "CREATE PROCEDURE p() BEGIN SELECT 1 END",
+    ] {
+        assert_eq!(split_body_line(text), None, "{text}");
+    }
+}
+
+#[test]
+fn a_case_expression_inside_a_body_does_not_hide_the_split() {
+    let text = "CREATE PROCEDURE p() BEGIN\n  SELECT CASE WHEN a THEN 1 END;\n  IF x THEN SELECT 1; END IF;\nEND;";
+
+    assert_eq!(split_body_line(text), Some(1));
+}
+
+// ------------------------------------------------- sequence changes
+
+#[test]
+fn a_sequence_function_call_counts_as_a_write_in_the_summary() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    let script = script(
+        "SELECT setval('s', 5);\nSELECT NEXTVAL ('s');\nSELECT 'setval(';\nSELECT 1; -- setval(\nALTER SEQUENCE s RESTART;\nSELECT setval_count FROM t;",
+    );
+
+    let summary = script.summarize(connection.as_ref(), 10);
+
+    let classes: Vec<_> = summary.preview.iter().map(|s| s.classification).collect();
+    assert_eq!(classes[0], ExecutionClassification::Write);
+    assert_eq!(classes[1], ExecutionClassification::Write);
+    assert_eq!(classes[2], ExecutionClassification::Read);
+    assert_eq!(classes[3], ExecutionClassification::Read);
+    assert_ne!(classes[4], ExecutionClassification::Read);
+    assert_eq!(classes[5], ExecutionClassification::Read);
+    assert_eq!(summary.changing_count, 3);
+}
+
+#[test]
+fn a_read_only_profile_refuses_a_sequence_change_but_not_a_lookalike() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    let options = RunOptions {
+        read_only_profile: true,
+        ..RunOptions::default()
+    };
+
+    let error = run(
+        connection.as_ref(),
+        &script("SELECT setval('s', 5);"),
+        options,
+    )
+    .expect_err("refused");
+    assert_eq!(error, ScriptError::ReadOnlyProfile { changing: 1 });
+
+    let report = run(connection.as_ref(), &script("SELECT 'setval(';"), options)
+        .expect("a string is not a call");
+    assert_eq!(report.ran, 1);
+}
+
+// ------------------------------------------------------ psql-only content
+
+fn psql_error(text: &str) -> Option<ScriptError> {
+    SqlScript::from_text(text, &QueryLanguage::Sql).err()
+}
+
+#[test]
+fn copy_from_stdin_is_refused_with_its_line() {
+    for sql in [
+        "COPY t (a, b) FROM stdin;\n1\t2\n\\.\n",
+        "copy t from STDIN WITH (FORMAT csv);\n1,2\n\\.\n",
+    ] {
+        let text = format!("SELECT 1;\n\n{sql}");
+        assert_eq!(
+            psql_error(&text),
+            Some(ScriptError::CopyFromStdin { line: 3 }),
+            "{sql}"
+        );
+    }
+
+    assert_eq!(
+        ScriptError::CopyFromStdin { line: 48 }.to_string(),
+        "The script has a COPY … FROM stdin data block on line 48, which only the psql command-line client can load. Run it with psql, or re-create the dump with INSERT statements (pg_dump --inserts)."
+    );
+}
+
+#[test]
+fn psql_meta_commands_are_refused_with_the_command_and_line() {
+    for (text, command, line) in [
+        ("SELECT 1;\n\\connect shop\n", "\\connect", 2),
+        ("  \\c db\nSELECT 1;", "\\c", 1),
+        ("SELECT 1;\n\\set x 1\n", "\\set", 2),
+        ("SELECT 1;\n\t\\i other.sql\n", "\\i", 2),
+    ] {
+        assert_eq!(
+            psql_error(text),
+            Some(ScriptError::PsqlMetaCommand {
+                command: command.to_string(),
+                line
+            }),
+            "{text:?}"
+        );
+    }
+
+    assert_eq!(
+        ScriptError::PsqlMetaCommand {
+            command: "\\connect".to_string(),
+            line: 3
+        }
+        .to_string(),
+        "The script uses the psql command \\connect on line 3, which only the psql command-line client understands. Remove it, or run the script with psql."
+    );
+}
+
+#[test]
+fn server_side_copy_and_backslashes_in_text_are_not_psql_only() {
+    let text = "COPY t FROM '/data/file.csv';\n\
+                SELECT 'a\n\\connect x\nb';\n\
+                -- \\connect\n\
+                /* line\n\\set */\n\
+                SELECT $$\n\\i x\n$$;\n\
+                SELECT 'C:\\dir';\n";
+
+    assert_eq!(psql_error(text), None);
+}

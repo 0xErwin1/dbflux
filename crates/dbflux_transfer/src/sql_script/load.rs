@@ -3,6 +3,9 @@ use std::path::Path;
 
 use dbflux_core::QueryLanguage;
 
+use super::directives::find_directive;
+use super::psql::find_psql_only;
+use super::routine::split_routine_body_line;
 use super::{ScriptError, ScriptStatement, SqlScript};
 
 /// Scripts larger than this are refused before they are read.
@@ -55,6 +58,14 @@ impl SqlScript {
 
         let bytes = text.len() as u64;
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+
+        if let Some(directive) = find_directive(text) {
+            return Err(ScriptError::ClientDirective {
+                directive: directive.name.to_string(),
+                line: directive.line,
+            });
+        }
+
         let ranges = language.statement_ranges(text).unwrap_or_default();
 
         let mut statements = Vec::with_capacity(ranges.len());
@@ -78,8 +89,16 @@ impl SqlScript {
             });
         }
 
+        if let Some(error) = find_psql_only(text, &statements) {
+            return Err(error);
+        }
+
         if statements.is_empty() {
             return Err(ScriptError::Empty);
+        }
+
+        if let Some(line) = split_routine_body_line(&statements) {
+            return Err(ScriptError::SplitRoutineBody { line });
         }
 
         Ok(Self::new(statements, bytes))

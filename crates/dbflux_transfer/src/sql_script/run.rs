@@ -166,6 +166,15 @@ fn preflight(
         return Err(ScriptError::TransactionWithContinue);
     }
 
+    if options.transaction
+        && let Some(control) = script.transaction_control()
+    {
+        return Err(ScriptError::SelfManagedTransaction {
+            keyword: control.keyword.to_string(),
+            line: control.line,
+        });
+    }
+
     let classes = classify_all(script, connection);
 
     if options.read_only_profile {
