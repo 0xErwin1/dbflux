@@ -38,10 +38,17 @@ pub enum TypeFamily {
     Text,
 }
 
+/// Whether the name ends in an array dimension: `[]` or a fixed-size `[3]`.
+fn has_array_suffix(name: &str) -> bool {
+    name.strip_suffix(']')
+        .and_then(|rest| rest.rsplit_once('['))
+        .is_some_and(|(_, length)| length.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// Classify a driver-reported type name, ignoring case and modifiers such as
 /// `varchar(255)`, `numeric(12,2)` or `timestamp(3) with time zone`.
 ///
-/// Arrays (`text[]`, `_int4`), intervals, range and multirange types and
+/// Arrays (`text[]`, `INTEGER[3]`, `_int4`), intervals, range and multirange types and
 /// unrecognised names have no family.
 pub fn type_family(type_name: &str) -> Option<TypeFamily> {
     let mut name = type_name.trim().to_ascii_lowercase();
@@ -55,7 +62,7 @@ pub fn type_family(type_name: &str) -> Option<TypeFamily> {
         name = inner.trim().to_string();
     }
 
-    if name.is_empty() || name.ends_with("[]") || name.starts_with('_') {
+    if name.is_empty() || name.starts_with('_') || has_array_suffix(&name) {
         return None;
     }
 
@@ -554,6 +561,11 @@ mod tests {
         assert_eq!(type_family("  DateTime2(7) "), Some(TypeFamily::Timestamp));
         assert_eq!(type_family("Nullable(Date)"), Some(TypeFamily::Date));
         assert_eq!(type_family("text[]"), None);
+        assert_eq!(type_family("INTEGER[3]"), None);
+        assert_eq!(type_family("varchar(10)[2]"), None);
+        assert_eq!(type_family("INTEGER[3][]"), None);
+        assert_eq!(type_family("INTEGER[2][3]"), None);
+        assert_eq!(type_family("Nullable(INTEGER[3])"), None);
         assert_eq!(type_family("_int4"), None);
         assert_eq!(type_family("interval day to second"), None);
         assert_eq!(type_family("geometry"), None);
