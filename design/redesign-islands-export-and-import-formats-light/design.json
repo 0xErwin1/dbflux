@@ -44,6 +44,20 @@
       "tradeoff": "Islands, light: Export confirms a summary with Back, Cancel and Start Export; import confirms only a Recreate or Truncate plan, with the affected tables and modes in the shared danger block and Back, Cancel and Yes, proceed in the footer.",
       "width": 1580,
       "height": 815
+    },
+    {
+      "file": "07-isl-light-import-spreadsheet.html",
+      "title": "Import wizard: spreadsheet import (Sheet dropdown, empty or invalid sheet, error cell, sheet too large, XML)",
+      "tradeoff": "Islands, light: Adds a single Sheet row to the existing Configure step instead of a separate sheet wizard, and reuses the shared danger block for every failure; sheet names only, so the dropdown does not promise row counts the reader may not give cheaply.",
+      "width": 1400,
+      "height": 2900
+    },
+    {
+      "file": "08-isl-light-sql-script.html",
+      "title": "Import wizard: run a SQL script (Configure, Confirm, Running, Done, Pick Source errors)",
+      "tradeoff": "Islands, light: Keeps the script flow inside the import wizard with its four-step rail rather than a new dialog, and skips Confirm when nothing is destructive; the cost is that a plain write-only script starts running from one button, so that button is labelled Run Script.",
+      "width": 1400,
+      "height": 5150
     }
   ]
 }
