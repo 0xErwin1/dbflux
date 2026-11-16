@@ -54,13 +54,14 @@ pub(super) fn words_with_offsets(code: &str) -> Vec<(usize, String)> {
 }
 
 /// `statement` with quoted text, comments and dollar-quoted bodies replaced
-/// by spaces. Newlines stay, so offsets keep their line numbers. The body of
-/// a MySQL conditional comment (`/*!50003 ... */`) is code, so it is kept.
+/// by spaces. Newlines stay, so offsets keep their line numbers. A MySQL
+/// conditional comment (`/*!50003 ... */`) is blanked like any comment: it
+/// runs only on some servers, so no detector may act on its text (see
+/// [`conditional_comment_bodies`] for the one that refuses it).
 pub(super) fn blank_literals(statement: &str, identifiers: Identifiers) -> String {
     let characters: Vec<char> = statement.chars().collect();
     let mut output = String::with_capacity(statement.len());
     let mut position = 0;
-    let mut conditional_depth = 0usize;
 
     while let Some(&current) = characters.get(position) {
         let next = characters.get(position + 1).copied();
@@ -68,23 +69,6 @@ pub(super) fn blank_literals(statement: &str, identifiers: Identifiers) -> Strin
             .checked_sub(1)
             .and_then(|before| characters.get(before))
             .copied();
-
-        if (current, next) == ('/', Some('*')) {
-            let marker = conditional_marker_len(&characters, position);
-            if marker > 0 {
-                output.extend(std::iter::repeat_n(' ', marker));
-                position += marker;
-                conditional_depth += 1;
-                continue;
-            }
-        }
-
-        if conditional_depth > 0 && (current, next) == ('*', Some('/')) {
-            output.push_str("  ");
-            position += 2;
-            conditional_depth -= 1;
-            continue;
-        }
 
         let keeps_quoted = match current {
             '"' | '`' => identifiers != Identifiers::Blank,
@@ -240,4 +224,55 @@ fn dollar_end(characters: &[char], start: usize) -> usize {
     }
 
     characters.len()
+}
+
+/// The bodies of the version-conditional comments (`/*!50003 ... */`,
+/// `/*M!100100 ... */`) in `statement`, each with its 0-based line offset
+/// inside the statement. Strings, quoted identifiers, ordinary comments and
+/// dollar-quoted bodies are skipped.
+pub(super) fn conditional_comment_bodies(statement: &str) -> Vec<(usize, String)> {
+    let characters: Vec<char> = statement.chars().collect();
+    let mut bodies = Vec::new();
+    let mut position = 0;
+
+    while let Some(&current) = characters.get(position) {
+        let next = characters.get(position + 1).copied();
+        let previous = position
+            .checked_sub(1)
+            .and_then(|before| characters.get(before))
+            .copied();
+        let opens_dollar = current == '$'
+            && !previous
+                .is_some_and(|before| before.is_alphanumeric() || before == '_' || before == '$');
+
+        let end = match (current, next) {
+            ('-', Some('-')) => position + line_comment_len(&characters, position),
+            ('/', Some('*')) => {
+                let end = block_comment_end(&characters, position);
+                let marker = conditional_marker_len(&characters, position);
+                if marker > 0 {
+                    let body_end = end.saturating_sub(2).max(position + marker);
+                    let body: String = characters
+                        .iter()
+                        .skip(position + marker)
+                        .take(body_end - position - marker)
+                        .collect();
+                    let line_offset = characters
+                        .iter()
+                        .take(position)
+                        .filter(|character| **character == '\n')
+                        .count();
+                    bodies.push((line_offset, body));
+                }
+                end
+            }
+            ('\'' | '"' | '`', _) => quoted_end(&characters, position, current),
+            ('$', _) if opens_dollar => dollar_end(&characters, position),
+            _ => position,
+        };
+
+        position = end.max(position + 1);
+    }
+
+    bodies
 }

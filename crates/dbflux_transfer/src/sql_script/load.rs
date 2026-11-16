@@ -4,7 +4,7 @@ use std::path::Path;
 
 use dbflux_core::QueryLanguage;
 
-use super::control::session_commit_mode_change;
+use super::control::{conditional_transaction_control_line, session_commit_mode_change};
 use super::directives::find_directive;
 use super::psql::find_psql_only;
 use super::routine::split_routine_body_line;
@@ -100,6 +100,10 @@ impl SqlScript {
 
         if let Some(error) = find_psql_only(text, &statements) {
             return Err(error);
+        }
+
+        if let Some(line) = conditional_transaction_control_line(&statements) {
+            return Err(ScriptError::ConditionalTransactionControl { line });
         }
 
         if let Some(error) = find_commit_mode_change(&statements) {

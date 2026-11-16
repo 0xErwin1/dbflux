@@ -96,6 +96,13 @@ pub enum ScriptTransaction {
     /// without `COMMIT`, so the engine rolled it back: nothing it had changed
     /// there was saved. The UI says the script ended without COMMIT.
     EndedWithoutCommit,
+    /// The script used `SAVEPOINT` outside any transaction of its own. On
+    /// some engines that opens a transaction and on others it does nothing,
+    /// and the connection cannot be asked which, so the engine issued a
+    /// `ROLLBACK` in case one was left open. Changes the database had already
+    /// committed stay. A failing rollback is read as "nothing was open" and
+    /// reports [`ScriptTransaction::None`].
+    PossiblyOpenRolledBack,
     /// The rollback failed, so the transaction may still be open; see
     /// [`ScriptReport::finish_error`].
     LeftOpen,
@@ -272,6 +279,8 @@ struct LoopOutcome {
     first_implicit_commit: Option<usize>,
     /// The script opened a transaction of its own and has not closed it.
     script_transaction_open: bool,
+    /// The script used `SAVEPOINT` outside a `BEGIN` of its own.
+    savepoint_outside_transaction: bool,
 }
 
 fn execute_statements(
@@ -290,6 +299,7 @@ fn execute_statements(
         stopped_at: None,
         first_implicit_commit: None,
         script_transaction_open: false,
+        savepoint_outside_transaction: false,
     };
 
     let mut tracker = TransactionTracker::default();
@@ -318,6 +328,8 @@ fn execute_statements(
                 }
                 tracker.apply(&statement.text);
                 outcome.script_transaction_open = tracker.is_open();
+                outcome.savepoint_outside_transaction =
+                    tracker.used_savepoint_outside_transaction();
             }
             Err(DbError::Cancelled) => {
                 outcome.end = RunEnd::Cancelled;
@@ -362,6 +374,8 @@ fn finish(
             if outcome.script_transaction_open {
                 (script_transaction, finish_error) =
                     resolve_script_transaction(connection, end != RunEnd::Finished);
+            } else if outcome.savepoint_outside_transaction {
+                script_transaction = precautionary_rollback(connection);
             }
             Disposition::Kept
         }
@@ -435,5 +449,22 @@ fn resolve_script_transaction(
             ScriptTransaction::LeftOpen,
             Some(format!("Rollback failed: {error}")),
         ),
+    }
+}
+
+/// The script used `SAVEPOINT` outside a transaction of its own. Some engines
+/// open a transaction for it and some do nothing, and the connection cannot
+/// be asked which, so a `ROLLBACK` is issued in case one was left open. It is
+/// harmless when none is. An engine that refuses it ("no transaction is
+/// active") is telling us nothing was open, so a failure reads as
+/// [`ScriptTransaction::None`].
+fn precautionary_rollback(connection: &dyn Connection) -> ScriptTransaction {
+    let Some(vocab) = TransactionVocab::for_kind(connection.kind()) else {
+        return ScriptTransaction::None;
+    };
+
+    match connection.execute(&QueryRequest::new(vocab.rollback)) {
+        Ok(_) => ScriptTransaction::PossiblyOpenRolledBack,
+        Err(_) => ScriptTransaction::None,
     }
 }

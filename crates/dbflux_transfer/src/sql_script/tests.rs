@@ -1193,8 +1193,6 @@ fn autocommit_off_is_found_in_any_assignment_of_a_set_list_and_in_quoted_values(
         "SET sql_mode = 'ANSI', autocommit = 0",
         "SET autocommit = 'OFF'",
         "SET autocommit = '0'",
-        "/*!50003 SET autocommit = 0 */",
-        "/*!50003 SET @@session.autocommit=0 */",
     ] {
         assert_eq!(
             commit_mode(&format!("{sql};")),
@@ -1233,25 +1231,31 @@ fn a_chained_commit_keeps_the_script_transaction_open() {
 }
 
 #[test]
-fn a_savepoint_that_opens_a_transaction_is_tracked_until_its_outermost_release() {
+fn a_top_level_savepoint_is_not_guessed_to_be_a_transaction() {
     let mut tracker = TransactionTracker::default();
     tracker.apply("SAVEPOINT outer_one");
-    tracker.apply("SAVEPOINT inner_one");
-    assert!(tracker.is_open());
-    tracker.apply("RELEASE inner_one");
-    assert!(tracker.is_open());
-    tracker.apply("RELEASE SAVEPOINT outer_one");
     assert!(!tracker.is_open());
+    assert!(tracker.used_savepoint_outside_transaction());
 
     let mut inside_begin = TransactionTracker::default();
     inside_begin.apply("BEGIN");
     inside_begin.apply("SAVEPOINT a");
     inside_begin.apply("RELEASE a");
     assert!(inside_begin.is_open(), "the BEGIN is still open");
+    assert!(!inside_begin.used_savepoint_outside_transaction());
 }
 
 #[test]
-fn a_savepoint_left_open_at_the_end_is_rolled_back() {
+fn conditional_comment_text_never_changes_the_tracker() {
+    let mut tracker = TransactionTracker::default();
+    tracker.apply("BEGIN");
+    tracker.apply("/*! COMMIT */");
+    tracker.apply("/*M!100100 ROLLBACK */");
+    assert!(tracker.is_open());
+}
+
+#[test]
+fn a_savepoint_outside_a_transaction_gets_a_precautionary_rollback() {
     let scratch = Scratch::new();
     let connection = sqlite(&scratch);
     exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
@@ -1261,12 +1265,57 @@ fn a_savepoint_left_open_at_the_end_is_rolled_back() {
 
     assert_eq!(
         report.script_transaction,
-        ScriptTransaction::EndedWithoutCommit
+        ScriptTransaction::PossiblyOpenRolledBack
     );
+    assert_eq!(report.finish_error, None);
     assert_eq!(row_count(connection.as_ref(), "t"), 0);
+}
 
-    let released = self::script("SAVEPOINT s;\nINSERT INTO t VALUES (1);\nRELEASE s;\n");
+#[test]
+fn a_released_savepoint_leaves_nothing_to_roll_back() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let released = script("SAVEPOINT s;\nINSERT INTO t VALUES (1);\nRELEASE s;\n");
+
     let report = run(connection.as_ref(), &released, RunOptions::default()).expect("run");
+
     assert_eq!(report.script_transaction, ScriptTransaction::None);
+    assert_eq!(report.finish_error, None);
     assert_eq!(row_count(connection.as_ref(), "t"), 1);
+}
+
+#[test]
+fn a_conditional_comment_that_controls_transactions_is_refused_with_its_line() {
+    for body in [
+        "/*!50003 SET autocommit = 0 */",
+        "/*!40101 COMMIT */",
+        "/*M!100100 BEGIN */",
+        "/*! SET sql_mode = '', autocommit = 0; */",
+        "/*!80000 SELECT 1; ROLLBACK */",
+    ] {
+        let text = format!("SELECT 1;\n\nSELECT 2 {body};\n");
+        assert_eq!(
+            SqlScript::from_text(&text, &QueryLanguage::Sql).err(),
+            Some(ScriptError::ConditionalTransactionControl { line: 3 }),
+            "{body}"
+        );
+    }
+
+    assert_eq!(
+        ScriptError::ConditionalTransactionControl { line: 7 }.to_string(),
+        "The script has a version-conditional comment on line 7 that controls transactions, and whether it runs depends on the server. Run the script with the database's own command-line client."
+    );
+}
+
+#[test]
+fn other_conditional_comments_and_look_alikes_are_allowed() {
+    let text = "/*!40101 SET NAMES utf8 */;\nSELECT 1 /*!50003 + 1 */;\n/* COMMIT */ SELECT 2;\nSELECT '/*! COMMIT */';\n";
+
+    assert_eq!(
+        SqlScript::from_text(text, &QueryLanguage::Sql)
+            .map(|s| s.statement_count())
+            .ok(),
+        Some(4)
+    );
 }
