@@ -456,6 +456,16 @@ the driver to interrupt it. In one transaction the changes are then rolled back;
 without one, the statements that already ran are kept. The footer says which
 before you press it.
 
+The script runs on the profile's connection, so its statements and its
+transaction share that connection with anything else started from the profile.
+Let other work on that connection (the editor, the grid, another import) finish
+before you run a script, and do not start new work on it until the run ends: a
+query that runs in the middle of the script's transaction can be rolled back or
+saved with it. On a driver that offers separate sessions the script runs on its
+own session instead, other work cannot interfere, and **Cancel Run** stops only
+the script. A folder or file import has the same property on a connection
+without separate sessions.
+
 **Done** says what happened. A run that stops names the statement (number, line
 and text), shows the database's error, says what happened to the earlier
 statements and what to do next; without a transaction that means reconciling

@@ -497,6 +497,17 @@ sentencia en curso y pide al controlador que la interrumpa. En una transacción
 los cambios se deshacen; sin ella, las sentencias ya ejecutadas se conservan. El
 pie dice cuál de los dos casos es antes de pulsar.
 
+El script se ejecuta en la conexión del perfil, así que sus sentencias y su
+transacción comparten esa conexión con cualquier otra cosa iniciada desde el
+perfil. Deja que termine el resto del trabajo en esa conexión (el editor, la
+cuadrícula, otra importación) antes de ejecutar un script y no inicies trabajo
+nuevo en ella hasta que acabe la ejecución: una consulta que se ejecute en
+medio de la transacción del script puede deshacerse o guardarse con ella. En un
+controlador que ofrece sesiones separadas, el script se ejecuta en su propia
+sesión, el resto del trabajo no puede interferir y **Cancelar ejecución** solo
+detiene el script. Una importación de carpeta o de archivo tiene la misma
+propiedad en una conexión sin sesiones separadas.
+
 **Terminado** dice qué ocurrió. Una ejecución que se detiene nombra la sentencia
 (número, línea y texto), muestra el error de la base de datos, dice qué pasó con
 las sentencias anteriores y qué hacer a continuación; una ejecución que continuó

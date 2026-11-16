@@ -2,12 +2,15 @@
 //! `Connection::execute`, so it runs on the background executor; the wizard
 //! follows it through the shared progress counter, like every other run.
 
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use dbflux_core::{
-    CancelToken, Connection, TaskId, TaskKind, TaskTarget, observability::EventRecord,
+    CancelToken, Connection, DbError, ExecutionSessionScope, TaskId, TaskKind, TaskTarget,
+    observability::EventRecord,
 };
-use dbflux_transfer::sql_script::{ScriptProgress, run_script};
+use dbflux_transfer::sql_script::{
+    RunOptions, ScriptError, ScriptProgress, ScriptReport, SqlScript, run_script,
+};
 use dbflux_ui_base::app_state_entity::{AppStateChanged, AppStateEntity};
 use dbflux_ui_base::toast::Toast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -15,16 +18,20 @@ use gpui::*;
 
 use super::super::{ImportWizard, RunTaskAction, WizardStep};
 use super::audit::{AuditTarget, RunFacts, record_events, run_events};
-use super::interrupt::ScopedConnection;
-use super::messages::{DoneView, ScriptResolution, resolve_script_outcome_at};
+use super::interrupt::{InterruptSlot, ScopedConnection, current};
+use super::messages::{
+    DoneView, ScriptResolution, resolve_script_outcome_at, resolve_session_open_failure,
+};
 use super::options::ConnectionRules;
 use crate::progress_forwarding::spawn_task_progress_forwarder;
 
 /// Everything the worker and the finishing step need, captured when the run
 /// starts so they do not read the wizard again.
 struct RunPlan {
-    /// The run's connection, which knows what it is running.
-    connection: Arc<ScopedConnection>,
+    /// The profile's connection. The run uses an isolated session of it when
+    /// the driver offers one.
+    connection: Arc<dyn Connection>,
+    interrupt: InterruptSlot,
     script: Arc<dbflux_transfer::sql_script::SqlScript>,
     options: dbflux_transfer::sql_script::RunOptions,
     transaction_offered: bool,
@@ -54,9 +61,6 @@ impl ImportWizard {
             return;
         };
 
-        if let Some(flow) = self.script.as_mut() {
-            flow.interrupt = Some(Arc::clone(&plan.connection));
-        }
         let (task_id, cancel_token) = self.begin_script_task(cx);
         self.step = WizardStep::Running;
         self.spawn_script_run(plan, task_id, cancel_token, cx);
@@ -88,7 +92,8 @@ impl ImportWizard {
             snippet: Arc::clone(&flow.snippet),
             options,
             audit,
-            connection: Arc::new(ScopedConnection::new(connection)),
+            connection,
+            interrupt: Arc::clone(&flow.interrupt),
         })
     }
 
@@ -173,6 +178,7 @@ impl ImportWizard {
         cx.spawn(async move |this, cx| {
             let RunPlan {
                 connection,
+                interrupt,
                 script,
                 options,
                 transaction_offered,
@@ -182,18 +188,38 @@ impl ImportWizard {
             } = plan;
 
             let lines = Arc::clone(&script);
-            let result = cx
+            let session_run = cx
                 .background_executor()
                 .spawn(async move {
-                    run_script(
-                        connection.as_ref(),
+                    run_in_session(
+                        connection,
                         &script,
                         &options,
-                        |step: &ScriptProgress| publish_progress(&progress, &snippet, step),
                         &cancel_token,
+                        &interrupt,
+                        |step: &ScriptProgress| publish_progress(&progress, &snippet, step),
                     )
                 })
                 .await;
+
+            let (result, cleanup_error) = match session_run {
+                SessionRun::Ran {
+                    result,
+                    cleanup_error,
+                } => (result, cleanup_error),
+                SessionRun::OpenFailed(error) => {
+                    let resolution = resolve_session_open_failure(&error);
+                    finalize_task(&app_state, task_id, &resolution, Vec::new(), cx);
+                    this.update(cx, |this, cx| {
+                        this.finish_script_run(task_id, resolution.view, cx);
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            if let Some(error) = cleanup_error {
+                cx.update(|cx| report_session_cleanup_failure(&error, cx));
+            }
 
             let events = run_events(&audit, &facts, &result, now_millis());
             let implicit_commit_line = result
@@ -231,7 +257,6 @@ impl ImportWizard {
         self.step = WizardStep::Done;
         if let Some(flow) = self.script.as_mut() {
             flow.done = Some(view);
-            flow.interrupt = None;
         }
         cx.notify();
     }
@@ -246,7 +271,11 @@ impl ImportWizard {
         if !self.running {
             return;
         }
-        let Some(scope) = self.script.as_ref().and_then(|flow| flow.interrupt.clone()) else {
+        let Some(scope) = self
+            .script
+            .as_ref()
+            .and_then(|flow| current(&flow.interrupt))
+        else {
             return;
         };
 
@@ -272,6 +301,64 @@ impl ImportWizard {
         })
         .detach();
     }
+}
+
+/// How a run on an isolated session ended.
+pub(in crate::import_wizard) enum SessionRun {
+    Ran {
+        result: Result<ScriptReport, ScriptError>,
+        /// The session could not be released cleanly after the run.
+        cleanup_error: Option<Box<DbError>>,
+    },
+    /// No session could be opened, so nothing ran.
+    OpenFailed(Box<DbError>),
+}
+
+/// Runs the script on an isolated session of `root` when its driver offers
+/// one (`Connection::execution_session_factory`), else on `root` itself.
+/// Blocking: call it from the background executor.
+///
+/// On a session, other work on the profile's connection cannot interleave
+/// with the script's statements or its transaction, and `slot` holds the
+/// session's connection only while the script runs, so Cancel Run reaches
+/// nothing but the script. The session is released once the run ends.
+pub(in crate::import_wizard) fn run_in_session(
+    root: Arc<dyn Connection>,
+    script: &SqlScript,
+    options: &RunOptions,
+    cancel: &CancelToken,
+    slot: &InterruptSlot,
+    on_progress: impl FnMut(&ScriptProgress),
+) -> SessionRun {
+    let mut scope = match ExecutionSessionScope::new(root) {
+        Ok(scope) => scope,
+        Err(error) => return SessionRun::OpenFailed(Box::new(error)),
+    };
+    let scoped = Arc::new(ScopedConnection::new(scope.connection()));
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&scoped));
+
+    let result = run_script(scoped.as_ref(), script, options, on_progress, cancel);
+
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    let cleanup_error = scope.finish(Ok(())).err().map(Box::new);
+
+    SessionRun::Ran {
+        result,
+        cleanup_error,
+    }
+}
+
+fn report_session_cleanup_failure(error: &DbError, cx: &mut App) {
+    report_error(
+        UserFacingError::new(
+            ErrorKind::Driver,
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.session_cleanup_failed",
+                error = error
+            ),
+        ),
+        cx,
+    );
 }
 
 fn publish_progress(

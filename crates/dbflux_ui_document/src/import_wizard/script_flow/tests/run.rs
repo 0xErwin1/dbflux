@@ -207,7 +207,7 @@ fn cancel_run_trips_the_token_and_interrupts_the_statement(cx: &mut gpui::TestAp
         this.step = WizardStep::Running;
         this.cancel_token = Some(token.clone());
         if let Some(flow) = this.script.as_mut() {
-            flow.interrupt = Some(scope.clone());
+            *flow.interrupt.lock().expect("slot") = Some(scope.clone());
         }
         this.cancel_run(cx);
     });
@@ -234,7 +234,7 @@ fn cancel_run_between_statements_does_not_interrupt_the_connection(cx: &mut gpui
         this.step = WizardStep::Running;
         this.cancel_token = Some(token.clone());
         if let Some(flow) = this.script.as_mut() {
-            flow.interrupt = Some(scope);
+            *flow.interrupt.lock().expect("slot") = Some(scope);
         }
         this.cancel_run(cx);
     });

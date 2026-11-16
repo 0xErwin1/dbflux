@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use dbflux_core::{
     CancelToken, Connection, DatabaseCategory, DbConfig, DbError, DbKind, DriverCapabilities,
-    DriverMetadata, FormattedError, Icon, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TransferFamily, WritePrivilege,
+    DriverMetadata, ExecutionSession, ExecutionSessionFactory, FormattedError, Icon, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    TransferFamily, WritePrivilege,
 };
 use dbflux_ui_base::app_state_entity::AppStateEntity;
 use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
@@ -48,6 +49,7 @@ pub(super) struct ScriptFake {
     during_run: Mutex<Option<StatementHook>>,
     pub(super) interrupts: AtomicUsize,
     fail_interrupt: std::sync::atomic::AtomicBool,
+    factory: Option<FakeFactory>,
 }
 
 impl ScriptFake {
@@ -66,7 +68,38 @@ impl ScriptFake {
             during_run: Mutex::new(None),
             interrupts: AtomicUsize::new(0),
             fail_interrupt: std::sync::atomic::AtomicBool::new(false),
+            factory: None,
         })
+    }
+
+    /// A connection that offers isolated sessions, which run on `session`.
+    pub(super) fn with_sessions(
+        kind: FakeKind,
+        session: Arc<ScriptFake>,
+    ) -> (Arc<Self>, Arc<SessionProbe>) {
+        let capabilities = if kind.transactions {
+            DriverCapabilities::TRANSACTIONS
+        } else {
+            DriverCapabilities::empty()
+        };
+        let probe = Arc::new(SessionProbe::default());
+
+        (
+            Arc::new(Self {
+                metadata: metadata(kind, capabilities),
+                transactional_ddl: kind.transactional_ddl,
+                executed: Mutex::new(Vec::new()),
+                failures: Mutex::new(Vec::new()),
+                during_run: Mutex::new(None),
+                interrupts: AtomicUsize::new(0),
+                fail_interrupt: std::sync::atomic::AtomicBool::new(false),
+                factory: Some(FakeFactory {
+                    session,
+                    probe: Arc::clone(&probe),
+                }),
+            }),
+            probe,
+        )
     }
 
     /// Fails every statement that contains `needle` with `message`.
@@ -196,6 +229,76 @@ impl Connection for ScriptFake {
 
     fn supports_transactional_ddl(&self) -> bool {
         self.transactional_ddl
+    }
+
+    fn execution_session_factory(&self) -> Option<&dyn ExecutionSessionFactory> {
+        self.factory
+            .as_ref()
+            .map(|factory| factory as &dyn ExecutionSessionFactory)
+    }
+}
+
+/// How a test makes the session factory behave, and what it saw.
+#[derive(Default)]
+pub(super) struct SessionProbe {
+    pub(super) fail_open: std::sync::atomic::AtomicBool,
+    pub(super) fail_finish: std::sync::atomic::AtomicBool,
+    pub(super) opened: AtomicUsize,
+    pub(super) finished: AtomicUsize,
+}
+
+/// A session factory that opens sessions running on another fake connection.
+pub(super) struct FakeFactory {
+    session: Arc<ScriptFake>,
+    probe: Arc<SessionProbe>,
+}
+
+struct FakeSession {
+    connection: Arc<ScriptFake>,
+    probe: Arc<SessionProbe>,
+}
+
+impl ExecutionSessionFactory for FakeFactory {
+    fn open(&self) -> Result<Arc<dyn ExecutionSession>, DbError> {
+        if self.probe.fail_open.load(Ordering::SeqCst) {
+            return Err(DbError::ConnectionFailed(FormattedError::new(
+                "no more sessions",
+            )));
+        }
+        self.probe.opened.fetch_add(1, Ordering::SeqCst);
+
+        Ok(Arc::new(FakeSession {
+            connection: Arc::clone(&self.session),
+            probe: Arc::clone(&self.probe),
+        }))
+    }
+
+    fn shutdown(&self) -> Result<(), DbError> {
+        Ok(())
+    }
+}
+
+impl ExecutionSession for FakeSession {
+    fn connection(&self) -> Arc<dyn Connection> {
+        self.connection.clone()
+    }
+
+    fn close(&self) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    fn finish_operation(&self) -> Result<(), DbError> {
+        self.probe.finished.fetch_add(1, Ordering::SeqCst);
+        if self.probe.fail_finish.load(Ordering::SeqCst) {
+            return Err(DbError::QueryFailed(FormattedError::new(
+                "could not release the session",
+            )));
+        }
+        Ok(())
+    }
+
+    fn is_closed(&self) -> bool {
+        false
     }
 }
 

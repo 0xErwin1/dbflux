@@ -3,6 +3,8 @@
 
 /// Every key of the flow, in the order the catalogs declare them.
 const SCRIPT_KEYS: &[&str] = &[
+    "document.import_wizard.script.error.session_open_failed",
+    "document.import_wizard.script.error.session_cleanup_failed",
     "document.import_wizard.script.done.stopped_own_transaction_next",
     "document.import_wizard.script.done.cancelled_own_transaction_next",
     "document.import_wizard.script.error.interrupt_failed",

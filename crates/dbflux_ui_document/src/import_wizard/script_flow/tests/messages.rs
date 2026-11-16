@@ -559,7 +559,7 @@ fn a_script_that_ends_without_commit_says_it_was_rolled_back() {
     );
 }
 
-const OWN_TX_OUTCOME: &str = "Statements before the script's own BEGIN were saved as they ran. The script's open transaction was rolled back, so what it had changed there was not saved.";
+const OWN_TX_OUTCOME: &str = "Statements the script ran outside its own transactions were saved as they ran. The script's open transaction was rolled back, so what it had changed there was not saved.";
 
 #[test]
 fn a_stop_inside_the_scripts_own_transaction_does_not_claim_everything_before_it_was_kept() {
@@ -575,7 +575,7 @@ fn a_stop_inside_the_scripts_own_transaction_does_not_claim_everything_before_it
     assert_eq!(
         view.next_step.as_deref(),
         Some(
-            "Fix statement 4,121, then check which statements before it were saved (only those before the script's own BEGIN were) and reconcile the changes. Keep or restore the session settings the script needs (for example SET search_path or SET NAMES), then run only what is missing, or the saved statements run twice."
+            "Fix statement 4,121, then check the database to see which statements before it were saved and reconcile the changes. Keep or restore the session settings the script needs (for example SET search_path or SET NAMES), then run only what is missing, or the saved statements run twice."
         )
     );
 }
@@ -594,7 +594,7 @@ fn a_cancel_inside_the_scripts_own_transaction_uses_the_same_neutral_wording() {
     assert_eq!(
         view.next_step.as_deref(),
         Some(
-            "Check which statements were saved (only those before the script's own BEGIN were) and reconcile the changes before you run the script again, or the saved statements run twice."
+            "Check the database to see which statements were saved and reconcile the changes before you run the script again, or the saved statements run twice."
         )
     );
 }
@@ -715,4 +715,20 @@ fn a_version_conditional_transaction_comment_is_refused_with_localized_copy() {
         block.next_step,
         "Run the script with the database's own command-line client."
     );
+}
+
+#[test]
+fn a_session_that_could_not_be_opened_says_nothing_ran() {
+    let error = dbflux_core::DbError::ConnectionFailed(dbflux_core::FormattedError::new(
+        "no more sessions",
+    ));
+    let resolution = super::super::messages::resolve_session_open_failure(&error);
+    let block = resolution.view.block.expect("danger block");
+
+    assert_eq!(
+        block.message,
+        "Could not open a separate session for the script, so nothing ran: Connection failed: no more sessions"
+    );
+    assert!(matches!(resolution.task_action, RunTaskAction::Fail(_)));
+    assert!(resolution.report.is_some());
 }

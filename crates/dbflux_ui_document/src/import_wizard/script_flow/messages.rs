@@ -2,6 +2,7 @@
 //! the Done step of a run, each with what happened to the statements and what
 //! to do next. Pure text and data, no GPUI.
 
+use dbflux_core::DbError;
 use dbflux_transfer::sql_script::{
     Disposition, RunEnd, ScriptError, ScriptReport, ScriptTransaction, StatementFailure,
 };
@@ -689,6 +690,30 @@ fn failure_cause(report: &ScriptReport) -> String {
         .map(|failure| failure.error.clone())
         .or_else(|| report.finish_error.clone())
         .unwrap_or_default()
+}
+
+/// The run never started because no isolated session could be opened.
+pub(in crate::import_wizard) fn resolve_session_open_failure(error: &DbError) -> ScriptResolution {
+    let message = dbflux_i18n::t!(
+        "document.import_wizard.script.error.session_open_failed",
+        error = error
+    );
+    let mut view = plain_view(
+        dbflux_i18n::t!("document.import_wizard.script.done.not_run"),
+        DoneTone::Danger,
+    );
+    view.block = Some(ErrorBlock {
+        message: message.clone(),
+        next_step: dbflux_i18n::t!("document.import_wizard.script.done.not_run_next"),
+        footer_reason: None,
+    });
+
+    ScriptResolution {
+        view,
+        task_action: RunTaskAction::Fail(message.clone()),
+        report: Some(message),
+        toast_success: false,
+    }
 }
 
 fn not_run_resolution(error: &ScriptError) -> ScriptResolution {

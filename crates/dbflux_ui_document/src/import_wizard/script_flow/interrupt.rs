@@ -15,6 +15,16 @@ use dbflux_core::{
     QueryRequest, QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TransactionVocab,
 };
 
+/// Where the run publishes the connection Cancel Run interrupts. It holds
+/// the run's own connection while the run is in progress and nothing before
+/// and after it, so an interrupt can never reach anything else.
+pub(super) type InterruptSlot = Arc<Mutex<Option<Arc<ScopedConnection>>>>;
+
+/// The connection to interrupt, if a run is in progress.
+pub(super) fn current(slot: &InterruptSlot) -> Option<Arc<ScopedConnection>> {
+    slot.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
 /// What the connection is running.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Phase {

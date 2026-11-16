@@ -51,7 +51,7 @@ pub(super) struct ScriptFlow {
     /// Set when the run ends.
     done: Option<DoneView>,
     /// The connection of the run in progress, which Cancel Run interrupts.
-    interrupt: Option<Arc<interrupt::ScopedConnection>>,
+    interrupt: interrupt::InterruptSlot,
 }
 
 impl ScriptFlow {
@@ -96,7 +96,7 @@ fn read_script(
         rules,
         snippet: Arc::default(),
         done: None,
-        interrupt: None,
+        interrupt: Arc::default(),
     })
 }
 

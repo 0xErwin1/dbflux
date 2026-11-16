@@ -7,6 +7,7 @@ mod options;
 mod pick;
 mod render;
 mod run;
+mod session;
 mod stale;
 mod support;
 
