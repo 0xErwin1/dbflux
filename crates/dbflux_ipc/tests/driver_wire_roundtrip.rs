@@ -1892,3 +1892,31 @@ fn database_category_variants_keep_their_postcard_indices() {
         assert_eq!(decoded, category);
     }
 }
+
+/// The base `RowInsert`/`RowPatch` wire shapes default their trailing type
+/// vectors, so a self-describing frame that omits them still decodes through
+/// the frozen v1.9 shapes. `postcard` frames are positional and unaffected.
+#[test]
+fn self_describing_row_write_frames_without_type_vectors_still_decode() {
+    let insert: DriverRequestBody = serde_json::from_value(json!({
+        "InsertRow": {
+            "insert": { "table": "users", "schema": null, "columns": [], "values": [] }
+        }
+    }))
+    .expect("insert frame without column_types");
+    assert!(matches!(insert, DriverRequestBody::InsertRow { .. }));
+
+    let patch: DriverRequestBody = serde_json::from_value(json!({
+        "UpdateRow": {
+            "patch": {
+                "identity": serde_json::to_value(RowIdentity::composite(vec![], vec![]))
+                    .expect("identity"),
+                "table": "users",
+                "schema": null,
+                "changes": []
+            }
+        }
+    }))
+    .expect("patch frame without change_types");
+    assert!(matches!(patch, DriverRequestBody::UpdateRow { .. }));
+}

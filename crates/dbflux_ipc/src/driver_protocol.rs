@@ -824,6 +824,7 @@ mod row_insert_v1_9 {
         schema: Option<String>,
         columns: Vec<String>,
         values: Vec<Value>,
+        #[serde(default)]
         column_types: Vec<Option<String>>,
     }
 
@@ -902,6 +903,7 @@ mod row_patch_v1_9 {
         table: String,
         schema: Option<String>,
         changes: Vec<(String, Value)>,
+        #[serde(default)]
         change_types: Vec<Option<String>>,
     }
 
