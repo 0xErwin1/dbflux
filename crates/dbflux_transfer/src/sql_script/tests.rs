@@ -877,7 +877,7 @@ fn copy_from_stdin_is_refused_with_its_line() {
 
     assert_eq!(
         ScriptError::CopyFromStdin { line: 48 }.to_string(),
-        "The script has a COPY … FROM stdin data block on line 48, which only the psql command-line client can load. Run it with psql, or re-create the dump with INSERT statements (pg_dump --inserts)."
+        "The script has a COPY … FROM stdin data block on line 48, which only the psql command-line client can load. Run it with psql instead."
     );
 }
 
