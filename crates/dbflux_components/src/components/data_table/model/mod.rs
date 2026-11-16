@@ -127,13 +127,20 @@ impl TableModel {
     /// The model with row `row_idx` showing the cells `edits` overrides in
     /// it, and every other cell unchanged. The cells are copied as they are,
     /// so values a `Value` cannot hold (binary sizes, placeholders) survive.
+    /// An expression is not copied: it has no value until the database
+    /// evaluates it, and as a base cell it would hide the row's key from the
+    /// identity-based restore, so that cell keeps what the row held.
     pub fn with_row_edits(&self, row_idx: usize, edits: &EditBuffer) -> Self {
         let mut new_rows = self.rows.clone();
 
         if let Some(row) = new_rows.get_mut(row_idx) {
             for (col, cell) in row.cells.iter_mut().enumerate() {
                 if edits.is_cell_dirty(row_idx, col) {
-                    *cell = edits.get_cell(row_idx, col, &CellValue::null()).clone();
+                    let placeholder = CellValue::null();
+                    let edited = edits.get_cell(row_idx, col, &placeholder);
+                    if edited.as_expression().is_none() {
+                        *cell = edited.clone();
+                    }
                 }
             }
         }

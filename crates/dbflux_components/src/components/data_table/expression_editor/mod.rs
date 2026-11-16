@@ -27,6 +27,20 @@ pub(super) fn expression_placeholder() -> SharedString {
 }
 
 /// The element the editing cell draws in expression mode.
+/// How far a key press moves the suggestion: plain Down and Up only, so a
+/// shifted arrow stays a selection gesture of the input.
+fn suggestion_step(keystroke: &gpui::Keystroke) -> Option<isize> {
+    if keystroke.modifiers.shift {
+        return None;
+    }
+
+    match keystroke.key.as_str() {
+        "down" => Some(1),
+        "up" => Some(-1),
+        _ => None,
+    }
+}
+
 pub(super) fn expression_editor(
     input: &Entity<InputState>,
     state: &Entity<DataTableState>,
@@ -47,10 +61,8 @@ pub(super) fn expression_editor(
         .gap(Spacing::XS)
         .when(has_suggestions, |editor| {
             editor.capture_key_down(move |event: &KeyDownEvent, window: &mut Window, cx| {
-                let step = match event.keystroke.key.as_str() {
-                    "down" => 1,
-                    "up" => -1,
-                    _ => return,
+                let Some(step) = suggestion_step(&event.keystroke) else {
+                    return;
                 };
 
                 cx.stop_propagation();
@@ -127,3 +139,6 @@ fn suggestion_list(
         )
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;

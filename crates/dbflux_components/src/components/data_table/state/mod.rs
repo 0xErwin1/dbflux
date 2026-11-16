@@ -115,6 +115,10 @@ pub struct DataTableState {
     /// rather than a literal. Literal unless the user flips it or opens an
     /// expression cell, so typed text is never promoted by detection.
     expression_mode: bool,
+    /// Whether the host's source takes SQL expressions. Off by default, so a
+    /// source that cannot write one (a document collection, a spreadsheet)
+    /// never offers the editor mode.
+    expressions_allowed: bool,
 
     /// Index of the suggestion the open editor last put in its input, when
     /// the user stepped through them.
@@ -234,6 +238,7 @@ impl DataTableState {
             cell_input: None,
             enum_dropdown: None,
             expression_mode: false,
+            expressions_allowed: false,
             suggestion_index: None,
             _editing_subs: Vec::new(),
             pending_refocus: false,
@@ -1166,6 +1171,16 @@ impl DataTableState {
         }
     }
 
+    /// Declares whether cells of this source can carry SQL expressions.
+    pub fn set_expressions_allowed(&mut self, allowed: bool) {
+        self.expressions_allowed = allowed;
+    }
+
+    /// Whether cells of this source can carry SQL expressions.
+    pub fn expressions_allowed(&self) -> bool {
+        self.expressions_allowed
+    }
+
     /// Whether the open inline editor stages its text as an expression.
     pub fn is_expression_mode(&self) -> bool {
         self.editing_cell.is_some() && self.cell_input.is_some() && self.expression_mode
@@ -1190,6 +1205,10 @@ impl DataTableState {
     /// text. With no editor open, opens one on the active cell in
     /// expression mode, so the chord and the menu entry do the same thing.
     pub fn toggle_expression_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.expressions_allowed {
+            return false;
+        }
+
         if self.editing_cell.is_none() {
             let Some(coord) = self.selection.active else {
                 return false;
@@ -1198,7 +1217,12 @@ impl DataTableState {
         }
 
         if self.cell_input.is_none() {
-            return false;
+            // An open enum dropdown is a literal editor with no input to
+            // flip: reopen the cell as a text editor in expression mode.
+            let Some(coord) = self.editing_cell.filter(|_| self.enum_dropdown.is_some()) else {
+                return false;
+            };
+            return self.start_editing_as_expression(coord, window, cx);
         }
 
         self.expression_mode = !self.expression_mode;
@@ -1302,6 +1326,10 @@ impl DataTableState {
         cx: &mut Context<Self>,
     ) -> bool {
         use super::model::{ColumnKind, VisualRowSource};
+
+        if as_expression && !self.expressions_allowed {
+            return false;
+        }
 
         if self.document.is_some() && self.is_nested_cell(coord) {
             cx.emit(DataTableEvent::StepIntoRequested {
@@ -2405,6 +2433,7 @@ mod tests {
                 let mut s = super::DataTableState::new(model, cx);
                 s.set_pk_columns(vec![0]);
                 s.set_readonly_columns(HashSet::new());
+                s.set_expressions_allowed(true);
                 s
             });
             holder_clone.replace(Some(state.clone()));

@@ -378,6 +378,9 @@ impl gpui::Render for DataTable {
                     if !state.is_editable() && !state.is_insertable() {
                         return;
                     }
+                    if !state.expressions_allowed() {
+                        return;
+                    }
                     state.toggle_expression_mode(window, cx);
                 });
             };

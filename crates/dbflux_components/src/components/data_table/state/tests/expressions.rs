@@ -172,3 +172,46 @@ fn suggestions_step_into_the_input(cx: &mut gpui::TestAppContext) {
     let text = window.update(|_, app| input.read(app).value().to_string());
     assert_eq!(text, "CURRENT_DATE");
 }
+
+/// A source that cannot write an expression never enters expression mode,
+/// whether the editor is open, closed or started as an expression.
+#[gpui::test]
+fn a_source_without_expressions_never_enters_expression_mode(cx: &mut gpui::TestAppContext) {
+    use crate::components::data_table::selection::CellCoord;
+
+    let (state, _input, window) = editing_state(cx, CellCoord::new(0, 1));
+    window.update(|window, app| {
+        state.update(app, |s, cx| {
+            s.set_expressions_allowed(false);
+            assert!(!s.toggle_expression_mode(window, cx), "open editor");
+            assert!(!s.is_expression_mode());
+            s.stop_editing(false, cx);
+
+            assert!(!s.toggle_expression_mode(window, cx), "no editor");
+            assert!(!s.is_editing());
+            assert!(!s.start_editing_as_expression(CellCoord::new(0, 1), window, cx));
+            assert!(!s.is_editing());
+        });
+    });
+}
+
+/// An open enum dropdown becomes a text editor in expression mode.
+#[gpui::test]
+fn the_toggle_turns_an_open_enum_dropdown_into_an_expression_editor(cx: &mut gpui::TestAppContext) {
+    use crate::components::data_table::selection::CellCoord;
+
+    let (state, _input, window) = editing_state(cx, CellCoord::new(0, 1));
+    window.update(|window, app| {
+        state.update(app, |s, cx| {
+            s.stop_editing(false, cx);
+            s.set_enum_options(1, vec!["a".to_string(), "b".to_string()]);
+            assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+            assert!(s.is_editing_enum(), "the enum column opens a dropdown");
+
+            assert!(s.toggle_expression_mode(window, cx));
+            assert!(!s.is_editing_enum());
+            assert!(s.is_editing() && s.is_expression_mode());
+            assert!(s.cell_input().is_some());
+        });
+    });
+}
