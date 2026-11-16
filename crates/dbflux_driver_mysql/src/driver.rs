@@ -2032,7 +2032,9 @@ fn plan_mysql_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
 ///
 /// An expression cell (`NOW()`, `UUID()`) has no literal to match the row by,
 /// and the generated value is unknown, so an insert that carries one is not
-/// read back at all instead of matching the wrong row or none.
+/// read back at all instead of matching the wrong row or none. The same holds
+/// when the server generated an id, because the AUTO_INCREMENT column is not
+/// known here.
 fn insert_readback_sql(
     builder: &SqlQueryBuilder,
     insert: &RowInsert,
@@ -2042,18 +2044,10 @@ fn insert_readback_sql(
         return None;
     }
 
+    // The generated id belongs to the AUTO_INCREMENT column, which the statement
+    // may not assign, so no assigned column can be matched against it.
     if last_insert_id > 0 {
-        let first_col = insert
-            .assignments
-            .first()
-            .map(|a| MYSQL_DIALECT.quote_identifier(&a.name))
-            .unwrap_or_else(|| "`id`".to_string());
-        let table = MYSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
-
-        return Some(format!(
-            "SELECT * FROM {} WHERE {} = {} LIMIT 1",
-            table, first_col, last_insert_id
-        ));
+        return None;
     }
 
     let (columns, values): (Vec<String>, Vec<Value>) = insert
@@ -3058,13 +3052,10 @@ mod sql_statement_tests {
     }
 
     #[test]
-    fn insert_readback_uses_the_auto_increment_id_when_there_is_one() {
+    fn insert_is_not_read_back_by_an_assigned_column_when_an_id_was_generated() {
         let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
 
-        assert_eq!(
-            insert_readback_sql(&builder, &literal_insert(), 7).as_deref(),
-            Some("SELECT * FROM `app`.`users` WHERE `name` = 7 LIMIT 1")
-        );
+        assert_eq!(insert_readback_sql(&builder, &literal_insert(), 7), None);
     }
 
     #[test]
