@@ -51,8 +51,8 @@ use dbflux_ipc::{
     EventSeverityDto, ProtocolVersion, QueryRequestDto, QueryResultChunk, QueryResultDto,
     QueryResultSetsDto, ResultSetDto,
 };
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -716,6 +716,16 @@ fn request_variants() -> Vec<(&'static str, DriverRequestBody)> {
                 action_id: "delete".to_string(),
             },
         ),
+        (
+            "InsertRowV2",
+            DriverRequestBody::InsertRowV2 {
+                insert: row_insert(),
+            },
+        ),
+        (
+            "UpdateRowV2",
+            DriverRequestBody::UpdateRowV2 { patch: row_patch() },
+        ),
     ]
 }
 
@@ -1109,6 +1119,8 @@ fn request_variant_name(body: &DriverRequestBody) -> &'static str {
         DriverRequestBody::RootSections => "RootSections",
         DriverRequestBody::RootSectionItems { .. } => "RootSectionItems",
         DriverRequestBody::ExecuteRootSectionAction { .. } => "ExecuteRootSectionAction",
+        DriverRequestBody::InsertRowV2 { .. } => "InsertRowV2",
+        DriverRequestBody::UpdateRowV2 { .. } => "UpdateRowV2",
     }
 }
 
@@ -1554,6 +1566,184 @@ fn row_patch_and_insert_with_expressions_round_trip() {
     let decoded: RowPatch = postcard::from_bytes(&encoded).expect("decode");
     assert!(decoded.changes[0].expression.is_none());
     assert_eq!(decoded.changes[1].expression.as_deref(), Some("now()"));
+}
+
+/// The v1.9 `RowInsert` wire shape, copied byte-for-byte from before cell
+/// expressions existed. A v1.9 peer decodes exactly this and ignores trailing
+/// bytes, so the old request variants must never carry more.
+#[derive(Serialize, Deserialize)]
+struct BaselineRowInsertV19 {
+    table: String,
+    schema: Option<String>,
+    columns: Vec<String>,
+    values: Vec<Value>,
+    column_types: Vec<Option<String>>,
+}
+
+/// The v1.9 `RowPatch` wire shape; see [`BaselineRowInsertV19`].
+#[derive(Serialize, Deserialize)]
+struct BaselineRowPatchV19 {
+    identity: RowIdentity,
+    table: String,
+    schema: Option<String>,
+    changes: Vec<(String, Value)>,
+    change_types: Vec<Option<String>>,
+}
+
+fn typed_insert() -> RowInsert {
+    RowInsert::with_typed_assignments(
+        "users".to_string(),
+        Some("public".to_string()),
+        vec![
+            ColumnAssignment::typed("name", Value::Text("Ada".to_string()), "text"),
+            ColumnAssignment::new("age", Value::Int(36)),
+        ],
+    )
+}
+
+fn typed_patch() -> RowPatch {
+    RowPatch::with_typed_changes(
+        RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+        "users".to_string(),
+        None,
+        vec![
+            ColumnAssignment::typed("name", Value::Text("Ada".to_string()), "text"),
+            ColumnAssignment::new("age", Value::Int(36)),
+        ],
+    )
+}
+
+#[test]
+fn insert_row_without_expressions_keeps_the_v1_9_frame_byte_for_byte() {
+    let body = DriverRequestBody::InsertRow {
+        insert: typed_insert(),
+    };
+    let encoded = postcard::to_allocvec(&body).expect("encode");
+
+    let baseline = BaselineRowInsertV19 {
+        table: "users".to_string(),
+        schema: Some("public".to_string()),
+        columns: vec!["name".to_string(), "age".to_string()],
+        values: vec![Value::Text("Ada".to_string()), Value::Int(36)],
+        column_types: vec![Some("text".to_string()), None],
+    };
+    let expected = postcard::to_allocvec(&baseline).expect("baseline");
+
+    assert_eq!(&encoded[1..], expected.as_slice());
+    assert_postcard_roundtrip(&body);
+}
+
+#[test]
+fn update_row_without_expressions_keeps_the_v1_9_frame_byte_for_byte() {
+    let body = DriverRequestBody::UpdateRow {
+        patch: typed_patch(),
+    };
+    let encoded = postcard::to_allocvec(&body).expect("encode");
+
+    let baseline = BaselineRowPatchV19 {
+        identity: RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+        table: "users".to_string(),
+        schema: None,
+        changes: vec![
+            ("name".to_string(), Value::Text("Ada".to_string())),
+            ("age".to_string(), Value::Int(36)),
+        ],
+        change_types: vec![Some("text".to_string()), None],
+    };
+    let expected = postcard::to_allocvec(&baseline).expect("baseline");
+
+    assert_eq!(&encoded[1..], expected.as_slice());
+    assert_postcard_roundtrip(&body);
+}
+
+#[test]
+fn a_v1_9_frame_decodes_into_the_old_request_variants() {
+    let baseline = BaselineRowInsertV19 {
+        table: "users".to_string(),
+        schema: None,
+        columns: vec!["name".to_string()],
+        values: vec![Value::Text("Ada".to_string())],
+        column_types: vec![],
+    };
+    let reference = postcard::to_allocvec(&DriverRequestBody::InsertRow {
+        insert: typed_insert(),
+    })
+    .expect("encode");
+    let mut frame = vec![reference[0]];
+    frame.extend(postcard::to_allocvec(&baseline).expect("baseline"));
+
+    match postcard::from_bytes::<DriverRequestBody>(&frame).expect("decode") {
+        DriverRequestBody::InsertRow { insert } => {
+            assert_eq!(insert.assignments.len(), 1);
+            assert!(insert.assignments[0].expression.is_none());
+        }
+        other => panic!("expected InsertRow, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_old_row_variants_refuse_to_drop_an_expression() {
+    let insert = DriverRequestBody::InsertRow {
+        insert: RowInsert::with_typed_assignments(
+            "users".to_string(),
+            None,
+            vec![ColumnAssignment::expression("id", "gen_random_uuid()")],
+        ),
+    };
+    assert!(postcard::to_allocvec(&insert).is_err());
+
+    let update = DriverRequestBody::UpdateRow {
+        patch: RowPatch::with_typed_changes(
+            RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "users".to_string(),
+            None,
+            vec![ColumnAssignment::expression("deleted_at", "now()")],
+        ),
+    };
+    assert!(postcard::to_allocvec(&update).is_err());
+}
+
+#[test]
+fn the_v2_row_variants_carry_expressions_and_are_appended_last() {
+    let insert = DriverRequestBody::InsertRowV2 {
+        insert: RowInsert::with_typed_assignments(
+            "users".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("id", "gen_random_uuid()"),
+                ColumnAssignment::new("name", Value::Text("Ada".to_string())),
+            ],
+        ),
+    };
+    assert_postcard_roundtrip(&insert);
+    let encoded = postcard::to_allocvec(&insert).expect("encode");
+    match postcard::from_bytes::<DriverRequestBody>(&encoded).expect("decode") {
+        DriverRequestBody::InsertRowV2 { insert } => {
+            assert_eq!(
+                insert.assignments[0].expression.as_deref(),
+                Some("gen_random_uuid()")
+            );
+            assert!(insert.assignments[1].expression.is_none());
+        }
+        other => panic!("expected InsertRowV2, got {other:?}"),
+    }
+
+    let update = DriverRequestBody::UpdateRowV2 {
+        patch: RowPatch::with_typed_changes(
+            RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "users".to_string(),
+            None,
+            vec![ColumnAssignment::expression("deleted_at", "now()")],
+        ),
+    };
+    assert_postcard_roundtrip(&update);
+    let encoded = postcard::to_allocvec(&update).expect("encode");
+    match postcard::from_bytes::<DriverRequestBody>(&encoded).expect("decode") {
+        DriverRequestBody::UpdateRowV2 { patch } => {
+            assert_eq!(patch.changes[0].expression.as_deref(), Some("now()"));
+        }
+        other => panic!("expected UpdateRowV2, got {other:?}"),
+    }
 }
 
 #[test]

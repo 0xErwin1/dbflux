@@ -35,8 +35,9 @@ pub use driver_protocol::{
     DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
     DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope, DriverRpcError,
     DriverRpcErrorCode, QueryRequestDto, QueryResultChunk, QueryResultDto, QueryResultSetsDto,
-    QueryResultShapeDto, ResultSetDto, protocol_carries_request_row_limit,
-    protocol_carries_result_sets, protocol_carries_root_sections,
+    QueryResultShapeDto, ResultSetDto, protocol_carries_cell_expressions,
+    protocol_carries_request_row_limit, protocol_carries_result_sets,
+    protocol_carries_root_sections,
 };
 pub use envelope::{
     APP_CONTROL_VERSION, AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS,

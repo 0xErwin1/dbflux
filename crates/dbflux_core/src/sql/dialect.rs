@@ -41,8 +41,8 @@ pub enum TypeFamily {
 /// Classify a driver-reported type name, ignoring case and modifiers such as
 /// `varchar(255)`, `numeric(12,2)` or `timestamp(3) with time zone`.
 ///
-/// Arrays (`text[]`, `_int4`), intervals and unrecognised names have no
-/// family.
+/// Arrays (`text[]`, `_int4`), intervals, range and multirange types and
+/// unrecognised names have no family.
 pub fn type_family(type_name: &str) -> Option<TypeFamily> {
     let mut name = type_name.trim().to_ascii_lowercase();
 
@@ -62,6 +62,12 @@ pub fn type_family(type_name: &str) -> Option<TypeFamily> {
     let base = name.split('(').next().unwrap_or(&name).trim();
 
     if base.starts_with("interval") {
+        return None;
+    }
+
+    // `daterange` and `int4range` look like their element type by prefix, but a
+    // scalar expression such as `now()` is not a valid range value.
+    if base.ends_with("range") || base.contains("multirange") {
         return None;
     }
 
@@ -557,6 +563,33 @@ mod tests {
                 .type_value_expressions("geometry")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn range_types_have_no_family_and_no_value_expressions() {
+        use super::type_family;
+
+        for name in [
+            "daterange",
+            "tsrange",
+            "tstzrange",
+            "int4range",
+            "int8range",
+            "numrange",
+            "datemultirange",
+            "tsmultirange",
+            "tstzmultirange",
+            "int4multirange",
+            "int8multirange",
+            "nummultirange",
+            "DateRange",
+        ] {
+            assert_eq!(type_family(name), None, "{name}");
+            assert!(
+                DefaultSqlDialect.type_value_expressions(name).is_empty(),
+                "{name}"
+            );
+        }
     }
 
     use super::*;

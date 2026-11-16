@@ -2027,6 +2027,44 @@ fn plan_mysql_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
     }
 }
 
+/// SQL that reads back the row an INSERT just wrote, or `None` when there is no
+/// reliable way to find it.
+///
+/// An expression cell (`NOW()`, `UUID()`) has no literal to match the row by,
+/// and the generated value is unknown, so an insert that carries one is not
+/// read back at all instead of matching the wrong row or none.
+fn insert_readback_sql(
+    builder: &SqlQueryBuilder,
+    insert: &RowInsert,
+    last_insert_id: u64,
+) -> Option<String> {
+    if insert.assignments.iter().any(|a| a.is_expression()) {
+        return None;
+    }
+
+    if last_insert_id > 0 {
+        let first_col = insert
+            .assignments
+            .first()
+            .map(|a| MYSQL_DIALECT.quote_identifier(&a.name))
+            .unwrap_or_else(|| "`id`".to_string());
+        let table = MYSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
+
+        return Some(format!(
+            "SELECT * FROM {} WHERE {} = {} LIMIT 1",
+            table, first_col, last_insert_id
+        ));
+    }
+
+    let (columns, values): (Vec<String>, Vec<Value>) = insert
+        .assignments
+        .iter()
+        .map(|a| (a.name.clone(), a.value.clone()))
+        .unzip();
+    let identity = RecordIdentity::composite(columns, values);
+    builder.build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
+}
+
 impl Connection for MysqlConnection {
     fn metadata(&self) -> &DriverMetadata {
         match self.kind {
@@ -2813,30 +2851,10 @@ impl Connection for MysqlConnection {
 
         let last_id = state.conn.last_insert_id();
 
-        let select_sql = if last_id > 0 {
-            let first_col = insert
-                .assignments
-                .first()
-                .map(|a| MYSQL_DIALECT.quote_identifier(&a.name))
-                .unwrap_or_else(|| "`id`".to_string());
-            let table = MYSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
-
-            format!(
-                "SELECT * FROM {} WHERE {} = {} LIMIT 1",
-                table, first_col, last_id
-            )
-        } else {
-            // An expression cell has no literal value to look the row up by.
-            let (columns, values): (Vec<String>, Vec<Value>) = insert
-                .assignments
-                .iter()
-                .filter(|a| !a.is_expression())
-                .map(|a| (a.name.clone(), a.value.clone()))
-                .unzip();
-            let identity = RecordIdentity::composite(columns, values);
-            builder
-                .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
-                .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?
+        // The INSERT already succeeded; a read-back that errors would report a
+        // failure for a committed write.
+        let Some(select_sql) = insert_readback_sql(&builder, insert, last_id) else {
+            return Ok(CrudResult::new(1, None));
         };
 
         log::debug!("[INSERT] Re-querying: {}", select_sql);
@@ -3018,6 +3036,52 @@ const VERSION_QUERY: &str = "SELECT VERSION()";
 #[cfg(test)]
 mod sql_statement_tests {
     use super::*;
+
+    fn literal_insert() -> RowInsert {
+        RowInsert::new(
+            "users".to_string(),
+            Some("app".to_string()),
+            vec!["name".to_string()],
+            vec![Value::Text("Ada".to_string())],
+        )
+    }
+
+    fn expression_insert() -> RowInsert {
+        RowInsert::with_typed_assignments(
+            "users".to_string(),
+            Some("app".to_string()),
+            vec![
+                dbflux_core::ColumnAssignment::new("name", Value::Text("Ada".to_string())),
+                dbflux_core::ColumnAssignment::expression("created_at", "NOW()"),
+            ],
+        )
+    }
+
+    #[test]
+    fn insert_readback_uses_the_auto_increment_id_when_there_is_one() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        assert_eq!(
+            insert_readback_sql(&builder, &literal_insert(), 7).as_deref(),
+            Some("SELECT * FROM `app`.`users` WHERE `name` = 7 LIMIT 1")
+        );
+    }
+
+    #[test]
+    fn insert_readback_matches_literal_columns_without_an_auto_increment_id() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        let sql = insert_readback_sql(&builder, &literal_insert(), 0).expect("read-back");
+        assert!(sql.contains("`name`") && sql.contains("'Ada'"), "{sql}");
+    }
+
+    #[test]
+    fn insert_with_an_expression_is_not_read_back() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        assert_eq!(insert_readback_sql(&builder, &expression_insert(), 0), None);
+        assert_eq!(insert_readback_sql(&builder, &expression_insert(), 9), None);
+    }
 
     /// `TEXT` holds at most 65,535 bytes in MySQL, so a column created for an
     /// untyped source uses `LONGTEXT`, which a long CSV field still fits.

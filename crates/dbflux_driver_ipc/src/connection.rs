@@ -16,8 +16,8 @@ use dbflux_core::{
     ZSetAddRequest, ZSetRemoveRequest,
 };
 use dbflux_ipc::driver_protocol::{
-    DriverRequestBody, DriverResponseBody, protocol_carries_request_row_limit,
-    protocol_carries_root_sections,
+    DriverRequestBody, DriverResponseBody, protocol_carries_cell_expressions,
+    protocol_carries_request_row_limit, protocol_carries_root_sections,
 };
 use dbflux_ipc::{DRIVER_RPC_VERSION, ProtocolVersion};
 
@@ -346,12 +346,24 @@ impl Connection for IpcConnection {
     }
 
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
+        if patch.changes.iter().any(|change| change.is_expression()) {
+            ensure_cell_expressions_supported(self.client.selected_version())?;
+        }
+
         self.client
             .update_row(self.session_id, patch.clone())
             .map_err(DbError::from)
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
+        if insert
+            .assignments
+            .iter()
+            .any(|assignment| assignment.is_expression())
+        {
+            ensure_cell_expressions_supported(self.client.selected_version())?;
+        }
+
         self.client
             .insert_row(self.session_id, insert.clone())
             .map_err(DbError::from)
@@ -730,13 +742,29 @@ fn ensure_key_count_supported(version: ProtocolVersion) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Refuse a row write that carries a SQL expression, before anything is sent,
+/// when the negotiated driver RPC version predates `InsertRowV2`/`UpdateRowV2`.
+/// A v1.9 host cannot decode those variants, and the plain `InsertRow` /
+/// `UpdateRow` frames have no room for the expression, so dropping it would
+/// write NULL instead.
+#[allow(clippy::result_large_err)]
+fn ensure_cell_expressions_supported(version: ProtocolVersion) -> Result<(), DbError> {
+    if !protocol_carries_cell_expressions(version) {
+        return Err(DbError::NotSupported(
+            "the negotiated driver RPC protocol does not support SQL expressions in row writes"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{IpcConnection, ensure_bulk_schema_columns_supported, ensure_key_count_supported};
     use crate::transport::RpcClient;
     use dbflux_core::{
         Connection, DatabaseCategory, DbError, DbKind, DriverCapabilities, DriverMetadataBuilder,
-        KeyValueApi, QueryLanguage, QueryRequest, Value,
+        KeyValueApi, QueryLanguage, QueryRequest, RowInsert, RowPatch, Value,
     };
     use dbflux_core::{
         ExecutionClassification, LocalizedText, RootItemPresentation, RootSectionAction,
@@ -1247,6 +1275,143 @@ mod tests {
     fn key_count_allowed_from_v1_5() {
         assert!(ensure_key_count_supported(ProtocolVersion::new(1, 5)).is_ok());
         assert!(ensure_key_count_supported(ProtocolVersion::new(1, 6)).is_ok());
+    }
+
+    fn crud_done() -> DriverResponseBody {
+        DriverResponseBody::CrudResult {
+            result: dbflux_ipc::driver_protocol::CrudResultDto {
+                affected_rows: 1,
+                returning_row: None,
+                metadata_extra: None,
+            },
+        }
+    }
+
+    fn expression_insert() -> RowInsert {
+        RowInsert::with_typed_assignments(
+            "users".into(),
+            None,
+            vec![dbflux_core::ColumnAssignment::expression(
+                "id",
+                "gen_random_uuid()",
+            )],
+        )
+    }
+
+    fn expression_patch() -> RowPatch {
+        RowPatch::with_typed_changes(
+            dbflux_core::RowIdentity::composite(
+                vec!["id".into()],
+                vec![dbflux_core::Value::Int(1)],
+            ),
+            "users".into(),
+            None,
+            vec![dbflux_core::ColumnAssignment::expression(
+                "deleted_at",
+                "now()",
+            )],
+        )
+    }
+
+    fn plain_insert() -> RowInsert {
+        RowInsert::new(
+            "users".into(),
+            None,
+            vec!["name".into()],
+            vec![dbflux_core::Value::Text("Ada".into())],
+        )
+    }
+
+    fn plain_patch() -> RowPatch {
+        RowPatch::new(
+            dbflux_core::RowIdentity::composite(
+                vec!["id".into()],
+                vec![dbflux_core::Value::Int(1)],
+            ),
+            "users".into(),
+            None,
+            vec![("name".into(), dbflux_core::Value::Text("Ada".into()))],
+        )
+    }
+
+    #[test]
+    fn pre_v1_10_session_refuses_expression_row_writes_without_a_frame() {
+        let (server, connection) = root_section_server(
+            "cell-expressions-v19",
+            ProtocolVersion::new(1, 9),
+            vec![FakeDriverAction::Pong],
+        );
+
+        assert!(matches!(
+            connection.insert_row(&expression_insert()),
+            Err(DbError::NotSupported(_))
+        ));
+        assert!(matches!(
+            connection.update_row(&expression_patch()),
+            Err(DbError::NotSupported(_))
+        ));
+        assert!(connection.ping().is_ok());
+        assert!(matches!(
+            server.received_requests().as_slice(),
+            [DriverRequestBody::Ping]
+        ));
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn v1_10_session_sends_expression_row_writes_as_v2_variants() {
+        let (server, connection) = root_section_server(
+            "cell-expressions-v110",
+            ProtocolVersion::new(1, 10),
+            vec![
+                FakeDriverAction::respond(crud_done()),
+                FakeDriverAction::respond(crud_done()),
+            ],
+        );
+
+        connection
+            .insert_row(&expression_insert())
+            .expect("insert with expression");
+        connection
+            .update_row(&expression_patch())
+            .expect("update with expression");
+
+        let requests = server.received_requests();
+        assert!(matches!(
+            &requests[0],
+            DriverRequestBody::InsertRowV2 { insert }
+                if insert.assignments[0].expression.as_deref() == Some("gen_random_uuid()")
+        ));
+        assert!(matches!(
+            &requests[1],
+            DriverRequestBody::UpdateRowV2 { patch }
+                if patch.changes[0].expression.as_deref() == Some("now()")
+        ));
+        assert_eq!(requests.len(), 2);
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn row_writes_without_an_expression_always_use_the_old_variants() {
+        for (name, minor) in [("cell-plain-v19", 9), ("cell-plain-v110", 10)] {
+            let (server, connection) = root_section_server(
+                name,
+                ProtocolVersion::new(1, minor),
+                vec![
+                    FakeDriverAction::respond(crud_done()),
+                    FakeDriverAction::respond(crud_done()),
+                ],
+            );
+
+            connection.insert_row(&plain_insert()).expect("insert");
+            connection.update_row(&plain_patch()).expect("update");
+
+            let requests = server.received_requests();
+            assert!(matches!(requests[0], DriverRequestBody::InsertRow { .. }));
+            assert!(matches!(requests[1], DriverRequestBody::UpdateRow { .. }));
+            assert_eq!(requests.len(), 2);
+            server.wait().expect("server completed");
+        }
     }
 
     fn buckets_section() -> RootSectionDef {
