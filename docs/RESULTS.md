@@ -326,7 +326,8 @@ first step, next to the folder picker, and pick a `.csv`, `.json`, `.jsonl` or
 `.xml` file; HTML, Markdown and SQL files are not offered. The wizard reads the
 columns from the CSV header row, from the keys of the first 100 JSON records,
 or from the `name` of the `<field>` elements in the first 100 XML rows (all the
-keys seen, in the order they first appear). A nested object or array
+keys seen, in the order they first appear). A key that first appears after those
+rows stops the import with an error naming it and its row. A nested object or array
 is imported as JSON text.
 
 The target table defaults to the file name without its extension; type another

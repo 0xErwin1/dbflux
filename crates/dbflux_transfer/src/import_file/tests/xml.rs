@@ -427,3 +427,222 @@ fn epoch_seconds_in_an_xml_field_import_into_a_timestamp_column() {
     );
     assert_eq!(instant, vec![vec![Value::Int(1_706_659_200)]], "{stored:?}");
 }
+
+fn late_field_rows(first_row: &str, late_row: &str) -> String {
+    let mut document = String::from("<rows>");
+    for id in 0..DISCOVERY_SAMPLE_ROWS {
+        document.push_str(&format!(
+            "<row><field name=\"id\">{id}</field><field name=\"body\">x</field></row>"
+        ));
+    }
+    document.push_str(first_row);
+    document.push_str(late_row);
+    document.push_str("</rows>");
+    document
+}
+
+#[test]
+fn an_xml_field_first_seen_after_the_sample_rejects_the_import_naming_field_and_row() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(&connection, NOTES);
+    run(
+        &connection,
+        "INSERT INTO notes (id, body) VALUES (100, 'kept')",
+    );
+    let document = late_field_rows(
+        "",
+        "<row><field name=\"id\">500</field><field name=\"late\">y</field></row>",
+    );
+    let path = scratch.write("notes.xml", document.as_bytes());
+    let file = inspect(&path, FileFormat::Xml).expect("the sample has no late field");
+
+    let message = rejection(
+        &connection,
+        &file,
+        &plan(&file, TableMappingMode::Existing, "notes"),
+    );
+
+    assert!(message.contains("field 'late'"), "{message}");
+    assert!(message.contains("row 101"), "{message}");
+    assert_eq!(
+        rows(&connection, "SELECT id, body FROM notes ORDER BY id"),
+        vec![vec![Value::Int(100), text("kept")]]
+    );
+}
+
+#[test]
+fn a_json_key_first_seen_after_the_sample_is_rejected_the_same_way() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(&connection, NOTES);
+    let mut lines = String::new();
+    for id in 0..DISCOVERY_SAMPLE_ROWS {
+        lines.push_str(&format!("{{\"id\":{id}}}\n"));
+    }
+    lines.push_str("{\"id\":500,\"late\":\"y\"}\n");
+    let path = scratch.write("notes.jsonl", lines.as_bytes());
+    let file = inspect(&path, FileFormat::JsonLines).expect("inspect");
+
+    let message = rejection(
+        &connection,
+        &file,
+        &plan(&file, TableMappingMode::Existing, "notes"),
+    );
+
+    assert!(message.contains("field 'late'"), "{message}");
+    assert!(message.contains("row 101"), "{message}");
+}
+
+/// Writes a folder whose manifest names `file` with `format`, and truncates
+/// `notes` from it.
+fn truncating_folder_import(
+    scratch: &Scratch,
+    file: &str,
+    format: &str,
+    content: &[u8],
+) -> (Arc<dyn Connection>, Result<ImportOutcome, TransferError>) {
+    use crate::import::run_import;
+    use crate::manifest::{ManifestSource, TransferManifest};
+
+    let connection = sqlite(scratch);
+    run(&connection, NOTES);
+    run(
+        &connection,
+        "INSERT INTO notes (id, body) VALUES (100, 'kept')",
+    );
+    scratch.write(file, content);
+    let manifest = TransferManifest {
+        version: TransferManifest::CURRENT_VERSION,
+        source: ManifestSource {
+            driver: "sqlite".to_string(),
+            database: "main".to_string(),
+            schema: None,
+        },
+        created_at: "2026-07-07T10:00:00+00:00".to_string(),
+        tables: vec![ManifestTable {
+            schema: None,
+            name: "notes".to_string(),
+            file: file.to_string(),
+            format: format.to_string(),
+            columns: vec![
+                transfer_column("id", "INTEGER"),
+                transfer_column("body", "TEXT"),
+            ],
+            row_count: 1,
+            fk_order_index: 0,
+            options: FormatOptions::default(),
+        }],
+    };
+    scratch.write(
+        "manifest.json",
+        serde_json::to_string(&manifest)
+            .expect("manifest")
+            .as_bytes(),
+    );
+    let plans = [ImportTablePlan {
+        source_table: "notes".to_string(),
+        target_schema: None,
+        target_table: "notes".to_string(),
+        mapping_mode: TableMappingMode::Truncate,
+        column_overrides: None,
+    }];
+    let outcome = run_import(
+        &connection,
+        &scratch.0,
+        &plans,
+        &ImportOptions {
+            destructive_confirmed: true,
+            ..import_options(1)
+        },
+        &CancelToken::new(),
+        |_, _, _| {},
+    );
+    (connection, outcome)
+}
+
+#[test]
+fn a_broken_folder_file_fails_before_truncate_removes_the_rows() {
+    let cases: [(&str, &str, &[u8]); 3] = [
+        ("notes.xml", "xml", b"<catalog/>"),
+        (
+            "notes.xml",
+            "xml",
+            b"<rows><row><field name=\"id\">1</field></row><row><field name=\"id\">2</rows>",
+        ),
+        ("notes.jsonl", "jsonl", b"{\"id\":1}\n5\n"),
+    ];
+
+    for (file, format, content) in cases {
+        let scratch = Scratch::new();
+        let (connection, outcome) = truncating_folder_import(&scratch, file, format, content);
+
+        let failed = match outcome {
+            Err(_) => true,
+            Ok(outcome) => matches!(outcome.tables[0].status, TableTransferStatus::Failed { .. }),
+        };
+        assert!(failed, "{file}: the import must fail");
+        assert_eq!(
+            rows(&connection, "SELECT id, body FROM notes ORDER BY id"),
+            vec![vec![Value::Int(100), text("kept")]],
+            "{file}: the rows survive"
+        );
+    }
+}
+
+#[test]
+fn epoch_dates_and_times_in_an_exported_xml_file_import_into_date_time_and_timestamp_columns() {
+    use dbflux_core::chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
+    use dbflux_export::DateFormat;
+
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(
+        &connection,
+        "CREATE TABLE ev (day DATE, at TIME, seen TIMESTAMP)",
+    );
+    let path = scratch.0.join("ev.xml");
+    let columns: Vec<TransferColumn> = ["day", "at", "seen"]
+        .into_iter()
+        .map(|name| transfer_column(name, "text"))
+        .collect();
+    let mut sink = FileSink::to_file(&path, FileFormat::Xml).with_options(FormatOptions {
+        date_format: DateFormat::Epoch,
+        ..FormatOptions::default()
+    });
+    sink.begin(&columns, TableMappingMode::Existing)
+        .expect("begin");
+    sink.write_chunk(&RowChunk(vec![vec![
+        Value::Date(NaiveDate::from_ymd_opt(2024, 1, 31).expect("date")),
+        Value::Time(NaiveTime::from_hms_opt(13, 45, 30).expect("time")),
+        Value::DateTime(
+            Utc.with_ymd_and_hms(2024, 3, 5, 10, 20, 30)
+                .single()
+                .expect("ts"),
+        ),
+    ]]))
+    .expect("write");
+    sink.finish().expect("finish");
+    let file = inspect(&path, FileFormat::Xml).expect("inspect");
+
+    import(
+        &connection,
+        &file,
+        &plan(&file, TableMappingMode::Existing, "ev"),
+        500,
+    );
+
+    let stored = rows(&connection, "SELECT day, at, seen FROM ev");
+    let Value::Text(day) = &stored[0][0] else {
+        panic!("{stored:?}");
+    };
+    let Value::Text(time) = &stored[0][1] else {
+        panic!("{stored:?}");
+    };
+    assert!(day.starts_with("2024-01-31"), "{stored:?}");
+    assert!(time.starts_with("13:45:30"), "{stored:?}");
+    assert!(
+        matches!(&stored[0][2], Value::Text(t) if t.starts_with("2024-03-05")),
+        "{stored:?}"
+    );
+}

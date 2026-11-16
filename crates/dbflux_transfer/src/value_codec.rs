@@ -318,7 +318,9 @@ fn decode_date(text: &str, date_format: DateFormat) -> Option<NaiveDate> {
     {
         return Some(timestamp.date_naive());
     }
-    NaiveDate::parse_from_str(text, "%Y-%m-%d").ok()
+    NaiveDate::parse_from_str(text, "%Y-%m-%d")
+        .ok()
+        .or_else(|| epoch_seconds_text(text).map(|timestamp| timestamp.date_naive()))
 }
 
 fn decode_time(text: &str, date_format: DateFormat) -> Option<NaiveTime> {
@@ -330,7 +332,20 @@ fn decode_time(text: &str, date_format: DateFormat) -> Option<NaiveTime> {
     {
         return Some(time);
     }
-    NaiveTime::parse_from_str(text, "%H:%M:%S%.f").ok()
+    NaiveTime::parse_from_str(text, "%H:%M:%S%.f")
+        .ok()
+        .or_else(|| epoch_seconds_of_day_text(text))
+}
+
+/// Seconds since midnight written as plain digits, the inverse of the epoch
+/// format's time rendering. Like [`epoch_seconds_text`] it is read under any
+/// date format, after the text formats.
+fn epoch_seconds_of_day_text(text: &str) -> Option<NaiveTime> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    NaiveTime::from_num_seconds_from_midnight_opt(text.parse::<u32>().ok()?, 0)
 }
 
 #[cfg(test)]

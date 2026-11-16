@@ -23,10 +23,10 @@ use dbflux_core::{CancelToken, Connection, TransferColumn};
 use dbflux_export::{FormatOptions, decode_to_utf8};
 
 use crate::file_sink::FileFormat;
-use crate::file_source::{FileSource, check_json_records, sample_object_keys};
+use crate::file_source::{check_file_readable, check_no_late_fields, sample_object_keys};
 use crate::import::{ImportOptions, ImportOutcome, ImportTablePlan, TableFile, run_plans};
 use crate::manifest::ManifestTable;
-use crate::pipeline::{RowSource, TransferError};
+use crate::pipeline::TransferError;
 use crate::spreadsheet_source::{SheetRows, list_worksheets};
 use crate::xml_source::sample_field_names;
 
@@ -217,24 +217,17 @@ fn check_readable(
     segment_size: u32,
     cancel: &CancelToken,
 ) -> Result<(), TransferError> {
-    if matches!(file.format, FileFormat::Json | FileFormat::JsonLines) {
-        // A record that is not an object would otherwise import as a row of NULLs.
-        check_json_records(&file.path, file.format, cancel)?;
-    }
-
-    let mut source = FileSource::open_sheet(
+    check_file_readable(
         &file.path,
         file.format,
-        file.columns.clone(),
-        segment_size,
-        None,
-        file.options.clone(),
+        &file.columns,
+        &file.options,
         file.sheet(),
+        segment_size,
+        cancel,
     )?;
 
-    while source.next_chunk(cancel)?.is_some() {}
-
-    Ok(())
+    check_no_late_fields(&file.path, file.format, &file.columns, cancel)
 }
 
 /// The CSV header row, read the way the import reads the file: with the

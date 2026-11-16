@@ -357,7 +357,8 @@ archivo `.csv`, `.json`, `.jsonl` o `.xml`; los archivos HTML, Markdown y SQL no
 ofrecen. El asistente lee las columnas de la fila de encabezado del CSV, de
 las claves de los primeros 100 registros JSON, o del `name` de los elementos
 `<field>` de las primeras 100 filas XML (todas las claves vistas, en el
-orden en que aparecen). Un objeto o array anidado se importa como texto JSON.
+orden en que aparecen). Una clave que aparece por primera vez después de esas
+filas detiene la importación con un error que indica la clave y su fila. Un objeto o array anidado se importa como texto JSON.
 
 La tabla de destino es por defecto el nombre del archivo sin extensión; escribe
 otro nombre y elige **Usar tabla** (o pulsa Enter) para apuntar la importación a

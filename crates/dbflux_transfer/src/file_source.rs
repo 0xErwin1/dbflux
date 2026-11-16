@@ -284,6 +284,90 @@ fn for_each_object_keys(
     Ok(())
 }
 
+/// Reads the whole file once without writing anything, failing on the first
+/// malformed row or record. A JSON record that is not an object is rejected
+/// too, because it would otherwise import as a row of NULLs.
+pub(crate) fn check_file_readable(
+    path: &Path,
+    format: FileFormat,
+    columns: &[TransferColumn],
+    options: &FormatOptions,
+    sheet: Option<&str>,
+    segment_size: u32,
+    cancel: &CancelToken,
+) -> Result<(), TransferError> {
+    if matches!(format, FileFormat::Json | FileFormat::JsonLines) {
+        check_json_records(path, format, cancel)?;
+    }
+
+    let mut source = FileSource::open_sheet(
+        path,
+        format,
+        columns.to_vec(),
+        segment_size,
+        None,
+        options.clone(),
+        sheet,
+    )?;
+
+    while source.next_chunk(cancel)?.is_some() {}
+
+    Ok(())
+}
+
+/// Fails on the first JSON record or XML row that holds a field `columns`
+/// does not list. The columns of a loose file come from its first rows, so a
+/// field first seen later would otherwise be dropped without a word. The
+/// error names the field and the one-based row where it first appears.
+pub(crate) fn check_no_late_fields(
+    path: &Path,
+    format: FileFormat,
+    columns: &[TransferColumn],
+    cancel: &CancelToken,
+) -> Result<(), TransferError> {
+    let known = |name: &str| columns.iter().any(|column| column.name == name);
+    let late = |name: &str, row: usize| {
+        TransferError::Source(format!(
+            "{}: field '{name}' first appears in row {row}, after the columns were read from the first rows; add it to the first rows of the file",
+            path.display()
+        ))
+    };
+
+    match format {
+        FileFormat::Xml => {
+            let mut rows = XmlRows::open(path)?;
+            let mut row_number = 0usize;
+            while !cancel.is_cancelled() {
+                let Some(row) = rows.next_row()? else {
+                    break;
+                };
+                row_number += 1;
+                if let Some((name, _)) = row.iter().find(|(name, _)| !known(name)) {
+                    return Err(late(name, row_number));
+                }
+            }
+            Ok(())
+        }
+        FileFormat::Json | FileFormat::JsonLines => {
+            let mut found: Option<(String, usize)> = None;
+            let mut row_number = 0usize;
+            for_each_object_keys(path, format, usize::MAX, Some(cancel), |keys| {
+                row_number += 1;
+                if found.is_none()
+                    && let Some(name) = keys.into_iter().find(|name| !known(name))
+                {
+                    found = Some((name, row_number));
+                }
+            })?;
+            match found {
+                Some((name, row)) => Err(late(&name, row)),
+                None => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 pub struct FileSource {
     reader: SourceReader,
     columns: Vec<TransferColumn>,

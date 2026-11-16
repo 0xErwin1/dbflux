@@ -28,7 +28,7 @@ use dbflux_export::FormatOptions;
 
 use crate::column_map::{AutoColumnMap, ColumnMappingOverride, DecodingColumnMap};
 use crate::file_sink::FileFormat;
-use crate::file_source::FileSource;
+use crate::file_source::{FileSource, check_file_readable};
 use crate::manifest::read_manifest;
 use crate::pipeline::{
     ColumnMap, TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
@@ -265,6 +265,21 @@ fn import_one_table(
     } else {
         Some(open_table_file(file, file.columns.clone(), options)?)
     };
+
+    // A folder file is read through before the target is touched, as a loose
+    // file is: a Truncate or Recreate runs DDL that some engines autocommit,
+    // so a malformed file found halfway through would leave the table empty.
+    if !file.loose && plan.mapping_mode != TableMappingMode::Skip {
+        check_file_readable(
+            &file.path,
+            file.format,
+            &file.columns,
+            &file.options,
+            file.sheet.as_deref(),
+            options.segment_size,
+            cancel,
+        )?;
+    }
 
     let mut target_columns =
         resolve_target_columns(connection, plan, &file.columns, &options.target_database)?;
