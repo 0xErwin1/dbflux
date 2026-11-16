@@ -2248,7 +2248,7 @@ document:
         batch_size: "Continue is off until Rows per INSERT is valid."
         segment_size: "Continue is off until Chunk size is valid."
     done:
-      closing_failed: "Close this dialog, fix the cause above and export again. Files already written stay in the folder. Without a manifest.json the folder can't be imported as a whole, but each completed CSV or JSON file can still be imported with Choose File."
+      closing_failed: "Close this dialog, fix the cause above and export again. Files already written stay in the folder. Without a manifest.json the folder can't be imported as a whole, but each completed CSV or JSON file can still be imported with Choose File; first set the delimiter, encoding and NULL text to match this export, because a loose file does not carry them."
   file:
     error:
       source_changed: "The file was changed elsewhere since it was opened, so nothing was saved and your edits are kept. To see its new content, discard your edits and choose Reload from file, then make them again."
@@ -2517,7 +2517,7 @@ document:
     done:
       cancelled_rows: "%{rows} row(s) were imported before the import stopped."
       close: Close
-      closing_failed: "Close this dialog and fix the cause above. Tables listed as completed stay in the target; choose Skip for them if you import again."
+      closing_failed: "Close this dialog and fix the cause above. Tables listed as completed stay in the target; choose Skip for them if you import again. On a target without transaction support, rows of the failed table written before the error also stay."
     error:
       no_connection: No active connection for this import
     toast:

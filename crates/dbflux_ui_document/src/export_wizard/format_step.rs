@@ -16,6 +16,176 @@ use super::notes::{alert_hint, form_row, info_line, with_danger_edge};
 use super::{ExportWizard, SEGMENT_SIZE_INPUT_WIDTH, format_icon, format_segment_id};
 
 impl ExportWizard {
+    fn delimiter_encoding_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+
+        let entity = cx.entity().downgrade();
+        let items: Vec<SegmentedItem> = dbflux_export::CsvDelimiter::ALL
+            .into_iter()
+            .map(|delimiter| {
+                SegmentedItem::new(delimiter_segment_id(delimiter), delimiter_label(delimiter))
+            })
+            .collect();
+        let picker = SegmentedControl::new(
+            items,
+            delimiter_segment_id(self.format_options.delimiter),
+            move |segment_id, _window, cx| {
+                entity
+                    .update(cx, |this, cx| this.select_delimiter(segment_id, cx))
+                    .ok();
+            },
+        )
+        .group("export-format-delimiter");
+        rows.push(
+            form_row(
+                dbflux_i18n::t!("document.export_wizard.format_options.delimiter_label"),
+                div().flex().child(picker),
+                None,
+                cx,
+            )
+            .into_any_element(),
+        );
+
+        let entity = cx.entity().downgrade();
+        let items: Vec<SegmentedItem> = dbflux_export::TextEncoding::ALL
+            .into_iter()
+            .map(|encoding| {
+                SegmentedItem::new(encoding_segment_id(encoding), encoding_label(encoding))
+            })
+            .collect();
+        let picker = SegmentedControl::new(
+            items,
+            encoding_segment_id(self.format_options.encoding),
+            move |segment_id, _window, cx| {
+                entity
+                    .update(cx, |this, cx| this.select_encoding(segment_id, cx))
+                    .ok();
+            },
+        )
+        .group("export-format-encoding");
+        rows.push(
+            form_row(
+                dbflux_i18n::t!("document.export_wizard.format_options.encoding_label"),
+                div().flex().child(picker),
+                None,
+                cx,
+            )
+            .into_any_element(),
+        );
+
+        rows
+    }
+
+    fn null_text_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+
+        let hint = modal_hint(
+            dbflux_i18n::t!("document.export_wizard.format_options.null_text_hint"),
+            cx,
+        );
+        rows.push(
+            form_row(
+                dbflux_i18n::t!("document.export_wizard.format_options.null_text_label"),
+                div()
+                    .w(SEGMENT_SIZE_INPUT_WIDTH)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
+                    .child(
+                        Input::new(&self.null_text_input)
+                            .id("export-wizard-null-text")
+                            .w_full()
+                            .aria_label(dbflux_i18n::t!(
+                                "document.export_wizard.format_options.null_text_label"
+                            )),
+                    ),
+                Some(hint),
+                cx,
+            )
+            .into_any_element(),
+        );
+
+        rows
+    }
+
+    fn batch_size_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+
+        let hint = if self.sql_batch_size_invalid {
+            alert_hint(
+                dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_invalid"),
+                "export-wizard-batch-size-hint",
+                cx,
+            )
+        } else {
+            modal_hint(
+                dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_hint"),
+                cx,
+            )
+        };
+        rows.push(
+            form_row(
+                dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_label"),
+                with_danger_edge(
+                    div()
+                        .w(SEGMENT_SIZE_INPUT_WIDTH)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
+                        .child(
+                            Input::new(&self.sql_batch_size_input)
+                                .id("export-wizard-sql-batch-size")
+                                .w_full()
+                                .aria_label(dbflux_i18n::t!(
+                                    "document.export_wizard.format_options.sql_batch_size_label"
+                                )),
+                        ),
+                    self.sql_batch_size_invalid,
+                    cx,
+                )
+                .w(SEGMENT_SIZE_INPUT_WIDTH)
+                .debug_selector(|| "export-wizard-batch-size-edge".to_string()),
+                Some(hint),
+                cx,
+            )
+            .into_any_element(),
+        );
+
+        rows
+    }
+
+    fn date_format_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+
+        let entity = cx.entity().downgrade();
+        let items: Vec<SegmentedItem> = dbflux_export::DateFormat::ALL
+            .into_iter()
+            .map(|date_format| {
+                SegmentedItem::new(
+                    date_format_segment_id(date_format),
+                    date_format_label(date_format),
+                )
+            })
+            .collect();
+        let picker = SegmentedControl::new(
+            items,
+            date_format_segment_id(self.format_options.date_format),
+            move |segment_id, _window, cx| {
+                entity
+                    .update(cx, |this, cx| this.select_date_format(segment_id, cx))
+                    .ok();
+            },
+        )
+        .group("export-format-date");
+        rows.push(
+            form_row(
+                dbflux_i18n::t!("document.export_wizard.format_options.date_format_label"),
+                div().flex().child(picker),
+                None,
+                cx,
+            )
+            .into_any_element(),
+        );
+
+        rows
+    }
+
     /// The per-format option rows, only those the selected format uses.
     fn render_format_option_rows(
         &self,
@@ -25,192 +195,23 @@ impl ExportWizard {
         let mut rows = Vec::new();
 
         if visible.delimiter_and_encoding {
-            let entity = cx.entity().downgrade();
-            let items: Vec<SegmentedItem> = dbflux_export::CsvDelimiter::ALL
-                .into_iter()
-                .map(|delimiter| {
-                    SegmentedItem::new(delimiter_segment_id(delimiter), delimiter_label(delimiter))
-                })
-                .collect();
-            let picker = SegmentedControl::new(
-                items,
-                delimiter_segment_id(self.format_options.delimiter),
-                move |segment_id, _window, cx| {
-                    entity
-                        .update(cx, |this, cx| this.select_delimiter(segment_id, cx))
-                        .ok();
-                },
-            )
-            .group("export-format-delimiter");
-            rows.push(
-                form_row(
-                    dbflux_i18n::t!("document.export_wizard.format_options.delimiter_label"),
-                    div().flex().child(picker),
-                    None,
-                    cx,
-                )
-                .into_any_element(),
-            );
-
-            let entity = cx.entity().downgrade();
-            let items: Vec<SegmentedItem> = dbflux_export::TextEncoding::ALL
-                .into_iter()
-                .map(|encoding| {
-                    SegmentedItem::new(encoding_segment_id(encoding), encoding_label(encoding))
-                })
-                .collect();
-            let picker = SegmentedControl::new(
-                items,
-                encoding_segment_id(self.format_options.encoding),
-                move |segment_id, _window, cx| {
-                    entity
-                        .update(cx, |this, cx| this.select_encoding(segment_id, cx))
-                        .ok();
-                },
-            )
-            .group("export-format-encoding");
-            rows.push(
-                form_row(
-                    dbflux_i18n::t!("document.export_wizard.format_options.encoding_label"),
-                    div().flex().child(picker),
-                    None,
-                    cx,
-                )
-                .into_any_element(),
-            );
+            rows.extend(self.delimiter_encoding_rows(cx));
         }
-
         if visible.null_text {
-            let hint = modal_hint(
-                dbflux_i18n::t!("document.export_wizard.format_options.null_text_hint"),
-                cx,
-            );
-            rows.push(
-                form_row(
-                    dbflux_i18n::t!("document.export_wizard.format_options.null_text_label"),
-                    div()
-                        .w(SEGMENT_SIZE_INPUT_WIDTH)
-                        .font_family(dbflux_components::fonts::editor_family(cx))
-                        .child(
-                            Input::new(&self.null_text_input)
-                                .id("export-wizard-null-text")
-                                .w_full()
-                                .aria_label(dbflux_i18n::t!(
-                                    "document.export_wizard.format_options.null_text_label"
-                                )),
-                        ),
-                    Some(hint),
-                    cx,
-                )
-                .into_any_element(),
-            );
+            rows.extend(self.null_text_rows(cx));
         }
-
         if visible.sql_batch_size {
-            let hint = if self.sql_batch_size_invalid {
-                alert_hint(
-                    dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_invalid"),
-                    "export-wizard-batch-size-hint",
-                    cx,
-                )
-            } else {
-                modal_hint(
-                    dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_hint"),
-                    cx,
-                )
-            };
-            rows.push(
-                form_row(
-                    dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_label"),
-                    with_danger_edge(
-                        div()
-                            .w(SEGMENT_SIZE_INPUT_WIDTH)
-                            .font_family(dbflux_components::fonts::editor_family(cx))
-                            .child(
-                                Input::new(&self.sql_batch_size_input)
-                                    .id("export-wizard-sql-batch-size")
-                                    .w_full()
-                                    .aria_label(dbflux_i18n::t!(
-                                        "document.export_wizard.format_options.sql_batch_size_label"
-                                    )),
-                            ),
-                        self.sql_batch_size_invalid,
-                        cx,
-                    )
-                    .w(SEGMENT_SIZE_INPUT_WIDTH)
-                    .debug_selector(|| "export-wizard-batch-size-edge".to_string()),
-                    Some(hint),
-                    cx,
-                )
-                .into_any_element(),
-            );
+            rows.extend(self.batch_size_rows(cx));
         }
-
         if visible.date_format {
-            let entity = cx.entity().downgrade();
-            let items: Vec<SegmentedItem> = dbflux_export::DateFormat::ALL
-                .into_iter()
-                .map(|date_format| {
-                    SegmentedItem::new(
-                        date_format_segment_id(date_format),
-                        date_format_label(date_format),
-                    )
-                })
-                .collect();
-            let picker = SegmentedControl::new(
-                items,
-                date_format_segment_id(self.format_options.date_format),
-                move |segment_id, _window, cx| {
-                    entity
-                        .update(cx, |this, cx| this.select_date_format(segment_id, cx))
-                        .ok();
-                },
-            )
-            .group("export-format-date");
-            rows.push(
-                form_row(
-                    dbflux_i18n::t!("document.export_wizard.format_options.date_format_label"),
-                    div().flex().child(picker),
-                    None,
-                    cx,
-                )
-                .into_any_element(),
-            );
+            rows.extend(self.date_format_rows(cx));
         }
 
         rows
     }
 
-    pub(super) fn render_format_options(&self, cx: &mut Context<Self>) -> AnyElement {
-        let format_items: Vec<SegmentedItem> = available_formats(self.sql_export_available)
-            .into_iter()
-            .map(|format| {
-                SegmentedItem::new(format_segment_id(format), format.label())
-                    .icon(format_icon(format))
-            })
-            .collect();
-
-        let entity = cx.entity().downgrade();
-        let format_picker = div()
-            .debug_selector(|| "export-wizard-format-picker".to_string())
-            .flex()
-            .child(SegmentedControl::new(
-                format_items,
-                format_segment_id(self.selected_format),
-                move |segment_id, _window, cx| {
-                    entity
-                        .update(cx, |this, cx| this.select_format(segment_id, cx))
-                        .ok();
-                },
-            ));
-        let format_hint = (!self.sql_export_available).then(|| {
-            info_line(
-                dbflux_i18n::t!("document.export_wizard.format_options.sql_unavailable"),
-                "export-wizard-sql-unavailable",
-                cx,
-            )
-        });
-
+    /// The folder row: the chosen path, Choose, and why it is missing.
+    fn folder_row(&self, cx: &mut Context<Self>) -> Div {
         let folder_value = self
             .output_dir
             .as_ref()
@@ -253,6 +254,16 @@ impl ExportWizard {
             (None, Some(_)) => None,
         };
 
+        form_row(
+            dbflux_i18n::t!("document.export_wizard.format_options.output_folder_label"),
+            folder_control,
+            folder_hint,
+            cx,
+        )
+    }
+
+    /// The chunk size row, with its danger edge and hint.
+    fn chunk_size_row(&self, cx: &mut Context<Self>) -> Div {
         let segment_hint = if self.segment_size_invalid {
             alert_hint(
                 dbflux_i18n::t!("document.export_wizard.format_options.segment_size_invalid"),
@@ -265,6 +276,60 @@ impl ExportWizard {
                 cx,
             )
         };
+
+        form_row(
+            dbflux_i18n::t!("document.export_wizard.format_options.segment_size_label"),
+            with_danger_edge(
+                div()
+                    .w(SEGMENT_SIZE_INPUT_WIDTH)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
+                    .child(
+                        Input::new(&self.segment_size_input)
+                            .id("export-wizard-segment-size")
+                            .w_full()
+                            .aria_label(dbflux_i18n::t!(
+                                "document.export_wizard.format_options.segment_size_label"
+                            )),
+                    ),
+                self.segment_size_invalid,
+                cx,
+            )
+            .w(SEGMENT_SIZE_INPUT_WIDTH)
+            .debug_selector(|| "export-wizard-segment-size-edge".to_string()),
+            Some(segment_hint),
+            cx,
+        )
+    }
+
+    pub(super) fn render_format_options(&self, cx: &mut Context<Self>) -> AnyElement {
+        let format_items: Vec<SegmentedItem> = available_formats(self.sql_export_available)
+            .into_iter()
+            .map(|format| {
+                SegmentedItem::new(format_segment_id(format), format.label())
+                    .icon(format_icon(format))
+            })
+            .collect();
+
+        let entity = cx.entity().downgrade();
+        let format_picker = div()
+            .debug_selector(|| "export-wizard-format-picker".to_string())
+            .flex()
+            .child(SegmentedControl::new(
+                format_items,
+                format_segment_id(self.selected_format),
+                move |segment_id, _window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.select_format(segment_id, cx))
+                        .ok();
+                },
+            ));
+        let format_hint = (!self.sql_export_available).then(|| {
+            info_line(
+                dbflux_i18n::t!("document.export_wizard.format_options.sql_unavailable"),
+                "export-wizard-sql-unavailable",
+                cx,
+            )
+        });
 
         let visible = visible_options(self.selected_format);
         let option_rows = self.render_format_option_rows(visible, cx);
@@ -279,34 +344,8 @@ impl ExportWizard {
                 cx,
             ))
             .children(option_rows)
-            .child(form_row(
-                dbflux_i18n::t!("document.export_wizard.format_options.output_folder_label"),
-                folder_control,
-                folder_hint,
-                cx,
-            ))
-            .child(form_row(
-                dbflux_i18n::t!("document.export_wizard.format_options.segment_size_label"),
-                with_danger_edge(
-                    div()
-                        .w(SEGMENT_SIZE_INPUT_WIDTH)
-                        .font_family(dbflux_components::fonts::editor_family(cx))
-                        .child(
-                            Input::new(&self.segment_size_input)
-                                .id("export-wizard-segment-size")
-                                .w_full()
-                                .aria_label(dbflux_i18n::t!(
-                                    "document.export_wizard.format_options.segment_size_label"
-                                )),
-                        ),
-                    self.segment_size_invalid,
-                    cx,
-                )
-                .w(SEGMENT_SIZE_INPUT_WIDTH)
-                .debug_selector(|| "export-wizard-segment-size-edge".to_string()),
-                Some(segment_hint),
-                cx,
-            ))
+            .child(self.folder_row(cx))
+            .child(self.chunk_size_row(cx))
             .into_any_element()
     }
 }

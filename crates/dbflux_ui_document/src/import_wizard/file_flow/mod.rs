@@ -564,13 +564,17 @@ impl ImportWizard {
                     cx,
                 );
 
-                let options_can_fix_it =
-                    format == FileFormat::Csv || matches!(failure, FileLoadError::Lookup(_));
+                // Nothing on Configure can fix an unreadable JSON file, and that
+                // step cannot choose another file: the picker shows the error,
+                // whichever step the read started from.
+                let unreadable_without_options =
+                    format != FileFormat::Csv && matches!(failure, FileLoadError::Read(_));
 
-                if self.step == WizardStep::PickFolder && !options_can_fix_it {
-                    // Nothing on the configure step could fix this file, and
-                    // that step has no way back: the picker shows the error.
+                if unreadable_without_options {
                     self.file_import = None;
+                    self.rows.clear();
+                    self._row_subscriptions.clear();
+                    self.step = WizardStep::PickFolder;
                     self.manifest_error = Some(block);
                 } else {
                     // A CSV stays picked and the user lands on the configure

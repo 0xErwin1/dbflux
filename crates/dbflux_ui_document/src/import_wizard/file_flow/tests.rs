@@ -510,6 +510,45 @@ fn a_failed_lookup_with_a_failed_listing_keeps_the_original_error() {
     assert!(message.contains("link down"), "{message}");
 }
 
+/// A JSON file that stops being readable while the user is on Configure (a
+/// retry with Use Table) goes back to Pick Source, which has the file picker:
+/// Configure has no way to choose another file.
+#[gpui::test]
+fn a_non_csv_read_failure_on_configure_returns_to_pick_source(cx: &mut gpui::TestAppContext) {
+    use crate::import_wizard::errors::FileLoadError;
+
+    let (wizard, window) = wizard_on_fake_connection(cx);
+    let generation = wizard.update(window, |this, cx| {
+        let generation = this.next_file_read_request();
+        let mut state = file_state(FileFormat::Json, None);
+        state.generation = generation;
+        this.file_import = Some(state);
+        this.build_rows(vec![people_row()], cx);
+        this.step = WizardStep::Configure;
+        this.loading = true;
+        generation
+    });
+
+    wizard.update(window, |this, cx| {
+        this.finish_file_read(
+            generation,
+            false,
+            Err(FileLoadError::Read(dbflux_transfer::TransferError::Source(
+                "invalid JSON".to_string(),
+            ))),
+            cx,
+        );
+    });
+
+    window.update(|_, cx| {
+        let wizard = wizard.read(cx);
+        assert!(wizard.step == WizardStep::PickFolder);
+        assert!(wizard.file_import.is_none());
+        assert!(wizard.rows.is_empty());
+        assert!(wizard.manifest_error.is_some());
+    });
+}
+
 /// A failed target-table lookup keeps the file picked on Configure and names
 /// the lookup, not the file, in the danger block that tells the user to press
 /// Use Table again.

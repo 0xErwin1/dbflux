@@ -2248,7 +2248,7 @@ document:
         batch_size: "Continuar está desactivado hasta que Filas por INSERT sea válido."
         segment_size: "Continuar está desactivado hasta que Tamaño de bloque sea válido."
     done:
-      closing_failed: "Cierra este diálogo, corrige la causa indicada arriba y exporta de nuevo. Los archivos ya escritos permanecen en la carpeta. Sin un manifest.json la carpeta no se puede importar completa, pero cada archivo CSV o JSON terminado todavía se puede importar con Elegir archivo."
+      closing_failed: "Cierra este diálogo, corrige la causa indicada arriba y exporta de nuevo. Los archivos ya escritos permanecen en la carpeta. Sin un manifest.json la carpeta no se puede importar completa, pero cada archivo CSV o JSON terminado todavía se puede importar con Elegir archivo; antes configura el delimitador, la codificación y el texto NULL igual que en esta exportación, porque un archivo suelto no los incluye."
   file:
     error:
       source_changed: "El archivo cambió en otro lugar desde que se abrió, así que no se guardó nada y tus cambios se conservan. Para ver su contenido nuevo, descarta tus cambios y elige Recargar desde el archivo, y luego repítelos."
@@ -2517,7 +2517,7 @@ document:
     done:
       cancelled_rows: "Se importaron %{rows} filas antes de que se detuviera la importación."
       close: Cerrar
-      closing_failed: "Cierra este diálogo y corrige la causa indicada arriba. Las tablas completadas permanecen en el destino; elige Omitir para ellas si vuelves a importar."
+      closing_failed: "Cierra este diálogo y corrige la causa indicada arriba. Las tablas completadas permanecen en el destino; elige Omitir para ellas si vuelves a importar. En un destino sin soporte de transacciones, las filas de la tabla fallida escritas antes del error también permanecen."
     error:
       no_connection: No hay una conexión activa para esta importación
     toast:

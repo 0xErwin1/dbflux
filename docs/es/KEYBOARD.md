@@ -875,7 +875,7 @@ En el paso de configuración, un cursor recorre las opciones que no toman foco p
 | `j` / `k` | Mover el cursor a la opción siguiente / anterior |
 | `l` / `h` (o `Right` / `Left`) | En el delimitador o la codificación: elegir el siguiente / anterior y leer el archivo de nuevo |
 | `Enter` | En el delimitador o la codificación: elegir el siguiente. En un modo de mapeo, columna de destino o columna de origen: abrir su desplegable, que entonces usa `j` / `k` y `Enter` como en [Desplegables](#desplegables) |
-| `Escape` | En el campo de la tabla de destino o del texto NULL: salir del campo y devolver al diálogo las teclas anteriores. En cualquier otro sitio: cerrar el asistente |
+| `Escape` | En el campo de la tabla de destino o del texto NULL: salir del campo y devolver al diálogo las teclas anteriores. En un desplegable abierto: cerrar solo el desplegable y devolver las teclas al diálogo. En cualquier otro sitio: cerrar el asistente |
 
 Mientras un campo de texto o un desplegable abierto tiene el foco, estas teclas (incluido `Enter`) actúan sobre ese campo, no sobre el cursor. Aparecen en el contexto Import Wizard de Settings > Keybindings.
 
