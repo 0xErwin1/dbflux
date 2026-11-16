@@ -1557,9 +1557,11 @@ fn data_table_layer() -> KeymapLayer {
     );
     // The literal / expression editor toggle. Ctrl+E and Ctrl+Shift+E belong
     // to the input component and the export menu, so it takes Ctrl+Shift+I.
-    layer.bind(
+    // It also works inside the cell input, to flip an open editor.
+    layer.bind_with_predicate(
         KeyChord::new("i", Modifiers::ctrl_shift()),
         Command::ResultsToggleExpression,
+        "DataTable",
     );
 
     // Undo / redo: the standard primary chords plus the vim-style `u` and

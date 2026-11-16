@@ -3102,3 +3102,18 @@ fn test_results_b_rolls_the_secret_back() {
         Some(Command::RollBackVersion)
     );
 }
+
+/// The literal / expression toggle must reach the grid while the cell input
+/// has focus, where the other grid chords are held back by `!Input`.
+#[test]
+fn the_expression_toggle_stays_active_inside_the_cell_input() {
+    let keymap = default_keymap();
+    let keys = KeySequence::from(KeyChord::new("i", Modifiers::ctrl_shift()));
+    let layer = keymap.layer(ContextId::DataTable).expect("grid layer");
+
+    assert_eq!(
+        layer.get_sequence(&keys),
+        Some(Command::ResultsToggleExpression)
+    );
+    assert_eq!(layer.predicate_for(&keys), "DataTable");
+}
