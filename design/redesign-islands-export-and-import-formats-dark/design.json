@@ -54,10 +54,10 @@
     },
     {
       "file": "08-isl-sql-script.html",
-      "title": "Import wizard: run a SQL script (Configure, Confirm, Running, Done, Pick Source errors)",
-      "tradeoff": "Islands, dark: Keeps the script flow inside the import wizard with its four-step rail rather than a new dialog, and skips Confirm when nothing is destructive; the cost is that a plain write-only script starts running from one button, so that button is labelled Run Script.",
+      "title": "Import wizard: run a SQL script (Configure, Confirm for every run, Running, Done, Pick Source errors)",
+      "tradeoff": "Islands, dark: Keeps the script flow inside the import wizard with its four-step rail rather than a new dialog, and skips Confirm when nothing is destructive; every run stops at Confirm, a plain summary when nothing is destructive and the danger block when something is, at the cost of one extra click for harmless scripts.",
       "width": 1400,
-      "height": 5150
+      "height": 5800
     }
   ]
 }
