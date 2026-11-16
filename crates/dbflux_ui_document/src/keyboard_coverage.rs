@@ -1460,6 +1460,10 @@ pub(crate) const IMPORT_WIZARD: SurfaceRegistry = SurfaceRegistry {
             "import-source-*.dropdown-trigger",
             KeyboardPath::Command(Command::Execute),
         ),
+        (
+            "import-sheet.dropdown-trigger",
+            KeyboardPath::Command(Command::Execute),
+        ),
         // L picks the next segment (H the previous one).
         (
             "segmented-import-file-delimiter-*",

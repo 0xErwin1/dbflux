@@ -28,6 +28,8 @@ use crate::import::{ImportOptions, ImportOutcome, ImportTablePlan, TableFile, ru
 use crate::manifest::ManifestTable;
 use crate::pipeline::TransferError;
 use crate::spreadsheet_source::{SheetRows, list_worksheets};
+
+pub use crate::spreadsheet_source::{DuplicateHeader, InspectError, SheetIssue};
 use crate::xml_source::sample_field_names;
 
 /// How many JSON records are read to discover the columns.
@@ -90,12 +92,27 @@ impl ImportFile {
         options: FormatOptions,
         sheet: Option<&str>,
     ) -> Result<Self, TransferError> {
+        Self::inspect_checked(path, format, options, sheet)
+            .map_err(|error| error.into_transfer_error(path))
+    }
+
+    /// Like [`Self::inspect_sheet`], keeping what is wrong with a
+    /// spreadsheet's sheet as a [`SheetIssue`] instead of a message. A sheet
+    /// is checked for an empty grid, a blank or repeated header name and an
+    /// error cell before any row is imported.
+    pub fn inspect_checked(
+        path: &Path,
+        format: FileFormat,
+        options: FormatOptions,
+        sheet: Option<&str>,
+    ) -> Result<Self, InspectError> {
         if !format.is_importable() {
             return Err(TransferError::Source(format!(
                 "{}: {} files cannot be imported",
                 path.display(),
                 format.label()
-            )));
+            ))
+            .into());
         }
 
         let column_names = match format {
@@ -282,14 +299,10 @@ fn check_header_names(path: &Path, names: &[String]) -> Result<(), TransferError
     Ok(())
 }
 
-/// The first row of the sheet, which must be a valid header.
-fn spreadsheet_header(path: &Path, sheet: Option<&str>) -> Result<Vec<String>, TransferError> {
-    let rows = SheetRows::open(path, sheet)?;
-    let names = rows.headers().to_vec();
-
-    check_header_names(path, &names)?;
-
-    Ok(names)
+/// The first row of the sheet, checked to be a valid header along with the
+/// rest of the sheet.
+fn spreadsheet_header(path: &Path, sheet: Option<&str>) -> Result<Vec<String>, InspectError> {
+    Ok(SheetRows::open_checked(path, sheet)?.headers().to_vec())
 }
 
 /// The union of the field names of the first sampled XML rows, in the order

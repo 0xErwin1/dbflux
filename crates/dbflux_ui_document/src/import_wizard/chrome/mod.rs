@@ -365,9 +365,7 @@ impl ImportWizard {
             WizardStep::PickFolder if self.loading => Some(dbflux_i18n::t!(
                 "document.import_wizard.pick_file.reading_hint"
             )),
-            WizardStep::Configure if self.file_import_blocked() => Some(dbflux_i18n::t!(
-                "document.import_wizard.footer.reason.file_read"
-            )),
+            WizardStep::Configure => self.file_blocked_reason(),
             _ => None,
         }
     }

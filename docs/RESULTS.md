@@ -322,11 +322,12 @@ fixed number of the closest rows, and the grid already holds all of them.
 ## Importing a file
 
 The import wizard also reads one loose file. Choose **Choose File…** on its
-first step, next to the folder picker, and pick a `.csv`, `.json`, `.jsonl` or
-`.xml` file; HTML, Markdown and SQL files are not offered. The wizard reads the
+first step, next to the folder picker, and pick a `.csv`, `.json`, `.jsonl`,
+`.xml` or spreadsheet (`.xlsx`, `.xlsm`, `.xls` or `.ods`) file; HTML, Markdown
+and SQL files are not offered. The wizard reads the
 columns from the CSV header row, from the keys of the first 100 JSON records,
-or from the `name` of the `<field>` elements in the first 100 XML rows (all the
-keys seen, in the order they first appear). A key that first appears after those
+from the `name` of the `<field>` elements in the first 100 XML rows (all the
+keys seen, in the order they first appear), or from row 1 of a spreadsheet sheet. A key that first appears after those
 rows stops the import with an error naming it and its row. A nested object or array
 is imported as JSON text.
 
@@ -350,6 +351,26 @@ expected.
 Changing the delimiter or encoding reads the file again. The whole file is read
 once before anything is written, so a malformed row or record stops the import
 with the target unchanged.
+
+A spreadsheet is imported one sheet at a time. The Configure step adds a
+**Sheet** dropdown that lists the visible worksheets of the workbook and starts
+on the first; hidden sheets and chart sheets are not listed, and choosing another
+sheet reads the file again at once and rebuilds the column mapping. A workbook
+with one visible sheet shows it with the dropdown off and says there is nothing
+to choose. Row 1 of the sheet is the header, so every column needs a unique,
+non-blank name; a spreadsheet has no delimiter, encoding or NULL options. Numbers,
+booleans, dates, date-times and text are read as values of those types, an
+empty cell is NULL, and a formula is read as the result last saved in the file.
+Workbooks on the 1904 date system read their dates correctly, but a time of day
+in one arrives as a timestamp on 1904-01-01 instead of a time. The whole sheet
+is read into memory, so a sheet of more than 10,000,000 cells (rows × columns,
+counted from cell A1) is rejected. A sheet that cannot be imported keeps the file
+picked on Configure and shows a danger block with what to do next: the sheet is
+empty, row 1 has a blank or repeated name (the block lists the columns), a cell
+holds an error value such as `#DIV/0!` (the block names the sheet, row and
+column), or the sheet is over the limit (export it as CSV and import that, or
+choose a smaller sheet). Choosing another sheet is the way out of each of them,
+and the footer says why **Continue** is off.
 
 The import dialog uses the same top stepper and footer as the export wizard:
 **Cancel** on the first two steps, **Back** and **Cancel** on the confirmation,

@@ -2476,19 +2476,20 @@ document:
       unmatched_source: "Columna(s) de origen sin coincidencia, se omitirán salvo que se remapeen: %{names}"
       truncate_unavailable: "Esta conexión no puede truncar tablas, así que Truncate no aparece. Elige Recreate para reemplazar la tabla."
     pick_file:
-      description: "O importa un único archivo CSV, JSON, JSON Lines o XML en una tabla."
+      description: "O importa un único archivo en una tabla: CSV, JSON, JSON Lines, XML o una hoja de cálculo."
       choose_file: "Elegir archivo…"
       reading_file: "Leyendo archivo…"
       dialog_title: "Elegir archivo para importar"
-      filter_label: "CSV, JSON, JSON Lines y XML"
+      filter_label: "CSV, JSON, JSON Lines, XML y hojas de cálculo"
       error:
-        unsupported: "Solo se pueden importar archivos .csv, .json, .jsonl y .xml."
+        unsupported: "Solo se pueden importar archivos .csv, .json, .jsonl, .xml, .xlsx, .xlsm, .xls y .ods."
         invalid_file: "No se puede leer el archivo: %{error}"
         unsupported_next: "Elige un archivo con una de esas extensiones."
         lookup_failed: "No se pudo consultar la tabla de destino: %{error}"
         next_csv: "Elige otra codificación o delimitador arriba: el archivo se lee de nuevo en cuanto elijas uno."
         next_json: "Corrige el JSON del archivo y vuelve a elegirlo, o elige otro archivo."
         next_xml: "Corrige el XML del archivo y vuelve a elegirlo, o elige otro archivo."
+        next_spreadsheet: "Comprueba que el archivo sea un libro válido y sin contraseña y vuelve a elegirlo, o elige otro archivo."
         next_lookup: "Revisa el nombre de la tabla y tu acceso a la conexión, y pulsa Usar tabla otra vez."
       reading_hint: "Leyendo el archivo. Ambos botones están desactivados hasta que termine."
     file:
@@ -2499,6 +2500,29 @@ document:
       null_text_hint: "Texto del archivo que representa NULL. Con texto vacío, un campo vacío es NULL."
       json_no_options: "JSON y JSON Lines no tienen opciones de importación: el propio archivo define las columnas y los NULL."
       xml_no_options: "XML no tiene opciones de importación: el propio archivo define las columnas y los NULL."
+      spreadsheet_header: "La fila 1 es el encabezado. Una hoja de cálculo no tiene opciones de delimitador ni de codificación: la hoja define las columnas y una celda vacía es NULL."
+      sheet_label: "Hoja"
+      sheet_hint: "Cada importación lee una hoja. Solo se listan las hojas visibles. Al elegir otra hoja, el archivo se lee de nuevo al instante."
+      sheet_single: "Este libro tiene una sola hoja, así que no hay nada que elegir."
+    sheet:
+      empty:
+        message: "La hoja “%{sheet}” está vacía: no tiene filas."
+        next: "Elige otra hoja arriba, o añade una fila de encabezado y datos a esta hoja en la aplicación de hojas de cálculo, guarda y vuelve a elegir el archivo."
+      header:
+        message: "La fila 1 de la hoja “%{sheet}” no es un encabezado válido: %{problems}."
+        next: "Da a cada columna de la fila 1 un nombre único en la aplicación de hojas de cálculo, guarda y vuelve a elegir el archivo, o elige otra hoja arriba."
+        blank_one: "la columna %{columns} está en blanco"
+        blank_many: "las columnas %{columns} están en blanco"
+        duplicate_two: "las columnas %{columns} se llaman ambas “%{name}”"
+        duplicate_many: "las columnas %{columns} se llaman todas “%{name}”"
+      cell:
+        message: "La hoja “%{sheet}”, fila %{row}, columna %{column} (“%{name}”) contiene el error %{code}."
+        next: "Corrige o borra esa celda en la aplicación de hojas de cálculo, guarda y vuelve a elegir el archivo. Las fórmulas se leen como el último resultado guardado en el archivo."
+      large:
+        message: "La hoja “%{sheet}” tiene %{cells} celdas, por encima del límite de %{limit}. La hoja entera se lee en memoria, así que no se puede importar."
+        next: "Expórtala como CSV desde la aplicación de hojas de cálculo (Guardar como → CSV) e importa el CSV, o elige una hoja más pequeña arriba."
+      list_and: "%{head} y %{last}"
+      list_more: "%{list} y %{count} más"
     mapping_mode:
       create: Crear
       existing: "Existente (solo insertar)"
@@ -2541,6 +2565,10 @@ document:
     footer:
       reason:
         file_read: "Continuar está desactivado hasta que se haya leído el archivo."
+        sheet_empty: "Continuar está desactivado: la hoja “%{sheet}” no tiene filas."
+        sheet_header: "Continuar está desactivado: la fila 1 necesita un nombre único en cada columna."
+        sheet_cell: "Continuar está desactivado: una celda contiene un valor de error."
+        sheet_large: "Continuar está desactivado: la hoja supera las %{limit} celdas."
       cancel: "Cancelar"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"

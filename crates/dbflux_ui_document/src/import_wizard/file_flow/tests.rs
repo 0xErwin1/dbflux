@@ -12,7 +12,9 @@ use uuid::Uuid;
 use super::{FileImportState, ImportJob};
 use crate::import_wizard::{ImportWizard, WizardStep};
 
-fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> Entity<AppStateEntity> {
+pub(in crate::import_wizard) fn isolated_test_app_state(
+    cx: &mut gpui::TestAppContext,
+) -> Entity<AppStateEntity> {
     cx.update(|cx| {
         cx.new(|_| {
             let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
@@ -22,7 +24,7 @@ fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> Entity<AppStateEnti
     })
 }
 
-fn init_test_runtime(cx: &mut gpui::TestAppContext) {
+pub(in crate::import_wizard) fn init_test_runtime(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     cx.update(dbflux_components::theme::init);
     cx.update(|cx| {
@@ -31,14 +33,20 @@ fn init_test_runtime(cx: &mut gpui::TestAppContext) {
     });
 }
 
-fn file_state(format: FileFormat, error: Option<&str>) -> FileImportState {
+pub(in crate::import_wizard) fn file_state(
+    format: FileFormat,
+    error: Option<&str>,
+) -> FileImportState {
     FileImportState {
         path: PathBuf::from("/data/people.csv"),
         format,
         options: FormatOptions::default(),
+        sheets: Vec::new(),
+        sheet: None,
         error: error.map(|message| crate::import_wizard::errors::ErrorBlock {
             message: message.to_string(),
             next_step: "next".to_string(),
+            footer_reason: None,
         }),
         generation: 0,
         continue_after_read: false,
@@ -174,6 +182,7 @@ fn the_run_reads_the_picked_file_else_the_picked_folder(cx: &mut gpui::TestAppCo
                 path,
                 format,
                 options,
+                sheet,
             }) = &file
             else {
                 panic!("a picked file must be the job");
@@ -181,6 +190,7 @@ fn the_run_reads_the_picked_file_else_the_picked_folder(cx: &mut gpui::TestAppCo
             assert_eq!(path, &PathBuf::from("/data/people.csv"));
             assert_eq!(*format, FileFormat::Csv);
             assert_eq!(options.delimiter, CsvDelimiter::Semicolon);
+            assert_eq!(sheet, &None);
         },
     );
 }
@@ -224,6 +234,8 @@ fn continuing_applies_a_target_table_typed_without_confirming_it(cx: &mut gpui::
                 path: file_path,
                 format: FileFormat::Csv,
                 options: FormatOptions::default(),
+                sheets: Vec::new(),
+                sheet: None,
                 error: None,
                 generation: 0,
                 continue_after_read: false,
@@ -351,7 +363,7 @@ fn the_wizard_steps_are_covered(cx: &mut gpui::TestAppContext) {
 }
 
 /// Opens a wizard on a fake connection and returns it with its window.
-fn wizard_on_fake_connection(
+pub(in crate::import_wizard) fn wizard_on_fake_connection(
     cx: &mut gpui::TestAppContext,
 ) -> (Entity<ImportWizard>, &mut gpui::VisualTestContext) {
     use std::cell::RefCell;
@@ -385,7 +397,11 @@ fn wizard_on_fake_connection(
     (wizard, window)
 }
 
-fn scratch_file(tag: &str, name: &str, bytes: &[u8]) -> (PathBuf, PathBuf) {
+pub(in crate::import_wizard) fn scratch_file(
+    tag: &str,
+    name: &str,
+    bytes: &[u8],
+) -> (PathBuf, PathBuf) {
     let directory =
         std::env::temp_dir().join(format!("dbflux_import_wizard_{tag}_{}", std::process::id()));
     std::fs::create_dir_all(&directory).expect("create scratch dir");
@@ -843,5 +859,52 @@ fn a_lookup_with_columns_does_not_consult_the_listing() {
     assert!(
         matches!(&found, Ok(Some(columns)) if columns.len() == 1),
         "{found:?}"
+    );
+}
+
+/// Every control of the Configure step of a workbook with several sheets,
+/// the Sheet dropdown included, has a keyboard path in the registry.
+#[gpui::test]
+fn the_sheet_dropdown_is_covered(cx: &mut gpui::TestAppContext) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::keyboard_coverage::IMPORT_WIZARD;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
+
+    init_test_runtime(cx);
+    cx.update(dbflux_ui_base::keymap::init_keymap);
+    let app_state = isolated_test_app_state(cx);
+
+    let slot: Rc<RefCell<Option<Entity<ImportWizard>>>> = Rc::default();
+    let capture_slot = Rc::clone(&slot);
+    let (_root, window) = cx.add_window_view(move |window, cx| {
+        let wizard = cx.new(|cx| ImportWizard::new(app_state, cx));
+        wizard.update(cx, |this, cx| {
+            this.open(Uuid::new_v4(), None, window, cx);
+            let mut state = file_state(FileFormat::Spreadsheet, None);
+            state.sheets = vec!["Ventas Q3".to_string(), "Clientes".to_string()];
+            state.sheet = Some("Ventas Q3".to_string());
+            this.file_import = Some(state);
+            this.build_rows(vec![people_row()], cx);
+            this.sync_sheet_dropdown(cx);
+            this.step = WizardStep::Configure;
+        });
+        *capture_slot.borrow_mut() = Some(wizard.clone());
+        gpui_component::Root::new(wizard, window, cx)
+    });
+    let _wizard = slot.borrow().clone().expect("wizard");
+    let capture = FrameCapture::observe(window);
+    window.run_until_parked();
+
+    let checked = Coverage::new(IMPORT_WIZARD)
+        .with_surface(MODAL_CHROME)
+        .assert_covered(&capture.frame(window));
+
+    assert!(
+        checked
+            .iter()
+            .any(|id| id == "import-sheet.dropdown-trigger"),
+        "the Sheet dropdown trigger in {checked:?}"
     );
 }

@@ -2476,19 +2476,20 @@ document:
       unmatched_source: "未匹配的源列将被跳过，除非重新映射：%{names}"
       truncate_unavailable: "此连接无法清空表，因此不列出 Truncate。请改选 Recreate 来替换该表。"
     pick_file:
-      description: "或将单个 CSV、JSON、JSON Lines 或 XML 文件导入到一张表。"
+      description: "或将单个文件导入到一张表：CSV、JSON、JSON Lines、XML 或电子表格。"
       choose_file: "选择文件…"
       reading_file: "正在读取文件…"
       dialog_title: "选择要导入的文件"
-      filter_label: "CSV、JSON、JSON Lines 和 XML"
+      filter_label: "CSV、JSON、JSON Lines、XML 和电子表格"
       error:
-        unsupported: "只能导入 .csv、.json、.jsonl 和 .xml 文件。"
+        unsupported: "只能导入 .csv、.json、.jsonl、.xml、.xlsx、.xlsm、.xls 和 .ods 文件。"
         invalid_file: "无法读取文件：%{error}"
         unsupported_next: "请选择扩展名为上述之一的文件。"
         lookup_failed: "无法查找目标表：%{error}"
         next_csv: "请在上方选择其他编码或分隔符：选择后会立即重新读取文件。"
         next_json: "请修复文件中的 JSON 后重新选择，或选择其他文件。"
         next_xml: "请修复文件中的 XML 后重新选择，或选择其他文件。"
+        next_spreadsheet: "请确认该文件是没有密码的有效工作簿后重新选择，或选择其他文件。"
         next_lookup: "请检查表名以及你对该连接的访问权限，然后再次点击“使用该表”。"
       reading_hint: "正在读取文件。读取完成前两个按钮均不可用。"
     file:
@@ -2499,6 +2500,29 @@ document:
       null_text_hint: "文件中表示 NULL 的文本。文本为空时，空字段即为 NULL。"
       json_no_options: "JSON 和 JSON Lines 没有导入选项：列和 NULL 由文件本身决定。"
       xml_no_options: "XML 没有导入选项：列和 NULL 由文件本身决定。"
+      spreadsheet_header: "第 1 行是表头。电子表格没有分隔符或编码选项：列由工作表决定，空单元格为 NULL。"
+      sheet_label: "工作表"
+      sheet_hint: "每次导入读取一个工作表。只列出可见的工作表。选择其他工作表后会立即重新读取文件。"
+      sheet_single: "此工作簿只有一个工作表，无需选择。"
+    sheet:
+      empty:
+        message: "工作表“%{sheet}”为空：没有任何行。"
+        next: "请在上方选择其他工作表，或在电子表格应用中为此工作表添加表头行和数据，保存后重新选择文件。"
+      header:
+        message: "工作表“%{sheet}”的第 1 行不是有效的表头：%{problems}。"
+        next: "请在电子表格应用中为第 1 行的每一列设置唯一名称，保存后重新选择文件，或在上方选择其他工作表。"
+        blank_one: "第 %{columns} 列为空"
+        blank_many: "第 %{columns} 列为空"
+        duplicate_two: "第 %{columns} 列的名称都是“%{name}”"
+        duplicate_many: "第 %{columns} 列的名称都是“%{name}”"
+      cell:
+        message: "工作表“%{sheet}”第 %{row} 行第 %{column} 列（“%{name}”）的值为错误 %{code}。"
+        next: "请在电子表格应用中修正或清除该单元格，保存后重新选择文件。公式按文件中最后保存的结果读取。"
+      large:
+        message: "工作表“%{sheet}”有 %{cells} 个单元格，超过 %{limit} 的上限。整个工作表会读入内存，因此无法导入。"
+        next: "请在电子表格应用中将其导出为 CSV（另存为 → CSV）并改为导入该 CSV，或在上方选择较小的工作表。"
+      list_and: "%{head}和%{last}"
+      list_more: "%{list}等另外 %{count} 列"
     mapping_mode:
       create: 创建
       existing: 已存在（仅插入）
@@ -2541,6 +2565,10 @@ document:
     footer:
       reason:
         file_read: "文件读取完成之前，“继续”不可用。"
+        sheet_empty: "“继续”不可用：工作表“%{sheet}”没有任何行。"
+        sheet_header: "“继续”不可用：第 1 行的每一列都需要唯一名称。"
+        sheet_cell: "“继续”不可用：某个单元格的值为错误值。"
+        sheet_large: "“继续”不可用：工作表超过 %{limit} 个单元格。"
       cancel: "取消"
   instance_inspector:
     task_label: "检查器：%{metric_id}"

@@ -5,7 +5,8 @@
 //! so the keymap's `ImportWizard` context reaches them through a cursor over
 //! the step's choices: J and K move it, H and L pick the previous or next
 //! delimiter or encoding, and Enter (which the dialog hands to its owner)
-//! picks the next one or opens the dropdown under the cursor. Every path runs
+//! picks the next one or opens the dropdown under the cursor (the Sheet
+//! dropdown of a workbook comes first). Every path runs
 //! the action of the mouse control.
 
 use dbflux_components::primitives::{FocusShape, focus_ring};
@@ -21,6 +22,7 @@ use super::{ImportWizard, WizardStep};
 /// A choice of the configure step the keyboard cursor can rest on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ConfigureField {
+    Sheet,
     Delimiter,
     Encoding,
     Mode(usize),
@@ -61,6 +63,7 @@ impl ImportWizard {
     pub(super) fn field_count(file: Option<&FileImportState>, rows: usize) -> usize {
         let file_fields = match file {
             Some(state) if visible_file_options(state.format).delimiter_and_encoding => 2,
+            Some(state) if ImportWizard::sheet_is_choosable(state) => 1,
             _ => 0,
         };
 
@@ -73,11 +76,14 @@ impl ImportWizard {
     pub(super) fn configure_fields(&self) -> Vec<ConfigureField> {
         let mut fields = Vec::new();
 
-        if let Some(state) = &self.file_import
-            && visible_file_options(state.format).delimiter_and_encoding
-        {
-            fields.push(ConfigureField::Delimiter);
-            fields.push(ConfigureField::Encoding);
+        if let Some(state) = &self.file_import {
+            if visible_file_options(state.format).delimiter_and_encoding {
+                fields.push(ConfigureField::Delimiter);
+                fields.push(ConfigureField::Encoding);
+            }
+            if Self::sheet_is_choosable(state) {
+                fields.push(ConfigureField::Sheet);
+            }
         }
 
         for table_index in 0..self.rows.len() {
@@ -134,7 +140,10 @@ impl ImportWizard {
                     self.select_encoding(encoding_segment_id(next), cx);
                 }
             }
-            ConfigureField::Mode(_) | ConfigureField::Target(_) | ConfigureField::Source(_) => {}
+            ConfigureField::Sheet
+            | ConfigureField::Mode(_)
+            | ConfigureField::Target(_)
+            | ConfigureField::Source(_) => {}
         }
     }
 
@@ -151,6 +160,10 @@ impl ImportWizard {
             ConfigureField::Source(index) => {
                 self.rows.get(index).map(|row| &row.rebind_source_dropdown)
             }
+            ConfigureField::Sheet => self
+                .file_inputs
+                .as_ref()
+                .map(|inputs| &inputs.sheet_dropdown),
             ConfigureField::Delimiter | ConfigureField::Encoding => None,
         };
 

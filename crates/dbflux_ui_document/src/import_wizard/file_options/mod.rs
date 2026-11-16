@@ -10,7 +10,8 @@ use dbflux_transfer::import_file::format_for_path;
 
 /// The option rows the wizard shows for one importable format. An option a
 /// format does not use is hidden, so the dialog never offers a choice that has
-/// no effect: CSV has all of them, JSON, JSON Lines and XML none.
+/// no effect: CSV has all of them; JSON, JSON Lines, XML and spreadsheets none (a
+/// spreadsheet has the Sheet row instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct VisibleFileOptions {
     pub(super) delimiter_and_encoding: bool,
@@ -24,14 +25,21 @@ pub(super) fn visible_file_options(format: FileFormat) -> VisibleFileOptions {
     }
 }
 
+/// The extensions a workbook is picked by. Calamine reads all four, and
+/// [`FileFormat::Spreadsheet`] names only the first.
+const SPREADSHEET_EXTENSIONS: [&str; 4] = ["xlsx", "xlsm", "xls", "ods"];
+
 /// File extensions the picker accepts: the importable formats only, so HTML,
 /// Markdown and SQL files are not offered.
 pub(super) fn picker_extensions() -> Vec<&'static str> {
-    FileFormat::WITH_SQL
+    let mut extensions: Vec<&'static str> = FileFormat::WITH_SQL
         .into_iter()
         .filter(|format| format.is_importable())
         .map(FileFormat::extension)
-        .collect()
+        .collect();
+    extensions.extend(SPREADSHEET_EXTENSIONS);
+
+    extensions
 }
 
 /// The importable format of a picked file, from its extension.

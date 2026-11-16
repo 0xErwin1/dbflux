@@ -2,6 +2,9 @@
 //! message and, always, the next step to take. Rendered as one danger block
 //! on both the Pick Source and the Configure step.
 
+mod sheet;
+
+use dbflux_transfer::import_file::SheetIssue;
 use dbflux_transfer::{FileFormat, TransferError};
 
 /// An error shown to the user: what went wrong and what to do next.
@@ -9,6 +12,9 @@ use dbflux_transfer::{FileFormat, TransferError};
 pub(super) struct ErrorBlock {
     pub(super) message: String,
     pub(super) next_step: String,
+    /// Why Continue is off while this block shows, when the generic "the file
+    /// has not been read" line would not say it.
+    pub(super) footer_reason: Option<String>,
 }
 
 /// Why a picked file could not be turned into a table plan.
@@ -16,6 +22,9 @@ pub(super) struct ErrorBlock {
 pub(super) enum FileLoadError {
     /// The file itself could not be read with the current options.
     Read(TransferError),
+    /// The chosen sheet of a workbook cannot be imported; another sheet can
+    /// be chosen on the Configure step.
+    Sheet(SheetIssue),
     /// The target table could not be looked up, so whether it exists is
     /// unknown. The text is the lookup's own error.
     Lookup(String),
@@ -28,6 +37,7 @@ impl ErrorBlock {
             next_step: dbflux_i18n::t!(
                 "document.import_wizard.pick_folder.error.no_connection_next"
             ),
+            footer_reason: None,
         }
     }
 
@@ -35,6 +45,7 @@ impl ErrorBlock {
         Self {
             message: dbflux_i18n::t!("document.import_wizard.pick_folder.error.no_dialog"),
             next_step: dbflux_i18n::t!("document.import_wizard.pick_folder.error.no_dialog_next"),
+            footer_reason: None,
         }
     }
 
@@ -47,6 +58,7 @@ impl ErrorBlock {
             next_step: dbflux_i18n::t!(
                 "document.import_wizard.pick_folder.error.invalid_bundle_next"
             ),
+            footer_reason: None,
         }
     }
 
@@ -54,6 +66,7 @@ impl ErrorBlock {
         Self {
             message: dbflux_i18n::t!("document.import_wizard.pick_file.error.unsupported"),
             next_step: dbflux_i18n::t!("document.import_wizard.pick_file.error.unsupported_next"),
+            footer_reason: None,
         }
     }
 
@@ -68,7 +81,9 @@ impl ErrorBlock {
                     error = error.as_str()
                 ),
                 next_step: dbflux_i18n::t!("document.import_wizard.pick_file.error.next_lookup"),
+                footer_reason: None,
             },
+            FileLoadError::Sheet(issue) => Self::sheet_issue(issue),
             FileLoadError::Read(error) => Self {
                 message: dbflux_i18n::t!(
                     "document.import_wizard.pick_file.error.invalid_file",
@@ -81,8 +96,12 @@ impl ErrorBlock {
                     FileFormat::Xml => {
                         dbflux_i18n::t!("document.import_wizard.pick_file.error.next_xml")
                     }
+                    FileFormat::Spreadsheet => {
+                        dbflux_i18n::t!("document.import_wizard.pick_file.error.next_spreadsheet")
+                    }
                     _ => dbflux_i18n::t!("document.import_wizard.pick_file.error.next_json"),
                 },
+                footer_reason: None,
             },
         }
     }
