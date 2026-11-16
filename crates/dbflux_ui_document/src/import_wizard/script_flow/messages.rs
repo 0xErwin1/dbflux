@@ -132,6 +132,13 @@ pub(in crate::import_wizard) fn load_error_block(error: &ScriptError) -> ErrorBl
             ),
             dbflux_i18n::t!("document.import_wizard.script.error.session_commit_next"),
         ),
+        ScriptError::ConditionalTransactionControl { line } => (
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.conditional_transaction",
+                line = grouped(*line)
+            ),
+            dbflux_i18n::t!("document.import_wizard.script.error.conditional_transaction_next"),
+        ),
         ScriptError::SelfManagedTransaction { keyword, line } => (
             dbflux_i18n::t!(
                 "document.import_wizard.script.error.self_managed",
@@ -206,8 +213,8 @@ pub(in crate::import_wizard) fn done_view_at(
         view.next_step = Some(dbflux_i18n::t!(
             "document.import_wizard.script.done.partially_kept_next"
         ));
-    } else if report.script_transaction == ScriptTransaction::RolledBack {
-        let note = dbflux_i18n::t!("document.import_wizard.script.done.script_rolled_back");
+    } else if let Some(key) = script_transaction_note(report.script_transaction) {
+        let note = dbflux_i18n::t!(key);
         view.outcome = Some(match view.outcome.take() {
             Some(outcome) => format!("{outcome} {note}"),
             None => note,
@@ -215,6 +222,20 @@ pub(in crate::import_wizard) fn done_view_at(
     }
 
     view
+}
+
+/// The line about a transaction the engine rolled back for the script, if
+/// the run ended that way.
+fn script_transaction_note(transaction: ScriptTransaction) -> Option<&'static str> {
+    match transaction {
+        ScriptTransaction::RolledBack => {
+            Some("document.import_wizard.script.done.script_rolled_back")
+        }
+        ScriptTransaction::PossiblyOpenRolledBack => {
+            Some("document.import_wizard.script.done.possibly_open_rolled_back")
+        }
+        _ => None,
+    }
 }
 
 /// Everything up to the statement that committed on its own was saved, and

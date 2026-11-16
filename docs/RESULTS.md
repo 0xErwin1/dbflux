@@ -398,7 +398,11 @@ included), and the first six statements with their classification; a `DELETE` or
   saves the changes before it. A transaction the script opens and never ends is
 rolled back when the script finishes, and the dialog says so: add a `COMMIT` at
 the end to save its changes. If that rollback fails the dialog says a transaction
-may still be open and to disconnect and reconnect.
+may still be open and to disconnect and reconnect. A script with a
+version-conditional comment that controls transactions is refused, because
+whether it runs depends on the server. A script that uses `SAVEPOINT` outside a
+transaction gets a precautionary `ROLLBACK` when it ends, in case one was left
+open; the dialog says so, and changes the database had already committed stay.
 
 On a connection that commits schema statements on its own (MySQL and MariaDB),
 `CREATE`, `ALTER` and `DROP` are saved as they run and also save every statement

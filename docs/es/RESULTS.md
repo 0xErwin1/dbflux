@@ -437,7 +437,12 @@ una conexión de solo lectura las rechaza. Tiene dos opciones:
   abre y nunca termina se deshace al acabar el script, y el diálogo lo dice:
   añade un `COMMIT` al final para guardar sus cambios. Si ese rollback falla, el
   diálogo dice que puede seguir abierta una transacción y que hay que
-  desconectarse y volver a conectar.
+  desconectarse y volver a conectar. Un script con un comentario condicional por
+  versión que controla transacciones se rechaza, porque que se ejecute o no
+  depende del servidor. Un script que usa `SAVEPOINT` fuera de una transacción
+  recibe un `ROLLBACK` preventivo al terminar, por si quedó una abierta; el
+  diálogo lo dice, y los cambios que la base de datos ya había confirmado se
+  mantienen.
 
 En una conexión que confirma por sí sola las sentencias de esquema (MySQL y
 MariaDB), `CREATE`, `ALTER` y `DROP` se guardan al ejecutarse y también guardan

@@ -627,3 +627,34 @@ fn a_script_that_switches_off_autocommit_is_refused_with_localized_copy() {
             .starts_with("This script turns on implicit transactions on line 1")
     );
 }
+
+#[test]
+fn a_savepoint_outside_a_transaction_explains_the_precautionary_rollback() {
+    let precaution = ScriptReport {
+        script_transaction: ScriptTransaction::PossiblyOpenRolledBack,
+        ..report(RunEnd::Finished, Disposition::Kept)
+    };
+    let outcome = done_view(&precaution, false).outcome.unwrap_or_default();
+
+    assert!(
+        outcome.ends_with(
+            "The script used SAVEPOINT outside a transaction, so DBFlux issued a ROLLBACK in case one was left open. Changes the database had already committed stay."
+        ),
+        "{outcome}"
+    );
+    assert!(outcome.starts_with("Every statement was saved as it ran."));
+}
+
+#[test]
+fn a_version_conditional_transaction_comment_is_refused_with_localized_copy() {
+    let block = load_error_block(&ScriptError::ConditionalTransactionControl { line: 7 });
+
+    assert_eq!(
+        block.message,
+        "This script has a version-conditional comment (line 7) that controls transactions, and whether it runs depends on the server."
+    );
+    assert_eq!(
+        block.next_step,
+        "Run the script with the database's own command-line client."
+    );
+}
