@@ -375,7 +375,7 @@ fn finish(
                 (script_transaction, finish_error) =
                     resolve_script_transaction(connection, end != RunEnd::Finished);
             } else if outcome.savepoint_outside_transaction {
-                script_transaction = precautionary_rollback(connection);
+                (script_transaction, finish_error) = precautionary_rollback(connection);
             }
             Disposition::Kept
         }
@@ -455,16 +455,26 @@ fn resolve_script_transaction(
 /// The script used `SAVEPOINT` outside a transaction of its own. Some engines
 /// open a transaction for it and some do nothing, and the connection cannot
 /// be asked which, so a `ROLLBACK` is issued in case one was left open. It is
-/// harmless when none is. An engine that refuses it ("no transaction is
-/// active") is telling us nothing was open, so a failure reads as
-/// [`ScriptTransaction::None`].
-fn precautionary_rollback(connection: &dyn Connection) -> ScriptTransaction {
+/// harmless when none is.
+///
+/// An engine with nothing to roll back may refuse the statement ("no
+/// transaction is active"). That refusal is a statement failure
+/// (`DbError::QueryFailed`) on a live session, and reads as
+/// [`ScriptTransaction::None`]. Any other failure (connection, timeout,
+/// cancel, I/O) says nothing about the transaction, so it is reported as
+/// [`ScriptTransaction::LeftOpen`] with the error. The refusal's wording is
+/// not matched: it differs between engines and languages.
+fn precautionary_rollback(connection: &dyn Connection) -> (ScriptTransaction, Option<String>) {
     let Some(vocab) = TransactionVocab::for_kind(connection.kind()) else {
-        return ScriptTransaction::None;
+        return (ScriptTransaction::None, None);
     };
 
     match connection.execute(&QueryRequest::new(vocab.rollback)) {
-        Ok(_) => ScriptTransaction::PossiblyOpenRolledBack,
-        Err(_) => ScriptTransaction::None,
+        Ok(_) => (ScriptTransaction::PossiblyOpenRolledBack, None),
+        Err(DbError::QueryFailed(_)) => (ScriptTransaction::None, None),
+        Err(error) => (
+            ScriptTransaction::LeftOpen,
+            Some(format!("Rollback failed: {error}")),
+        ),
     }
 }

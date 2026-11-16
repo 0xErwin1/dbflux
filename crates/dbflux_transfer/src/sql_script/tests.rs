@@ -43,7 +43,7 @@ impl Drop for Scratch {
 
 /// SQLite does not declare `DriverCapabilities::TRANSACTIONS`; this wrapper
 /// declares it so the transaction paths can be exercised without a server.
-struct WithTransactions(Box<dyn Connection>, bool);
+struct WithTransactions(Box<dyn Connection>, bool, bool);
 
 impl Connection for WithTransactions {
     fn metadata(&self) -> &DriverMetadata {
@@ -63,6 +63,10 @@ impl Connection for WithTransactions {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if self.2 && req.sql == "ROLLBACK" {
+            return Err(DbError::Timeout);
+        }
+
         self.0.execute(req)
     }
 
@@ -92,7 +96,7 @@ impl Connection for WithTransactions {
 }
 
 fn sqlite(scratch: &Scratch) -> Box<dyn Connection> {
-    Box::new(WithTransactions(plain_sqlite(scratch), true))
+    Box::new(WithTransactions(plain_sqlite(scratch), true, false))
 }
 
 fn plain_sqlite(scratch: &Scratch) -> Box<dyn Connection> {
@@ -1043,7 +1047,8 @@ fn a_script_that_closes_its_own_transaction_reports_none() {
 #[test]
 fn an_implicit_commit_before_a_failure_is_never_a_full_rollback() {
     let scratch = Scratch::new();
-    let connection: Box<dyn Connection> = Box::new(WithTransactions(plain_sqlite(&scratch), false));
+    let connection: Box<dyn Connection> =
+        Box::new(WithTransactions(plain_sqlite(&scratch), false, false));
     exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
     let script = script(
         "INSERT INTO t VALUES (1);\nCREATE TABLE marker (id INTEGER);\nINSERT INTO missing VALUES (2);\n",
@@ -1068,7 +1073,8 @@ fn an_implicit_commit_before_a_failure_is_never_a_full_rollback() {
 #[test]
 fn a_failure_before_any_implicit_commit_is_still_a_full_rollback() {
     let scratch = Scratch::new();
-    let connection: Box<dyn Connection> = Box::new(WithTransactions(plain_sqlite(&scratch), false));
+    let connection: Box<dyn Connection> =
+        Box::new(WithTransactions(plain_sqlite(&scratch), false, false));
     exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
     let script = script(
         "INSERT INTO t VALUES (1);\nINSERT INTO missing VALUES (2);\nCREATE TABLE marker (id INTEGER);\n",
@@ -1091,7 +1097,8 @@ fn a_failure_before_any_implicit_commit_is_still_a_full_rollback() {
 #[test]
 fn destructive_ddl_counts_as_schema_statements_in_the_summary() {
     let scratch = Scratch::new();
-    let connection: Box<dyn Connection> = Box::new(WithTransactions(plain_sqlite(&scratch), false));
+    let connection: Box<dyn Connection> =
+        Box::new(WithTransactions(plain_sqlite(&scratch), false, false));
 
     let summary = script(
         "ALTER TABLE t ADD COLUMN x INTEGER;\nDROP TABLE t;\nTRUNCATE TABLE t;\nDELETE FROM t;",
@@ -1318,4 +1325,49 @@ fn other_conditional_comments_and_look_alikes_are_allowed() {
             .ok(),
         Some(4)
     );
+}
+
+// ----------------------------------------- conditional comments in context
+
+#[test]
+fn a_conditional_fragment_inside_a_transaction_statement_is_refused() {
+    let text = "BEGIN;\nCOMMIT /*!80000 AND CHAIN */;\nINSERT INTO t VALUES (1);";
+
+    assert_eq!(
+        SqlScript::from_text(text, &QueryLanguage::Sql).err(),
+        Some(ScriptError::ConditionalTransactionControl { line: 2 })
+    );
+    assert_eq!(
+        SqlScript::from_text(
+            "SET sql_mode = '' /*!, autocommit = 0 */;",
+            &QueryLanguage::Sql
+        )
+        .err(),
+        Some(ScriptError::ConditionalTransactionControl { line: 1 })
+    );
+}
+
+#[test]
+fn a_conditional_comment_reports_the_line_inside_a_multi_line_statement() {
+    let text = "SELECT 1,\n  2,\n  3 /*!50003 + 1 */,\n  4;\nSELECT 5\n/*!40101 COMMIT */;";
+
+    assert_eq!(
+        SqlScript::from_text(text, &QueryLanguage::Sql).err(),
+        Some(ScriptError::ConditionalTransactionControl { line: 6 })
+    );
+}
+
+#[test]
+fn a_savepoint_rollback_that_fails_for_another_reason_is_left_open_with_the_error() {
+    let scratch = Scratch::new();
+    let connection: Box<dyn Connection> =
+        Box::new(WithTransactions(plain_sqlite(&scratch), true, true));
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("SAVEPOINT imported;\nINSERT INTO t VALUES (1);\n");
+
+    let report = run(connection.as_ref(), &script, RunOptions::default()).expect("run");
+
+    assert_eq!(report.script_transaction, ScriptTransaction::LeftOpen);
+    let message = report.finish_error.expect("the rollback error is reported");
+    assert!(message.contains("timed out"), "{message}");
 }

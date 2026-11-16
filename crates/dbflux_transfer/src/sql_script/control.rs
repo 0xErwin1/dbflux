@@ -1,5 +1,5 @@
 use super::ScriptStatement;
-use super::blank::{Identifiers, blank_literals, conditional_comment_bodies, words_with_offsets};
+use super::blank::{Identifiers, blank_literals, conditional_comments, words_with_offsets};
 
 /// A statement that starts, ends or checkpoints a transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,16 +184,23 @@ impl TransactionTracker {
 pub(super) fn conditional_transaction_control_line(
     statements: &[ScriptStatement],
 ) -> Option<usize> {
+    let controls = |text: &str| {
+        transaction_keyword(text).is_some() || session_commit_mode_change(text).is_some()
+    };
+
     statements.iter().find_map(|statement| {
-        conditional_comment_bodies(&statement.text)
-            .into_iter()
-            .find(|(_, body)| {
-                body.split(';').any(|piece| {
-                    transaction_keyword(piece).is_some()
-                        || session_commit_mode_change(piece).is_some()
-                })
-            })
-            .map(|(offset, _)| statement.line + offset)
+        let comments = conditional_comments(&statement.text)?;
+        let first_line = statement.line + comments.bodies.first().map_or(0, |(offset, _)| *offset);
+
+        let body_controls = comments
+            .bodies
+            .iter()
+            .any(|(_, body)| body.split(';').any(controls));
+
+        // A fragment can change what the statement around it does
+        // (`COMMIT /*!80000 AND CHAIN */`), so the statement is also read with
+        // its conditional comments opened up.
+        (body_controls || controls(&comments.inlined)).then_some(first_line)
     })
 }
 

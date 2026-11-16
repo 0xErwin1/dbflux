@@ -226,14 +226,28 @@ fn dollar_end(characters: &[char], start: usize) -> usize {
     characters.len()
 }
 
-/// The bodies of the version-conditional comments (`/*!50003 ... */`,
-/// `/*M!100100 ... */`) in `statement`, each with its 0-based line offset
-/// inside the statement. Strings, quoted identifiers, ordinary comments and
-/// dollar-quoted bodies are skipped.
-pub(super) fn conditional_comment_bodies(statement: &str) -> Vec<(usize, String)> {
+/// The version-conditional comments (`/*!50003 ... */`, `/*M!100100 ... */`)
+/// of a statement.
+pub(super) struct ConditionalComments {
+    /// Each body with the 0-based line, inside the statement, where its
+    /// comment starts.
+    pub bodies: Vec<(usize, String)>,
+    /// The statement with every conditional comment opened up, as a server
+    /// that runs them would read it (markers blanked, bodies kept as code).
+    pub inlined: String,
+}
+
+/// Finds the conditional comments of `statement`, skipping strings, quoted
+/// identifiers, ordinary comments and dollar-quoted bodies. `None` when there
+/// is none.
+pub(super) fn conditional_comments(statement: &str) -> Option<ConditionalComments> {
     let characters: Vec<char> = statement.chars().collect();
     let mut bodies = Vec::new();
+    let mut inlined = String::with_capacity(statement.len());
     let mut position = 0;
+    let mut copied_to = 0;
+    let mut line_offset = 0;
+    let mut counted_to = 0;
 
     while let Some(&current) = characters.get(position) {
         let next = characters.get(position + 1).copied();
@@ -251,18 +265,31 @@ pub(super) fn conditional_comment_bodies(statement: &str) -> Vec<(usize, String)
                 let end = block_comment_end(&characters, position);
                 let marker = conditional_marker_len(&characters, position);
                 if marker > 0 {
-                    let body_end = end.saturating_sub(2).max(position + marker);
-                    let body: String = characters
-                        .iter()
-                        .skip(position + marker)
-                        .take(body_end - position - marker)
-                        .collect();
-                    let line_offset = characters
-                        .iter()
-                        .take(position)
-                        .filter(|character| **character == '\n')
-                        .count();
-                    bodies.push((line_offset, body));
+                    let body_start = position + marker;
+                    let body_end = end.saturating_sub(2).max(body_start);
+
+                    line_offset += newlines_between(&characters, counted_to, position);
+                    counted_to = position;
+
+                    inlined.extend(characters.iter().skip(copied_to).take(position - copied_to));
+                    inlined.extend(std::iter::repeat_n(' ', marker));
+                    inlined.extend(
+                        characters
+                            .iter()
+                            .skip(body_start)
+                            .take(body_end - body_start),
+                    );
+                    inlined.extend(std::iter::repeat_n(' ', end - body_end));
+                    copied_to = end;
+
+                    bodies.push((
+                        line_offset,
+                        characters
+                            .iter()
+                            .skip(body_start)
+                            .take(body_end - body_start)
+                            .collect(),
+                    ));
                 }
                 end
             }
@@ -274,5 +301,19 @@ pub(super) fn conditional_comment_bodies(statement: &str) -> Vec<(usize, String)
         position = end.max(position + 1);
     }
 
-    bodies
+    if bodies.is_empty() {
+        return None;
+    }
+
+    inlined.extend(characters.iter().skip(copied_to));
+    Some(ConditionalComments { bodies, inlined })
+}
+
+fn newlines_between(characters: &[char], from: usize, to: usize) -> usize {
+    characters
+        .iter()
+        .skip(from)
+        .take(to.saturating_sub(from))
+        .filter(|character| **character == '\n')
+        .count()
 }
