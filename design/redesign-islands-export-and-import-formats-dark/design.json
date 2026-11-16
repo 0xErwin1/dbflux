@@ -41,9 +41,9 @@
     {
       "file": "06-isl-wizard-confirm.html",
       "title": "Wizards: the Confirm step (export plan, import destructive confirmation)",
-      "tradeoff": "Islands, dark: Draws what the code ships: export confirms a summary with Back and Start Export, import confirms only a Recreate or Truncate plan with Back, Cancel and Yes, proceed; the wording is plain text, so a destructive plan reads no louder than an export summary.",
+      "tradeoff": "Islands, dark: Export confirms a summary with Back, Cancel and Start Export; import confirms only a Recreate or Truncate plan, with the affected tables and modes in the shared danger block and Back, Cancel and Yes, proceed in the footer.",
       "width": 1580,
-      "height": 736
+      "height": 784
     }
   ]
 }
