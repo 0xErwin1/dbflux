@@ -305,6 +305,11 @@ impl SqlDialect for MssqlDialect {
             return vec!["1", "0"];
         }
 
+        // `SYSDATETIME()` carries no offset, so SQL Server would store it as UTC.
+        if lowered.starts_with("datetimeoffset") {
+            return vec!["SYSDATETIMEOFFSET()"];
+        }
+
         match dbflux_core::type_family(type_name) {
             Some(TypeFamily::Timestamp) => vec!["SYSDATETIME()", "GETDATE()"],
             Some(TypeFamily::Date) => vec!["CAST(GETDATE() AS date)"],
@@ -5560,6 +5565,10 @@ mod tests {
         assert_eq!(
             dialect.type_value_expressions("datetime2(7)"),
             vec!["SYSDATETIME()", "GETDATE()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("datetimeoffset(7)"),
+            vec!["SYSDATETIMEOFFSET()"]
         );
         assert_eq!(
             dialect.type_value_expressions("date"),
