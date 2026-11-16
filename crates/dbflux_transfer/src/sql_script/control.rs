@@ -206,7 +206,7 @@ pub(super) fn conditional_transaction_control_line(
 /// starts with a transaction keyword, or when `autocommit` or
 /// `implicit_transactions` appears anywhere in it as a word.
 fn opened_up_controls_transactions(inlined: &str) -> bool {
-    let mentions_commit_mode = words_with_offsets(&blank_literals(inlined, Identifiers::Blank))
+    let mentions_commit_mode = words_with_offsets(&blank_literals(inlined, Identifiers::Keep))
         .iter()
         .any(|(_, word)| matches!(word.as_str(), "AUTOCOMMIT" | "IMPLICIT_TRANSACTIONS"));
     if mentions_commit_mode {

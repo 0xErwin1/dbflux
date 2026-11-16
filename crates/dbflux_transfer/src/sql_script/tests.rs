@@ -1394,3 +1394,33 @@ fn conditional_fragments_are_judged_by_the_opened_up_statement() {
         );
     }
 }
+
+#[test]
+fn quoted_commit_mode_variables_are_still_commit_mode_variables() {
+    for sql in [
+        "SET `autocommit` = 0",
+        "SET \"autocommit\" = OFF",
+        "SET @@`autocommit` = 0",
+        "SET @@session.`autocommit` = 0",
+    ] {
+        assert_eq!(
+            commit_mode(&format!("{sql};")),
+            Some(("turns off autocommit", 1)),
+            "{sql}"
+        );
+    }
+
+    for sql in [
+        "/*!80000 SET `autocommit` = 0 */",
+        "SELECT 1 /*!50003 , `implicit_transactions` */",
+    ] {
+        assert_eq!(
+            SqlScript::from_text(&format!("{sql};"), &QueryLanguage::Sql).err(),
+            Some(ScriptError::ConditionalTransactionControl { line: 1 }),
+            "{sql}"
+        );
+    }
+
+    assert_eq!(control_keyword("`COMMIT`;"), None);
+    assert_eq!(control_keyword("\"BEGIN\";"), None);
+}
