@@ -658,10 +658,12 @@ fn transaction_control_statements_are_detected_case_insensitively_after_comments
         ("ROLLBACK TO sp;", "ROLLBACK"),
         ("SAVEPOINT sp;", "SAVEPOINT"),
         ("release savepoint sp;", "RELEASE"),
-        ("SET autocommit = 0;", "SET autocommit"),
         ("set @@session.autocommit=1;", "SET autocommit"),
-        ("SET SESSION autocommit = 0;", "SET autocommit"),
-        ("SET IMPLICIT_TRANSACTIONS ON;", "SET IMPLICIT_TRANSACTIONS"),
+        ("SET SESSION autocommit = 1;", "SET autocommit"),
+        (
+            "SET IMPLICIT_TRANSACTIONS OFF;",
+            "SET IMPLICIT_TRANSACTIONS",
+        ),
     ];
 
     for (sql, keyword) in cases {
@@ -1099,4 +1101,75 @@ fn destructive_ddl_counts_as_schema_statements_in_the_summary() {
 
     assert_eq!(summary.ddl_count, 3);
     assert!(summary.ddl_commits_on_its_own);
+}
+
+// ------------------------------------------------ session commit mode
+
+fn commit_mode(text: &str) -> Option<(&'static str, usize)> {
+    match SqlScript::from_text(text, &QueryLanguage::Sql) {
+        Err(ScriptError::SessionCommitMode { change, line, .. }) => Some((change, line)),
+        Ok(_) => None,
+        Err(other) => panic!("unexpected error for {text:?}: {other:?}"),
+    }
+}
+
+#[test]
+fn switching_autocommit_off_is_refused_in_every_spelling() {
+    for sql in [
+        "SET autocommit = 0",
+        "set autocommit=0",
+        "SET AUTOCOMMIT = OFF",
+        "SET autocommit = FALSE",
+        "SET @@autocommit = 0",
+        "SET SESSION autocommit = 0",
+        "SET @@session.autocommit = 0",
+        "SET LOCAL autocommit TO off",
+        "/* c */ SET autocommit = 0",
+    ] {
+        let text = format!("SELECT 1;\n\n{sql};\n");
+        assert_eq!(
+            commit_mode(&text),
+            Some(("turns off autocommit", 3)),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn implicit_transactions_on_is_refused() {
+    assert_eq!(
+        commit_mode("SET IMPLICIT_TRANSACTIONS ON;"),
+        Some(("turns on implicit transactions", 1))
+    );
+}
+
+#[test]
+fn switching_autocommit_on_or_unrelated_sets_are_allowed() {
+    for sql in [
+        "SET autocommit = 1",
+        "SET autocommit = ON",
+        "SET autocommit = TRUE",
+        "SET IMPLICIT_TRANSACTIONS OFF",
+        "SET search_path = public",
+        "SET NAMES utf8",
+        "SELECT 'SET autocommit = 0'",
+        "-- SET autocommit = 0\nSELECT 1",
+        "SELECT autocommit FROM settings",
+    ] {
+        assert_eq!(commit_mode(&format!("{sql};")), None, "{sql}");
+    }
+}
+
+#[test]
+fn the_commit_mode_error_names_the_statement_and_says_what_to_do() {
+    let error = SqlScript::from_text(
+        "SELECT 1;\nSELECT 2;\nSELECT 3;\nSELECT 4;\nSET autocommit = 0;",
+        &QueryLanguage::Sql,
+    )
+    .expect_err("refused");
+
+    assert_eq!(
+        error.to_string(),
+        "The script turns off autocommit on line 5 (SET autocommit = 0). That would leave this connection in manual-commit mode after the run. Remove that statement, or run the script with the database's own command-line client."
+    );
 }

@@ -125,3 +125,27 @@ pub(super) fn transaction_effect(statement: &str) -> TransactionEffect {
         _ => TransactionEffect::Other,
     }
 }
+
+/// What a statement does when it switches the session to manual commit
+/// (`SET autocommit = 0/OFF/FALSE`, `SET IMPLICIT_TRANSACTIONS ON`), or
+/// `None`. Turning autocommit on, or implicit transactions off, is fine.
+pub(super) fn session_commit_mode_change(statement: &str) -> Option<&'static str> {
+    let words = statement_words(statement);
+    if words.first().map(String::as_str) != Some("SET") {
+        return None;
+    }
+
+    let mut rest = words
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .skip_while(|word| matches!(*word, "SESSION" | "GLOBAL" | "LOCAL" | "PERSIST"));
+    let variable = rest.next()?;
+    let value = rest.find(|word| *word != "TO")?;
+
+    match (variable, value) {
+        ("AUTOCOMMIT", "0" | "OFF" | "FALSE") => Some("turns off autocommit"),
+        ("IMPLICIT_TRANSACTIONS", "ON") => Some("turns on implicit transactions"),
+        _ => None,
+    }
+}

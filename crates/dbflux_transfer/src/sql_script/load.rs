@@ -4,6 +4,7 @@ use std::path::Path;
 
 use dbflux_core::QueryLanguage;
 
+use super::control::session_commit_mode_change;
 use super::directives::find_directive;
 use super::psql::find_psql_only;
 use super::routine::split_routine_body_line;
@@ -101,6 +102,10 @@ impl SqlScript {
             return Err(error);
         }
 
+        if let Some(error) = find_commit_mode_change(&statements) {
+            return Err(error);
+        }
+
         if statements.is_empty() {
             return Err(ScriptError::Empty);
         }
@@ -189,4 +194,17 @@ pub(super) fn read_limited(
     }
 
     Ok(bytes)
+}
+
+/// The first statement that leaves the session in manual-commit mode. The
+/// connection is shared with the application, so it would stay that way
+/// after the run.
+fn find_commit_mode_change(statements: &[ScriptStatement]) -> Option<ScriptError> {
+    statements.iter().find_map(|statement| {
+        session_commit_mode_change(&statement.text).map(|change| ScriptError::SessionCommitMode {
+            change,
+            statement: statement.snippet(),
+            line: statement.line,
+        })
+    })
 }

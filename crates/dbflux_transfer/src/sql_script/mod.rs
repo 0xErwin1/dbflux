@@ -180,6 +180,17 @@ pub enum ScriptError {
     )]
     PsqlMetaCommand { command: String, line: usize },
 
+    #[error(
+        "The script {change} on line {line} ({statement}). That would leave this connection in manual-commit mode after the run. Remove that statement, or run the script with the database's own command-line client."
+    )]
+    SessionCommitMode {
+        /// What the statement does: `turns off autocommit` or `turns on implicit transactions`.
+        change: &'static str,
+        /// The offending statement, cut to a snippet.
+        statement: String,
+        line: usize,
+    },
+
     #[error("Could not start the transaction, so nothing ran: {message}")]
     TransactionStart { message: String },
 }
