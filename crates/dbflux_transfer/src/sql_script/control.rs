@@ -15,10 +15,12 @@ pub struct TransactionControl {
 }
 
 /// What a statement does to the session's transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TransactionEffect {
     Opens,
     Closes,
+    Savepoint(String),
+    Release(String),
     Other,
 }
 
@@ -67,7 +69,11 @@ pub(super) fn begin_is_transaction(next: Option<&str>, after: Option<&str>) -> b
 }
 
 fn statement_words(statement: &str) -> Vec<String> {
-    words_with_offsets(&blank_literals(statement, Identifiers::Blank))
+    statement_words_with(statement, Identifiers::Blank)
+}
+
+fn statement_words_with(statement: &str, identifiers: Identifiers) -> Vec<String> {
+    words_with_offsets(&blank_literals(statement, identifiers))
         .into_iter()
         .map(|(_, word)| word)
         .collect()
@@ -93,59 +99,118 @@ pub(super) fn transaction_keyword(statement: &str) -> Option<&'static str> {
     }
 }
 
-/// `SET autocommit ...` and `SET IMPLICIT_TRANSACTIONS ...`, with the
-/// `@@`, `SESSION`/`GLOBAL`/`LOCAL` spellings.
+/// `SET autocommit ...` and `SET IMPLICIT_TRANSACTIONS ...` anywhere in the
+/// assignment list (`SET sql_mode = '', autocommit = 1`), with the `@@`,
+/// `SESSION`/`GLOBAL`/`LOCAL` spellings.
 fn set_keyword(words: &[String]) -> Option<&'static str> {
-    let variable = words
-        .iter()
-        .skip(1)
-        .find(|word| !matches!(word.as_str(), "SESSION" | "GLOBAL" | "LOCAL" | "PERSIST"))?;
-
-    match variable.as_str() {
+    words.iter().skip(1).find_map(|word| match word.as_str() {
         "AUTOCOMMIT" => Some("SET autocommit"),
         "IMPLICIT_TRANSACTIONS" => Some("SET IMPLICIT_TRANSACTIONS"),
         _ => None,
-    }
+    })
 }
 
-/// Whether `statement` opens or closes a transaction of the session
-/// (`ROLLBACK TO savepoint` does neither).
+/// What `statement` does to the session's transaction. `ROLLBACK TO` and a
+/// chained end (`COMMIT AND CHAIN`, `ROLLBACK AND CHAIN`, which start the
+/// next transaction at once) leave it open.
 pub(super) fn transaction_effect(statement: &str) -> TransactionEffect {
+    let words = statement_words_with(statement, Identifiers::Keep);
+    let name_after = |skip: usize| {
+        words
+            .iter()
+            .skip(skip)
+            .find(|word| word.as_str() != "SAVEPOINT")
+            .cloned()
+            .unwrap_or_default()
+    };
+
     match transaction_keyword(statement) {
         Some("BEGIN" | "START TRANSACTION") => TransactionEffect::Opens,
-        Some("COMMIT" | "END" | "ABORT") => TransactionEffect::Closes,
-        Some("ROLLBACK") => {
-            let words = statement_words(statement);
-            if words.iter().skip(1).take(3).any(|word| word == "TO") {
+        Some("COMMIT" | "END" | "ABORT" | "ROLLBACK") => {
+            let chained = words
+                .windows(2)
+                .any(|pair| matches!(pair, [and, chain] if and == "AND" && chain == "CHAIN"));
+            let to_savepoint = words.iter().skip(1).take(3).any(|word| word == "TO");
+
+            if chained || to_savepoint {
                 TransactionEffect::Other
             } else {
                 TransactionEffect::Closes
             }
         }
+        Some("SAVEPOINT") => TransactionEffect::Savepoint(name_after(1)),
+        Some("RELEASE") => TransactionEffect::Release(name_after(1)),
         _ => TransactionEffect::Other,
+    }
+}
+
+/// Follows the transaction a script opens on its own: `BEGIN` and `START
+/// TRANSACTION`, and `SAVEPOINT` outside a transaction, which starts one on
+/// SQLite and ends again with the release of its outermost savepoint.
+#[derive(Debug, Default)]
+pub(super) struct TransactionTracker {
+    open: bool,
+    opened_by_savepoint: bool,
+    savepoints: Vec<String>,
+}
+
+impl TransactionTracker {
+    pub(super) fn apply(&mut self, statement: &str) {
+        match transaction_effect(statement) {
+            TransactionEffect::Opens => {
+                self.open = true;
+                self.opened_by_savepoint = false;
+            }
+            TransactionEffect::Closes => *self = Self::default(),
+            TransactionEffect::Savepoint(name) => {
+                if !self.open {
+                    self.open = true;
+                    self.opened_by_savepoint = true;
+                }
+                self.savepoints.push(name);
+            }
+            TransactionEffect::Release(name) => {
+                if let Some(position) = self.savepoints.iter().rposition(|saved| *saved == name) {
+                    self.savepoints.truncate(position);
+                }
+                if self.opened_by_savepoint && self.savepoints.is_empty() {
+                    *self = Self::default();
+                }
+            }
+            TransactionEffect::Other => {}
+        }
+    }
+
+    pub(super) fn is_open(&self) -> bool {
+        self.open
     }
 }
 
 /// What a statement does when it switches the session to manual commit
 /// (`SET autocommit = 0/OFF/FALSE`, `SET IMPLICIT_TRANSACTIONS ON`), or
-/// `None`. Turning autocommit on, or implicit transactions off, is fine.
+/// `None`. Every assignment of a `SET` list is checked, quoted values count,
+/// and the body of a `/*!...*/` conditional comment is read as code. Turning
+/// autocommit on, or implicit transactions off, is fine.
 pub(super) fn session_commit_mode_change(statement: &str) -> Option<&'static str> {
-    let words = statement_words(statement);
+    let words = statement_words_with(statement, Identifiers::KeepStrings);
     if words.first().map(String::as_str) != Some("SET") {
         return None;
     }
 
-    let mut rest = words
+    words
         .iter()
+        .enumerate()
         .skip(1)
-        .map(String::as_str)
-        .skip_while(|word| matches!(*word, "SESSION" | "GLOBAL" | "LOCAL" | "PERSIST"));
-    let variable = rest.next()?;
-    let value = rest.find(|word| *word != "TO")?;
+        .find_map(|(position, variable)| {
+            let value = words
+                .iter()
+                .skip(position + 1)
+                .find(|word| word.as_str() != "TO")?;
 
-    match (variable, value) {
-        ("AUTOCOMMIT", "0" | "OFF" | "FALSE") => Some("turns off autocommit"),
-        ("IMPLICIT_TRANSACTIONS", "ON") => Some("turns on implicit transactions"),
-        _ => None,
-    }
+            match (variable.as_str(), value.as_str()) {
+                ("AUTOCOMMIT", "0" | "OFF" | "FALSE") => Some("turns off autocommit"),
+                ("IMPLICIT_TRANSACTIONS", "ON") => Some("turns on implicit transactions"),
+                _ => None,
+            }
+        })
 }

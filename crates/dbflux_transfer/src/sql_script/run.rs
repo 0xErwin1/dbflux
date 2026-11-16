@@ -5,7 +5,7 @@ use dbflux_core::{
     TransactionVocab,
 };
 
-use super::control::{TransactionEffect, transaction_effect};
+use super::control::TransactionTracker;
 use super::summary::{changes_data, classify_all, ddl_flags};
 use super::{ScriptError, SqlScript};
 
@@ -292,6 +292,8 @@ fn execute_statements(
         script_transaction_open: false,
     };
 
+    let mut tracker = TransactionTracker::default();
+
     for (position, statement) in script.statements().iter().enumerate() {
         let index = position + 1;
 
@@ -314,11 +316,8 @@ fn execute_statements(
                 if implicit_commit.get(position) == Some(&true) {
                     outcome.first_implicit_commit.get_or_insert(index);
                 }
-                match transaction_effect(&statement.text) {
-                    TransactionEffect::Opens => outcome.script_transaction_open = true,
-                    TransactionEffect::Closes => outcome.script_transaction_open = false,
-                    TransactionEffect::Other => {}
-                }
+                tracker.apply(&statement.text);
+                outcome.script_transaction_open = tracker.is_open();
             }
             Err(DbError::Cancelled) => {
                 outcome.end = RunEnd::Cancelled;
