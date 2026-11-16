@@ -43,7 +43,7 @@
       "title": "Wizards: the Confirm step (export plan, import destructive confirmation)",
       "tradeoff": "Islands, light: Export confirms a summary with Back, Cancel and Start Export; import confirms only a Recreate or Truncate plan, with the affected tables and modes in the shared danger block and Back, Cancel and Yes, proceed in the footer.",
       "width": 1580,
-      "height": 784
+      "height": 815
     }
   ]
 }
