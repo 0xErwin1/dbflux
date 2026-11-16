@@ -1,3 +1,5 @@
+use dbflux_core::QueryLanguage;
+
 use super::ScriptStatement;
 use super::blank::{Identifiers, blank_literals, conditional_comments, words_with_offsets};
 
@@ -184,10 +186,6 @@ impl TransactionTracker {
 pub(super) fn conditional_transaction_control_line(
     statements: &[ScriptStatement],
 ) -> Option<usize> {
-    let controls = |text: &str| {
-        transaction_keyword(text).is_some() || session_commit_mode_change(text).is_some()
-    };
-
     statements.iter().find_map(|statement| {
         let comments = conditional_comments(&statement.text)?;
         let first_line = statement.line + comments.bodies.first().map_or(0, |(offset, _)| *offset);
@@ -195,13 +193,38 @@ pub(super) fn conditional_transaction_control_line(
         let body_controls = comments
             .bodies
             .iter()
-            .any(|(_, body)| body.split(';').any(controls));
+            .any(|(_, body)| starts_with_transaction_keyword(body));
 
-        // A fragment can change what the statement around it does
-        // (`COMMIT /*!80000 AND CHAIN */`), so the statement is also read with
-        // its conditional comments opened up.
-        (body_controls || controls(&comments.inlined)).then_some(first_line)
+        (body_controls || opened_up_controls_transactions(&comments.inlined)).then_some(first_line)
     })
+}
+
+/// Which conditional fragments run depends on the server version, so no
+/// attempt is made to tell. The statement is read with every conditional
+/// comment opened up, and counts as controlling transactions when any of its
+/// statements (a body may hold several, split with the quote-aware splitter)
+/// starts with a transaction keyword, or when `autocommit` or
+/// `implicit_transactions` appears anywhere in it as a word.
+fn opened_up_controls_transactions(inlined: &str) -> bool {
+    let mentions_commit_mode = words_with_offsets(&blank_literals(inlined, Identifiers::Blank))
+        .iter()
+        .any(|(_, word)| matches!(word.as_str(), "AUTOCOMMIT" | "IMPLICIT_TRANSACTIONS"));
+    if mentions_commit_mode {
+        return true;
+    }
+
+    starts_with_transaction_keyword(inlined)
+}
+
+/// Whether any statement of `text`, split with the quote-aware splitter,
+/// starts with a transaction keyword.
+fn starts_with_transaction_keyword(text: &str) -> bool {
+    QueryLanguage::Sql
+        .statement_ranges(text)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|range| text.get(range))
+        .any(|piece| transaction_keyword(piece).is_some())
 }
 
 /// What a statement does when it switches the session to manual commit

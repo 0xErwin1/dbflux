@@ -1371,3 +1371,26 @@ fn a_savepoint_rollback_that_fails_for_another_reason_is_left_open_with_the_erro
     let message = report.finish_error.expect("the rollback error is reported");
     assert!(message.contains("timed out"), "{message}");
 }
+
+#[test]
+fn conditional_fragments_are_judged_by_the_opened_up_statement() {
+    let accepted = "SELECT /*!50003 ';COMMIT' AS label, */ 1;";
+    assert_eq!(
+        SqlScript::from_text(accepted, &QueryLanguage::Sql)
+            .map(|script| script.statement_count())
+            .ok(),
+        Some(1)
+    );
+
+    for refused in [
+        "SET autocommit = /*!99999 1 + */ /*!80000 0 */;",
+        "SELECT 1 /*!50003 , autocommit */;",
+        "SELECT /*!50003 implicit_transactions */ 1;",
+    ] {
+        assert_eq!(
+            SqlScript::from_text(refused, &QueryLanguage::Sql).err(),
+            Some(ScriptError::ConditionalTransactionControl { line: 1 }),
+            "{refused}"
+        );
+    }
+}
