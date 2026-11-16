@@ -238,9 +238,10 @@ como expresión.
 Una celda de expresión se dibuja con `ƒx` en el color de acento, y copiarla
 copia el texto de la expresión. Un guardado que escribe una expresión pide
 confirmación antes, porque la expresión se coloca en la sentencia tal como
-está en lugar de enlazarse como valor. Rechazar no guarda nada y mantiene las
-ediciones preparadas. Solo las tablas SQL ofrecen expresiones; las grillas de
-documentos no.
+está en lugar de enlazarse como valor. Rechazar no guarda esa expresión y
+mantiene sus ediciones preparadas. En un guardado por lotes, las filas
+anteriores ya se han escrito y las posteriores no. Solo las tablas SQL ofrecen
+expresiones; las grillas de documentos no.
 
 ### Resultados agregados
 

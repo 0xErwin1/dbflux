@@ -219,8 +219,10 @@ explicitly. Text is never detected as an expression.
 An expression cell is drawn with `ƒx` in the accent color, and copying it
 copies the expression text. A save that writes an expression asks for
 confirmation first, because the expression is placed in the statement as
-written instead of being bound as a value. Declining saves nothing and keeps
-the edits staged. Only SQL tables offer expressions; document grids do not.
+written instead of being bound as a value. Declining does not save that
+expression and keeps its edits staged. In a batch save the rows before it are
+already written, and the rows after it are not. Only SQL tables offer
+expressions; document grids do not.
 
 ### Aggregated results
 
