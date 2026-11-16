@@ -55,7 +55,7 @@
     {
       "file": "08-isl-light-sql-script.html",
       "title": "Import wizard: run a SQL script (Configure, Confirm for every run, Running, Done, Pick Source errors)",
-      "tradeoff": "Islands, light: Keeps the script flow inside the import wizard with its four-step rail rather than a new dialog, and skips Confirm when nothing is destructive; every run stops at Confirm, a plain summary when nothing is destructive and the danger block when something is, at the cost of one extra click for harmless scripts.",
+      "tradeoff": "Islands, light: Keeps the script flow inside the import wizard with its four-step rail rather than a new dialog; every run stops at Confirm, a plain summary when nothing is destructive and the danger block when something is, at the cost of one extra click for harmless scripts.",
       "width": 1400,
       "height": 5800
     }
