@@ -385,4 +385,24 @@ mod states {
             );
         }
     }
+
+    /// The Confirm step's footer: Back, Cancel, then Start Export.
+    #[gpui::test]
+    fn the_confirm_footer_has_back_cancel_and_start(cx: &mut TestAppContext) {
+        let (wizard, window) = open_wizard(cx, three_tables());
+        format_step(&wizard, window);
+        update(&wizard, window, |this| this.phase = ExportPhase::Confirm);
+
+        let footer = window.debug_bounds("export-wizard-footer").expect("footer");
+        let back = window.debug_bounds("export-wizard-back").expect("Back");
+        let cancel = window
+            .debug_bounds("export-wizard-dismiss")
+            .expect("Cancel");
+        let start = window
+            .debug_bounds("export-wizard-start")
+            .expect("Start Export");
+
+        assert!(back.right() <= cancel.left() && cancel.right() <= start.left());
+        assert!(start.right() <= footer.right() + px(1.0));
+    }
 }

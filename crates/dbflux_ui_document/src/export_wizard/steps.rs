@@ -248,15 +248,6 @@ impl ExportWizard {
                     .flex_shrink_0()
                     .items_center()
                     .gap(ModalMetrics::FOOTER_GAP)
-                    .when(self.phase == ExportPhase::Tables, |footer| {
-                        footer.child(
-                            Button::new(
-                                "export-wizard-dismiss",
-                                dbflux_i18n::t!("document.export_wizard.running.cancel"),
-                            )
-                            .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
-                        )
-                    })
                     .when(shows_back, |footer| {
                         footer.child(
                             Button::new(
@@ -267,6 +258,18 @@ impl ExportWizard {
                             .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
                         )
                     })
+                    .when(
+                        matches!(self.phase, ExportPhase::Tables | ExportPhase::Confirm),
+                        |footer| {
+                            footer.child(
+                                Button::new(
+                                    "export-wizard-dismiss",
+                                    dbflux_i18n::t!("document.export_wizard.running.cancel"),
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
+                            )
+                        },
+                    )
                     .when(shows_continue, |footer| {
                         footer.child(
                             Button::new(

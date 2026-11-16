@@ -12,8 +12,9 @@ use std::sync::Arc;
 
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::modals::modal_hint;
-use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
+use dbflux_components::primitives::{Kbd, SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Spacing, ui};
+use dbflux_core::keymap_types::{Command, ContextId};
 use dbflux_core::{
     CancelToken, Connection, DbError, DbSchemaInfo, DriverCapabilities, RelationalSchema,
     SchemaLoadingStrategy, SchemaSnapshot, TableInfo, TransferColumn,
@@ -317,6 +318,22 @@ fn load_file_config(
     config.source_table = source_table;
 
     Ok(LoadedFile { config })
+}
+
+/// The keycap at the right edge of the target table field: Enter applies the
+/// name, like Use Table. The label comes from the keymap, so it follows the
+/// platform and the user's bindings.
+fn enter_hint(cx: &App) -> Div {
+    let label = dbflux_components::actions::shortcut_label(
+        cx,
+        ContextId::Modal.id(),
+        Command::Execute.id(),
+        "Enter",
+    );
+
+    div()
+        .debug_selector(|| "import-wizard-target-enter-hint".to_string())
+        .children(label.map(Kbd::new))
 }
 
 impl ImportWizard {
@@ -640,6 +657,7 @@ impl ImportWizard {
                         div().w(FILE_INPUT_WIDTH).child(
                             Input::new(&inputs.target_table)
                                 .id("import-wizard-file-target-table")
+                                .suffix(enter_hint(cx))
                                 .w_full()
                                 .aria_label(dbflux_i18n::t!(
                                     "document.import_wizard.file.target_table_label"

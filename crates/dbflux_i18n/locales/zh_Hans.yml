@@ -2503,7 +2503,8 @@ document:
       skip: 跳过
       truncate: 清空（TRUNCATE + 插入）
     confirm:
-      body: "这将在加载数据前删除并重建或清空以下表：%{tables}"
+      body: "这将在加载数据前删除并重建或清空以下表："
+      table_line: "%{table} — %{mode}"
       warning: 此操作无法撤销。确认以继续。
       back: 返回
       proceed: 是，继续

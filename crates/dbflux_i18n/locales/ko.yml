@@ -2503,7 +2503,8 @@ document:
       skip: 건너뛰기
       truncate: 자르기 (비우기 + 삽입)
     confirm:
-      body: "데이터를 적재하기 전에 다음 테이블을 삭제 후 다시 만들거나 비웁니다: %{tables}"
+      body: "데이터를 적재하기 전에 다음 테이블을 삭제 후 다시 만들거나 비웁니다:"
+      table_line: "%{table} — %{mode}"
       warning: "이 작업은 되돌릴 수 없습니다. 계속하려면 확인하세요."
       back: 뒤로
       proceed: "예, 계속합니다"

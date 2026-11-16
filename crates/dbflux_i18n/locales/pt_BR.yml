@@ -2503,7 +2503,8 @@ document:
       skip: Ignorar
       truncate: Truncar (esvaziar + inserir)
     confirm:
-      body: "Isto excluirá e recriará ou truncará a(s) seguinte(s) tabela(s) antes de carregar os dados: %{tables}"
+      body: "Isto excluirá e recriará ou truncará a(s) seguinte(s) tabela(s) antes de carregar os dados:"
+      table_line: "%{table} — %{mode}"
       warning: Isto não pode ser desfeito. Confirme para continuar.
       back: Voltar
       proceed: "Sim, continuar"

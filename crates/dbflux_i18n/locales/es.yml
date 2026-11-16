@@ -2503,7 +2503,8 @@ document:
       skip: Omitir
       truncate: "Truncar (vaciar + insertar)"
     confirm:
-      body: "Esto eliminará y recreará o truncará la(s) siguiente(s) tabla(s) antes de cargar los datos: %{tables}"
+      body: "Esto eliminará y recreará o truncará la(s) siguiente(s) tabla(s) antes de cargar los datos:"
+      table_line: "%{table} — %{mode}"
       warning: Esta acción no se puede deshacer. Confirma para continuar.
       back: Atrás
       proceed: "Sí, continuar"

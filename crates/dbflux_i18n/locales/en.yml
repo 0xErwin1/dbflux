@@ -2503,7 +2503,8 @@ document:
       skip: Skip
       truncate: Truncate (empty + insert)
     confirm:
-      body: "This will drop-and-recreate or truncate the following table(s) before loading data: %{tables}"
+      body: "This will drop-and-recreate or truncate the following table(s) before loading data:"
+      table_line: "%{table} — %{mode}"
       warning: This cannot be undone. Confirm to proceed.
       back: Back
       proceed: "Yes, proceed"

@@ -332,3 +332,76 @@ fn a_footer_reason_leaves_the_buttons_inside_the_dialog(cx: &mut TestAppContext)
     }
     std::fs::remove_dir_all(&directory).ok();
 }
+
+/// The target table field shows the Enter keycap that applies the name.
+#[gpui::test]
+fn the_target_table_field_shows_the_enter_hint(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("enter_hint", "people.csv", b"id,name\n1,Ada\n");
+    let (wizard, window) = open_wizard(cx);
+    assert!(!present(window, "import-wizard-target-enter-hint"));
+
+    pick(&wizard, window, path);
+
+    assert!(present(window, "import-wizard-target-enter-hint"));
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+fn plan(
+    name: &str,
+    mode: dbflux_transfer::TableMappingMode,
+) -> crate::import_wizard::TableImportConfig {
+    let manifest_table = dbflux_transfer::manifest::ManifestTable {
+        schema: None,
+        name: name.to_string(),
+        file: format!("{name}.csv"),
+        format: "csv".to_string(),
+        columns: vec![dbflux_core::TransferColumn {
+            name: "id".to_string(),
+            type_name: None,
+            nullable: true,
+            is_primary_key: false,
+        }],
+        row_count: 0,
+        fk_order_index: 0,
+        options: Default::default(),
+    };
+    let mut config =
+        crate::import_wizard::TableImportConfig::new(&manifest_table, true, Vec::new());
+    config.mapping_mode = mode;
+    config
+}
+
+/// A destructive plan is confirmed through the danger block, which lists
+/// each affected table with its mode; tables that are not touched are left
+/// out.
+#[gpui::test]
+fn the_destructive_confirm_lists_each_table_with_its_mode(cx: &mut TestAppContext) {
+    use dbflux_transfer::TableMappingMode;
+
+    let (wizard, window) = open_wizard(cx);
+    wizard.update(window, |this, cx| {
+        this.supports_truncate = true;
+        this.build_rows(
+            vec![
+                plan("customers", TableMappingMode::Recreate),
+                plan("orders", TableMappingMode::Truncate),
+                plan("items", TableMappingMode::Existing),
+            ],
+            cx,
+        );
+        this.step = WizardStep::Confirm;
+        cx.notify();
+    });
+    window.run_until_parked();
+
+    assert!(present(window, "import-wizard-confirm-block"));
+    window.update(|_, cx| {
+        assert_eq!(
+            wizard.read(cx).destructive_lines(),
+            vec![
+                "customers — Recreate (drop + create)".to_string(),
+                "orders — Truncate (empty + insert)".to_string(),
+            ]
+        );
+    });
+}

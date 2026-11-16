@@ -251,28 +251,44 @@ impl ImportWizard {
             .into_any_element()
     }
 
-    pub(super) fn render_confirm(&self, cx: &mut Context<Self>) -> AnyElement {
-        let destructive_tables: Vec<String> = self
-            .rows
+    /// One "table — mode" line per table the confirmation covers.
+    pub(super) fn destructive_lines(&self) -> Vec<String> {
+        self.rows
             .iter()
             .filter(|row| row.config.is_destructive())
-            .map(|row| row.config.target_table.clone())
-            .collect();
+            .map(|row| {
+                dbflux_i18n::t!(
+                    "document.import_wizard.confirm.table_line",
+                    table = row.config.target_table.as_str(),
+                    mode = crate::labels::import_mapping_mode_label(row.config.mapping_mode)
+                )
+            })
+            .collect()
+    }
+
+    pub(super) fn render_confirm(&self, cx: &mut Context<Self>) -> AnyElement {
+        let danger = cx.theme().danger;
 
         div()
             .flex()
             .flex_col()
             .gap(ModalMetrics::BODY_GAP)
             .child(modal_lead(
-                dbflux_i18n::t!(
-                    "document.import_wizard.confirm.body",
-                    tables = destructive_tables.join(", ")
-                ),
+                dbflux_i18n::t!("document.import_wizard.confirm.body"),
                 cx,
             ))
-            .child(modal_hint(
-                dbflux_i18n::t!("document.import_wizard.confirm.warning"),
-                cx,
+            .child(selectable(
+                "import-wizard-confirm-block",
+                BannerBlock::new(
+                    BannerVariant::Danger,
+                    dbflux_i18n::t!("document.import_wizard.confirm.warning"),
+                )
+                .with_icon(
+                    Icon::new(AppIcon::CircleAlert)
+                        .size(Feedback::BANNER_ICON)
+                        .color(danger),
+                )
+                .with_body(self.destructive_lines().join("\n")),
             ))
             .into_any_element()
     }
