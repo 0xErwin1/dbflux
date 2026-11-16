@@ -499,3 +499,126 @@ fn the_expression_editor_suggests_the_dialects_type_values(cx: &mut TestAppConte
         })
     });
 }
+
+/// The grid takes expressions from a SQL table and from nothing else: the
+/// table state is told so, and a collection grid is not.
+#[gpui::test]
+fn only_a_sql_table_grid_allows_expressions(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx);
+
+    assert!(window.update(|_, app| fixture.table_state.read(app).expressions_allowed()));
+
+    window.update(|_, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.source = DataSource::Collection {
+                profile_id: fixture.profile_id,
+                collection: dbflux_core::CollectionRef::new("testdb", "users"),
+                pagination: Pagination::default(),
+                total_docs: None,
+            };
+            panel.rebuild_table(None, cx);
+        })
+    });
+    let table_state = window.update(|_, app| {
+        fixture
+            .panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("table state")
+    });
+
+    assert!(!window.update(|_, app| table_state.read(app).expressions_allowed()));
+}
+
+/// A collection has no column default: "Set to default" there stages
+/// nothing instead of a NULL for the document field.
+#[gpui::test]
+fn set_default_on_a_collection_stages_nothing(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx);
+
+    window.update(|_, app| {
+        fixture.panel.update(app, |panel, _| {
+            panel.source = DataSource::Collection {
+                profile_id: fixture.profile_id,
+                collection: dbflux_core::CollectionRef::new("testdb", "users"),
+                pagination: Pagination::default(),
+                total_docs: None,
+            };
+        })
+    });
+    window.update(|_, app| {
+        fixture
+            .panel
+            .update(app, |panel, cx| panel.handle_set_default(0, 1, cx))
+    });
+
+    assert!(staged(window, &fixture, 1).is_none());
+}
+
+/// A confirmation holds its insert while another insert leaves the buffer:
+/// confirming writes the insert that was held, not the one that moved into
+/// its place.
+#[gpui::test]
+fn a_held_insert_follows_the_inserts_removed_before_it(cx: &mut TestAppContext) {
+    use dbflux_test_support::fake_driver::CrudOp;
+
+    let (fixture, window) = fixture(cx);
+
+    let held_idx = window.update(|_, app| {
+        fixture.table_state.update(app, |state, _| {
+            let buffer = state.edit_buffer_mut();
+            buffer.add_pending_insert_after(
+                0,
+                vec![
+                    CellValue::null(),
+                    CellValue::text("first"),
+                    CellValue::null(),
+                ],
+            );
+            buffer.add_pending_insert_after(
+                0,
+                vec![
+                    CellValue::null(),
+                    CellValue::text("second"),
+                    CellValue::expression("now()"),
+                ],
+            )
+        })
+    });
+    window.update(|_, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.handle_commit_insert(held_idx, false, cx)
+        })
+    });
+    assert!(window.update(|_, app| fixture.panel.read(app).has_expression_confirm()));
+
+    // The first insert lands while the confirmation is open.
+    window.update(|_, app| {
+        fixture.table_state.update(app, |state, _| {
+            state.edit_buffer_mut().remove_pending_insert_by_idx(0)
+        });
+        fixture.panel.update(app, |panel, _| {
+            panel.renumber_queued_inserts_after_removal(0)
+        });
+    });
+
+    window.update(|window, app| {
+        fixture
+            .panel
+            .update(app, |panel, cx| panel.confirm_expressions(window, cx))
+    });
+    window.run_until_parked();
+
+    let ops = fixture.driver.stats().crud_ops;
+    let CrudOp::Insert(insert) = ops.first().expect("the held insert was written") else {
+        panic!("expected an insert");
+    };
+    let name = insert
+        .assignments
+        .iter()
+        .find(|assignment| assignment.name == "name")
+        .expect("name");
+    assert_eq!(name.value, dbflux_core::Value::Text("second".into()));
+}

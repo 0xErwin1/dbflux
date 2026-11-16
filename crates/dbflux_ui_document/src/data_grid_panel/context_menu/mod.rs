@@ -2756,6 +2756,12 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_set_default(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        // A collection has no column default to restore, and a NULL staged
+        // here would be written into the document field.
+        if matches!(self.source, DataSource::Collection { .. }) {
+            return;
+        }
+
         // Get column default value from table details
         let default_value = self.get_column_default(col, cx);
 

@@ -1747,6 +1747,8 @@ impl DataGridPanel {
     /// indices the batch still holds would otherwise point at the wrong insert
     /// or past the end.
     pub(super) fn renumber_queued_inserts_after_removal(&mut self, removed_idx: usize) {
+        self.renumber_held_insert_after_removal(removed_idx);
+
         let Some(remaining) = self.pending_batch_remaining.as_mut() else {
             return;
         };

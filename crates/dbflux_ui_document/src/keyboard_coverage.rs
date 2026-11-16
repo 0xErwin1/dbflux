@@ -109,6 +109,16 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             "cell-expression-*",
             KeyboardPath::Command(Command::ResultsToggleExpression),
         ),
+        // The confirmation a save with expressions waits on: Escape declines
+        // and Enter confirms.
+        (
+            "expression-cancel-btn",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "expression-confirm-btn",
+            KeyboardPath::Command(Command::Execute),
+        ),
         ("export-menu.*", KeyboardPath::Command(Command::MenuSelect)),
         (
             "export-trigger",

@@ -93,6 +93,25 @@ impl DataGridPanel {
         true
     }
 
+    /// Keeps the insert a confirmation holds pointing at the same insert
+    /// after another one leaves the edit buffer. When the held insert itself
+    /// was removed there is nothing left to confirm, so the confirmation is
+    /// dropped.
+    pub(super) fn renumber_held_insert_after_removal(&mut self, removed_idx: usize) {
+        let Some(held) = self.pending_expression_confirm.as_mut() else {
+            return;
+        };
+        let HeldSave::Insert(held_idx) = &mut held.save else {
+            return;
+        };
+
+        match (*held_idx).cmp(&removed_idx) {
+            std::cmp::Ordering::Less => {}
+            std::cmp::Ordering::Equal => self.pending_expression_confirm = None,
+            std::cmp::Ordering::Greater => *held_idx -= 1,
+        }
+    }
+
     pub fn has_expression_confirm(&self) -> bool {
         self.pending_expression_confirm.is_some()
     }
