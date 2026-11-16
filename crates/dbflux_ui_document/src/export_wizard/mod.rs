@@ -71,7 +71,7 @@ fn format_segment_id(format: FileFormat) -> &'static str {
 /// Icon of a file format in the format picker.
 fn format_icon(format: FileFormat) -> AppIcon {
     match format {
-        FileFormat::Csv => AppIcon::FileSpreadsheet,
+        FileFormat::Csv | FileFormat::Spreadsheet => AppIcon::FileSpreadsheet,
         FileFormat::Json | FileFormat::JsonLines => AppIcon::Braces,
         FileFormat::Html => AppIcon::Code,
         FileFormat::Markdown => AppIcon::ScrollText,

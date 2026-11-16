@@ -242,6 +242,20 @@ fn json_files_say_they_have_no_options_and_csv_files_show_them(cx: &mut TestAppC
     std::fs::remove_dir_all(&directory).ok();
 }
 
+#[gpui::test]
+fn xml_files_say_they_have_no_options(cx: &mut TestAppContext) {
+    let (directory, xml) = scratch_file(
+        "xml_options",
+        "events.xml",
+        b"<rows><row><field name=\"id\">1</field></row></rows>",
+    );
+    let (wizard, window) = open_wizard(cx);
+
+    pick(&wizard, window, xml);
+    assert!(present(window, "import-wizard-json-no-options"));
+    std::fs::remove_dir_all(&directory).ok();
+}
+
 /// A connection that cannot truncate lists no Truncate mode, and the step
 /// says why and what to choose instead.
 #[gpui::test]

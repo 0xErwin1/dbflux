@@ -74,10 +74,14 @@ impl ErrorBlock {
                     "document.import_wizard.pick_file.error.invalid_file",
                     error = error.to_string()
                 ),
-                next_step: if format == FileFormat::Csv {
-                    dbflux_i18n::t!("document.import_wizard.pick_file.error.next_csv")
-                } else {
-                    dbflux_i18n::t!("document.import_wizard.pick_file.error.next_json")
+                next_step: match format {
+                    FileFormat::Csv => {
+                        dbflux_i18n::t!("document.import_wizard.pick_file.error.next_csv")
+                    }
+                    FileFormat::Xml => {
+                        dbflux_i18n::t!("document.import_wizard.pick_file.error.next_xml")
+                    }
+                    _ => dbflux_i18n::t!("document.import_wizard.pick_file.error.next_json"),
                 },
             },
         }

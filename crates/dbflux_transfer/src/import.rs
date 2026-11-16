@@ -28,7 +28,7 @@ use dbflux_export::FormatOptions;
 
 use crate::column_map::{AutoColumnMap, ColumnMappingOverride, DecodingColumnMap};
 use crate::file_sink::FileFormat;
-use crate::file_source::FileSource;
+use crate::file_source::{FileSource, check_file_readable};
 use crate::manifest::read_manifest;
 use crate::pipeline::{
     ColumnMap, TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
@@ -86,6 +86,8 @@ pub(crate) struct TableFile {
     /// source type names, so each column that maps onto a target column is
     /// decoded by that target column's type, and nested JSON stays JSON text.
     pub(crate) loose: bool,
+    /// The spreadsheet sheet to read; `None` is the first worksheet.
+    pub(crate) sheet: Option<String>,
 }
 
 /// Reads `manifest_dir/manifest.json` and imports every table with a
@@ -128,6 +130,7 @@ pub fn run_import(
                 estimated_total: Some(manifest_table.row_count),
                 options: manifest_table.options.clone(),
                 loose: false,
+                sheet: None,
             }))
         },
         |plan| format!("manifest has no table named '{}'", plan.source_table),
@@ -263,6 +266,21 @@ fn import_one_table(
         Some(open_table_file(file, file.columns.clone(), options)?)
     };
 
+    // A folder file is read through before the target is touched, as a loose
+    // file is: a Truncate or Recreate runs DDL that some engines autocommit,
+    // so a malformed file found halfway through would leave the table empty.
+    if !file.loose && plan.mapping_mode != TableMappingMode::Skip {
+        check_file_readable(
+            &file.path,
+            file.format,
+            &file.columns,
+            &file.options,
+            file.sheet.as_deref(),
+            options.segment_size,
+            cancel,
+        )?;
+    }
+
     let mut target_columns =
         resolve_target_columns(connection, plan, &file.columns, &options.target_database)?;
     if file.loose
@@ -316,13 +334,14 @@ fn open_table_file(
     columns: Vec<TransferColumn>,
     options: &ImportOptions,
 ) -> Result<FileSource, TransferError> {
-    FileSource::open_with(
+    FileSource::open_sheet(
         &file.path,
         file.format,
         columns,
         options.segment_size,
         file.estimated_total,
         file.options.clone(),
+        file.sheet.as_deref(),
     )
 }
 

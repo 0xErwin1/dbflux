@@ -7,7 +7,10 @@
 //! JSON array one element at a time (see [`JsonArrayStream`]). A `json` file
 //! whose first token is not `[` is read as NDJSON, because export folders
 //! written before JSON Lines existed stored NDJSON under that format. No path
-//! ever holds the whole file's rows resident in memory at once.
+//! ever holds the whole file's rows resident in memory at once, with one
+//! exception: a spreadsheet sheet is decoded whole (calamine has no row
+//! stream), which `spreadsheet_source` bounds to 10 million cells. XML is
+//! streamed one `<row>` at a time (see `xml_source`).
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -18,7 +21,9 @@ use dbflux_export::{DateFormat, FormatOptions, decode_to_utf8};
 
 use crate::file_sink::FileFormat;
 use crate::pipeline::{RowChunk, RowSource, TransferError};
-use crate::value_codec::{value_from_csv_field, value_from_json};
+use crate::spreadsheet_source::SheetRows;
+use crate::value_codec::{value_from_csv_field, value_from_json, value_from_xml_text};
+use crate::xml_source::{XmlRow, XmlRows};
 
 type JsonValueStream = serde_json::StreamDeserializer<
     'static,
@@ -30,6 +35,15 @@ enum SourceReader {
     Csv(Box<csv::Reader<Box<dyn Read + Send>>>),
     Json(Box<JsonValueStream>),
     JsonArray(Box<JsonArrayStream>),
+    Xml(Box<XmlRows>),
+    Spreadsheet(Box<SpreadsheetReader>),
+}
+
+/// A sheet's rows with, for each requested column, the sheet column that
+/// holds it (matched by header name).
+struct SpreadsheetReader {
+    rows: SheetRows,
+    sheet_columns: Vec<Option<usize>>,
 }
 
 /// Yields the elements of one top-level JSON array without parsing the
@@ -270,6 +284,90 @@ fn for_each_object_keys(
     Ok(())
 }
 
+/// Reads the whole file once without writing anything, failing on the first
+/// malformed row or record. A JSON record that is not an object is rejected
+/// too, because it would otherwise import as a row of NULLs.
+pub(crate) fn check_file_readable(
+    path: &Path,
+    format: FileFormat,
+    columns: &[TransferColumn],
+    options: &FormatOptions,
+    sheet: Option<&str>,
+    segment_size: u32,
+    cancel: &CancelToken,
+) -> Result<(), TransferError> {
+    if matches!(format, FileFormat::Json | FileFormat::JsonLines) {
+        check_json_records(path, format, cancel)?;
+    }
+
+    let mut source = FileSource::open_sheet(
+        path,
+        format,
+        columns.to_vec(),
+        segment_size,
+        None,
+        options.clone(),
+        sheet,
+    )?;
+
+    while source.next_chunk(cancel)?.is_some() {}
+
+    Ok(())
+}
+
+/// Fails on the first JSON record or XML row that holds a field `columns`
+/// does not list. The columns of a loose file come from its first rows, so a
+/// field first seen later would otherwise be dropped without a word. The
+/// error names the field and the one-based row where it first appears.
+pub(crate) fn check_no_late_fields(
+    path: &Path,
+    format: FileFormat,
+    columns: &[TransferColumn],
+    cancel: &CancelToken,
+) -> Result<(), TransferError> {
+    let known = |name: &str| columns.iter().any(|column| column.name == name);
+    let late = |name: &str, row: usize| {
+        TransferError::Source(format!(
+            "{}: field '{name}' first appears in row {row}, after the columns were read from the first rows; add it to the first rows of the file",
+            path.display()
+        ))
+    };
+
+    match format {
+        FileFormat::Xml => {
+            let mut rows = XmlRows::open(path)?;
+            let mut row_number = 0usize;
+            while !cancel.is_cancelled() {
+                let Some(row) = rows.next_row()? else {
+                    break;
+                };
+                row_number += 1;
+                if let Some((name, _)) = row.iter().find(|(name, _)| !known(name)) {
+                    return Err(late(name, row_number));
+                }
+            }
+            Ok(())
+        }
+        FileFormat::Json | FileFormat::JsonLines => {
+            let mut found: Option<(String, usize)> = None;
+            let mut row_number = 0usize;
+            for_each_object_keys(path, format, usize::MAX, Some(cancel), |keys| {
+                row_number += 1;
+                if found.is_none()
+                    && let Some(name) = keys.into_iter().find(|name| !known(name))
+                {
+                    found = Some((name, row_number));
+                }
+            })?;
+            match found {
+                Some((name, row)) => Err(late(&name, row)),
+                None => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 pub struct FileSource {
     reader: SourceReader,
     columns: Vec<TransferColumn>,
@@ -308,21 +406,47 @@ impl FileSource {
         estimated_total: Option<u64>,
         options: FormatOptions,
     ) -> Result<Self, TransferError> {
-        let file = File::open(path)
-            .map_err(|e| TransferError::Source(format!("{}: {e}", path.display())))?;
+        Self::open_sheet(
+            path,
+            format,
+            columns,
+            segment_size,
+            estimated_total,
+            options,
+            None,
+        )
+    }
 
+    /// Like [`Self::open_with`], reading the spreadsheet sheet named `sheet`
+    /// (the first worksheet when `None`). Other formats ignore `sheet`.
+    pub fn open_sheet(
+        path: &Path,
+        format: FileFormat,
+        columns: Vec<TransferColumn>,
+        segment_size: u32,
+        estimated_total: Option<u64>,
+        options: FormatOptions,
+        sheet: Option<&str>,
+    ) -> Result<Self, TransferError> {
         let reader = match format {
-            FileFormat::Csv => {
-                let bytes = decode_to_utf8(BufReader::new(file), options.encoding);
-                let csv_reader = csv::ReaderBuilder::new()
-                    .has_headers(true)
-                    .delimiter(options.delimiter.byte())
-                    .from_reader(bytes);
-                SourceReader::Csv(Box::new(csv_reader))
+            FileFormat::Csv | FileFormat::Json | FileFormat::JsonLines => {
+                let file = File::open(path)
+                    .map_err(|e| TransferError::Source(format!("{}: {e}", path.display())))?;
+                open_text_reader(file, format, &options)?
             }
-            FileFormat::Json => open_json(file)?,
-            FileFormat::JsonLines => open_json_lines(BufReader::new(file)),
-            FileFormat::Html | FileFormat::Markdown | FileFormat::Xml | FileFormat::Sql => {
+            FileFormat::Xml => SourceReader::Xml(Box::new(XmlRows::open(path)?)),
+            FileFormat::Spreadsheet => {
+                let rows = SheetRows::open(path, sheet)?;
+                let sheet_columns = columns
+                    .iter()
+                    .map(|column| rows.headers().iter().position(|name| *name == column.name))
+                    .collect();
+                SourceReader::Spreadsheet(Box::new(SpreadsheetReader {
+                    rows,
+                    sheet_columns,
+                }))
+            }
+            FileFormat::Html | FileFormat::Markdown | FileFormat::Sql => {
                 return Err(TransferError::Source(format!(
                     "{}: {} files cannot be imported",
                     path.display(),
@@ -347,6 +471,84 @@ impl FileSource {
         self.nested_json_as_text = enabled;
         self
     }
+}
+
+fn open_text_reader(
+    file: File,
+    format: FileFormat,
+    options: &FormatOptions,
+) -> Result<SourceReader, TransferError> {
+    Ok(match format {
+        FileFormat::Csv => {
+            let bytes = decode_to_utf8(BufReader::new(file), options.encoding);
+            let csv_reader = csv::ReaderBuilder::new()
+                .has_headers(true)
+                .delimiter(options.delimiter.byte())
+                .from_reader(bytes);
+            SourceReader::Csv(Box::new(csv_reader))
+        }
+        FileFormat::Json => open_json(file)?,
+        _ => open_json_lines(BufReader::new(file)),
+    })
+}
+
+fn read_xml_chunk(
+    xml: &mut XmlRows,
+    columns: &[TransferColumn],
+    segment_size: usize,
+    date_format: DateFormat,
+) -> Result<Vec<Vec<Value>>, TransferError> {
+    let mut rows = Vec::new();
+
+    while rows.len() < segment_size {
+        match xml.next_row()? {
+            Some(row) => rows.push(xml_row_to_values(&row, columns, date_format)),
+            None => break,
+        }
+    }
+
+    Ok(rows)
+}
+
+fn xml_row_to_values(
+    row: &XmlRow,
+    columns: &[TransferColumn],
+    date_format: DateFormat,
+) -> Vec<Value> {
+    columns
+        .iter()
+        .map(
+            |column| match row.iter().find(|(name, _)| *name == column.name) {
+                Some((_, Some(text))) => {
+                    value_from_xml_text(text, column.type_name.as_deref(), date_format)
+                }
+                Some((_, None)) | None => Value::Null,
+            },
+        )
+        .collect()
+}
+
+fn read_spreadsheet_chunk(
+    reader: &mut SpreadsheetReader,
+    segment_size: usize,
+) -> Result<Vec<Vec<Value>>, TransferError> {
+    let sheet_rows = reader.rows.next_rows(segment_size)?;
+
+    Ok(sheet_rows
+        .into_iter()
+        .map(|cells| {
+            reader
+                .sheet_columns
+                .iter()
+                .map(|position| {
+                    position
+                        .and_then(|index| cells.get(index))
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                })
+                .collect()
+        })
+        .collect())
 }
 
 fn read_csv_chunk(
@@ -480,6 +682,13 @@ impl RowSource for FileSource {
                 self.options.date_format,
                 self.nested_json_as_text,
             )?,
+            SourceReader::Xml(xml) => read_xml_chunk(
+                xml,
+                &self.columns,
+                self.segment_size,
+                self.options.date_format,
+            )?,
+            SourceReader::Spreadsheet(sheet) => read_spreadsheet_chunk(sheet, self.segment_size)?,
         };
 
         if rows.is_empty() {
@@ -522,12 +731,7 @@ mod tests {
         let path = dir.join("t.html");
         std::fs::write(&path, "<table></table>").unwrap();
 
-        for format in [
-            FileFormat::Html,
-            FileFormat::Markdown,
-            FileFormat::Xml,
-            FileFormat::Sql,
-        ] {
+        for format in [FileFormat::Html, FileFormat::Markdown, FileFormat::Sql] {
             assert!(!format.is_importable());
             let Err(TransferError::Source(message)) =
                 FileSource::open(&path, format, vec![column("id", "int4")], 10, None)

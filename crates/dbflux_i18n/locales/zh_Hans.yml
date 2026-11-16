@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: 电子表格
           text: 文本
           binary: 二进制
           hex: Hex
@@ -2475,18 +2476,19 @@ document:
       unmatched_source: "未匹配的源列将被跳过，除非重新映射：%{names}"
       truncate_unavailable: "此连接无法清空表，因此不列出 Truncate。请改选 Recreate 来替换该表。"
     pick_file:
-      description: "或将单个 CSV、JSON 或 JSON Lines 文件导入到一张表。"
+      description: "或将单个 CSV、JSON、JSON Lines 或 XML 文件导入到一张表。"
       choose_file: "选择文件…"
       reading_file: "正在读取文件…"
       dialog_title: "选择要导入的文件"
-      filter_label: "CSV、JSON 和 JSON Lines"
+      filter_label: "CSV、JSON、JSON Lines 和 XML"
       error:
-        unsupported: "只能导入 .csv、.json 和 .jsonl 文件。"
+        unsupported: "只能导入 .csv、.json、.jsonl 和 .xml 文件。"
         invalid_file: "无法读取文件：%{error}"
         unsupported_next: "请选择扩展名为上述之一的文件。"
         lookup_failed: "无法查找目标表：%{error}"
         next_csv: "请在上方选择其他编码或分隔符：选择后会立即重新读取文件。"
         next_json: "请修复文件中的 JSON 后重新选择，或选择其他文件。"
+        next_xml: "请修复文件中的 XML 后重新选择，或选择其他文件。"
         next_lookup: "请检查表名以及你对该连接的访问权限，然后再次点击“使用该表”。"
       reading_hint: "正在读取文件。读取完成前两个按钮均不可用。"
     file:
@@ -2496,6 +2498,7 @@ document:
       use_table: "使用该表"
       null_text_hint: "文件中表示 NULL 的文本。文本为空时，空字段即为 NULL。"
       json_no_options: "JSON 和 JSON Lines 没有导入选项：列和 NULL 由文件本身决定。"
+      xml_no_options: "XML 没有导入选项：列和 NULL 由文件本身决定。"
     mapping_mode:
       create: 创建
       existing: 已存在（仅插入）

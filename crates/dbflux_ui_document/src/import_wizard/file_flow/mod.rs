@@ -336,6 +336,15 @@ fn enter_hint(cx: &App) -> Div {
         .children(label.map(Kbd::new))
 }
 
+/// The explanation shown for a format with no import options, worded for
+/// that format.
+fn no_options_key(format: FileFormat) -> &'static str {
+    match format {
+        FileFormat::Xml => "document.import_wizard.file.xml_no_options",
+        _ => "document.import_wizard.file.json_no_options",
+    }
+}
+
 impl ImportWizard {
     /// The job the run step executes: the picked file, else the picked folder.
     pub(super) fn import_job(&self) -> Option<ImportJob> {
@@ -686,7 +695,7 @@ impl ImportWizard {
             rows.insert(
                 1,
                 info_line(
-                    dbflux_i18n::t!("document.import_wizard.file.json_no_options"),
+                    dbflux_i18n::t!(no_options_key(state.format)),
                     "import-wizard-json-no-options",
                     cx,
                 ),

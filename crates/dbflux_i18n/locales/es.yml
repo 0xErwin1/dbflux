@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: Hoja de cálculo
           text: Texto
           binary: Binario
           hex: Hex
@@ -2475,18 +2476,19 @@ document:
       unmatched_source: "Columna(s) de origen sin coincidencia, se omitirán salvo que se remapeen: %{names}"
       truncate_unavailable: "Esta conexión no puede truncar tablas, así que Truncate no aparece. Elige Recreate para reemplazar la tabla."
     pick_file:
-      description: "O importa un único archivo CSV, JSON o JSON Lines en una tabla."
+      description: "O importa un único archivo CSV, JSON, JSON Lines o XML en una tabla."
       choose_file: "Elegir archivo…"
       reading_file: "Leyendo archivo…"
       dialog_title: "Elegir archivo para importar"
-      filter_label: "CSV, JSON y JSON Lines"
+      filter_label: "CSV, JSON, JSON Lines y XML"
       error:
-        unsupported: "Solo se pueden importar archivos .csv, .json y .jsonl."
+        unsupported: "Solo se pueden importar archivos .csv, .json, .jsonl y .xml."
         invalid_file: "No se puede leer el archivo: %{error}"
         unsupported_next: "Elige un archivo con una de esas extensiones."
         lookup_failed: "No se pudo consultar la tabla de destino: %{error}"
         next_csv: "Elige otra codificación o delimitador arriba: el archivo se lee de nuevo en cuanto elijas uno."
         next_json: "Corrige el JSON del archivo y vuelve a elegirlo, o elige otro archivo."
+        next_xml: "Corrige el XML del archivo y vuelve a elegirlo, o elige otro archivo."
         next_lookup: "Revisa el nombre de la tabla y tu acceso a la conexión, y pulsa Usar tabla otra vez."
       reading_hint: "Leyendo el archivo. Ambos botones están desactivados hasta que termine."
     file:
@@ -2496,6 +2498,7 @@ document:
       use_table: "Usar tabla"
       null_text_hint: "Texto del archivo que representa NULL. Con texto vacío, un campo vacío es NULL."
       json_no_options: "JSON y JSON Lines no tienen opciones de importación: el propio archivo define las columnas y los NULL."
+      xml_no_options: "XML no tiene opciones de importación: el propio archivo define las columnas y los NULL."
     mapping_mode:
       create: Crear
       existing: "Existente (solo insertar)"

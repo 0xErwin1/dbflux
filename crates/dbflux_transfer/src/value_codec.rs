@@ -35,6 +35,21 @@ pub(crate) fn value_from_csv_field(
     value_from_text(field, type_name, options.date_format)
 }
 
+/// Decodes the text of one XML `<field>` by the column's type. NULL is
+/// marked structurally (`null="true"`) rather than by text, so empty text is
+/// a real empty string, as it is for a JSON string.
+pub(crate) fn value_from_xml_text(
+    text: &str,
+    type_name: Option<&str>,
+    date_format: DateFormat,
+) -> Value {
+    if text.is_empty() {
+        return Value::Text(String::new());
+    }
+
+    value_from_text(text, type_name, date_format)
+}
+
 /// Decodes one JSON value (as produced by `Value::to_serde_json`) back into a
 /// `Value`, using `type_name` to disambiguate the JSON string cases that
 /// collapse several `Value` variants into plain strings (Decimal, Date, Time)
@@ -271,11 +286,27 @@ fn decode_timestamp(text: &str, date_format: DateFormat) -> Option<DateTime<Utc>
             .ok()
             .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
     };
-    selected.or_else(|| {
-        DateTime::parse_from_rfc3339(text)
-            .ok()
-            .map(|parsed| parsed.with_timezone(&Utc))
-    })
+    selected
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(text)
+                .ok()
+                .map(|parsed| parsed.with_timezone(&Utc))
+        })
+        .or_else(|| epoch_seconds_text(text))
+}
+
+/// A whole number of seconds since the Unix epoch written as plain digits.
+/// It is read under any date format, after the format's own text, because a
+/// loose file has no option to say its timestamps are epoch seconds (an
+/// export written with the epoch preset). RFC 3339 and
+/// `YYYY-MM-DD HH:MM:SS` text never match, so they decode as before.
+fn epoch_seconds_text(text: &str) -> Option<DateTime<Utc>> {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    DateTime::from_timestamp(text.parse::<i64>().ok()?, 0)
 }
 
 fn decode_date(text: &str, date_format: DateFormat) -> Option<NaiveDate> {
@@ -287,7 +318,9 @@ fn decode_date(text: &str, date_format: DateFormat) -> Option<NaiveDate> {
     {
         return Some(timestamp.date_naive());
     }
-    NaiveDate::parse_from_str(text, "%Y-%m-%d").ok()
+    NaiveDate::parse_from_str(text, "%Y-%m-%d")
+        .ok()
+        .or_else(|| epoch_seconds_text(text).map(|timestamp| timestamp.date_naive()))
 }
 
 fn decode_time(text: &str, date_format: DateFormat) -> Option<NaiveTime> {
@@ -299,7 +332,20 @@ fn decode_time(text: &str, date_format: DateFormat) -> Option<NaiveTime> {
     {
         return Some(time);
     }
-    NaiveTime::parse_from_str(text, "%H:%M:%S%.f").ok()
+    NaiveTime::parse_from_str(text, "%H:%M:%S%.f")
+        .ok()
+        .or_else(|| epoch_seconds_of_day_text(text))
+}
+
+/// Seconds since midnight written as plain digits, the inverse of the epoch
+/// format's time rendering. Like [`epoch_seconds_text`] it is read under any
+/// date format, after the text formats.
+fn epoch_seconds_of_day_text(text: &str) -> Option<NaiveTime> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    NaiveTime::from_num_seconds_from_midnight_opt(text.parse::<u32>().ok()?, 0)
 }
 
 #[cfg(test)]

@@ -19,10 +19,12 @@ pub mod import_file;
 pub mod manifest;
 pub mod migration;
 mod pipeline;
+mod spreadsheet_source;
 mod sql_insert;
 mod table_sink;
 mod table_source;
 mod value_codec;
+mod xml_source;
 
 pub use browse_source::{
     AlignByName, BrowseSource, PageShape, ReplayableRead, select_for_visual_spec,

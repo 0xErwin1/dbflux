@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: Spreadsheet
           text: Text
           binary: Binary
           hex: Hex
@@ -2475,18 +2476,19 @@ document:
       unmatched_source: "Unmatched source column(s), will be skipped unless remapped: %{names}"
       truncate_unavailable: "This connection can't truncate tables, so Truncate isn't listed. Choose Recreate to replace the table instead."
     pick_file:
-      description: "Or import a single CSV, JSON or JSON Lines file into one table."
+      description: "Or import a single CSV, JSON, JSON Lines or XML file into one table."
       choose_file: "Choose File…"
       reading_file: "Reading file…"
       dialog_title: "Choose File to Import"
-      filter_label: "CSV, JSON and JSON Lines"
+      filter_label: "CSV, JSON, JSON Lines and XML"
       error:
-        unsupported: "Only .csv, .json and .jsonl files can be imported."
+        unsupported: "Only .csv, .json, .jsonl and .xml files can be imported."
         invalid_file: "Cannot read the file: %{error}"
         unsupported_next: "Choose a file with one of those extensions."
         lookup_failed: "Could not look up the target table: %{error}"
         next_csv: "Choose another encoding or delimiter above: the file is read again as soon as you pick one."
         next_json: "Fix the JSON in the file and choose it again, or choose another file."
+        next_xml: "Fix the XML in the file and choose it again, or choose another file."
         next_lookup: "Check the table name and your access to the connection, then press Use Table again."
       reading_hint: "Reading the file. Both buttons are off until it finishes."
     file:
@@ -2496,6 +2498,7 @@ document:
       use_table: "Use Table"
       null_text_hint: "Text in the file that stands for NULL. With empty text, an empty field is NULL."
       json_no_options: "JSON and JSON Lines have no import options: the file itself defines the columns and the NULLs."
+      xml_no_options: "XML has no import options: the file itself defines the columns and the NULLs."
     mapping_mode:
       create: Create
       existing: Existing (insert only)

@@ -353,10 +353,12 @@ cuadrícula ya las tiene todas.
 
 El asistente de importación también lee un archivo suelto. Elige **Elegir
 archivo…** en su primer paso, junto al selector de carpeta, y selecciona un
-archivo `.csv`, `.json` o `.jsonl`; los archivos HTML, Markdown, XML y SQL no se
-ofrecen. El asistente lee las columnas de la fila de encabezado del CSV, o de
-las claves de los primeros 100 registros JSON (todas las claves vistas, en el
-orden en que aparecen). Un objeto o array anidado se importa como texto JSON.
+archivo `.csv`, `.json`, `.jsonl` o `.xml`; los archivos HTML, Markdown y SQL no se
+ofrecen. El asistente lee las columnas de la fila de encabezado del CSV, de
+las claves de los primeros 100 registros JSON, o del `name` de los elementos
+`<field>` de las primeras 100 filas XML (todas las claves vistas, en el
+orden en que aparecen). Una clave que aparece por primera vez después de esas
+filas detiene la importación con un error que indica la clave y su fila. Un objeto o array anidado se importa como texto JSON.
 
 La tabla de destino es por defecto el nombre del archivo sin extensión; escribe
 otro nombre y elige **Usar tabla** (o pulsa Enter) para apuntar la importación a
@@ -369,8 +371,13 @@ motor, como `NVARCHAR(MAX)` en SQL Server o `LONGTEXT` en MySQL), de modo que lo
 como texto.
 
 Un archivo CSV ofrece el delimitador, la codificación y el texto que representa
-NULL, las mismas opciones que el asistente de exportación; JSON y JSON Lines no
-tienen opciones. Cambiar el delimitador o la codificación vuelve a leer el
+NULL, las mismas opciones que el asistente de exportación; JSON, JSON Lines y XML no
+tienen opciones. Un archivo XML debe tener la forma que escribe la exportación:
+una raíz `<rows>` con elementos `<row>`, cada uno con un
+`<field name="...">texto</field>` por columna. Un campo escrito como
+`<field name="..." null="true"/>` es NULL, un `<field>` vacío es una cadena
+vacía y las referencias de carácter como `&#10;` se decodifican. Cualquier otra
+forma de XML se rechaza con un mensaje que indica la esperada. Cambiar el delimitador o la codificación vuelve a leer el
 archivo. Todo el archivo se lee una vez antes de escribir nada, así que una fila
 o registro mal formado detiene la importación sin tocar el destino.
 

@@ -120,6 +120,27 @@ fn a_json_file_shows_no_options(cx: &mut gpui::TestAppContext) {
     );
 }
 
+#[test]
+fn the_xml_no_options_line_names_xml_and_not_json_in_every_locale() {
+    assert_eq!(
+        super::no_options_key(FileFormat::Xml),
+        "document.import_wizard.file.xml_no_options"
+    );
+    for format in [FileFormat::Json, FileFormat::JsonLines] {
+        assert_eq!(
+            super::no_options_key(format),
+            "document.import_wizard.file.json_no_options"
+        );
+    }
+    for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+        let xml = dbflux_i18n::translate_in(locale, "document.import_wizard.file.xml_no_options");
+        assert!(
+            xml.contains("XML") && !xml.contains("JSON"),
+            "{locale}: {xml}"
+        );
+    }
+}
+
 #[gpui::test]
 fn a_file_that_could_not_be_read_blocks_the_run(cx: &mut gpui::TestAppContext) {
     with_wizard(

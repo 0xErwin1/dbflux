@@ -201,7 +201,8 @@ impl DataGridPanel {
                 | FileFormat::Html
                 | FileFormat::Markdown
                 | FileFormat::Xml
-                | FileFormat::Sql => Box::new(shape),
+                | FileFormat::Sql
+                | FileFormat::Spreadsheet => Box::new(shape),
             }
         } else {
             Box::new(AlignByName::default())

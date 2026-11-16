@@ -322,10 +322,12 @@ fixed number of the closest rows, and the grid already holds all of them.
 ## Importing a file
 
 The import wizard also reads one loose file. Choose **Choose File…** on its
-first step, next to the folder picker, and pick a `.csv`, `.json` or `.jsonl`
-file; HTML, Markdown, XML and SQL files are not offered. The wizard reads the
-columns from the CSV header row, or from the keys of the first 100 JSON records
-(all the keys seen, in the order they first appear). A nested object or array
+first step, next to the folder picker, and pick a `.csv`, `.json`, `.jsonl` or
+`.xml` file; HTML, Markdown and SQL files are not offered. The wizard reads the
+columns from the CSV header row, from the keys of the first 100 JSON records,
+or from the `name` of the `<field>` elements in the first 100 XML rows (all the
+keys seen, in the order they first appear). A key that first appears after those
+rows stops the import with an error naming it and its row. A nested object or array
 is imported as JSON text.
 
 The target table defaults to the file name without its extension; type another
@@ -338,7 +340,13 @@ engine's own wide text type such as `NVARCHAR(MAX)` on SQL Server or `LONGTEXT` 
 are stored as their text.
 
 A CSV file offers the delimiter, the encoding and the text that stands for NULL,
-the same choices as the export wizard; JSON and JSON Lines have no options.
+the same choices as the export wizard; JSON, JSON Lines and XML have no options.
+An XML file must have the shape the export writes: a `<rows>` root holding
+`<row>` elements, each with a `<field name="...">text</field>` per column. A
+field written as `<field name="..." null="true"/>` is NULL, an empty
+`<field>` is an empty string, and character references such as `&#10;` are
+decoded. Any other XML shape is rejected with a message that states the one
+expected.
 Changing the delimiter or encoding reads the file again. The whole file is read
 once before anything is written, so a malformed row or record stops the import
 with the target unchanged.

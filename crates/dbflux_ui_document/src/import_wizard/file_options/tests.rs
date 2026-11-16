@@ -12,8 +12,8 @@ fn csv_shows_delimiter_encoding_and_null_text() {
 }
 
 #[test]
-fn json_and_json_lines_show_no_options() {
-    for format in [FileFormat::Json, FileFormat::JsonLines] {
+fn json_json_lines_and_xml_show_no_options() {
+    for format in [FileFormat::Json, FileFormat::JsonLines, FileFormat::Xml] {
         assert_eq!(
             visible_file_options(format),
             VisibleFileOptions {
@@ -27,12 +27,7 @@ fn json_and_json_lines_show_no_options() {
 
 #[test]
 fn formats_that_cannot_be_imported_show_no_options() {
-    for format in [
-        FileFormat::Html,
-        FileFormat::Markdown,
-        FileFormat::Xml,
-        FileFormat::Sql,
-    ] {
+    for format in [FileFormat::Html, FileFormat::Markdown, FileFormat::Sql] {
         assert_eq!(
             visible_file_options(format),
             VisibleFileOptions {
@@ -46,7 +41,7 @@ fn formats_that_cannot_be_imported_show_no_options() {
 
 #[test]
 fn the_picker_offers_only_importable_extensions() {
-    assert_eq!(picker_extensions(), ["csv", "json", "jsonl"]);
+    assert_eq!(picker_extensions(), ["csv", "json", "jsonl", "xml"]);
 }
 
 #[test]
@@ -63,14 +58,8 @@ fn format_is_detected_from_the_extension_of_a_picked_file() {
         detect_format(Path::new("events.jsonl")),
         Some(FileFormat::JsonLines)
     );
-    for rejected in [
-        "page.html",
-        "readme.md",
-        "feed.xml",
-        "dump.sql",
-        "notes.txt",
-        "noext",
-    ] {
+    assert_eq!(detect_format(Path::new("feed.XML")), Some(FileFormat::Xml));
+    for rejected in ["page.html", "readme.md", "dump.sql", "notes.txt", "noext"] {
         assert_eq!(detect_format(Path::new(rejected)), None, "{rejected}");
     }
 }

@@ -32,6 +32,16 @@ fn a_json_read_failure_says_to_fix_or_replace_the_file() {
     }
 }
 
+#[test]
+fn an_xml_read_failure_says_xml_and_not_json() {
+    let block = ErrorBlock::file_load_failure(&read_failure(), FileFormat::Xml);
+
+    assert_eq!(
+        block.next_step,
+        "Fix the XML in the file and choose it again, or choose another file."
+    );
+}
+
 /// The lookup failure names the table lookup instead of claiming the file
 /// could not be read, and says to press Use Table again.
 #[test]
@@ -57,7 +67,7 @@ fn an_unsupported_extension_names_what_to_pick() {
 
     assert_eq!(
         block.message,
-        "Only .csv, .json and .jsonl files can be imported."
+        "Only .csv, .json, .jsonl and .xml files can be imported."
     );
     assert_eq!(
         block.next_step,

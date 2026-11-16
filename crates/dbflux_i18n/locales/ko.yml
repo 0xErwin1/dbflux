@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: 스프레드시트
           text: 텍스트
           binary: 바이너리
           hex: 16진수
@@ -2475,18 +2476,19 @@ document:
       unmatched_source: "매핑되지 않은 소스 열은 다시 매핑하지 않으면 건너뜁니다: %{names}"
       truncate_unavailable: "이 연결은 테이블을 비울 수 없으므로 Truncate가 표시되지 않습니다. 대신 Recreate를 선택해 테이블을 교체하세요."
     pick_file:
-      description: "또는 CSV, JSON, JSON Lines 파일 하나를 테이블 하나로 가져옵니다."
+      description: "또는 CSV, JSON, JSON Lines, XML 파일 하나를 테이블 하나로 가져옵니다."
       choose_file: "파일 선택…"
       reading_file: "파일 읽는 중…"
       dialog_title: "가져올 파일 선택"
-      filter_label: "CSV, JSON 및 JSON Lines"
+      filter_label: "CSV, JSON, JSON Lines 및 XML"
       error:
-        unsupported: ".csv, .json, .jsonl 파일만 가져올 수 있습니다."
+        unsupported: ".csv, .json, .jsonl, .xml 파일만 가져올 수 있습니다."
         invalid_file: "파일을 읽을 수 없습니다: %{error}"
         unsupported_next: "해당 확장자 중 하나인 파일을 선택하세요."
         lookup_failed: "대상 테이블을 조회하지 못했습니다: %{error}"
         next_csv: "위에서 다른 인코딩이나 구분자를 선택하세요. 선택하는 즉시 파일을 다시 읽습니다."
         next_json: "파일의 JSON을 고친 뒤 다시 선택하거나 다른 파일을 선택하세요."
+        next_xml: "파일의 XML을 고친 뒤 다시 선택하거나 다른 파일을 선택하세요."
         next_lookup: "테이블 이름과 연결에 대한 권한을 확인한 뒤 테이블 사용을 다시 누르세요."
       reading_hint: "파일을 읽는 중입니다. 끝날 때까지 두 버튼이 모두 비활성화됩니다."
     file:
@@ -2496,6 +2498,7 @@ document:
       use_table: "테이블 사용"
       null_text_hint: "파일에서 NULL을 나타내는 텍스트입니다. 비워 두면 빈 필드가 NULL입니다."
       json_no_options: "JSON과 JSON Lines에는 가져오기 옵션이 없습니다. 파일 자체가 열과 NULL을 정의합니다."
+      xml_no_options: "XML에는 가져오기 옵션이 없습니다. 파일 자체가 열과 NULL을 정의합니다."
     mapping_mode:
       create: 만들기
       existing: 기존 (삽입만)
