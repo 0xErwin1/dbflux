@@ -171,7 +171,7 @@ pub enum ScriptError {
     SplitRoutineBody { line: usize },
 
     #[error(
-        "The script has a COPY … FROM stdin data block on line {line}, which only the psql command-line client can load. Run it with psql, or re-create the dump with INSERT statements (pg_dump --inserts)."
+        "The script has a COPY … FROM stdin data block on line {line}, which only the psql command-line client can load. Run it with psql instead."
     )]
     CopyFromStdin { line: usize },
 
