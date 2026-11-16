@@ -1432,7 +1432,10 @@ pub(crate) const MIGRATE_WIZARD: SurfaceRegistry = SurfaceRegistry {
 /// segments take no focus, so the `ImportWizard` context reaches them: J and
 /// K move a cursor over the configure step's choices, L and H pick the next
 /// or previous CSV delimiter and encoding, and Enter picks the next one or
-/// opens the dropdown under the cursor.
+/// opens the dropdown under the cursor. A SQL script's configure step has two
+/// choices on the same cursor: L, H and Enter pick the other "On error"
+/// segment, and Enter toggles the transaction checkbox, which is also a stop
+/// of the dialog.
 pub(crate) const IMPORT_WIZARD: SurfaceRegistry = SurfaceRegistry {
     name: "import wizard",
     contexts: &[ContextId::Modal, ContextId::ImportWizard],
@@ -1444,6 +1447,8 @@ pub(crate) const IMPORT_WIZARD: SurfaceRegistry = SurfaceRegistry {
         ("import-wizard-cancel", KeyboardPath::TabStop),
         ("import-wizard-cancel-confirm", KeyboardPath::TabStop),
         ("import-wizard-confirm-destructive", KeyboardPath::TabStop),
+        ("import-wizard-run-script", KeyboardPath::TabStop),
+        ("import-wizard-script-transaction", KeyboardPath::TabStop),
         ("import-wizard-cancel-run", KeyboardPath::TabStop),
         ("import-wizard-close", KeyboardPath::TabStop),
         ("import-apply-mapping-*", KeyboardPath::TabStop),
@@ -1467,6 +1472,10 @@ pub(crate) const IMPORT_WIZARD: SurfaceRegistry = SurfaceRegistry {
         ),
         (
             "segmented-import-file-encoding-*",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
+            "segmented-import-script-on-error-*",
             KeyboardPath::Command(Command::ColumnRight),
         ),
     ],

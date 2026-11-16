@@ -6631,6 +6631,145 @@ mod tests {
         }
     }
 
+    /// Every key of the "Run SQL script" flow resolves in all five locales,
+    /// and the translated catalogs keep the placeholders of the English text.
+    #[test]
+    fn import_wizard_script_keys_resolve_in_every_locale() {
+        const SCRIPT_KEYS: &[&str] = &[
+            "document.import_wizard.script.title",
+            "document.import_wizard.script.task",
+            "document.import_wizard.script.thousands_separator",
+            "document.import_wizard.script.classification.metadata",
+            "document.import_wizard.script.classification.read",
+            "document.import_wizard.script.classification.write",
+            "document.import_wizard.script.classification.destructive",
+            "document.import_wizard.script.classification.admin",
+            "document.import_wizard.script.classification.admin_safe",
+            "document.import_wizard.script.classification.admin_destructive",
+            "document.import_wizard.script.error.unreadable",
+            "document.import_wizard.script.error.unreadable_next",
+            "document.import_wizard.script.error.not_utf8",
+            "document.import_wizard.script.error.not_utf8_next",
+            "document.import_wizard.script.error.too_large",
+            "document.import_wizard.script.error.too_large_next",
+            "document.import_wizard.script.error.empty",
+            "document.import_wizard.script.error.empty_next",
+            "document.import_wizard.script.error.not_sql",
+            "document.import_wizard.script.error.not_sql_next",
+            "document.import_wizard.script.error.other_next",
+            "document.import_wizard.script.error.read_only.one",
+            "document.import_wizard.script.error.read_only.many",
+            "document.import_wizard.script.error.read_only_next",
+            "document.import_wizard.script.configure.file",
+            "document.import_wizard.script.configure.script_label",
+            "document.import_wizard.script.configure.script_summary.one",
+            "document.import_wizard.script.configure.script_summary.many",
+            "document.import_wizard.script.configure.preview_label",
+            "document.import_wizard.script.configure.preview_more.one",
+            "document.import_wizard.script.configure.preview_more.many",
+            "document.import_wizard.script.configure.preview_hint",
+            "document.import_wizard.script.configure.no_where",
+            "document.import_wizard.script.configure.on_error_label",
+            "document.import_wizard.script.configure.on_error_stop",
+            "document.import_wizard.script.configure.on_error_continue",
+            "document.import_wizard.script.configure.on_error_stop_hint",
+            "document.import_wizard.script.configure.on_error_continue_hint",
+            "document.import_wizard.script.configure.transaction_label",
+            "document.import_wizard.script.configure.transaction_checkbox",
+            "document.import_wizard.script.configure.transaction_hint",
+            "document.import_wizard.script.configure.transaction_unchecked_hint",
+            "document.import_wizard.script.configure.transaction_off_continue",
+            "document.import_wizard.script.configure.transaction_unavailable",
+            "document.import_wizard.script.configure.ddl_commits",
+            "document.import_wizard.script.footer.read_only",
+            "document.import_wizard.script.footer.running_transaction",
+            "document.import_wizard.script.footer.running_kept",
+            "document.import_wizard.script.footer.cancelling_transaction",
+            "document.import_wizard.script.footer.cancelling_kept",
+            "document.import_wizard.script.confirm.destructive_lead.one",
+            "document.import_wizard.script.confirm.destructive_lead.many",
+            "document.import_wizard.script.confirm.plain_lead.one",
+            "document.import_wizard.script.confirm.plain_lead.many",
+            "document.import_wizard.script.confirm.warning",
+            "document.import_wizard.script.confirm.danger_line",
+            "document.import_wizard.script.confirm.first_label",
+            "document.import_wizard.script.confirm.first_line",
+            "document.import_wizard.script.confirm.how_transaction",
+            "document.import_wizard.script.confirm.how_each_stop",
+            "document.import_wizard.script.confirm.how_each_continue",
+            "document.import_wizard.script.confirm.run",
+            "document.import_wizard.script.confirm.proceed",
+            "document.import_wizard.script.running.title",
+            "document.import_wizard.script.running.current",
+            "document.import_wizard.script.running.starting",
+            "document.import_wizard.script.running.transaction_line",
+            "document.import_wizard.script.running.no_transaction_line",
+            "document.import_wizard.script.running.cancel",
+            "document.import_wizard.script.running.cancelling",
+            "document.import_wizard.script.toast.completed",
+            "document.import_wizard.script.done.finished.one",
+            "document.import_wizard.script.done.finished.many",
+            "document.import_wizard.script.done.committed",
+            "document.import_wizard.script.done.saved_as_run",
+            "document.import_wizard.script.done.with_errors",
+            "document.import_wizard.script.done.with_errors_next",
+            "document.import_wizard.script.done.failure_label",
+            "document.import_wizard.script.done.cancelled",
+            "document.import_wizard.script.done.rolled_back_cancelled",
+            "document.import_wizard.script.done.cancelled_rolled_back_next",
+            "document.import_wizard.script.done.nothing_ran",
+            "document.import_wizard.script.done.cancelled_kept.one",
+            "document.import_wizard.script.done.cancelled_kept.many",
+            "document.import_wizard.script.done.cancelled_kept_next",
+            "document.import_wizard.script.done.stopped",
+            "document.import_wizard.script.done.failed_statement",
+            "document.import_wizard.script.done.database_error",
+            "document.import_wizard.script.done.rolled_back_before.one",
+            "document.import_wizard.script.done.rolled_back_before.many",
+            "document.import_wizard.script.done.rolled_back_first",
+            "document.import_wizard.script.done.rolled_back_nothing_saved",
+            "document.import_wizard.script.done.stopped_rolled_back_next",
+            "document.import_wizard.script.done.kept_before.one",
+            "document.import_wizard.script.done.kept_before.many",
+            "document.import_wizard.script.done.nothing_before_it",
+            "document.import_wizard.script.done.not_run_range",
+            "document.import_wizard.script.done.not_run_single",
+            "document.import_wizard.script.done.stopped_kept_next",
+            "document.import_wizard.script.done.use_transaction_next",
+            "document.import_wizard.script.done.fix_first_next",
+            "document.import_wizard.script.done.commit_failed",
+            "document.import_wizard.script.done.commit_failed_next",
+            "document.import_wizard.script.done.unresolved",
+            "document.import_wizard.script.done.unresolved_message",
+            "document.import_wizard.script.done.unresolved_next",
+            "document.import_wizard.script.done.ddl_not_undone",
+            "document.import_wizard.script.done.not_run",
+            "document.import_wizard.script.done.not_run_next",
+            "document.import_wizard.pick_file.description_sql",
+            "document.import_wizard.pick_file.filter_label_sql",
+            "document.import_wizard.pick_file.error.unsupported_sql",
+        ];
+
+        for key in SCRIPT_KEYS {
+            let english = dbflux_i18n::t!(key, locale = "en");
+            assert_ne!(english, *key, "{key} missing from en");
+
+            for locale in ["es", "ko", "pt_BR", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} missing from {locale}");
+                for placeholder in ["%{count}", "%{index}", "%{total}", "%{ran}", "%{error}"] {
+                    assert_eq!(
+                        english.contains(placeholder),
+                        value.contains(placeholder),
+                        "{key} in {locale} must keep {placeholder}"
+                    );
+                }
+            }
+        }
+    }
+
     /// PR 26a: a representative sample of `document.import_wizard.*` keys
     /// diverges between locales.
     #[test]

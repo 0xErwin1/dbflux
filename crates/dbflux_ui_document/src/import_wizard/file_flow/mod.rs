@@ -32,8 +32,8 @@ use super::column_mapping::TableImportConfig;
 use super::errors::{ErrorBlock, FileLoadError};
 use super::file_options::{
     delimiter_from_segment_id, delimiter_label, delimiter_segment_id, detect_format,
-    encoding_from_segment_id, encoding_label, encoding_segment_id, picker_extensions,
-    visible_file_options,
+    encoding_from_segment_id, encoding_label, encoding_segment_id, is_sql_script,
+    picker_extensions, visible_file_options,
 };
 use super::keyboard::{ConfigureField, with_cursor_ring};
 use super::{ImportWizard, WizardStep};
@@ -363,20 +363,26 @@ impl ImportWizard {
             return;
         };
 
+        let sql_scripts = Self::sql_scripts_offered(connection.as_ref());
+
         self.loading = true;
         self.loading_folder = false;
         self.manifest_error = None;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            let extensions = picker_extensions();
+            let extensions = picker_extensions(sql_scripts);
             let picked = dbflux_ui_base::file_dialog::pick_existing_file(cx, async {
                 rfd::AsyncFileDialog::new()
                     .set_title(dbflux_i18n::t!(
                         "document.import_wizard.pick_file.dialog_title"
                     ))
                     .add_filter(
-                        dbflux_i18n::t!("document.import_wizard.pick_file.filter_label"),
+                        if sql_scripts {
+                            dbflux_i18n::t!("document.import_wizard.pick_file.filter_label_sql")
+                        } else {
+                            dbflux_i18n::t!("document.import_wizard.pick_file.filter_label")
+                        },
                         &extensions,
                     )
                     .pick_file()
@@ -403,9 +409,19 @@ impl ImportWizard {
         path: PathBuf,
         cx: &mut Context<Self>,
     ) {
+        // A `.sql` file runs as a script. The script flow refuses it with the
+        // reason when the connection is not SQL, for a file that got past the
+        // dialog's filter.
+        if is_sql_script(&path) {
+            self.open_script(connection, path, cx);
+            return;
+        }
+
         let Some(format) = detect_format(&path) else {
             self.loading = false;
-            self.manifest_error = Some(ErrorBlock::unsupported_file());
+            self.manifest_error = Some(ErrorBlock::unsupported_file(Self::sql_scripts_offered(
+                connection.as_ref(),
+            )));
             cx.notify();
             return;
         };
@@ -546,6 +562,7 @@ impl ImportWizard {
 
         match loaded {
             Ok(LoadedFile { config }) => {
+                self.script = None;
                 self.supports_truncate = supports_truncate;
                 self.build_rows(vec![config], cx);
                 self.step = WizardStep::Configure;

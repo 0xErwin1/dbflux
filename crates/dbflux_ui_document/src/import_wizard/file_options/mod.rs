@@ -24,14 +24,28 @@ pub(super) fn visible_file_options(format: FileFormat) -> VisibleFileOptions {
     }
 }
 
-/// File extensions the picker accepts: the importable formats only, so HTML,
-/// Markdown, XML and SQL files are not offered.
-pub(super) fn picker_extensions() -> Vec<&'static str> {
-    FileFormat::WITH_SQL
+/// File extensions the picker accepts: the importable formats, so HTML,
+/// Markdown and XML files are not offered, and `sql` only when the connection
+/// can run a script.
+pub(super) fn picker_extensions(sql_scripts: bool) -> Vec<&'static str> {
+    let mut extensions: Vec<&'static str> = FileFormat::WITH_SQL
         .into_iter()
         .filter(|format| format.is_importable())
         .map(FileFormat::extension)
-        .collect()
+        .collect();
+
+    if sql_scripts {
+        extensions.push(FileFormat::Sql.extension());
+    }
+
+    extensions
+}
+
+/// Whether a picked file is a SQL script, from its extension.
+pub(super) fn is_sql_script(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(FileFormat::Sql.extension()))
 }
 
 /// The importable format of a picked file, from its extension.

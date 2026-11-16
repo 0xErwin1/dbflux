@@ -46,7 +46,25 @@ fn formats_that_cannot_be_imported_show_no_options() {
 
 #[test]
 fn the_picker_offers_only_importable_extensions() {
-    assert_eq!(picker_extensions(), ["csv", "json", "jsonl"]);
+    assert_eq!(picker_extensions(false), ["csv", "json", "jsonl"]);
+}
+
+/// A SQL connection can run a script, so the dialog also offers `.sql`; any
+/// other connection never sees it, so a script cannot be picked by mistake.
+#[test]
+fn the_picker_offers_sql_only_on_a_sql_connection() {
+    assert_eq!(picker_extensions(true), ["csv", "json", "jsonl", "sql"]);
+    assert!(!picker_extensions(false).contains(&"sql"));
+}
+
+#[test]
+fn a_sql_script_is_recognized_by_its_extension() {
+    use std::path::Path;
+
+    assert!(is_sql_script(Path::new("/dumps/shop.sql")));
+    assert!(is_sql_script(Path::new("/dumps/SHOP.SQL")));
+    assert!(!is_sql_script(Path::new("/dumps/shop.csv")));
+    assert!(!is_sql_script(Path::new("/dumps/sql")));
 }
 
 #[test]

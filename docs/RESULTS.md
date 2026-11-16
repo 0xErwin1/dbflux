@@ -323,7 +323,8 @@ fixed number of the closest rows, and the grid already holds all of them.
 
 The import wizard also reads one loose file. Choose **Choose File…** on its
 first step, next to the folder picker, and pick a `.csv`, `.json` or `.jsonl`
-file; HTML, Markdown, XML and SQL files are not offered. The wizard reads the
+file; HTML, Markdown and XML files are not offered, and a `.sql` file runs as a
+script (see [Running a SQL script](#running-a-sql-script)). The wizard reads the
 columns from the CSV header row, or from the keys of the first 100 JSON records
 (all the keys seen, in the order they first appear). A nested object or array
 is imported as JSON text.
@@ -356,3 +357,60 @@ connection that cannot truncate tables a line explains why Truncate is not
 listed. In the text fields, `Escape` leaves the field and returns the keys to
 the dialog; a second `Escape` closes the wizard. When the run ends, one row per
 table lists its outcome, and a failed run says what to do next.
+
+### Running a SQL script
+
+On a connection whose query language is SQL, **Choose File…** also offers `.sql`
+files; other connections never see them, and a `.sql` file that gets through
+anyway is refused with a message that the connection is not SQL. Picking one
+opens a **Run SQL script** flow in the same dialog. The script is read as UTF-8
+and split into statements with the editor's own splitter, so quotes, comments
+and dollar-quoted bodies are respected, and it has no delimiter or encoding
+options. A script over 100 MB, a file that is not UTF-8 or cannot be read, and a
+script with no statements stay on the first step with the reason and what to do
+next.
+
+**Configure** shows the statement count and size, how many statements fall in
+each classification (the classes the editor and the audit viewer use, Admin
+included), and the first six statements with their classification; a `DELETE` or
+`UPDATE` without `WHERE` is marked. It has two options:
+
+- **On error**: **Stop at the first error** (the default) or **Continue after
+  errors**, which runs every statement and lists the ones that failed.
+- **Run in one transaction**: on by default when the connection supports
+  transactions. If a statement fails, the changes made in the transaction are
+  rolled back, and nothing is saved until the last statement succeeds. It is off,
+  with the reason, when **Continue after errors** is chosen (a failed statement
+  aborts the transaction on some engines), and it is not offered, with the
+  reason, on a connection without transactions.
+
+On a connection that commits schema statements on its own (MySQL and MariaDB),
+`CREATE`, `ALTER` and `DROP` are saved as they run and also save every statement
+before them, so a rollback only undoes the changes made after the last one.
+Sequence changes (`setval`, `nextval`) are never undone by a rollback. A
+connection that is read-only by its profile setting refuses a script that
+changes data or structure, says how many statements do, and keeps **Continue**
+off; a script that only reads can run.
+
+Every script goes through **Confirm**, whatever it holds. A script with no
+destructive statements shows how many statements fall in each classification and
+offers **Run script**. A script with destructive statements shows a danger block
+that counts them by the editor's dangerous-query kinds, lists the first three
+with their number in the file, and offers **Yes, run script**. **Back** returns
+to Configure.
+
+**Running** shows "Running statement N of M", the statement in progress and a
+Tasks panel entry. **Cancel Run** stops after the statement in progress and asks
+the driver to interrupt it. In one transaction the changes are then rolled back;
+without one, the statements that already ran are kept. The footer says which
+before you press it.
+
+**Done** says what happened. A run that stops names the statement (number, line
+and text), shows the database's error, says what happened to the earlier
+statements and what to do next; a run that continued after errors lists every
+statement that failed. If the commit or the rollback itself fails, the dialog
+says the outcome is unresolved and to check the state of the database before
+running anything else. Every failure is also reported once as a toast with
+**View in Audit**, and each run records a `Query` audit event (plus one per
+failed statement, up to 50) that carries only the first line of a statement,
+redacted by the audit settings.

@@ -839,6 +839,8 @@ On the configure step, a cursor walks the choices that take no focus of their ow
 | `Enter` | On the delimiter or encoding: pick the next one. On a mapping mode, target column or source column: open its dropdown, which then takes `j` / `k` and `Enter` as in [Dropdowns](#dropdowns) |
 | `Escape` | In the target table or NULL text field: leave the field and give the keys above back to the dialog. On an open dropdown: close only the dropdown and give the keys back to the dialog. Anywhere else: close the wizard |
 
+On the configure step of a SQL script, the cursor visits **On error** and **Run in one transaction**: `l` / `h` and `Enter` on **On error** pick the other choice, and `Enter` on the transaction checkbox toggles it (it is skipped while "Continue after errors" or a connection without transactions turns it off).
+
 While a text field or an open dropdown has focus, these keys (including `Enter`) act on that field, not on the cursor. They are listed under the Import Wizard context in Settings > Keybindings.
 
 ## Text fields

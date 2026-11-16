@@ -15,6 +15,7 @@ mod errors;
 mod file_flow;
 mod file_options;
 mod keyboard;
+mod script_flow;
 
 use dbflux_core::keymap_types::ContextId;
 use std::path::PathBuf;
@@ -46,6 +47,7 @@ pub use column_mapping::TableImportConfig;
 use column_mapping::mapping_mode_options;
 use errors::ErrorBlock;
 use file_flow::{FileImportState, FileInputs};
+use script_flow::ScriptFlow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WizardStep {
@@ -221,6 +223,9 @@ pub struct ImportWizard {
     /// The loose file picked with "Import file"; takes the place of
     /// `manifest_dir` as the import's source while set.
     file_import: Option<FileImportState>,
+    /// The SQL script picked with "Choose File…"; takes the place of the
+    /// folder and the loose file while set, and the steps render its flow.
+    script: Option<ScriptFlow>,
     file_inputs: Option<FileInputs>,
     /// Target table name a fresh file pick sets on its text field, applied at
     /// the next render because setting an input's text needs the window.
@@ -265,6 +270,7 @@ impl ImportWizard {
             manifest_dir: None,
             manifest_error: None,
             file_import: None,
+            script: None,
             file_inputs: None,
             pending_file_inputs: None,
             file_read_request: 0,
@@ -303,6 +309,7 @@ impl ImportWizard {
         self.manifest_dir = None;
         self.manifest_error = None;
         self.file_import = None;
+        self.script = None;
         self.file_inputs = Some(FileInputs::new(window, cx));
         self.pending_file_inputs = None;
         self.next_file_read_request();
@@ -439,6 +446,7 @@ impl ImportWizard {
             this.update(cx, |this, cx| {
                 this.loading = false;
                 this.file_import = None;
+                this.script = None;
                 this.manifest_dir = Some(dir);
                 this.supports_truncate = supports_truncate;
                 this.field_cursor = 0;
@@ -569,6 +577,10 @@ impl ImportWizard {
     }
 
     fn continue_from_configure(&mut self, cx: &mut Context<Self>) {
+        if self.script.is_some() {
+            self.continue_script(cx);
+            return;
+        }
         if self.defer_continue_for_typed_table(cx) {
             cx.notify();
             return;
@@ -747,6 +759,7 @@ impl ImportWizard {
         if let Some(token) = &self.cancel_token {
             token.cancel();
         }
+        self.interrupt_script_statement(cx);
         cx.notify();
     }
 
@@ -808,7 +821,7 @@ impl Render for ImportWizard {
             close_entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        let frame = Modal::new(dbflux_i18n::t!("document.import_wizard.title"))
+        let frame = Modal::new(self.dialog_title())
             .id("import-wizard")
             .focus_handle(&self.focus_handle)
             .on_close(close)

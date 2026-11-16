@@ -23,6 +23,10 @@ use super::{ImportWizard, WizardStep};
 pub(super) enum ConfigureField {
     Delimiter,
     Encoding,
+    /// "On error" of a SQL script.
+    OnError,
+    /// "Run in one transaction" of a SQL script.
+    Transaction,
     Mode(usize),
     Target(usize),
     Source(usize),
@@ -72,6 +76,15 @@ impl ImportWizard {
     /// target column and source column.
     pub(super) fn configure_fields(&self) -> Vec<ConfigureField> {
         let mut fields = Vec::new();
+
+        if let Some(flow) = &self.script {
+            fields.push(ConfigureField::OnError);
+            if flow.transaction_available() {
+                fields.push(ConfigureField::Transaction);
+            }
+
+            return fields;
+        }
 
         if let Some(state) = &self.file_import
             && visible_file_options(state.format).delimiter_and_encoding
@@ -134,7 +147,11 @@ impl ImportWizard {
                     self.select_encoding(encoding_segment_id(next), cx);
                 }
             }
-            ConfigureField::Mode(_) | ConfigureField::Target(_) | ConfigureField::Source(_) => {}
+            ConfigureField::OnError
+            | ConfigureField::Transaction
+            | ConfigureField::Mode(_)
+            | ConfigureField::Target(_)
+            | ConfigureField::Source(_) => {}
         }
     }
 
@@ -151,7 +168,10 @@ impl ImportWizard {
             ConfigureField::Source(index) => {
                 self.rows.get(index).map(|row| &row.rebind_source_dropdown)
             }
-            ConfigureField::Delimiter | ConfigureField::Encoding => None,
+            ConfigureField::Delimiter
+            | ConfigureField::Encoding
+            | ConfigureField::OnError
+            | ConfigureField::Transaction => None,
         };
 
         if let Some(dropdown) = dropdown {
@@ -205,6 +225,10 @@ impl ImportWizard {
                 match field {
                     ConfigureField::Delimiter | ConfigureField::Encoding => {
                         self.cycle_file_option(field, command != Command::ColumnLeft, cx);
+                    }
+                    ConfigureField::OnError => self.toggle_script_on_error(cx),
+                    ConfigureField::Transaction if command == Command::Execute => {
+                        self.toggle_script_transaction(cx);
                     }
                     _ if command == Command::Execute => {
                         self.open_field_dropdown(field, window, cx);

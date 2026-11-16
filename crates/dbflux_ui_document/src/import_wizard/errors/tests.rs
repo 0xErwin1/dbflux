@@ -53,11 +53,25 @@ fn a_failed_table_lookup_names_the_lookup_and_not_the_file() {
 
 #[test]
 fn an_unsupported_extension_names_what_to_pick() {
-    let block = ErrorBlock::unsupported_file();
+    let block = ErrorBlock::unsupported_file(false);
 
     assert_eq!(
         block.message,
         "Only .csv, .json and .jsonl files can be imported."
+    );
+    assert_eq!(
+        block.next_step,
+        "Choose a file with one of those extensions."
+    );
+}
+
+#[test]
+fn an_unsupported_extension_on_a_sql_connection_also_lists_sql() {
+    let block = ErrorBlock::unsupported_file(true);
+
+    assert_eq!(
+        block.message,
+        "Only .csv, .json, .jsonl and .sql files can be imported."
     );
     assert_eq!(
         block.next_step,
