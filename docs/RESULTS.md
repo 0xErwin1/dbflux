@@ -291,6 +291,18 @@ and date options do not apply and are hidden. SQL files are not importable yet:
 importing a folder that holds one fails that table with the message that the
 format cannot be imported. **Export all rows to file** does not offer SQL.
 
+When the source connection cannot write SQL, the Format step does not list it
+and says why under the format picker: its driver can't generate `INSERT`
+statements, so export as CSV or JSON instead. Every state that switches
+**Continue** off says why. The footer names what to fix (**Rows per INSERT**,
+**Chunk size**, the folder, or an empty table selection), and an invalid field
+shows a danger frame, an alert icon and a hint. When the run ends, the dialog
+lists one row per table with its outcome. A table the run never reached after a
+failure says so, and a failed run says what to do next: files already written
+stay in the folder, a failed run writes no `manifest.json`, so the folder cannot
+be imported as a whole, and each completed CSV or JSON file can still be
+imported with **Choose File…**.
+
 The defaults write exactly what earlier versions wrote. The manifest records
 the options that shaped a file, so importing the folder reads it back the same
 way; a manifest without them means the defaults. **Export all rows to file**
@@ -337,3 +349,17 @@ expected.
 Changing the delimiter or encoding reads the file again. The whole file is read
 once before anything is written, so a malformed row or record stops the import
 with the target unchanged.
+
+The import dialog uses the same top stepper and footer as the export wizard:
+**Cancel** on the first two steps, **Back** and **Cancel** on the confirmation,
+and **Continue** as the primary button. A file or folder that cannot be read
+shows one danger block with the error and what to do next. A CSV whose header
+does not decode stays on Configure, where another delimiter or encoding reads it
+again; broken JSON stays on the first step until another file is chosen; and a
+failed look-up of the target table says so and is retried with **Use Table**.
+The footer says why **Continue** is off (a file is being read, or could not be
+read). JSON and JSON Lines show a line saying they have no options, and on a
+connection that cannot truncate tables a line explains why Truncate is not
+listed. In the text fields, `Escape` leaves the field and returns the keys to
+the dialog; a second `Escape` closes the wizard. When the run ends, one row per
+table lists its outcome, and a failed run says what to do next.

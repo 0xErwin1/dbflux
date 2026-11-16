@@ -9,7 +9,9 @@
 //! always imports into the profile/database it was invoked against, which is
 //! by definition already connected.
 
+mod chrome;
 mod column_mapping;
+mod errors;
 mod file_flow;
 mod file_options;
 mod keyboard;
@@ -18,15 +20,10 @@ use dbflux_core::keymap_types::ContextId;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use dbflux_components::composites::{
-    RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_progress_bar,
-    render_wizard_rail, wizard_progress_fraction,
-};
-use dbflux_components::controls::{Button, Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::composites::RailItem;
+use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::Spacing;
 use dbflux_core::{CancelToken, Connection, DriverCapabilities, TaskId, TaskKind, TaskTarget};
 use dbflux_transfer::import::{
     ImportOptions, ImportOutcome, ImportTablePlan, ImportedTable, run_import,
@@ -41,12 +38,14 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use uuid::Uuid;
 
+use crate::export_wizard::notes::{ResultKind, ResultRow};
 use crate::progress_forwarding::spawn_task_progress_forwarder;
 
+use chrome::IMPORT_WIZARD_WIDTH;
 pub use column_mapping::TableImportConfig;
 use column_mapping::mapping_mode_options;
+use errors::ErrorBlock;
 use file_flow::{FileImportState, FileInputs};
-use keyboard::{ConfigureField, with_cursor_ring};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WizardStep {
@@ -104,7 +103,11 @@ struct RunResolution {
     report: Option<String>,
     toast_success: bool,
     summary: String,
-    warnings: Vec<String>,
+    /// One row per planned table, in plan order.
+    rows: Vec<ResultRow>,
+    /// Lines that belong to no table: the cancel's row count and the
+    /// engine's own warnings.
+    notes: Vec<String>,
 }
 
 /// Maps a finished `run_import` call onto its [`RunResolution`]. A cancelled
@@ -115,21 +118,19 @@ struct RunResolution {
 fn resolve_run_outcome(result: Result<ImportOutcome, TransferError>) -> RunResolution {
     match result {
         Ok(outcome) if outcome.cancelled => {
-            let mut warnings = vec![dbflux_i18n::t!(
+            let mut notes = vec![dbflux_i18n::t!(
                 "document.import_wizard.done.cancelled_rows",
                 rows = imported_row_count(&outcome.tables)
             )];
-            warnings.extend(ImportWizard::itemized_status_lines(
-                &outcome.tables,
-                &outcome.warnings,
-            ));
+            notes.extend(outcome.warnings.iter().cloned());
 
             RunResolution {
                 task_action: RunTaskAction::Cancel,
                 report: None,
                 toast_success: false,
                 summary: dbflux_i18n::t!("document.import_wizard.toast.cancelled"),
-                warnings,
+                rows: result_rows(&outcome.tables),
+                notes,
             }
         }
         Ok(outcome) => {
@@ -141,7 +142,8 @@ fn resolve_run_outcome(result: Result<ImportOutcome, TransferError>) -> RunResol
             });
 
             let summary = ImportWizard::summarize(&outcome);
-            let warnings = ImportWizard::itemized_status_lines(&outcome.tables, &outcome.warnings);
+            let rows = result_rows(&outcome.tables);
+            let notes = outcome.warnings;
 
             match failed_table {
                 Some((table, error)) => RunResolution {
@@ -153,14 +155,16 @@ fn resolve_run_outcome(result: Result<ImportOutcome, TransferError>) -> RunResol
                     )),
                     toast_success: false,
                     summary,
-                    warnings,
+                    rows,
+                    notes,
                 },
                 None => RunResolution {
                     task_action: RunTaskAction::Complete,
                     report: None,
                     toast_success: true,
                     summary,
-                    warnings,
+                    rows,
+                    notes,
                 },
             }
         }
@@ -173,7 +177,8 @@ fn resolve_run_outcome(result: Result<ImportOutcome, TransferError>) -> RunResol
                 report: Some(message.clone()),
                 toast_success: false,
                 summary: message,
-                warnings: Vec::new(),
+                rows: Vec::new(),
+                notes: Vec::new(),
             }
         }
     }
@@ -212,7 +217,7 @@ pub struct ImportWizard {
     database: Option<String>,
     step: WizardStep,
     manifest_dir: Option<PathBuf>,
-    manifest_error: Option<String>,
+    manifest_error: Option<ErrorBlock>,
     /// The loose file picked with "Import file"; takes the place of
     /// `manifest_dir` as the import's source while set.
     file_import: Option<FileImportState>,
@@ -234,6 +239,8 @@ pub struct ImportWizard {
     /// rather than being trivially satisfied by the plan itself (B-003).
     confirmed_destructive: bool,
     loading: bool,
+    /// Whether the read in flight is the folder's manifest (else a file).
+    loading_folder: bool,
     running: bool,
     progress: Arc<Mutex<(u64, Option<u64>)>>,
     /// The running import's cancel token, shared with its Tasks-panel entry;
@@ -241,7 +248,8 @@ pub struct ImportWizard {
     cancel_token: Option<CancelToken>,
     active_task_id: Option<TaskId>,
     result_summary: Option<String>,
-    result_warnings: Vec<String>,
+    result_rows: Vec<ResultRow>,
+    result_notes: Vec<String>,
     _row_subscriptions: Vec<Subscription>,
 }
 
@@ -265,12 +273,14 @@ impl ImportWizard {
             supports_truncate: false,
             confirmed_destructive: false,
             loading: false,
+            loading_folder: false,
             running: false,
             progress: Arc::new(Mutex::new((0, None))),
             cancel_token: None,
             active_task_id: None,
             result_summary: None,
-            result_warnings: Vec::new(),
+            result_rows: Vec::new(),
+            result_notes: Vec::new(),
             _row_subscriptions: Vec::new(),
         }
     }
@@ -304,7 +314,8 @@ impl ImportWizard {
         self.cancel_token = None;
         self.active_task_id = None;
         self.result_summary = None;
-        self.result_warnings.clear();
+        self.result_rows.clear();
+        self.result_notes.clear();
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -333,9 +344,7 @@ impl ImportWizard {
 
     fn choose_folder(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.resolve_connection(cx) else {
-            self.manifest_error = Some(dbflux_i18n::t!(
-                "document.import_wizard.pick_folder.error.no_connection"
-            ));
+            self.manifest_error = Some(ErrorBlock::no_connection());
             cx.notify();
             return;
         };
@@ -344,6 +353,8 @@ impl ImportWizard {
         let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
 
         self.loading = true;
+        self.loading_folder = true;
+        self.manifest_error = None;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -368,9 +379,7 @@ impl ImportWizard {
             } else {
                 this.update(cx, |this, cx| {
                     this.loading = false;
-                    this.manifest_error = Some(dbflux_i18n::t!(
-                        "document.import_wizard.pick_folder.error.no_dialog"
-                    ));
+                    this.manifest_error = Some(ErrorBlock::no_dialog());
                     cx.notify();
                 })
                 .ok();
@@ -388,10 +397,7 @@ impl ImportWizard {
                 Err(e) => {
                     this.update(cx, |this, cx| {
                         this.loading = false;
-                        this.manifest_error = Some(dbflux_i18n::t!(
-                            "document.import_wizard.pick_folder.error.invalid_bundle",
-                            error = e.to_string()
-                        ));
+                        this.manifest_error = Some(ErrorBlock::invalid_bundle(&e.to_string()));
                         cx.notify();
                     })
                     .ok();
@@ -622,7 +628,8 @@ impl ImportWizard {
 
         self.running = true;
         self.result_summary = None;
-        self.result_warnings.clear();
+        self.result_rows.clear();
+        self.result_notes.clear();
         *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = (0, None);
 
         let description = crate::labels::import_wizard_task_label(plans.len());
@@ -686,7 +693,8 @@ impl ImportWizard {
                 report,
                 toast_success,
                 summary,
-                warnings,
+                rows,
+                notes,
             } = resolve_run_outcome(import_result);
 
             // The task must reach a terminal state and any failure must reach
@@ -718,7 +726,8 @@ impl ImportWizard {
                 this.cancel_token = None;
                 this.step = WizardStep::Done;
                 this.result_summary = Some(summary);
-                this.result_warnings = warnings;
+                this.result_rows = rows;
+                this.result_notes = notes;
                 cx.notify();
             })
             .ok();
@@ -761,35 +770,30 @@ impl ImportWizard {
 
         crate::labels::import_summary_label(completed, rows, skipped, failed)
     }
+}
 
-    /// Renders one status line per planned table when the run left any table
-    /// `Failed`, `Cancelled` or `NotStarted`, so the user sees exactly which
-    /// tables succeeded, which one failed with what error, which one a cancel
-    /// stopped partway, and which were never attempted — not just the last
-    /// error swallowed into a single toast (R4-002/B-007). On a fully
-    /// successful/skipped run, only the engine's own warnings are shown,
-    /// unchanged.
-    fn itemized_status_lines(tables: &[ImportedTable], engine_warnings: &[String]) -> Vec<String> {
-        let has_issue = tables.iter().any(|t| {
-            matches!(
-                t.status,
-                TableTransferStatus::Failed { .. }
-                    | TableTransferStatus::Cancelled { .. }
-                    | TableTransferStatus::NotStarted
-            )
-        });
+/// One result row per planned table, so the user sees which tables
+/// succeeded, which one failed with what error, which one a cancel stopped
+/// partway, and which were never attempted (R4-002/B-007). A table never
+/// attempted because an earlier one failed says so.
+fn result_rows(tables: &[ImportedTable]) -> Vec<ResultRow> {
+    let stopped_by_failure = tables
+        .iter()
+        .any(|table| matches!(table.status, TableTransferStatus::Failed { .. }));
 
-        if !has_issue {
-            return engine_warnings.to_vec();
-        }
+    tables
+        .iter()
+        .map(|table| {
+            let kind = ResultKind::of(&table.status);
+            let text = if kind == ResultKind::NotAttempted && stopped_by_failure {
+                crate::labels::import_not_attempted_after_failure_line(&table.source_table)
+            } else {
+                crate::labels::import_table_status_line(table)
+            };
 
-        let mut lines: Vec<String> = tables
-            .iter()
-            .map(crate::labels::import_table_status_line)
-            .collect();
-        lines.extend(engine_warnings.iter().cloned());
-        lines
-    }
+            ResultRow { kind, text }
+        })
+        .collect()
 }
 
 impl Render for ImportWizard {
@@ -804,17 +808,16 @@ impl Render for ImportWizard {
             close_entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        let mut frame = Modal::new(dbflux_i18n::t!("document.import_wizard.title"))
+        let frame = Modal::new(dbflux_i18n::t!("document.import_wizard.title"))
             .id("import-wizard")
             .focus_handle(&self.focus_handle)
             .on_close(close)
             .key_context(ContextId::ImportWizard.as_gpui_context())
             .defer_keys_to_owner()
             .icon(AppIcon::Download)
-            .width(WIZARD_MODAL_WIDTH)
-            .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION);
-
-        frame = frame.child(self.render_body(cx));
+            .width(IMPORT_WIZARD_WIDTH)
+            .body(self.render_body(cx))
+            .footer(self.render_footer(cx));
 
         // The keymap's `ImportWizard` context runs its commands through this
         // handler; the dialog hands Escape and Enter to it as well.
@@ -831,299 +834,14 @@ impl Render for ImportWizard {
     }
 }
 
-impl ImportWizard {
-    /// Rail + phase-area layout shared with the migrate/export wizard chrome.
-    /// The rail is display-only (`on_select: None`) — see `import_rail_items`
-    /// — so this wrapping is purely presentational and leaves every step's
-    /// own logic and buttons (`render_pick_folder`, `render_configure`, ...)
-    /// unchanged.
-    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        let phase = match self.step {
-            WizardStep::PickFolder => self.render_pick_folder(cx),
-            WizardStep::Configure => self.render_configure(cx),
-            WizardStep::Confirm => self.render_confirm(cx),
-            WizardStep::Running => self.render_running(cx),
-            WizardStep::Done => self.render_done(cx),
-        };
-
-        div()
-            .flex()
-            .flex_row()
-            .flex_1()
-            .min_h(px(0.0))
-            .child(render_wizard_rail(
-                &import_rail_items(self.step),
-                None::<fn(usize, &mut Window, &mut App)>,
-                cx,
-            ))
-            .child(div().flex_1().min_w(px(0.0)).flex().flex_col().child(phase))
-            .into_any_element()
-    }
-}
-
-impl ImportWizard {
-    fn render_pick_folder(&self, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(Text::body(dbflux_i18n::t!(
-                "document.import_wizard.pick_folder.description"
-            )))
-            .when_some(self.manifest_error.clone(), |d, error| {
-                d.child(Text::caption(error))
-            })
-            .child(
-                Button::new(
-                    "import-wizard-choose-folder",
-                    if self.loading {
-                        dbflux_i18n::t!("document.import_wizard.pick_folder.reading_manifest")
-                    } else {
-                        dbflux_i18n::t!("document.import_wizard.pick_folder.choose_folder")
-                    },
-                )
-                .disabled(self.loading)
-                .on_click(cx.listener(|this, _, _, cx| this.choose_folder(cx))),
-            )
-            .child(Text::body(dbflux_i18n::t!(
-                "document.import_wizard.pick_file.description"
-            )))
-            .child(
-                div()
-                    .debug_selector(|| "import-wizard-choose-file".to_string())
-                    .child(
-                        Button::new(
-                            "import-wizard-choose-file",
-                            if self.loading {
-                                dbflux_i18n::t!("document.import_wizard.pick_file.reading_file")
-                            } else {
-                                dbflux_i18n::t!("document.import_wizard.pick_file.choose_file")
-                            },
-                        )
-                        .disabled(self.loading)
-                        .on_click(cx.listener(|this, _, _, cx| this.choose_file(cx))),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    fn render_configure(&self, cx: &mut Context<Self>) -> AnyElement {
-        let active = self.cursor_field();
-        let file_options = self.render_file_options(active, cx);
-        let rows = self.rows.iter().enumerate().map(|(table_index, row)| {
-            let unmatched = row.config.unmatched_source_names();
-
-            div()
-                .flex()
-                .flex_col()
-                .gap(Spacing::XS)
-                .p(Spacing::SM)
-                .border_1()
-                .child(Text::body(format!(
-                    "{} → {}",
-                    row.config.source_table, row.config.target_table
-                )))
-                .child(
-                    div()
-                        .flex()
-                        .gap(Spacing::SM)
-                        .child(with_cursor_ring(
-                            active,
-                            ConfigureField::Mode(table_index),
-                            row.mapping_mode_dropdown.clone(),
-                            cx,
-                        ))
-                        .child(with_cursor_ring(
-                            active,
-                            ConfigureField::Target(table_index),
-                            row.rebind_target_dropdown.clone(),
-                            cx,
-                        ))
-                        .child(with_cursor_ring(
-                            active,
-                            ConfigureField::Source(table_index),
-                            row.rebind_source_dropdown.clone(),
-                            cx,
-                        ))
-                        .child(
-                            Button::new(
-                                SharedString::from(format!("import-apply-mapping-{table_index}")),
-                                dbflux_i18n::t!("document.import_wizard.configure.apply_mapping"),
-                            )
-                            .ghost()
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.apply_rebind(table_index, cx);
-                                },
-                            )),
-                        ),
-                )
-                .when(!unmatched.is_empty(), |d| {
-                    d.child(Text::caption(dbflux_i18n::t!(
-                        "document.import_wizard.configure.unmatched_source",
-                        names = unmatched.join(", ")
-                    )))
-                })
-                .into_any_element()
-        });
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.0))
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .when_some(file_options, |d, options| d.child(options))
-            .child(
-                div()
-                    .id("import-wizard-tables")
-                    .debug_selector(|| "import-wizard-tables".to_string())
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .children(rows),
-            )
-            .child(
-                Button::new(
-                    "import-wizard-continue",
-                    dbflux_i18n::t!("document.import_wizard.configure.continue"),
-                )
-                .disabled(self.file_import_blocked())
-                .on_click(cx.listener(|this, _, _, cx| this.continue_from_configure(cx))),
-            )
-            .into_any_element()
-    }
-
-    fn render_confirm(&self, cx: &mut Context<Self>) -> AnyElement {
-        let destructive_tables: Vec<String> = self
-            .rows
-            .iter()
-            .filter(|row| row.config.is_destructive())
-            .map(|row| row.config.target_table.clone())
-            .collect();
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(Text::body(dbflux_i18n::t!(
-                "document.import_wizard.confirm.body",
-                tables = destructive_tables.join(", ")
-            )))
-            .child(Text::caption(dbflux_i18n::t!(
-                "document.import_wizard.confirm.warning"
-            )))
-            .child(
-                div()
-                    .flex()
-                    .gap(Spacing::SM)
-                    .child(
-                        Button::new(
-                            "import-wizard-cancel-confirm",
-                            dbflux_i18n::t!("document.import_wizard.confirm.back"),
-                        )
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.step = WizardStep::Configure;
-                            this.confirmed_destructive = false;
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        Button::new(
-                            "import-wizard-confirm-destructive",
-                            dbflux_i18n::t!("document.import_wizard.confirm.proceed"),
-                        )
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.confirm_destructive_and_run(cx)),
-                        ),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    fn render_running(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (rows_done, estimated_total) = *self.progress.lock().unwrap_or_else(|p| p.into_inner());
-        let fraction = wizard_progress_fraction(rows_done, estimated_total);
-        let cancel_requested = self
-            .cancel_token
-            .as_ref()
-            .is_none_or(CancelToken::is_cancelled);
-        let label = match estimated_total {
-            Some(total) if total > 0 => dbflux_i18n::t!(
-                "document.import_wizard.running.progress.of_total",
-                done = rows_done,
-                total = total
-            ),
-            _ => dbflux_i18n::t!(
-                "document.import_wizard.running.progress.only",
-                done = rows_done
-            ),
-        };
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(Text::body(dbflux_i18n::t!(
-                "document.import_wizard.running.title"
-            )))
-            .child(Text::caption(label))
-            .when_some(fraction, |d, fraction| {
-                d.child(render_wizard_progress_bar(fraction, cx))
-            })
-            .child(
-                div().flex().justify_end().child(
-                    Button::new(
-                        "import-wizard-cancel-run",
-                        dbflux_i18n::t!("document.import_wizard.running.cancel"),
-                    )
-                    .ghost()
-                    .disabled(cancel_requested)
-                    .on_click(cx.listener(|this, _, _, cx| this.cancel_run(cx))),
-                ),
-            )
-            .into_any_element()
-    }
-
-    fn render_done(&self, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .when_some(self.result_summary.clone(), |d, summary| {
-                d.child(Text::body(summary))
-            })
-            .when(!self.result_warnings.is_empty(), |d| {
-                d.child(Text::caption(self.result_warnings.join("; ")))
-            })
-            .child(
-                Button::new(
-                    "import-wizard-close",
-                    dbflux_i18n::t!("document.import_wizard.done.close"),
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
-            )
-            .into_any_element()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     // `use super::*` would re-glob the parent module's `use gpui::*`, and
     // combining that wildcard with `#[gpui::test]` blows rustc's macro
     // recursion limit in this crate — import only what the tests need.
     use super::{
-        AppStateEntity, ImportWizard, RunTaskAction, TableImportConfig, WizardStep,
-        resolve_run_outcome,
+        AppStateEntity, ImportWizard, ResultKind, RunTaskAction, TableImportConfig, WizardStep,
+        resolve_run_outcome, result_rows,
     };
     use crate::migrate_wizard::source_target::shared_coordinator_tests::{
         PickerFakeConnection, connect_profile,
@@ -1409,12 +1127,19 @@ mod tests {
         assert!(!resolution.toast_success);
         assert_eq!(resolution.summary, "Import cancelled");
         assert_eq!(
-            resolution.warnings,
+            resolution.notes,
+            vec!["520 row(s) were imported before the import stopped.".to_string()]
+        );
+        assert_eq!(
+            resolution
+                .rows
+                .iter()
+                .map(|row| (row.kind, row.text.as_str()))
+                .collect::<Vec<_>>(),
             vec![
-                "520 row(s) were imported before the import stopped.".to_string(),
-                "users: completed (500 row(s))".to_string(),
-                "orders: cancelled after 20 row(s)".to_string(),
-                "line_items: not attempted".to_string(),
+                (ResultKind::Completed, "users: completed (500 row(s))"),
+                (ResultKind::Cancelled, "orders: cancelled after 20 row(s)"),
+                (ResultKind::NotAttempted, "line_items: not attempted"),
             ],
             "the table the cancel stopped must be listed as cancelled, not completed"
         );
@@ -1469,6 +1194,42 @@ mod tests {
             Some("Import failed on table 'orders': constraint violation")
         );
         assert!(!resolution.toast_success);
+    }
+
+    /// A table the run never reached after a failure says why; without a
+    /// failure (a cancel) it keeps the plain line.
+    #[test]
+    fn result_rows_explain_a_table_the_failure_stopped_the_run_before() {
+        let tables = vec![
+            imported("users", TableTransferStatus::Completed { rows: 3 }),
+            imported(
+                "orders",
+                TableTransferStatus::Failed {
+                    error: "constraint violation".to_string(),
+                },
+            ),
+            imported("items", TableTransferStatus::NotStarted),
+        ];
+
+        let rows = result_rows(&tables);
+
+        assert_eq!(
+            rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
+            vec![
+                ResultKind::Completed,
+                ResultKind::Failed,
+                ResultKind::NotAttempted
+            ]
+        );
+        assert_eq!(rows[0].text, "users: completed (3 row(s))");
+        assert_eq!(rows[1].text, "orders: FAILED — constraint violation");
+        assert_eq!(
+            rows[2].text,
+            "items: not attempted: the import stopped at the failed table"
+        );
+
+        let cancelled = result_rows(&[imported("items", TableTransferStatus::NotStarted)]);
+        assert_eq!(cancelled[0].text, "items: not attempted");
     }
 
     #[test]

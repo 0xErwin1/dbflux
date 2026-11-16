@@ -348,6 +348,51 @@ fn focus_input(
     window.run_until_parked();
 }
 
+/// Escape inside a text field gives the keys back to the dialog, so J and K
+/// move the cursor again; a second Escape then closes the wizard.
+#[gpui::test]
+fn escape_in_the_target_table_field_returns_focus_to_the_dialog(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("escape_target", "people.csv", b"id,name\n1,Ada\n");
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path);
+    focus_input(&wizard, window, |inputs| inputs.target_table.clone());
+
+    press(window, "escape");
+
+    window.update(|window, cx| {
+        let wizard = wizard.read(cx);
+        assert!(
+            wizard.is_visible(),
+            "the first Escape leaves the field only"
+        );
+        assert!(wizard.focus_handle.is_focused(window));
+    });
+
+    press(window, "j");
+    window.update(|_, cx| assert_eq!(wizard.read(cx).field_cursor, 1));
+
+    press(window, "escape");
+    window.update(|_, cx| assert!(!wizard.read(cx).is_visible()));
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[gpui::test]
+fn escape_in_the_null_text_field_returns_focus_to_the_dialog(cx: &mut TestAppContext) {
+    let (directory, path) = scratch_file("escape_null", "people.csv", b"id,name\n1,Ada\n");
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path);
+    focus_input(&wizard, window, |inputs| inputs.null_text.clone());
+
+    press(window, "escape");
+
+    window.update(|window, cx| {
+        let wizard = wizard.read(cx);
+        assert!(wizard.is_visible());
+        assert!(wizard.focus_handle.is_focused(window));
+    });
+    std::fs::remove_dir_all(&directory).ok();
+}
+
 fn assert_comma_and_columns(wizard: &Entity<ImportWizard>, window: &mut VisualTestContext) {
     window.update(|_, cx| {
         let options = &wizard.read(cx).file_import.as_ref().expect("file").options;
@@ -461,4 +506,38 @@ fn picking_another_file_resets_the_cursor(cx: &mut TestAppContext) {
         );
     });
     std::fs::remove_dir_all(&directory).ok();
+}
+
+/// Escape on an open mapping dropdown closes only the dropdown; the wizard
+/// stays open and the dialog gets the keys back.
+#[gpui::test]
+fn escape_on_an_open_dropdown_closes_only_the_dropdown(cx: &mut TestAppContext) {
+    let (wizard, window) = open_wizard(cx);
+    wizard.update(window, |this, cx| {
+        this.build_rows(vec![rebind_row()], cx);
+        this.step = WizardStep::Configure;
+        cx.notify();
+    });
+    window.run_until_parked();
+
+    press(window, "enter");
+    window.update(|_, cx| {
+        assert!(
+            wizard.read(cx).rows[0]
+                .mapping_mode_dropdown
+                .read(cx)
+                .is_open()
+        );
+    });
+
+    press(window, "escape");
+    window.update(|window, cx| {
+        let wizard = wizard.read(cx);
+        assert!(!wizard.rows[0].mapping_mode_dropdown.read(cx).is_open());
+        assert!(
+            wizard.is_visible(),
+            "Escape on the dropdown must not close the wizard"
+        );
+        assert!(wizard.focus_handle.is_focused(window));
+    });
 }

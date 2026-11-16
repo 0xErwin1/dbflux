@@ -316,6 +316,19 @@ y se ocultan. Los archivos SQL aún no se pueden importar: al importar una
 carpeta que contiene uno, esa tabla falla con el mensaje de que el formato no se
 puede importar. **Exportar todas las filas a un archivo** no ofrece SQL.
 
+Cuando la conexión de origen no puede escribir SQL, el paso Formato no lo
+lista y explica el motivo bajo el selector de formato: su driver no puede
+generar sentencias `INSERT`, así que exporta como CSV o JSON. Cada estado que
+desactiva **Continuar** explica por qué. El pie nombra qué corregir (**Filas por
+INSERT**, **Tamaño de bloque**, la carpeta o una selección de tablas vacía), y
+un campo no válido muestra un marco de peligro, un icono de alerta y una
+pista. Cuando termina la ejecución, el diálogo lista una fila por tabla con su
+resultado. Una tabla que la ejecución no alcanzó tras un fallo lo indica, y una
+ejecución fallida dice qué hacer a continuación: los archivos ya escritos
+permanecen en la carpeta, una ejecución fallida no escribe `manifest.json`, así
+que la carpeta no se puede importar completa, y cada archivo CSV o JSON
+terminado todavía se puede importar con **Elegir archivo…**.
+
 Los valores por defecto escriben exactamente lo que escribían las versiones
 anteriores. El manifiesto registra las opciones que dieron forma a un archivo,
 de modo que importar la carpeta lo lee igual; un manifiesto sin ellas significa
@@ -366,3 +379,19 @@ vacía y las referencias de carácter como `&#10;` se decodifican. Cualquier otr
 forma de XML se rechaza con un mensaje que indica la esperada. Cambiar el delimitador o la codificación vuelve a leer el
 archivo. Todo el archivo se lee una vez antes de escribir nada, así que una fila
 o registro mal formado detiene la importación sin tocar el destino.
+
+El diálogo de importación usa el mismo indicador de pasos superior y el mismo
+pie que el asistente de exportación: **Cancelar** en los dos primeros pasos,
+**Atrás** y **Cancelar** en la confirmación, y **Continuar** como botón
+principal. Un archivo o una carpeta que no se puede leer muestra un único bloque
+de peligro con el error y qué hacer a continuación. Un CSV cuyo encabezado no se
+decodifica se queda en Configurar, donde otro delimitador o codificación lo lee
+de nuevo; un JSON roto se queda en el primer paso hasta que se elige otro
+archivo; y una consulta fallida de la tabla de destino lo indica y se reintenta
+con **Usar tabla**. El pie explica por qué **Continuar** está desactivado (se
+está leyendo un archivo o no se pudo leer). JSON y JSON Lines muestran una línea
+que dice que no tienen opciones, y en una conexión que no puede truncar tablas
+una línea explica por qué Truncate no aparece. En los campos de texto, `Escape`
+sale del campo y devuelve las teclas al diálogo; un segundo `Escape` cierra el
+asistente. Cuando termina la ejecución, una fila por tabla lista su resultado, y
+una ejecución fallida dice qué hacer a continuación.

@@ -14,6 +14,10 @@ All notable changes to DBFlux will be documented in this file.
 
 * **Import XML files in the export shape** — **Choose File…** in the import wizard also accepts `.xml` files written in the shape the XML export produces: a `<rows>` root with a `<row>` per row and a `<field name="...">` per column, where `null="true"` is NULL and character references such as `&#10;` are decoded. Columns are the field names of the first 100 rows, values are read as the target table's column types, and any other XML shape is rejected with a message that states the expected one. The Configure step says XML files have no import options. Importing a folder whose manifest says `xml` now works too (#805).
 
+### Changed
+
+* **The export and import wizards follow the approved design, and every blocked state says why** — The import wizard now uses the top stepper and the shared footer (Cancel, Continue, and Back on the confirmation) of the export wizard instead of a left rail, and the export dialog is 760 px wide so the seven-format picker fits. A file that cannot be read shows a danger block with an icon and what to do next, a target-table lookup failure now says so instead of claiming the file could not be read, and an invalid batch size, chunk size or folder gets a danger frame, an alert icon and a hint. The footer names why Continue is off, SQL not being offered, JSON having no options and Truncate not being listed are explained, and a finished run lists one row per table, marks the tables a failure stopped and says what to do next. In the import wizard, `Escape` in the target table or NULL text field returns the keys to the dialog and a second `Escape` closes it. The target table field shows its `Enter` key hint, the export confirmation has Cancel, and a destructive import confirmation lists each affected table with its mode in a danger block. (#805)
+
 ### Fixed
 
 * **A cancelled export lists its tables** — After cancelling an export, the Done screen only said "Export cancelled". It now lists each table, as import and migrate do: which tables were written, how many rows the cancel left in the table it stopped, and which were never started.

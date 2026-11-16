@@ -2167,6 +2167,7 @@ document:
       run: 실행
     tables:
       selected_count: "내보낼 테이블 %{count}개 선택됨"
+      required: "내보낼 테이블을 하나 이상 선택하세요."
     format_options:
       format_label: 형식
       output_folder_label: "폴더"
@@ -2204,6 +2205,8 @@ document:
         epoch: "Epoch (초)"
       error:
         no_dialog_fallback_failed: "폴더 선택기를 사용할 수 없고 대체 내보내기 디렉터리를 만들 수 없습니다: %{error}"
+      sql_unavailable: "이 연결에서는 SQL을 사용할 수 없습니다. 드라이버가 INSERT 문을 생성할 수 없기 때문입니다. CSV 또는 JSON으로 내보내세요."
+      folder_required: "파일을 저장할 폴더를 선택하세요."
     confirm:
       title: 내보내기 계획 검토
       summary: "테이블 %{count}개를 %{format} 형식으로 %{folder}에 저장"
@@ -2235,10 +2238,18 @@ document:
       failed: "%{table}: 실패 — %{error}"
       not_attempted: "%{table}: 시도하지 않음"
       cancelled: "%{table}: %{rows}행 처리 후 취소됨"
+      not_attempted_after_failure: "%{table}: 시도하지 않음: 실패한 테이블에서 내보내기가 중단되었습니다"
     footer:
       back: 뒤로
       continue: 계속
       close: 닫기
+      reason:
+        tables: "테이블을 선택할 때까지 계속이 비활성화됩니다."
+        folder: "폴더를 선택할 때까지 계속이 비활성화됩니다."
+        batch_size: "INSERT당 행 수가 올바를 때까지 계속이 비활성화됩니다."
+        segment_size: "청크 크기가 올바를 때까지 계속이 비활성화됩니다."
+    done:
+      closing_failed: "이 대화 상자를 닫고 위의 원인을 해결한 뒤 다시 내보내세요. 이미 기록된 파일은 폴더에 남습니다. manifest.json이 없으면 폴더 전체를 가져올 수 없지만, 완료된 CSV 또는 JSON 파일은 파일 선택으로 각각 가져올 수 있습니다. 단, CSV 파일은 개별 파일에 설정이 담기지 않으므로 먼저 구분자, 인코딩, NULL 텍스트를 이 내보내기와 같게 지정하세요."
   file:
     error:
       source_changed: "파일을 연 뒤 다른 곳에서 파일이 변경되어 아무것도 저장하지 않았고 편집 내용은 유지됩니다. 새 내용을 보려면 편집 내용을 취소하고 파일에서 다시 불러오기를 선택한 다음 다시 편집하세요."
@@ -2451,6 +2462,10 @@ document:
         no_connection: 이 프로필에 대한 활성 연결이 없습니다
         no_dialog: 이 플랫폼에서는 폴더 선택기를 사용할 수 없습니다
         invalid_bundle: "가져오기 번들이 올바르지 않습니다: %{error}"
+        no_connection_next: "프로필에 연결한 다음 가져오기를 다시 여세요."
+        no_dialog_next: "파일 대화 상자를 제공하는 데스크톱 세션에서 DBFlux를 시작한 뒤 다시 시도하세요."
+        invalid_bundle_next: "내보내기가 기록한 폴더를 선택하세요. manifest.json이 들어 있는 폴더입니다. 파일 하나를 가져오려면 대신 파일 선택…을 사용하세요."
+      reading_hint: "매니페스트를 읽는 중입니다. 끝날 때까지 두 버튼이 모두 비활성화됩니다."
     configure:
       mode_placeholder: 모드
       target_placeholder: 대상 열
@@ -2459,6 +2474,7 @@ document:
       apply_mapping: 매핑 적용
       continue: 계속
       unmatched_source: "매핑되지 않은 소스 열은 다시 매핑하지 않으면 건너뜁니다: %{names}"
+      truncate_unavailable: "이 연결은 테이블을 비울 수 없으므로 Truncate가 표시되지 않습니다. 대신 Recreate를 선택해 테이블을 교체하세요."
     pick_file:
       description: "또는 CSV, JSON, JSON Lines, XML 파일 하나를 테이블 하나로 가져옵니다."
       choose_file: "파일 선택…"
@@ -2468,13 +2484,21 @@ document:
       error:
         unsupported: ".csv, .json, .jsonl, .xml 파일만 가져올 수 있습니다."
         invalid_file: "파일을 읽을 수 없습니다: %{error}"
+        unsupported_next: "해당 확장자 중 하나인 파일을 선택하세요."
+        lookup_failed: "대상 테이블을 조회하지 못했습니다: %{error}"
+        next_csv: "위에서 다른 인코딩이나 구분자를 선택하세요. 선택하는 즉시 파일을 다시 읽습니다."
+        next_json: "파일의 JSON을 고친 뒤 다시 선택하거나 다른 파일을 선택하세요."
+        next_xml: "파일의 XML을 고친 뒤 다시 선택하거나 다른 파일을 선택하세요."
+        next_lookup: "테이블 이름과 연결에 대한 권한을 확인한 뒤 테이블 사용을 다시 누르세요."
+      reading_hint: "파일을 읽는 중입니다. 끝날 때까지 두 버튼이 모두 비활성화됩니다."
     file:
       source: "파일: %{file} (%{format})"
       target_table_label: "대상 테이블"
       target_table_placeholder: "테이블 이름 (기본값: 파일 이름)"
       use_table: "테이블 사용"
       null_text_hint: "파일에서 NULL을 나타내는 텍스트입니다. 비워 두면 빈 필드가 NULL입니다."
-      no_options_hint: "%{format} 파일에는 가져오기 옵션이 없습니다."
+      json_no_options: "JSON과 JSON Lines에는 가져오기 옵션이 없습니다. 파일 자체가 열과 NULL을 정의합니다."
+      xml_no_options: "XML에는 가져오기 옵션이 없습니다. 파일 자체가 열과 NULL을 정의합니다."
     mapping_mode:
       create: 만들기
       existing: 기존 (삽입만)
@@ -2482,7 +2506,8 @@ document:
       skip: 건너뛰기
       truncate: 자르기 (비우기 + 삽입)
     confirm:
-      body: "데이터를 적재하기 전에 다음 테이블을 삭제 후 다시 만들거나 비웁니다: %{tables}"
+      body: "데이터를 적재하기 전에 다음 테이블을 삭제 후 다시 만들거나 비웁니다:"
+      table_line: "%{table} — %{mode}"
       warning: "이 작업은 되돌릴 수 없습니다. 계속하려면 확인하세요."
       back: 뒤로
       proceed: "예, 계속합니다"
@@ -2495,6 +2520,7 @@ document:
     done:
       cancelled_rows: "가져오기가 중지되기 전에 %{rows}행을 가져왔습니다."
       close: 닫기
+      closing_failed: "이 대화 상자를 닫고 위의 원인을 해결하세요. 완료된 테이블은 대상에 남습니다. 다시 가져오려면 해당 테이블에 건너뛰기를 선택하세요. 트랜잭션을 지원하지 않는 대상에서는 오류 전에 기록된 실패 테이블의 행도 남습니다."
     error:
       no_connection: 이 가져오기에 대한 활성 연결이 없습니다
     toast:
@@ -2511,6 +2537,11 @@ document:
       failed: "%{table}: 실패 — %{error}"
       not_attempted: "%{table}: 시도하지 않음"
       cancelled: "%{table}: %{rows}행 처리 후 취소됨"
+      not_attempted_after_failure: "%{table}: 시도하지 않음: 실패한 테이블에서 가져오기가 중단되었습니다"
+    footer:
+      reason:
+        file_read: "파일을 읽을 때까지 계속이 비활성화됩니다."
+      cancel: "취소"
   instance_inspector:
     task_label: "검사기: %{metric_id}"
     connection_not_found: 연결을 찾을 수 없습니다
