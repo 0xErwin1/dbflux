@@ -30,6 +30,7 @@
 //!   statement stopped, calling `Connection::cancel_active`. A statement
 //!   that ends with `DbError::Cancelled` is a cancellation, not a failure.
 
+mod blank;
 mod control;
 mod directives;
 mod load;
@@ -44,8 +45,8 @@ mod tests;
 pub use control::TransactionControl;
 pub use load::{MAX_SCRIPT_BYTES, load_script};
 pub use run::{
-    Disposition, OnError, RunEnd, RunOptions, ScriptProgress, ScriptReport, StatementFailure,
-    run_script,
+    Disposition, OnError, RunEnd, RunOptions, ScriptProgress, ScriptReport, ScriptTransaction,
+    StatementFailure, run_script,
 };
 pub use summary::{ScriptSummary, StatementInfo};
 
@@ -178,6 +179,17 @@ pub enum ScriptError {
         "The script uses the psql command {command} on line {line}, which only the psql command-line client understands. Remove it, or run the script with psql."
     )]
     PsqlMetaCommand { command: String, line: usize },
+
+    #[error(
+        "The script {change} on line {line} ({statement}). That would leave this connection in manual-commit mode after the run. Remove that statement, or run the script with the database's own command-line client."
+    )]
+    SessionCommitMode {
+        /// What the statement does: `turns off autocommit` or `turns on implicit transactions`.
+        change: &'static str,
+        /// The offending statement, cut to a snippet.
+        statement: String,
+        line: usize,
+    },
 
     #[error("Could not start the transaction, so nothing ran: {message}")]
     TransactionStart { message: String },

@@ -4,8 +4,8 @@
 
 use super::ScriptError;
 use super::ScriptStatement;
+use super::blank::{Identifiers, blank_literals};
 use super::directives::find_in_code_lines;
-use super::routine::blank_literals;
 
 /// The first psql-only construct in the script, as the error to refuse it
 /// with. A `COPY ... FROM stdin` block is checked first, because its data
@@ -37,7 +37,7 @@ pub(super) fn find_psql_only(text: &str, statements: &[ScriptStatement]) -> Opti
 /// `COPY ... FROM stdin`, with or without options: the data follows the
 /// statement in the script, which only psql feeds to the server.
 fn is_copy_from_stdin(statement: &str) -> bool {
-    let code = blank_literals(statement);
+    let code = blank_literals(statement, Identifiers::Blank);
     let words: Vec<&str> = code.split_whitespace().collect();
     let is_word = |word: &str, expected: &str| {
         word.trim_end_matches(|c: char| !c.is_alphanumeric())
