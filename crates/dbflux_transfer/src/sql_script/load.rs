@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use dbflux_core::QueryLanguage;
@@ -32,7 +33,14 @@ pub fn load_script(path: &Path, language: &QueryLanguage) -> Result<SqlScript, S
         });
     }
 
-    let bytes = fs::read(path).map_err(unreadable)?;
+    let file = fs::File::open(path).map_err(unreadable)?;
+    let bytes = read_limited(file, MAX_SCRIPT_BYTES).map_err(|error| match error {
+        ReadError::Io(error) => unreadable(error),
+        ReadError::TooLarge(size) => ScriptError::TooLarge {
+            size,
+            limit: MAX_SCRIPT_BYTES,
+        },
+    })?;
     let text = String::from_utf8(bytes).map_err(|error| ScriptError::NotUtf8 {
         position: error.utf8_error().valid_up_to() + 1,
     })?;
@@ -156,4 +164,29 @@ fn after_block_comment(text: &str) -> &str {
     }
 
     ""
+}
+
+#[derive(Debug)]
+pub(super) enum ReadError {
+    Io(std::io::Error),
+    TooLarge(u64),
+}
+
+/// Reads at most `limit` bytes; one more means the source is too large.
+pub(super) fn read_limited(
+    mut reader: impl std::io::Read,
+    limit: u64,
+) -> Result<Vec<u8>, ReadError> {
+    let mut bytes = Vec::new();
+    reader
+        .by_ref()
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(ReadError::Io)?;
+
+    if bytes.len() as u64 > limit {
+        return Err(ReadError::TooLarge(bytes.len() as u64));
+    }
+
+    Ok(bytes)
 }

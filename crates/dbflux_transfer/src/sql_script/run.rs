@@ -5,7 +5,8 @@ use dbflux_core::{
     TransactionVocab,
 };
 
-use super::summary::{changes_data, classify_all, is_ddl_class};
+use super::control::{TransactionEffect, transaction_effect};
+use super::summary::{changes_data, classify_all, ddl_flags};
 use super::{ScriptError, SqlScript};
 
 /// What a failed statement does to the rest of the run.
@@ -65,9 +66,32 @@ pub enum Disposition {
     RolledBack,
     /// No transaction: every statement that ran was saved as it ran.
     Kept,
+    /// A transaction was rolled back, but the script had already made an
+    /// implicit commit (schema statements on a connection that commits them
+    /// on its own, see [`ScriptReport::first_implicit_commit`]). Everything up
+    /// to that statement was saved, and statements after it ran outside the
+    /// transaction, so they may be saved too. Never report this as a full
+    /// rollback.
+    PartiallyKept,
     /// The rollback itself failed, so the transaction may still be open; see
     /// [`ScriptReport::finish_error`].
     Unresolved,
+}
+
+/// What became of a transaction the script opened itself (`BEGIN`,
+/// `START TRANSACTION`) in a run that did not use [`RunOptions::transaction`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptTransaction {
+    /// The script left no transaction open.
+    None,
+    /// The script ended inside its own open transaction. Its changes are not
+    /// saved until someone commits, and they are lost if the session ends.
+    /// After a stop or cancel the engine tries to roll it back first, so this
+    /// also means that rollback failed (see [`ScriptReport::finish_error`]).
+    LeftOpen,
+    /// The run stopped or was cancelled inside the script's own transaction,
+    /// and the engine rolled it back: nothing it had changed there was saved.
+    RolledBack,
 }
 
 /// A statement that failed.
@@ -100,12 +124,32 @@ pub struct ScriptReport {
     /// A transaction was used, the script has schema statements, and the
     /// connection commits those on its own, so a rollback cannot undo them.
     pub ddl_not_transactional: bool,
+    /// 1-based position of the first statement that committed on its own while
+    /// the engine's transaction was open. `Some` only when
+    /// `ddl_not_transactional` and such a statement ran.
+    pub first_implicit_commit: Option<usize>,
+    /// What became of a transaction opened by the script itself.
+    pub script_transaction: ScriptTransaction,
     /// The error from the commit or rollback that ended the transaction.
     pub finish_error: Option<String>,
     pub elapsed: Duration,
 }
 
 /// Runs `script` on `connection` one statement at a time.
+///
+/// The run needs the connection to itself: `BEGIN`, the statements and
+/// `COMMIT` or `ROLLBACK` go through the one `&dyn Connection`, so a query
+/// from anywhere else in between would run inside the open transaction and
+/// be undone by its rollback. Pass a connection nothing else uses for the
+/// duration of the run.
+///
+/// A script may open a transaction of its own (`BEGIN`) when
+/// [`RunOptions::transaction`] is off. If the run is stopped or cancelled
+/// inside it, the engine rolls it back; if the script simply ends inside it,
+/// it is left open. Either way it is reported in
+/// [`ScriptReport::script_transaction`]. Only `BEGIN`, `START TRANSACTION`,
+/// `COMMIT`, `END`, `ABORT` and `ROLLBACK` are tracked; `SET autocommit` is
+/// not.
 ///
 /// `on_progress` is called before each statement. `cancel` is checked between
 /// statements, so a cancel stops the run after the statement in progress; a
@@ -138,6 +182,7 @@ pub fn run_script(
         connection,
         script,
         options.on_error,
+        &plan.implicit_commit,
         &mut on_progress,
         cancel,
     );
@@ -148,6 +193,9 @@ pub fn run_script(
 struct Plan {
     vocab: Option<TransactionVocab>,
     ddl_not_transactional: bool,
+    /// Per statement: it commits on its own while the engine's transaction is
+    /// open.
+    implicit_commit: Vec<bool>,
 }
 
 fn preflight(
@@ -196,12 +244,15 @@ fn preflight(
         None
     };
 
-    let has_ddl = classes.iter().any(|class| is_ddl_class(*class));
+    let commits_ddl = vocab.is_some() && !connection.supports_transactional_ddl();
+    let implicit_commit: Vec<bool> = ddl_flags(script, &classes)
+        .into_iter()
+        .map(|ddl| ddl && commits_ddl)
+        .collect();
 
     Ok(Plan {
-        ddl_not_transactional: vocab.is_some()
-            && has_ddl
-            && !connection.supports_transactional_ddl(),
+        ddl_not_transactional: implicit_commit.iter().any(|commits| *commits),
+        implicit_commit,
         vocab,
     })
 }
@@ -211,12 +262,16 @@ struct LoopOutcome {
     ran: usize,
     failures: Vec<StatementFailure>,
     stopped_at: Option<usize>,
+    first_implicit_commit: Option<usize>,
+    /// The script opened a transaction of its own and has not closed it.
+    script_transaction_open: bool,
 }
 
 fn execute_statements(
     connection: &dyn Connection,
     script: &SqlScript,
     on_error: OnError,
+    implicit_commit: &[bool],
     on_progress: &mut impl FnMut(&ScriptProgress),
     cancel: &CancelToken,
 ) -> LoopOutcome {
@@ -226,6 +281,8 @@ fn execute_statements(
         ran: 0,
         failures: Vec::new(),
         stopped_at: None,
+        first_implicit_commit: None,
+        script_transaction_open: false,
     };
 
     for (position, statement) in script.statements().iter().enumerate() {
@@ -244,7 +301,18 @@ fn execute_statements(
         });
 
         match connection.execute(&QueryRequest::new(statement.text.as_str())) {
-            Ok(_) => outcome.ran += 1,
+            Ok(_) => {
+                outcome.ran += 1;
+
+                if implicit_commit.get(position) == Some(&true) {
+                    outcome.first_implicit_commit.get_or_insert(index);
+                }
+                match transaction_effect(&statement.text) {
+                    TransactionEffect::Opens => outcome.script_transaction_open = true,
+                    TransactionEffect::Closes => outcome.script_transaction_open = false,
+                    TransactionEffect::Other => {}
+                }
+            }
             Err(DbError::Cancelled) => {
                 outcome.end = RunEnd::Cancelled;
                 outcome.stopped_at = Some(index);
@@ -270,8 +338,8 @@ fn execute_statements(
     outcome
 }
 
-/// Ends the transaction (commit when the run finished, rollback otherwise)
-/// and builds the report.
+/// Ends the transaction (commit when the run finished, rollback otherwise),
+/// resolves a transaction the script opened itself, and builds the report.
 fn finish(
     connection: &dyn Connection,
     script: &SqlScript,
@@ -281,9 +349,16 @@ fn finish(
 ) -> ScriptReport {
     let mut end = outcome.end;
     let mut finish_error = None;
+    let mut script_transaction = ScriptTransaction::None;
 
     let disposition = match &plan.vocab {
-        None => Disposition::Kept,
+        None => {
+            if outcome.script_transaction_open {
+                (script_transaction, finish_error) =
+                    resolve_script_transaction(connection, end != RunEnd::Finished);
+            }
+            Disposition::Kept
+        }
         Some(vocab) => {
             let commit_error = (end == RunEnd::Finished)
                 .then(|| connection.execute(&QueryRequest::new(vocab.commit)).err())
@@ -298,6 +373,9 @@ fn finish(
                     }
 
                     match connection.execute(&QueryRequest::new(vocab.rollback)) {
+                        Ok(_) if outcome.first_implicit_commit.is_some() => {
+                            Disposition::PartiallyKept
+                        }
                         Ok(_) => Disposition::RolledBack,
                         Err(error) => {
                             finish_error = Some(match finish_error {
@@ -321,7 +399,35 @@ fn finish(
         stopped_at: outcome.stopped_at,
         transaction_used: plan.vocab.is_some(),
         ddl_not_transactional: plan.ddl_not_transactional,
+        first_implicit_commit: outcome.first_implicit_commit,
+        script_transaction,
         finish_error,
         elapsed,
+    }
+}
+
+/// The script opened a transaction and the run ended inside it. After a stop
+/// or a cancel the rest of the script, including its `COMMIT`, never runs,
+/// so the connection is rolled back instead of being left holding locks and
+/// uncommitted changes. A run that finished is left alone and reported: the
+/// script may have meant to leave it open, and the user decides.
+fn resolve_script_transaction(
+    connection: &dyn Connection,
+    interrupted: bool,
+) -> (ScriptTransaction, Option<String>) {
+    if !interrupted {
+        return (ScriptTransaction::LeftOpen, None);
+    }
+
+    let Some(vocab) = TransactionVocab::for_kind(connection.kind()) else {
+        return (ScriptTransaction::LeftOpen, None);
+    };
+
+    match connection.execute(&QueryRequest::new(vocab.rollback)) {
+        Ok(_) => (ScriptTransaction::RolledBack, None),
+        Err(error) => (
+            ScriptTransaction::LeftOpen,
+            Some(format!("Rollback failed: {error}")),
+        ),
     }
 }

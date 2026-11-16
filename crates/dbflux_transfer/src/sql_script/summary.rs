@@ -3,6 +3,7 @@ use dbflux_core::{
     classify_query_for_language_with_service,
 };
 
+use super::blank::{Identifiers, blank_literals, words_with_offsets};
 use super::routine::changes_a_sequence;
 use super::{SqlScript, TransactionControl};
 
@@ -127,11 +128,7 @@ impl SqlScript {
             .zip(counts)
             .filter(|(_, count)| *count > 0)
             .collect();
-        let ddl_count = by_classification
-            .iter()
-            .filter(|(class, _)| is_ddl_class(*class))
-            .map(|(_, count)| count)
-            .sum();
+        let ddl_count = ddl_flags(self, &classes).iter().filter(|ddl| **ddl).count();
         let changing_count = classes.iter().filter(|class| changes_data(**class)).count();
 
         ScriptSummary {
@@ -182,13 +179,34 @@ pub(super) fn changes_data(classification: ExecutionClassification) -> bool {
     )
 }
 
-pub(super) fn is_ddl_class(classification: ExecutionClassification) -> bool {
-    matches!(
-        classification,
-        ExecutionClassification::AdminSafe
-            | ExecutionClassification::Admin
-            | ExecutionClassification::AdminDestructive
-    )
+/// For each statement, whether it changes the schema. The classifier rates
+/// `ALTER`, `DROP` and `TRUNCATE` as plain destructive, so the statement's
+/// first word counts as well as the schema classes.
+pub(super) fn ddl_flags(script: &SqlScript, classes: &[ExecutionClassification]) -> Vec<bool> {
+    script
+        .statements()
+        .iter()
+        .zip(classes)
+        .map(|(statement, class)| {
+            matches!(
+                class,
+                ExecutionClassification::AdminSafe
+                    | ExecutionClassification::Admin
+                    | ExecutionClassification::AdminDestructive
+            ) || first_word_is_ddl(&statement.text)
+        })
+        .collect()
+}
+
+fn first_word_is_ddl(statement: &str) -> bool {
+    let code = blank_literals(statement, Identifiers::Blank);
+
+    words_with_offsets(&code).first().is_some_and(|(_, word)| {
+        matches!(
+            word.as_str(),
+            "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "RENAME"
+        )
+    })
 }
 
 fn is_destructive_class(classification: ExecutionClassification) -> bool {

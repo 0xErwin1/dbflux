@@ -30,6 +30,7 @@
 //!   statement stopped, calling `Connection::cancel_active`. A statement
 //!   that ends with `DbError::Cancelled` is a cancellation, not a failure.
 
+mod blank;
 mod control;
 mod directives;
 mod load;
@@ -44,8 +45,8 @@ mod tests;
 pub use control::TransactionControl;
 pub use load::{MAX_SCRIPT_BYTES, load_script};
 pub use run::{
-    Disposition, OnError, RunEnd, RunOptions, ScriptProgress, ScriptReport, StatementFailure,
-    run_script,
+    Disposition, OnError, RunEnd, RunOptions, ScriptProgress, ScriptReport, ScriptTransaction,
+    StatementFailure, run_script,
 };
 pub use summary::{ScriptSummary, StatementInfo};
 

@@ -9,6 +9,8 @@ use dbflux_core::{
 };
 use dbflux_driver_sqlite::SqliteDriver;
 
+use super::load::{ReadError, read_limited};
+use super::routine::changes_a_sequence;
 use super::*;
 
 struct Scratch(PathBuf);
@@ -40,7 +42,7 @@ impl Drop for Scratch {
 
 /// SQLite does not declare `DriverCapabilities::TRANSACTIONS`; this wrapper
 /// declares it so the transaction paths can be exercised without a server.
-struct WithTransactions(Box<dyn Connection>);
+struct WithTransactions(Box<dyn Connection>, bool);
 
 impl Connection for WithTransactions {
     fn metadata(&self) -> &DriverMetadata {
@@ -84,12 +86,12 @@ impl Connection for WithTransactions {
     }
 
     fn supports_transactional_ddl(&self) -> bool {
-        self.0.supports_transactional_ddl()
+        self.1
     }
 }
 
 fn sqlite(scratch: &Scratch) -> Box<dyn Connection> {
-    Box::new(WithTransactions(plain_sqlite(scratch)))
+    Box::new(WithTransactions(plain_sqlite(scratch), true))
 }
 
 fn plain_sqlite(scratch: &Scratch) -> Box<dyn Connection> {
@@ -915,4 +917,180 @@ fn server_side_copy_and_backslashes_in_text_are_not_psql_only() {
                 SELECT 'C:\\dir';\n";
 
     assert_eq!(psql_error(text), None);
+}
+
+// ------------------------------------------------------ review feedback
+
+fn control_keyword(text: &str) -> Option<&'static str> {
+    control_of(text).map(|(_, _, keyword)| keyword)
+}
+
+#[test]
+fn comments_are_whitespace_for_transaction_keywords() {
+    assert_eq!(control_keyword("COMMIT/*note*/;"), Some("COMMIT"));
+    assert_eq!(control_keyword("/*a*/BEGIN/*b*/;"), Some("BEGIN"));
+    assert_eq!(control_keyword("ROLLBACK--x\n;"), Some("ROLLBACK"));
+}
+
+#[test]
+fn a_begin_in_a_comment_or_string_does_not_hide_a_later_end() {
+    assert_eq!(
+        control_of("SELECT 1 -- begin\n;\nEND;"),
+        Some((2, 3, "END"))
+    );
+    assert_eq!(control_keyword("SELECT 'begin';\nEND;"), Some("END"));
+}
+
+#[test]
+fn abort_is_transaction_control() {
+    assert_eq!(control_keyword("ABORT;"), Some("ABORT"));
+    assert_eq!(control_keyword("abort work;"), Some("ABORT"));
+}
+
+#[test]
+fn begin_not_atomic_is_a_compound_body_not_a_transaction() {
+    assert_eq!(control_keyword("BEGIN NOT ATOMIC SELECT 1 END"), None);
+    assert_eq!(
+        split_body_line("BEGIN NOT ATOMIC INSERT INTO t VALUES (1); DELETE FROM t; END;"),
+        Some(1)
+    );
+    assert_eq!(control_keyword("BEGIN NOT DEFERRABLE;"), Some("BEGIN"));
+}
+
+#[test]
+fn quoted_sequence_function_names_count_as_calls() {
+    for sql in [
+        "SELECT pg_catalog.\"setval\"('s', 5);",
+        "SELECT \"nextval\" ('s');",
+        "SELECT public.NEXTVAL('s');",
+    ] {
+        assert!(changes_a_sequence(sql), "{sql}");
+    }
+    for sql in [
+        "SELECT \"setval(\" FROM t;",
+        "SELECT 'x', \"my setval\" FROM t;",
+    ] {
+        assert!(!changes_a_sequence(sql), "{sql}");
+    }
+}
+
+#[test]
+fn the_read_is_bounded_even_when_the_file_outgrows_its_metadata() {
+    let source = std::io::Cursor::new(vec![b'x'; 11]);
+
+    match read_limited(source, 10) {
+        Err(ReadError::TooLarge(size)) => assert_eq!(size, 11),
+        other => panic!(
+            "expected TooLarge, got {:?}",
+            other.map(|bytes| bytes.len())
+        ),
+    }
+    assert_eq!(
+        read_limited(std::io::Cursor::new(vec![b'x'; 10]), 10)
+            .map(|bytes| bytes.len())
+            .ok(),
+        Some(10)
+    );
+}
+
+#[test]
+fn a_script_transaction_left_open_after_a_failure_is_rolled_back_and_reported() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("BEGIN;\nINSERT INTO t VALUES (1);\nINSERT INTO missing VALUES (2);\n");
+
+    let report = run(connection.as_ref(), &script, RunOptions::default()).expect("run");
+
+    assert_eq!(report.end, RunEnd::StoppedOnError);
+    assert_eq!(report.script_transaction, ScriptTransaction::RolledBack);
+    assert_eq!(row_count(connection.as_ref(), "t"), 0);
+}
+
+#[test]
+fn a_script_transaction_left_open_at_the_end_is_reported_not_kept_silently() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("BEGIN;\nINSERT INTO t VALUES (1);\n");
+
+    let report = run(connection.as_ref(), &script, RunOptions::default()).expect("run");
+
+    assert_eq!(report.end, RunEnd::Finished);
+    assert_eq!(report.script_transaction, ScriptTransaction::LeftOpen);
+    exec(connection.as_ref(), "ROLLBACK");
+}
+
+#[test]
+fn a_script_that_closes_its_own_transaction_reports_none() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("BEGIN;\nINSERT INTO t VALUES (1);\nCOMMIT;");
+
+    let report = run(connection.as_ref(), &script, RunOptions::default()).expect("run");
+
+    assert_eq!(report.script_transaction, ScriptTransaction::None);
+}
+
+#[test]
+fn an_implicit_commit_before_a_failure_is_never_a_full_rollback() {
+    let scratch = Scratch::new();
+    let connection: Box<dyn Connection> = Box::new(WithTransactions(plain_sqlite(&scratch), false));
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script(
+        "INSERT INTO t VALUES (1);\nCREATE TABLE marker (id INTEGER);\nINSERT INTO missing VALUES (2);\n",
+    );
+
+    let report = run(
+        connection.as_ref(),
+        &script,
+        RunOptions {
+            transaction: true,
+            ..RunOptions::default()
+        },
+    )
+    .expect("run");
+
+    assert_eq!(report.end, RunEnd::StoppedOnError);
+    assert_eq!(report.disposition, Disposition::PartiallyKept);
+    assert_eq!(report.first_implicit_commit, Some(2));
+    assert!(report.ddl_not_transactional);
+}
+
+#[test]
+fn a_failure_before_any_implicit_commit_is_still_a_full_rollback() {
+    let scratch = Scratch::new();
+    let connection: Box<dyn Connection> = Box::new(WithTransactions(plain_sqlite(&scratch), false));
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script(
+        "INSERT INTO t VALUES (1);\nINSERT INTO missing VALUES (2);\nCREATE TABLE marker (id INTEGER);\n",
+    );
+
+    let report = run(
+        connection.as_ref(),
+        &script,
+        RunOptions {
+            transaction: true,
+            ..RunOptions::default()
+        },
+    )
+    .expect("run");
+
+    assert_eq!(report.disposition, Disposition::RolledBack);
+    assert_eq!(report.first_implicit_commit, None);
+}
+
+#[test]
+fn destructive_ddl_counts_as_schema_statements_in_the_summary() {
+    let scratch = Scratch::new();
+    let connection: Box<dyn Connection> = Box::new(WithTransactions(plain_sqlite(&scratch), false));
+
+    let summary = script(
+        "ALTER TABLE t ADD COLUMN x INTEGER;\nDROP TABLE t;\nTRUNCATE TABLE t;\nDELETE FROM t;",
+    )
+    .summarize(connection.as_ref(), 4);
+
+    assert_eq!(summary.ddl_count, 3);
+    assert!(summary.ddl_commits_on_its_own);
 }
