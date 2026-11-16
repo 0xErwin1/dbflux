@@ -77,7 +77,7 @@ Notes:
 
 DBFlux connects and sends `Hello` first.
 
-The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are negotiated deterministically within that major line. Minor versions up to v1.7 are additive; v1.8 is a wire-format fix that changes how some existing payloads are encoded, and every shape that decoded before is byte-identical (see **Wire-format fix** below). v1.9 is additive again. v1.10 changes the bytes of two existing payloads (see **Cell SQL expressions** below).
+The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are negotiated deterministically within that major line. Minor versions up to v1.7 are additive; v1.8 is a wire-format fix that changes how some existing payloads are encoded, and every shape that decoded before is byte-identical (see **Wire-format fix** below). v1.9 is additive again. v1.10 is additive too: it appends two request variants and leaves every v1.9 payload byte-identical (see **Cell SQL expressions** below).
 
 Client request:
 
@@ -96,6 +96,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
         ProtocolVersion::new(1, 9),
+        ProtocolVersion::new(1, 10),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -235,9 +236,9 @@ The six variants are appended after the last v1.8 variant of their enum, for the
 
 ### Cell SQL expressions (v1.10)
 
-v1.10 adds no request or response variant. `RowInsert` (`InsertRow`) and `RowPatch` (`UpdateRow`) gain one list each, appended after the last field: `column_expressions` and `change_expressions`, a `Vec<Option<String>>` parallel to the columns. A non-empty entry is a SQL expression the driver writes verbatim in place of the value literal (`gen_random_uuid()`, `now()`), and the value sent for that column is `Null`. A literal is never promoted to an expression: only an entry in this list is one, so text such as `now()` stays a quoted string. The list is empty when no column carries an expression.
+v1.10 adds two request variants, `InsertRowV2 { insert }` and `UpdateRowV2 { patch }`, appended after the last v1.9 variant of the request enum for the wire-index reason described above. They carry `RowInsert` and `RowPatch` with one extra list each, appended after the last field: `column_expressions` and `change_expressions`, a `Vec<Option<String>>` parallel to the columns. A non-empty entry is a SQL expression the driver writes verbatim in place of the value literal (`gen_random_uuid()`, `now()`), and the value sent for that column is `Null`. A literal is never promoted to an expression: only an entry in this list is one, so text such as `now()` stays a quoted string.
 
-Like the fix in v1.8, the encoding is not gated by the negotiated version: postcard has no representation for an absent trailing field, so a v1.9 peer cannot decode a `RowInsert` or `RowPatch` from a v1.10 peer, nor the reverse. A driver host and its external drivers must be rebuilt against v1.10 together. A driver that is not SQL-based never builds the statement and rejects row inserts and updates as it already does. The MCP tools never produce an expression, because tool input is converted to values only.
+`InsertRow` and `UpdateRow` keep their exact v1.9 wire shape and have no room for an expression: the encoder refuses to serialize one rather than drop it, because postcard ignores trailing bytes and an older peer would otherwise run the write with the column set to `Null`. The client therefore sends the old variants for every write without an expression, so v1.9 peers keep working in both directions. A write with an expression is sent as `InsertRowV2` or `UpdateRowV2` only on a session that negotiated v1.10 or newer; on an older session `IpcConnection` returns `NotSupported` (`the negotiated driver RPC protocol does not support SQL expressions in row writes`) without sending a frame. A driver host serves both the old and the V2 variants. A driver that is not SQL-based never builds the statement and rejects row inserts and updates as it already does. The MCP tools never produce an expression, because tool input is converted to values only.
 
 ## Auth-provider RPC contract
 

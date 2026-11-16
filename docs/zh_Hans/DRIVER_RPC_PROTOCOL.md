@@ -77,7 +77,7 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 
 DBFlux 先建立连接并发送 `Hello`。
 
-当前启用的驱动 RPC API 族是 `driver_rpc`。在现有的专用驱动 RPC 传输层中，该族隐含在协议本身里，`Hello` 期间不会在线路上传输。兼容性由驱动 RPC 端点加上所选协议主版本号共同保证；次版本号在同一主版本线内以确定方式协商得出。v1.7 及之前的次版本号是追加式的；v1.8 是一次线路格式修正，改变了部分现有载荷的编码方式，而之前能够解码的所有形态都逐字节相同（见下文的**线路格式修正**）。v1.9 重新回到追加式。v1.10 改变了两个现有载荷的字节（见下文的**单元格 SQL 表达式**）。
+当前启用的驱动 RPC API 族是 `driver_rpc`。在现有的专用驱动 RPC 传输层中，该族隐含在协议本身里，`Hello` 期间不会在线路上传输。兼容性由驱动 RPC 端点加上所选协议主版本号共同保证；次版本号在同一主版本线内以确定方式协商得出。v1.7 及之前的次版本号是追加式的；v1.8 是一次线路格式修正，改变了部分现有载荷的编码方式，而之前能够解码的所有形态都逐字节相同（见下文的**线路格式修正**）。v1.9 重新回到追加式。v1.10 同样是追加式的：它追加了两个请求变体，v1.9 的所有载荷逐字节保持不变（见下文的**单元格 SQL 表达式**）。
 
 客户端请求：
 
@@ -96,6 +96,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
         ProtocolVersion::new(1, 9),
+        ProtocolVersion::new(1, 10),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -235,9 +236,9 @@ v1.8 没有新增任何请求或响应变体。它改变了部分现有载荷的
 
 ### 单元格 SQL 表达式（v1.10）
 
-v1.10 不新增请求或响应变体。`RowInsert`（`InsertRow`）和 `RowPatch`（`UpdateRow`）各在最后一个字段之后追加一个列表：`column_expressions` 和 `change_expressions`，即与列一一对应的 `Vec<Option<String>>`。非空条目是驱动原样写在值字面量位置上的 SQL 表达式（`gen_random_uuid()`、`now()`），该列发送的值为 `Null`。字面量不会被提升为表达式：只有该列表中的条目才是表达式，因此 `now()` 这样的文本仍是带引号的字符串。没有任何列带表达式时，列表为空。
+v1.10 新增两个请求变体 `InsertRowV2 { insert }` 和 `UpdateRowV2 { patch }`，出于上文所述的线路索引原因，它们追加在请求枚举最后一个 v1.9 变体之后。它们携带 `RowInsert` 和 `RowPatch`，各在最后一个字段之后多一个列表：`column_expressions` 和 `change_expressions`，即与列一一对应的 `Vec<Option<String>>`。非空条目是驱动原样写在值字面量位置上的 SQL 表达式（`gen_random_uuid()`、`now()`），该列发送的值为 `Null`。字面量不会被提升为表达式：只有该列表中的条目才是表达式，因此 `now()` 这样的文本仍是带引号的字符串。
 
-与 v1.8 的修正一样，编码不受协商版本限制：postcard 无法表示缺失的末尾字段，因此 v1.9 对端无法解码 v1.10 对端发来的 `RowInsert` 或 `RowPatch`，反之亦然。驱动宿主及其外部驱动必须一起针对 v1.10 重新构建。不基于 SQL 的驱动从不构造该语句，并像以往一样拒绝行插入和更新。MCP 工具永远不会产生表达式，因为工具输入只会被转换为值。
+`InsertRow` 和 `UpdateRow` 保持 v1.9 的线路形态不变，没有容纳表达式的位置：由于 postcard 会忽略末尾多余的字节，旧版对端会把该列当作 `Null` 执行写入，因此编码器拒绝序列化表达式，而不是将其丢弃。所以客户端对所有不含表达式的写入都发送旧变体，v1.9 对端在两个方向上都能继续工作。含表达式的写入只在协商到 v1.10 或更高版本的会话中以 `InsertRowV2` 或 `UpdateRowV2` 发送；在更旧的会话中，`IpcConnection` 不发送任何帧，直接返回 `NotSupported`（`the negotiated driver RPC protocol does not support SQL expressions in row writes`）。驱动宿主同时处理旧变体和 V2 变体。不基于 SQL 的驱动不会构建该语句，并照旧拒绝行插入和更新。MCP 工具永远不会产生表达式，因为工具输入只会被转换为值。
 
 ## 认证提供程序 RPC 契约
 
