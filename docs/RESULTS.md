@@ -323,8 +323,9 @@ fixed number of the closest rows, and the grid already holds all of them.
 
 The import wizard also reads one loose file. Choose **Choose File…** on its
 first step, next to the folder picker, and pick a `.csv`, `.json`, `.jsonl`,
-`.xml` or spreadsheet (`.xlsx`, `.xlsm`, `.xls` or `.ods`) file; HTML, Markdown
-and SQL files are not offered. The wizard reads the
+`.xml` or spreadsheet (`.xlsx`, `.xlsm`, `.xls` or `.ods`) file; HTML and Markdown
+files are not offered, and a `.sql` file on a SQL connection runs as a script (see
+[Running a SQL script](#running-a-sql-script)). The wizard reads the
 columns from the CSV header row, from the keys of the first 100 JSON records,
 from the `name` of the `<field>` elements in the first 100 XML rows (all the
 keys seen, in the order they first appear), or from row 1 of a spreadsheet sheet. A key that first appears after those
@@ -387,3 +388,94 @@ connection that cannot truncate tables a line explains why Truncate is not
 listed. In the text fields, `Escape` leaves the field and returns the keys to
 the dialog; a second `Escape` closes the wizard. When the run ends, one row per
 table lists its outcome, and a failed run says what to do next.
+
+### Running a SQL script
+
+On a connection whose query language is SQL, **Choose File…** also offers `.sql`
+files; other connections never see them, and a `.sql` file that gets through
+anyway is refused with a message that the connection is not SQL. Picking one
+opens a **Run SQL script** flow in the same dialog. The script is read as UTF-8
+and split into statements with the editor's own splitter, so quotes, comments
+and dollar-quoted bodies are respected, and it has no delimiter or encoding
+options. A script over 100 MB, a file that is not UTF-8 or cannot be read, and a
+script with no statements stay on the first step with the reason and what to do
+next. So does a script that uses something only a command-line client runs: a
+`DELIMITER` line or a `GO` batch separator, a routine body (a procedure,
+function or trigger) whose statements end with `;` and that has no client
+delimiters around it, a `COPY … FROM stdin` data block, or a psql backslash
+meta-command such as `\connect`, or a statement that switches off autocommit
+(`SET autocommit = 0`) or switches on implicit transactions, which would leave
+the connection in manual-commit mode. Each is refused before anything runs, with the
+line and a next step: run the script with the database's own command-line
+client (psql for a `COPY … FROM stdin` block or a psql meta-command: removing a `\connect` line would run the rest on this connection, which may not be the database it selects), or rewrite it. A script over 100 MB can also be split into smaller files, but each file runs on its own: a later file that fails cannot undo an earlier one.
+
+**Configure** shows the statement count and size, how many statements fall in
+each classification (the classes the editor and the audit viewer use, Admin
+included), and the first six statements with their classification; a `DELETE` or
+`UPDATE` without `WHERE` is marked. Statements that change a sequence (`setval`,
+`nextval`, `ALTER SEQUENCE`) count as Write, so a read-only connection refuses them. It has two options:
+
+- **On error**: **Stop at the first error** (the default) or **Continue after
+  errors**, which runs every statement and lists the ones that failed.
+- **Run in one transaction**: on by default when the connection supports
+  transactions. If a statement fails, the changes made in the transaction are
+  rolled back, and nothing is saved until the last statement succeeds. It is off,
+  with the reason, when **Continue after errors** is chosen (a failed statement
+  aborts the transaction on some engines), and it is not offered, with the
+  reason, on a connection without transactions. A script that manages its own
+  transactions (`BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`,
+  `SAVEPOINT`, `RELEASE`, `SET autocommit`) turns it off too, naming the
+  statement and its line: the script runs as written, and its own `COMMIT`
+  saves the changes before it. A transaction the script opens and never ends is
+rolled back when the script finishes, and the dialog says so: add a `COMMIT` at
+the end to save its changes. If that rollback fails the dialog says a transaction
+may still be open and to disconnect and reconnect. A script with a
+version-conditional comment that controls transactions is refused, because
+whether it runs depends on the server. A script that uses `SAVEPOINT` outside a
+transaction gets a precautionary `ROLLBACK` when it ends, in case one was left
+open; the dialog says so, and changes the database had already committed stay.
+
+On a connection that commits schema statements on its own (MySQL and MariaDB),
+`CREATE`, `ALTER` and `DROP` are saved as they run and also save every statement
+before them, so a rollback only undoes the changes made after the last one.
+Sequence changes (`setval`, `nextval`) are never undone by a rollback. A
+connection that is read-only by its profile setting refuses a script that
+changes data, structure or permissions, says how many statements do, and keeps **Continue**
+off; a script that only reads can run.
+
+Every script goes through **Confirm**, whatever it holds. A script with no
+destructive statements shows how many statements fall in each classification and
+offers **Run script**. A script with destructive statements shows a danger block
+that counts them by the editor's dangerous-query kinds, lists the first three
+with their number in the file, and offers **Yes, run script**. **Back** returns
+to Configure.
+
+**Running** shows "Running statement N of M", the statement in progress and a
+Tasks panel entry. **Cancel Run** stops after the statement in progress and asks
+the driver to interrupt it. In one transaction the changes are then rolled back;
+without one, the statements that already ran are kept. The footer says which
+before you press it.
+
+The script runs on the profile's connection, so its statements and its
+transaction share that connection with anything else started from the profile.
+Let other work on that connection (the editor, the grid, another import) finish
+before you run a script, and do not start new work on it until the run ends: a
+query that runs in the middle of the script's transaction can be rolled back or
+saved with it. On a driver that offers separate sessions the script runs on its
+own session instead: other work cannot join the script's transaction, and
+**Cancel Run** stops only the script. Another session can still lock or change
+the objects the script uses, so the script can wait on it or conflict with it. A folder or file import has the same property on a connection
+without separate sessions.
+
+**Done** says what happened. A run that stops names the statement (number, line
+and text), shows the database's error, says what happened to the earlier
+statements and what to do next; without a transaction that means reconciling
+the changes the earlier statements already made and keeping or restoring the
+session settings the script needs (such as `SET search_path`) before running the
+rest. A run that continued after errors lists every statement that failed, with
+the same advice. If the commit or the rollback itself fails, the dialog
+says the outcome is unresolved and to check the state of the database before
+running anything else. Every failure is also reported once as a toast with
+**View in Audit**, and each run records a `Query` audit event (plus one per
+failed statement, up to 50) that carries only the first line of a statement,
+redacted by the audit settings.

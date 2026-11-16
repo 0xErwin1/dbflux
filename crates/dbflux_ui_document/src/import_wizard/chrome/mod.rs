@@ -32,7 +32,7 @@ const MODE_DROPDOWN_WIDTH: Rems = ui(196.0);
 const COLUMN_DROPDOWN_WIDTH: Rems = ui(124.0);
 
 /// A named element a test or the UI automation can find.
-fn selectable(selector: &'static str, element: impl IntoElement) -> Div {
+pub(super) fn selectable(selector: &'static str, element: impl IntoElement) -> Div {
     div().debug_selector(|| selector.to_string()).child(element)
 }
 
@@ -57,6 +57,7 @@ impl ImportWizard {
     pub(super) fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let phase = match self.step {
             WizardStep::PickFolder => self.render_pick_folder(cx),
+            _ if self.script_step_active() => self.render_script_step(cx),
             WizardStep::Configure => self.render_configure(cx),
             WizardStep::Confirm => self.render_confirm(cx),
             WizardStep::Running => self.render_running(cx),
@@ -105,7 +106,11 @@ impl ImportWizard {
                 ),
             )
             .child(modal_lead(
-                dbflux_i18n::t!("document.import_wizard.pick_file.description"),
+                if self.connection_runs_scripts(cx) {
+                    dbflux_i18n::t!("document.import_wizard.pick_file.description_sql")
+                } else {
+                    dbflux_i18n::t!("document.import_wizard.pick_file.description")
+                },
                 cx,
             ))
             .child(
@@ -358,6 +363,10 @@ impl ImportWizard {
 
     /// Why the footer's Continue is off on this step, or `None`.
     fn footer_reason_text(&self) -> Option<String> {
+        if self.script_step_active() {
+            return self.script_footer_reason();
+        }
+
         match self.step {
             WizardStep::PickFolder if self.loading && self.loading_folder => Some(dbflux_i18n::t!(
                 "document.import_wizard.pick_folder.reading_hint"
@@ -370,7 +379,7 @@ impl ImportWizard {
         }
     }
 
-    fn footer_cancel(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn footer_cancel(&self, cx: &mut Context<Self>) -> Div {
         selectable(
             "import-wizard-cancel",
             Button::new(
@@ -383,6 +392,9 @@ impl ImportWizard {
 
     /// The step's buttons, the primary one last. The group never shrinks.
     fn footer_buttons(&self, cancel_requested: bool, cx: &mut Context<Self>) -> Div {
+        if self.script_step_active() {
+            return self.script_footer_buttons(cancel_requested, cx);
+        }
         let step = self.step;
 
         div()

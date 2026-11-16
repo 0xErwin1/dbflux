@@ -3896,6 +3896,9 @@ pub(crate) fn delimited_record_count_status(
 }
 
 #[cfg(test)]
+mod script_catalog_tests;
+
+#[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
     use super::mutation_approval_queue_failed_error;

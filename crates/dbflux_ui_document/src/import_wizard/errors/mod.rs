@@ -62,9 +62,15 @@ impl ErrorBlock {
         }
     }
 
-    pub(super) fn unsupported_file() -> Self {
+    /// A file with an extension the wizard cannot import. `sql_scripts` says
+    /// whether `.sql` is one it can, which is the case on a SQL connection.
+    pub(super) fn unsupported_file(sql_scripts: bool) -> Self {
         Self {
-            message: dbflux_i18n::t!("document.import_wizard.pick_file.error.unsupported"),
+            message: if sql_scripts {
+                dbflux_i18n::t!("document.import_wizard.pick_file.error.unsupported_sql")
+            } else {
+                dbflux_i18n::t!("document.import_wizard.pick_file.error.unsupported")
+            },
             next_step: dbflux_i18n::t!("document.import_wizard.pick_file.error.unsupported_next"),
             footer_reason: None,
         }
