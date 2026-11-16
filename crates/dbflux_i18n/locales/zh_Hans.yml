@@ -2166,6 +2166,7 @@ document:
       run: 执行
     tables:
       selected_count: "已选择 %{count} 张表用于导出"
+      required: "请至少选择一张要导出的表。"
     format_options:
       format_label: 格式
       output_folder_label: "文件夹"
@@ -2203,6 +2204,8 @@ document:
         epoch: "Epoch（秒）"
       error:
         no_dialog_fallback_failed: "没有可用的文件夹选择器且无法创建回退导出目录：%{error}"
+      sql_unavailable: "此连接不提供 SQL：其驱动无法生成 INSERT 语句。请改为导出 CSV 或 JSON。"
+      folder_required: "请选择文件的写入文件夹。"
     confirm:
       title: 查看导出计划
       summary: "%{count} 张表，格式 %{format}，导出到 %{folder}"
@@ -2234,10 +2237,18 @@ document:
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
       cancelled: "%{table}：已在 %{rows} 行后取消"
+      not_attempted_after_failure: "%{table}：未尝试：导出在失败的表处停止"
     footer:
       back: 返回
       continue: 继续
       close: 关闭
+      reason:
+        tables: "选择一张表之前，“继续”不可用。"
+        folder: "选择文件夹之前，“继续”不可用。"
+        batch_size: "“每条 INSERT 的行数”有效之前，“继续”不可用。"
+        segment_size: "“分块大小”有效之前，“继续”不可用。"
+    done:
+      closing_failed: "请关闭此对话框，修复上述原因后重新导出。已写入的文件会保留在文件夹中。没有 manifest.json 时无法将整个文件夹导入，但每个已完成的 CSV 或 JSON 文件仍可通过“选择文件”导入；对于 CSV 文件，单个文件不含这些设置，请先把分隔符、编码和 NULL 文本设为与本次导出一致。"
   file:
     error:
       source_changed: "文件在打开后已在别处被修改，因此未保存任何内容，你的编辑仍然保留。要查看新内容，请放弃编辑并选择从文件重新加载，然后重新编辑。"
@@ -2450,6 +2461,10 @@ document:
         no_connection: 此配置没有活动连接
         no_dialog: 此平台没有可用的文件夹选择器
         invalid_bundle: "无效的导入捆绑包：%{error}"
+        no_connection_next: "请先连接到该配置，然后重新打开导入。"
+        no_dialog_next: "请在提供文件对话框的桌面会话中启动 DBFlux，然后重试。"
+        invalid_bundle_next: "请选择导出所写入的文件夹：其中包含 manifest.json。若只导入单个文件，请改用“选择文件…”。"
+      reading_hint: "正在读取清单。读取完成前两个按钮均不可用。"
     configure:
       mode_placeholder: 模式
       target_placeholder: 目标列
@@ -2458,6 +2473,7 @@ document:
       apply_mapping: 应用映射
       continue: 继续
       unmatched_source: "未匹配的源列将被跳过，除非重新映射：%{names}"
+      truncate_unavailable: "此连接无法清空表，因此不列出 Truncate。请改选 Recreate 来替换该表。"
     pick_file:
       description: "或将单个 CSV、JSON 或 JSON Lines 文件导入到一张表。"
       choose_file: "选择文件…"
@@ -2467,12 +2483,19 @@ document:
       error:
         unsupported: "只能导入 .csv、.json 和 .jsonl 文件。"
         invalid_file: "无法读取文件：%{error}"
+        unsupported_next: "请选择扩展名为上述之一的文件。"
+        lookup_failed: "无法查找目标表：%{error}"
+        next_csv: "请在上方选择其他编码或分隔符：选择后会立即重新读取文件。"
+        next_json: "请修复文件中的 JSON 后重新选择，或选择其他文件。"
+        next_lookup: "请检查表名以及你对该连接的访问权限，然后再次点击“使用该表”。"
+      reading_hint: "正在读取文件。读取完成前两个按钮均不可用。"
     file:
       source: "文件：%{file}（%{format}）"
       target_table_label: "目标表"
       target_table_placeholder: "表名（默认为文件名）"
       use_table: "使用该表"
       null_text_hint: "文件中表示 NULL 的文本。文本为空时，空字段即为 NULL。"
+      json_no_options: "JSON 和 JSON Lines 没有导入选项：列和 NULL 由文件本身决定。"
     mapping_mode:
       create: 创建
       existing: 已存在（仅插入）
@@ -2480,7 +2503,8 @@ document:
       skip: 跳过
       truncate: 清空（TRUNCATE + 插入）
     confirm:
-      body: "这将在加载数据前删除并重建或清空以下表：%{tables}"
+      body: "这将在加载数据前删除并重建或清空以下表："
+      table_line: "%{table} — %{mode}"
       warning: 此操作无法撤销。确认以继续。
       back: 返回
       proceed: 是，继续
@@ -2493,6 +2517,7 @@ document:
     done:
       cancelled_rows: "导入停止前已导入 %{rows} 行。"
       close: 关闭
+      closing_failed: "请关闭此对话框并修复上述原因。已完成的表会保留在目标中；若重新导入，请对它们选择“跳过”。在不支持事务的目标上，失败的表中在出错前已写入的行也会保留。"
     error:
       no_connection: 此导入没有活动连接
     toast:
@@ -2509,6 +2534,11 @@ document:
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
       cancelled: "%{table}：已在 %{rows} 行后取消"
+      not_attempted_after_failure: "%{table}：未尝试：导入在失败的表处停止"
+    footer:
+      reason:
+        file_read: "文件读取完成之前，“继续”不可用。"
+      cancel: "取消"
   instance_inspector:
     task_label: "检查器：%{metric_id}"
     connection_not_found: 未找到连接

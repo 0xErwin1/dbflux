@@ -2166,6 +2166,7 @@ document:
       run: Executar
     tables:
       selected_count: "%{count} tabela(s) selecionada(s) para exportação"
+      required: "Selecione pelo menos uma tabela para exportar."
     format_options:
       format_label: Formato
       output_folder_label: "Pasta"
@@ -2203,6 +2204,8 @@ document:
         epoch: "Epoch (segundos)"
       error:
         no_dialog_fallback_failed: "Nenhum seletor de pastas disponível e o diretório alternativo de exportação não pôde ser criado: %{error}"
+      sql_unavailable: "SQL não está disponível para esta conexão: o driver dela não consegue gerar instruções INSERT. Exporte como CSV ou JSON."
+      folder_required: "Escolha a pasta onde os arquivos serão gravados."
     confirm:
       title: Revisar plano de exportação
       summary: "%{count} tabela(s) como %{format} em %{folder}"
@@ -2234,10 +2237,18 @@ document:
       failed: "%{table}: FALHOU — %{error}"
       not_attempted: "%{table}: não tentada"
       cancelled: "%{table}: cancelada após %{rows} linha(s)"
+      not_attempted_after_failure: "%{table}: não tentada: a exportação parou na tabela que falhou"
     footer:
       back: Voltar
       continue: Continuar
       close: Fechar
+      reason:
+        tables: "Continuar fica desativado até que uma tabela seja selecionada."
+        folder: "Continuar fica desativado até que você escolha uma pasta."
+        batch_size: "Continuar fica desativado até que Linhas por INSERT seja válido."
+        segment_size: "Continuar fica desativado até que Tamanho do bloco seja válido."
+    done:
+      closing_failed: "Feche este diálogo, corrija a causa indicada acima e exporte novamente. Os arquivos já gravados permanecem na pasta. Sem um manifest.json a pasta não pode ser importada inteira, mas cada arquivo CSV ou JSON concluído ainda pode ser importado com Escolher arquivo; para um CSV, antes defina o delimitador, a codificação e o texto NULL iguais aos desta exportação, pois um CSV avulso não os traz."
   file:
     error:
       source_changed: "O arquivo foi alterado em outro lugar desde que foi aberto, então nada foi salvo e suas edições foram mantidas. Para ver o novo conteúdo, descarte suas edições e escolha Recarregar do arquivo, e depois refaça-as."
@@ -2450,6 +2461,10 @@ document:
         no_connection: Nenhuma conexão ativa para este perfil
         no_dialog: Nenhum seletor de pastas disponível nesta plataforma
         invalid_bundle: "Pacote de importação inválido: %{error}"
+        no_connection_next: "Conecte-se ao perfil e abra a importação novamente."
+        no_dialog_next: "Inicie o DBFlux em uma sessão de desktop que ofereça um diálogo de arquivos e tente novamente."
+        invalid_bundle_next: "Escolha a pasta que a exportação gravou: ela contém manifest.json. Para importar um único arquivo, use Escolher arquivo… em vez disso."
+      reading_hint: "Lendo o manifesto. Os dois botões ficam desativados até terminar."
     configure:
       mode_placeholder: Modo
       target_placeholder: Coluna de destino
@@ -2458,6 +2473,7 @@ document:
       apply_mapping: Aplicar mapeamento
       continue: Continuar
       unmatched_source: "Coluna(s) de origem sem correspondência, serão ignoradas a menos que sejam remapeadas: %{names}"
+      truncate_unavailable: "Esta conexão não consegue truncar tabelas, então Truncate não aparece. Escolha Recreate para substituir a tabela."
     pick_file:
       description: "Ou importe um único arquivo CSV, JSON ou JSON Lines em uma tabela."
       choose_file: "Escolher arquivo…"
@@ -2467,12 +2483,19 @@ document:
       error:
         unsupported: "Somente arquivos .csv, .json e .jsonl podem ser importados."
         invalid_file: "Não foi possível ler o arquivo: %{error}"
+        unsupported_next: "Escolha um arquivo com uma dessas extensões."
+        lookup_failed: "Não foi possível consultar a tabela de destino: %{error}"
+        next_csv: "Escolha outra codificação ou delimitador acima: o arquivo é lido novamente assim que você escolher um."
+        next_json: "Corrija o JSON no arquivo e escolha-o novamente, ou escolha outro arquivo."
+        next_lookup: "Verifique o nome da tabela e seu acesso à conexão, e pressione Usar tabela novamente."
+      reading_hint: "Lendo o arquivo. Os dois botões ficam desativados até terminar."
     file:
       source: "Arquivo: %{file} (%{format})"
       target_table_label: "Tabela de destino"
       target_table_placeholder: "Nome da tabela (padrão: nome do arquivo)"
       use_table: "Usar tabela"
       null_text_hint: "Texto do arquivo que representa NULL. Com texto vazio, um campo vazio é NULL."
+      json_no_options: "JSON e JSON Lines não têm opções de importação: o próprio arquivo define as colunas e os NULL."
     mapping_mode:
       create: Criar
       existing: Existente (somente inserir)
@@ -2480,7 +2503,8 @@ document:
       skip: Ignorar
       truncate: Truncar (esvaziar + inserir)
     confirm:
-      body: "Isto excluirá e recriará ou truncará a(s) seguinte(s) tabela(s) antes de carregar os dados: %{tables}"
+      body: "Isto excluirá e recriará ou truncará a(s) seguinte(s) tabela(s) antes de carregar os dados:"
+      table_line: "%{table} — %{mode}"
       warning: Isto não pode ser desfeito. Confirme para continuar.
       back: Voltar
       proceed: "Sim, continuar"
@@ -2493,6 +2517,7 @@ document:
     done:
       cancelled_rows: "%{rows} linha(s) foram importadas antes de a importação parar."
       close: Fechar
+      closing_failed: "Feche este diálogo e corrija a causa indicada acima. As tabelas concluídas permanecem no destino; escolha Ignorar para elas se importar novamente. Em um destino sem suporte a transações, as linhas da tabela com falha gravadas antes do erro também permanecem."
     error:
       no_connection: Nenhuma conexão ativa para esta importação
     toast:
@@ -2509,6 +2534,11 @@ document:
       failed: "%{table}: FALHOU — %{error}"
       not_attempted: "%{table}: não tentada"
       cancelled: "%{table}: cancelada após %{rows} linha(s)"
+      not_attempted_after_failure: "%{table}: não tentada: a importação parou na tabela que falhou"
+    footer:
+      reason:
+        file_read: "Continuar fica desativado até que o arquivo seja lido."
+      cancel: "Cancelar"
   instance_inspector:
     task_label: "Inspetor: %{metric_id}"
     connection_not_found: Conexão não encontrada

@@ -159,6 +159,15 @@ impl ImportWizard {
         }
     }
 
+    /// Whether the target table or NULL text field holds the keyboard focus.
+    fn text_field_has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.file_inputs.as_ref().is_some_and(|inputs| {
+            [&inputs.target_table, &inputs.null_text]
+                .into_iter()
+                .any(|input| input.read(cx).focus_handle(cx).contains_focused(window, cx))
+        })
+    }
+
     /// Runs a keymap command the dialog's `ImportWizard` context bound.
     /// Every command is consumed: none may reach the document behind the
     /// dialog.
@@ -168,6 +177,15 @@ impl ImportWizard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Escape inside a text field only leaves the field: Tab never lands on
+        // the dialog itself, so without this the cursor keys would stay out of
+        // reach. The next Escape, now on the dialog, closes the wizard.
+        if command == Command::Cancel && self.text_field_has_focus(window, cx) {
+            self.focus_handle.focus(window, cx);
+            cx.notify();
+            return;
+        }
+
         // Enter and the cursor keys reach here from a focused text field or an
         // open dropdown too (the dialog hands them to its owner); they act on
         // that control, never on the cursor.

@@ -2166,6 +2166,7 @@ document:
       run: Run
     tables:
       selected_count: "%{count} table(s) selected for export"
+      required: "Select at least one table to export."
     format_options:
       format_label: Format
       output_folder_label: "Folder"
@@ -2203,6 +2204,8 @@ document:
         epoch: "Epoch (seconds)"
       error:
         no_dialog_fallback_failed: "No folder picker available and the fallback export directory could not be created: %{error}"
+      sql_unavailable: "SQL isn't available for this connection: its driver can't generate INSERT statements. Export as CSV or JSON instead."
+      folder_required: "Choose the folder the files are written to."
     confirm:
       title: Review export plan
       summary: "%{count} table(s) as %{format} to %{folder}"
@@ -2234,10 +2237,18 @@ document:
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
       cancelled: "%{table}: cancelled after %{rows} row(s)"
+      not_attempted_after_failure: "%{table}: not attempted: the export stopped at the failed table"
     footer:
       back: Back
       continue: Continue
       close: Close
+      reason:
+        tables: "Continue is off until a table is selected."
+        folder: "Continue is off until you choose a folder."
+        batch_size: "Continue is off until Rows per INSERT is valid."
+        segment_size: "Continue is off until Chunk size is valid."
+    done:
+      closing_failed: "Close this dialog, fix the cause above and export again. Files already written stay in the folder. Without a manifest.json the folder can't be imported as a whole, but each completed CSV or JSON file can still be imported with Choose File; for a CSV file, first set the delimiter, encoding and NULL text to match this export, because a loose CSV does not carry them."
   file:
     error:
       source_changed: "The file was changed elsewhere since it was opened, so nothing was saved and your edits are kept. To see its new content, discard your edits and choose Reload from file, then make them again."
@@ -2450,6 +2461,10 @@ document:
         no_connection: No active connection for this profile
         no_dialog: No folder picker available on this platform
         invalid_bundle: "Invalid import bundle: %{error}"
+        no_connection_next: "Connect to the profile, then open the import again."
+        no_dialog_next: "Start DBFlux in a desktop session that offers a file dialog, then try again."
+        invalid_bundle_next: "Choose the folder Export wrote: it holds manifest.json. To import a single file, use Choose File… instead."
+      reading_hint: "Reading the manifest. Both buttons are off until it finishes."
     configure:
       mode_placeholder: Mode
       target_placeholder: Target column
@@ -2458,6 +2473,7 @@ document:
       apply_mapping: Apply Mapping
       continue: Continue
       unmatched_source: "Unmatched source column(s), will be skipped unless remapped: %{names}"
+      truncate_unavailable: "This connection can't truncate tables, so Truncate isn't listed. Choose Recreate to replace the table instead."
     pick_file:
       description: "Or import a single CSV, JSON or JSON Lines file into one table."
       choose_file: "Choose File…"
@@ -2467,12 +2483,19 @@ document:
       error:
         unsupported: "Only .csv, .json and .jsonl files can be imported."
         invalid_file: "Cannot read the file: %{error}"
+        unsupported_next: "Choose a file with one of those extensions."
+        lookup_failed: "Could not look up the target table: %{error}"
+        next_csv: "Choose another encoding or delimiter above: the file is read again as soon as you pick one."
+        next_json: "Fix the JSON in the file and choose it again, or choose another file."
+        next_lookup: "Check the table name and your access to the connection, then press Use Table again."
+      reading_hint: "Reading the file. Both buttons are off until it finishes."
     file:
       source: "File: %{file} (%{format})"
       target_table_label: "Target table"
       target_table_placeholder: "Table name (defaults to the file name)"
       use_table: "Use Table"
       null_text_hint: "Text in the file that stands for NULL. With empty text, an empty field is NULL."
+      json_no_options: "JSON and JSON Lines have no import options: the file itself defines the columns and the NULLs."
     mapping_mode:
       create: Create
       existing: Existing (insert only)
@@ -2480,7 +2503,8 @@ document:
       skip: Skip
       truncate: Truncate (empty + insert)
     confirm:
-      body: "This will drop-and-recreate or truncate the following table(s) before loading data: %{tables}"
+      body: "This will drop-and-recreate or truncate the following table(s) before loading data:"
+      table_line: "%{table} — %{mode}"
       warning: This cannot be undone. Confirm to proceed.
       back: Back
       proceed: "Yes, proceed"
@@ -2493,6 +2517,7 @@ document:
     done:
       cancelled_rows: "%{rows} row(s) were imported before the import stopped."
       close: Close
+      closing_failed: "Close this dialog and fix the cause above. Tables listed as completed stay in the target; choose Skip for them if you import again. On a target without transaction support, rows of the failed table written before the error also stay."
     error:
       no_connection: No active connection for this import
     toast:
@@ -2509,6 +2534,11 @@ document:
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
       cancelled: "%{table}: cancelled after %{rows} row(s)"
+      not_attempted_after_failure: "%{table}: not attempted: the import stopped at the failed table"
+    footer:
+      reason:
+        file_read: "Continue is off until the file has been read."
+      cancel: "Cancel"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"
     connection_not_found: Connection not found
