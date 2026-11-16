@@ -17,7 +17,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
 use super::super::{ImportWizard, RunTaskAction, WizardStep};
-use super::audit::{AuditTarget, RunFacts, record_events, run_events};
+use super::audit::{AuditTarget, RunFacts, record_events, run_events, session_open_failure_events};
 use super::interrupt::{InterruptSlot, ScopedConnection, current};
 use super::messages::{
     DoneView, ScriptResolution, resolve_script_outcome_at, resolve_session_open_failure,
@@ -209,7 +209,8 @@ impl ImportWizard {
                 } => (result, cleanup_error),
                 SessionRun::OpenFailed(error) => {
                     let resolution = resolve_session_open_failure(&error);
-                    finalize_task(&app_state, task_id, &resolution, Vec::new(), cx);
+                    let events = session_open_failure_events(&audit, &facts, &error, now_millis());
+                    finalize_task(&app_state, task_id, &resolution, events, cx);
                     this.update(cx, |this, cx| {
                         this.finish_script_run(task_id, resolution.view, cx);
                     })

@@ -38,6 +38,35 @@ pub(super) struct RunFacts {
     pub(super) destructive_statements: usize,
 }
 
+/// The event of a run that never started because no isolated session could
+/// be opened.
+pub(super) fn session_open_failure_events(
+    target: &AuditTarget,
+    facts: &RunFacts,
+    error: &dbflux_core::DbError,
+    now_ms: i64,
+) -> Vec<EventRecord> {
+    let correlation_id = Uuid::new_v4().to_string();
+    let message = error.to_string();
+
+    vec![
+        base_event(
+            target,
+            now_ms,
+            EventSeverity::Error,
+            EventOutcome::Failure,
+            &correlation_id,
+        )
+        .with_typed_action(audit_actions::QUERY_EXECUTE_FAILED)
+        .with_summary(format!(
+            "SQL script {} did not run: no separate session could be opened",
+            facts.file_name
+        ))
+        .with_error("script_session_open", message)
+        .with_details_json(base_details(facts).to_string()),
+    ]
+}
+
 /// The events of a finished run, the run's own first.
 pub(super) fn run_events(
     target: &AuditTarget,
@@ -176,17 +205,7 @@ fn classify(facts: &RunFacts, result: &Result<ScriptReport, ScriptError>) -> Cla
 }
 
 fn run_details(facts: &RunFacts, result: &Result<ScriptReport, ScriptError>) -> serde_json::Value {
-    let on_error = match facts.options.on_error {
-        OnError::Stop => "stop",
-        OnError::Continue => "continue",
-    };
-    let mut details = serde_json::json!({
-        "script_file": facts.file_name,
-        "statements": facts.statements,
-        "destructive_statements": facts.destructive_statements,
-        "on_error": on_error,
-        "transaction": facts.options.transaction,
-    });
+    let mut details = base_details(facts);
 
     if let (Ok(report), Some(map)) = (result, details.as_object_mut()) {
         map.insert("ran".to_string(), report.ran.into());
@@ -206,6 +225,21 @@ fn run_details(facts: &RunFacts, result: &Result<ScriptReport, ScriptError>) -> 
     }
 
     details
+}
+
+/// What the run was asked to do, before anything ran.
+fn base_details(facts: &RunFacts) -> serde_json::Value {
+    let on_error = match facts.options.on_error {
+        OnError::Stop => "stop",
+        OnError::Continue => "continue",
+    };
+    serde_json::json!({
+        "script_file": facts.file_name,
+        "statements": facts.statements,
+        "destructive_statements": facts.destructive_statements,
+        "on_error": on_error,
+        "transaction": facts.options.transaction,
+    })
 }
 
 fn base_event(

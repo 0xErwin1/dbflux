@@ -462,8 +462,9 @@ Let other work on that connection (the editor, the grid, another import) finish
 before you run a script, and do not start new work on it until the run ends: a
 query that runs in the middle of the script's transaction can be rolled back or
 saved with it. On a driver that offers separate sessions the script runs on its
-own session instead, other work cannot interfere, and **Cancel Run** stops only
-the script. A folder or file import has the same property on a connection
+own session instead: other work cannot join the script's transaction, and
+**Cancel Run** stops only the script. Another session can still lock or change
+the objects the script uses, so the script can wait on it or conflict with it. A folder or file import has the same property on a connection
 without separate sessions.
 
 **Done** says what happened. A run that stops names the statement (number, line

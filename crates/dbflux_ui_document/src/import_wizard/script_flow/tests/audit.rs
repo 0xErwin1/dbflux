@@ -5,7 +5,7 @@ use dbflux_transfer::sql_script::{
     StatementFailure,
 };
 
-use super::super::audit::{AuditTarget, RunFacts, run_events};
+use super::super::audit::{AuditTarget, RunFacts, run_events, session_open_failure_events};
 
 fn facts() -> RunFacts {
     RunFacts {
@@ -145,4 +145,29 @@ fn no_more_than_fifty_failures_are_recorded() {
         run_events(&target(), &facts(), &Ok(failed), 1_000).len(),
         51
     );
+}
+
+#[test]
+fn a_session_that_could_not_be_opened_records_a_failed_run() {
+    let error = dbflux_core::DbError::ConnectionFailed(dbflux_core::FormattedError::new(
+        "no more sessions",
+    ));
+    let events = session_open_failure_events(&target(), &facts(), &error, 1_000);
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].action, "query_execute_failed");
+    assert_eq!(events[0].connection_id.as_deref(), Some("conn-1"));
+    assert_eq!(events[0].database_name.as_deref(), Some("shop"));
+    assert!(
+        events[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no more sessions")
+    );
+    let details: serde_json::Value =
+        serde_json::from_str(events[0].details_json.as_deref().expect("details")).expect("json");
+    assert_eq!(details["script_file"], "shop.sql");
+    assert_eq!(details["statements"], 10);
+    assert_eq!(details["transaction"], true);
 }

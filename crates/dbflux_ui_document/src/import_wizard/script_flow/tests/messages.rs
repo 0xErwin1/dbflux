@@ -559,7 +559,7 @@ fn a_script_that_ends_without_commit_says_it_was_rolled_back() {
     );
 }
 
-const OWN_TX_OUTCOME: &str = "Statements the script ran outside its own transactions were saved as they ran. The script's open transaction was rolled back, so what it had changed there was not saved.";
+const OWN_TX_OUTCOME: &str = "Statements the script ran outside its own transactions were saved as they ran. The script's open transaction was rolled back, so what it had changed there was not saved. Sequence changes (setval, nextval) are not undone by a rollback.";
 
 #[test]
 fn a_stop_inside_the_scripts_own_transaction_does_not_claim_everything_before_it_was_kept() {

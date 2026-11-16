@@ -2683,7 +2683,7 @@ document:
         partially_kept: "Partly saved: everything up to statement %{index} (line %{line}) was saved, because it commits on its own on this connection, and later statements may have been saved too."
         partially_kept_no_line: "Partly saved: everything up to statement %{index} was saved, because it commits on its own on this connection, and later statements may have been saved too."
         partially_kept_next: "Check the database and reconcile what was saved before you run the script again, or the statements that were saved run twice."
-        script_rolled_back: "Statements the script ran outside its own transactions were saved as they ran. The script's open transaction was rolled back, so what it had changed there was not saved."
+        script_rolled_back: "Statements the script ran outside its own transactions were saved as they ran. The script's open transaction was rolled back, so what it had changed there was not saved. Sequence changes (setval, nextval) are not undone by a rollback."
         stopped_own_transaction_next: "Fix statement %{index}, then check the database to see which statements before it were saved and reconcile the changes. Keep or restore the session settings the script needs (for example SET search_path or SET NAMES), then run only what is missing, or the saved statements run twice."
         cancelled_own_transaction_next: "Check the database to see which statements were saved and reconcile the changes before you run the script again, or the saved statements run twice."
         possibly_open_rolled_back: "The script used SAVEPOINT outside a transaction, so DBFlux issued a ROLLBACK in case one was left open. Changes the database had already committed stay."
