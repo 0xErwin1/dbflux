@@ -74,10 +74,13 @@ impl ScriptOptions {
         &self,
         rules: &ConnectionRules,
     ) -> TransactionAvailability {
-        if !rules.transactions_supported {
-            TransactionAvailability::Unavailable
-        } else if rules.self_managed.is_some() {
+        // The script's own transaction statements run as written whether or
+        // not the connection has transactions of its own, so that reason
+        // comes first: it says when the changes are saved.
+        if rules.self_managed.is_some() {
             TransactionAvailability::SelfManaged
+        } else if !rules.transactions_supported {
+            TransactionAvailability::Unavailable
         } else if self.on_error == OnError::Continue {
             TransactionAvailability::OffForContinue
         } else {

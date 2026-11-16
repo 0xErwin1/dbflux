@@ -11,6 +11,7 @@
 //! service.
 
 mod audit;
+mod interrupt;
 mod messages;
 mod options;
 mod render;
@@ -49,6 +50,8 @@ pub(super) struct ScriptFlow {
     snippet: Arc<Mutex<String>>,
     /// Set when the run ends.
     done: Option<DoneView>,
+    /// The connection of the run in progress, which Cancel Run interrupts.
+    interrupt: Option<Arc<interrupt::ScopedConnection>>,
 }
 
 impl ScriptFlow {
@@ -93,6 +96,7 @@ fn read_script(
         rules,
         snippet: Arc::default(),
         done: None,
+        interrupt: None,
     })
 }
 

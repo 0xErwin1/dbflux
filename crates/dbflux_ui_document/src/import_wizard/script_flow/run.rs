@@ -15,13 +15,16 @@ use gpui::*;
 
 use super::super::{ImportWizard, RunTaskAction, WizardStep};
 use super::audit::{AuditTarget, RunFacts, record_events, run_events};
-use super::messages::{ScriptResolution, resolve_script_outcome_at};
+use super::interrupt::ScopedConnection;
+use super::messages::{DoneView, ScriptResolution, resolve_script_outcome_at};
+use super::options::ConnectionRules;
 use crate::progress_forwarding::spawn_task_progress_forwarder;
 
 /// Everything the worker and the finishing step need, captured when the run
 /// starts so they do not read the wizard again.
 struct RunPlan {
-    connection: Arc<dyn Connection>,
+    /// The run's connection, which knows what it is running.
+    connection: Arc<ScopedConnection>,
     script: Arc<dbflux_transfer::sql_script::SqlScript>,
     options: dbflux_transfer::sql_script::RunOptions,
     transaction_offered: bool,
@@ -51,6 +54,9 @@ impl ImportWizard {
             return;
         };
 
+        if let Some(flow) = self.script.as_mut() {
+            flow.interrupt = Some(Arc::clone(&plan.connection));
+        }
         let (task_id, cancel_token) = self.begin_script_task(cx);
         self.step = WizardStep::Running;
         self.spawn_script_run(plan, task_id, cancel_token, cx);
@@ -60,7 +66,14 @@ impl ImportWizard {
     fn script_run_plan(&self, cx: &App) -> Option<RunPlan> {
         let connection = self.resolve_connection(cx)?;
         let flow = self.script.as_ref()?;
-        let options = flow.options.run_options(&flow.rules);
+        // The profile can change while the wizard is open, so the rules are
+        // read again from the connection the run will use.
+        let rules = ConnectionRules::of(
+            connection.as_ref(),
+            self.profile_is_read_only(cx),
+            flow.summary.transaction_control.as_ref(),
+        );
+        let options = flow.options.run_options(&rules);
         let audit = self.audit_target(&connection, cx);
 
         Some(RunPlan {
@@ -71,12 +84,11 @@ impl ImportWizard {
                 destructive_statements: flow.summary.destructive_count,
             },
             script: Arc::clone(&flow.script),
-            transaction_offered: flow.rules.transactions_supported
-                && flow.rules.self_managed.is_none(),
+            transaction_offered: rules.transactions_supported && rules.self_managed.is_none(),
             snippet: Arc::clone(&flow.snippet),
             options,
             audit,
-            connection,
+            connection: Arc::new(ScopedConnection::new(connection)),
         })
     }
 
@@ -195,38 +207,70 @@ impl ImportWizard {
             finalize_task(&app_state, task_id, &resolution, events, cx);
 
             this.update(cx, |this, cx| {
-                this.running = false;
-                this.cancel_token = None;
-                this.step = WizardStep::Done;
-                if let Some(flow) = this.script.as_mut() {
-                    flow.done = Some(resolution.view);
-                }
-                cx.notify();
+                this.finish_script_run(task_id, resolution.view, cx);
             })
             .ok();
         })
         .detach();
     }
 
-    /// Asks the driver to stop the statement in progress, off the UI thread.
-    /// The token alone only stops the run between statements. A driver that
-    /// cannot interrupt a statement says so, and the statement then finishes
-    /// before the run stops.
-    pub(in crate::import_wizard) fn interrupt_script_statement(&mut self, cx: &mut Context<Self>) {
-        if self.script.is_none() || !self.running {
+    /// Shows the end of the run of `task_id`. A run that is no longer the
+    /// wizard's active one (the wizard was closed and reopened since it
+    /// started) changes nothing.
+    pub(in crate::import_wizard) fn finish_script_run(
+        &mut self,
+        task_id: TaskId,
+        view: DoneView,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_task_id != Some(task_id) {
             return;
         }
-        let Some(connection) = self.resolve_connection(cx) else {
+        self.running = false;
+        self.cancel_token = None;
+        self.step = WizardStep::Done;
+        if let Some(flow) = self.script.as_mut() {
+            flow.done = Some(view);
+            flow.interrupt = None;
+        }
+        cx.notify();
+    }
+
+    /// Asks the driver to stop the statement in progress, off the UI thread.
+    /// The token alone only stops the run between statements. A driver that
+    /// cannot interrupt a statement is reported, and the statement then
+    /// finishes before the run stops. An interrupt that arrives when no
+    /// statement of the script is running is dropped: see
+    /// [`ScopedConnection`].
+    pub(in crate::import_wizard) fn interrupt_script_statement(&mut self, cx: &mut Context<Self>) {
+        if !self.running {
+            return;
+        }
+        let Some(scope) = self.script.as_ref().and_then(|flow| flow.interrupt.clone()) else {
             return;
         };
 
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(error) = connection.cancel_active() {
-                    log::warn!("Could not interrupt the running statement: {error}");
-                }
-            })
-            .detach();
+        let interrupt = cx
+            .background_executor()
+            .spawn(async move { scope.interrupt() });
+
+        cx.spawn(async move |_this, cx| {
+            if let Err(error) = interrupt.await {
+                cx.update(|cx| {
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::Driver,
+                            dbflux_i18n::t!(
+                                "document.import_wizard.script.error.interrupt_failed",
+                                error = error
+                            ),
+                        ),
+                        cx,
+                    );
+                });
+            }
+        })
+        .detach();
     }
 }
 

@@ -91,7 +91,7 @@ fn a_script_over_the_limit_is_refused_before_it_is_read(cx: &mut gpui::TestAppCo
 
     assert_eq!(
         message,
-        "This script is 100 MB, over the 100 MB limit for running a script here."
+        "This script is 104,857,601 B, over the 104,857,600 B limit for running a script here."
     );
     assert_eq!(
         next_step,

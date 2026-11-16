@@ -47,6 +47,7 @@ pub(super) struct ScriptFake {
     /// middle of a run (press Cancel Run).
     during_run: Mutex<Option<StatementHook>>,
     pub(super) interrupts: AtomicUsize,
+    fail_interrupt: std::sync::atomic::AtomicBool,
 }
 
 impl ScriptFake {
@@ -64,6 +65,7 @@ impl ScriptFake {
             failures: Mutex::new(Vec::new()),
             during_run: Mutex::new(None),
             interrupts: AtomicUsize::new(0),
+            fail_interrupt: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -85,6 +87,10 @@ impl ScriptFake {
             .lock()
             .map(|log| log.clone())
             .unwrap_or_default()
+    }
+
+    pub(super) fn fail_interrupts(&self) {
+        self.fail_interrupt.store(true, Ordering::SeqCst);
     }
 
     pub(super) fn interrupts(&self) -> usize {
@@ -166,6 +172,9 @@ impl Connection for ScriptFake {
 
     fn cancel_active(&self) -> Result<(), DbError> {
         self.interrupts.fetch_add(1, Ordering::SeqCst);
+        if self.fail_interrupt.load(Ordering::SeqCst) {
+            return Err(DbError::QueryFailed(FormattedError::new("no such query")));
+        }
         Ok(())
     }
 
@@ -320,3 +329,22 @@ pub(super) const READ_ONLY_SCRIPT: &str = "SELECT 1;\nSELECT 2;\n";
 /// A script of plain writes, none destructive.
 pub(super) const WRITE_SCRIPT: &str =
     "INSERT INTO t VALUES (1);\nUPDATE t SET id = 2 WHERE id = 1;\n";
+
+/// Makes the opened wizard's profile read-only, as the user can while the
+/// wizard is open.
+pub(super) fn make_read_only(opened: &mut Opened<'_>) {
+    opened.window.update(|_, cx| {
+        let wizard = opened.wizard.read(cx);
+        let Some(profile_id) = wizard.profile_id else {
+            return;
+        };
+        let state = wizard.app_state.clone();
+        state.update(cx, |state, _| {
+            if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+                connected.profile.read_only_flag = true;
+                connected.mutation_policy = dbflux_core::MutationPolicy::ReadOnly;
+                connected.read_only_reason = Some(dbflux_core::ReadOnlyReason::ProfileSetting);
+            }
+        });
+    });
+}

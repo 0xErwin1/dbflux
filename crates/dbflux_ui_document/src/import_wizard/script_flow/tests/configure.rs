@@ -289,3 +289,34 @@ fn confirm_says_a_self_managed_script_runs_as_written(cx: &mut gpui::TestAppCont
         "a keyword that is not a commit gets the generic sentence"
     );
 }
+
+#[gpui::test]
+fn a_connection_without_transactions_still_names_the_scripts_own_commit(
+    cx: &mut gpui::TestAppContext,
+) {
+    let scratch = Scratch::new("own_tx_no_tx");
+    let kind = FakeKind {
+        transactions: false,
+        ..FakeKind::SQL
+    };
+    let mut opened = open_wizard(cx, ScriptFake::new(kind), false);
+    pick(
+        &mut opened,
+        scratch.write("own.sql", b"BEGIN;\nINSERT INTO t VALUES (1);\nCOMMIT;\n"),
+    );
+
+    let (reason, how) = read(&mut opened, |wizard| {
+        let flow = wizard.script.as_ref().expect("script");
+        (
+            super::super::render::transaction_reason(flow),
+            super::super::render::how_it_runs(flow),
+        )
+    });
+    assert_eq!(
+        reason.as_deref(),
+        Some(
+            "Off because this script manages its own transactions (BEGIN at line 1). It runs as written: its own transaction statements decide what is saved."
+        )
+    );
+    assert!(how.starts_with("It runs as written"), "{how}");
+}

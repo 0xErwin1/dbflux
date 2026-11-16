@@ -199,11 +199,16 @@ fn cancel_run_trips_the_token_and_interrupts_the_statement(cx: &mut gpui::TestAp
     let fake = ScriptFake::new(FakeKind::SQL);
     let opened = on_confirm(cx, fake.clone(), &scratch, SCRIPT);
     let token = CancelToken::new();
+    let scope = Arc::new(super::super::interrupt::ScopedConnection::new(fake.clone()));
+    scope.enter_for_test(super::super::interrupt::Phase::Statement);
 
     opened.wizard.update(opened.window, |this, cx| {
         this.running = true;
         this.step = WizardStep::Running;
         this.cancel_token = Some(token.clone());
+        if let Some(flow) = this.script.as_mut() {
+            flow.interrupt = Some(scope.clone());
+        }
         this.cancel_run(cx);
     });
     opened.window.run_until_parked();
@@ -214,6 +219,29 @@ fn cancel_run_trips_the_token_and_interrupts_the_statement(cx: &mut gpui::TestAp
         1,
         "the driver is asked to stop the statement"
     );
+}
+
+#[gpui::test]
+fn cancel_run_between_statements_does_not_interrupt_the_connection(cx: &mut gpui::TestAppContext) {
+    let scratch = Scratch::new("cancel_idle");
+    let fake = ScriptFake::new(FakeKind::SQL);
+    let opened = on_confirm(cx, fake.clone(), &scratch, SCRIPT);
+    let token = CancelToken::new();
+    let scope = Arc::new(super::super::interrupt::ScopedConnection::new(fake.clone()));
+
+    opened.wizard.update(opened.window, |this, cx| {
+        this.running = true;
+        this.step = WizardStep::Running;
+        this.cancel_token = Some(token.clone());
+        if let Some(flow) = this.script.as_mut() {
+            flow.interrupt = Some(scope);
+        }
+        this.cancel_run(cx);
+    });
+    opened.window.run_until_parked();
+
+    assert!(token.is_cancelled());
+    assert_eq!(fake.interrupts(), 0);
 }
 
 #[gpui::test]
@@ -298,5 +326,35 @@ fn a_run_that_cannot_start_returns_to_configure_without_a_task(cx: &mut gpui::Te
         assert!(matches!(wizard.step, WizardStep::Configure));
         assert!(wizard.cancel_token.is_none());
         assert!(!wizard.running);
+    });
+}
+
+#[gpui::test]
+fn a_profile_that_became_read_only_after_configure_refuses_the_run(cx: &mut gpui::TestAppContext) {
+    let scratch = Scratch::new("read_only_late");
+    let fake = ScriptFake::new(FakeKind::SQL);
+    let mut opened = on_confirm(cx, fake.clone(), &scratch, WRITE_SCRIPT);
+    super::support::make_read_only(&mut opened);
+
+    run_to_the_end(&mut opened);
+
+    assert!(
+        fake.executed().is_empty(),
+        "nothing ran: {:?}",
+        fake.executed()
+    );
+    read(&mut opened, |wizard| {
+        let view = wizard
+            .script
+            .as_ref()
+            .and_then(|flow| flow.done.as_ref())
+            .expect("done");
+        let block = view.block.as_ref().expect("danger block");
+
+        assert!(
+            block.message.starts_with("This connection is read-only"),
+            "{}",
+            block.message
+        );
     });
 }

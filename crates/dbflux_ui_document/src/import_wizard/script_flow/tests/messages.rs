@@ -118,7 +118,9 @@ fn a_cancelled_run_without_a_transaction_says_how_many_were_kept() {
     );
     assert_eq!(
         view.next_step.as_deref(),
-        Some("Delete them from the file before you run it again, or they run twice.")
+        Some(
+            "Delete them from the file before you run it again, or they run twice. Keep or restore the session settings the script needs (for example SET search_path or SET NAMES) for the rest."
+        )
     );
 
     let nothing = ScriptReport {
@@ -557,19 +559,75 @@ fn a_script_that_ends_without_commit_says_it_was_rolled_back() {
     );
 }
 
+const OWN_TX_OUTCOME: &str = "Statements before the script's own BEGIN were saved as they ran. The script's open transaction was rolled back, so what it had changed there was not saved.";
+
 #[test]
-fn a_stop_inside_the_scripts_own_transaction_says_it_was_rolled_back() {
+fn a_stop_inside_the_scripts_own_transaction_does_not_claim_everything_before_it_was_kept() {
     let rolled = ScriptReport {
         script_transaction: ScriptTransaction::RolledBack,
         ..stopped(Disposition::Kept)
     };
-    let outcome = done_view(&rolled, false).outcome.unwrap_or_default();
+    let view = done_view(&rolled, false);
+    let outcome = view.outcome.clone().unwrap_or_default();
 
-    assert!(
-        outcome.ends_with(
-            "The script's open transaction was rolled back, so what it had changed there was not saved."
-        ),
-        "{outcome}"
+    assert_eq!(outcome, OWN_TX_OUTCOME);
+    assert!(!outcome.contains("were kept"));
+    assert_eq!(
+        view.next_step.as_deref(),
+        Some(
+            "Fix statement 4,121, then check which statements before it were saved (only those before the script's own BEGIN were) and reconcile the changes. Keep or restore the session settings the script needs (for example SET search_path or SET NAMES), then run only what is missing, or the saved statements run twice."
+        )
+    );
+}
+
+#[test]
+fn a_cancel_inside_the_scripts_own_transaction_uses_the_same_neutral_wording() {
+    let rolled = ScriptReport {
+        script_transaction: ScriptTransaction::RolledBack,
+        ran: 5,
+        stopped_at: Some(6),
+        ..report(RunEnd::Cancelled, Disposition::Kept)
+    };
+    let view = done_view(&rolled, false);
+
+    assert_eq!(view.outcome.as_deref(), Some(OWN_TX_OUTCOME));
+    assert_eq!(
+        view.next_step.as_deref(),
+        Some(
+            "Check which statements were saved (only those before the script's own BEGIN were) and reconcile the changes before you run the script again, or the saved statements run twice."
+        )
+    );
+}
+
+#[test]
+fn a_cancelled_run_still_lists_the_statements_that_failed_before_it() {
+    let cancelled = ScriptReport {
+        failures: vec![failure(2, 3, "INSERT INTO t VALUES (1)", "duplicate key")],
+        stopped_at: Some(5),
+        ran: 3,
+        ..report(RunEnd::Cancelled, Disposition::Kept)
+    };
+    let view = done_view(&cancelled, false);
+
+    assert_eq!(
+        view.headline,
+        "Script cancelled after 3 of 12,481 statements"
+    );
+    assert_eq!(view.failures.len(), 1);
+    assert_eq!(view.failures[0].label, "#2 · line 3");
+    assert_eq!(view.failures[0].error, "duplicate key");
+}
+
+#[test]
+fn a_size_that_rounds_to_the_limit_is_shown_in_bytes() {
+    let block = load_error_block(&ScriptError::TooLarge {
+        size: 100 * 1024 * 1024 + 1,
+        limit: 100 * 1024 * 1024,
+    });
+
+    assert_eq!(
+        block.message,
+        "This script is 104,857,601 B, over the 104,857,600 B limit for running a script here."
     );
 }
 

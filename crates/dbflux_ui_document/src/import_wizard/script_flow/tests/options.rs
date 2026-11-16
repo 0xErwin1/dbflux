@@ -134,7 +134,7 @@ fn a_script_that_manages_its_own_transactions_turns_the_option_off() {
     };
     assert_eq!(
         options.availability(&without_transactions),
-        TransactionAvailability::Unavailable,
-        "no transactions is the more basic reason"
+        TransactionAvailability::SelfManaged,
+        "the script's own COMMIT decides what is saved, with or without transactions"
     );
 }

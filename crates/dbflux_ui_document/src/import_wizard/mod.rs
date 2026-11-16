@@ -201,6 +201,18 @@ fn imported_row_count(tables: &[ImportedTable]) -> u64 {
         .sum()
 }
 
+/// How a folder read ended.
+enum FolderRead {
+    /// The folder dialog was dismissed.
+    Cancelled,
+    Failed(ErrorBlock),
+    Read {
+        dir: PathBuf,
+        configs: Vec<TableImportConfig>,
+        supports_truncate: bool,
+    },
+}
+
 /// One table row's live controls, wrapping the pure [`TableImportConfig`]
 /// with the `Dropdown` entities the user adjusts it through. Item lists are
 /// static (source/target column names don't change once the folder is
@@ -360,6 +372,8 @@ impl ImportWizard {
         let supports_truncate = connection.supports(DriverCapabilities::TRUNCATE_TABLE);
         let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
 
+        let generation = self.next_file_read_request();
+
         self.loading = true;
         self.loading_folder = true;
         self.manifest_error = None;
@@ -377,8 +391,7 @@ impl ImportWizard {
                     Some(handle) => handle.path().to_path_buf(),
                     None => {
                         this.update(cx, |this, cx| {
-                            this.loading = false;
-                            cx.notify();
+                            this.finish_folder_read(generation, FolderRead::Cancelled, cx);
                         })
                         .ok();
                         return;
@@ -386,9 +399,11 @@ impl ImportWizard {
                 }
             } else {
                 this.update(cx, |this, cx| {
-                    this.loading = false;
-                    this.manifest_error = Some(ErrorBlock::no_dialog());
-                    cx.notify();
+                    this.finish_folder_read(
+                        generation,
+                        FolderRead::Failed(ErrorBlock::no_dialog()),
+                        cx,
+                    );
                 })
                 .ok();
                 return;
@@ -404,9 +419,8 @@ impl ImportWizard {
                 Ok(manifest) => manifest,
                 Err(e) => {
                     this.update(cx, |this, cx| {
-                        this.loading = false;
-                        this.manifest_error = Some(ErrorBlock::invalid_bundle(&e.to_string()));
-                        cx.notify();
+                        let block = ErrorBlock::invalid_bundle(&e.to_string());
+                        this.finish_folder_read(generation, FolderRead::Failed(block), cx);
                     })
                     .ok();
                     return;
@@ -445,19 +459,45 @@ impl ImportWizard {
             }
 
             this.update(cx, |this, cx| {
-                this.loading = false;
-                this.file_import = None;
-                this.script = None;
-                this.manifest_dir = Some(dir);
-                this.supports_truncate = supports_truncate;
-                this.field_cursor = 0;
-                this.build_rows(configs, cx);
-                this.step = WizardStep::Configure;
-                cx.notify();
+                let read = FolderRead::Read {
+                    dir,
+                    configs,
+                    supports_truncate,
+                };
+                this.finish_folder_read(generation, read, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Applies the end of a folder read. A read that belongs to an earlier
+    /// request (the wizard was reopened, or another file was picked since)
+    /// changes nothing, not even `loading`, which the newer request owns.
+    fn finish_folder_read(&mut self, generation: u64, read: FolderRead, cx: &mut Context<Self>) {
+        if generation != self.file_read_request {
+            return;
+        }
+        self.loading = false;
+
+        match read {
+            FolderRead::Cancelled => {}
+            FolderRead::Failed(block) => self.manifest_error = Some(block),
+            FolderRead::Read {
+                dir,
+                configs,
+                supports_truncate,
+            } => {
+                self.file_import = None;
+                self.script = None;
+                self.manifest_dir = Some(dir);
+                self.supports_truncate = supports_truncate;
+                self.field_cursor = 0;
+                self.build_rows(configs, cx);
+                self.step = WizardStep::Configure;
+            }
+        }
+        cx.notify();
     }
 
     fn build_rows(&mut self, configs: Vec<TableImportConfig>, cx: &mut Context<Self>) {

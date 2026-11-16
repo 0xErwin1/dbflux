@@ -53,11 +53,14 @@ pub(in crate::import_wizard) struct DoneView {
 pub(in crate::import_wizard) fn load_error_block(error: &ScriptError) -> ErrorBlock {
     let (message, next_step) = match error {
         ScriptError::TooLarge { size, limit } => (
-            dbflux_i18n::t!(
-                "document.import_wizard.script.error.too_large",
-                size = size_label(*size),
-                limit = size_label(*limit)
-            ),
+            {
+                let (size, limit) = size_and_limit_labels(*size, *limit);
+                dbflux_i18n::t!(
+                    "document.import_wizard.script.error.too_large",
+                    size = size,
+                    limit = limit
+                )
+            },
             dbflux_i18n::t!("document.import_wizard.script.error.too_large_next"),
         ),
         ScriptError::NotUtf8 { position } => (
@@ -160,6 +163,20 @@ pub(in crate::import_wizard) fn load_error_block(error: &ScriptError) -> ErrorBl
     }
 }
 
+/// The size and the limit as labels. A size that rounds to the same label as
+/// the limit (a file one byte over it) is shown in bytes, so the user can see
+/// why it was refused.
+fn size_and_limit_labels(size: u64, limit: u64) -> (String, String) {
+    let (rounded_size, rounded_limit) = (size_label(size), size_label(limit));
+
+    if rounded_size == rounded_limit {
+        let bytes = |value: u64| format!("{} B", grouped(value as usize));
+        return (bytes(size), bytes(limit));
+    }
+
+    (rounded_size, rounded_limit)
+}
+
 /// What a statement that switches the session's commit mode does, in words.
 /// A change this flow does not know is shown as the engine names it.
 fn session_change_label(change: &str) -> String {
@@ -217,6 +234,9 @@ pub(in crate::import_wizard) fn done_view_at(
         view.next_step = Some(dbflux_i18n::t!(
             "document.import_wizard.script.done.partially_kept_next"
         ));
+    } else if let Some(neutral) = own_transaction_rollback(report) {
+        view.outcome = Some(neutral.0);
+        view.next_step = Some(neutral.1);
     } else if let Some(key) = script_transaction_note(report.script_transaction) {
         let note = dbflux_i18n::t!(key);
         view.outcome = Some(match view.outcome.take() {
@@ -232,12 +252,34 @@ pub(in crate::import_wizard) fn done_view_at(
 /// the run ended that way.
 fn script_transaction_note(transaction: ScriptTransaction) -> Option<&'static str> {
     match transaction {
-        ScriptTransaction::RolledBack => {
-            Some("document.import_wizard.script.done.script_rolled_back")
-        }
         ScriptTransaction::PossiblyOpenRolledBack => {
             Some("document.import_wizard.script.done.possibly_open_rolled_back")
         }
+        _ => None,
+    }
+}
+
+/// The outcome and next step of a stop or cancel inside the script's own
+/// transaction. Only the statements before the script's `BEGIN` were saved,
+/// and the report does not say where that was, so neither text counts them.
+fn own_transaction_rollback(report: &ScriptReport) -> Option<(String, String)> {
+    if report.script_transaction != ScriptTransaction::RolledBack {
+        return None;
+    }
+    let outcome = dbflux_i18n::t!("document.import_wizard.script.done.script_rolled_back");
+
+    match (report.end, report.failures.first()) {
+        (RunEnd::StoppedOnError, Some(failure)) => Some((
+            outcome,
+            dbflux_i18n::t!(
+                "document.import_wizard.script.done.stopped_own_transaction_next",
+                index = grouped(failure.index)
+            ),
+        )),
+        (RunEnd::Cancelled, _) => Some((
+            outcome,
+            dbflux_i18n::t!("document.import_wizard.script.done.cancelled_own_transaction_next"),
+        )),
         _ => None,
     }
 }
@@ -347,6 +389,7 @@ fn cancelled_view(report: &ScriptReport) -> DoneView {
         ),
         DoneTone::Warning,
     );
+    view.failures = report.failures.iter().map(failure_row).collect();
 
     match report.disposition {
         Disposition::RolledBack => {

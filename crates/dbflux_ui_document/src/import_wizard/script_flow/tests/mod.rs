@@ -1,11 +1,13 @@
 mod audit;
 mod configure;
+mod interrupt;
 mod keyboard;
 mod messages;
 mod options;
 mod pick;
 mod render;
 mod run;
+mod stale;
 mod support;
 
 use dbflux_core::ExecutionClassification;
