@@ -176,7 +176,7 @@ pub enum ScriptError {
     CopyFromStdin { line: usize },
 
     #[error(
-        "The script uses the psql command {command} on line {line}, which only the psql command-line client understands. Remove it, or run the script with psql."
+        "The script uses the psql command {command} on line {line}, which only the psql command-line client understands. Run the script with psql instead: removing it would run the remaining statements on this connection, which may not be the database it selects."
     )]
     PsqlMetaCommand { command: String, line: usize },
 

@@ -906,7 +906,7 @@ fn psql_meta_commands_are_refused_with_the_command_and_line() {
             line: 3
         }
         .to_string(),
-        "The script uses the psql command \\connect on line 3, which only the psql command-line client understands. Remove it, or run the script with psql."
+        "The script uses the psql command \\connect on line 3, which only the psql command-line client understands. Run the script with psql instead: removing it would run the remaining statements on this connection, which may not be the database it selects."
     );
 }
 
