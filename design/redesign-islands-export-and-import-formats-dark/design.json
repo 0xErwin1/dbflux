@@ -44,6 +44,20 @@
       "tradeoff": "Islands, dark: Export confirms a summary with Back, Cancel and Start Export; import confirms only a Recreate or Truncate plan, with the affected tables and modes in the shared danger block and Back, Cancel and Yes, proceed in the footer.",
       "width": 1580,
       "height": 815
+    },
+    {
+      "file": "07-isl-import-spreadsheet.html",
+      "title": "Import wizard: spreadsheet import (Sheet dropdown, empty or invalid sheet, error cell, sheet too large, XML)",
+      "tradeoff": "Islands, dark: Adds a single Sheet row to the existing Configure step instead of a separate sheet wizard, and reuses the shared danger block for every failure; sheet names only, so the dropdown does not promise row counts the reader may not give cheaply.",
+      "width": 1400,
+      "height": 2900
+    },
+    {
+      "file": "08-isl-sql-script.html",
+      "title": "Import wizard: run a SQL script (Configure, Confirm for every run, Running, Done, Pick Source errors)",
+      "tradeoff": "Islands, dark: Keeps the script flow inside the import wizard with its four-step rail rather than a new dialog; every run stops at Confirm, a plain summary when nothing is destructive and the danger block when something is, at the cost of one extra click for harmless scripts.",
+      "width": 1400,
+      "height": 5800
     }
   ]
 }
