@@ -1,5 +1,5 @@
 use super::ScriptStatement;
-use super::blank::{Identifiers, blank_literals, words_with_offsets};
+use super::blank::{Identifiers, blank_literals, conditional_comment_bodies, words_with_offsets};
 
 /// A statement that starts, ends or checkpoints a transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,46 +144,57 @@ pub(super) fn transaction_effect(statement: &str) -> TransactionEffect {
     }
 }
 
-/// Follows the transaction a script opens on its own: `BEGIN` and `START
-/// TRANSACTION`, and `SAVEPOINT` outside a transaction, which starts one on
-/// SQLite and ends again with the release of its outermost savepoint.
+/// Follows the transaction a script opens on its own with `BEGIN` or `START
+/// TRANSACTION`. A `SAVEPOINT` outside one is only noted: whether it opens a
+/// transaction depends on the engine, and the connection cannot be asked.
+/// Chained ends (`COMMIT AND CHAIN`) keep the transaction open.
 #[derive(Debug, Default)]
 pub(super) struct TransactionTracker {
     open: bool,
-    opened_by_savepoint: bool,
-    savepoints: Vec<String>,
+    savepoint_outside_transaction: bool,
 }
 
 impl TransactionTracker {
     pub(super) fn apply(&mut self, statement: &str) {
         match transaction_effect(statement) {
-            TransactionEffect::Opens => {
-                self.open = true;
-                self.opened_by_savepoint = false;
-            }
+            TransactionEffect::Opens => self.open = true,
             TransactionEffect::Closes => *self = Self::default(),
-            TransactionEffect::Savepoint(name) => {
+            TransactionEffect::Savepoint(_) => {
                 if !self.open {
-                    self.open = true;
-                    self.opened_by_savepoint = true;
-                }
-                self.savepoints.push(name);
-            }
-            TransactionEffect::Release(name) => {
-                if let Some(position) = self.savepoints.iter().rposition(|saved| *saved == name) {
-                    self.savepoints.truncate(position);
-                }
-                if self.opened_by_savepoint && self.savepoints.is_empty() {
-                    *self = Self::default();
+                    self.savepoint_outside_transaction = true;
                 }
             }
-            TransactionEffect::Other => {}
+            TransactionEffect::Release(_) | TransactionEffect::Other => {}
         }
+    }
+
+    pub(super) fn used_savepoint_outside_transaction(&self) -> bool {
+        self.savepoint_outside_transaction
     }
 
     pub(super) fn is_open(&self) -> bool {
         self.open
     }
+}
+
+/// The line of the first version-conditional comment whose body controls
+/// transactions or switches the session to manual commit. Whether such a
+/// comment runs depends on the server and its version, so the script cannot
+/// be followed.
+pub(super) fn conditional_transaction_control_line(
+    statements: &[ScriptStatement],
+) -> Option<usize> {
+    statements.iter().find_map(|statement| {
+        conditional_comment_bodies(&statement.text)
+            .into_iter()
+            .find(|(_, body)| {
+                body.split(';').any(|piece| {
+                    transaction_keyword(piece).is_some()
+                        || session_commit_mode_change(piece).is_some()
+                })
+            })
+            .map(|(offset, _)| statement.line + offset)
+    })
 }
 
 /// What a statement does when it switches the session to manual commit

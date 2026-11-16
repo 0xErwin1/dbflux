@@ -191,6 +191,11 @@ pub enum ScriptError {
         line: usize,
     },
 
+    #[error(
+        "The script has a version-conditional comment on line {line} that controls transactions, and whether it runs depends on the server. Run the script with the database's own command-line client."
+    )]
+    ConditionalTransactionControl { line: usize },
+
     #[error("Could not start the transaction, so nothing ran: {message}")]
     TransactionStart { message: String },
 }
