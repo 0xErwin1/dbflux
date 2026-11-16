@@ -286,11 +286,27 @@ fn decode_timestamp(text: &str, date_format: DateFormat) -> Option<DateTime<Utc>
             .ok()
             .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
     };
-    selected.or_else(|| {
-        DateTime::parse_from_rfc3339(text)
-            .ok()
-            .map(|parsed| parsed.with_timezone(&Utc))
-    })
+    selected
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(text)
+                .ok()
+                .map(|parsed| parsed.with_timezone(&Utc))
+        })
+        .or_else(|| epoch_seconds_text(text))
+}
+
+/// A whole number of seconds since the Unix epoch written as plain digits.
+/// It is read under any date format, after the format's own text, because a
+/// loose file has no option to say its timestamps are epoch seconds (an
+/// export written with the epoch preset). RFC 3339 and
+/// `YYYY-MM-DD HH:MM:SS` text never match, so they decode as before.
+fn epoch_seconds_text(text: &str) -> Option<DateTime<Utc>> {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    DateTime::from_timestamp(text.parse::<i64>().ok()?, 0)
 }
 
 fn decode_date(text: &str, date_format: DateFormat) -> Option<NaiveDate> {

@@ -434,10 +434,38 @@ fn an_ods_and_an_xls_workbook_are_read_through_the_same_reader() {
             Some(FileFormat::Spreadsheet),
             "{name}"
         );
-        let file = inspect_xlsx(&path, None);
+        // The fixtures carry other content to the right of the table, so
+        // the first row has a column without a name.
+        let message = source_error(inspect_xlsx(&path, None));
         assert!(
-            file.is_ok() || matches!(file, Err(TransferError::Source(_))),
-            "{name}"
+            message.contains("header column 6 has no name"),
+            "{name}: {message}"
         );
     }
+}
+
+#[test]
+fn rows_past_the_data_that_only_pad_the_grid_are_not_imported() {
+    let scratch = Scratch::new();
+    let path = workbook(&scratch, "merged.xlsx", |book| {
+        let data = sheet(book, "Data")?;
+        header(data, &["a", "b"])?;
+        data.write_string(1, 0, "x")?;
+        data.write_string(3, 0, "after a gap")?;
+        data.merge_range(10, 0, 99, 1, "", &Format::new())?;
+        Ok(())
+    });
+    let file = inspect_xlsx(&path, None).expect("inspect");
+
+    let values = read_values(&file);
+
+    assert_eq!(
+        values,
+        vec![
+            vec![text("x"), Value::Null],
+            vec![Value::Null, Value::Null],
+            vec![text("after a gap"), Value::Null],
+        ],
+        "interior empty rows stay, trailing padding does not"
+    );
 }

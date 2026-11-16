@@ -31,13 +31,13 @@ fn dates_times_and_errors_map_to_values() {
     };
 
     assert_eq!(
-        cell_value(&CellValue::Date(at(2024, 1, 31, 0, 0, 0))),
+        cell_value(&CellValue::Date(at(2024, 1, 31, 0, 0, 0)), true),
         Ok(Value::Date(
             NaiveDate::from_ymd_opt(2024, 1, 31).expect("date")
         ))
     );
     assert_eq!(
-        cell_value(&CellValue::Date(at(2024, 3, 5, 13, 45, 30))),
+        cell_value(&CellValue::Date(at(2024, 3, 5, 13, 45, 30)), true),
         Ok(Value::DateTime(
             Utc.with_ymd_and_hms(2024, 3, 5, 13, 45, 30)
                 .single()
@@ -45,13 +45,58 @@ fn dates_times_and_errors_map_to_values() {
         ))
     );
     assert_eq!(
-        cell_value(&CellValue::Date(at(1899, 12, 31, 6, 0, 0))),
+        cell_value(&CellValue::Date(at(1899, 12, 31, 6, 0, 0)), true),
         Ok(Value::Time(NaiveTime::from_hms_opt(6, 0, 0).expect("time")))
     );
+    // Only the 1900-date-system day zero stands for a time of day; a real
+    // calendar date before it (an ods date) keeps its day.
     assert_eq!(
-        cell_value(&CellValue::Error(CellErrorCode::DivisionByZero)),
+        cell_value(&CellValue::Date(at(1890, 1, 1, 0, 0, 0)), false),
+        Ok(Value::Date(
+            NaiveDate::from_ymd_opt(1890, 1, 1).expect("date")
+        ))
+    );
+    assert_eq!(
+        cell_value(&CellValue::Date(at(1890, 1, 1, 0, 0, 0)), true),
+        Ok(Value::Date(
+            NaiveDate::from_ymd_opt(1890, 1, 1).expect("date")
+        ))
+    );
+    assert_eq!(
+        cell_value(&CellValue::Date(at(1899, 12, 31, 6, 0, 0)), false),
+        Ok(Value::DateTime(
+            Utc.with_ymd_and_hms(1899, 12, 31, 6, 0, 0)
+                .single()
+                .expect("timestamp")
+        ))
+    );
+    assert_eq!(
+        cell_value(&CellValue::Error(CellErrorCode::DivisionByZero), true),
         Err("#DIV/0!")
     );
-    assert_eq!(cell_value(&CellValue::Empty), Ok(Value::Null));
-    assert_eq!(cell_value(&CellValue::Bool(true)), Ok(Value::Bool(true)));
+    assert_eq!(cell_value(&CellValue::Empty, true), Ok(Value::Null));
+    assert_eq!(
+        cell_value(&CellValue::Bool(true), true),
+        Ok(Value::Bool(true))
+    );
+}
+
+#[test]
+fn ods_and_xls_sheets_are_read_with_their_header_and_rows() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../dbflux_spreadsheet/tests/fixtures");
+
+    for name in ["in.ods", "in.xls"] {
+        let mut rows =
+            SheetRows::open(&fixtures.join(name), None).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+
+        assert_eq!(
+            &rows.headers()[..5],
+            ["Name", "Amount", "Date", "Double", "Ok"],
+            "{name}"
+        );
+        let values = rows.next_rows(100).expect("rows");
+        assert_eq!(values[0][0], Value::Text("item1".to_string()), "{name}");
+        assert!(values.len() >= 5, "{name}: {values:?}");
+    }
 }

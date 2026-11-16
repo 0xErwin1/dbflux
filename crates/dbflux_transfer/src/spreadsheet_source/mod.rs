@@ -15,7 +15,9 @@ use std::sync::Arc;
 use dbflux_byte_source::FileSource as ByteFile;
 use dbflux_core::Value;
 use dbflux_core::chrono::{NaiveDate, NaiveDateTime, NaiveTime};
-use dbflux_spreadsheet::{CellValue, SheetGrid, SheetInfo, SheetKind, Workbook, open};
+use dbflux_spreadsheet::{
+    CellFormula, CellValue, SheetGrid, SheetInfo, SheetKind, SpreadsheetFormat, Workbook, open,
+};
 
 use crate::pipeline::TransferError;
 
@@ -47,6 +49,12 @@ pub(crate) struct SheetRows {
     sheet_name: String,
     headers: Vec<String>,
     label: String,
+    /// One past the last row that holds a value, a formula or text; the
+    /// grid can run further to cover merged ranges and tables.
+    end_row: usize,
+    /// Whether day zero (1899-12-31) stands for a time of day, which holds
+    /// for the Excel formats and not for ods.
+    day_zero_is_time: bool,
 }
 
 impl SheetRows {
@@ -67,6 +75,9 @@ impl SheetRows {
             )));
         }
 
+        let end_row = data_end_row(&grid);
+        let day_zero_is_time = workbook.format() != SpreadsheetFormat::Ods;
+
         let headers = grid
             .row(0)
             .unwrap_or_default()
@@ -80,6 +91,8 @@ impl SheetRows {
             sheet_name,
             headers,
             label,
+            end_row,
+            day_zero_is_time,
         })
     }
 
@@ -95,6 +108,9 @@ impl SheetRows {
 
         while rows.len() < limit {
             let row_index = self.next_row;
+            if row_index >= self.end_row {
+                break;
+            }
             let Some(cells) = self.grid.row(row_index) else {
                 break;
             };
@@ -102,7 +118,7 @@ impl SheetRows {
 
             let mut values = Vec::with_capacity(cells.len());
             for (column, cell) in cells.iter().enumerate() {
-                values.push(cell_value(&cell.value).map_err(|code| {
+                values.push(cell_value(&cell.value, self.day_zero_is_time).map_err(|code| {
                     TransferError::Source(format!(
                         "{}: sheet '{}', row {}, column '{}': the cell holds the error value {code}",
                         self.label,
@@ -117,6 +133,22 @@ impl SheetRows {
 
         Ok(rows)
     }
+}
+
+/// One past the last row holding a non-empty cell or a formula, so trailing
+/// rows that only pad the grid are not imported; empty rows between data
+/// rows are kept.
+fn data_end_row(grid: &SheetGrid) -> usize {
+    (0..grid.row_count())
+        .rev()
+        .find(|&row| {
+            grid.row(row).is_some_and(|cells| {
+                cells
+                    .iter()
+                    .any(|cell| cell.value != CellValue::Empty || cell.formula != CellFormula::None)
+            })
+        })
+        .map_or(0, |row| row + 1)
 }
 
 fn choose_sheet(
@@ -158,13 +190,13 @@ fn choose_sheet(
 /// numbers inside the `i64` range become integers, so a count does not
 /// arrive as `3.0`; a date at midnight is a date and any other is a UTC
 /// timestamp. Text stays text and is decoded by the target column's type.
-fn cell_value(value: &CellValue) -> Result<Value, &'static str> {
+fn cell_value(value: &CellValue, day_zero_is_time: bool) -> Result<Value, &'static str> {
     Ok(match value {
         CellValue::Empty => Value::Null,
         CellValue::Number(number) => number_value(*number),
         CellValue::Bool(flag) => Value::Bool(*flag),
         CellValue::Text(text) => Value::Text(text.to_string()),
-        CellValue::Date(date) => date_value(*date),
+        CellValue::Date(date) => date_value(*date, day_zero_is_time),
         CellValue::Error(code) => return Err(code.code()),
     })
 }
@@ -190,9 +222,8 @@ fn number_value(number: f64) -> Value {
 /// reports as 1899-12-31 (no real date falls on it, since the 1900 system
 /// starts at 1900-01-01). A workbook on the 1904 system has no such marker,
 /// so a time of day there arrives as a timestamp on 1904-01-01.
-fn date_value(date: NaiveDateTime) -> Value {
-    let day_zero = NaiveDate::from_ymd_opt(1899, 12, 31);
-    if Some(date.date()) <= day_zero {
+fn date_value(date: NaiveDateTime, day_zero_is_time: bool) -> Value {
+    if day_zero_is_time && Some(date.date()) == NaiveDate::from_ymd_opt(1899, 12, 31) {
         return Value::Time(date.time());
     }
 

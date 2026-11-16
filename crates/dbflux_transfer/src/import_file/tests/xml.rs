@@ -374,3 +374,56 @@ fn a_folder_manifest_naming_xml_imports_the_file_with_the_manifest_types() {
         ]]
     );
 }
+
+#[test]
+fn a_field_name_repeated_inside_one_row_is_rejected_but_may_repeat_across_rows() {
+    let scratch = Scratch::new();
+    for document in [
+        "<rows><row><field name=\"id\">1</field><field name=\"id\">2</field></row></rows>",
+        "<rows><row><field name=\"id\">1</field><field name=\"id\" null=\"true\"/></row></rows>",
+        "<rows><row><field name=\"id\"/><field name=\"id\"/></row></rows>",
+    ] {
+        let path = scratch.write("t.xml", document.as_bytes());
+        let message = source_error(inspect(&path, FileFormat::Xml));
+        assert!(
+            message.contains("field 'id' appears more than once in a <row>"),
+            "{document}: {message}"
+        );
+    }
+
+    let path = scratch.write(
+        "ok.xml",
+        b"<rows><row><field name=\"id\">1</field></row><row><field name=\"id\">2</field></row></rows>",
+    );
+    assert_eq!(
+        names(&inspect(&path, FileFormat::Xml).expect("inspect")),
+        ["id"]
+    );
+}
+
+#[test]
+fn epoch_seconds_in_an_xml_field_import_into_a_timestamp_column() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    run(&connection, "CREATE TABLE ev (id INTEGER, at TIMESTAMP)");
+    let path = scratch.write(
+        "ev.xml",
+        b"<rows><row><field name=\"id\">1</field><field name=\"at\">1706659200</field></row></rows>",
+    );
+    let file = inspect(&path, FileFormat::Xml).expect("inspect");
+
+    import(
+        &connection,
+        &file,
+        &plan(&file, TableMappingMode::Existing, "ev"),
+        500,
+    );
+
+    let stored = rows(&connection, "SELECT at FROM ev");
+    assert_ne!(stored, vec![vec![text("1706659200")]], "{stored:?}");
+    assert!(
+        matches!(&stored[0][0], Value::Text(t) if t.starts_with("2024-01-31"))
+            || matches!(&stored[0][0], Value::DateTime(_)),
+        "{stored:?}"
+    );
+}

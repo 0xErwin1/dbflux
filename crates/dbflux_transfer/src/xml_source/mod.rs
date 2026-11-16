@@ -155,11 +155,13 @@ impl XmlRows {
                 Token::Text(text) if text.trim().is_empty() => {}
                 Token::Start(element) if element.name == "field" => {
                     let name = self.field_name(element.field_name)?;
+                    self.check_new_field(&fields, &name)?;
                     let text = self.read_field_text()?;
                     fields.push((name, (!element.null).then_some(text)));
                 }
                 Token::Empty(element) if element.name == "field" => {
                     let name = self.field_name(element.field_name)?;
+                    self.check_new_field(&fields, &name)?;
                     fields.push((name, (!element.null).then(String::new)));
                 }
                 Token::End(name) if name == "row" => return Ok(fields),
@@ -171,6 +173,16 @@ impl XmlRows {
                 Token::Eof => return Err(self.error("the document ends inside a <row>")),
             }
         }
+    }
+
+    fn check_new_field(&self, fields: &XmlRow, name: &str) -> Result<(), TransferError> {
+        if fields.iter().any(|(existing, _)| existing == name) {
+            return Err(
+                self.shape_error(&format!("field '{name}' appears more than once in a <row>"))
+            );
+        }
+
+        Ok(())
     }
 
     fn read_field_text(&mut self) -> Result<String, TransferError> {
