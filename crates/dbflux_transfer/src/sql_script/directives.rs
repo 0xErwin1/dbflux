@@ -95,13 +95,15 @@ fn advance(mut scan: Scan, line: &str) -> Scan {
                 ('\'', _) => Scan::SingleQuote,
                 ('"', _) => Scan::DoubleQuote,
                 ('`', _) => Scan::Backtick,
-                ('$', _) => match dollar_tag(&characters, position) {
-                    Some((tag, consumed)) => {
-                        position += consumed;
-                        Scan::Dollar(tag)
+                ('$', _) if !continues_identifier(&characters, position) => {
+                    match dollar_tag(&characters, position) {
+                        Some((tag, consumed)) => {
+                            position += consumed;
+                            Scan::Dollar(tag)
+                        }
+                        None => Scan::Code,
                     }
-                    None => Scan::Code,
-                },
+                }
                 _ => Scan::Code,
             },
             Scan::SingleQuote if current == '\'' => Scan::Code,
@@ -170,4 +172,13 @@ pub(super) fn closes_dollar(characters: &[char], position: usize, tag: &str) -> 
     }
 
     characters.get(offset) == Some(&'$')
+}
+
+/// Whether the `$` just read (at `position - 1`) continues an identifier
+/// such as `a$b`, which cannot open a dollar quote.
+fn continues_identifier(characters: &[char], position: usize) -> bool {
+    position
+        .checked_sub(2)
+        .and_then(|before| characters.get(before))
+        .is_some_and(|before| before.is_alphanumeric() || *before == '_' || *before == '$')
 }

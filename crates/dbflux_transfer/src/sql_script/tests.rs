@@ -9,6 +9,7 @@ use dbflux_core::{
 };
 use dbflux_driver_sqlite::SqliteDriver;
 
+use super::control::TransactionTracker;
 use super::load::{ReadError, read_limited};
 use super::routine::changes_a_sequence;
 use super::*;
@@ -921,8 +922,6 @@ fn server_side_copy_and_backslashes_in_text_are_not_psql_only() {
     assert_eq!(psql_error(text), None);
 }
 
-// ------------------------------------------------------ review feedback
-
 fn control_keyword(text: &str) -> Option<&'static str> {
     control_of(text).map(|(_, _, keyword)| keyword)
 }
@@ -1172,4 +1171,102 @@ fn the_commit_mode_error_names_the_statement_and_says_what_to_do() {
         error.to_string(),
         "The script turns off autocommit on line 5 (SET autocommit = 0). That would leave this connection in manual-commit mode after the run. Remove that statement, or run the script with the database's own command-line client."
     );
+}
+
+// ------------------------------------------------ lexing edge cases
+
+#[test]
+fn a_dollar_inside_an_identifier_does_not_open_a_quote() {
+    assert!(changes_a_sequence("SELECT a$b$c, nextval('s') FROM t"));
+}
+
+#[test]
+fn a_limit_of_u64_max_still_reads_the_source() {
+    let read = read_limited(std::io::Cursor::new(vec![b'x'; 3]), u64::MAX);
+
+    assert_eq!(read.map(|bytes| bytes.len()).ok(), Some(3));
+}
+
+#[test]
+fn autocommit_off_is_found_in_any_assignment_of_a_set_list_and_in_quoted_values() {
+    for sql in [
+        "SET sql_mode = 'ANSI', autocommit = 0",
+        "SET autocommit = 'OFF'",
+        "SET autocommit = '0'",
+        "/*!50003 SET autocommit = 0 */",
+        "/*!50003 SET @@session.autocommit=0 */",
+    ] {
+        assert_eq!(
+            commit_mode(&format!("{sql};")),
+            Some(("turns off autocommit", 1)),
+            "{sql}"
+        );
+    }
+    for sql in [
+        "SET sql_mode = 'autocommit 0'",
+        "SET autocommit = 'ON', sql_mode = ''",
+        "SET search_path TO autocommit",
+    ] {
+        assert_eq!(commit_mode(&format!("{sql};")), None, "{sql}");
+    }
+    assert_eq!(
+        control_keyword("SET sql_mode = '', autocommit = 1;"),
+        Some("SET autocommit")
+    );
+}
+
+#[test]
+fn a_chained_commit_keeps_the_script_transaction_open() {
+    for (statements, open) in [
+        (vec!["BEGIN", "COMMIT AND CHAIN"], true),
+        (vec!["BEGIN", "ROLLBACK AND CHAIN"], true),
+        (vec!["BEGIN", "COMMIT AND NO CHAIN"], false),
+        (vec!["BEGIN", "COMMIT"], false),
+        (vec!["BEGIN", "SAVEPOINT a", "ROLLBACK TO a"], true),
+    ] {
+        let mut tracker = TransactionTracker::default();
+        for statement in &statements {
+            tracker.apply(statement);
+        }
+        assert_eq!(tracker.is_open(), open, "{statements:?}");
+    }
+}
+
+#[test]
+fn a_savepoint_that_opens_a_transaction_is_tracked_until_its_outermost_release() {
+    let mut tracker = TransactionTracker::default();
+    tracker.apply("SAVEPOINT outer_one");
+    tracker.apply("SAVEPOINT inner_one");
+    assert!(tracker.is_open());
+    tracker.apply("RELEASE inner_one");
+    assert!(tracker.is_open());
+    tracker.apply("RELEASE SAVEPOINT outer_one");
+    assert!(!tracker.is_open());
+
+    let mut inside_begin = TransactionTracker::default();
+    inside_begin.apply("BEGIN");
+    inside_begin.apply("SAVEPOINT a");
+    inside_begin.apply("RELEASE a");
+    assert!(inside_begin.is_open(), "the BEGIN is still open");
+}
+
+#[test]
+fn a_savepoint_left_open_at_the_end_is_rolled_back() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("SAVEPOINT imported;\nINSERT INTO t VALUES (1);\n");
+
+    let report = run(connection.as_ref(), &script, RunOptions::default()).expect("run");
+
+    assert_eq!(
+        report.script_transaction,
+        ScriptTransaction::EndedWithoutCommit
+    );
+    assert_eq!(row_count(connection.as_ref(), "t"), 0);
+
+    let released = self::script("SAVEPOINT s;\nINSERT INTO t VALUES (1);\nRELEASE s;\n");
+    let report = run(connection.as_ref(), &released, RunOptions::default()).expect("run");
+    assert_eq!(report.script_transaction, ScriptTransaction::None);
+    assert_eq!(row_count(connection.as_ref(), "t"), 1);
 }

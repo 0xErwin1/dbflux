@@ -5,7 +5,7 @@
 
 use super::directives::{closes_dollar, dollar_tag};
 
-/// What happens to double-quoted and backtick-quoted identifiers.
+/// What happens to quoted identifiers and, for one mode, strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Identifiers {
     /// Blanked like strings: a column called `"begin"` is not a keyword.
@@ -14,9 +14,14 @@ pub(super) enum Identifiers {
     /// blanked, so `"setval"(` reads as a call to `setval` while `"setval("`
     /// does not.
     Keep,
+    /// As [`Identifiers::Keep`], and single-quoted strings are kept too, with
+    /// everything but letters, digits and `_` turned into `_`, so a value
+    /// such as `'OFF'` stays one word while `'autocommit 0'` cannot pass for
+    /// two.
+    KeepStrings,
 }
 
-fn keep_identifier_char(character: char) -> char {
+fn keep_identifier_character(character: char) -> char {
     if character.is_alphanumeric() || character == '_' {
         character
     } else if character == '\n' {
@@ -48,35 +53,73 @@ pub(super) fn words_with_offsets(code: &str) -> Vec<(usize, String)> {
     words
 }
 
-/// `statement` with quoted text, comments and
-/// dollar-quoted bodies replaced by spaces. Newlines stay, so offsets keep
-/// their line numbers.
+/// `statement` with quoted text, comments and dollar-quoted bodies replaced
+/// by spaces. Newlines stay, so offsets keep their line numbers. The body of
+/// a MySQL conditional comment (`/*!50003 ... */`) is code, so it is kept.
 pub(super) fn blank_literals(statement: &str, identifiers: Identifiers) -> String {
     let characters: Vec<char> = statement.chars().collect();
     let mut output = String::with_capacity(statement.len());
     let mut position = 0;
+    let mut conditional_depth = 0usize;
 
     while let Some(&current) = characters.get(position) {
         let next = characters.get(position + 1).copied();
+        let previous = position
+            .checked_sub(1)
+            .and_then(|before| characters.get(before))
+            .copied();
+
+        if (current, next) == ('/', Some('*')) {
+            let marker = conditional_marker_len(&characters, position);
+            if marker > 0 {
+                output.extend(std::iter::repeat_n(' ', marker));
+                position += marker;
+                conditional_depth += 1;
+                continue;
+            }
+        }
+
+        if conditional_depth > 0 && (current, next) == ('*', Some('/')) {
+            output.push_str("  ");
+            position += 2;
+            conditional_depth -= 1;
+            continue;
+        }
+
+        let keeps_quoted = match current {
+            '"' | '`' => identifiers != Identifiers::Blank,
+            '\'' => identifiers == Identifiers::KeepStrings,
+            _ => false,
+        };
+        if keeps_quoted {
+            let end = quoted_end(&characters, position, current);
+            let keep_character = if current == '\'' {
+                keep_string_character
+            } else {
+                keep_identifier_character
+            };
+            output.push(' ');
+            output.extend(
+                characters
+                    .iter()
+                    .skip(position + 1)
+                    .take(end.saturating_sub(position + 2))
+                    .map(|character| keep_character(*character)),
+            );
+            output.push(' ');
+            position = end;
+            continue;
+        }
+
+        let starts_dollar_quote = current == '$'
+            && !previous
+                .is_some_and(|before| before.is_alphanumeric() || before == '_' || before == '$');
+
         let end = match (current, next) {
             ('-', Some('-')) => position + line_comment_len(&characters, position),
             ('/', Some('*')) => block_comment_end(&characters, position),
-            ('"' | '`', _) if identifiers == Identifiers::Keep => {
-                output.push(' ');
-                let end = quoted_end(&characters, position, current);
-                output.extend(
-                    characters
-                        .iter()
-                        .skip(position + 1)
-                        .take(end.saturating_sub(position + 2))
-                        .map(|c| keep_identifier_char(*c)),
-                );
-                output.push(' ');
-                position = end;
-                continue;
-            }
             ('\'' | '"' | '`', _) => quoted_end(&characters, position, current),
-            ('$', _) => dollar_end(&characters, position),
+            ('$', _) if starts_dollar_quote => dollar_end(&characters, position),
             _ => position,
         };
 
@@ -86,7 +129,7 @@ pub(super) fn blank_literals(statement: &str, identifiers: Identifiers) -> Strin
                     .iter()
                     .skip(position)
                     .take(end - position)
-                    .map(|c| if *c == '\n' { '\n' } else { ' ' }),
+                    .map(|character| if *character == '\n' { '\n' } else { ' ' }),
             );
             position = end;
         } else {
@@ -98,11 +141,39 @@ pub(super) fn blank_literals(statement: &str, identifiers: Identifiers) -> Strin
     output
 }
 
+/// Length of the opening of a conditional comment at `start` (`/*!50003`,
+/// `/*M!100100`), or 0 when the comment there is an ordinary one.
+fn conditional_marker_len(characters: &[char], start: usize) -> usize {
+    let after_open = start + 2;
+    let marker = match characters.get(after_open) {
+        Some('!') => 1,
+        Some('M') if characters.get(after_open + 1) == Some(&'!') => 2,
+        _ => return 0,
+    };
+    let digits = characters
+        .iter()
+        .skip(after_open + marker)
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+
+    2 + marker + digits
+}
+
+fn keep_string_character(character: char) -> char {
+    if character.is_alphanumeric() || character == '_' {
+        character
+    } else if character == '\n' {
+        '\n'
+    } else {
+        '_'
+    }
+}
+
 fn line_comment_len(characters: &[char], start: usize) -> usize {
     characters
         .iter()
         .skip(start)
-        .position(|c| *c == '\n')
+        .position(|character| *character == '\n')
         .unwrap_or(characters.len() - start)
 }
 

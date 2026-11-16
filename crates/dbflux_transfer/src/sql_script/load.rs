@@ -185,7 +185,7 @@ pub(super) fn read_limited(
     let mut bytes = Vec::new();
     reader
         .by_ref()
-        .take(limit + 1)
+        .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(ReadError::Io)?;
 
