@@ -713,6 +713,10 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("s", Modifiers::shift()),
         Command::FindSimilarRows,
     );
+    layer.bind(
+        KeyChord::new("0", Modifiers::ctrl_shift()),
+        Command::ResultsSetDefault,
+    );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
     // GPUI reports cmd vs ctrl on separate modifier fields, so binding only
@@ -1550,6 +1554,12 @@ fn data_table_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("n", Modifiers::ctrl()),
         Command::ResultsSetNull,
+    );
+    // The literal / expression editor toggle. Ctrl+E and Ctrl+Shift+E belong
+    // to the input component and the export menu, so it takes Ctrl+Shift+I.
+    layer.bind(
+        KeyChord::new("i", Modifiers::ctrl_shift()),
+        Command::ResultsToggleExpression,
     );
 
     // Undo / redo: the standard primary chords plus the vim-style `u` and

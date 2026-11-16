@@ -477,6 +477,8 @@ Alt 拖动鼠标选择一样，按顺序用换行符连接非空行片段；若�
 | `d d` / `Delete` | 删除行 |
 | `a a` / `Shift+a Shift+a` | 添加 / 复制一行 |
 | `Ctrl+n` | 将单元格设为 NULL |
+| `Ctrl+Shift+0` | 将单元格设为列默认值（暂存默认表达式） |
+| `Ctrl+Shift+I` | 在字面量和 SQL 表达式之间切换行内编辑器，或以表达式模式打开 |
 | `u` / `Ctrl+z` / `Cmd+z` | 撤销 |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | 重做 |
 | `e` | 展开或折叠嵌套列（文档网格） |

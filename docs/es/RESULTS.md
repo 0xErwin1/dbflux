@@ -215,6 +215,33 @@ El SQL de forma libre escrito en el editor sigue siendo de solo lectura; la
 edición inline solo aplica a browses de tabla planos y a SELECTs generados por
 el builder.
 
+### Expresiones SQL en celdas
+
+Una celda normalmente guarda un literal: lo que escribís se guarda como valor
+entre comillas, así que escribir `now()` guarda el texto `now()`. Para guardar
+una expresión SQL que la base de datos evalúa (`now()`, `gen_random_uuid()`),
+marcá la celda como expresión de forma explícita. El texto nunca se detecta
+como expresión.
+
+- **Establecer valor** en el menú de la celda abre un submenú con **Valor por
+  defecto de la columna** (deshabilitado, con el motivo, cuando la columna no
+  tiene valor por defecto), los valores que el dialecto de la conexión ofrece
+  para el tipo de la columna, **NULL** y **Expresión…**.
+- En el editor en línea, `Ctrl+Shift+I` alterna entre modo literal y modo
+  expresión, y abre el editor en modo expresión cuando no hay ninguno abierto.
+  En modo expresión el editor muestra un marcador `ƒx` y lista los valores del
+  tipo bajo la celda; `Arriba` / `Abajo` ponen uno en la entrada y `Enter` lo
+  guarda.
+- **Poner en el valor por defecto** (`Ctrl+Shift+0`) prepara la expresión por
+  defecto de la columna.
+
+Una celda de expresión se dibuja con `ƒx` en el color de acento, y copiarla
+copia el texto de la expresión. Un guardado que escribe una expresión pide
+confirmación antes, porque la expresión se coloca en la sentencia tal como
+está en lugar de enlazarse como valor. Rechazar no guarda nada y mantiene las
+ediciones preparadas. Solo las tablas SQL ofrecen expresiones; las grillas de
+documentos no.
+
 ### Resultados agregados
 
 Cuando un resultado proviene de una query agrupada (`GROUP BY`), las filas

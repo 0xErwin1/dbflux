@@ -955,6 +955,19 @@ impl DataGridPanel {
                 true
             }
             Command::FindSimilarRows => self.find_similar_rows(cx),
+            Command::ResultsSetDefault => {
+                let active = self.grid_table.table_state.as_ref().and_then(|state| {
+                    let state = state.read(cx);
+                    state
+                        .is_editable()
+                        .then(|| state.selection().active)
+                        .flatten()
+                });
+                if let Some(coord) = active {
+                    self.handle_set_default(coord.row, coord.col, cx);
+                }
+                true
+            }
             _ => false,
         }
     }

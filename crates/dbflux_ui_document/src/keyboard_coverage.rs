@@ -94,6 +94,21 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ),
         // Every row of the table menu and its submenus.
         ("context-menu.*", KeyboardPath::Command(Command::MenuSelect)),
+        // The "Set value" trigger and the rows of its flyout.
+        (
+            "set-value-trigger",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
+        (
+            "set-value-entry-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
+        // The ƒx editor and its suggestions: Ctrl+Shift+I flips the mode,
+        // Up and Down step through the suggestions.
+        (
+            "cell-expression-*",
+            KeyboardPath::Command(Command::ResultsToggleExpression),
+        ),
         ("export-menu.*", KeyboardPath::Command(Command::MenuSelect)),
         (
             "export-trigger",
