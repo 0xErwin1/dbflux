@@ -2248,7 +2248,7 @@ document:
         batch_size: "Continuar está desactivado hasta que Filas por INSERT sea válido."
         segment_size: "Continuar está desactivado hasta que Tamaño de bloque sea válido."
     done:
-      closing_failed: "Cierra este diálogo, corrige la causa indicada arriba y exporta de nuevo. Los archivos ya escritos permanecen en la carpeta. Sin un manifest.json la carpeta no se puede importar completa, pero cada archivo CSV o JSON terminado todavía se puede importar con Elegir archivo; antes configura el delimitador, la codificación y el texto NULL igual que en esta exportación, porque un archivo suelto no los incluye."
+      closing_failed: "Cierra este diálogo, corrige la causa indicada arriba y exporta de nuevo. Los archivos ya escritos permanecen en la carpeta. Sin un manifest.json la carpeta no se puede importar completa, pero cada archivo CSV o JSON terminado todavía se puede importar con Elegir archivo; para un CSV, antes configura el delimitador, la codificación y el texto NULL igual que en esta exportación, porque un CSV suelto no los incluye."
   file:
     error:
       source_changed: "El archivo cambió en otro lugar desde que se abrió, así que no se guardó nada y tus cambios se conservan. Para ver su contenido nuevo, descarta tus cambios y elige Recargar desde el archivo, y luego repítelos."
