@@ -21,6 +21,7 @@ pub mod migration;
 mod pipeline;
 mod spreadsheet_source;
 mod sql_insert;
+pub mod sql_script;
 mod table_sink;
 mod table_source;
 mod value_codec;
