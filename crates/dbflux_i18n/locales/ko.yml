@@ -1611,6 +1611,13 @@ document:
         edit_in_modal: 모달에서 편집…
         set_default: 기본값으로 설정
         set_null: NULL로 설정
+        set_value: "값 설정"
+        set_expression: "표현식으로 설정…"
+        set_value_column_default: "열 기본값"
+        set_value_type_values: "타입 값 · %{type}"
+        set_value_expression: "표현식…"
+        set_value_null: "NULL"
+        set_value_no_default: "%{column}에는 기본값이 없습니다. 테이블 설계에서 추가하거나 타입 값을 선택하세요."
         add_row: 행 추가
         inspect_row: 행 검사
         find_similar_rows: 유사한 행 찾기
@@ -1632,6 +1639,10 @@ document:
           many: "행 %{count}개가 영구적으로 삭제됩니다. 이 작업은 되돌릴 수 없습니다."
         cancel: 취소
         delete: 삭제
+      expression_confirm:
+        list: "SQL로 작성된 표현식:"
+        cancel: "취소"
+        confirm: "표현식과 함께 저장"
       filter:
         title: 필터
         cell_value: 셀 값
@@ -1714,6 +1725,8 @@ document:
           insert_failed: "문서를 삽입하지 못했습니다: %{error}"
           update_failed: "문서를 업데이트하지 못했습니다: %{error}"
     grid:
+      expression:
+        placeholder: SQL 표현식
       edit_bar:
         clean: 저장하지 않은 변경 사항 없음
         dirty:
@@ -4719,6 +4732,8 @@ settings:
       toggle_row_inspector: 행 검사기 전환
       find_similar_rows: 유사한 행 찾기
       results_set_null: 셀을 NULL로 설정
+      results_set_default: "셀을 열 기본값으로 설정"
+      results_toggle_expression: "리터럴 / 표현식 편집기 전환"
       open_context_menu: 상황에 맞는 메뉴 열기
       open_pane_actions: 패널 작업 열기
       menu_up: 메뉴 위로

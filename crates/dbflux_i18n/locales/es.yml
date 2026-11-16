@@ -1611,6 +1611,13 @@ document:
         edit_in_modal: Editar en modal…
         set_default: Establecer valor predeterminado
         set_null: Establecer NULL
+        set_value: "Establecer valor"
+        set_expression: "Establecer como expresión…"
+        set_value_column_default: "Valor por defecto de la columna"
+        set_value_type_values: "Valores del tipo · %{type}"
+        set_value_expression: "Expresión…"
+        set_value_null: "NULL"
+        set_value_no_default: "%{column} no tiene valor por defecto. Agregá uno en el diseño de la tabla o elegí un valor del tipo."
         add_row: Agregar fila
         inspect_row: Inspeccionar fila
         find_similar_rows: Buscar filas similares
@@ -1632,6 +1639,10 @@ document:
           many: "%{count} filas se eliminarán de forma permanente. Esta acción no se puede deshacer."
         cancel: Cancelar
         delete: Eliminar
+      expression_confirm:
+        list: "Expresiones escritas como SQL:"
+        cancel: "Cancelar"
+        confirm: "Guardar con expresiones"
       filter:
         title: Filtro
         cell_value: Valor de celda
@@ -1714,6 +1725,8 @@ document:
           insert_failed: "Error al insertar el documento: %{error}"
           update_failed: "Error al actualizar el documento: %{error}"
     grid:
+      expression:
+        placeholder: Expresión SQL
       edit_bar:
         clean: Sin cambios pendientes
         dirty:
@@ -4719,6 +4732,8 @@ settings:
       toggle_row_inspector: Alternar inspector de fila
       find_similar_rows: Buscar filas similares
       results_set_null: Establecer celda en NULL
+      results_set_default: "Poner la celda en el valor por defecto de la columna"
+      results_toggle_expression: "Alternar editor literal / expresión"
       open_context_menu: Abrir menú contextual
       open_pane_actions: Abrir acciones del panel
       menu_up: "Menú: arriba"

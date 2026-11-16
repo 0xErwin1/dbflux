@@ -87,6 +87,9 @@ pub mod actions {
             // Document grids
             ToggleColumnGroup,
             StepOut,
+            // Flips the open inline editor between literal and expression, or
+            // opens it in expression mode.
+            ToggleExpression,
         ]
     );
 }
@@ -110,6 +113,7 @@ pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Key
         ContextMenuAction::Edit => Box::new(StartEdit),
         ContextMenuAction::DeleteRow => Box::new(DeleteRow),
         ContextMenuAction::SetNull => Box::new(SetNull),
+        ContextMenuAction::SetExpression => Box::new(ToggleExpression),
         ContextMenuAction::AddRow => Box::new(AddRow),
         ContextMenuAction::DuplicateRow => Box::new(DuplicateRow),
         _ => return None,
@@ -368,6 +372,17 @@ impl gpui::Render for DataTable {
         };
 
         let s = self.state.clone();
+        let on_toggle_expression =
+            move |_: &ToggleExpression, window: &mut Window, cx: &mut App| {
+                s.update(cx, |state, cx| {
+                    if !state.is_editable() && !state.is_insertable() {
+                        return;
+                    }
+                    state.toggle_expression_mode(window, cx);
+                });
+            };
+
+        let s = self.state.clone();
         let on_copy_row = move |_: &CopyRow, _: &mut Window, cx: &mut App| {
             let row = s.read(cx).selection().active.map(|c| c.row);
             if let Some(row) = row {
@@ -595,6 +610,7 @@ impl gpui::Render for DataTable {
                 .on_action(on_add_row)
                 .on_action(on_duplicate_row)
                 .on_action(on_set_null)
+                .on_action(on_toggle_expression)
                 // Undo/Redo
                 .on_action(on_undo)
                 .on_action(on_redo)
@@ -1256,9 +1272,21 @@ impl DataTable {
                     .enum_dropdown()
                     .map(|dropdown| dropdown.clone().into_any_element())
                     .or_else(|| {
-                        state
-                            .cell_input()
-                            .map(|input| Input::new(input).small().into_any_element())
+                        state.cell_input().map(|input| {
+                            if state.is_expression_mode() {
+                                let (suggestions, selected) = state.editor_suggestions();
+                                super::expression_editor::expression_editor(
+                                    input,
+                                    &state_entity,
+                                    suggestions,
+                                    selected,
+                                    &grid_colors,
+                                    font_size,
+                                )
+                            } else {
+                                Input::new(input).small().into_any_element()
+                            }
+                        })
                     });
 
                 render_rows(

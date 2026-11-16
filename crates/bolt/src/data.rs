@@ -97,6 +97,9 @@ pub enum CellTone {
     Warning,
     /// A value that flags a failure; drawn in the palette's danger color.
     Danger,
+    /// A SQL expression the database evaluates (`now()`), as opposed to a
+    /// literal value; drawn in the accent color so it never reads as text.
+    Expression,
 }
 
 /// How a row stands relative to its data source, as a grid paints it.

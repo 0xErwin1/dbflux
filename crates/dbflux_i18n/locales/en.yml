@@ -1611,6 +1611,13 @@ document:
         edit_in_modal: Edit in modal…
         set_default: Set to default
         set_null: Set to NULL
+        set_value: "Set value"
+        set_expression: "Set to expression…"
+        set_value_column_default: "Column default"
+        set_value_type_values: "Type values · %{type}"
+        set_value_expression: "Expression…"
+        set_value_null: "NULL"
+        set_value_no_default: "%{column} has no default. Add one in the table design, or pick a type value."
         add_row: Add row
         inspect_row: Inspect row
         find_similar_rows: Find similar rows
@@ -1632,6 +1639,10 @@ document:
           many: "%{count} rows will be permanently deleted. This cannot be undone."
         cancel: Cancel
         delete: Delete
+      expression_confirm:
+        list: "Expressions written as SQL:"
+        cancel: "Cancel"
+        confirm: "Save with expressions"
       filter:
         title: Filter
         cell_value: Cell value
@@ -1714,6 +1725,8 @@ document:
           insert_failed: "Failed to insert document: %{error}"
           update_failed: "Failed to update document: %{error}"
     grid:
+      expression:
+        placeholder: SQL expression
       edit_bar:
         clean: No unsaved changes
         dirty:
@@ -4719,6 +4732,8 @@ settings:
       toggle_row_inspector: Toggle row inspector
       find_similar_rows: Find similar rows
       results_set_null: Set cell to NULL
+      results_set_default: "Set cell to column default"
+      results_toggle_expression: "Toggle literal / expression editor"
       open_context_menu: Open context menu
       open_pane_actions: Open pane actions
       menu_up: Menu up

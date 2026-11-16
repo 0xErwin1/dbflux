@@ -1611,6 +1611,13 @@ document:
         edit_in_modal: 在弹窗中编辑…
         set_default: 设为默认值
         set_null: 设为 NULL
+        set_value: "设置值"
+        set_expression: "设为表达式…"
+        set_value_column_default: "列默认值"
+        set_value_type_values: "类型值 · %{type}"
+        set_value_expression: "表达式…"
+        set_value_null: "NULL"
+        set_value_no_default: "%{column} 没有默认值。请在表设计中添加，或选择一个类型值。"
         add_row: 添加行
         inspect_row: 检查行
         find_similar_rows: 查找相似行
@@ -1632,6 +1639,10 @@ document:
           many: "%{count} 行将被永久删除。此操作无法撤销。"
         cancel: 取消
         delete: 删除
+      expression_confirm:
+        list: "以 SQL 写入的表达式："
+        cancel: "取消"
+        confirm: "连同表达式一起保存"
       filter:
         title: 筛选
         cell_value: 单元格值
@@ -1714,6 +1725,8 @@ document:
           insert_failed: "插入文档失败：%{error}"
           update_failed: "更新文档失败：%{error}"
     grid:
+      expression:
+        placeholder: SQL 表达式
       edit_bar:
         clean: 无未保存的更改
         dirty:
@@ -4719,6 +4732,8 @@ settings:
       toggle_row_inspector: 切换行检查器
       find_similar_rows: 查找相似行
       results_set_null: 将单元格设为 NULL
+      results_set_default: "将单元格设为列默认值"
+      results_toggle_expression: "切换字面量 / 表达式编辑器"
       open_context_menu: 打开上下文菜单
       open_pane_actions: 打开面板操作
       menu_up: 菜单上移

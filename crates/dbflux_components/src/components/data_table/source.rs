@@ -95,6 +95,8 @@ fn cell_view(
         CellTone::Nested
     } else if cell.is_null() {
         CellTone::Null
+    } else if cell.as_expression().is_some() {
+        CellTone::Expression
     } else if cell.is_auto_generated() || cell.is_placeholder() {
         CellTone::Muted
     } else if row_state.is_pending_delete() {
@@ -118,10 +120,10 @@ fn cell_view(
         None => (
             match replaced {
                 Some(base) => CellContent::Transition {
-                    from: base.display_text().into(),
-                    to: cell.display_text().into(),
+                    from: drawn_text(base),
+                    to: drawn_text(cell),
                 },
-                None => CellContent::Plain(cell.display_text().into()),
+                None => CellContent::Plain(drawn_text(cell)),
             },
             None,
         ),
@@ -141,6 +143,20 @@ fn cell_view(
         align,
         secondary,
         nested,
+    }
+}
+
+/// The text a cell draws: its display text, with the `ƒx` marker before an
+/// expression so it never reads as the literal text it resembles.
+fn drawn_text(cell: &CellValue) -> gpui::SharedString {
+    match cell.as_expression() {
+        Some(_) => format!(
+            "{} {}",
+            super::expression_editor::EXPRESSION_MARKER,
+            cell.display_text()
+        )
+        .into(),
+        None => cell.display_text().into(),
     }
 }
 
@@ -640,6 +656,30 @@ mod tests {
                 to: CellValue::text("stepped").display_text().into(),
             }
         );
+    }
+
+    #[test]
+    fn an_expression_draws_in_its_own_tone_behind_the_marker() {
+        let model = model_with(
+            vec![text_spec("a"), text_spec("b")],
+            vec![vec![
+                CellValue::text("now()"),
+                CellValue::expression("now()"),
+            ]],
+        );
+        let edits = EditBuffer::new();
+        let source = GridRowSource::new(&model, &edits);
+
+        let literal = source.cell(0, 0).expect("literal");
+        let expression = source.cell(0, 1).expect("expression");
+
+        assert_eq!(literal.tone, CellTone::Normal);
+        assert_eq!(expression.tone, CellTone::Expression);
+        assert_eq!(
+            expression.content,
+            CellContent::Plain("\u{192}x now()".into())
+        );
+        assert_eq!(literal.content, CellContent::Plain("now()".into()));
     }
 
     #[test]

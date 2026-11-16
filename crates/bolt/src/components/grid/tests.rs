@@ -316,6 +316,22 @@ fn the_status_tones_map_from_the_palettes_semantic_colors(cx: &mut TestAppContex
     assert_ne!(warned.text_color, theme.foreground);
 }
 
+/// An expression is drawn in the accent tint, upright, so it never reads as
+/// the literal text it resembles.
+#[gpui::test]
+fn an_expression_cell_is_drawn_in_the_accent_tint(cx: &mut TestAppContext) {
+    let (expression, theme, _) = paint_of(
+        cx,
+        &CellView::new("now()", CellTone::Expression, CellAlignment::Left),
+        false,
+        false,
+        false,
+    );
+    assert_eq!(expression.text_color, GridColors::of(&theme).tint);
+    assert_ne!(expression.text_color, theme.foreground);
+    assert!(!expression.italic);
+}
+
 /// A semantic status keeps its color under the active tint: the focused
 /// success cell still reads as success, as a null cell does today.
 #[gpui::test]

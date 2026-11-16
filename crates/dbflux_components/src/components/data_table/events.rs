@@ -76,6 +76,13 @@ pub enum ContextMenuAction {
     SetDefault,
     /// Set the cell to NULL.
     SetNull,
+    /// Open the "Set value" submenu: the column default, the type's values,
+    /// NULL and a typed expression.
+    SetValueMenu,
+    /// Stage the `n`th expression the dialect offers for the column's type.
+    SetTypeValue(usize),
+    /// Open the inline editor on the cell in expression mode.
+    SetExpression,
     /// Insert a new row.
     AddRow,
     /// Duplicate the current row.

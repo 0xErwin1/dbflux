@@ -111,6 +111,15 @@ pub struct DataTableState {
     /// Dropdown for editing enum/set columns inline.
     enum_dropdown: Option<Entity<Dropdown>>,
 
+    /// Whether the open inline editor stages its text as a SQL expression
+    /// rather than a literal. Literal unless the user flips it or opens an
+    /// expression cell, so typed text is never promoted by detection.
+    expression_mode: bool,
+
+    /// Index of the suggestion the open editor last put in its input, when
+    /// the user stepped through them.
+    suggestion_index: Option<usize>,
+
     /// Subscriptions for the currently active inline editor (cell input or
     /// enum dropdown). Held so a new `start_editing` drops the previous
     /// editor's subscriptions before installing its own — otherwise a stale
@@ -170,6 +179,15 @@ pub struct DataTableState {
     /// Enum/set options per column index.
     enum_options: std::collections::HashMap<usize, Vec<String>>,
 
+    /// Expressions the host suggests per column index for an editor in
+    /// expression mode (the dialect's values for the column's type).
+    expression_suggestions: std::collections::HashMap<usize, Vec<String>>,
+
+    /// Asks the host for the suggestions of a column when an editor opens in
+    /// expression mode, so a host that cannot answer (no dialect yet) is not
+    /// asked while the grid is only drawn.
+    suggestion_source: Option<SuggestionSource>,
+
     /// Document extras (column groups, presence bars, stepping into nested
     /// values). `None` for relational grids.
     document: Option<super::document::DocumentPresentation>,
@@ -178,6 +196,9 @@ pub struct DataTableState {
     /// columns. Empty, or all `None`, keeps the header one line tall.
     header_annotations: Vec<Option<HeaderAnnotation>>,
 }
+
+/// The host's answer to "which expressions suit this column".
+pub type SuggestionSource = std::rc::Rc<dyn Fn(usize, &App) -> Vec<String>>;
 
 impl DataTableState {
     pub const NULL_SENTINEL: &'static str = "\0__NULL__";
@@ -212,6 +233,8 @@ impl DataTableState {
             editing_cell: None,
             cell_input: None,
             enum_dropdown: None,
+            expression_mode: false,
+            suggestion_index: None,
             _editing_subs: Vec::new(),
             pending_refocus: false,
             end_in_view: false,
@@ -225,6 +248,8 @@ impl DataTableState {
             positional_rows: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
+            expression_suggestions: std::collections::HashMap::new(),
+            suggestion_source: None,
             document: None,
             header_annotations: Vec::new(),
         }
@@ -394,6 +419,7 @@ impl DataTableState {
         self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
         self.enum_options.clear();
+        self.expression_suggestions.clear();
 
         match swap {
             ModelSwap::KeepCursor => self.clamp_selection(),
@@ -1119,6 +1145,124 @@ impl DataTableState {
         self.enum_options.get(&col)
     }
 
+    /// Sets the expressions offered while editing column `col` in expression
+    /// mode. An empty list clears them.
+    pub fn set_expression_suggestions(&mut self, col: usize, suggestions: Vec<String>) {
+        if suggestions.is_empty() {
+            self.expression_suggestions.remove(&col);
+        } else {
+            self.expression_suggestions.insert(col, suggestions);
+        }
+    }
+
+    /// Installs the host's source of expression suggestions per column.
+    pub fn set_expression_suggestion_source(&mut self, source: Option<SuggestionSource>) {
+        self.suggestion_source = source;
+    }
+
+    fn refresh_suggestions(&mut self, col: usize, cx: &App) {
+        if let Some(source) = self.suggestion_source.clone() {
+            self.set_expression_suggestions(col, source(col, cx));
+        }
+    }
+
+    /// Whether the open inline editor stages its text as an expression.
+    pub fn is_expression_mode(&self) -> bool {
+        self.editing_cell.is_some() && self.cell_input.is_some() && self.expression_mode
+    }
+
+    /// The suggestions under an editor in expression mode, and the one it
+    /// last put in its input. Empty outside expression mode.
+    pub fn editor_suggestions(&self) -> (&[String], Option<usize>) {
+        match self.editing_cell {
+            Some(coord) if self.is_expression_mode() => (
+                self.expression_suggestions
+                    .get(&coord.col)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+                self.suggestion_index,
+            ),
+            _ => (&[], None),
+        }
+    }
+
+    /// Flips the inline editor between literal and expression, keeping the
+    /// text. With no editor open, opens one on the active cell in
+    /// expression mode, so the chord and the menu entry do the same thing.
+    pub fn toggle_expression_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.editing_cell.is_none() {
+            let Some(coord) = self.selection.active else {
+                return false;
+            };
+            return self.start_editing_as_expression(coord, window, cx);
+        }
+
+        if self.cell_input.is_none() {
+            return false;
+        }
+
+        self.expression_mode = !self.expression_mode;
+        self.suggestion_index = None;
+        if let Some(coord) = self.editing_cell
+            && self.expression_mode
+        {
+            self.refresh_suggestions(coord.col, cx);
+        }
+
+        let placeholder = if self.expression_mode {
+            super::expression_editor::expression_placeholder()
+        } else {
+            gpui::SharedString::default()
+        };
+        if let Some(input) = &self.cell_input {
+            input.update(cx, |state, cx| {
+                state.set_placeholder(placeholder, window, cx)
+            });
+        }
+
+        cx.notify();
+        true
+    }
+
+    /// Opens the inline editor on `coord` in expression mode, with the
+    /// cell's text. Enum columns and modal-sized values still edit in the
+    /// text input, because an expression is free text.
+    pub fn start_editing_as_expression(
+        &mut self,
+        coord: CellCoord,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.open_editor(coord, true, window, cx)
+    }
+
+    /// Moves the suggestion under the editor by `step` (wrapping) and puts
+    /// it in the input. A no-op outside expression mode or without
+    /// suggestions.
+    pub fn step_suggestion(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.cell_input.clone() else {
+            return;
+        };
+        let (suggestions, current) = self.editor_suggestions();
+        let count = suggestions.len();
+        if count == 0 {
+            return;
+        }
+
+        let next = match current {
+            Some(index) => (index as isize + step).rem_euclid(count as isize) as usize,
+            None if step >= 0 => 0,
+            None => count - 1,
+        };
+        let Some(text) = suggestions.get(next).cloned() else {
+            return;
+        };
+
+        self.suggestion_index = Some(next);
+        input.update(cx, |state, cx| state.set_value(&text, window, cx));
+        cx.notify();
+    }
+
     /// Check if a cell is currently being edited.
     pub fn is_editing(&self) -> bool {
         self.editing_cell.is_some()
@@ -1142,6 +1286,18 @@ impl DataTableState {
     pub fn start_editing(
         &mut self,
         coord: CellCoord,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.open_editor(coord, false, window, cx)
+    }
+
+    /// Opens the inline editor. `as_expression` starts it in expression
+    /// mode; a cell that already holds an expression starts there anyway.
+    fn open_editor(
+        &mut self,
+        coord: CellCoord,
+        as_expression: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -1183,49 +1339,59 @@ impl DataTableState {
             return false;
         }
 
-        let (initial_value, needs_modal, is_json_cell, is_unsupported_cell) = match row_source {
-            Some(VisualRowSource::Base(base_idx)) => {
-                let base_cell = self.model.cell(base_idx, coord.col);
-                let base = base_cell.unwrap_or(&null_cell);
-                let cell = self.edit_buffer.get_cell(base_idx, coord.col, base);
+        let (initial_value, needs_modal, is_json_cell, is_unsupported_cell, holds_expression) =
+            match row_source {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    let base_cell = self.model.cell(base_idx, coord.col);
+                    let base = base_cell.unwrap_or(&null_cell);
+                    let cell = self.edit_buffer.get_cell(base_idx, coord.col, base);
 
-                (
-                    cell.edit_text(),
-                    cell.needs_modal_editor(),
-                    cell.is_json(),
-                    cell.is_unsupported(),
-                )
-            }
-            Some(VisualRowSource::Insert(insert_idx)) => {
-                if let Some(insert_data) = self.edit_buffer.get_pending_insert_by_idx(insert_idx) {
-                    if coord.col < insert_data.len() {
-                        #[expect(
-                            clippy::indexing_slicing,
-                            reason = "guarded by coord.col < insert_data.len()"
-                        )]
-                        let cell = &insert_data[coord.col];
-                        (
-                            cell.edit_text(),
-                            cell.needs_modal_editor(),
-                            cell.is_json(),
-                            cell.is_unsupported(),
-                        )
-                    } else {
-                        (String::new(), false, false, false)
-                    }
-                } else {
-                    (String::new(), false, false, false)
+                    (
+                        cell.edit_text(),
+                        cell.needs_modal_editor(),
+                        cell.is_json(),
+                        cell.is_unsupported(),
+                        cell.as_expression().is_some(),
+                    )
                 }
-            }
-            None => return false,
-        };
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    if let Some(insert_data) =
+                        self.edit_buffer.get_pending_insert_by_idx(insert_idx)
+                    {
+                        if coord.col < insert_data.len() {
+                            #[expect(
+                                clippy::indexing_slicing,
+                                reason = "guarded by coord.col < insert_data.len()"
+                            )]
+                            let cell = &insert_data[coord.col];
+                            (
+                                cell.edit_text(),
+                                cell.needs_modal_editor(),
+                                cell.is_json(),
+                                cell.is_unsupported(),
+                                cell.as_expression().is_some(),
+                            )
+                        } else {
+                            (String::new(), false, false, false, false)
+                        }
+                    } else {
+                        (String::new(), false, false, false, false)
+                    }
+                }
+                None => return false,
+            };
 
-        if is_unsupported_cell {
+        let expression_mode = as_expression || holds_expression;
+
+        // An expression is typed in the inline editor whatever the value
+        // around it is: a modal, a dropdown or an unsupported type cannot
+        // hold one.
+        if is_unsupported_cell && !expression_mode {
             return false;
         }
 
         let is_json = column_kind == ColumnKind::Json || is_json_cell;
-        if is_json || needs_modal {
+        if !expression_mode && (is_json || needs_modal) {
             cx.emit(DataTableEvent::ModalEditRequested {
                 row: coord.row,
                 col: coord.col,
@@ -1236,7 +1402,7 @@ impl DataTableState {
         }
 
         // Enum/set columns: use a dropdown instead of text input
-        if let Some(options) = self.enum_options.get(&coord.col).cloned() {
+        if !expression_mode && let Some(options) = self.enum_options.get(&coord.col).cloned() {
             let items: Vec<DropdownItem> = options
                 .iter()
                 .map(|v| {
@@ -1296,6 +1462,13 @@ impl DataTableState {
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
             state.set_value(&initial_value, window, cx);
+            if expression_mode {
+                state.set_placeholder(
+                    super::expression_editor::expression_placeholder(),
+                    window,
+                    cx,
+                );
+            }
             state
         });
 
@@ -1318,6 +1491,11 @@ impl DataTableState {
         self.editing_cell = Some(coord);
         self.cell_input = Some(input);
         self.enum_dropdown = None;
+        self.expression_mode = expression_mode;
+        self.suggestion_index = None;
+        if expression_mode {
+            self.refresh_suggestions(coord.col, cx);
+        }
         self.scroll_to_cell(coord.row, coord.col);
         cx.notify();
         true
@@ -1510,16 +1688,28 @@ impl DataTableState {
         };
 
         self.enum_dropdown = None;
+        let expression_mode = std::mem::take(&mut self.expression_mode);
+        self.suggestion_index = None;
 
         if apply {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                self.stage_cell_value(
-                    coord.row,
-                    coord.col,
-                    super::model::CellValue::text(&value_str),
-                );
+                if !expression_mode {
+                    self.stage_cell_value(
+                        coord.row,
+                        coord.col,
+                        super::model::CellValue::text(&value_str),
+                    );
+                } else if !value_str.trim().is_empty() {
+                    // An empty expression is no value: it would build invalid
+                    // SQL, so closing the editor on one stages nothing.
+                    self.stage_cell_value(
+                        coord.row,
+                        coord.col,
+                        super::model::CellValue::expression(value_str.trim()),
+                    );
+                }
             }
         } else {
             self.cell_input = None;
@@ -2234,6 +2424,179 @@ mod tests {
         });
 
         (state, input, window)
+    }
+
+    /// The cell at `coord` as the edit buffer holds it, if staged.
+    fn staged_cell(
+        window: &mut gpui::VisualTestContext,
+        state: &gpui::Entity<super::DataTableState>,
+        col: usize,
+    ) -> Option<super::super::model::CellValue> {
+        window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .row_changes(0)
+                .into_iter()
+                .find(|(staged_col, _)| *staged_col == col)
+                .map(|(_, value)| value.clone())
+        })
+    }
+
+    /// S2: text typed in the default (literal) mode stays a literal even
+    /// when it looks like a function call.
+    #[gpui::test]
+    fn function_text_typed_in_literal_mode_stays_a_literal(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("now()", window, cx));
+        });
+        window.update(|_, app| state.update(app, |s, cx| s.stop_editing(true, cx)));
+
+        let staged = staged_cell(window, &state, 1).expect("the typed value is staged");
+        assert_eq!(staged.as_expression(), None);
+        assert_eq!(staged.to_value(), dbflux_core::Value::Text("now()".into()));
+    }
+
+    /// S1: with the editor flipped to expression mode, the typed text is
+    /// staged as an expression.
+    #[gpui::test]
+    fn text_typed_in_expression_mode_is_staged_as_an_expression(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        assert!(!window.update(|_, app| state.read(app).is_expression_mode()));
+        window.update(|window, app| {
+            state.update(app, |s, cx| assert!(s.toggle_expression_mode(window, cx)));
+        });
+        assert!(window.update(|_, app| state.read(app).is_expression_mode()));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_value("  gen_random_uuid() ", window, cx)
+            });
+        });
+        window.update(|_, app| state.update(app, |s, cx| s.stop_editing(true, cx)));
+
+        let staged = staged_cell(window, &state, 1).expect("the expression is staged");
+        assert_eq!(staged.as_expression(), Some("gen_random_uuid()"));
+        assert!(
+            !window.update(|_, app| state.read(app).is_expression_mode()),
+            "closing the editor leaves expression mode"
+        );
+    }
+
+    /// Flipping back to literal before committing stages the text as a
+    /// literal again.
+    #[gpui::test]
+    fn toggling_twice_returns_to_a_literal(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.toggle_expression_mode(window, cx);
+                s.toggle_expression_mode(window, cx);
+            });
+            input.update(app, |input, cx| input.set_value("now()", window, cx));
+        });
+        window.update(|_, app| state.update(app, |s, cx| s.stop_editing(true, cx)));
+
+        let staged = staged_cell(window, &state, 1).expect("staged");
+        assert_eq!(staged.as_expression(), None);
+    }
+
+    /// An empty expression is no value: committing it stages nothing.
+    #[gpui::test]
+    fn an_empty_expression_stages_nothing(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.toggle_expression_mode(window, cx);
+            });
+            input.update(app, |input, cx| input.set_value("   ", window, cx));
+        });
+        window.update(|_, app| state.update(app, |s, cx| s.stop_editing(true, cx)));
+
+        assert!(staged_cell(window, &state, 1).is_none());
+    }
+
+    /// With no editor open, the toggle opens one on the active cell in
+    /// expression mode, and a cell that already holds an expression opens
+    /// there on its own.
+    #[gpui::test]
+    fn the_toggle_opens_an_expression_editor_and_expression_cells_reopen_in_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.toggle_expression_mode(window, cx);
+            });
+            input.update(app, |input, cx| input.set_value("now()", window, cx));
+        });
+        window.update(|_, app| state.update(app, |s, cx| s.stop_editing(true, cx)));
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+                assert!(
+                    s.is_expression_mode(),
+                    "an expression cell opens in expression mode"
+                );
+                let text = s.cell_input().expect("input").read(cx).value().to_string();
+                assert_eq!(text, "now()");
+                s.stop_editing(false, cx);
+            });
+        });
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.select_cell(CellCoord::new(1, 1), cx);
+                assert!(s.toggle_expression_mode(window, cx));
+                assert!(s.is_editing() && s.is_expression_mode());
+            });
+        });
+    }
+
+    /// Up and Down step through the suggestions of the column, wrapping, and
+    /// put the chosen expression in the input.
+    #[gpui::test]
+    fn suggestions_step_into_the_input(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.set_expression_suggestions(1, vec!["now()".into(), "CURRENT_DATE".into()]);
+                assert!(
+                    s.editor_suggestions().0.is_empty(),
+                    "literal mode lists none"
+                );
+                s.toggle_expression_mode(window, cx);
+                assert_eq!(s.editor_suggestions().0.len(), 2);
+
+                s.step_suggestion(1, window, cx);
+                assert_eq!(s.editor_suggestions().1, Some(0));
+                s.step_suggestion(1, window, cx);
+                s.step_suggestion(1, window, cx);
+                assert_eq!(s.editor_suggestions().1, Some(0), "stepping wraps");
+                s.step_suggestion(-1, window, cx);
+            });
+        });
+
+        let text = window.update(|_, app| input.read(app).value().to_string());
+        assert_eq!(text, "CURRENT_DATE");
     }
 
     /// Regression: typing back the value the row already holds must drop the
