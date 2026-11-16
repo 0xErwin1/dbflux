@@ -678,7 +678,7 @@ impl ImportWizard {
             rows.push(Self::render_null_text_row(inputs, cx));
         }
         if let Some(error) = state.error.as_ref() {
-            rows.push(error_block(error, "import-wizard-error"));
+            rows.push(error_block(error, "import-wizard-error", cx));
         }
 
         Some(

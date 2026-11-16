@@ -10,7 +10,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{modal_hint, modal_lead};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Chamfer, Icon};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, ModalMetrics, Spacing, ui};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Feedback, ModalMetrics, Spacing, ui};
 use dbflux_core::CancelToken;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -37,10 +37,16 @@ fn selectable(selector: &'static str, element: impl IntoElement) -> Div {
 }
 
 /// The danger block of a failed step: the message, then what to do next.
-pub(super) fn error_block(error: &ErrorBlock, selector: &'static str) -> AnyElement {
+pub(super) fn error_block(error: &ErrorBlock, selector: &'static str, cx: &App) -> AnyElement {
+    let danger = cx.theme().danger;
     selectable(
         selector,
         BannerBlock::new(BannerVariant::Danger, error.message.clone())
+            .with_icon(
+                Icon::new(AppIcon::CircleAlert)
+                    .size(Feedback::BANNER_ICON)
+                    .color(danger),
+            )
             .with_body(error.next_step.clone()),
     )
     .into_any_element()
@@ -78,7 +84,7 @@ impl ImportWizard {
             .flex_col()
             .gap(ModalMetrics::BODY_GAP)
             .when_some(self.manifest_error.as_ref(), |body, error| {
-                body.child(error_block(error, "import-wizard-error"))
+                body.child(error_block(error, "import-wizard-error", cx))
             })
             .child(modal_lead(
                 dbflux_i18n::t!("document.import_wizard.pick_folder.description"),
@@ -361,6 +367,87 @@ impl ImportWizard {
         )
     }
 
+    /// The step's buttons, the primary one last. The group never shrinks.
+    fn footer_buttons(&self, cancel_requested: bool, cx: &mut Context<Self>) -> Div {
+        let step = self.step;
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(ModalMetrics::FOOTER_GAP)
+            .when(step == WizardStep::Confirm, |footer| {
+                footer.child(selectable(
+                    "import-wizard-cancel-confirm",
+                    Button::new(
+                        "import-wizard-cancel-confirm",
+                        dbflux_i18n::t!("document.import_wizard.confirm.back"),
+                    )
+                    .icon(AppIcon::ChevronLeft)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.step = WizardStep::Configure;
+                        this.confirmed_destructive = false;
+                        cx.notify();
+                    })),
+                ))
+            })
+            .when(
+                matches!(
+                    step,
+                    WizardStep::PickFolder | WizardStep::Configure | WizardStep::Confirm
+                ),
+                |footer| footer.child(self.footer_cancel(cx)),
+            )
+            .when(step == WizardStep::Configure, |footer| {
+                footer.child(selectable(
+                    "import-wizard-continue",
+                    Button::new(
+                        "import-wizard-continue",
+                        dbflux_i18n::t!("document.import_wizard.configure.continue"),
+                    )
+                    .primary()
+                    .icon(AppIcon::ChevronRight)
+                    .disabled(self.file_import_blocked())
+                    .on_click(cx.listener(|this, _, _, cx| this.continue_from_configure(cx))),
+                ))
+            })
+            .when(step == WizardStep::Confirm, |footer| {
+                footer.child(selectable(
+                    "import-wizard-confirm-destructive",
+                    Button::new(
+                        "import-wizard-confirm-destructive",
+                        dbflux_i18n::t!("document.import_wizard.confirm.proceed"),
+                    )
+                    .primary()
+                    .on_click(cx.listener(|this, _, _, cx| this.confirm_destructive_and_run(cx))),
+                ))
+            })
+            .when(step == WizardStep::Running, |footer| {
+                footer.child(selectable(
+                    "import-wizard-cancel-run",
+                    Button::new(
+                        "import-wizard-cancel-run",
+                        dbflux_i18n::t!("document.import_wizard.running.cancel"),
+                    )
+                    .danger()
+                    .icon(AppIcon::CircleX)
+                    .disabled(cancel_requested)
+                    .on_click(cx.listener(|this, _, _, cx| this.cancel_run(cx))),
+                ))
+            })
+            .when(step == WizardStep::Done, |footer| {
+                footer.child(selectable(
+                    "import-wizard-close",
+                    Button::new(
+                        "import-wizard-close",
+                        dbflux_i18n::t!("document.import_wizard.done.close"),
+                    )
+                    .primary()
+                    .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
+                ))
+            })
+    }
+
     /// The shared footer: the reason a button is off at the start, then the
     /// step's buttons, the primary one last.
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -369,7 +456,6 @@ impl ImportWizard {
             .as_ref()
             .is_none_or(CancelToken::is_cancelled);
         let reason = self.footer_reason_text();
-        let step = self.step;
 
         div()
             .debug_selector(|| "import-wizard-footer".to_string())
@@ -382,87 +468,7 @@ impl ImportWizard {
             .when_some(reason, |footer, reason| {
                 footer.child(footer_reason(reason, "import-wizard-footer-reason", cx))
             })
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(ModalMetrics::FOOTER_GAP)
-                    .when(step == WizardStep::Confirm, |footer| {
-                        footer.child(selectable(
-                            "import-wizard-cancel-confirm",
-                            Button::new(
-                                "import-wizard-cancel-confirm",
-                                dbflux_i18n::t!("document.import_wizard.confirm.back"),
-                            )
-                            .icon(AppIcon::ChevronLeft)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.step = WizardStep::Configure;
-                                this.confirmed_destructive = false;
-                                cx.notify();
-                            })),
-                        ))
-                    })
-                    .when(
-                        matches!(
-                            step,
-                            WizardStep::PickFolder | WizardStep::Configure | WizardStep::Confirm
-                        ),
-                        |footer| footer.child(self.footer_cancel(cx)),
-                    )
-                    .when(step == WizardStep::Configure, |footer| {
-                        footer.child(selectable(
-                            "import-wizard-continue",
-                            Button::new(
-                                "import-wizard-continue",
-                                dbflux_i18n::t!("document.import_wizard.configure.continue"),
-                            )
-                            .primary()
-                            .icon(AppIcon::ChevronRight)
-                            .disabled(self.file_import_blocked())
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.continue_from_configure(cx)),
-                            ),
-                        ))
-                    })
-                    .when(step == WizardStep::Confirm, |footer| {
-                        footer.child(selectable(
-                            "import-wizard-confirm-destructive",
-                            Button::new(
-                                "import-wizard-confirm-destructive",
-                                dbflux_i18n::t!("document.import_wizard.confirm.proceed"),
-                            )
-                            .primary()
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.confirm_destructive_and_run(cx)),
-                            ),
-                        ))
-                    })
-                    .when(step == WizardStep::Running, |footer| {
-                        footer.child(selectable(
-                            "import-wizard-cancel-run",
-                            Button::new(
-                                "import-wizard-cancel-run",
-                                dbflux_i18n::t!("document.import_wizard.running.cancel"),
-                            )
-                            .danger()
-                            .icon(AppIcon::CircleX)
-                            .disabled(cancel_requested)
-                            .on_click(cx.listener(|this, _, _, cx| this.cancel_run(cx))),
-                        ))
-                    })
-                    .when(step == WizardStep::Done, |footer| {
-                        footer.child(selectable(
-                            "import-wizard-close",
-                            Button::new(
-                                "import-wizard-close",
-                                dbflux_i18n::t!("document.import_wizard.done.close"),
-                            )
-                            .primary()
-                            .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
-                        ))
-                    }),
-            )
+            .child(self.footer_buttons(cancel_requested, cx))
             .into_any_element()
     }
 }
