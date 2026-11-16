@@ -80,18 +80,25 @@ pub enum Disposition {
 
 /// What became of a transaction the script opened itself (`BEGIN`,
 /// `START TRANSACTION`) in a run that did not use [`RunOptions::transaction`].
+///
+/// The connection is shared with the rest of the application, so the engine
+/// never leaves such a transaction open: later work would run inside it and
+/// hold its locks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptTransaction {
     /// The script left no transaction open.
     None,
-    /// The script ended inside its own open transaction. Its changes are not
-    /// saved until someone commits, and they are lost if the session ends.
-    /// After a stop or cancel the engine tries to roll it back first, so this
-    /// also means that rollback failed (see [`ScriptReport::finish_error`]).
-    LeftOpen,
-    /// The run stopped or was cancelled inside the script's own transaction,
-    /// and the engine rolled it back: nothing it had changed there was saved.
+    /// The run was stopped by an error or cancelled inside the script's own
+    /// transaction, and the engine rolled it back: nothing it had changed
+    /// there was saved.
     RolledBack,
+    /// Every statement ran, but the script ended inside its own transaction
+    /// without `COMMIT`, so the engine rolled it back: nothing it had changed
+    /// there was saved. The UI says the script ended without COMMIT.
+    EndedWithoutCommit,
+    /// The rollback failed, so the transaction may still be open; see
+    /// [`ScriptReport::finish_error`].
+    LeftOpen,
 }
 
 /// A statement that failed.
@@ -145,9 +152,9 @@ pub struct ScriptReport {
 ///
 /// A script may open a transaction of its own (`BEGIN`) when
 /// [`RunOptions::transaction`] is off. If the run is stopped or cancelled
-/// inside it, the engine rolls it back; if the script simply ends inside it,
-/// it is left open. Either way it is reported in
-/// [`ScriptReport::script_transaction`]. Only `BEGIN`, `START TRANSACTION`,
+/// inside it, or the script ends inside it without `COMMIT`, the engine rolls
+/// it back, and says which in [`ScriptReport::script_transaction`]. It is left
+/// open only when that rollback fails. Only `BEGIN`, `START TRANSACTION`,
 /// `COMMIT`, `END`, `ABORT` and `ROLLBACK` are tracked; `SET autocommit` is
 /// not.
 ///
@@ -406,25 +413,25 @@ fn finish(
     }
 }
 
-/// The script opened a transaction and the run ended inside it. After a stop
-/// or a cancel the rest of the script, including its `COMMIT`, never runs,
-/// so the connection is rolled back instead of being left holding locks and
-/// uncommitted changes. A run that finished is left alone and reported: the
-/// script may have meant to leave it open, and the user decides.
+/// The script opened a transaction and the run ended inside it, whether it
+/// was interrupted (the rest of the script, including its `COMMIT`, never
+/// ran) or it simply ended without one. Either way the connection is rolled
+/// back: it is shared with the rest of the application, so a transaction left
+/// open would silently capture later work and hold its locks.
 fn resolve_script_transaction(
     connection: &dyn Connection,
     interrupted: bool,
 ) -> (ScriptTransaction, Option<String>) {
-    if !interrupted {
-        return (ScriptTransaction::LeftOpen, None);
-    }
-
     let Some(vocab) = TransactionVocab::for_kind(connection.kind()) else {
-        return (ScriptTransaction::LeftOpen, None);
+        return (
+            ScriptTransaction::LeftOpen,
+            Some("Rollback failed: this connection has no transaction statements.".to_string()),
+        );
     };
 
     match connection.execute(&QueryRequest::new(vocab.rollback)) {
-        Ok(_) => (ScriptTransaction::RolledBack, None),
+        Ok(_) if interrupted => (ScriptTransaction::RolledBack, None),
+        Ok(_) => (ScriptTransaction::EndedWithoutCommit, None),
         Err(error) => (
             ScriptTransaction::LeftOpen,
             Some(format!("Rollback failed: {error}")),

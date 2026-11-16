@@ -1008,7 +1008,7 @@ fn a_script_transaction_left_open_after_a_failure_is_rolled_back_and_reported() 
 }
 
 #[test]
-fn a_script_transaction_left_open_at_the_end_is_reported_not_kept_silently() {
+fn a_script_that_ends_without_commit_has_its_transaction_rolled_back() {
     let scratch = Scratch::new();
     let connection = sqlite(&scratch);
     exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
@@ -1017,8 +1017,14 @@ fn a_script_transaction_left_open_at_the_end_is_reported_not_kept_silently() {
     let report = run(connection.as_ref(), &script, RunOptions::default()).expect("run");
 
     assert_eq!(report.end, RunEnd::Finished);
-    assert_eq!(report.script_transaction, ScriptTransaction::LeftOpen);
-    exec(connection.as_ref(), "ROLLBACK");
+    assert_eq!(
+        report.script_transaction,
+        ScriptTransaction::EndedWithoutCommit
+    );
+    assert_eq!(report.finish_error, None);
+    assert_eq!(row_count(connection.as_ref(), "t"), 0);
+    exec(connection.as_ref(), "BEGIN");
+    exec(connection.as_ref(), "COMMIT");
 }
 
 #[test]
