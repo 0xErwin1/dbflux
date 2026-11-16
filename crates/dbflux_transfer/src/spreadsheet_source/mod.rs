@@ -74,8 +74,11 @@ impl SheetRows {
     pub(crate) fn open_checked(path: &Path, sheet: Option<&str>) -> Result<Self, InspectError> {
         let rows = Self::read(path, sheet)?;
 
+        // An error value in row 1 would be taken for a column name, so the
+        // header row is checked for them before its names are.
+        rows.check_cells(0..1)?;
         rows.check_header()?;
-        rows.check_cells()?;
+        rows.check_cells(1..rows.end_row)?;
 
         Ok(rows)
     }
@@ -158,9 +161,9 @@ impl SheetRows {
         })
     }
 
-    /// The first cell below the header that holds an error value.
-    fn check_cells(&self) -> Result<(), SheetIssue> {
-        for row_index in 1..self.end_row {
+    /// The first cell in `rows` that holds an error value.
+    fn check_cells(&self, rows: std::ops::Range<usize>) -> Result<(), SheetIssue> {
+        for row_index in rows {
             let Some(cells) = self.grid.row(row_index) else {
                 break;
             };

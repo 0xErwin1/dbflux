@@ -146,7 +146,7 @@ fn a_header_problem_lists_columns_by_letter_and_says_which_name_repeats() {
             "columns A, B, C, D, E and F and 2 more are blank",
         ),
     ] {
-        let block = ErrorBlock::sheet_issue(&issue);
+        let block = ErrorBlock::sheet_issue(&issue, true);
 
         assert_eq!(
             block.message,
@@ -175,7 +175,7 @@ fn every_sheet_problem_ends_with_a_next_step_and_a_footer_reason() {
             limit: 10_000_000,
         },
     ] {
-        let block = ErrorBlock::sheet_issue(&issue);
+        let block = ErrorBlock::sheet_issue(&issue, true);
 
         assert!(!block.message.is_empty(), "{issue:?}");
         assert!(!block.next_step.is_empty(), "{issue:?}");
@@ -203,10 +203,12 @@ fn a_sheet_problem_goes_through_the_load_failure_block() {
 
     assert_eq!(
         block,
-        ErrorBlock::sheet_issue(&match failure {
-            FileLoadError::Sheet(issue) => issue,
-            _ => unreachable!(),
-        })
+        ErrorBlock::sheet_issue(
+            &SheetIssue::Empty {
+                sheet: "Hoja4".to_string()
+            },
+            true
+        )
     );
 }
 
@@ -223,6 +225,9 @@ fn the_spreadsheet_strings_exist_in_every_locale() {
         "document.import_wizard.file.sheet_single",
         "document.import_wizard.sheet.empty.message",
         "document.import_wizard.sheet.empty.next",
+        "document.import_wizard.sheet.empty.next_single",
+        "document.import_wizard.sheet.header.next_single",
+        "document.import_wizard.sheet.large.next_single",
         "document.import_wizard.sheet.header.message",
         "document.import_wizard.sheet.header.next",
         "document.import_wizard.sheet.header.blank_one",
@@ -246,5 +251,44 @@ fn the_spreadsheet_strings_exist_in_every_locale() {
             let text = dbflux_i18n::translate_in(locale, key);
             assert!(!text.is_empty() && text != key, "{locale}: {key}");
         }
+    }
+}
+
+#[test]
+fn with_no_other_sheet_the_next_step_says_to_fix_the_file_and_choose_it_again() {
+    for (issue, next_step) in [
+        (
+            SheetIssue::Empty {
+                sheet: "S".to_string(),
+            },
+            "Add a header row and data to this sheet in the spreadsheet app, save, and choose the file again.",
+        ),
+        (
+            header_issue(vec![0], vec![]),
+            "Give every column of row 1 a unique name in the spreadsheet app, save, and choose the file again.",
+        ),
+        (
+            SheetIssue::ErrorCell {
+                sheet: "S".to_string(),
+                row: 1,
+                column: 0,
+                column_name: "#N/A".to_string(),
+                code: "#N/A",
+            },
+            "Fix or clear that cell in the spreadsheet app, save, and choose the file again. Formulas are read as the result last saved in the file.",
+        ),
+        (
+            SheetIssue::TooLarge {
+                sheet: "S".to_string(),
+                cells: 10_000_001,
+                limit: 10_000_000,
+            },
+            "Export it as CSV from the spreadsheet app (Save as → CSV) and import the CSV instead.",
+        ),
+    ] {
+        let block = ErrorBlock::sheet_issue(&issue, false);
+
+        assert_eq!(block.next_step, next_step, "{issue:?}");
+        assert!(!block.next_step.contains("above"), "{issue:?}");
     }
 }

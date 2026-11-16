@@ -110,9 +110,36 @@ fn header_problems(blank_columns: &[usize], duplicates: &[DuplicateHeader]) -> S
 }
 
 impl ErrorBlock {
-    /// The block for a sheet that cannot be imported. Every one points at the
-    /// Sheet dropdown or at fixing the file.
-    pub(in crate::import_wizard) fn sheet_issue(issue: &SheetIssue) -> Self {
+    /// The block for a sheet that cannot be imported. It points at the Sheet
+    /// dropdown when `other_sheets` says there is another sheet to choose,
+    /// and otherwise only at fixing the file.
+    pub(in crate::import_wizard) fn sheet_issue(issue: &SheetIssue, other_sheets: bool) -> Self {
+        let mut block = Self::sheet_issue_with_others(issue);
+        if !other_sheets {
+            block.next_step = Self::single_sheet_next_step(issue);
+        }
+
+        block
+    }
+
+    fn single_sheet_next_step(issue: &SheetIssue) -> String {
+        match issue {
+            SheetIssue::Empty { .. } => {
+                dbflux_i18n::t!("document.import_wizard.sheet.empty.next_single")
+            }
+            SheetIssue::InvalidHeader { .. } => {
+                dbflux_i18n::t!("document.import_wizard.sheet.header.next_single")
+            }
+            SheetIssue::ErrorCell { .. } => {
+                dbflux_i18n::t!("document.import_wizard.sheet.cell.next")
+            }
+            SheetIssue::TooLarge { .. } => {
+                dbflux_i18n::t!("document.import_wizard.sheet.large.next_single")
+            }
+        }
+    }
+
+    fn sheet_issue_with_others(issue: &SheetIssue) -> Self {
         match issue {
             SheetIssue::Empty { sheet } => Self {
                 message: dbflux_i18n::t!(

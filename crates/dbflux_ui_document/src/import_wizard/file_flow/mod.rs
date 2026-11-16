@@ -686,7 +686,14 @@ impl ImportWizard {
                     .file_import
                     .as_ref()
                     .map_or(FileFormat::Csv, |state| state.format);
-                let block = ErrorBlock::file_load_failure(&failure, format);
+                let other_sheets = self
+                    .file_import
+                    .as_ref()
+                    .is_some_and(|state| state.sheets.len() > 1);
+                let block = match &failure {
+                    FileLoadError::Sheet(issue) => ErrorBlock::sheet_issue(issue, other_sheets),
+                    _ => ErrorBlock::file_load_failure(&failure, format),
+                };
                 report_error(
                     UserFacingError::new(ErrorKind::User, block.message.clone()),
                     cx,

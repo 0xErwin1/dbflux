@@ -602,3 +602,26 @@ fn rows_past_the_data_that_only_pad_the_grid_are_not_imported() {
         "interior empty rows stay, trailing padding does not"
     );
 }
+
+#[test]
+fn an_error_value_in_the_header_row_is_reported_as_an_error_cell_on_row_one() {
+    let scratch = Scratch::new();
+    let path = workbook(&scratch, "header_error.xlsx", |book| {
+        let data = sheet(book, "Data")?;
+        data.write_formula(0, 0, Formula::new("=1/0").set_result("#DIV/0!"))?;
+        data.write_string(0, 1, "name")?;
+        data.write_string(1, 0, "1")?;
+        Ok(())
+    });
+
+    assert_eq!(
+        issue(checked(&path, None)),
+        SheetIssue::ErrorCell {
+            sheet: "Data".to_string(),
+            row: 1,
+            column: 0,
+            column_name: "#DIV/0!".to_string(),
+            code: "#DIV/0!",
+        }
+    );
+}

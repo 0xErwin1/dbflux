@@ -2508,9 +2508,11 @@ document:
       empty:
         message: "工作表“%{sheet}”为空：没有任何行。"
         next: "请在上方选择其他工作表，或在电子表格应用中为此工作表添加表头行和数据，保存后重新选择文件。"
+        next_single: "请在电子表格应用中为此工作表添加表头行和数据，保存后重新选择文件。"
       header:
         message: "工作表“%{sheet}”的第 1 行不是有效的表头：%{problems}。"
         next: "请在电子表格应用中为第 1 行的每一列设置唯一名称，保存后重新选择文件，或在上方选择其他工作表。"
+        next_single: "请在电子表格应用中为第 1 行的每一列设置唯一名称，保存后重新选择文件。"
         blank_one: "第 %{columns} 列为空"
         blank_many: "第 %{columns} 列为空"
         duplicate_two: "第 %{columns} 列的名称都是“%{name}”"
@@ -2521,6 +2523,7 @@ document:
       large:
         message: "工作表“%{sheet}”有 %{cells} 个单元格，超过 %{limit} 的上限。整个工作表会读入内存，因此无法导入。"
         next: "请在电子表格应用中将其导出为 CSV（另存为 → CSV）并改为导入该 CSV，或在上方选择较小的工作表。"
+        next_single: "请在电子表格应用中将其导出为 CSV（另存为 → CSV）并改为导入该 CSV。"
       list_and: "%{head}和%{last}"
       list_more: "%{list}等另外 %{count} 列"
     mapping_mode:

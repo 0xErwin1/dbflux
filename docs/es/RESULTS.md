@@ -398,9 +398,11 @@ celdas (filas × columnas, contadas desde la celda A1). Una hoja que no se puede
 importar mantiene el archivo elegido en Configurar y muestra un bloque de peligro
 con qué hacer a continuación: la hoja está vacía, la fila 1 tiene un nombre vacío
 o repetido (el bloque lista las columnas), una celda contiene un valor de error
-como `#DIV/0!` (el bloque indica la hoja, la fila y la columna), o la hoja supera
+como `#DIV/0!` (el bloque indica la hoja, la fila y la columna; cuenta también una celda de la fila 1, así que un valor de error nunca se toma por un nombre de columna), o la hoja supera
 el límite (expórtala como CSV e importa ese CSV, o elige una hoja más pequeña).
-Elegir otra hoja es la salida en cada caso, y el pie explica por qué **Continuar**
+Elegir otra hoja es una salida en cada caso, y cuando el libro no tiene otra hoja
+visible el bloque indica en su lugar que corrijas la hoja en la aplicación de hojas
+de cálculo, guardes y vuelvas a elegir el archivo. El pie explica por qué **Continuar**
 está desactivado.
 
 El diálogo de importación usa el mismo indicador de pasos superior y el mismo

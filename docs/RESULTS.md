@@ -368,9 +368,11 @@ counted from cell A1) is rejected. A sheet that cannot be imported keeps the fil
 picked on Configure and shows a danger block with what to do next: the sheet is
 empty, row 1 has a blank or repeated name (the block lists the columns), a cell
 holds an error value such as `#DIV/0!` (the block names the sheet, row and
-column), or the sheet is over the limit (export it as CSV and import that, or
-choose a smaller sheet). Choosing another sheet is the way out of each of them,
-and the footer says why **Continue** is off.
+column; a cell in row 1 counts, so an error value is never taken for a column
+name), or the sheet is over the limit (export it as CSV and import that, or
+choose a smaller sheet). Choosing another sheet is a way out of each of them, and when the workbook has
+no other visible sheet the block says to fix the sheet in the spreadsheet app,
+save, and choose the file again instead. The footer says why **Continue** is off.
 
 The import dialog uses the same top stepper and footer as the export wizard:
 **Cancel** on the first two steps, **Back** and **Cancel** on the confirmation,

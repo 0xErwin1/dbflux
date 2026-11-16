@@ -2508,9 +2508,11 @@ document:
       empty:
         message: "Sheet “%{sheet}” is empty: it has no rows."
         next: "Pick another sheet above, or add a header row and data to this sheet in the spreadsheet app, save, and choose the file again."
+        next_single: "Add a header row and data to this sheet in the spreadsheet app, save, and choose the file again."
       header:
         message: "Row 1 of sheet “%{sheet}” is not a valid header: %{problems}."
         next: "Give every column of row 1 a unique name in the spreadsheet app, save, and choose the file again, or pick another sheet above."
+        next_single: "Give every column of row 1 a unique name in the spreadsheet app, save, and choose the file again."
         blank_one: "column %{columns} is blank"
         blank_many: "columns %{columns} are blank"
         duplicate_two: "columns %{columns} are both named “%{name}”"
@@ -2521,6 +2523,7 @@ document:
       large:
         message: "Sheet “%{sheet}” has %{cells} cells, over the limit of %{limit}. The whole sheet is read into memory, so it cannot be imported."
         next: "Export it as CSV from the spreadsheet app (Save as → CSV) and import the CSV instead, or pick a smaller sheet above."
+        next_single: "Export it as CSV from the spreadsheet app (Save as → CSV) and import the CSV instead."
       list_and: "%{head} and %{last}"
       list_more: "%{list} and %{count} more"
     mapping_mode:

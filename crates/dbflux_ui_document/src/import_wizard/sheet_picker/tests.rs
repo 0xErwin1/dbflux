@@ -424,6 +424,7 @@ fn an_invalid_header_names_the_blank_and_the_repeated_columns(cx: &mut gpui::Tes
         data.write_string(0, 4, "other")?;
         data.write_string(0, 5, "total")?;
         data.write_string(1, 0, "1")?;
+        add_sheet(book, "Otra")?;
         Ok(())
     });
     let (wizard, window) = wizard_on_fake_connection(cx);
@@ -471,6 +472,7 @@ fn a_sheet_over_the_cell_limit_says_the_size_and_the_way_out(cx: &mut gpui::Test
         let data = add_sheet(book, "Registro")?;
         write_header(data, &["a"])?;
         data.write_string(999_999, 15, "far")?;
+        add_sheet(book, "Otra")?;
         Ok(())
     });
     let (wizard, window) = wizard_on_fake_connection(cx);
@@ -531,6 +533,55 @@ fn a_file_that_is_not_a_workbook_returns_to_pick_source_with_its_error(
         assert_eq!(
             block.next_step,
             "Check that the file is a valid workbook without a password and choose it again, or choose another file."
+        );
+    });
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[gpui::test]
+fn an_error_value_in_the_header_row_blocks_the_sheet(cx: &mut gpui::TestAppContext) {
+    let (directory, path) = write_workbook("header_cell", "ventas_2026.xlsx", |book| {
+        let data = add_sheet(book, "Ventas Q3")?;
+        data.write_formula(0, 0, Formula::new("=1/0").set_result("#DIV/0!"))?;
+        data.write_string(0, 1, "total")?;
+        data.write_number(1, 1, 1.0)?;
+        add_sheet(book, "Otra")?;
+        Ok(())
+    });
+    let (wizard, window) = wizard_on_fake_connection(cx);
+
+    pick(&wizard, window, &path);
+
+    assert_blocked_with(
+        &wizard,
+        window,
+        "Sheet “Ventas Q3”, row 1, column A (“#DIV/0!”) holds the error #DIV/0!.",
+        "Fix or clear that cell in the spreadsheet app, save, and choose the file again. Formulas are read as the result last saved in the file.",
+        "Continue is off: a cell holds an error value.",
+    );
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[gpui::test]
+fn a_single_sheet_with_a_problem_does_not_say_to_pick_another_sheet(cx: &mut gpui::TestAppContext) {
+    let (directory, path) = write_workbook("single_problem", "uno.xlsx", |book| {
+        add_sheet(book, "Hoja4")?;
+        Ok(())
+    });
+    let (wizard, window) = wizard_on_fake_connection(cx);
+
+    pick(&wizard, window, &path);
+
+    window.update(|_, cx| {
+        let block = wizard
+            .read(cx)
+            .file_import
+            .as_ref()
+            .and_then(|state| state.error.clone())
+            .expect("the error block");
+        assert_eq!(
+            block.next_step,
+            "Add a header row and data to this sheet in the spreadsheet app, save, and choose the file again."
         );
     });
     std::fs::remove_dir_all(&directory).ok();

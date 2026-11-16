@@ -83,7 +83,7 @@ impl ErrorBlock {
                 next_step: dbflux_i18n::t!("document.import_wizard.pick_file.error.next_lookup"),
                 footer_reason: None,
             },
-            FileLoadError::Sheet(issue) => Self::sheet_issue(issue),
+            FileLoadError::Sheet(issue) => Self::sheet_issue(issue, true),
             FileLoadError::Read(error) => Self {
                 message: dbflux_i18n::t!(
                     "document.import_wizard.pick_file.error.invalid_file",
