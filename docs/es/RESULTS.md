@@ -401,12 +401,22 @@ diálogo. El script se lee como UTF-8 y se divide en sentencias con el mismo
 divisor del editor, que respeta comillas, comentarios y cuerpos entre dólares, y
 no tiene opciones de delimitador ni de codificación. Un script de más de 100 MB,
 un archivo que no es UTF-8 o no se puede leer, y un script sin sentencias se
-quedan en el primer paso con el motivo y qué hacer a continuación.
+quedan en el primer paso con el motivo y qué hacer a continuación. Lo mismo
+ocurre con un script que usa algo que solo ejecuta un cliente de línea de
+comandos: una línea `DELIMITER` o un separador de lotes `GO`, un cuerpo de rutina
+(procedimiento, función o disparador) cuyas sentencias terminan con `;` y que no
+tiene delimitadores de cliente alrededor, un bloque de datos `COPY … FROM stdin`
+o un metacomando de psql con barra invertida como `\connect`. Cada uno se
+rechaza antes de ejecutar nada, con la línea y qué hacer a continuación: ejecutar
+el script con el cliente de línea de comandos de la propia base de datos o
+reescribirlo (por ejemplo con `pg_dump --inserts`).
 
 **Configurar** muestra el número de sentencias y el tamaño, cuántas sentencias
 hay en cada clasificación (las clases que usan el editor y el visor de auditoría,
 incluida Administración) y las seis primeras sentencias con su clasificación; un
-`DELETE` o `UPDATE` sin `WHERE` aparece marcado. Tiene dos opciones:
+`DELETE` o `UPDATE` sin `WHERE` aparece marcado. Las sentencias que cambian una
+secuencia (`setval`, `nextval`, `ALTER SEQUENCE`) cuentan como Escritura, así que
+una conexión de solo lectura las rechaza. Tiene dos opciones:
 
 - **Ante un error**: **Detener en el primer error** (por defecto) o **Continuar
   tras los errores**, que ejecuta todas las sentencias y lista las que fallaron.
@@ -415,7 +425,11 @@ incluida Administración) y las seis primeras sentencias con su clasificación; 
   transacción se deshacen y no se guarda nada hasta que la última sentencia tenga
   éxito. Está desactivada, con el motivo, cuando se elige **Continuar tras los
   errores** (una sentencia fallida aborta la transacción en algunos motores), y
-  no se ofrece, con el motivo, en una conexión sin transacciones.
+  no se ofrece, con el motivo, en una conexión sin transacciones. Un script que
+  gestiona sus propias transacciones (`BEGIN`, `START TRANSACTION`, `COMMIT`,
+  `END`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`, `SET autocommit`) también la
+  desactiva, indicando la sentencia y su línea: el script se ejecuta tal cual y
+  su propio `COMMIT` guarda los cambios anteriores.
 
 En una conexión que confirma por sí sola las sentencias de esquema (MySQL y
 MariaDB), `CREATE`, `ALTER` y `DROP` se guardan al ejecutarse y también guardan
@@ -442,7 +456,10 @@ pie dice cuál de los dos casos es antes de pulsar.
 **Terminado** dice qué ocurrió. Una ejecución que se detiene nombra la sentencia
 (número, línea y texto), muestra el error de la base de datos, dice qué pasó con
 las sentencias anteriores y qué hacer a continuación; una ejecución que continuó
-tras los errores lista cada sentencia que falló. Si falla el propio commit o
+tras los errores lista cada sentencia que falló. Sin transacción, el consejo es
+conciliar los cambios que ya hicieron las sentencias anteriores y conservar o
+restaurar los ajustes de sesión que necesita el script (como `SET search_path`)
+antes de ejecutar el resto; tras los errores es el mismo. Si falla el propio commit o
 rollback, el diálogo dice que el resultado no está claro y que se compruebe el
 estado de la base de datos antes de ejecutar nada más. Cada fallo se informa
 además una vez como notificación con **Ver en Auditoría**, y cada ejecución

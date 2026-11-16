@@ -79,13 +79,18 @@ fn read_script(
 ) -> Result<ScriptFlow, ScriptError> {
     let script = load_script(path, &connection.metadata().query_language)?;
     let summary = script.summarize(connection.as_ref(), PREVIEW_STATEMENTS);
+    let rules = ConnectionRules::of(
+        connection.as_ref(),
+        read_only_profile,
+        summary.transaction_control.as_ref(),
+    );
 
     Ok(ScriptFlow {
         path: path.to_path_buf(),
         script: Arc::new(script),
         summary,
         options: ScriptOptions::default(),
-        rules: ConnectionRules::of(connection.as_ref(), read_only_profile),
+        rules,
         snippet: Arc::default(),
         done: None,
     })

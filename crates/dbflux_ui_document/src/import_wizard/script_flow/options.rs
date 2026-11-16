@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use dbflux_core::{Connection, DriverCapabilities, TransactionVocab};
-use dbflux_transfer::sql_script::{OnError, RunOptions, ScriptSummary};
+use dbflux_transfer::sql_script::{OnError, RunOptions, ScriptSummary, TransactionControl};
 
 /// What the connection allows the options to be, fixed when the script is
 /// read.
@@ -16,17 +16,22 @@ pub(in crate::import_wizard) struct ConnectionRules {
     pub(in crate::import_wizard) transactions_supported: bool,
     /// The profile is read-only by its own setting.
     pub(in crate::import_wizard) read_only_profile: bool,
+    /// The keyword and line of the first statement that controls
+    /// transactions itself, which the run then leaves as written.
+    pub(in crate::import_wizard) self_managed: Option<(&'static str, usize)>,
 }
 
 impl ConnectionRules {
     pub(in crate::import_wizard) fn of(
         connection: &dyn Connection,
         read_only_profile: bool,
+        control: Option<&TransactionControl>,
     ) -> Self {
         Self {
             transactions_supported: connection.supports(DriverCapabilities::TRANSACTIONS)
                 && TransactionVocab::for_kind(connection.kind()).is_some(),
             read_only_profile,
+            self_managed: control.map(|control| (control.keyword, control.line)),
         }
     }
 }
@@ -41,6 +46,8 @@ pub(in crate::import_wizard) enum TransactionAvailability {
     OffForContinue,
     /// The connection has no transactions.
     Unavailable,
+    /// Off because the script has its own transaction statements.
+    SelfManaged,
 }
 
 /// What the user chose on Configure.
@@ -69,6 +76,8 @@ impl ScriptOptions {
     ) -> TransactionAvailability {
         if !rules.transactions_supported {
             TransactionAvailability::Unavailable
+        } else if rules.self_managed.is_some() {
+            TransactionAvailability::SelfManaged
         } else if self.on_error == OnError::Continue {
             TransactionAvailability::OffForContinue
         } else {

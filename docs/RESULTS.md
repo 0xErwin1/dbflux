@@ -368,12 +368,19 @@ and split into statements with the editor's own splitter, so quotes, comments
 and dollar-quoted bodies are respected, and it has no delimiter or encoding
 options. A script over 100 MB, a file that is not UTF-8 or cannot be read, and a
 script with no statements stay on the first step with the reason and what to do
-next.
+next. So does a script that uses something only a command-line client runs: a
+`DELIMITER` line or a `GO` batch separator, a routine body (a procedure,
+function or trigger) whose statements end with `;` and that has no client
+delimiters around it, a `COPY … FROM stdin` data block, or a psql backslash
+meta-command such as `\connect`. Each is refused before anything runs, with the
+line and a next step: run the script with the database's own command-line
+client, or rewrite it (for example with `pg_dump --inserts`).
 
 **Configure** shows the statement count and size, how many statements fall in
 each classification (the classes the editor and the audit viewer use, Admin
 included), and the first six statements with their classification; a `DELETE` or
-`UPDATE` without `WHERE` is marked. It has two options:
+`UPDATE` without `WHERE` is marked. Statements that change a sequence (`setval`,
+`nextval`, `ALTER SEQUENCE`) count as Write, so a read-only connection refuses them. It has two options:
 
 - **On error**: **Stop at the first error** (the default) or **Continue after
   errors**, which runs every statement and lists the ones that failed.
@@ -382,7 +389,11 @@ included), and the first six statements with their classification; a `DELETE` or
   rolled back, and nothing is saved until the last statement succeeds. It is off,
   with the reason, when **Continue after errors** is chosen (a failed statement
   aborts the transaction on some engines), and it is not offered, with the
-  reason, on a connection without transactions.
+  reason, on a connection without transactions. A script that manages its own
+  transactions (`BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`,
+  `SAVEPOINT`, `RELEASE`, `SET autocommit`) turns it off too, naming the
+  statement and its line: the script runs as written, and its own `COMMIT`
+  saves the changes before it.
 
 On a connection that commits schema statements on its own (MySQL and MariaDB),
 `CREATE`, `ALTER` and `DROP` are saved as they run and also save every statement
@@ -407,8 +418,11 @@ before you press it.
 
 **Done** says what happened. A run that stops names the statement (number, line
 and text), shows the database's error, says what happened to the earlier
-statements and what to do next; a run that continued after errors lists every
-statement that failed. If the commit or the rollback itself fails, the dialog
+statements and what to do next; without a transaction that means reconciling
+the changes the earlier statements already made and keeping or restoring the
+session settings the script needs (such as `SET search_path`) before running the
+rest. A run that continued after errors lists every statement that failed, with
+the same advice. If the commit or the rollback itself fails, the dialog
 says the outcome is unresolved and to check the state of the database before
 running anything else. Every failure is also reported once as a toast with
 **View in Audit**, and each run records a `Query` audit event (plus one per

@@ -12,6 +12,7 @@ fn rules(transactions_supported: bool, read_only_profile: bool) -> ConnectionRul
     ConnectionRules {
         transactions_supported,
         read_only_profile,
+        self_managed: None,
     }
 }
 
@@ -111,4 +112,29 @@ fn digits_group_in_threes() {
 fn elapsed_time_has_one_decimal() {
     assert_eq!(elapsed_label(Duration::from_millis(8_400)), "8.4 s");
     assert_eq!(elapsed_label(Duration::from_millis(12)), "0.0 s");
+}
+
+#[test]
+fn a_script_that_manages_its_own_transactions_turns_the_option_off() {
+    let own = ConnectionRules {
+        self_managed: Some(("COMMIT", 214)),
+        ..rules(true, false)
+    };
+    let options = ScriptOptions::default();
+
+    assert_eq!(
+        options.availability(&own),
+        TransactionAvailability::SelfManaged
+    );
+    assert!(!options.run_options(&own).transaction, "it runs as written");
+
+    let without_transactions = ConnectionRules {
+        self_managed: Some(("COMMIT", 214)),
+        ..rules(false, false)
+    };
+    assert_eq!(
+        options.availability(&without_transactions),
+        TransactionAvailability::Unavailable,
+        "no transactions is the more basic reason"
+    );
 }

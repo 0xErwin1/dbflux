@@ -193,11 +193,13 @@ impl ImportWizard {
         let label = dbflux_i18n::t!("document.import_wizard.script.configure.transaction_label");
 
         let control = match availability {
-            TransactionAvailability::Unavailable => info_line(
-                dbflux_i18n::t!("document.import_wizard.script.configure.transaction_unavailable"),
-                "import-wizard-script-transaction-why",
-                cx,
-            ),
+            TransactionAvailability::Unavailable | TransactionAvailability::SelfManaged => {
+                info_line(
+                    transaction_reason(flow).unwrap_or_default(),
+                    "import-wizard-script-transaction-why",
+                    cx,
+                )
+            }
             _ => self.transaction_checkbox(flow, availability, active, cx),
         };
         let mut notes: Vec<AnyElement> = Vec::new();
@@ -218,7 +220,7 @@ impl ImportWizard {
                 },
                 cx,
             )),
-            TransactionAvailability::Unavailable => {}
+            TransactionAvailability::Unavailable | TransactionAvailability::SelfManaged => {}
         }
         if flow.summary.ddl_commits_on_its_own && flow.rules.transactions_supported {
             notes.push(info_line(
@@ -640,6 +642,10 @@ fn preview_row(flow: &ScriptFlow, cx: &App) -> AnyElement {
             .child(modal_hint(
                 dbflux_i18n::t!("document.import_wizard.script.configure.preview_hint"),
                 cx,
+            ))
+            .child(modal_hint(
+                dbflux_i18n::t!("document.import_wizard.script.configure.preview_sequence_hint"),
+                cx,
             )),
         None,
         cx,
@@ -802,8 +808,19 @@ fn plain_confirm(flow: &ScriptFlow, cx: &App) -> AnyElement {
 
 /// One sentence on how the run goes: in one transaction or statement by
 /// statement, and what a failed statement does.
-fn how_it_runs(flow: &ScriptFlow) -> String {
+pub(super) fn how_it_runs(flow: &ScriptFlow) -> String {
     let transaction = flow.options.runs_in_transaction(&flow.rules);
+
+    if flow.options.availability(&flow.rules) == TransactionAvailability::SelfManaged {
+        return match flow.options.on_error {
+            OnError::Stop => {
+                dbflux_i18n::t!("document.import_wizard.script.confirm.how_self_stop")
+            }
+            OnError::Continue => {
+                dbflux_i18n::t!("document.import_wizard.script.confirm.how_self_continue")
+            }
+        };
+    }
 
     match (transaction, flow.options.on_error) {
         (true, _) => dbflux_i18n::t!("document.import_wizard.script.confirm.how_transaction"),
@@ -869,4 +886,31 @@ fn failure_rows(view: &DoneView) -> Vec<ResultRow> {
             text: format!("{} {}: {}", failure.label, failure.snippet, failure.error),
         })
         .collect()
+}
+
+/// The reason line of a transaction that is off or missing, if any.
+pub(super) fn transaction_reason(flow: &ScriptFlow) -> Option<String> {
+    match flow.options.availability(&flow.rules) {
+        TransactionAvailability::Available => None,
+        TransactionAvailability::Unavailable => Some(dbflux_i18n::t!(
+            "document.import_wizard.script.configure.transaction_unavailable"
+        )),
+        TransactionAvailability::OffForContinue => Some(dbflux_i18n::t!(
+            "document.import_wizard.script.configure.transaction_off_continue"
+        )),
+        TransactionAvailability::SelfManaged => {
+            let (keyword, line) = flow.rules.self_managed?;
+            let key = if matches!(keyword, "COMMIT" | "END") {
+                "document.import_wizard.script.configure.transaction_self_managed_commit"
+            } else {
+                "document.import_wizard.script.configure.transaction_self_managed"
+            };
+
+            Some(dbflux_i18n::t!(
+                key,
+                keyword = keyword,
+                line = grouped(line)
+            ))
+        }
+    }
 }

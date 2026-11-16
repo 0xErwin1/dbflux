@@ -22,6 +22,7 @@ pub(super) fn summary_with(total: usize, changing: usize) -> ScriptSummary {
         changing_count: changing,
         ddl_count: 0,
         ddl_commits_on_its_own: false,
+        transaction_control: None,
         preview: Vec::new(),
         first_destructive: Vec::new(),
     }

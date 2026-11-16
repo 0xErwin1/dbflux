@@ -166,7 +166,7 @@ fn a_stopped_run_without_a_transaction_says_what_ran_and_what_did_not() {
     assert_eq!(
         view.next_step.as_deref(),
         Some(
-            "Fix statement 4,121, then delete statements 1 to 4,120 from the file before running it again, or they run twice. Turn on “Run in one transaction” next time to avoid a partial run."
+            "Fix statement 4,121, then reconcile the changes the first 4,120 statements already made. Before running the rest, keep or restore the session settings the script needs (for example SET search_path or SET NAMES), then run only the remaining statements, or they run twice. Turn on “Run in one transaction” next time to avoid a partial run."
         )
     );
 
@@ -235,7 +235,7 @@ fn continue_after_errors_lists_every_failed_statement() {
     assert_eq!(
         view.next_step.as_deref(),
         Some(
-            "The statements that ran were kept; the 3 that failed were skipped. Fix them in the file and run only those again."
+            "The statements that ran were kept; the 3 that failed were skipped. Review the failed statements and the ones after them that depend on them, and reconcile the partial run, and keep or restore the session settings the script needs (for example SET search_path or SET NAMES), before running the fixed statements again: a later statement may have run against data that a failed one should have changed."
         )
     );
 }
@@ -404,4 +404,79 @@ fn a_run_that_could_not_start_shows_the_reason_and_that_nothing_ran() {
         "Nothing ran. Fix the cause above and run the script again."
     );
     assert!(resolution.report.is_some());
+}
+
+#[test]
+fn each_refused_script_content_has_localized_copy_and_a_next_step() {
+    let cases = [
+        (
+            ScriptError::ClientDirective {
+                directive: "DELIMITER".to_string(),
+                line: 12,
+            },
+            "This script uses the client command DELIMITER (line 12), which only a database command-line client understands.",
+            "Run the script with the database's own command-line client, or remove the DELIMITER lines and end each statement with a semicolon.",
+        ),
+        (
+            ScriptError::SplitRoutineBody { line: 30 },
+            "This script has a routine body starting on line 30 whose statements end with \";\", so it cannot be split into statements here.",
+            "Run the script with the database's own command-line client.",
+        ),
+        (
+            ScriptError::CopyFromStdin { line: 48 },
+            "This script has a COPY … FROM stdin data block (line 48), which only the psql command-line client can load.",
+            "Run it with psql, or re-create the dump with INSERT statements (pg_dump --inserts).",
+        ),
+        (
+            ScriptError::PsqlMetaCommand {
+                command: "\\connect".to_string(),
+                line: 3,
+            },
+            "This script uses the psql command \\connect (line 3), which only the psql command-line client understands.",
+            "Remove it, or run the script with psql.",
+        ),
+        (
+            ScriptError::SelfManagedTransaction {
+                keyword: "COMMIT".to_string(),
+                line: 214,
+            },
+            "This script manages its own transactions (COMMIT on line 214), so it cannot run in one transaction.",
+            "Turn off “Run in one transaction”; the script's own statements then decide what is saved.",
+        ),
+    ];
+
+    for (error, message, next_step) in cases {
+        let block = load_error_block(&error);
+
+        assert_eq!(block.message, message, "{error:?}");
+        assert_eq!(block.next_step, next_step, "{error:?}");
+    }
+}
+
+#[test]
+fn a_stop_without_a_transaction_tells_the_user_to_reconcile_and_keep_session_settings() {
+    let view = done_view(&stopped(Disposition::Kept), false);
+
+    assert_eq!(
+        view.next_step.as_deref(),
+        Some(
+            "Fix statement 4,121, then reconcile the changes the first 4,120 statements already made. Before running the rest, keep or restore the session settings the script needs (for example SET search_path or SET NAMES), then run only the remaining statements, or they run twice."
+        )
+    );
+}
+
+#[test]
+fn continue_with_failures_says_to_reconcile_before_running_the_fixed_statements() {
+    let continued = ScriptReport {
+        ran: 9,
+        failures: vec![failure(2, 2, "INSERT INTO t VALUES (1)", "duplicate key")],
+        ..report(RunEnd::Finished, Disposition::Kept)
+    };
+
+    assert_eq!(
+        done_view(&continued, false).next_step.as_deref(),
+        Some(
+            "The statements that ran were kept; the 1 that failed were skipped. Review the failed statements and the ones after them that depend on them, and reconcile the partial run, and keep or restore the session settings the script needs (for example SET search_path or SET NAMES), before running the fixed statements again: a later statement may have run against data that a failed one should have changed."
+        )
+    );
 }

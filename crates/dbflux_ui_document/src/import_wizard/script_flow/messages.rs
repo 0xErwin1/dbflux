@@ -86,6 +86,47 @@ pub(in crate::import_wizard) fn load_error_block(error: &ScriptError) -> ErrorBl
             ),
             dbflux_i18n::t!("document.import_wizard.script.error.not_sql_next"),
         ),
+        ScriptError::ClientDirective { directive, line } => (
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.client_directive",
+                directive = directive,
+                line = grouped(*line)
+            ),
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.client_directive_next",
+                directive = directive
+            ),
+        ),
+        ScriptError::SplitRoutineBody { line } => (
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.split_routine",
+                line = grouped(*line)
+            ),
+            dbflux_i18n::t!("document.import_wizard.script.error.split_routine_next"),
+        ),
+        ScriptError::CopyFromStdin { line } => (
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.copy_stdin",
+                line = grouped(*line)
+            ),
+            dbflux_i18n::t!("document.import_wizard.script.error.copy_stdin_next"),
+        ),
+        ScriptError::PsqlMetaCommand { command, line } => (
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.psql_meta",
+                command = command,
+                line = grouped(*line)
+            ),
+            dbflux_i18n::t!("document.import_wizard.script.error.psql_meta_next"),
+        ),
+        ScriptError::SelfManagedTransaction { keyword, line } => (
+            dbflux_i18n::t!(
+                "document.import_wizard.script.error.self_managed",
+                keyword = keyword,
+                line = grouped(*line)
+            ),
+            dbflux_i18n::t!("document.import_wizard.script.error.self_managed_next"),
+        ),
         other => (
             other.to_string(),
             dbflux_i18n::t!("document.import_wizard.script.error.other_next"),
@@ -435,7 +476,7 @@ fn failure_cause(report: &ScriptReport) -> String {
 }
 
 fn not_run_resolution(error: &ScriptError) -> ScriptResolution {
-    let message = error.to_string();
+    let message = load_error_block(error).message;
     let mut view = plain_view(
         dbflux_i18n::t!("document.import_wizard.script.done.not_run"),
         DoneTone::Danger,

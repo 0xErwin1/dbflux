@@ -209,3 +209,83 @@ fn a_read_only_profile_runs_a_script_that_only_reads(cx: &mut gpui::TestAppConte
         assert!(matches!(wizard.step, WizardStep::Confirm));
     });
 }
+
+#[gpui::test]
+fn a_script_with_its_own_commit_turns_the_transaction_off_and_says_why(
+    cx: &mut gpui::TestAppContext,
+) {
+    let scratch = Scratch::new("own_tx");
+    let mut opened = open_wizard(cx, ScriptFake::new(FakeKind::SQL), false);
+    pick(
+        &mut opened,
+        scratch.write(
+            "own.sql",
+            b"INSERT INTO t VALUES (1);\nCOMMIT;\nINSERT INTO t VALUES (2);\n",
+        ),
+    );
+
+    read(&mut opened, |wizard| {
+        let flow = wizard.script.as_ref().expect("script");
+
+        assert_eq!(flow.rules.self_managed, Some(("COMMIT", 2)));
+        assert_eq!(
+            flow.options.availability(&flow.rules),
+            TransactionAvailability::SelfManaged
+        );
+        assert!(!flow.options.run_options(&flow.rules).transaction);
+        assert_eq!(
+            wizard.configure_fields().len(),
+            1,
+            "no transaction stop on the cursor"
+        );
+    });
+    assert!(
+        opened
+            .window
+            .debug_bounds("import-wizard-script-transaction-why")
+            .is_some()
+    );
+    assert_eq!(
+        read(&mut opened, |wizard| wizard
+            .script
+            .as_ref()
+            .map(super::super::render::transaction_reason)),
+        Some(Some(
+            "Off because this script manages its own transactions (COMMIT at line 2). It runs as written: each COMMIT in it saves the changes before it.".to_string()
+        ))
+    );
+}
+
+#[gpui::test]
+fn confirm_says_a_self_managed_script_runs_as_written(cx: &mut gpui::TestAppContext) {
+    let scratch = Scratch::new("own_tx_how");
+    let mut opened = open_wizard(cx, ScriptFake::new(FakeKind::SQL), false);
+    pick(
+        &mut opened,
+        scratch.write(
+            "own.sql",
+            b"INSERT INTO t VALUES (1);\nBEGIN;\nINSERT INTO t VALUES (2);\n",
+        ),
+    );
+
+    let how = read(&mut opened, |wizard| {
+        wizard
+            .script
+            .as_ref()
+            .map(super::super::render::how_it_runs)
+    });
+    assert_eq!(
+        how.as_deref(),
+        Some(
+            "It runs as written: the script's own transaction statements decide what is saved, and the run stops at the first error."
+        )
+    );
+    assert_eq!(
+        read(&mut opened, |wizard| wizard
+            .script
+            .as_ref()
+            .and_then(super::super::render::transaction_reason)),
+        Some("Off because this script manages its own transactions (BEGIN at line 2). It runs as written: its own transaction statements decide what is saved.".to_string()),
+        "a keyword that is not a commit gets the generic sentence"
+    );
+}

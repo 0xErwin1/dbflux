@@ -172,3 +172,20 @@ fn a_file_the_wizard_cannot_import_lists_sql_on_a_sql_connection(cx: &mut gpui::
         "Only .csv, .json and .jsonl files can be imported."
     );
 }
+
+#[gpui::test]
+fn a_script_with_a_client_directive_is_refused_with_localized_copy(cx: &mut gpui::TestAppContext) {
+    let scratch = Scratch::new("delimiter");
+    let path = scratch.write("proc.sql", b"SELECT 1;\nDELIMITER //\nSELECT 2//\n");
+
+    let (message, next_step) = error_after_picking(cx, FakeKind::SQL, path);
+
+    assert_eq!(
+        message,
+        "This script uses the client command DELIMITER (line 2), which only a database command-line client understands."
+    );
+    assert_eq!(
+        next_step,
+        "Run the script with the database's own command-line client, or remove the DELIMITER lines and end each statement with a semicolon."
+    );
+}

@@ -71,7 +71,8 @@ impl ImportWizard {
                 destructive_statements: flow.summary.destructive_count,
             },
             script: Arc::clone(&flow.script),
-            transaction_offered: flow.rules.transactions_supported,
+            transaction_offered: flow.rules.transactions_supported
+                && flow.rules.self_managed.is_none(),
             snippet: Arc::clone(&flow.snippet),
             options,
             audit,
