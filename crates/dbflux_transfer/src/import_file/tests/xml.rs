@@ -421,9 +421,9 @@ fn epoch_seconds_in_an_xml_field_import_into_a_timestamp_column() {
 
     let stored = rows(&connection, "SELECT at FROM ev");
     assert_ne!(stored, vec![vec![text("1706659200")]], "{stored:?}");
-    assert!(
-        matches!(&stored[0][0], Value::Text(t) if t.starts_with("2024-01-31"))
-            || matches!(&stored[0][0], Value::DateTime(_)),
-        "{stored:?}"
+    let instant = rows(
+        &connection,
+        "SELECT CAST(strftime('%s', at) AS INTEGER) FROM ev",
     );
+    assert_eq!(instant, vec![vec![Value::Int(1_706_659_200)]], "{stored:?}");
 }
