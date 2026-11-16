@@ -25,6 +25,99 @@ pub enum MutationTargetAlias {
     RequiresAs,
 }
 
+/// Coarse family of a declared column type, shared by every dialect's
+/// [`SqlDialect::type_value_expressions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypeFamily {
+    Timestamp,
+    Date,
+    Time,
+    Uuid,
+    Boolean,
+    Numeric,
+    Text,
+}
+
+/// Classify a driver-reported type name, ignoring case and modifiers such as
+/// `varchar(255)`, `numeric(12,2)` or `timestamp(3) with time zone`.
+///
+/// Arrays (`text[]`, `_int4`), intervals and unrecognised names have no
+/// family.
+pub fn type_family(type_name: &str) -> Option<TypeFamily> {
+    let mut name = type_name.trim().to_ascii_lowercase();
+
+    // ClickHouse wraps the base type: `Nullable(DateTime)`.
+    while let Some(inner) = ["nullable(", "lowcardinality("]
+        .iter()
+        .find_map(|wrapper| name.strip_prefix(wrapper))
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        name = inner.trim().to_string();
+    }
+
+    if name.is_empty() || name.ends_with("[]") || name.starts_with('_') {
+        return None;
+    }
+
+    let base = name.split('(').next().unwrap_or(&name).trim();
+
+    if base.starts_with("interval") {
+        return None;
+    }
+
+    if base.contains("uuid") || base.contains("uniqueidentifier") {
+        return Some(TypeFamily::Uuid);
+    }
+
+    if base.contains("timestamp") || base.contains("datetime") {
+        return Some(TypeFamily::Timestamp);
+    }
+
+    if base.starts_with("date") {
+        return Some(TypeFamily::Date);
+    }
+
+    if base.starts_with("time") {
+        return Some(TypeFamily::Time);
+    }
+
+    if base.starts_with("bool") {
+        return Some(TypeFamily::Boolean);
+    }
+
+    const NUMERIC_PREFIXES: [&str; 17] = [
+        "int",
+        "uint",
+        "tinyint",
+        "smallint",
+        "mediumint",
+        "bigint",
+        "serial",
+        "smallserial",
+        "bigserial",
+        "numeric",
+        "decimal",
+        "number",
+        "float",
+        "double",
+        "real",
+        "money",
+        "smallmoney",
+    ];
+    if NUMERIC_PREFIXES
+        .iter()
+        .any(|prefix| base.starts_with(prefix))
+    {
+        return Some(TypeFamily::Numeric);
+    }
+
+    if base.contains("char") || base.contains("text") || base == "string" || base == "clob" {
+        return Some(TypeFamily::Text);
+    }
+
+    None
+}
+
 /// Database-specific SQL syntax (quoting, escaping, literals).
 pub trait SqlDialect: Send + Sync {
     /// Quote an identifier (table/column name).
@@ -61,6 +154,24 @@ pub trait SqlDialect: Send + Sync {
         match &assignment.expression {
             Some(expression) => expression.clone(),
             None => self.value_to_literal_typed(&assignment.value, assignment.type_name.as_deref()),
+        }
+    }
+
+    /// SQL expressions that make a sensible value for a column of the declared
+    /// type (`now()` for a timestamp, `gen_random_uuid()` for a uuid), best
+    /// first. Empty when the type is unknown or has no useful candidate.
+    ///
+    /// The default is ANSI SQL by type family; dialects override it where the
+    /// native function differs.
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        match type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["CURRENT_TIMESTAMP"],
+            Some(TypeFamily::Date) => vec!["CURRENT_DATE"],
+            Some(TypeFamily::Time) => vec!["CURRENT_TIME"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) | None => Vec::new(),
         }
     }
 
@@ -399,6 +510,55 @@ impl SqlDialect for DefaultSqlDialect {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_dialect_offers_ansi_expressions_by_type_family() {
+        let dialect = DefaultSqlDialect;
+
+        assert_eq!(
+            dialect.type_value_expressions("TIMESTAMP(3) WITH TIME ZONE"),
+            vec!["CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("timestamptz"),
+            vec!["CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(dialect.type_value_expressions("date"), vec!["CURRENT_DATE"]);
+        assert_eq!(
+            dialect.type_value_expressions("time without time zone"),
+            vec!["CURRENT_TIME"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("bool"),
+            vec!["TRUE", "FALSE"]
+        );
+        assert_eq!(dialect.type_value_expressions("int4"), vec!["0"]);
+        assert_eq!(dialect.type_value_expressions("numeric(12,2)"), vec!["0"]);
+        assert_eq!(dialect.type_value_expressions("varchar(255)"), vec!["''"]);
+        assert_eq!(
+            dialect.type_value_expressions("character varying"),
+            vec!["''"]
+        );
+    }
+
+    #[test]
+    fn type_family_rejects_arrays_intervals_and_unknown_names() {
+        use super::{TypeFamily, type_family};
+
+        assert_eq!(type_family("uuid"), Some(TypeFamily::Uuid));
+        assert_eq!(type_family("  DateTime2(7) "), Some(TypeFamily::Timestamp));
+        assert_eq!(type_family("Nullable(Date)"), Some(TypeFamily::Date));
+        assert_eq!(type_family("text[]"), None);
+        assert_eq!(type_family("_int4"), None);
+        assert_eq!(type_family("interval day to second"), None);
+        assert_eq!(type_family("geometry"), None);
+        assert_eq!(type_family(""), None);
+        assert!(
+            DefaultSqlDialect
+                .type_value_expressions("geometry")
+                .is_empty()
+        );
+    }
+
     use super::*;
 
     #[test]

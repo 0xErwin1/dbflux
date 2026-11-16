@@ -371,6 +371,21 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
 pub struct MysqlDialect;
 
 impl SqlDialect for MysqlDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["NOW()", "CURRENT_TIMESTAMP"],
+            Some(TypeFamily::Date) => vec!["CURDATE()", "CURRENT_DATE"],
+            Some(TypeFamily::Time) => vec!["CURTIME()"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) => vec!["UUID()"],
+            None => Vec::new(),
+        }
+    }
+
     /// `TEXT` holds at most 65,535 bytes, which a long CSV field can exceed.
     fn text_column_type(&self) -> &'static str {
         "LONGTEXT"
@@ -4880,6 +4895,24 @@ fn resolve_write_privilege(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mysql_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::MYSQL_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("datetime"),
+            vec!["NOW()", "CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("DATE"),
+            vec!["CURDATE()", "CURRENT_DATE"]
+        );
+        assert_eq!(dialect.type_value_expressions("uuid"), vec!["UUID()"]);
+        assert_eq!(dialect.type_value_expressions("varchar(20)"), vec!["''"]);
+        assert_eq!(dialect.type_value_expressions("blob"), Vec::<&str>::new());
+    }
+
     use super::rowid_pseudo_columns;
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,

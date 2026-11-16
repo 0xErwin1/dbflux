@@ -231,6 +231,21 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
 pub struct PostgresDialect;
 
 impl SqlDialect for PostgresDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["now()", "CURRENT_TIMESTAMP"],
+            Some(TypeFamily::Date) => vec!["CURRENT_DATE"],
+            Some(TypeFamily::Time) => vec!["CURRENT_TIME"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) => vec!["gen_random_uuid()"],
+            None => Vec::new(),
+        }
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         pg_quote_ident(name)
     }
@@ -6629,6 +6644,42 @@ fn get_schema_routines(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn postgres_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::POSTGRES_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("timestamptz"),
+            vec!["now()", "CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("timestamp(3) with time zone"),
+            vec!["now()", "CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("uuid"),
+            vec!["gen_random_uuid()"]
+        );
+        assert_eq!(dialect.type_value_expressions("date"), vec!["CURRENT_DATE"]);
+        assert_eq!(dialect.type_value_expressions("int4"), vec!["0"]);
+        assert_eq!(
+            dialect.type_value_expressions("bool"),
+            vec!["TRUE", "FALSE"]
+        );
+        assert_eq!(dialect.type_value_expressions("varchar(255)"), vec!["''"]);
+        assert_eq!(dialect.type_value_expressions("numeric(12,2)"), vec!["0"]);
+        assert_eq!(dialect.type_value_expressions("_text"), Vec::<&str>::new());
+        assert_eq!(
+            dialect.type_value_expressions("interval"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            dialect.type_value_expressions("geometry"),
+            Vec::<&str>::new()
+        );
+    }
+
     use super::{
         NUMERIC_SIGN_NAN, NUMERIC_SIGN_NEGATIVE, NUMERIC_SIGN_NEGATIVE_INFINITY,
         NUMERIC_SIGN_POSITIVE, NUMERIC_SIGN_POSITIVE_INFINITY, POSTGRES_DIALECT, PgAnyValue,

@@ -3,6 +3,21 @@ use dbflux_core::{PlaceholderStyle, SqlDialect, Value};
 pub struct ClickHouseDialect;
 
 impl SqlDialect for ClickHouseDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["now()"],
+            Some(TypeFamily::Date) => vec!["today()"],
+            Some(TypeFamily::Time) => vec!["now()"],
+            Some(TypeFamily::Boolean) => vec!["true", "false"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) => vec!["generateUUIDv4()"],
+            None => Vec::new(),
+        }
+    }
+
     fn text_column_type(&self) -> &'static str {
         "String"
     }
@@ -75,6 +90,27 @@ pub static CLICKHOUSE_DIALECT: ClickHouseDialect = ClickHouseDialect;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clickhouse_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::ClickHouseDialect;
+        assert_eq!(dialect.type_value_expressions("DateTime"), vec!["now()"]);
+        assert_eq!(
+            dialect.type_value_expressions("Nullable(Date)"),
+            vec!["today()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("UUID"),
+            vec!["generateUUIDv4()"]
+        );
+        assert_eq!(dialect.type_value_expressions("UInt64"), vec!["0"]);
+        assert_eq!(
+            dialect.type_value_expressions("Array(String)"),
+            Vec::<&str>::new()
+        );
+    }
+
     use super::CLICKHOUSE_DIALECT;
     use dbflux_core::{PlaceholderStyle, SqlDialect, Value};
 
