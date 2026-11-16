@@ -16,10 +16,15 @@ use dbflux_byte_source::FileSource as ByteFile;
 use dbflux_core::Value;
 use dbflux_core::chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use dbflux_spreadsheet::{
-    CellFormula, CellValue, SheetGrid, SheetInfo, SheetKind, SpreadsheetFormat, Workbook, open,
+    CellFormula, CellValue, SheetGrid, SheetInfo, SheetKind, SpreadsheetError, SpreadsheetFormat,
+    Workbook, open,
 };
 
 use crate::pipeline::TransferError;
+
+mod issue;
+
+pub use issue::{DuplicateHeader, InspectError, SheetIssue};
 
 type FileWorkbook = Workbook<Arc<ByteFile>>;
 
@@ -58,24 +63,55 @@ pub(crate) struct SheetRows {
 }
 
 impl SheetRows {
-    /// Opens the sheet named `sheet`, or the first worksheet when `None`,
-    /// and reads its header row.
+    /// Opens the sheet named `sheet`, or the first visible worksheet when
+    /// `None`, and reads its header row.
     pub(crate) fn open(path: &Path, sheet: Option<&str>) -> Result<Self, TransferError> {
+        Self::read(path, sheet).map_err(|error| error.into_transfer_error(path))
+    }
+
+    /// Like [`Self::open`], and also checks what an import would stumble on
+    /// later: a blank or repeated column name, and the first error cell.
+    pub(crate) fn open_checked(path: &Path, sheet: Option<&str>) -> Result<Self, InspectError> {
+        let rows = Self::read(path, sheet)?;
+
+        // An error value in row 1 would be taken for a column name, so the
+        // header row is checked for them before its names are.
+        rows.check_cells(0..1)?;
+        rows.check_header()?;
+        rows.check_cells(1..rows.end_row)?;
+
+        Ok(rows)
+    }
+
+    fn read(path: &Path, sheet: Option<&str>) -> Result<Self, InspectError> {
         let label = path.display().to_string();
         let mut workbook = open_workbook(path)?;
         let (index, sheet_name) = choose_sheet(&workbook, sheet, &label)?;
 
-        let grid = workbook
-            .read_sheet(index)
-            .map_err(|e| TransferError::Source(format!("{label}: {e}")))?;
-
-        if grid.row_count() == 0 || grid.column_count() == 0 {
-            return Err(TransferError::Source(format!(
-                "{label}: sheet '{sheet_name}' is empty; the first row must hold the column names"
-            )));
-        }
+        let grid = match workbook.read_sheet(index) {
+            Ok(grid) => grid,
+            Err(SpreadsheetError::SheetTooLarge {
+                rows,
+                columns,
+                limit,
+            }) => {
+                return Err(SheetIssue::TooLarge {
+                    sheet: sheet_name,
+                    cells: rows.saturating_mul(columns),
+                    limit,
+                }
+                .into());
+            }
+            Err(error) => {
+                return Err(TransferError::Source(format!("{label}: {error}")).into());
+            }
+        };
 
         let end_row = data_end_row(&grid);
+        if grid.row_count() == 0 || grid.column_count() == 0 || end_row == 0 {
+            return Err(SheetIssue::Empty { sheet: sheet_name }.into());
+        }
+
         let day_zero_is_time = workbook.format() != SpreadsheetFormat::Ods;
 
         let headers = grid
@@ -94,6 +130,63 @@ impl SheetRows {
             end_row,
             day_zero_is_time,
         })
+    }
+
+    fn check_header(&self) -> Result<(), SheetIssue> {
+        let mut blank_columns = Vec::new();
+        let mut named: Vec<DuplicateHeader> = Vec::new();
+
+        for (column, name) in self.headers.iter().enumerate() {
+            if name.trim().is_empty() {
+                blank_columns.push(column);
+            } else if let Some(entry) = named.iter_mut().find(|entry| entry.name == *name) {
+                entry.columns.push(column);
+            } else {
+                named.push(DuplicateHeader {
+                    name: name.clone(),
+                    columns: vec![column],
+                });
+            }
+        }
+        named.retain(|entry| entry.columns.len() > 1);
+
+        if blank_columns.is_empty() && named.is_empty() {
+            return Ok(());
+        }
+
+        Err(SheetIssue::InvalidHeader {
+            sheet: self.sheet_name.clone(),
+            blank_columns,
+            duplicate_names: named,
+        })
+    }
+
+    /// The first cell in `rows` that holds an error value.
+    fn check_cells(&self, rows: std::ops::Range<usize>) -> Result<(), SheetIssue> {
+        for row_index in rows {
+            let Some(cells) = self.grid.row(row_index) else {
+                break;
+            };
+            let found = cells
+                .iter()
+                .enumerate()
+                .find_map(|(column, cell)| match &cell.value {
+                    CellValue::Error(code) => Some((column, code.code())),
+                    _ => None,
+                });
+
+            if let Some((column, code)) = found {
+                return Err(SheetIssue::ErrorCell {
+                    sheet: self.sheet_name.clone(),
+                    row: row_index + 1,
+                    column,
+                    column_name: self.headers.get(column).cloned().unwrap_or_default(),
+                    code,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// The header row's text, one name per column of the sheet.
@@ -166,7 +259,7 @@ fn choose_sheet(
 
     let chosen = match sheet {
         Some(name) => worksheets().find(|(_, info)| info.name == name),
-        None => worksheets().next(),
+        None => worksheets().find(|(_, info)| info.visible),
     };
 
     match (chosen, sheet) {
@@ -181,7 +274,7 @@ fn choose_sheet(
             )))
         }
         (None, None) => Err(TransferError::Source(format!(
-            "{label}: the workbook has no worksheet to import"
+            "{label}: the workbook has no visible worksheet to import"
         ))),
     }
 }

@@ -353,11 +353,11 @@ cuadrícula ya las tiene todas.
 
 El asistente de importación también lee un archivo suelto. Elige **Elegir
 archivo…** en su primer paso, junto al selector de carpeta, y selecciona un
-archivo `.csv`, `.json`, `.jsonl` o `.xml`; los archivos HTML, Markdown y SQL no se
+archivo `.csv`, `.json`, `.jsonl`, `.xml` o de hoja de cálculo (`.xlsx`, `.xlsm`, `.xls` o `.ods`); los archivos HTML, Markdown y SQL no se
 ofrecen. El asistente lee las columnas de la fila de encabezado del CSV, de
-las claves de los primeros 100 registros JSON, o del `name` de los elementos
+las claves de los primeros 100 registros JSON, del `name` de los elementos
 `<field>` de las primeras 100 filas XML (todas las claves vistas, en el
-orden en que aparecen). Una clave que aparece por primera vez después de esas
+orden en que aparecen), o de la fila 1 de una hoja de cálculo. Una clave que aparece por primera vez después de esas
 filas detiene la importación con un error que indica la clave y su fila. Un objeto o array anidado se importa como texto JSON.
 
 La tabla de destino es por defecto el nombre del archivo sin extensión; escribe
@@ -380,6 +380,30 @@ vacía y las referencias de carácter como `&#10;` se decodifican. Cualquier otr
 forma de XML se rechaza con un mensaje que indica la esperada. Cambiar el delimitador o la codificación vuelve a leer el
 archivo. Todo el archivo se lee una vez antes de escribir nada, así que una fila
 o registro mal formado detiene la importación sin tocar el destino.
+
+Una hoja de cálculo se importa una hoja cada vez. El paso Configurar añade un
+desplegable **Hoja** que lista las hojas visibles del libro y empieza en la
+primera; las hojas ocultas y las hojas de gráfico no aparecen, y al elegir otra
+hoja el archivo se lee de nuevo al instante y se rehace el mapeo de columnas. Un
+libro con una sola hoja visible la muestra con el desplegable desactivado e indica
+que no hay nada que elegir. La fila 1 de la hoja es el encabezado, así que cada
+columna necesita un nombre único y no vacío; una hoja de cálculo no tiene opciones de
+delimitador, codificación ni NULL. Los números, booleanos, fechas, fechas con hora
+y textos se leen como valores de esos tipos, una celda vacía es NULL y una
+fórmula se lee como el último resultado guardado en el archivo. Los libros con el
+sistema de fechas 1904 leen bien sus fechas, pero una hora del día en uno de
+ellos llega como una marca de tiempo del 1904-01-01 en lugar de una hora. La hoja
+entera se lee en memoria, así que se rechaza una hoja de más de 10.000.000 de
+celdas (filas × columnas, contadas desde la celda A1). Una hoja que no se puede
+importar mantiene el archivo elegido en Configurar y muestra un bloque de peligro
+con qué hacer a continuación: la hoja está vacía, la fila 1 tiene un nombre vacío
+o repetido (el bloque lista las columnas), una celda contiene un valor de error
+como `#DIV/0!` (el bloque indica la hoja, la fila y la columna; cuenta también una celda de la fila 1, así que un valor de error nunca se toma por un nombre de columna), o la hoja supera
+el límite (expórtala como CSV e importa ese CSV, o elige una hoja más pequeña).
+Elegir otra hoja es una salida en cada caso, y cuando el libro no tiene otra hoja
+visible el bloque indica en su lugar que corrijas la hoja en la aplicación de hojas
+de cálculo, guardes y vuelvas a elegir el archivo. El pie explica por qué **Continuar**
+está desactivado.
 
 El diálogo de importación usa el mismo indicador de pasos superior y el mismo
 pie que el asistente de exportación: **Cancelar** en los dos primeros pasos,

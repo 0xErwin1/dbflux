@@ -41,7 +41,10 @@ fn formats_that_cannot_be_imported_show_no_options() {
 
 #[test]
 fn the_picker_offers_only_importable_extensions() {
-    assert_eq!(picker_extensions(), ["csv", "json", "jsonl", "xml"]);
+    assert_eq!(
+        picker_extensions(),
+        ["csv", "json", "jsonl", "xml", "xlsx", "xlsm", "xls", "ods"]
+    );
 }
 
 #[test]

@@ -17,6 +17,7 @@ use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use uuid::Uuid;
 
 use super::ConfigureField;
+use crate::import_wizard::sheet_picker::tests::{several_sheets, write_workbook};
 use crate::import_wizard::{ImportWizard, TableImportConfig, WizardStep};
 use crate::keyboard_test_support::init_keyboard_runtime;
 use crate::migrate_wizard::source_target::shared_coordinator_tests::{
@@ -540,4 +541,77 @@ fn escape_on_an_open_dropdown_closes_only_the_dropdown(cx: &mut TestAppContext) 
         );
         assert!(wizard.focus_handle.is_focused(window));
     });
+}
+
+/// With several sheets the Sheet dropdown is the first stop of the cursor.
+/// Enter opens it, the dropdown's own keys choose, and the file is read
+/// again for the sheet, as choosing with the mouse does.
+#[gpui::test]
+fn the_cursor_starts_on_the_sheet_dropdown_and_choosing_reads_the_sheet(cx: &mut TestAppContext) {
+    let (directory, path) = several_sheets("keyboard_sheet");
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path);
+
+    window.update(|_, cx| {
+        let wizard = wizard.read(cx);
+        assert_eq!(wizard.step, WizardStep::Configure);
+        assert_eq!(wizard.cursor_field(), Some(ConfigureField::Sheet));
+    });
+    assert_eq!(source_names(&wizard, window), ["id", "total"]);
+
+    press(window, "enter");
+    window.update(|_, cx| {
+        let dropdown = wizard
+            .read(cx)
+            .file_inputs
+            .as_ref()
+            .expect("inputs")
+            .sheet_dropdown
+            .clone();
+        assert!(dropdown.read(cx).is_open(), "Enter opens the sheet list");
+    });
+
+    // The list is Ventas Q3, Clientes and Resumen; Ventas Q3 is chosen.
+    press(window, "j enter");
+    window.update(|_, cx| {
+        let wizard = wizard.read(cx);
+        assert_eq!(
+            wizard.file_import.as_ref().and_then(|s| s.sheet.as_deref()),
+            Some("Clientes")
+        );
+    });
+    assert_eq!(source_names(&wizard, window), ["name"]);
+
+    press(window, "j");
+    window.update(|_, cx| {
+        assert_eq!(
+            wizard.read(cx).cursor_field(),
+            Some(ConfigureField::Mode(0)),
+            "the cursor goes on to the mapping row"
+        );
+    });
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// A workbook with one visible sheet has nothing to choose, so the cursor
+/// skips the disabled dropdown.
+#[gpui::test]
+fn a_single_sheet_is_not_a_cursor_stop(cx: &mut TestAppContext) {
+    let (directory, path) = write_workbook("keyboard_single", "one.xlsx", |book| {
+        let only = book.add_worksheet();
+        only.set_name("Only")?;
+        only.write_string(0, 0, "id")?;
+        only.write_string(1, 0, "1")?;
+        Ok(())
+    });
+    let (wizard, window) = open_wizard(cx);
+    pick_file(&wizard, window, path);
+
+    window.update(|_, cx| {
+        assert_eq!(
+            wizard.read(cx).cursor_field(),
+            Some(ConfigureField::Mode(0))
+        );
+    });
+    std::fs::remove_dir_all(&directory).ok();
 }

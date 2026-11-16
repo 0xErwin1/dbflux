@@ -15,6 +15,7 @@ mod errors;
 mod file_flow;
 mod file_options;
 mod keyboard;
+mod sheet_picker;
 
 use dbflux_core::keymap_types::ContextId;
 use std::path::PathBuf;

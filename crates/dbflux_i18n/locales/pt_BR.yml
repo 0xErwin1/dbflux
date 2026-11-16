@@ -2476,19 +2476,20 @@ document:
       unmatched_source: "Coluna(s) de origem sem correspondência, serão ignoradas a menos que sejam remapeadas: %{names}"
       truncate_unavailable: "Esta conexão não consegue truncar tabelas, então Truncate não aparece. Escolha Recreate para substituir a tabela."
     pick_file:
-      description: "Ou importe um único arquivo CSV, JSON, JSON Lines ou XML em uma tabela."
+      description: "Ou importe um único arquivo em uma tabela: CSV, JSON, JSON Lines, XML ou uma planilha."
       choose_file: "Escolher arquivo…"
       reading_file: "Lendo arquivo…"
       dialog_title: "Escolher arquivo para importar"
-      filter_label: "CSV, JSON, JSON Lines e XML"
+      filter_label: "CSV, JSON, JSON Lines, XML e planilhas"
       error:
-        unsupported: "Somente arquivos .csv, .json, .jsonl e .xml podem ser importados."
+        unsupported: "Somente arquivos .csv, .json, .jsonl, .xml, .xlsx, .xlsm, .xls e .ods podem ser importados."
         invalid_file: "Não foi possível ler o arquivo: %{error}"
         unsupported_next: "Escolha um arquivo com uma dessas extensões."
         lookup_failed: "Não foi possível consultar a tabela de destino: %{error}"
         next_csv: "Escolha outra codificação ou delimitador acima: o arquivo é lido novamente assim que você escolher um."
         next_json: "Corrija o JSON no arquivo e escolha-o novamente, ou escolha outro arquivo."
         next_xml: "Corrija o XML no arquivo e escolha-o novamente, ou escolha outro arquivo."
+        next_spreadsheet: "Verifique se o arquivo é uma pasta de trabalho válida e sem senha e escolha-o novamente, ou escolha outro arquivo."
         next_lookup: "Verifique o nome da tabela e seu acesso à conexão, e pressione Usar tabela novamente."
       reading_hint: "Lendo o arquivo. Os dois botões ficam desativados até terminar."
     file:
@@ -2499,6 +2500,32 @@ document:
       null_text_hint: "Texto do arquivo que representa NULL. Com texto vazio, um campo vazio é NULL."
       json_no_options: "JSON e JSON Lines não têm opções de importação: o próprio arquivo define as colunas e os NULL."
       xml_no_options: "XML não tem opções de importação: o próprio arquivo define as colunas e os NULL."
+      spreadsheet_header: "A linha 1 é o cabeçalho. Uma planilha não tem opções de delimitador nem de codificação: a planilha define as colunas e uma célula vazia é NULL."
+      sheet_label: "Planilha"
+      sheet_hint: "Cada importação lê uma planilha. Somente as planilhas visíveis são listadas. Ao escolher outra planilha, o arquivo é lido novamente na hora."
+      sheet_single: "Esta pasta de trabalho tem uma só planilha, então não há nada a escolher."
+    sheet:
+      empty:
+        message: "A planilha “%{sheet}” está vazia: não tem linhas."
+        next: "Escolha outra planilha acima, ou adicione uma linha de cabeçalho e dados a esta planilha no aplicativo de planilhas, salve e escolha o arquivo novamente."
+        next_single: "Adicione uma linha de cabeçalho e dados a esta planilha no aplicativo de planilhas, salve e escolha o arquivo novamente."
+      header:
+        message: "A linha 1 da planilha “%{sheet}” não é um cabeçalho válido: %{problems}."
+        next: "Dê a cada coluna da linha 1 um nome único no aplicativo de planilhas, salve e escolha o arquivo novamente, ou escolha outra planilha acima."
+        next_single: "Dê a cada coluna da linha 1 um nome único no aplicativo de planilhas, salve e escolha o arquivo novamente."
+        blank_one: "a coluna %{columns} está em branco"
+        blank_many: "as colunas %{columns} estão em branco"
+        duplicate_two: "as colunas %{columns} têm ambas o nome “%{name}”"
+        duplicate_many: "as colunas %{columns} têm todas o nome “%{name}”"
+      cell:
+        message: "A planilha “%{sheet}”, linha %{row}, coluna %{column} (“%{name}”) contém o erro %{code}."
+        next: "Corrija ou apague essa célula no aplicativo de planilhas, salve e escolha o arquivo novamente. As fórmulas são lidas como o último resultado salvo no arquivo."
+      large:
+        message: "A planilha “%{sheet}” tem %{cells} células, acima do limite de %{limit}. A planilha inteira é lida na memória, então não pode ser importada."
+        next: "Exporte-a como CSV no aplicativo de planilhas (Salvar como → CSV) e importe o CSV, ou escolha uma planilha menor acima."
+        next_single: "Exporte-a como CSV no aplicativo de planilhas (Salvar como → CSV) e importe o CSV."
+      list_and: "%{head} e %{last}"
+      list_more: "%{list} e mais %{count}"
     mapping_mode:
       create: Criar
       existing: Existente (somente inserir)
@@ -2541,6 +2568,10 @@ document:
     footer:
       reason:
         file_read: "Continuar fica desativado até que o arquivo seja lido."
+        sheet_empty: "Continuar está desativado: a planilha “%{sheet}” não tem linhas."
+        sheet_header: "Continuar está desativado: a linha 1 precisa de um nome único em cada coluna."
+        sheet_cell: "Continuar está desativado: uma célula contém um valor de erro."
+        sheet_large: "Continuar está desativado: a planilha passa de %{limit} células."
       cancel: "Cancelar"
   instance_inspector:
     task_label: "Inspetor: %{metric_id}"

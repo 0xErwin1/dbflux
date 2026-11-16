@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use dbflux_components::controls::{Button, Input, InputEvent, InputState};
+use dbflux_components::controls::{Button, Dropdown, Input, InputEvent, InputState};
 use dbflux_components::modals::modal_hint;
 use dbflux_components::primitives::{Kbd, SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Spacing, ui};
@@ -21,7 +21,7 @@ use dbflux_core::{
 };
 use dbflux_export::{CsvDelimiter, FormatOptions, TextEncoding};
 use dbflux_transfer::import::{ImportOptions, ImportOutcome, ImportTablePlan, run_import};
-use dbflux_transfer::import_file::{ImportFile, run_file_import};
+use dbflux_transfer::import_file::{ImportFile, InspectError, run_file_import};
 use dbflux_transfer::{FileFormat, TransferError};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
@@ -36,6 +36,7 @@ use super::file_options::{
     visible_file_options,
 };
 use super::keyboard::{ConfigureField, with_cursor_ring};
+use super::sheet_picker::{SheetChoice, choose_sheet, uses_sheet_picker};
 use super::{ImportWizard, WizardStep};
 use crate::export_wizard::notes::{form_row, info_line};
 
@@ -49,6 +50,8 @@ pub(super) enum ImportJob {
         path: PathBuf,
         format: FileFormat,
         options: FormatOptions,
+        /// The spreadsheet sheet to read; `None` for every other format.
+        sheet: Option<String>,
     },
 }
 
@@ -75,11 +78,17 @@ impl ImportJob {
                 path,
                 format,
                 options: format_options,
+                sheet,
             } => {
                 let plan = plans.first().ok_or_else(|| {
                     TransferError::Source("there is no table to import the file into".to_string())
                 })?;
-                let file = ImportFile::inspect(path, *format, format_options.clone())?;
+                let file = ImportFile::inspect_sheet(
+                    path,
+                    *format,
+                    format_options.clone(),
+                    sheet.as_deref(),
+                )?;
 
                 run_file_import(connection, &file, plan, options, cancel, on_progress)
             }
@@ -92,11 +101,16 @@ pub(super) struct FileImportState {
     path: PathBuf,
     pub(super) format: FileFormat,
     pub(super) options: FormatOptions,
+    /// The visible worksheets of a workbook, in workbook order; empty for a
+    /// file with no sheets and until the first read of a workbook finishes.
+    pub(super) sheets: Vec<String>,
+    /// The worksheet the import reads; set once the workbook was listed.
+    pub(super) sheet: Option<String>,
     /// Set when the file could not be read with these options, so the user can
     /// change them; the run stays unavailable until it is read again.
-    error: Option<ErrorBlock>,
+    pub(super) error: Option<ErrorBlock>,
     /// Identifies the latest read, so a slower earlier one cannot overwrite it.
-    generation: u64,
+    pub(super) generation: u64,
     /// Continue to the run as soon as the read in flight finishes: the user
     /// pressed Continue with a typed table name that was not applied yet.
     continue_after_read: bool,
@@ -107,6 +121,7 @@ pub(super) struct FileImportState {
 pub(super) struct FileInputs {
     pub(super) target_table: Entity<InputState>,
     pub(super) null_text: Entity<InputState>,
+    pub(super) sheet_dropdown: Entity<Dropdown>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -148,10 +163,17 @@ impl FileInputs {
             },
         );
 
+        let (sheet_dropdown, sheet_subscription) = Self::new_sheet_dropdown(cx);
+
         Self {
             target_table,
             null_text,
-            _subscriptions: vec![target_subscription, null_text_subscription],
+            sheet_dropdown,
+            _subscriptions: vec![
+                target_subscription,
+                null_text_subscription,
+                sheet_subscription,
+            ],
         }
     }
 }
@@ -159,6 +181,23 @@ impl FileInputs {
 /// A file read for import with the table configuration it starts from.
 struct LoadedFile {
     config: TableImportConfig,
+}
+
+/// What to read: the file, how, the target table name typed so far and, for
+/// a workbook, the sheet.
+struct FileRequest {
+    path: PathBuf,
+    format: FileFormat,
+    options: FormatOptions,
+    target_table: Option<String>,
+    sheet: Option<String>,
+}
+
+/// The outcome of one read: the sheets a workbook holds, found even when the
+/// chosen sheet cannot be imported, and the configuration or why not.
+struct FileRead {
+    choice: Option<SheetChoice>,
+    loaded: Result<LoadedFile, FileLoadError>,
 }
 
 /// The target table could not be looked up. Carries the lookup's own error
@@ -278,17 +317,51 @@ fn complete_listing(
 }
 
 /// Reads the file's columns and looks up the target table, off the UI thread.
+fn read_file_config(
+    connection: &Arc<dyn Connection>,
+    target_database: &str,
+    request: FileRequest,
+) -> FileRead {
+    let choice = if uses_sheet_picker(request.format) {
+        match choose_sheet(&request.path, request.sheet.as_deref()) {
+            Ok(choice) => Some(choice),
+            Err(error) => {
+                return FileRead {
+                    choice: None,
+                    loaded: Err(FileLoadError::Read(error)),
+                };
+            }
+        }
+    } else {
+        None
+    };
+    let sheet = choice.as_ref().map(|choice| choice.selected.as_str());
+    let loaded = load_file_config(connection, target_database, &request, sheet);
+
+    FileRead { choice, loaded }
+}
+
 fn load_file_config(
     connection: &Arc<dyn Connection>,
     target_database: &str,
-    path: &Path,
-    format: FileFormat,
-    options: FormatOptions,
-    target_table: Option<String>,
+    request: &FileRequest,
+    sheet: Option<&str>,
 ) -> Result<LoadedFile, FileLoadError> {
-    let file = ImportFile::inspect(path, format, options).map_err(FileLoadError::Read)?;
+    let file = ImportFile::inspect_checked(
+        &request.path,
+        request.format,
+        request.options.clone(),
+        sheet,
+    )
+    .map_err(|error| match error {
+        InspectError::Sheet(issue) => FileLoadError::Sheet(issue),
+        InspectError::Failed(error) => FileLoadError::Read(error),
+    })?;
     let source_table = file.table_name();
-    let target_table = target_table.unwrap_or_else(|| source_table.clone());
+    let target_table = request
+        .target_table
+        .clone()
+        .unwrap_or_else(|| source_table.clone());
 
     let existing_columns = existing_table_columns(
         connection.table_details(target_database, None, &target_table),
@@ -341,6 +414,7 @@ fn enter_hint(cx: &App) -> Div {
 fn no_options_key(format: FileFormat) -> &'static str {
     match format {
         FileFormat::Xml => "document.import_wizard.file.xml_no_options",
+        FileFormat::Spreadsheet => "document.import_wizard.file.spreadsheet_header",
         _ => "document.import_wizard.file.json_no_options",
     }
 }
@@ -353,6 +427,7 @@ impl ImportWizard {
                 path: state.path.clone(),
                 format: state.format,
                 options: state.options.clone(),
+                sheet: state.sheet.clone(),
             }),
             None => self.manifest_dir.clone().map(ImportJob::Folder),
         }
@@ -363,6 +438,26 @@ impl ImportWizard {
         self.file_import
             .as_ref()
             .is_some_and(|state| state.error.is_some() || self.loading)
+    }
+
+    /// The footer's line for a disabled Continue on a file: the specific
+    /// reason the failed read gave, else that the file has not been read.
+    pub(super) fn file_blocked_reason(&self) -> Option<String> {
+        if !self.file_import_blocked() {
+            return None;
+        }
+
+        let specific = self
+            .file_import
+            .as_ref()
+            .and_then(|state| state.error.as_ref())
+            .and_then(|error| error.footer_reason.clone());
+
+        Some(
+            specific.unwrap_or_else(|| {
+                dbflux_i18n::t!("document.import_wizard.footer.reason.file_read")
+            }),
+        )
     }
 
     pub(super) fn choose_file(&mut self, cx: &mut Context<Self>) {
@@ -425,25 +520,51 @@ impl ImportWizard {
             .unwrap_or_default();
         self.pending_file_inputs = Some(stem);
         self.field_cursor = 0;
-        self.read_file(connection, path, format, FormatOptions::default(), None, cx);
+        self.read_file(
+            connection,
+            FileRequest {
+                path,
+                format,
+                options: FormatOptions::default(),
+                target_table: None,
+                sheet: None,
+            },
+            cx,
+        );
     }
 
-    /// Reads the file again with the current options and target table name.
-    fn reload_file(&mut self, cx: &mut Context<Self>) {
+    /// Reads the file again with the current options, sheet and target table
+    /// name.
+    pub(super) fn reload_file(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.resolve_connection(cx) else {
             return;
         };
         let Some(state) = self.file_import.as_ref() else {
             return;
         };
-        let (path, format, options) = (state.path.clone(), state.format, state.options.clone());
+        let (path, format, options, sheet) = (
+            state.path.clone(),
+            state.format,
+            state.options.clone(),
+            state.sheet.clone(),
+        );
         let typed = self
             .file_inputs
             .as_ref()
             .map(|inputs| inputs.target_table.read(cx).value().trim().to_string())
             .filter(|name| !name.is_empty());
 
-        self.read_file(connection, path, format, options, typed, cx);
+        self.read_file(
+            connection,
+            FileRequest {
+                path,
+                format,
+                options,
+                target_table: typed,
+                sheet,
+            },
+            cx,
+        );
     }
 
     /// When the target table field holds a name the table row does not use
@@ -480,22 +601,28 @@ impl ImportWizard {
     fn read_file(
         &mut self,
         connection: Arc<dyn Connection>,
-        path: PathBuf,
-        format: FileFormat,
-        options: FormatOptions,
-        target_table: Option<String>,
+        request: FileRequest,
         cx: &mut Context<Self>,
     ) {
         let target_database = self.target_database(&connection);
         let supports_truncate = connection.supports(DriverCapabilities::TRUNCATE_TABLE);
         let generation = self.next_file_read_request();
 
+        let sheets = self
+            .file_import
+            .as_ref()
+            .filter(|state| state.path == request.path)
+            .map(|state| state.sheets.clone())
+            .unwrap_or_default();
+
         self.loading = true;
         self.loading_folder = false;
         self.file_import = Some(FileImportState {
-            path: path.clone(),
-            format,
-            options: options.clone(),
+            path: request.path.clone(),
+            format: request.format,
+            options: request.options.clone(),
+            sheets,
+            sheet: request.sheet.clone(),
             error: None,
             generation,
             continue_after_read: false,
@@ -503,22 +630,14 @@ impl ImportWizard {
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            let loaded = cx
+            let read = cx
                 .background_executor()
-                .spawn(async move {
-                    load_file_config(
-                        &connection,
-                        &target_database,
-                        &path,
-                        format,
-                        options,
-                        target_table,
-                    )
-                })
+                .spawn(async move { read_file_config(&connection, &target_database, request) })
                 .await;
 
             this.update(cx, |this, cx| {
-                this.finish_file_read(generation, supports_truncate, loaded, cx);
+                this.apply_sheet_choice(generation, read.choice, cx);
+                this.finish_file_read(generation, supports_truncate, read.loaded, cx);
             })
             .ok();
         })
@@ -567,7 +686,14 @@ impl ImportWizard {
                     .file_import
                     .as_ref()
                     .map_or(FileFormat::Csv, |state| state.format);
-                let block = ErrorBlock::file_load_failure(&failure, format);
+                let other_sheets = self
+                    .file_import
+                    .as_ref()
+                    .is_some_and(|state| state.sheets.len() > 1);
+                let block = match &failure {
+                    FileLoadError::Sheet(issue) => ErrorBlock::sheet_issue(issue, other_sheets),
+                    _ => ErrorBlock::file_load_failure(&failure, format),
+                };
                 report_error(
                     UserFacingError::new(ErrorKind::User, block.message.clone()),
                     cx,
@@ -660,47 +786,25 @@ impl ImportWizard {
                 format = state.format.label()
             ))
             .into_any_element(),
-            form_row(
-                dbflux_i18n::t!("document.import_wizard.file.target_table_label"),
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(
-                        div().w(FILE_INPUT_WIDTH).child(
-                            Input::new(&inputs.target_table)
-                                .id("import-wizard-file-target-table")
-                                .suffix(enter_hint(cx))
-                                .w_full()
-                                .aria_label(dbflux_i18n::t!(
-                                    "document.import_wizard.file.target_table_label"
-                                )),
-                        ),
-                    )
-                    .child(
-                        Button::new(
-                            "import-wizard-file-apply-target",
-                            dbflux_i18n::t!("document.import_wizard.file.use_table"),
-                        )
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| this.apply_target_table(cx))),
-                    ),
-                None,
-                cx,
-            )
-            .into_any_element(),
         ];
 
-        if !visible.delimiter_and_encoding && !visible.null_text {
-            rows.insert(
-                1,
-                info_line(
-                    dbflux_i18n::t!(no_options_key(state.format)),
-                    "import-wizard-json-no-options",
-                    cx,
-                ),
-            );
+        // A sheet that cannot be read has its own block, so the header line
+        // that tells what a good sheet looks like is left out.
+        let spreadsheet_ok = uses_sheet_picker(state.format) && state.error.is_none();
+        if (!visible.delimiter_and_encoding && !visible.null_text)
+            && (spreadsheet_ok || !uses_sheet_picker(state.format))
+        {
+            rows.push(info_line(
+                dbflux_i18n::t!(no_options_key(state.format)),
+                "import-wizard-json-no-options",
+                cx,
+            ));
         }
+        if uses_sheet_picker(state.format) && !state.sheets.is_empty() {
+            rows.push(self.render_sheet_row(state, inputs, active, cx));
+        }
+        rows.push(self.render_target_table_row(inputs, cx));
+
         if visible.delimiter_and_encoding {
             rows.push(self.render_delimiter_row(state.options.delimiter, active, cx));
             rows.push(self.render_encoding_row(state.options.encoding, active, cx));
@@ -721,6 +825,38 @@ impl ImportWizard {
                 .children(rows)
                 .into_any_element(),
         )
+    }
+
+    fn render_target_table_row(&self, inputs: &FileInputs, cx: &mut Context<Self>) -> AnyElement {
+        form_row(
+            dbflux_i18n::t!("document.import_wizard.file.target_table_label"),
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .child(
+                    div().w(FILE_INPUT_WIDTH).child(
+                        Input::new(&inputs.target_table)
+                            .id("import-wizard-file-target-table")
+                            .suffix(enter_hint(cx))
+                            .w_full()
+                            .aria_label(dbflux_i18n::t!(
+                                "document.import_wizard.file.target_table_label"
+                            )),
+                    ),
+                )
+                .child(
+                    Button::new(
+                        "import-wizard-file-apply-target",
+                        dbflux_i18n::t!("document.import_wizard.file.use_table"),
+                    )
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| this.apply_target_table(cx))),
+                ),
+            None,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_delimiter_row(
@@ -827,4 +963,4 @@ impl ImportWizard {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

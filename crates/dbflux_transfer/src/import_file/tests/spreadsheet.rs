@@ -305,13 +305,21 @@ fn error_book(scratch: &Scratch) -> PathBuf {
 }
 
 #[test]
-fn an_error_cell_names_the_sheet_row_and_column_and_rejects_the_import() {
+fn an_error_cell_that_appears_after_the_inspection_still_rejects_the_import() {
     let scratch = Scratch::new();
     let connection = sqlite(&scratch);
     run(&connection, "CREATE TABLE errors (id INTEGER, ratio REAL)");
     run(&connection, "INSERT INTO errors (id) VALUES (100)");
-    let path = error_book(&scratch);
-    let file = inspect_xlsx(&path, None).expect("the header is fine");
+    let path = workbook(&scratch, "errors.xlsx", |book| {
+        let data = sheet(book, "Data")?;
+        header(data, &["id", "ratio"])?;
+        data.write_number(1, 0, 1.0)?;
+        data.write_number(1, 1, 2.0)?;
+        Ok(())
+    });
+    let file = inspect_xlsx(&path, None).expect("the sheet is fine when inspected");
+    let replaced = error_book(&scratch);
+    assert_eq!(replaced, path, "the second workbook replaces the first");
 
     let message = rejection(
         &connection,
@@ -328,6 +336,131 @@ fn an_error_cell_names_the_sheet_row_and_column_and_rejects_the_import() {
         vec![vec![Value::Int(100)]],
         "nothing was written"
     );
+}
+
+fn checked(path: &Path, sheet: Option<&str>) -> Result<ImportFile, InspectError> {
+    ImportFile::inspect_checked(
+        path,
+        FileFormat::Spreadsheet,
+        FormatOptions::default(),
+        sheet,
+    )
+}
+
+fn issue(result: Result<ImportFile, InspectError>) -> SheetIssue {
+    match result {
+        Err(InspectError::Sheet(issue)) => issue,
+        other => panic!("expected a sheet issue, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_empty_sheet_is_reported_as_an_empty_issue() {
+    let scratch = Scratch::new();
+    let path = workbook(&scratch, "empty.xlsx", |book| {
+        sheet(book, "Hoja4")?;
+        Ok(())
+    });
+
+    assert_eq!(
+        issue(checked(&path, None)),
+        SheetIssue::Empty {
+            sheet: "Hoja4".to_string()
+        }
+    );
+}
+
+#[test]
+fn a_blank_and_a_repeated_header_are_reported_with_every_column() {
+    let scratch = Scratch::new();
+    let path = workbook(&scratch, "header.xlsx", |book| {
+        let data = sheet(book, "Ventas Q3")?;
+        data.write_string(0, 0, "id")?;
+        data.write_string(0, 1, "total")?;
+        data.write_string(0, 3, "total")?;
+        data.write_string(0, 4, "total")?;
+        data.write_string(1, 0, "1")?;
+        Ok(())
+    });
+
+    assert_eq!(
+        issue(checked(&path, None)),
+        SheetIssue::InvalidHeader {
+            sheet: "Ventas Q3".to_string(),
+            blank_columns: vec![2],
+            duplicate_names: vec![DuplicateHeader {
+                name: "total".to_string(),
+                columns: vec![1, 3, 4],
+            }],
+        }
+    );
+}
+
+#[test]
+fn an_error_cell_is_reported_when_the_sheet_is_inspected() {
+    let scratch = Scratch::new();
+    let path = error_book(&scratch);
+
+    assert_eq!(
+        issue(checked(&path, None)),
+        SheetIssue::ErrorCell {
+            sheet: "Data".to_string(),
+            row: 3,
+            column: 1,
+            column_name: "ratio".to_string(),
+            code: "#DIV/0!",
+        }
+    );
+}
+
+#[test]
+fn a_sheet_over_the_cell_limit_is_reported_with_its_size() {
+    let scratch = Scratch::new();
+    let path = workbook(&scratch, "big.xlsx", |book| {
+        let data = sheet(book, "Registro")?;
+        header(data, &["a"])?;
+        data.write_string(999_999, 15, "far")?;
+        Ok(())
+    });
+
+    assert_eq!(
+        issue(checked(&path, None)),
+        SheetIssue::TooLarge {
+            sheet: "Registro".to_string(),
+            cells: 16_000_000,
+            limit: 10_000_000,
+        }
+    );
+}
+
+#[test]
+fn a_sheet_issue_reads_as_a_transfer_error_with_the_same_wording_as_before() {
+    let scratch = Scratch::new();
+    let path = workbook(&scratch, "empty.xlsx", |book| {
+        sheet(book, "Empty")?;
+        Ok(())
+    });
+
+    let message = source_error(inspect_xlsx(&path, None));
+
+    assert!(message.contains("empty.xlsx"), "{message}");
+    assert!(message.contains("sheet 'Empty' is empty"), "{message}");
+}
+
+#[test]
+fn the_default_sheet_is_the_first_visible_worksheet() {
+    let scratch = Scratch::new();
+    let path = workbook(&scratch, "hidden_first.xlsx", |book| {
+        header(sheet(book, "Secret")?, &["hidden"])?;
+        sheet(book, "Public")?.set_active(true);
+        book.worksheet_from_name("Secret")?.set_hidden(true);
+        header(book.worksheet_from_name("Public")?, &["shown"])?;
+        Ok(())
+    });
+
+    let file = inspect_xlsx(&path, None).expect("default sheet");
+
+    assert_eq!(names(&file), ["shown"]);
 }
 
 #[test]
@@ -467,5 +600,28 @@ fn rows_past_the_data_that_only_pad_the_grid_are_not_imported() {
             vec![text("after a gap"), Value::Null],
         ],
         "interior empty rows stay, trailing padding does not"
+    );
+}
+
+#[test]
+fn an_error_value_in_the_header_row_is_reported_as_an_error_cell_on_row_one() {
+    let scratch = Scratch::new();
+    let path = workbook(&scratch, "header_error.xlsx", |book| {
+        let data = sheet(book, "Data")?;
+        data.write_formula(0, 0, Formula::new("=1/0").set_result("#DIV/0!"))?;
+        data.write_string(0, 1, "name")?;
+        data.write_string(1, 0, "1")?;
+        Ok(())
+    });
+
+    assert_eq!(
+        issue(checked(&path, None)),
+        SheetIssue::ErrorCell {
+            sheet: "Data".to_string(),
+            row: 1,
+            column: 0,
+            column_name: "#DIV/0!".to_string(),
+            code: "#DIV/0!",
+        }
     );
 }
