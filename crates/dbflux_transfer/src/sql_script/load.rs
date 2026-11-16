@@ -3,6 +3,7 @@ use std::path::Path;
 
 use dbflux_core::QueryLanguage;
 
+use super::directives::find_directive;
 use super::{ScriptError, ScriptStatement, SqlScript};
 
 /// Scripts larger than this are refused before they are read.
@@ -55,6 +56,14 @@ impl SqlScript {
 
         let bytes = text.len() as u64;
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+
+        if let Some(directive) = find_directive(text) {
+            return Err(ScriptError::ClientDirective {
+                directive: directive.name.to_string(),
+                line: directive.line,
+            });
+        }
+
         let ranges = language.statement_ranges(text).unwrap_or_default();
 
         let mut statements = Vec::with_capacity(ranges.len());

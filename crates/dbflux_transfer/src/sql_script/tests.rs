@@ -583,3 +583,172 @@ fn a_read_only_profile_refuses_a_script_that_changes_data() {
         .expect("a reading script runs");
     assert_eq!(report.ran, 1);
 }
+
+// ------------------------------------------------- client directives
+
+fn refused(text: &str) -> (String, usize) {
+    match SqlScript::from_text(text, &QueryLanguage::Sql) {
+        Err(ScriptError::ClientDirective { directive, line }) => (directive, line),
+        other => panic!("expected a client directive error for {text:?}, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_delimiter_directive_is_refused_naming_it_and_its_line() {
+    let text =
+        "SELECT 1;\n  delimiter //\nCREATE PROCEDURE p() BEGIN SELECT 1; END//\nDELIMITER ;\n";
+
+    assert_eq!(refused(text), ("DELIMITER".to_string(), 2));
+}
+
+#[test]
+fn a_go_batch_separator_is_refused_with_or_without_a_count() {
+    assert_eq!(refused("SELECT 1\nGO\nSELECT 2\n"), ("GO".to_string(), 2));
+    assert_eq!(refused("SELECT 1;\n\n go 5 \n"), ("GO".to_string(), 3));
+    assert_eq!(refused("SELECT 1\r\ngo\r\n"), ("GO".to_string(), 2));
+}
+
+#[test]
+fn directive_words_inside_text_are_not_directives() {
+    let text = "SELECT 'a\nGO\nb';\n\
+                -- GO\n\
+                /* DELIMITER //\nGO\n*/\n\
+                SELECT $$\nGO\n$$;\n\
+                SELECT go, delimiter FROM t WHERE go = 1;\n\
+                SELECT\n  gopher\nFROM t;\n";
+
+    let script = SqlScript::from_text(text, &QueryLanguage::Sql).expect("no directive");
+
+    assert_eq!(script.statement_count(), 4);
+}
+
+#[test]
+fn the_directive_error_message_says_what_to_do() {
+    let error = ScriptError::ClientDirective {
+        directive: "DELIMITER".to_string(),
+        line: 7,
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "The script uses the DELIMITER directive on line 7. It is a command of a command-line client, not SQL, so it cannot be run here. Remove it and end each statement with \";\", or run the script with the database's own command-line client."
+    );
+}
+
+// ------------------------------------------ self-managed transactions
+
+fn control_of(text: &str) -> Option<(usize, usize, &'static str)> {
+    script(text)
+        .transaction_control()
+        .map(|control| (control.index, control.line, control.keyword))
+}
+
+#[test]
+fn transaction_control_statements_are_detected_case_insensitively_after_comments() {
+    let cases = [
+        ("BEGIN;", "BEGIN"),
+        ("begin transaction;", "BEGIN"),
+        ("BEGIN IMMEDIATE;", "BEGIN"),
+        ("-- go\n/* x */ Start   Transaction;", "START TRANSACTION"),
+        ("commit;", "COMMIT"),
+        ("END;", "END"),
+        ("end transaction;", "END"),
+        ("ROLLBACK TO sp;", "ROLLBACK"),
+        ("SAVEPOINT sp;", "SAVEPOINT"),
+        ("release savepoint sp;", "RELEASE"),
+        ("SET autocommit = 0;", "SET autocommit"),
+        ("set @@session.autocommit=1;", "SET autocommit"),
+        ("SET SESSION autocommit = 0;", "SET autocommit"),
+        ("SET IMPLICIT_TRANSACTIONS ON;", "SET IMPLICIT_TRANSACTIONS"),
+    ];
+
+    for (sql, keyword) in cases {
+        let text = format!("SELECT 1;\n{sql}\n");
+        let found = control_of(&text);
+        assert_eq!(found.map(|(_, _, k)| k), Some(keyword), "{sql}");
+    }
+}
+
+#[test]
+fn the_first_transaction_control_statement_reports_its_index_and_line() {
+    let found = control_of("SELECT 1;\n\nINSERT INTO t VALUES (1);\n-- c\nCOMMIT;\nROLLBACK;\n");
+
+    assert_eq!(found, Some((3, 5, "COMMIT")));
+}
+
+#[test]
+fn compound_bodies_and_ordinary_statements_are_not_transaction_control() {
+    for text in [
+        "CREATE PROCEDURE p() BEGIN SELECT 1; END;",
+        "CREATE TRIGGER x AFTER INSERT ON t BEGIN SELECT 1; END;",
+        "BEGIN\n  INSERT INTO t VALUES (1)\nEND;",
+        "SET search_path = public;",
+        "SET NAMES utf8;",
+        "SELECT 'commit';",
+        "INSERT INTO commit_log VALUES (1);",
+        "SELECT 1 AS begin_value;",
+    ] {
+        assert_eq!(control_of(text), None, "{text}");
+    }
+}
+
+#[test]
+fn the_summary_exposes_the_first_transaction_control_statement() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+
+    let with = script("SELECT 1;\nBEGIN;\nCOMMIT;").summarize(connection.as_ref(), 3);
+    let without = script("SELECT 1;").summarize(connection.as_ref(), 3);
+
+    let control = with.transaction_control.expect("detected");
+    assert_eq!(
+        (control.index, control.line, control.keyword),
+        (2, 2, "BEGIN")
+    );
+    assert_eq!(without.transaction_control, None);
+}
+
+#[test]
+fn a_script_that_manages_its_own_transactions_is_refused_in_one_transaction() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("INSERT INTO t VALUES (1);\nBEGIN;\nINSERT INTO t VALUES (2);\nCOMMIT;\n");
+
+    let error = run(
+        connection.as_ref(),
+        &script,
+        RunOptions {
+            transaction: true,
+            ..RunOptions::default()
+        },
+    )
+    .expect_err("refused");
+
+    assert_eq!(
+        error,
+        ScriptError::SelfManagedTransaction {
+            keyword: "BEGIN".to_string(),
+            line: 2
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "The script manages its own transactions (BEGIN on line 2), so it cannot run in one transaction. Turn off \"Run in one transaction\"; the script's own statements then decide what is saved."
+    );
+    assert_eq!(row_count(connection.as_ref(), "t"), 0, "nothing ran");
+}
+
+#[test]
+fn a_script_that_manages_its_own_transactions_runs_as_written_without_one() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    exec(connection.as_ref(), "CREATE TABLE t (id INTEGER)");
+    let script = script("BEGIN;\nINSERT INTO t VALUES (1);\nCOMMIT;\n");
+
+    let report = run(connection.as_ref(), &script, RunOptions::default()).expect("run");
+
+    assert_eq!(report.end, RunEnd::Finished);
+    assert_eq!(report.disposition, Disposition::Kept);
+    assert_eq!(row_count(connection.as_ref(), "t"), 1);
+}
