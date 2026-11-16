@@ -806,3 +806,113 @@ fn a_case_expression_inside_a_body_does_not_hide_the_split() {
 
     assert_eq!(split_body_line(text), Some(1));
 }
+
+// ------------------------------------------------- sequence changes
+
+#[test]
+fn a_sequence_function_call_counts_as_a_write_in_the_summary() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    let script = script(
+        "SELECT setval('s', 5);\nSELECT NEXTVAL ('s');\nSELECT 'setval(';\nSELECT 1; -- setval(\nALTER SEQUENCE s RESTART;\nSELECT setval_count FROM t;",
+    );
+
+    let summary = script.summarize(connection.as_ref(), 10);
+
+    let classes: Vec<_> = summary.preview.iter().map(|s| s.classification).collect();
+    assert_eq!(classes[0], ExecutionClassification::Write);
+    assert_eq!(classes[1], ExecutionClassification::Write);
+    assert_eq!(classes[2], ExecutionClassification::Read);
+    assert_eq!(classes[3], ExecutionClassification::Read);
+    assert_ne!(classes[4], ExecutionClassification::Read);
+    assert_eq!(classes[5], ExecutionClassification::Read);
+    assert_eq!(summary.changing_count, 3);
+}
+
+#[test]
+fn a_read_only_profile_refuses_a_sequence_change_but_not_a_lookalike() {
+    let scratch = Scratch::new();
+    let connection = sqlite(&scratch);
+    let options = RunOptions {
+        read_only_profile: true,
+        ..RunOptions::default()
+    };
+
+    let error = run(
+        connection.as_ref(),
+        &script("SELECT setval('s', 5);"),
+        options,
+    )
+    .expect_err("refused");
+    assert_eq!(error, ScriptError::ReadOnlyProfile { changing: 1 });
+
+    let report = run(connection.as_ref(), &script("SELECT 'setval(';"), options)
+        .expect("a string is not a call");
+    assert_eq!(report.ran, 1);
+}
+
+// ------------------------------------------------------ psql-only content
+
+fn psql_error(text: &str) -> Option<ScriptError> {
+    SqlScript::from_text(text, &QueryLanguage::Sql).err()
+}
+
+#[test]
+fn copy_from_stdin_is_refused_with_its_line() {
+    for sql in [
+        "COPY t (a, b) FROM stdin;\n1\t2\n\\.\n",
+        "copy t from STDIN WITH (FORMAT csv);\n1,2\n\\.\n",
+    ] {
+        let text = format!("SELECT 1;\n\n{sql}");
+        assert_eq!(
+            psql_error(&text),
+            Some(ScriptError::CopyFromStdin { line: 3 }),
+            "{sql}"
+        );
+    }
+
+    assert_eq!(
+        ScriptError::CopyFromStdin { line: 48 }.to_string(),
+        "The script has a COPY … FROM stdin data block on line 48, which only the psql command-line client can load. Run it with psql, or re-create the dump with INSERT statements (pg_dump --inserts)."
+    );
+}
+
+#[test]
+fn psql_meta_commands_are_refused_with_the_command_and_line() {
+    for (text, command, line) in [
+        ("SELECT 1;\n\\connect shop\n", "\\connect", 2),
+        ("  \\c db\nSELECT 1;", "\\c", 1),
+        ("SELECT 1;\n\\set x 1\n", "\\set", 2),
+        ("SELECT 1;\n\t\\i other.sql\n", "\\i", 2),
+    ] {
+        assert_eq!(
+            psql_error(text),
+            Some(ScriptError::PsqlMetaCommand {
+                command: command.to_string(),
+                line
+            }),
+            "{text:?}"
+        );
+    }
+
+    assert_eq!(
+        ScriptError::PsqlMetaCommand {
+            command: "\\connect".to_string(),
+            line: 3
+        }
+        .to_string(),
+        "The script uses the psql command \\connect on line 3, which only the psql command-line client understands. Remove it, or run the script with psql."
+    );
+}
+
+#[test]
+fn server_side_copy_and_backslashes_in_text_are_not_psql_only() {
+    let text = "COPY t FROM '/data/file.csv';\n\
+                SELECT 'a\n\\connect x\nb';\n\
+                -- \\connect\n\
+                /* line\n\\set */\n\
+                SELECT $$\n\\i x\n$$;\n\
+                SELECT 'C:\\dir';\n";
+
+    assert_eq!(psql_error(text), None);
+}

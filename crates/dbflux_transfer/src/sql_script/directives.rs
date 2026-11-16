@@ -27,16 +27,24 @@ enum Scan {
 /// line (optionally followed by a repeat count), on a line of its own and
 /// outside quotes, comments and dollar-quoted bodies. Case-insensitive.
 pub(super) fn find_directive(text: &str) -> Option<Directive> {
+    find_in_code_lines(text, |line, number| {
+        directive_name(line).map(|name| Directive { name, line: number })
+    })
+}
+
+/// The first `Some` of `check`, called with each line (and its 1-based
+/// number) that starts outside quotes, comments and dollar-quoted bodies.
+pub(super) fn find_in_code_lines<T>(
+    text: &str,
+    mut check: impl FnMut(&str, usize) -> Option<T>,
+) -> Option<T> {
     let mut scan = Scan::Code;
 
     for (position, line) in text.lines().enumerate() {
         if matches!(scan, Scan::Code)
-            && let Some(name) = directive_name(line)
+            && let Some(found) = check(line, position + 1)
         {
-            return Some(Directive {
-                name,
-                line: position + 1,
-            });
+            return Some(found);
         }
 
         scan = advance(scan, line);

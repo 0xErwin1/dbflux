@@ -33,6 +33,7 @@
 mod control;
 mod directives;
 mod load;
+mod psql;
 mod routine;
 mod run;
 mod summary;
@@ -167,6 +168,16 @@ pub enum ScriptError {
         "The script has a routine body starting on line {line} whose statements end with \";\", so it cannot be split into statements here. Run the script with the database's own command-line client."
     )]
     SplitRoutineBody { line: usize },
+
+    #[error(
+        "The script has a COPY … FROM stdin data block on line {line}, which only the psql command-line client can load. Run it with psql, or re-create the dump with INSERT statements (pg_dump --inserts)."
+    )]
+    CopyFromStdin { line: usize },
+
+    #[error(
+        "The script uses the psql command {command} on line {line}, which only the psql command-line client understands. Remove it, or run the script with psql."
+    )]
+    PsqlMetaCommand { command: String, line: usize },
 
     #[error("Could not start the transaction, so nothing ran: {message}")]
     TransactionStart { message: String },

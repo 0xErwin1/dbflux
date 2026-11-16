@@ -4,6 +4,7 @@ use std::path::Path;
 use dbflux_core::QueryLanguage;
 
 use super::directives::find_directive;
+use super::psql::find_psql_only;
 use super::routine::split_routine_body_line;
 use super::{ScriptError, ScriptStatement, SqlScript};
 
@@ -86,6 +87,10 @@ impl SqlScript {
                 text: text[first_token..range.end].to_string(),
                 line,
             });
+        }
+
+        if let Some(error) = find_psql_only(text, &statements) {
+            return Err(error);
         }
 
         if statements.is_empty() {

@@ -81,7 +81,7 @@ fn words_with_offsets(code: &str) -> Vec<(usize, String)> {
 /// `statement` with quoted text, quoted identifiers, comments and
 /// dollar-quoted bodies replaced by spaces. Newlines stay, so offsets keep
 /// their line numbers.
-fn blank_literals(statement: &str) -> String {
+pub(super) fn blank_literals(statement: &str) -> String {
     let characters: Vec<char> = statement.chars().collect();
     let mut output = String::with_capacity(statement.len());
     let mut position = 0;
@@ -185,4 +185,27 @@ fn dollar_end(characters: &[char], start: usize) -> usize {
     }
 
     characters.len()
+}
+
+/// Whether the statement changes a sequence: it calls `setval(` or
+/// `nextval(` (outside quotes and comments), or is `ALTER SEQUENCE`. The
+/// shared classifier rates `SELECT setval(...)` as a read, but it moves the
+/// sequence, so a script summary and a read-only profile must treat it as a
+/// write.
+pub(crate) fn changes_a_sequence(statement: &str) -> bool {
+    let code = blank_literals(statement);
+    let words = words_with_offsets(&code);
+
+    let alters = matches!(
+        (words.first(), words.get(1)),
+        (Some((_, first)), Some((_, second))) if first == "ALTER" && second == "SEQUENCE"
+    );
+
+    alters
+        || words.iter().any(|(offset, word)| {
+            matches!(word.as_str(), "SETVAL" | "NEXTVAL")
+                && code
+                    .get(offset + word.len()..)
+                    .is_some_and(|rest| rest.trim_start().starts_with('('))
+        })
 }

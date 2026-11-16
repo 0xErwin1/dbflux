@@ -3,6 +3,7 @@ use dbflux_core::{
     classify_query_for_language_with_service,
 };
 
+use super::routine::changes_a_sequence;
 use super::{SqlScript, TransactionControl};
 
 /// Order in which [`ScriptSummary::by_classification`] lists the classes.
@@ -162,7 +163,14 @@ pub(super) fn classify_all(
         .statements()
         .iter()
         .map(|statement| {
-            classify_query_for_language_with_service(language, &statement.text, Some(service))
+            let classification =
+                classify_query_for_language_with_service(language, &statement.text, Some(service));
+
+            if changes_data(classification) || !changes_a_sequence(&statement.text) {
+                classification
+            } else {
+                ExecutionClassification::Write
+            }
         })
         .collect()
 }
