@@ -353,8 +353,9 @@ cuadrícula ya las tiene todas.
 
 El asistente de importación también lee un archivo suelto. Elige **Elegir
 archivo…** en su primer paso, junto al selector de carpeta, y selecciona un
-archivo `.csv`, `.json`, `.jsonl`, `.xml` o de hoja de cálculo (`.xlsx`, `.xlsm`, `.xls` o `.ods`); los archivos HTML, Markdown y SQL no se
-ofrecen. El asistente lee las columnas de la fila de encabezado del CSV, de
+archivo `.csv`, `.json`, `.jsonl`, `.xml` o de hoja de cálculo (`.xlsx`, `.xlsm`, `.xls` o `.ods`); los archivos HTML y Markdown no se
+ofrecen, y un archivo `.sql` en una conexión SQL se ejecuta como script (consulta
+[Ejecutar un script SQL](#ejecutar-un-script-sql)). El asistente lee las columnas de la fila de encabezado del CSV, de
 las claves de los primeros 100 registros JSON, del `name` de los elementos
 `<field>` de las primeras 100 filas XML (todas las claves vistas, en el
 orden en que aparecen), o de la fila 1 de una hoja de cálculo. Una clave que aparece por primera vez después de esas
@@ -420,3 +421,92 @@ una línea explica por qué Truncate no aparece. En los campos de texto, `Escape
 sale del campo y devuelve las teclas al diálogo; un segundo `Escape` cierra el
 asistente. Cuando termina la ejecución, una fila por tabla lista su resultado, y
 una ejecución fallida dice qué hacer a continuación.
+
+### Ejecutar un script SQL
+
+En una conexión cuyo lenguaje de consulta es SQL, **Elegir archivo…** también
+ofrece archivos `.sql`; las demás conexiones nunca los ven, y un archivo `.sql`
+que se cuele de todos modos se rechaza con un mensaje que dice que la conexión no
+es SQL. Al elegir uno se abre el flujo **Ejecutar script SQL** en el mismo
+diálogo. El script se lee como UTF-8 y se divide en sentencias con el mismo
+divisor del editor, que respeta comillas, comentarios y cuerpos entre dólares, y
+no tiene opciones de delimitador ni de codificación. Un script de más de 100 MB,
+un archivo que no es UTF-8 o no se puede leer, y un script sin sentencias se
+quedan en el primer paso con el motivo y qué hacer a continuación. Lo mismo
+ocurre con un script que usa algo que solo ejecuta un cliente de línea de
+comandos: una línea `DELIMITER` o un separador de lotes `GO`, un cuerpo de rutina
+(procedimiento, función o disparador) cuyas sentencias terminan con `;` y que no
+tiene delimitadores de cliente alrededor, un bloque de datos `COPY … FROM stdin`
+o un metacomando de psql con barra invertida como `\connect`, o una sentencia que
+desactiva autocommit (`SET autocommit = 0`) o activa las transacciones
+implícitas, lo que dejaría la conexión en modo de confirmación manual. Cada uno se
+rechaza antes de ejecutar nada, con la línea y qué hacer a continuación: ejecutar
+el script con el cliente de línea de comandos de la propia base de datos o
+reescribirlo (psql para un bloque `COPY … FROM stdin` o un metacomando de psql: quitar una línea `\connect` ejecutaría el resto en esta conexión, que puede no ser la base de datos que selecciona). Un script de más de 100 MB
+también se puede dividir en archivos más pequeños, pero cada archivo se ejecuta
+por separado: un archivo posterior que falle no puede deshacer uno anterior.
+
+**Configurar** muestra el número de sentencias y el tamaño, cuántas sentencias
+hay en cada clasificación (las clases que usan el editor y el visor de auditoría,
+incluida Administración) y las seis primeras sentencias con su clasificación; un
+`DELETE` o `UPDATE` sin `WHERE` aparece marcado. Las sentencias que cambian una
+secuencia (`setval`, `nextval`, `ALTER SEQUENCE`) cuentan como Escritura, así que
+una conexión de solo lectura las rechaza. Tiene dos opciones:
+
+- **Ante un error**: **Detener en el primer error** (por defecto) o **Continuar
+  tras los errores**, que ejecuta todas las sentencias y lista las que fallaron.
+- **Ejecutar en una sola transacción**: activada por defecto cuando la conexión
+  admite transacciones. Si una sentencia falla, los cambios hechos en la
+  transacción se deshacen y no se guarda nada hasta que la última sentencia tenga
+  éxito. Está desactivada, con el motivo, cuando se elige **Continuar tras los
+  errores** (una sentencia fallida aborta la transacción en algunos motores), y
+  no se ofrece, con el motivo, en una conexión sin transacciones. Un script que
+  gestiona sus propias transacciones (`BEGIN`, `START TRANSACTION`, `COMMIT`,
+  `END`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`, `SET autocommit`) también la
+  desactiva, indicando la sentencia y su línea: el script se ejecuta tal cual y
+  su propio `COMMIT` guarda los cambios anteriores. Una transacción que el script
+  abre y nunca termina se deshace al acabar el script, y el diálogo lo dice:
+  añade un `COMMIT` al final para guardar sus cambios. Si ese rollback falla, el
+  diálogo dice que puede seguir abierta una transacción y que hay que
+  desconectarse y volver a conectar. Un script con un comentario condicional por
+  versión que controla transacciones se rechaza, porque que se ejecute o no
+  depende del servidor. Un script que usa `SAVEPOINT` fuera de una transacción
+  recibe un `ROLLBACK` preventivo al terminar, por si quedó una abierta; el
+  diálogo lo dice, y los cambios que la base de datos ya había confirmado se
+  mantienen.
+
+En una conexión que confirma por sí sola las sentencias de esquema (MySQL y
+MariaDB), `CREATE`, `ALTER` y `DROP` se guardan al ejecutarse y también guardan
+todas las sentencias anteriores, así que un rollback solo deshace los cambios
+hechos después de la última. Los cambios de secuencias (`setval`, `nextval`)
+nunca se deshacen con un rollback. Una conexión de solo lectura por la
+configuración de su perfil rechaza un script que cambia datos, estructura o permisos, dice
+cuántas sentencias lo hacen y mantiene **Continuar** desactivado; un script que
+solo lee puede ejecutarse.
+
+Todo script pasa por **Confirmar**, sea cual sea su contenido. Un script sin
+sentencias destructivas muestra cuántas sentencias hay en cada clasificación y
+ofrece **Ejecutar script**. Un script con sentencias destructivas muestra un
+bloque de peligro que las cuenta por los tipos de consulta peligrosa del editor,
+lista las tres primeras con su número en el archivo y ofrece **Sí, ejecutar
+script**. **Atrás** vuelve a Configurar.
+
+**Ejecutando** muestra "Ejecutando la sentencia N de M", la sentencia en curso y
+una entrada en el panel de tareas. **Cancelar ejecución** se detiene tras la
+sentencia en curso y pide al controlador que la interrumpa. En una transacción
+los cambios se deshacen; sin ella, las sentencias ya ejecutadas se conservan. El
+pie dice cuál de los dos casos es antes de pulsar.
+
+**Terminado** dice qué ocurrió. Una ejecución que se detiene nombra la sentencia
+(número, línea y texto), muestra el error de la base de datos, dice qué pasó con
+las sentencias anteriores y qué hacer a continuación; una ejecución que continuó
+tras los errores lista cada sentencia que falló. Sin transacción, el consejo es
+conciliar los cambios que ya hicieron las sentencias anteriores y conservar o
+restaurar los ajustes de sesión que necesita el script (como `SET search_path`)
+antes de ejecutar el resto; tras los errores es el mismo. Si falla el propio commit o
+rollback, el diálogo dice que el resultado no está claro y que se compruebe el
+estado de la base de datos antes de ejecutar nada más. Cada fallo se informa
+además una vez como notificación con **Ver en Auditoría**, y cada ejecución
+registra un evento de auditoría `Query` (más uno por sentencia fallida, hasta 50)
+que solo lleva la primera línea de la sentencia, ocultada según los ajustes de
+auditoría.
