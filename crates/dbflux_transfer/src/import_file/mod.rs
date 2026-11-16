@@ -1,8 +1,9 @@
-//! Single-file import: one loose CSV, JSON or JSON Lines file becomes a
-//! one-table import, with no `manifest.json` on disk.
+//! Single-file import: one loose CSV, JSON, JSON Lines, XML or spreadsheet
+//! file becomes a one-table import, with no `manifest.json` on disk.
 //!
 //! [`ImportFile::inspect`] reads the columns off the file (the CSV header row,
-//! or the keys of the first JSON records) and [`ImportFile::manifest_table`]
+//! the spreadsheet's first row, or the keys of the first JSON records and the
+//! field names of the first XML rows) and [`ImportFile::manifest_table`]
 //! describes it as the in-memory equivalent of a one-table manifest.
 //! [`run_file_import`] then runs the same pipeline as a folder import
 //! ([`crate::import`]), so the column mapping, the table mapping modes, the
@@ -26,16 +27,38 @@ use crate::file_source::{FileSource, check_json_records, sample_object_keys};
 use crate::import::{ImportOptions, ImportOutcome, ImportTablePlan, TableFile, run_plans};
 use crate::manifest::ManifestTable;
 use crate::pipeline::{RowSource, TransferError};
+use crate::spreadsheet_source::{SheetRows, list_worksheets};
+use crate::xml_source::sample_field_names;
 
 /// How many JSON records are read to discover the columns.
 pub const DISCOVERY_SAMPLE_ROWS: usize = 100;
 
 /// The importable format a path's extension names, case-insensitively. HTML,
-/// Markdown, XML and SQL files are not importable and give `None`.
+/// Markdown and SQL files are not importable and give `None`.
 pub fn format_for_path(path: &Path) -> Option<FileFormat> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
 
     FileFormat::from_extension(&extension).filter(|format| format.is_importable())
+}
+
+/// One worksheet of a workbook, as offered for choosing the sheet to import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportSheet {
+    pub name: String,
+    /// `false` for hidden and very hidden sheets.
+    pub visible: bool,
+}
+
+/// The worksheets of the workbook at `path`, in workbook order (chart
+/// sheets hold no cells and are left out).
+pub fn list_sheets(path: &Path) -> Result<Vec<ImportSheet>, TransferError> {
+    Ok(list_worksheets(path)?
+        .into_iter()
+        .map(|sheet| ImportSheet {
+            name: sheet.name,
+            visible: sheet.visible,
+        })
+        .collect())
 }
 
 /// A loose file inspected for import: its format, the options it is read
@@ -46,6 +69,7 @@ pub struct ImportFile {
     format: FileFormat,
     options: FormatOptions,
     columns: Vec<TransferColumn>,
+    sheet: Option<String>,
 }
 
 impl ImportFile {
@@ -54,6 +78,17 @@ impl ImportFile {
         path: &Path,
         format: FileFormat,
         options: FormatOptions,
+    ) -> Result<Self, TransferError> {
+        Self::inspect_sheet(path, format, options, None)
+    }
+
+    /// Like [`Self::inspect`], reading the spreadsheet sheet named `sheet`
+    /// (the first worksheet when `None`). Other formats ignore `sheet`.
+    pub fn inspect_sheet(
+        path: &Path,
+        format: FileFormat,
+        options: FormatOptions,
+        sheet: Option<&str>,
     ) -> Result<Self, TransferError> {
         if !format.is_importable() {
             return Err(TransferError::Source(format!(
@@ -65,6 +100,8 @@ impl ImportFile {
 
         let column_names = match format {
             FileFormat::Csv => csv_header(path, &options)?,
+            FileFormat::Spreadsheet => spreadsheet_header(path, sheet)?,
+            FileFormat::Xml => xml_keys(path)?,
             _ => json_keys(path, format)?,
         };
         let columns = column_names
@@ -82,6 +119,7 @@ impl ImportFile {
             format,
             options,
             columns,
+            sheet: sheet.map(str::to_string),
         })
     }
 
@@ -99,6 +137,12 @@ impl ImportFile {
 
     pub fn columns(&self) -> &[TransferColumn] {
         &self.columns
+    }
+
+    /// The spreadsheet sheet chosen at inspection, `None` for the first
+    /// worksheet and for every other format.
+    pub fn sheet(&self) -> Option<&str> {
+        self.sheet.as_deref()
     }
 
     /// The default target table name: the file name without its extension.
@@ -157,6 +201,7 @@ pub fn run_file_import(
                 estimated_total: None,
                 options: file.options.clone(),
                 loose: true,
+                sheet: file.sheet.clone(),
             }))
         },
         |plan| format!("no file to import into table '{}'", plan.target_table),
@@ -172,18 +217,19 @@ fn check_readable(
     segment_size: u32,
     cancel: &CancelToken,
 ) -> Result<(), TransferError> {
-    if file.format != FileFormat::Csv {
+    if matches!(file.format, FileFormat::Json | FileFormat::JsonLines) {
         // A record that is not an object would otherwise import as a row of NULLs.
         check_json_records(&file.path, file.format, cancel)?;
     }
 
-    let mut source = FileSource::open_with(
+    let mut source = FileSource::open_sheet(
         &file.path,
         file.format,
         file.columns.clone(),
         segment_size,
         None,
         file.options.clone(),
+        file.sheet(),
     )?;
 
     while source.next_chunk(cancel)?.is_some() {}
@@ -208,6 +254,14 @@ fn csv_header(path: &Path, options: &FormatOptions) -> Result<Vec<String>, Trans
         .map(str::to_string)
         .collect();
 
+    check_header_names(path, &names)?;
+
+    Ok(names)
+}
+
+/// Rejects a header with no columns, a blank name or a repeated name, the
+/// same rules for a CSV header row and a spreadsheet's first row.
+fn check_header_names(path: &Path, names: &[String]) -> Result<(), TransferError> {
     if names.is_empty() {
         return Err(TransferError::Source(format!(
             "{}: the file has no header row",
@@ -232,7 +286,32 @@ fn csv_header(path: &Path, options: &FormatOptions) -> Result<Vec<String>, Trans
         }
     }
 
+    Ok(())
+}
+
+/// The first row of the sheet, which must be a valid header.
+fn spreadsheet_header(path: &Path, sheet: Option<&str>) -> Result<Vec<String>, TransferError> {
+    let rows = SheetRows::open(path, sheet)?;
+    let names = rows.headers().to_vec();
+
+    check_header_names(path, &names)?;
+
     Ok(names)
+}
+
+/// The union of the field names of the first sampled XML rows, in the order
+/// they are first seen.
+fn xml_keys(path: &Path) -> Result<Vec<String>, TransferError> {
+    let rows = sample_field_names(path, DISCOVERY_SAMPLE_ROWS)?;
+
+    if rows.is_empty() {
+        return Err(TransferError::Source(format!(
+            "{}: the file has no records",
+            path.display()
+        )));
+    }
+
+    unique_keys(path, rows)
 }
 
 /// The union of the keys of the first sampled JSON records, in the order
@@ -247,6 +326,10 @@ fn json_keys(path: &Path, format: FileFormat) -> Result<Vec<String>, TransferErr
         )));
     }
 
+    unique_keys(path, records)
+}
+
+fn unique_keys(path: &Path, records: Vec<Vec<String>>) -> Result<Vec<String>, TransferError> {
     let mut seen = HashSet::new();
     let names: Vec<String> = records
         .into_iter()

@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: Hoja de cálculo
           text: Texto
           binary: Binario
           hex: Hex
@@ -2459,13 +2460,13 @@ document:
       continue: Continuar
       unmatched_source: "Columna(s) de origen sin coincidencia, se omitirán salvo que se remapeen: %{names}"
     pick_file:
-      description: "O importa un único archivo CSV, JSON o JSON Lines en una tabla."
+      description: "O importa un único archivo CSV, JSON, JSON Lines o XML en una tabla."
       choose_file: "Elegir archivo…"
       reading_file: "Leyendo archivo…"
       dialog_title: "Elegir archivo para importar"
-      filter_label: "CSV, JSON y JSON Lines"
+      filter_label: "CSV, JSON, JSON Lines y XML"
       error:
-        unsupported: "Solo se pueden importar archivos .csv, .json y .jsonl."
+        unsupported: "Solo se pueden importar archivos .csv, .json, .jsonl y .xml."
         invalid_file: "No se puede leer el archivo: %{error}"
     file:
       source: "Archivo: %{file} (%{format})"
@@ -2473,6 +2474,7 @@ document:
       target_table_placeholder: "Nombre de la tabla (por defecto, el del archivo)"
       use_table: "Usar tabla"
       null_text_hint: "Texto del archivo que representa NULL. Con texto vacío, un campo vacío es NULL."
+      no_options_hint: "Los archivos %{format} no tienen opciones de importación."
     mapping_mode:
       create: Crear
       existing: "Existente (solo insertar)"

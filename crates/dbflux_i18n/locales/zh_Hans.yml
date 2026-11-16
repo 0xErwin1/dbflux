@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: 电子表格
           text: 文本
           binary: 二进制
           hex: Hex
@@ -2459,13 +2460,13 @@ document:
       continue: 继续
       unmatched_source: "未匹配的源列将被跳过，除非重新映射：%{names}"
     pick_file:
-      description: "或将单个 CSV、JSON 或 JSON Lines 文件导入到一张表。"
+      description: "或将单个 CSV、JSON、JSON Lines 或 XML 文件导入到一张表。"
       choose_file: "选择文件…"
       reading_file: "正在读取文件…"
       dialog_title: "选择要导入的文件"
-      filter_label: "CSV、JSON 和 JSON Lines"
+      filter_label: "CSV、JSON、JSON Lines 和 XML"
       error:
-        unsupported: "只能导入 .csv、.json 和 .jsonl 文件。"
+        unsupported: "只能导入 .csv、.json、.jsonl 和 .xml 文件。"
         invalid_file: "无法读取文件：%{error}"
     file:
       source: "文件：%{file}（%{format}）"
@@ -2473,6 +2474,7 @@ document:
       target_table_placeholder: "表名（默认为文件名）"
       use_table: "使用该表"
       null_text_hint: "文件中表示 NULL 的文本。文本为空时，空字段即为 NULL。"
+      no_options_hint: "%{format} 文件没有导入选项。"
     mapping_mode:
       create: 创建
       existing: 已存在（仅插入）

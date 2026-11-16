@@ -18,6 +18,9 @@ workspace = true
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
 dbflux_export.workspace = true
+dbflux_byte_source.workspace = true
+dbflux_spreadsheet.workspace = true
+quick-xml.workspace = true
 thiserror = "2"
 serde.workspace = true
 serde_json.workspace = true
@@ -27,3 +30,4 @@ csv.workspace = true
 dbflux_test_support.workspace = true
 dbflux_driver_postgres.workspace = true
 dbflux_driver_sqlite.workspace = true
+rust_xlsxwriter.workspace = true

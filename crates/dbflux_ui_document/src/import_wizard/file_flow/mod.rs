@@ -654,6 +654,18 @@ impl ImportWizard {
         if visible.null_text {
             rows.push(Self::render_null_text_row(inputs, cx));
         }
+        if !visible.delimiter_and_encoding && !visible.null_text {
+            rows.push(
+                div()
+                    .id("import-wizard-file-no-options")
+                    .debug_selector(|| "import-wizard-file-no-options".to_string())
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.import_wizard.file.no_options_hint",
+                        format = state.format.label()
+                    )))
+                    .into_any_element(),
+            );
+        }
         if let Some(error) = state.error.clone() {
             rows.push(Text::caption(error).danger().into_any_element());
         }

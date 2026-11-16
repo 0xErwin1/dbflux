@@ -238,12 +238,7 @@ fn formats_that_cannot_be_imported_are_rejected() {
     let scratch = Scratch::new();
     let path = scratch.write("page.html", b"<table></table>");
 
-    for format in [
-        FileFormat::Html,
-        FileFormat::Markdown,
-        FileFormat::Xml,
-        FileFormat::Sql,
-    ] {
+    for format in [FileFormat::Html, FileFormat::Markdown, FileFormat::Sql] {
         let message = source_error(inspect(&path, format));
         assert!(
             message.ends_with(&format!("{} files cannot be imported", format.label())),
@@ -269,7 +264,21 @@ fn format_comes_from_the_extension_for_importable_formats_only() {
         format_for_path(Path::new("b.JsonL")),
         Some(FileFormat::JsonLines)
     );
-    for rejected in ["b.html", "b.md", "b.xml", "b.sql", "b.txt", "b"] {
+    for accepted in ["b.xml", "B.XML"] {
+        assert_eq!(
+            format_for_path(Path::new(accepted)),
+            Some(FileFormat::Xml),
+            "{accepted}"
+        );
+    }
+    for accepted in ["a.xlsx", "a.XLSM", "a.xls", "a.ods"] {
+        assert_eq!(
+            format_for_path(Path::new(accepted)),
+            Some(FileFormat::Spreadsheet),
+            "{accepted}"
+        );
+    }
+    for rejected in ["b.html", "b.md", "b.sql", "b.txt", "b"] {
         assert_eq!(format_for_path(Path::new(rejected)), None, "{rejected}");
     }
 }
@@ -974,3 +983,6 @@ fn a_cancelled_json_import_stops_before_the_preflight_scan_and_writes_nothing() 
         "nothing is written"
     );
 }
+
+mod spreadsheet;
+mod xml;

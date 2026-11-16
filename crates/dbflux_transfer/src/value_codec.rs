@@ -35,6 +35,21 @@ pub(crate) fn value_from_csv_field(
     value_from_text(field, type_name, options.date_format)
 }
 
+/// Decodes the text of one XML `<field>` by the column's type. NULL is
+/// marked structurally (`null="true"`) rather than by text, so empty text is
+/// a real empty string, as it is for a JSON string.
+pub(crate) fn value_from_xml_text(
+    text: &str,
+    type_name: Option<&str>,
+    date_format: DateFormat,
+) -> Value {
+    if text.is_empty() {
+        return Value::Text(String::new());
+    }
+
+    value_from_text(text, type_name, date_format)
+}
+
 /// Decodes one JSON value (as produced by `Value::to_serde_json`) back into a
 /// `Value`, using `type_name` to disambiguate the JSON string cases that
 /// collapse several `Value` variants into plain strings (Decimal, Date, Time)

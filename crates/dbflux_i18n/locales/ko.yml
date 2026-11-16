@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: 스프레드시트
           text: 텍스트
           binary: 바이너리
           hex: 16진수
@@ -2459,13 +2460,13 @@ document:
       continue: 계속
       unmatched_source: "매핑되지 않은 소스 열은 다시 매핑하지 않으면 건너뜁니다: %{names}"
     pick_file:
-      description: "또는 CSV, JSON, JSON Lines 파일 하나를 테이블 하나로 가져옵니다."
+      description: "또는 CSV, JSON, JSON Lines, XML 파일 하나를 테이블 하나로 가져옵니다."
       choose_file: "파일 선택…"
       reading_file: "파일 읽는 중…"
       dialog_title: "가져올 파일 선택"
-      filter_label: "CSV, JSON 및 JSON Lines"
+      filter_label: "CSV, JSON, JSON Lines 및 XML"
       error:
-        unsupported: ".csv, .json, .jsonl 파일만 가져올 수 있습니다."
+        unsupported: ".csv, .json, .jsonl, .xml 파일만 가져올 수 있습니다."
         invalid_file: "파일을 읽을 수 없습니다: %{error}"
     file:
       source: "파일: %{file} (%{format})"
@@ -2473,6 +2474,7 @@ document:
       target_table_placeholder: "테이블 이름 (기본값: 파일 이름)"
       use_table: "테이블 사용"
       null_text_hint: "파일에서 NULL을 나타내는 텍스트입니다. 비워 두면 빈 필드가 NULL입니다."
+      no_options_hint: "%{format} 파일에는 가져오기 옵션이 없습니다."
     mapping_mode:
       create: 만들기
       existing: 기존 (삽입만)

@@ -2478,6 +2478,9 @@ pub(crate) fn export_all_format_label(format: dbflux_transfer::FileFormat) -> St
         }
         dbflux_transfer::FileFormat::Xml => dbflux_i18n::t!("document.data.grid.export.format.xml"),
         dbflux_transfer::FileFormat::Sql => dbflux_i18n::t!("document.data.grid.export.format.sql"),
+        dbflux_transfer::FileFormat::Spreadsheet => {
+            dbflux_i18n::t!("document.data.grid.export.format.spreadsheet")
+        }
     }
 }
 
@@ -8674,5 +8677,9 @@ mod tests {
             "Markdown"
         );
         assert_eq!(super::export_all_format_label(FileFormat::Xml), "XML");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Spreadsheet),
+            "Spreadsheet"
+        );
     }
 }

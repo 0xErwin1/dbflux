@@ -86,6 +86,8 @@ pub(crate) struct TableFile {
     /// source type names, so each column that maps onto a target column is
     /// decoded by that target column's type, and nested JSON stays JSON text.
     pub(crate) loose: bool,
+    /// The spreadsheet sheet to read; `None` is the first worksheet.
+    pub(crate) sheet: Option<String>,
 }
 
 /// Reads `manifest_dir/manifest.json` and imports every table with a
@@ -128,6 +130,7 @@ pub fn run_import(
                 estimated_total: Some(manifest_table.row_count),
                 options: manifest_table.options.clone(),
                 loose: false,
+                sheet: None,
             }))
         },
         |plan| format!("manifest has no table named '{}'", plan.source_table),
@@ -316,13 +319,14 @@ fn open_table_file(
     columns: Vec<TransferColumn>,
     options: &ImportOptions,
 ) -> Result<FileSource, TransferError> {
-    FileSource::open_with(
+    FileSource::open_sheet(
         &file.path,
         file.format,
         columns,
         options.segment_size,
         file.estimated_total,
         file.options.clone(),
+        file.sheet.as_deref(),
     )
 }
 

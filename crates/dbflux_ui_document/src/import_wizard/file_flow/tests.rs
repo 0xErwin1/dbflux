@@ -117,6 +117,68 @@ fn a_json_file_shows_no_options(cx: &mut gpui::TestAppContext) {
     );
 }
 
+fn assert_no_options_line(cx: &mut gpui::TestAppContext, format: FileFormat) {
+    with_wizard(
+        cx,
+        move |this| {
+            this.file_import = Some(file_state(format, None));
+            this.step = WizardStep::Configure;
+        },
+        |window, ()| {
+            assert!(
+                window
+                    .debug_bounds("import-wizard-file-no-options")
+                    .is_some()
+            )
+        },
+    );
+}
+
+#[gpui::test]
+fn a_json_file_explains_that_it_has_no_options(cx: &mut gpui::TestAppContext) {
+    assert_no_options_line(cx, FileFormat::Json);
+}
+
+#[gpui::test]
+fn a_json_lines_file_explains_that_it_has_no_options(cx: &mut gpui::TestAppContext) {
+    assert_no_options_line(cx, FileFormat::JsonLines);
+}
+
+#[gpui::test]
+fn an_xml_file_explains_that_it_has_no_options(cx: &mut gpui::TestAppContext) {
+    assert_no_options_line(cx, FileFormat::Xml);
+}
+
+#[gpui::test]
+fn a_csv_file_shows_no_no_options_line(cx: &mut gpui::TestAppContext) {
+    with_wizard(
+        cx,
+        |this| {
+            this.file_import = Some(file_state(FileFormat::Csv, None));
+            this.step = WizardStep::Configure;
+        },
+        |window, ()| {
+            assert!(
+                window
+                    .debug_bounds("import-wizard-file-no-options")
+                    .is_none()
+            )
+        },
+    );
+}
+
+#[test]
+fn the_no_options_line_names_the_format_in_every_locale() {
+    for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+        let xml = dbflux_i18n::translate_in(locale, "document.import_wizard.file.no_options_hint")
+            .replace("%{format}", "XML");
+        assert!(
+            xml.contains("XML") && !xml.contains("JSON"),
+            "{locale}: {xml}"
+        );
+    }
+}
+
 #[gpui::test]
 fn a_file_that_could_not_be_read_blocks_the_run(cx: &mut gpui::TestAppContext) {
     with_wizard(

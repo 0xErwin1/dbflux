@@ -10,7 +10,7 @@ use dbflux_transfer::import_file::format_for_path;
 
 /// The option rows the wizard shows for one importable format. An option a
 /// format does not use is hidden, so the dialog never offers a choice that has
-/// no effect: CSV has all of them, JSON and JSON Lines none.
+/// no effect: CSV has all of them, JSON, JSON Lines and XML none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct VisibleFileOptions {
     pub(super) delimiter_and_encoding: bool,
@@ -25,7 +25,7 @@ pub(super) fn visible_file_options(format: FileFormat) -> VisibleFileOptions {
 }
 
 /// File extensions the picker accepts: the importable formats only, so HTML,
-/// Markdown, XML and SQL files are not offered.
+/// Markdown and SQL files are not offered.
 pub(super) fn picker_extensions() -> Vec<&'static str> {
     FileFormat::WITH_SQL
         .into_iter()
