@@ -131,7 +131,7 @@ fn advance(mut scan: Scan, line: &str) -> Scan {
 /// The tag of a dollar-quote opening just after the `$` at `position - 1`,
 /// and how many characters after that `$` it spans (the tag and the closing
 /// `$`). `None` for `$1` style parameters and a lone `$`.
-fn dollar_tag(characters: &[char], position: usize) -> Option<(String, usize)> {
+pub(super) fn dollar_tag(characters: &[char], position: usize) -> Option<(String, usize)> {
     let mut tag = String::new();
     let mut offset = position;
 
@@ -151,7 +151,7 @@ fn dollar_tag(characters: &[char], position: usize) -> Option<(String, usize)> {
 }
 
 /// Whether `tag` followed by `$` starts at `position` (just after a `$`).
-fn closes_dollar(characters: &[char], position: usize, tag: &str) -> bool {
+pub(super) fn closes_dollar(characters: &[char], position: usize, tag: &str) -> bool {
     let mut offset = position;
 
     for expected in tag.chars() {

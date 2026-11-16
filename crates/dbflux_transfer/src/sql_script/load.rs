@@ -4,6 +4,7 @@ use std::path::Path;
 use dbflux_core::QueryLanguage;
 
 use super::directives::find_directive;
+use super::routine::split_routine_body_line;
 use super::{ScriptError, ScriptStatement, SqlScript};
 
 /// Scripts larger than this are refused before they are read.
@@ -89,6 +90,10 @@ impl SqlScript {
 
         if statements.is_empty() {
             return Err(ScriptError::Empty);
+        }
+
+        if let Some(line) = split_routine_body_line(&statements) {
+            return Err(ScriptError::SplitRoutineBody { line });
         }
 
         Ok(Self::new(statements, bytes))

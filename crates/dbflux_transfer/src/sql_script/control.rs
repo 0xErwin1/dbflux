@@ -55,7 +55,7 @@ pub(super) fn first_transaction_control(
 
 /// Words that may follow `BEGIN` or `END` in a transaction statement; any
 /// other word after `BEGIN` starts a compound block.
-const BEGIN_FOLLOWERS: [&str; 9] = [
+pub(super) const BEGIN_FOLLOWERS: [&str; 9] = [
     "TRANSACTION",
     "TRAN",
     "WORK",

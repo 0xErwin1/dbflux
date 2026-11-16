@@ -679,8 +679,6 @@ fn the_first_transaction_control_statement_reports_its_index_and_line() {
 #[test]
 fn compound_bodies_and_ordinary_statements_are_not_transaction_control() {
     for text in [
-        "CREATE PROCEDURE p() BEGIN SELECT 1; END;",
-        "CREATE TRIGGER x AFTER INSERT ON t BEGIN SELECT 1; END;",
         "BEGIN\n  INSERT INTO t VALUES (1)\nEND;",
         "SET search_path = public;",
         "SET NAMES utf8;",
@@ -751,4 +749,60 @@ fn a_script_that_manages_its_own_transactions_runs_as_written_without_one() {
     assert_eq!(report.end, RunEnd::Finished);
     assert_eq!(report.disposition, Disposition::Kept);
     assert_eq!(row_count(connection.as_ref(), "t"), 1);
+}
+
+// ------------------------------------------------ split routine bodies
+
+fn split_body_line(text: &str) -> Option<usize> {
+    match SqlScript::from_text(text, &QueryLanguage::Sql) {
+        Err(ScriptError::SplitRoutineBody { line }) => Some(line),
+        Ok(_) => None,
+        Err(other) => panic!("unexpected error for {text:?}: {other:?}"),
+    }
+}
+
+#[test]
+fn a_procedure_body_cut_at_its_semicolons_is_refused_with_its_line() {
+    let text = "SELECT 1;\n\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\n  SELECT 2;\nEND;\n";
+
+    assert_eq!(split_body_line(text), Some(4));
+    assert_eq!(
+        ScriptError::SplitRoutineBody { line: 12 }.to_string(),
+        "The script has a routine body starting on line 12 whose statements end with \";\", so it cannot be split into statements here. Run the script with the database's own command-line client."
+    );
+}
+
+#[test]
+fn trigger_bodies_are_refused_too() {
+    let text = "CREATE TRIGGER x AFTER INSERT ON t BEGIN INSERT INTO log VALUES (1); END;";
+
+    assert_eq!(split_body_line(text), Some(1));
+}
+
+#[test]
+fn a_dollar_quoted_function_is_accepted() {
+    let text = "CREATE FUNCTION f() RETURNS int AS $$ BEGIN PERFORM 1; RETURN 1; END; $$ LANGUAGE plpgsql;";
+
+    assert_eq!(split_body_line(text), None);
+}
+
+#[test]
+fn transaction_scripts_and_lookalikes_are_not_split_bodies() {
+    for text in [
+        "BEGIN TRANSACTION;\nINSERT INTO t VALUES (1);\nCOMMIT;",
+        "BEGIN;\nINSERT INTO t VALUES (1);\nEND;",
+        "BEGIN IMMEDIATE;\nSELECT 1;\nCOMMIT;",
+        "SELECT CASE WHEN a THEN 1 ELSE 2 END FROM t;\nSELECT CASE a WHEN 1 THEN 'begin' END;",
+        "SELECT 'BEGIN';\n-- BEGIN\n/* BEGIN */ SELECT \"begin\";",
+        "CREATE PROCEDURE p() BEGIN SELECT 1 END",
+    ] {
+        assert_eq!(split_body_line(text), None, "{text}");
+    }
+}
+
+#[test]
+fn a_case_expression_inside_a_body_does_not_hide_the_split() {
+    let text = "CREATE PROCEDURE p() BEGIN\n  SELECT CASE WHEN a THEN 1 END;\n  IF x THEN SELECT 1; END IF;\nEND;";
+
+    assert_eq!(split_body_line(text), Some(1));
 }

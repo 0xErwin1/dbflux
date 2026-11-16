@@ -33,6 +33,7 @@
 mod control;
 mod directives;
 mod load;
+mod routine;
 mod run;
 mod summary;
 
@@ -161,6 +162,11 @@ pub enum ScriptError {
         "The script manages its own transactions ({keyword} on line {line}), so it cannot run in one transaction. Turn off \"Run in one transaction\"; the script's own statements then decide what is saved."
     )]
     SelfManagedTransaction { keyword: String, line: usize },
+
+    #[error(
+        "The script has a routine body starting on line {line} whose statements end with \";\", so it cannot be split into statements here. Run the script with the database's own command-line client."
+    )]
+    SplitRoutineBody { line: usize },
 
     #[error("Could not start the transaction, so nothing ran: {message}")]
     TransactionStart { message: String },
