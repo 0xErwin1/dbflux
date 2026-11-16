@@ -4381,7 +4381,7 @@ fn build_insert_with_output(insert: &RowInsert) -> Result<String, DbError> {
     let values = insert
         .assignments
         .iter()
-        .map(|a| MSSQL_DIALECT.value_to_literal(&a.value))
+        .map(|a| MSSQL_DIALECT.assignment_to_sql(a))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -4400,7 +4400,7 @@ fn build_update_with_output(patch: &RowPatch) -> Result<String, DbError> {
             format!(
                 "{} = {}",
                 MSSQL_DIALECT.quote_identifier(&change.name),
-                MSSQL_DIALECT.value_to_literal(&change.value)
+                MSSQL_DIALECT.assignment_to_sql(change)
             )
         })
         .collect::<Vec<_>>()
@@ -5749,6 +5749,33 @@ mod tests {
         assert_eq!(
             sql,
             "INSERT INTO [dbo].[users] ([name], [age]) OUTPUT INSERTED.* VALUES (N'alice', 30)"
+        );
+    }
+
+    #[test]
+    fn insert_and_update_with_output_write_expressions_verbatim() {
+        let insert = RowInsert::with_typed_assignments(
+            "users".into(),
+            Some("dbo".into()),
+            vec![
+                ColumnAssignment::expression("id", "NEWID()"),
+                ColumnAssignment::new("name", Value::Text("alice".into())),
+            ],
+        );
+        assert_eq!(
+            build_insert_with_output(&insert).unwrap(),
+            "INSERT INTO [dbo].[users] ([id], [name]) OUTPUT INSERTED.* VALUES (NEWID(), N'alice')"
+        );
+
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".into()], vec![Value::Int(7)]),
+            "users".into(),
+            Some("dbo".into()),
+            vec![ColumnAssignment::expression("deleted_at", "SYSDATETIME()")],
+        );
+        assert_eq!(
+            build_update_with_output(&patch).unwrap(),
+            "UPDATE [dbo].[users] SET [deleted_at] = SYSDATETIME() OUTPUT INSERTED.* WHERE [id] = 7"
         );
     }
 

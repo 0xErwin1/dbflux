@@ -238,7 +238,7 @@ impl SqlDialect for SqliteDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -260,7 +260,7 @@ impl SqlDialect for SqliteDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()

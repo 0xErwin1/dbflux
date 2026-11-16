@@ -55,6 +55,15 @@ pub trait SqlDialect: Send + Sync {
         self.value_to_literal(value)
     }
 
+    /// The right-hand side of an assignment: the expression written verbatim
+    /// when the assignment carries one, otherwise the typed literal.
+    fn assignment_to_sql(&self, assignment: &crate::data::crud::ColumnAssignment) -> String {
+        match &assignment.expression {
+            Some(expression) => expression.clone(),
+            None => self.value_to_literal_typed(&assignment.value, assignment.type_name.as_deref()),
+        }
+    }
+
     /// The column type for text of any length, used when a table is created
     /// from columns that carry no type name (a loose CSV or JSON file).
     /// `TEXT` unless the engine has no such type or truncates it.
@@ -353,7 +362,7 @@ impl SqlDialect for DefaultSqlDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -375,7 +384,7 @@ impl SqlDialect for DefaultSqlDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()

@@ -425,7 +425,7 @@ impl SqlDialect for MysqlDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -442,7 +442,7 @@ impl SqlDialect for MysqlDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -2811,7 +2811,14 @@ impl Connection for MysqlConnection {
                 table, first_col, last_id
             )
         } else {
-            let identity = RecordIdentity::composite(insert.column_names(), insert.values());
+            // An expression cell has no literal value to look the row up by.
+            let (columns, values): (Vec<String>, Vec<Value>) = insert
+                .assignments
+                .iter()
+                .filter(|a| !a.is_expression())
+                .map(|a| (a.name.clone(), a.value.clone()))
+                .unzip();
+            let identity = RecordIdentity::composite(columns, values);
             builder
                 .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
                 .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?

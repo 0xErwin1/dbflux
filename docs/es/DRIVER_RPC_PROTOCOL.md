@@ -104,7 +104,7 @@ las versiones menores se negocian de forma determinista dentro de esa línea
 mayor. Hasta v1.7 las versiones menores son aditivas; v1.8 es una corrección
 del formato de wire que cambia cómo se codifican algunos payloads existentes, y
 toda forma que se decodificaba antes es idéntica byte a byte (ver **Corrección
-del formato de wire** más abajo). v1.9 vuelve a ser aditiva.
+del formato de wire** más abajo). v1.9 vuelve a ser aditiva. v1.10 cambia los bytes de dos payloads existentes (ver **Expresiones SQL de celda** más abajo).
 
 Solicitud del cliente:
 
@@ -378,6 +378,12 @@ secciones de un driver externo quedan ocultas hasta que exista una presentación
 sin esa necesidad. Cada
 `RootSectionAction` lleva su `ExecutionClassification`, así que el host confirma
 y audita las acciones de los drivers externos igual que las de los integrados.
+
+### Expresiones SQL de celda (v1.10)
+
+v1.10 no añade ninguna variante de solicitud ni de respuesta. `RowInsert` (`InsertRow`) y `RowPatch` (`UpdateRow`) ganan una lista cada uno, añadida después del último campo: `column_expressions` y `change_expressions`, un `Vec<Option<String>>` paralelo a las columnas. Una entrada no vacía es una expresión SQL que el driver escribe tal cual en lugar del literal del valor (`gen_random_uuid()`, `now()`), y el valor enviado para esa columna es `Null`. Un literal nunca se promueve a expresión: solo una entrada de esta lista lo es, de modo que un texto como `now()` sigue siendo una cadena entre comillas. La lista está vacía cuando ninguna columna lleva una expresión.
+
+Igual que la corrección de v1.8, la codificación no depende de la versión negociada: postcard no tiene representación para un campo final ausente, así que un par v1.9 no puede decodificar un `RowInsert` o `RowPatch` de un par v1.10, ni al revés. Un host de drivers y sus drivers externos deben recompilarse juntos contra v1.10. Un driver que no se basa en SQL nunca construye la sentencia y rechaza las inserciones y actualizaciones de fila como ya hacía. Las herramientas MCP nunca producen una expresión, porque la entrada de las herramientas se convierte solo en valores.
 
 ## Contrato RPC de auth-provider
 

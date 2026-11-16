@@ -556,6 +556,7 @@ impl DataGridPanel {
                     name: col.title.to_string(),
                     value: cell_value.to_value(),
                     type_name: Some(col.type_name.to_string()),
+                    expression: None,
                 })
             })
             .collect();
@@ -1098,6 +1099,7 @@ impl DataGridPanel {
                         name: col.title.to_string(),
                         value,
                         type_name: Some(col.type_name.to_string()),
+                        expression: None,
                     });
                 }
             }

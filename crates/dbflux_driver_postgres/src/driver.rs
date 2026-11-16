@@ -303,7 +303,7 @@ impl SqlDialect for PostgresDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -325,7 +325,7 @@ impl SqlDialect for PostgresDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -8752,6 +8752,7 @@ mod tests {
                     Value::Text("b".to_string()),
                 ]),
                 type_name: Some("text[]".to_string()),
+                expression: None,
             }],
         );
 
@@ -8763,6 +8764,27 @@ mod tests {
             "INSERT INTO \"t\" (\"tags\") VALUES (ARRAY['a', 'b']::text[])"
         );
         assert!(!sql.contains("::jsonb"));
+    }
+
+    #[test]
+    fn postgres_build_insert_writes_a_uuid_expression_unquoted() {
+        let insert = RowInsert::with_typed_assignments(
+            "t".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("id", "gen_random_uuid()").with_type_opt(None),
+                ColumnAssignment::typed("name", Value::Text("x".to_string()), "text"),
+            ],
+        );
+
+        let sql = SqlQueryBuilder::new(&POSTGRES_DIALECT)
+            .build_insert(&insert, true)
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES (gen_random_uuid(), 'x') RETURNING *"
+        );
     }
 
     #[test]

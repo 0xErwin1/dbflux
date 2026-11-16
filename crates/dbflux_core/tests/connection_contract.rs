@@ -380,6 +380,35 @@ impl dbflux_core::Connection for PlannedExecutionConnection {
 }
 
 #[test]
+fn a_driver_without_sql_row_edits_rejects_an_expression_assignment() {
+    let connection = PlannedExecutionConnection::new();
+
+    let insert = RowInsert::with_typed_assignments(
+        "users".to_string(),
+        None,
+        vec![dbflux_core::ColumnAssignment::expression(
+            "id",
+            "gen_random_uuid()",
+        )],
+    );
+    let patch = dbflux_core::RowPatch::with_typed_changes(
+        dbflux_core::RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+        "users".to_string(),
+        None,
+        vec![dbflux_core::ColumnAssignment::expression("at", "now()")],
+    );
+
+    assert!(matches!(
+        connection.insert_row(&insert),
+        Err(DbError::NotSupported(_))
+    ));
+    assert!(matches!(
+        connection.update_row(&patch),
+        Err(DbError::NotSupported(_))
+    ));
+}
+
+#[test]
 fn execute_semantic_request_runs_the_primary_planned_query() {
     let connection = PlannedExecutionConnection::new();
     let request =

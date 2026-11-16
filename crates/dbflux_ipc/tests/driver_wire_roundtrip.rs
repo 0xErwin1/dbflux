@@ -22,22 +22,23 @@ use std::time::Duration;
 
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGeneratorInfo, CollectionBrowseRequest,
-    CollectionCountRequest, CollectionRef, ColumnInfo, ColumnKind, ColumnMeta, CrudResult,
-    CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbKind, DbSchemaInfo,
-    DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, DriverFormDef,
-    DriverMetadata, DriverMetadataBuilder, ExecutionClassification, ExecutionContext,
-    ExecutionSourceContext, ExplainRequest, FormSection, FormTab, HashDeleteRequest,
-    HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
-    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState, KeyPersistRequest,
-    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
-    KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, LocalizedText,
-    PlannedQuery, QueryLanguage, QueryRequest, QueryResult, RelationalSchema, RootItemPresentation,
-    RootSectionAction, RootSectionDef, RootSectionItem, RootSectionPage, RootSectionPresentation,
-    RowDelete, RowIdentity, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
-    StreamDeleteRequest, StreamEntryId, StreamMaxLen, TableBrowseRequest, TableCountRequest,
-    TableInfo, TableRef, Value, ValueRepr, ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
+    CollectionCountRequest, CollectionRef, ColumnAssignment, ColumnInfo, ColumnKind, ColumnMeta,
+    CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbKind,
+    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
+    DriverFormDef, DriverMetadata, DriverMetadataBuilder, ExecutionClassification,
+    ExecutionContext, ExecutionSourceContext, ExplainRequest, FormSection, FormTab,
+    HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
+    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState,
+    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest,
+    KeyType, KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest,
+    LocalizedText, PlannedQuery, QueryLanguage, QueryRequest, QueryResult, RelationalSchema,
+    RootItemPresentation, RootSectionAction, RootSectionDef, RootSectionItem, RootSectionPage,
+    RootSectionPresentation, RowDelete, RowIdentity, RowInsert, RowPatch, SchemaColumnInfo,
+    SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
+    SemanticPlan, SemanticPlanKind, SemanticRequest, SetAddRequest, SetRemoveRequest,
+    StreamAddRequest, StreamDeleteRequest, StreamEntryId, StreamMaxLen, TableBrowseRequest,
+    TableCountRequest, TableInfo, TableRef, Value, ValueRepr, ViewInfo, ZSetAddRequest,
+    ZSetRemoveRequest,
 };
 use dbflux_ipc::driver_protocol::{
     CollectionBrowseRequestDto, CollectionCountRequestDto, CrudResultDto, DocumentDeleteDto,
@@ -1510,6 +1511,49 @@ fn row_patch_and_insert_without_type_names_round_trip() {
             .iter()
             .all(|assignment| assignment.type_name.is_none())
     );
+}
+
+#[test]
+fn row_patch_and_insert_with_expressions_round_trip() {
+    let insert = RowInsert::with_typed_assignments(
+        "users".to_string(),
+        Some("public".to_string()),
+        vec![
+            ColumnAssignment::expression("id", "gen_random_uuid()"),
+            ColumnAssignment::typed("name", Value::Text("now()".to_string()), "text"),
+        ],
+    );
+    assert_postcard_roundtrip(&insert);
+
+    let encoded = postcard::to_allocvec(&insert).expect("encode");
+    let decoded: RowInsert = postcard::from_bytes(&encoded).expect("decode");
+    assert_eq!(
+        decoded.assignments[0].expression.as_deref(),
+        Some("gen_random_uuid()")
+    );
+    assert_eq!(decoded.assignments[0].value, Value::Null);
+    assert!(decoded.assignments[1].expression.is_none());
+    assert_eq!(
+        decoded.assignments[1].value,
+        Value::Text("now()".to_string())
+    );
+    assert_eq!(decoded.assignments[1].type_name.as_deref(), Some("text"));
+
+    let patch = RowPatch::with_typed_changes(
+        RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+        "users".to_string(),
+        None,
+        vec![
+            ColumnAssignment::new("name", Value::Text("Ada".to_string())),
+            ColumnAssignment::expression("deleted_at", "now()"),
+        ],
+    );
+    assert_postcard_roundtrip(&patch);
+
+    let encoded = postcard::to_allocvec(&patch).expect("encode");
+    let decoded: RowPatch = postcard::from_bytes(&encoded).expect("decode");
+    assert!(decoded.changes[0].expression.is_none());
+    assert_eq!(decoded.changes[1].expression.as_deref(), Some("now()"));
 }
 
 #[test]

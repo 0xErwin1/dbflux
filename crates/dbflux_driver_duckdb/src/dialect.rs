@@ -122,9 +122,7 @@ impl SqlDialect for DuckDbDialect {
         let values = join(
             assignments
                 .iter()
-                .map(|assignment| {
-                    self.value_to_literal_typed(&assignment.value, assignment.type_name.as_deref())
-                })
+                .map(|assignment| self.assignment_to_sql(assignment))
                 .collect(),
         );
         let conflict = join(
@@ -147,10 +145,7 @@ impl SqlDialect for DuckDbDialect {
                     format!(
                         "{} = {}",
                         self.quote_identifier(&assignment.name),
-                        self.value_to_literal_typed(
-                            &assignment.value,
-                            assignment.type_name.as_deref()
-                        )
+                        self.assignment_to_sql(assignment)
                     )
                 })
                 .collect(),

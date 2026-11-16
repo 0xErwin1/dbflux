@@ -96,10 +96,7 @@ impl<'a> SqlQueryBuilder<'a> {
         let values_str = insert
             .assignments
             .iter()
-            .map(|a| {
-                self.dialect
-                    .value_to_literal_typed(&a.value, a.type_name.as_deref())
-            })
+            .map(|a| self.dialect.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -374,8 +371,7 @@ impl<'a> SqlQueryBuilder<'a> {
                 format!(
                     "{} = {}",
                     self.dialect.quote_identifier(&a.name),
-                    self.dialect
-                        .value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.dialect.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -647,6 +643,81 @@ mod tests {
         assert_eq!(
             sql,
             "UPDATE \"public\".\"users\" SET \"archived\" = TRUE WHERE \"status\" = 'active'"
+        );
+    }
+
+    #[test]
+    fn build_insert_writes_an_expression_verbatim_next_to_a_literal() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let insert = RowInsert::with_typed_assignments(
+            "t".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("id", "gen_random_uuid()"),
+                ColumnAssignment::new("name", Value::Text("x".to_string())),
+            ],
+        );
+
+        assert_eq!(
+            builder.build_insert(&insert, false).unwrap(),
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES (gen_random_uuid(), 'x')"
+        );
+    }
+
+    #[test]
+    fn build_update_writes_an_expression_in_the_set_clause() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "t".to_string(),
+            None,
+            vec![ColumnAssignment::expression("deleted_at", "now()")],
+        );
+
+        assert_eq!(
+            builder.build_update(&patch, false).unwrap(),
+            "UPDATE \"t\" SET \"deleted_at\" = now() WHERE \"id\" = 1"
+        );
+    }
+
+    #[test]
+    fn a_text_value_that_looks_like_an_expression_stays_a_quoted_literal() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let assignment = ColumnAssignment::new("deleted_at", Value::Text("now()".to_string()));
+
+        assert!(!assignment.is_expression());
+        assert_eq!(
+            builder.build_set_clause(&[assignment]),
+            "\"deleted_at\" = 'now()'"
+        );
+    }
+
+    #[test]
+    fn upsert_writes_expressions_in_both_value_lists() {
+        let dialect = DefaultSqlDialect;
+
+        let sql = dialect
+            .build_upsert_statement(
+                None,
+                "t",
+                &[
+                    ColumnAssignment::new("id", Value::Int(1)),
+                    ColumnAssignment::expression("seen_at", "now()"),
+                ],
+                &["id".to_string()],
+                &[ColumnAssignment::expression("seen_at", "now()")],
+            )
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "INSERT INTO \"t\" (\"id\", \"seen_at\") VALUES (1, now()) ON CONFLICT (\"id\") DO UPDATE SET \"seen_at\" = now()"
         );
     }
 

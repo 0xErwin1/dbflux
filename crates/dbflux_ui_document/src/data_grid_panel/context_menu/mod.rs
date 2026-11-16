@@ -4040,6 +4040,7 @@ impl DataGridPanel {
                         name: name.clone(),
                         value: value.clone(),
                         type_name: Some(type_name.clone()),
+                        expression: None,
                     })
                     .collect();
 
@@ -4090,6 +4091,7 @@ impl DataGridPanel {
                             name,
                             value,
                             type_name: Some(type_name),
+                            expression: None,
                         },
                     )
                     .collect();

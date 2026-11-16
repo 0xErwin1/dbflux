@@ -59,7 +59,7 @@ impl SqlDialect for TursoDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -80,7 +80,7 @@ impl SqlDialect for TursoDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -592,6 +592,7 @@ mod tests {
             name: "id".into(),
             value: Value::Int(1),
             type_name: None,
+            expression: None,
         }];
         let sql = TURSO_DIALECT
             .build_upsert_statement(None, "t", &assignments, &["id".to_string()], &[])
