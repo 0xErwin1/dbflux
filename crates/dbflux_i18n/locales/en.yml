@@ -2534,12 +2534,12 @@ document:
         copy_stdin: "This script has a COPY … FROM stdin data block (line %{line}), which only the psql command-line client can load."
         copy_stdin_next: "Run it with psql instead."
         psql_meta: "This script uses the psql command %{command} (line %{line}), which only the psql command-line client understands."
-        psql_meta_next: "Remove it, or run the script with psql."
+        psql_meta_next: "Run the script with psql instead: removing it would run the remaining statements on this connection, which may not be the database it selects."
         self_managed: "This script manages its own transactions (%{keyword} on line %{line}), so it cannot run in one transaction."
         self_managed_next: "Turn off “Run in one transaction”; the script's own statements then decide what is saved."
         read_only:
-          one: "This connection is read-only, and %{count} statement in the script changes data or structure."
-          many: "This connection is read-only, and %{count} statements in the script change data or structure."
+          one: "This connection is read-only, and %{count} statement in the script changes data, structure or permissions."
+          many: "This connection is read-only, and %{count} statements in the script change data, structure or permissions."
         read_only_next: "Open a read-write connection to run it. A script that only reads can run here."
       configure:
         file: "File: %{file} (SQL script)"

@@ -376,7 +376,7 @@ meta-command such as `\connect`, or a statement that switches off autocommit
 (`SET autocommit = 0`) or switches on implicit transactions, which would leave
 the connection in manual-commit mode. Each is refused before anything runs, with the
 line and a next step: run the script with the database's own command-line
-client (psql for a `COPY … FROM stdin` block), or rewrite it. A script over 100 MB can also be split into smaller files, but each file runs on its own: a later file that fails cannot undo an earlier one.
+client (psql for a `COPY … FROM stdin` block or a psql meta-command: removing a `\connect` line would run the rest on this connection, which may not be the database it selects), or rewrite it. A script over 100 MB can also be split into smaller files, but each file runs on its own: a later file that fails cannot undo an earlier one.
 
 **Configure** shows the statement count and size, how many statements fall in
 each classification (the classes the editor and the audit viewer use, Admin
@@ -405,7 +405,7 @@ On a connection that commits schema statements on its own (MySQL and MariaDB),
 before them, so a rollback only undoes the changes made after the last one.
 Sequence changes (`setval`, `nextval`) are never undone by a rollback. A
 connection that is read-only by its profile setting refuses a script that
-changes data or structure, says how many statements do, and keeps **Continue**
+changes data, structure or permissions, says how many statements do, and keeps **Continue**
 off; a script that only reads can run.
 
 Every script goes through **Confirm**, whatever it holds. A script with no

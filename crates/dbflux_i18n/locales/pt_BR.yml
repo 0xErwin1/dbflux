@@ -2534,12 +2534,12 @@ document:
         copy_stdin: "Este script tem um bloco de dados COPY … FROM stdin (linha %{line}), que só o cliente de linha de comando psql consegue carregar."
         copy_stdin_next: "Execute-o com o psql."
         psql_meta: "Este script usa o comando do psql %{command} (linha %{line}), que só o cliente de linha de comando psql entende."
-        psql_meta_next: "Remova-o, ou execute o script com o psql."
+        psql_meta_next: "Execute o script com o psql: removê-lo executaria as instruções restantes nesta conexão, que pode não ser o banco de dados que ele seleciona."
         self_managed: "Este script gerencia suas próprias transações (%{keyword} na linha %{line}), então não pode ser executado em uma única transação."
         self_managed_next: "Desative “Executar em uma única transação”; as próprias instruções do script decidem então o que é salvo."
         read_only:
-          one: "Esta conexão é somente leitura, e %{count} instrução do script altera dados ou estrutura."
-          many: "Esta conexão é somente leitura, e %{count} instruções do script alteram dados ou estrutura."
+          one: "Esta conexão é somente leitura, e %{count} instrução do script altera dados, estrutura ou permissões."
+          many: "Esta conexão é somente leitura, e %{count} instruções do script alteram dados, estrutura ou permissões."
         read_only_next: "Abra uma conexão de leitura e escrita para executá-lo. Um script que apenas lê pode ser executado aqui."
       configure:
         file: "Arquivo: %{file} (script SQL)"

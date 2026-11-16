@@ -99,7 +99,7 @@ impl ScriptOptions {
     }
 }
 
-/// The number of statements that change data or structure when the profile
+/// The number of statements that change data, structure or permissions when the profile
 /// is read-only, which refuses the script; `None` when it can run.
 pub(in crate::import_wizard) fn read_only_conflict(
     summary: &ScriptSummary,

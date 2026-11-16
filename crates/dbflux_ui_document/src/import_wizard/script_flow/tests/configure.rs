@@ -170,7 +170,7 @@ fn a_read_only_profile_refuses_a_script_that_changes_data(cx: &mut gpui::TestApp
     let block = read(&mut opened, |wizard| wizard.script_read_only_block()).expect("block");
     assert_eq!(
         block.message,
-        "This connection is read-only, and 2 statements in the script change data or structure."
+        "This connection is read-only, and 2 statements in the script change data, structure or permissions."
     );
     assert_eq!(
         block.next_step,

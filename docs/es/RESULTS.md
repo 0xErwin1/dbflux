@@ -411,7 +411,7 @@ desactiva autocommit (`SET autocommit = 0`) o activa las transacciones
 implícitas, lo que dejaría la conexión en modo de confirmación manual. Cada uno se
 rechaza antes de ejecutar nada, con la línea y qué hacer a continuación: ejecutar
 el script con el cliente de línea de comandos de la propia base de datos o
-reescribirlo (psql para un bloque `COPY … FROM stdin`). Un script de más de 100 MB
+reescribirlo (psql para un bloque `COPY … FROM stdin` o un metacomando de psql: quitar una línea `\connect` ejecutaría el resto en esta conexión, que puede no ser la base de datos que selecciona). Un script de más de 100 MB
 también se puede dividir en archivos más pequeños, pero cada archivo se ejecuta
 por separado: un archivo posterior que falle no puede deshacer uno anterior.
 
@@ -444,7 +444,7 @@ MariaDB), `CREATE`, `ALTER` y `DROP` se guardan al ejecutarse y también guardan
 todas las sentencias anteriores, así que un rollback solo deshace los cambios
 hechos después de la última. Los cambios de secuencias (`setval`, `nextval`)
 nunca se deshacen con un rollback. Una conexión de solo lectura por la
-configuración de su perfil rechaza un script que cambia datos o estructura, dice
+configuración de su perfil rechaza un script que cambia datos, estructura o permisos, dice
 cuántas sentencias lo hacen y mantiene **Continuar** desactivado; un script que
 solo lee puede ejecutarse.
 

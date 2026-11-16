@@ -2534,12 +2534,12 @@ document:
         copy_stdin: "此脚本有一个 COPY … FROM stdin 数据块（第 %{line} 行），只有 psql 命令行客户端能加载它。"
         copy_stdin_next: "请改用 psql 运行。"
         psql_meta: "此脚本使用了 psql 命令 %{command}（第 %{line} 行），只有 psql 命令行客户端能理解它。"
-        psql_meta_next: "请删除它，或用 psql 运行该脚本。"
+        psql_meta_next: "请改用 psql 运行该脚本：删除它会让其余语句在此连接上运行，而这可能不是它所选择的数据库。"
         self_managed: "此脚本自行管理事务（第 %{line} 行的 %{keyword}），因此不能在一个事务中运行。"
         self_managed_next: "请关闭“在一个事务中运行”；之后由脚本自己的语句决定保存什么。"
         read_only:
-          one: "此连接为只读，脚本中有 %{count} 条语句会更改数据或结构。"
-          many: "此连接为只读，脚本中有 %{count} 条语句会更改数据或结构。"
+          one: "此连接为只读，脚本中有 %{count} 条语句会更改数据、结构或权限。"
+          many: "此连接为只读，脚本中有 %{count} 条语句会更改数据、结构或权限。"
         read_only_next: "请打开读写连接来运行它。只读取数据的脚本可以在这里运行。"
       configure:
         file: "文件：%{file}（SQL 脚本）"

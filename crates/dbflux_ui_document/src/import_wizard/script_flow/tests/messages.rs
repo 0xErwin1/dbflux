@@ -437,7 +437,7 @@ fn each_refused_script_content_has_localized_copy_and_a_next_step() {
                 line: 3,
             },
             "This script uses the psql command \\connect (line 3), which only the psql command-line client understands.",
-            "Remove it, or run the script with psql.",
+            "Run the script with psql instead: removing it would run the remaining statements on this connection, which may not be the database it selects.",
         ),
         (
             ScriptError::SelfManagedTransaction {
