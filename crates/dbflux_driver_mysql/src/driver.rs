@@ -4228,16 +4228,18 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
                 );
             }
             let enum_values = parse_mysql_enum_or_set(&type_name);
+            let default_value = column_default_as_sql_for_type(
+                default,
+                &type_name,
+                extra.as_deref().unwrap_or_default(),
+                server_quotes_literal_defaults,
+            );
 
             ColumnInfo {
                 name,
                 type_name,
                 nullable: nullable == "YES",
-                default_value: column_default_as_sql(
-                    default,
-                    extra.as_deref().unwrap_or_default(),
-                    server_quotes_literal_defaults,
-                ),
+                default_value,
                 is_primary_key: is_pk,
                 enum_values,
             }
@@ -4250,10 +4252,12 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
 ///
 /// MySQL 8 reports a literal default unquoted (`pending`, `00123`) and marks an
 /// expression default with `DEFAULT_GENERATED` in `EXTRA`; MySQL 5.7 has no
-/// such marker but only allows `CURRENT_TIMESTAMP` as an expression default.
-/// MariaDB 10.2.7+ already quotes literals and writes expressions bare.
-fn column_default_as_sql(
+/// such marker but only allows `CURRENT_TIMESTAMP` as an expression default,
+/// and only on temporal columns. MariaDB 10.2.7+ already quotes literals and
+/// writes expressions bare.
+fn column_default_as_sql_for_type(
     default: Option<String>,
+    column_type: &str,
     extra: &str,
     server_quotes_literal_defaults: bool,
 ) -> Option<String> {
@@ -4263,15 +4267,19 @@ fn column_default_as_sql(
         return Some(default);
     }
 
+    let column_type = column_type.to_ascii_lowercase();
+    let is_temporal_column = ["timestamp", "datetime", "date", "time"]
+        .iter()
+        .any(|prefix| column_type.starts_with(prefix));
     let upper = default.to_ascii_uppercase();
     let is_timestamp_function = ["CURRENT_TIMESTAMP", "NOW(", "LOCALTIME"]
         .iter()
         .any(|prefix| upper.starts_with(prefix));
-    if is_timestamp_function {
+    if is_temporal_column && is_timestamp_function {
         return Some(default);
     }
 
-    Some(format!("'{}'", default.replace('\'', "''")))
+    Some(mysql_text_literal(&default))
 }
 
 fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<IndexInfo>, DbError> {
@@ -5000,42 +5008,79 @@ fn resolve_write_privilege(
 mod tests {
     #[test]
     fn column_defaults_are_returned_as_sql_text() {
-        use super::column_default_as_sql;
+        use super::column_default_as_sql_for_type;
 
         let own = |value: &str| Some(value.to_string());
 
-        assert_eq!(column_default_as_sql(None, "", false), None);
         assert_eq!(
-            column_default_as_sql(own("pending"), "", false),
+            column_default_as_sql_for_type(None, "varchar(20)", "", false),
+            None
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("pending"), "varchar(20)", "", false),
             own("'pending'")
         );
         assert_eq!(
-            column_default_as_sql(own("00123"), "", false),
+            column_default_as_sql_for_type(own("00123"), "varchar(20)", "", false),
             own("'00123'")
         );
         assert_eq!(
-            column_default_as_sql(own("it's"), "", false),
-            own("'it''s'")
+            column_default_as_sql_for_type(own("it's"), "varchar(20)", "", false),
+            Some(super::mysql_text_literal("it's"))
         );
         assert_eq!(
-            column_default_as_sql(own("uuid()"), "DEFAULT_GENERATED", false),
+            column_default_as_sql_for_type(
+                own("uuid()"),
+                "varchar(20)",
+                "DEFAULT_GENERATED",
+                false
+            ),
             own("uuid()")
         );
         assert_eq!(
-            column_default_as_sql(
+            column_default_as_sql_for_type(
                 own("CURRENT_TIMESTAMP"),
+                "timestamp",
                 "on update CURRENT_TIMESTAMP",
                 false
             ),
             own("CURRENT_TIMESTAMP")
         );
         assert_eq!(
-            column_default_as_sql(own("'pending'"), "", true),
+            column_default_as_sql_for_type(own("'pending'"), "varchar(20)", "", true),
             own("'pending'")
         );
         assert_eq!(
-            column_default_as_sql(own("uuid()"), "", true),
+            column_default_as_sql_for_type(own("uuid()"), "varchar(20)", "", true),
             own("uuid()")
+        );
+    }
+
+    #[test]
+    fn literal_defaults_survive_backslashes_and_timestamp_lookalikes() {
+        use super::{column_default_as_sql_for_type, mysql_text_literal};
+
+        let own = |value: &str| Some(value.to_string());
+
+        assert_eq!(
+            column_default_as_sql_for_type(own("a\\nb"), "varchar(20)", "", false),
+            Some(mysql_text_literal("a\\nb"))
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("tail\\"), "varchar(20)", "", false),
+            Some(mysql_text_literal("tail\\"))
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP"), "varchar(32)", "", false),
+            own("'CURRENT_TIMESTAMP'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP"), "timestamp", "", false),
+            own("CURRENT_TIMESTAMP")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP(3)"), "datetime(3)", "", false),
+            own("CURRENT_TIMESTAMP(3)")
         );
     }
 
