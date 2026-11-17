@@ -22,17 +22,21 @@ use crate::user_error::{ErrorKind, UserFacingError, report_error_async};
 /// On Windows and macOS this is unconditionally `true` — the native pickers
 /// are part of the OS.
 ///
-/// On Linux this is a heuristic that succeeds when any of these holds:
-/// - the `org.freedesktop.portal.Desktop` session service is installed (the
-///   XDG portal backend rfd prefers)
+/// On Linux this is a filesystem-only heuristic that succeeds when any of
+/// these holds:
+/// - the XDG portal is usable: the `org.freedesktop.portal.Desktop` session
+///   service file is installed (runtime dir, `XDG_DATA_HOME`, `XDG_DATA_DIRS`
+///   or `/usr/share`) AND at least one backend `*.portal` file under an
+///   `xdg-desktop-portal/portals` data directory lists
+///   `org.freedesktop.impl.portal.FileChooser` in its `Interfaces=` key
 /// - `zenity` is on `PATH` (rfd's fallback when the portal call fails)
 /// - `kdialog` is on `PATH` (KDE's equivalent fallback)
 ///
-/// The heuristic is intentionally lenient: rfd may still fail at runtime when
-/// the portal is installed but the FileChooser interface is unimplemented by
-/// the active desktop. The Linux user pain we're solving — a missing portal AND
-/// missing zenity, which makes rfd return `None` silently — is reliably caught
-/// by this probe.
+/// A portal frontend without a FileChooser backend (for example only
+/// `xdg-desktop-portal-hyprland`) makes rfd return `None`, which callers would
+/// misread as a cancellation, so it does not count. Remaining limitations:
+/// `UseIn` and `portals.conf` backend routing are ignored, and rfd still cannot
+/// tell a backend failure from a user cancellation.
 pub fn is_native_file_dialog_available() -> bool {
     #[cfg(not(target_os = "linux"))]
     {
@@ -41,9 +45,7 @@ pub fn is_native_file_dialog_available() -> bool {
 
     #[cfg(target_os = "linux")]
     {
-        binary_on_path("zenity")
-            || binary_on_path("kdialog")
-            || portal_service_installed_in(&session_service_dirs())
+        binary_on_path("zenity") || binary_on_path("kdialog") || portal_file_chooser_available()
     }
 }
 
@@ -56,60 +58,132 @@ pub fn is_native_file_dialog_available() -> bool {
 const PORTAL_SERVICE_FILE: &str = "org.freedesktop.portal.Desktop.service";
 
 #[cfg(target_os = "linux")]
+const FILE_CHOOSER_INTERFACE: &str = "org.freedesktop.impl.portal.FileChooser";
+
+/// The environment inputs that locate D-Bus service files and portal backend
+/// declarations, captured once so the directory computation stays pure.
+#[cfg(target_os = "linux")]
+struct XdgDirectories {
+    data_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    data_dirs: Option<std::ffi::OsString>,
+    runtime_dir: Option<std::ffi::OsString>,
+}
+
+#[cfg(target_os = "linux")]
+impl XdgDirectories {
+    fn from_env() -> Self {
+        Self {
+            data_home: std::env::var_os("XDG_DATA_HOME"),
+            home: std::env::var_os("HOME"),
+            data_dirs: std::env::var_os("XDG_DATA_DIRS"),
+            runtime_dir: std::env::var_os("XDG_RUNTIME_DIR"),
+        }
+    }
+
+    /// `XDG_DATA_HOME` then each `XDG_DATA_DIRS` entry, with the XDG Base
+    /// Directory defaults when a variable is unset or empty, then the
+    /// compiled-in `/usr/share` when absent.
+    fn data_directories(&self) -> Vec<PathBuf> {
+        let data_home = self
+            .data_home
+            .clone()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                self.home
+                    .clone()
+                    .filter(|value| !value.is_empty())
+                    .map(|home| PathBuf::from(home).join(".local").join("share"))
+            });
+
+        let data_dirs: Vec<PathBuf> =
+            match self.data_dirs.as_ref().filter(|value| !value.is_empty()) {
+                Some(value) => std::env::split_paths(value)
+                    .filter(|dir| !dir.as_os_str().is_empty())
+                    .collect(),
+                None => vec![
+                    PathBuf::from("/usr/local/share"),
+                    PathBuf::from("/usr/share"),
+                ],
+            };
+
+        let mut directories: Vec<PathBuf> = data_home.into_iter().chain(data_dirs).collect();
+
+        let system_default = PathBuf::from("/usr/share");
+        if !directories.contains(&system_default) {
+            directories.push(system_default);
+        }
+
+        directories
+    }
+
+    /// Mirrors the session bus search order: `XDG_RUNTIME_DIR`, then the data
+    /// directories.
+    fn session_service_dirs(&self) -> Vec<PathBuf> {
+        let runtime_dir = self
+            .runtime_dir
+            .iter()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+
+        runtime_dir
+            .chain(self.data_directories())
+            .map(|dir| dir.join("dbus-1").join("services"))
+            .collect()
+    }
+
+    fn portal_backend_dirs(&self) -> Vec<PathBuf> {
+        self.data_directories()
+            .into_iter()
+            .map(|dir| dir.join("xdg-desktop-portal").join("portals"))
+            .collect()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn portal_file_chooser_available() -> bool {
+    let directories = XdgDirectories::from_env();
+
+    portal_service_installed_in(&directories.session_service_dirs())
+        && file_chooser_backend_installed_in(&directories.portal_backend_dirs())
+}
+
+#[cfg(target_os = "linux")]
 fn portal_service_installed_in(service_dirs: &[PathBuf]) -> bool {
     service_dirs
         .iter()
         .any(|dir| dir.join(PORTAL_SERVICE_FILE).is_file())
 }
 
+/// Unreadable directories and files are skipped.
 #[cfg(target_os = "linux")]
-fn session_service_dirs() -> Vec<PathBuf> {
-    session_service_dirs_from(
-        std::env::var_os("XDG_DATA_HOME"),
-        std::env::var_os("HOME"),
-        std::env::var_os("XDG_DATA_DIRS"),
-    )
+fn file_chooser_backend_installed_in(backend_dirs: &[PathBuf]) -> bool {
+    backend_dirs.iter().any(|dir| {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+
+        entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "portal"))
+            .filter_map(|path| std::fs::read_to_string(path).ok())
+            .any(|contents| declares_file_chooser(&contents))
+    })
 }
 
-/// The session bus searches `dbus-1/services` under `XDG_DATA_HOME` and each
-/// `XDG_DATA_DIRS` entry, with the XDG Base Directory defaults when a variable
-/// is unset or empty, plus the compiled-in `/usr/share` location.
 #[cfg(target_os = "linux")]
-fn session_service_dirs_from(
-    data_home: Option<std::ffi::OsString>,
-    home: Option<std::ffi::OsString>,
-    data_dirs: Option<std::ffi::OsString>,
-) -> Vec<PathBuf> {
-    let data_home = data_home
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            home.filter(|value| !value.is_empty())
-                .map(|home| PathBuf::from(home).join(".local").join("share"))
-        });
-
-    let data_dirs: Vec<PathBuf> = match data_dirs.filter(|value| !value.is_empty()) {
-        Some(value) => std::env::split_paths(&value)
-            .filter(|dir| !dir.as_os_str().is_empty())
-            .collect(),
-        None => vec![
-            PathBuf::from("/usr/local/share"),
-            PathBuf::from("/usr/share"),
-        ],
-    };
-
-    let mut service_dirs: Vec<PathBuf> = data_home
-        .into_iter()
-        .chain(data_dirs)
-        .map(|dir| dir.join("dbus-1").join("services"))
-        .collect();
-
-    let system_default = PathBuf::from("/usr/share/dbus-1/services");
-    if !service_dirs.contains(&system_default) {
-        service_dirs.push(system_default);
-    }
-
-    service_dirs
+fn declares_file_chooser(portal_file: &str) -> bool {
+    portal_file
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(key, _)| key.trim() == "Interfaces")
+        .any(|(_, value)| {
+            value
+                .split(';')
+                .any(|interface| interface.trim() == FILE_CHOOSER_INTERFACE)
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -350,11 +424,27 @@ mod tests {
     #[cfg(target_os = "linux")]
     mod portal_service {
         use std::ffi::OsString;
-        use std::path::PathBuf;
+        use std::path::{Path, PathBuf};
 
-        use super::super::{portal_service_installed_in, session_service_dirs_from};
+        use super::super::{
+            XdgDirectories, file_chooser_backend_installed_in, portal_service_installed_in,
+        };
 
-        fn install_portal_service(data_dir: &std::path::Path) {
+        fn directories(
+            data_home: Option<&str>,
+            home: Option<&str>,
+            data_dirs: Option<OsString>,
+            runtime_dir: Option<&str>,
+        ) -> XdgDirectories {
+            XdgDirectories {
+                data_home: data_home.map(OsString::from),
+                home: home.map(OsString::from),
+                data_dirs,
+                runtime_dir: runtime_dir.map(OsString::from),
+            }
+        }
+
+        fn install_portal_service(data_dir: &Path) {
             let services = data_dir.join("dbus-1").join("services");
             std::fs::create_dir_all(&services).expect("create services dir");
             std::fs::write(
@@ -364,13 +454,27 @@ mod tests {
             .expect("write service file");
         }
 
+        fn install_backend(data_dir: &Path, file_name: &str, interfaces: &str) {
+            let portals = data_dir.join("xdg-desktop-portal").join("portals");
+            std::fs::create_dir_all(&portals).expect("create portals dir");
+            std::fs::write(
+                portals.join(file_name),
+                format!("[portal]\nDBusName=org.example\nInterfaces={interfaces}\nUseIn=gnome\n"),
+            )
+            .expect("write backend file");
+        }
+
+        fn backend_dirs_of(data_dir: &Path) -> Vec<PathBuf> {
+            vec![data_dir.join("xdg-desktop-portal").join("portals")]
+        }
+
         #[test]
         fn portal_is_detected_from_its_session_service_file() {
             let missing = tempfile::tempdir().expect("tempdir");
             let installed = tempfile::tempdir().expect("tempdir");
             install_portal_service(installed.path());
 
-            let dirs = session_service_dirs_from(
+            let dirs = directories(
                 None,
                 None,
                 Some(OsString::from(format!(
@@ -378,7 +482,20 @@ mod tests {
                     missing.path().display(),
                     installed.path().display()
                 ))),
-            );
+                None,
+            )
+            .session_service_dirs();
+
+            assert!(portal_service_installed_in(&dirs));
+        }
+
+        #[test]
+        fn portal_service_is_detected_in_the_runtime_dir() {
+            let runtime = tempfile::tempdir().expect("tempdir");
+            install_portal_service(runtime.path());
+
+            let dirs = directories(None, Some("/home/user"), None, runtime.path().to_str())
+                .session_service_dirs();
 
             assert!(portal_service_installed_in(&dirs));
         }
@@ -393,7 +510,7 @@ mod tests {
 
         #[test]
         fn service_dirs_follow_the_xdg_base_directory_defaults() {
-            let dirs = session_service_dirs_from(None, Some(OsString::from("/home/user")), None);
+            let dirs = directories(None, Some("/home/user"), None, None).session_service_dirs();
 
             assert_eq!(
                 dirs,
@@ -407,11 +524,13 @@ mod tests {
 
         #[test]
         fn service_dirs_prefer_explicit_xdg_variables() {
-            let dirs = session_service_dirs_from(
-                Some(OsString::from("/data/home")),
-                Some(OsString::from("/home/user")),
+            let dirs = directories(
+                Some("/data/home"),
+                Some("/home/user"),
                 Some(OsString::from("/run/current-system/sw/share")),
-            );
+                None,
+            )
+            .session_service_dirs();
 
             assert_eq!(
                 dirs,
@@ -421,6 +540,94 @@ mod tests {
                     PathBuf::from("/usr/share/dbus-1/services"),
                 ]
             );
+        }
+
+        #[test]
+        fn service_dirs_search_the_runtime_dir_first_when_set() {
+            let dirs = directories(None, Some("/home/user"), None, Some("/run/user/1000"))
+                .session_service_dirs();
+
+            assert_eq!(
+                dirs.first(),
+                Some(&PathBuf::from("/run/user/1000/dbus-1/services"))
+            );
+            assert_eq!(dirs.len(), 4);
+        }
+
+        #[test]
+        fn service_dirs_omit_the_runtime_dir_when_unset_or_empty() {
+            let unset = directories(None, Some("/home/user"), None, None).session_service_dirs();
+            let empty =
+                directories(None, Some("/home/user"), None, Some("")).session_service_dirs();
+
+            assert_eq!(unset, empty);
+            assert_eq!(unset.len(), 3);
+        }
+
+        #[test]
+        fn backend_dirs_follow_the_data_dirs_without_the_runtime_dir() {
+            let dirs = directories(None, Some("/home/user"), None, Some("/run/user/1000"))
+                .portal_backend_dirs();
+
+            assert_eq!(
+                dirs,
+                vec![
+                    PathBuf::from("/home/user/.local/share/xdg-desktop-portal/portals"),
+                    PathBuf::from("/usr/local/share/xdg-desktop-portal/portals"),
+                    PathBuf::from("/usr/share/xdg-desktop-portal/portals"),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_file_chooser_backend_is_detected() {
+            let data = tempfile::tempdir().expect("tempdir");
+            install_backend(
+                data.path(),
+                "gtk.portal",
+                "org.freedesktop.impl.portal.FileChooser;org.freedesktop.impl.portal.AppChooser;org.freedesktop.impl.portal.Print;",
+            );
+
+            assert!(file_chooser_backend_installed_in(&backend_dirs_of(
+                data.path()
+            )));
+        }
+
+        #[test]
+        fn a_backend_without_file_chooser_is_not_detected() {
+            let data = tempfile::tempdir().expect("tempdir");
+            install_backend(
+                data.path(),
+                "hyprland.portal",
+                "org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.ScreenCast;",
+            );
+
+            assert!(!file_chooser_backend_installed_in(&backend_dirs_of(
+                data.path()
+            )));
+        }
+
+        #[test]
+        fn an_interface_that_only_contains_the_name_is_not_detected() {
+            let data = tempfile::tempdir().expect("tempdir");
+            install_backend(
+                data.path(),
+                "extra.portal",
+                "org.freedesktop.impl.portal.FileChooserExtra;x.org.freedesktop.impl.portal.FileChooser;",
+            );
+
+            assert!(!file_chooser_backend_installed_in(&backend_dirs_of(
+                data.path()
+            )));
+        }
+
+        #[test]
+        fn missing_backend_dirs_are_skipped() {
+            let data = tempfile::tempdir().expect("tempdir");
+
+            assert!(!file_chooser_backend_installed_in(&backend_dirs_of(
+                &data.path().join("absent")
+            )));
         }
     }
 

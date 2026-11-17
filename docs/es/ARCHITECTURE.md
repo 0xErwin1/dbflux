@@ -1658,8 +1658,10 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
   módulo (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`). La disponibilidad del
   file-dialog se sondea en runtime vía
   `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` (en
-  Linux: busca el archivo de servicio de sesión D-Bus de
-  `org.freedesktop.portal.Desktop`, o `zenity` / `kdialog` en `PATH`);
+  Linux: el portal XDG cuenta solo si existe el archivo de servicio de sesión
+  D-Bus de `org.freedesktop.portal.Desktop` y un backend instalado declara
+  `org.freedesktop.impl.portal.FileChooser`; si no, busca `zenity` / `kdialog`
+  en `PATH`);
   cuando no hay backend disponible, los exports caen a `fallback_export_dir()`
   (`~/.local/share/dbflux/exports/`) con deconfliction vía `unique_path_in()`.
   También hay disponible un path de export por clipboard como target
