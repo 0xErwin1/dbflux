@@ -22,14 +22,14 @@ use crate::user_error::{ErrorKind, UserFacingError, report_error_async};
 /// On Windows and macOS this is unconditionally `true` — the native pickers
 /// are part of the OS.
 ///
-/// On Linux this is a heuristic that succeeds when at least one of the
-/// following binaries is on `PATH`:
-/// - `xdg-desktop-portal` (the XDG portal backend rfd prefers)
-/// - `zenity` (rfd's fallback when the portal call fails)
-/// - `kdialog` (KDE's equivalent fallback)
+/// On Linux this is a heuristic that succeeds when any of these holds:
+/// - the `org.freedesktop.portal.Desktop` session service is installed (the
+///   XDG portal backend rfd prefers)
+/// - `zenity` is on `PATH` (rfd's fallback when the portal call fails)
+/// - `kdialog` is on `PATH` (KDE's equivalent fallback)
 ///
 /// The heuristic is intentionally lenient: rfd may still fail at runtime when
-/// the portal binary exists but the FileChooser interface is unimplemented by
+/// the portal is installed but the FileChooser interface is unimplemented by
 /// the active desktop. The Linux user pain we're solving — a missing portal AND
 /// missing zenity, which makes rfd return `None` silently — is reliably caught
 /// by this probe.
@@ -41,28 +41,75 @@ pub fn is_native_file_dialog_available() -> bool {
 
     #[cfg(target_os = "linux")]
     {
-        binary_on_path("xdg-desktop-portal")
-            || binary_on_path("zenity")
+        binary_on_path("zenity")
             || binary_on_path("kdialog")
-            || portal_process_running()
+            || portal_service_installed_in(&session_service_dirs())
     }
 }
 
-/// On distros like NixOS the portal runs as a service without its binary on
-/// PATH, so the PATH probe alone reports a false negative. A live
-/// `xdg-desktop-portal` process means rfd's portal backend can serve dialogs.
+/// The portal binary usually lives outside `PATH` (`/usr/lib` on Arch, the
+/// Nix store on NixOS) and is started on demand by D-Bus activation, so
+/// neither a `PATH` lookup nor a process scan finds it reliably. The session
+/// service file that D-Bus activation reads is present whenever the portal can
+/// be started, running or not.
 #[cfg(target_os = "linux")]
-fn portal_process_running() -> bool {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return false;
+const PORTAL_SERVICE_FILE: &str = "org.freedesktop.portal.Desktop.service";
+
+#[cfg(target_os = "linux")]
+fn portal_service_installed_in(service_dirs: &[PathBuf]) -> bool {
+    service_dirs
+        .iter()
+        .any(|dir| dir.join(PORTAL_SERVICE_FILE).is_file())
+}
+
+#[cfg(target_os = "linux")]
+fn session_service_dirs() -> Vec<PathBuf> {
+    session_service_dirs_from(
+        std::env::var_os("XDG_DATA_HOME"),
+        std::env::var_os("HOME"),
+        std::env::var_os("XDG_DATA_DIRS"),
+    )
+}
+
+/// The session bus searches `dbus-1/services` under `XDG_DATA_HOME` and each
+/// `XDG_DATA_DIRS` entry, with the XDG Base Directory defaults when a variable
+/// is unset or empty, plus the compiled-in `/usr/share` location.
+#[cfg(target_os = "linux")]
+fn session_service_dirs_from(
+    data_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    data_dirs: Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let data_home = data_home
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".local").join("share"))
+        });
+
+    let data_dirs: Vec<PathBuf> = match data_dirs.filter(|value| !value.is_empty()) {
+        Some(value) => std::env::split_paths(&value)
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .collect(),
+        None => vec![
+            PathBuf::from("/usr/local/share"),
+            PathBuf::from("/usr/share"),
+        ],
     };
 
-    entries.filter_map(Result::ok).any(|entry| {
-        let comm_path = entry.path().join("comm");
-        std::fs::read_to_string(comm_path)
-            .map(|comm| comm.trim() == "xdg-desktop-portal")
-            .unwrap_or(false)
-    })
+    let mut service_dirs: Vec<PathBuf> = data_home
+        .into_iter()
+        .chain(data_dirs)
+        .map(|dir| dir.join("dbus-1").join("services"))
+        .collect();
+
+    let system_default = PathBuf::from("/usr/share/dbus-1/services");
+    if !service_dirs.contains(&system_default) {
+        service_dirs.push(system_default);
+    }
+
+    service_dirs
 }
 
 #[cfg(target_os = "linux")]
@@ -298,6 +345,83 @@ mod tests {
 
         assert_eq!(outcome, OpenTargetOutcome::Unavailable);
         assert!(!polled.get());
+    }
+
+    #[cfg(target_os = "linux")]
+    mod portal_service {
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+
+        use super::super::{portal_service_installed_in, session_service_dirs_from};
+
+        fn install_portal_service(data_dir: &std::path::Path) {
+            let services = data_dir.join("dbus-1").join("services");
+            std::fs::create_dir_all(&services).expect("create services dir");
+            std::fs::write(
+                services.join("org.freedesktop.portal.Desktop.service"),
+                "[D-BUS Service]\nName=org.freedesktop.portal.Desktop\n",
+            )
+            .expect("write service file");
+        }
+
+        #[test]
+        fn portal_is_detected_from_its_session_service_file() {
+            let missing = tempfile::tempdir().expect("tempdir");
+            let installed = tempfile::tempdir().expect("tempdir");
+            install_portal_service(installed.path());
+
+            let dirs = session_service_dirs_from(
+                None,
+                None,
+                Some(OsString::from(format!(
+                    "{}:{}",
+                    missing.path().display(),
+                    installed.path().display()
+                ))),
+            );
+
+            assert!(portal_service_installed_in(&dirs));
+        }
+
+        #[test]
+        fn portal_is_not_detected_without_a_service_file() {
+            let empty = tempfile::tempdir().expect("tempdir");
+            let dirs = vec![empty.path().join("dbus-1").join("services")];
+
+            assert!(!portal_service_installed_in(&dirs));
+        }
+
+        #[test]
+        fn service_dirs_follow_the_xdg_base_directory_defaults() {
+            let dirs = session_service_dirs_from(None, Some(OsString::from("/home/user")), None);
+
+            assert_eq!(
+                dirs,
+                vec![
+                    PathBuf::from("/home/user/.local/share/dbus-1/services"),
+                    PathBuf::from("/usr/local/share/dbus-1/services"),
+                    PathBuf::from("/usr/share/dbus-1/services"),
+                ]
+            );
+        }
+
+        #[test]
+        fn service_dirs_prefer_explicit_xdg_variables() {
+            let dirs = session_service_dirs_from(
+                Some(OsString::from("/data/home")),
+                Some(OsString::from("/home/user")),
+                Some(OsString::from("/run/current-system/sw/share")),
+            );
+
+            assert_eq!(
+                dirs,
+                vec![
+                    PathBuf::from("/data/home/dbus-1/services"),
+                    PathBuf::from("/run/current-system/sw/share/dbus-1/services"),
+                    PathBuf::from("/usr/share/dbus-1/services"),
+                ]
+            );
+        }
     }
 
     #[test]
