@@ -31,7 +31,7 @@ use dbflux_ui_base::window_state::{self, WindowGeometry};
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
-    Listener as IpcListener, ListenerNonblockingMode, ListenerOptions
+    Listener as IpcListener, ListenerNonblockingMode, ListenerOptions,
 };
 use log::info;
 use std::io::{self, Write};
@@ -267,8 +267,7 @@ fn main() {
 }
 
 fn bind_ipc_socket() -> Result<IpcListener, ()> {
-    if send_focus_request().is_ok()
-    {
+    if send_focus_request().is_ok() {
         std::process::exit(0);
     }
 

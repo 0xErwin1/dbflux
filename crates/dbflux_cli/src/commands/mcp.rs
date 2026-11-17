@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::interface::{Dispatch, Runnable};
 use dbflux_app::mcp_command::run_mcp_command;
 
+/// Options for `dbflux mcp`.
 #[derive(Debug, Args)]
 pub struct McpArgs {
     /// Identifier for this AI client; must match a trusted client in MCP settings.

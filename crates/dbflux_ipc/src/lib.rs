@@ -10,7 +10,6 @@ pub mod protocol;
 pub mod secret_provider;
 pub mod socket;
 
-
 pub use app_control_client::{send_app_control_request, send_focus_request};
 
 pub use audit::{

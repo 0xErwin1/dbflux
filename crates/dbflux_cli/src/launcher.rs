@@ -1,27 +1,23 @@
 use dbflux_ipc::protocol::IpcMessage;
 use dbflux_ipc::{send_app_control_request, send_focus_request};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const CONNECT_RETRIES: usize = 20;
 const RETRY_DELAY_MS: u64 = 50;
 
+/// Focuses an already-running instance; `false` means none answered.
 pub(crate) fn focus_running_instance() -> bool {
     send_focus_request().is_ok()
 }
 
+/// Opens `path` (or just focuses) in the running instance, spawning a detached
+/// GUI first if none is running. Returns the process exit code.
 pub(crate) fn open_or_spawn(path: Option<PathBuf>) -> i32 {
-    let msg = match path.as_ref() {
-        None => IpcMessage::Focus,
-        Some(p) => {
-            let Ok(absolute) = p.canonicalize() else {
-                eprintln!("Invalid path: {}", p.display());
-                return 1;
-            };
-            IpcMessage::OpenScript { path: absolute }
-        },
+    let Ok(msg) = build_message(path.as_deref()).map_err(|e| eprintln!("{e}")) else {
+        return 1;
     };
 
     if send_app_control_request(msg.clone()).is_ok() {
@@ -39,6 +35,16 @@ pub(crate) fn open_or_spawn(path: Option<PathBuf>) -> i32 {
             1
         }
     }
+}
+
+fn build_message(path: Option<&Path>) -> Result<IpcMessage, String> {
+    let Some(path) = path else {
+        return Ok(IpcMessage::Focus);
+    };
+
+    path.canonicalize()
+        .map(|absolute| IpcMessage::OpenScript { path: absolute })
+        .map_err(|_| format!("Invalid path: {}", path.display()))
 }
 
 fn retry_send(msg: &IpcMessage) -> io::Result<()> {

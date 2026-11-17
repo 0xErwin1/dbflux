@@ -5,6 +5,7 @@ use clap::Subcommand;
 
 use super::interface::{Dispatch, Runnable};
 
+/// Subcommands that run without opening a window.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run DBFlux as an MCP (Model Context Protocol) server for AI clients.

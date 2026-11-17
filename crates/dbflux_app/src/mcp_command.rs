@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+/// Runs the MCP server on stdio until the client disconnects; returns the exit code.
 #[cfg(feature = "mcp")]
 pub fn run_mcp_command(client_id: String, config_dir: Option<PathBuf>) -> i32 {
     let mcp_args = dbflux_mcp_server::McpServerArgs {
@@ -7,7 +8,6 @@ pub fn run_mcp_command(client_id: String, config_dir: Option<PathBuf>) -> i32 {
         config_dir,
     };
 
-    // Create tokio runtime for async MCP server
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -16,7 +16,6 @@ pub fn run_mcp_command(client_id: String, config_dir: Option<PathBuf>) -> i32 {
         }
     };
 
-    // Run async server
     match rt.block_on(dbflux_mcp_server::run_mcp_server(mcp_args)) {
         Ok(_) => 0,
         Err(e) => {
@@ -24,9 +23,9 @@ pub fn run_mcp_command(client_id: String, config_dir: Option<PathBuf>) -> i32 {
             1
         }
     }
-
 }
 
+/// Reports that this build lacks MCP support; always returns exit code 1.
 #[cfg(not(feature = "mcp"))]
 pub fn run_mcp_command(_client_id: String, _config_dir: Option<PathBuf>) -> i32 {
     eprintln!("Error: MCP support not compiled into this build.");

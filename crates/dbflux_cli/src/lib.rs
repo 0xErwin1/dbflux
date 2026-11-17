@@ -5,15 +5,17 @@
 //! which keeps gpui out of this crate.
 
 mod commands;
-mod launcher;
 mod interface;
+mod launcher;
 
-use commands::Command;
+pub use commands::Command;
 pub use interface::{Dispatch, Runnable};
 
 pub use clap::Parser;
 use std::path::PathBuf;
 
+/// Top-level arguments. With no subcommand, `PATH` opens a script in the
+/// running instance, and no arguments at all focus it (or start the GUI).
 #[derive(Debug, Parser)]
 #[command(
     name = "dbflux",
@@ -35,6 +37,8 @@ pub struct Cli {
 }
 
 impl Cli {
+    /// Runs the selected action. Precedence: subcommand, `--gui`, `PATH`,
+    /// then focus-or-start.
     pub fn run(self) -> Dispatch {
         if let Some(command) = self.command {
             return command.run();
