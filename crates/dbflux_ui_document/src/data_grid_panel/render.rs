@@ -342,6 +342,9 @@ impl Render for DataGridPanel {
             .when(self.pending_delete_confirm.is_some(), |d| {
                 d.child(self.render_delete_confirm_modal(&st.theme, cx))
             })
+            .when(self.pending_expression_confirm.is_some(), |d| {
+                d.child(self.render_expression_confirm_modal(cx))
+            })
             .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
                 d.child(self.document_view.cell_editor.clone())
             })

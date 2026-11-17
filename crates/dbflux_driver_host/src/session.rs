@@ -220,19 +220,23 @@ pub(crate) fn dispatch(
         },
 
         // === CRUD operations ===
-        DriverRequestBody::UpdateRow { patch } => match conn.update_row(&patch) {
-            Ok(result) => DriverResponseBody::CrudResult {
-                result: result.into(),
-            },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::UpdateRow { patch } | DriverRequestBody::UpdateRowV2 { patch } => {
+            match conn.update_row(&patch) {
+                Ok(result) => DriverResponseBody::CrudResult {
+                    result: result.into(),
+                },
+                Err(e) => db_error_to_response(e),
+            }
+        }
 
-        DriverRequestBody::InsertRow { insert } => match conn.insert_row(&insert) {
-            Ok(result) => DriverResponseBody::CrudResult {
-                result: result.into(),
-            },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::InsertRow { insert } | DriverRequestBody::InsertRowV2 { insert } => {
+            match conn.insert_row(&insert) {
+                Ok(result) => DriverResponseBody::CrudResult {
+                    result: result.into(),
+                },
+                Err(e) => db_error_to_response(e),
+            }
+        }
 
         DriverRequestBody::DeleteRow { delete } => match conn.delete_row(&delete) {
             Ok(result) => DriverResponseBody::CrudResult {
@@ -1365,6 +1369,141 @@ mod tests {
         fn root_section_source(&self) -> Option<&dyn dbflux_core::RootSectionSource> {
             Some(self)
         }
+    }
+
+    /// Driver that records the expression carried by every row write.
+    struct RowWriteConnection {
+        metadata: dbflux_core::DriverMetadata,
+        expressions: Mutex<Vec<Option<String>>>,
+    }
+
+    impl RowWriteConnection {
+        fn new() -> Self {
+            Self {
+                metadata: DriverMetadataBuilder::new(
+                    "test",
+                    "Test",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .build(),
+                expressions: Mutex::new(Vec::new()),
+            }
+        }
+
+        #[allow(clippy::result_large_err)]
+        fn record(&self, expression: Option<String>) -> Result<dbflux_core::CrudResult, DbError> {
+            self.expressions
+                .lock()
+                .map_err(|_| DbError::QueryFailed("expressions lock poisoned".into()))?
+                .push(expression);
+            Ok(dbflux_core::CrudResult::new(1, None))
+        }
+    }
+
+    impl Connection for RowWriteConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Ok(QueryResult::empty())
+        }
+        fn execute_with_handle(
+            &self,
+            _req: &QueryRequest,
+        ) -> Result<(dbflux_core::QueryHandle, QueryResult), DbError> {
+            Err(DbError::NotSupported("not used in test".into()))
+        }
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+        fn insert_row(
+            &self,
+            insert: &dbflux_core::RowInsert,
+        ) -> Result<dbflux_core::CrudResult, DbError> {
+            self.record(insert.assignments[0].expression.clone())
+        }
+        fn update_row(
+            &self,
+            patch: &dbflux_core::RowPatch,
+        ) -> Result<dbflux_core::CrudResult, DbError> {
+            self.record(patch.changes[0].expression.clone())
+        }
+    }
+
+    #[test]
+    fn host_serves_old_and_v2_row_writes_with_their_expressions() {
+        use dbflux_core::{ColumnAssignment, RowIdentity, RowInsert, RowPatch, Value};
+
+        let connection = RowWriteConnection::new();
+        let identity = || RowIdentity::composite(vec!["id".into()], vec![Value::Int(1)]);
+        let bodies = [
+            DriverRequestBody::InsertRow {
+                insert: RowInsert::with_typed_assignments(
+                    "t".into(),
+                    None,
+                    vec![ColumnAssignment::new("name", Value::Text("Ada".into()))],
+                ),
+            },
+            DriverRequestBody::UpdateRow {
+                patch: RowPatch::with_typed_changes(
+                    identity(),
+                    "t".into(),
+                    None,
+                    vec![ColumnAssignment::new("name", Value::Text("Ada".into()))],
+                ),
+            },
+            DriverRequestBody::InsertRowV2 {
+                insert: RowInsert::with_typed_assignments(
+                    "t".into(),
+                    None,
+                    vec![ColumnAssignment::expression("id", "gen_random_uuid()")],
+                ),
+            },
+            DriverRequestBody::UpdateRowV2 {
+                patch: RowPatch::with_typed_changes(
+                    identity(),
+                    "t".into(),
+                    None,
+                    vec![ColumnAssignment::expression("deleted_at", "now()")],
+                ),
+            },
+        ];
+
+        for body in bodies {
+            assert!(matches!(
+                dispatch(&connection, DRIVER_RPC_VERSION, body),
+                DriverResponseBody::CrudResult { .. }
+            ));
+        }
+
+        assert_eq!(
+            *connection.expressions.lock().expect("expressions lock"),
+            vec![
+                None,
+                None,
+                Some("gen_random_uuid()".to_string()),
+                Some("now()".to_string())
+            ]
+        );
     }
 
     fn root_section_bodies() -> [DriverRequestBody; 3] {

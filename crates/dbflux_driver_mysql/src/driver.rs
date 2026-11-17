@@ -371,6 +371,21 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
 pub struct MysqlDialect;
 
 impl SqlDialect for MysqlDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["NOW()", "CURRENT_TIMESTAMP"],
+            Some(TypeFamily::Date) => vec!["CURDATE()", "CURRENT_DATE"],
+            Some(TypeFamily::Time) => vec!["CURTIME()"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) => vec!["UUID()"],
+            None => Vec::new(),
+        }
+    }
+
     /// `TEXT` holds at most 65,535 bytes, which a long CSV field can exceed.
     fn text_column_type(&self) -> &'static str {
         "LONGTEXT"
@@ -425,7 +440,7 @@ impl SqlDialect for MysqlDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -442,7 +457,7 @@ impl SqlDialect for MysqlDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -2012,6 +2027,38 @@ fn plan_mysql_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
     }
 }
 
+/// SQL that reads back the row an INSERT just wrote, or `None` when there is no
+/// reliable way to find it.
+///
+/// An expression cell (`NOW()`, `UUID()`) has no literal to match the row by,
+/// and the generated value is unknown, so an insert that carries one is not
+/// read back at all instead of matching the wrong row or none. The same holds
+/// when the server generated an id, because the AUTO_INCREMENT column is not
+/// known here.
+fn insert_readback_sql(
+    builder: &SqlQueryBuilder,
+    insert: &RowInsert,
+    last_insert_id: u64,
+) -> Option<String> {
+    if insert.assignments.iter().any(|a| a.is_expression()) {
+        return None;
+    }
+
+    // The generated id belongs to the AUTO_INCREMENT column, which the statement
+    // may not assign, so no assigned column can be matched against it.
+    if last_insert_id > 0 {
+        return None;
+    }
+
+    let (columns, values): (Vec<String>, Vec<Value>) = insert
+        .assignments
+        .iter()
+        .map(|a| (a.name.clone(), a.value.clone()))
+        .unzip();
+    let identity = RecordIdentity::composite(columns, values);
+    builder.build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
+}
+
 impl Connection for MysqlConnection {
     fn metadata(&self) -> &DriverMetadata {
         match self.kind {
@@ -2798,23 +2845,10 @@ impl Connection for MysqlConnection {
 
         let last_id = state.conn.last_insert_id();
 
-        let select_sql = if last_id > 0 {
-            let first_col = insert
-                .assignments
-                .first()
-                .map(|a| MYSQL_DIALECT.quote_identifier(&a.name))
-                .unwrap_or_else(|| "`id`".to_string());
-            let table = MYSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
-
-            format!(
-                "SELECT * FROM {} WHERE {} = {} LIMIT 1",
-                table, first_col, last_id
-            )
-        } else {
-            let identity = RecordIdentity::composite(insert.column_names(), insert.values());
-            builder
-                .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
-                .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?
+        // The INSERT already succeeded; a read-back that errors would report a
+        // failure for a committed write.
+        let Some(select_sql) = insert_readback_sql(&builder, insert, last_id) else {
+            return Ok(CrudResult::new(1, None));
         };
 
         log::debug!("[INSERT] Re-querying: {}", select_sql);
@@ -2996,6 +3030,49 @@ const VERSION_QUERY: &str = "SELECT VERSION()";
 #[cfg(test)]
 mod sql_statement_tests {
     use super::*;
+
+    fn literal_insert() -> RowInsert {
+        RowInsert::new(
+            "users".to_string(),
+            Some("app".to_string()),
+            vec!["name".to_string()],
+            vec![Value::Text("Ada".to_string())],
+        )
+    }
+
+    fn expression_insert() -> RowInsert {
+        RowInsert::with_typed_assignments(
+            "users".to_string(),
+            Some("app".to_string()),
+            vec![
+                dbflux_core::ColumnAssignment::new("name", Value::Text("Ada".to_string())),
+                dbflux_core::ColumnAssignment::expression("created_at", "NOW()"),
+            ],
+        )
+    }
+
+    #[test]
+    fn insert_is_not_read_back_by_an_assigned_column_when_an_id_was_generated() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        assert_eq!(insert_readback_sql(&builder, &literal_insert(), 7), None);
+    }
+
+    #[test]
+    fn insert_readback_matches_literal_columns_without_an_auto_increment_id() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        let sql = insert_readback_sql(&builder, &literal_insert(), 0).expect("read-back");
+        assert!(sql.contains("`name`") && sql.contains("'Ada'"), "{sql}");
+    }
+
+    #[test]
+    fn insert_with_an_expression_is_not_read_back() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        assert_eq!(insert_readback_sql(&builder, &expression_insert(), 0), None);
+        assert_eq!(insert_readback_sql(&builder, &expression_insert(), 9), None);
+    }
 
     /// `TEXT` holds at most 65,535 bytes in MySQL, so a column created for an
     /// untyped source uses `LONGTEXT`, which a long CSV field still fits.
@@ -4097,7 +4174,21 @@ fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError
 }
 
 fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
-    type ColumnMetadataRow = (String, String, String, Option<String>, Option<String>);
+    type ColumnMetadataRow = (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+
+    let server_version: Option<String> = conn
+        .query_first("SELECT VERSION()")
+        .map_err(|e| format_mysql_query_error(&e))?;
+    let server_quotes_literal_defaults = server_version
+        .as_deref()
+        .is_some_and(|version| version.to_ascii_lowercase().contains("mariadb"));
 
     let query = r"
         SELECT
@@ -4105,7 +4196,8 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
             column_type,
             is_nullable,
             column_default,
-            column_key
+            column_key,
+            extra
         FROM information_schema.columns
         WHERE table_schema = ?
           AND table_name = ?
@@ -4125,7 +4217,7 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
 
     Ok(rows
         .into_iter()
-        .map(|(name, type_name, nullable, default, key)| {
+        .map(|(name, type_name, nullable, default, key, extra)| {
             let is_pk = key.as_deref() == Some("PRI");
             if is_pk {
                 log::info!(
@@ -4136,17 +4228,58 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
                 );
             }
             let enum_values = parse_mysql_enum_or_set(&type_name);
+            let default_value = column_default_as_sql_for_type(
+                default,
+                &type_name,
+                extra.as_deref().unwrap_or_default(),
+                server_quotes_literal_defaults,
+            );
 
             ColumnInfo {
                 name,
                 type_name,
                 nullable: nullable == "YES",
-                default_value: default,
+                default_value,
                 is_primary_key: is_pk,
                 enum_values,
             }
         })
         .collect())
+}
+
+/// Returns a column default as SQL text, the form `ColumnInfo::default_value`
+/// holds for every driver.
+///
+/// MySQL 8 reports a literal default unquoted (`pending`, `00123`) and marks an
+/// expression default with `DEFAULT_GENERATED` in `EXTRA`; MySQL 5.7 has no
+/// such marker but only allows `CURRENT_TIMESTAMP` as an expression default,
+/// and only on temporal columns. MariaDB 10.2.7+ already quotes literals and
+/// writes expressions bare.
+fn column_default_as_sql_for_type(
+    default: Option<String>,
+    column_type: &str,
+    extra: &str,
+    server_quotes_literal_defaults: bool,
+) -> Option<String> {
+    let default = default?;
+
+    if server_quotes_literal_defaults || extra.to_ascii_uppercase().contains("DEFAULT_GENERATED") {
+        return Some(default);
+    }
+
+    let column_type = column_type.to_ascii_lowercase();
+    let is_temporal_column = ["timestamp", "datetime", "date", "time"]
+        .iter()
+        .any(|prefix| column_type.starts_with(prefix));
+    let upper = default.to_ascii_uppercase();
+    let is_timestamp_function = ["CURRENT_TIMESTAMP", "NOW(", "LOCALTIME"]
+        .iter()
+        .any(|prefix| upper.starts_with(prefix));
+    if is_temporal_column && is_timestamp_function {
+        return Some(default);
+    }
+
+    Some(mysql_text_literal(&default))
 }
 
 fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<IndexInfo>, DbError> {
@@ -4873,6 +5006,102 @@ fn resolve_write_privilege(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn column_defaults_are_returned_as_sql_text() {
+        use super::column_default_as_sql_for_type;
+
+        let own = |value: &str| Some(value.to_string());
+
+        assert_eq!(
+            column_default_as_sql_for_type(None, "varchar(20)", "", false),
+            None
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("pending"), "varchar(20)", "", false),
+            own("'pending'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("00123"), "varchar(20)", "", false),
+            own("'00123'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("it's"), "varchar(20)", "", false),
+            Some(super::mysql_text_literal("it's"))
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(
+                own("uuid()"),
+                "varchar(20)",
+                "DEFAULT_GENERATED",
+                false
+            ),
+            own("uuid()")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(
+                own("CURRENT_TIMESTAMP"),
+                "timestamp",
+                "on update CURRENT_TIMESTAMP",
+                false
+            ),
+            own("CURRENT_TIMESTAMP")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("'pending'"), "varchar(20)", "", true),
+            own("'pending'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("uuid()"), "varchar(20)", "", true),
+            own("uuid()")
+        );
+    }
+
+    #[test]
+    fn literal_defaults_survive_backslashes_and_timestamp_lookalikes() {
+        use super::{column_default_as_sql_for_type, mysql_text_literal};
+
+        let own = |value: &str| Some(value.to_string());
+
+        assert_eq!(
+            column_default_as_sql_for_type(own("a\\nb"), "varchar(20)", "", false),
+            Some(mysql_text_literal("a\\nb"))
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("tail\\"), "varchar(20)", "", false),
+            Some(mysql_text_literal("tail\\"))
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP"), "varchar(32)", "", false),
+            own("'CURRENT_TIMESTAMP'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP"), "timestamp", "", false),
+            own("CURRENT_TIMESTAMP")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP(3)"), "datetime(3)", "", false),
+            own("CURRENT_TIMESTAMP(3)")
+        );
+    }
+
+    #[test]
+    fn mysql_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::MYSQL_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("datetime"),
+            vec!["NOW()", "CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("DATE"),
+            vec!["CURDATE()", "CURRENT_DATE"]
+        );
+        assert_eq!(dialect.type_value_expressions("uuid"), vec!["UUID()"]);
+        assert_eq!(dialect.type_value_expressions("varchar(20)"), vec!["''"]);
+        assert_eq!(dialect.type_value_expressions("blob"), Vec::<&str>::new());
+    }
+
     use super::rowid_pseudo_columns;
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,

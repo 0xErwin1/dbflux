@@ -290,6 +290,37 @@ pub struct MssqlDialect;
 static MSSQL_DIALECT: MssqlDialect = MssqlDialect;
 
 impl SqlDialect for MssqlDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        let lowered = type_name.trim().to_ascii_lowercase();
+
+        // `timestamp` is the read-only `rowversion` type, and `bit` is the
+        // boolean-like type; neither maps onto the generic families.
+        if lowered.starts_with("timestamp") || lowered.starts_with("rowversion") {
+            return Vec::new();
+        }
+
+        if lowered.starts_with("bit") {
+            return vec!["1", "0"];
+        }
+
+        // `SYSDATETIME()` carries no offset, so SQL Server would store it as UTC.
+        if lowered.starts_with("datetimeoffset") {
+            return vec!["SYSDATETIMEOFFSET()"];
+        }
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["SYSDATETIME()", "GETDATE()"],
+            Some(TypeFamily::Date) => vec!["CAST(GETDATE() AS date)"],
+            Some(TypeFamily::Time) => vec!["CAST(GETDATE() AS time)"],
+            Some(TypeFamily::Uuid) => vec!["NEWID()"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Boolean) | None => Vec::new(),
+        }
+    }
+
     fn text_column_type(&self) -> &'static str {
         "NVARCHAR(MAX)"
     }
@@ -4381,7 +4412,7 @@ fn build_insert_with_output(insert: &RowInsert) -> Result<String, DbError> {
     let values = insert
         .assignments
         .iter()
-        .map(|a| MSSQL_DIALECT.value_to_literal(&a.value))
+        .map(|a| MSSQL_DIALECT.assignment_to_sql(a))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -4400,7 +4431,7 @@ fn build_update_with_output(patch: &RowPatch) -> Result<String, DbError> {
             format!(
                 "{} = {}",
                 MSSQL_DIALECT.quote_identifier(&change.name),
-                MSSQL_DIALECT.value_to_literal(&change.value)
+                MSSQL_DIALECT.assignment_to_sql(change)
             )
         })
         .collect::<Vec<_>>()
@@ -5526,6 +5557,36 @@ fn dependents_from_rows(rows: Vec<(String, String, String)>) -> Vec<dbflux_core:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mssql_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::MSSQL_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("datetime2(7)"),
+            vec!["SYSDATETIME()", "GETDATE()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("datetimeoffset(7)"),
+            vec!["SYSDATETIMEOFFSET()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("date"),
+            vec!["CAST(GETDATE() AS date)"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("uniqueidentifier"),
+            vec!["NEWID()"]
+        );
+        assert_eq!(dialect.type_value_expressions("bit"), vec!["1", "0"]);
+        assert_eq!(
+            dialect.type_value_expressions("timestamp"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(dialect.type_value_expressions("nvarchar(50)"), vec!["''"]);
+        assert_eq!(dialect.type_value_expressions("xml"), Vec::<&str>::new());
+    }
+
     use super::*;
     use dbflux_core::{DefaultSpec, OrderByColumn};
 
@@ -5749,6 +5810,33 @@ mod tests {
         assert_eq!(
             sql,
             "INSERT INTO [dbo].[users] ([name], [age]) OUTPUT INSERTED.* VALUES (N'alice', 30)"
+        );
+    }
+
+    #[test]
+    fn insert_and_update_with_output_write_expressions_verbatim() {
+        let insert = RowInsert::with_typed_assignments(
+            "users".into(),
+            Some("dbo".into()),
+            vec![
+                ColumnAssignment::expression("id", "NEWID()"),
+                ColumnAssignment::new("name", Value::Text("alice".into())),
+            ],
+        );
+        assert_eq!(
+            build_insert_with_output(&insert).unwrap(),
+            "INSERT INTO [dbo].[users] ([id], [name]) OUTPUT INSERTED.* VALUES (NEWID(), N'alice')"
+        );
+
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".into()], vec![Value::Int(7)]),
+            "users".into(),
+            Some("dbo".into()),
+            vec![ColumnAssignment::expression("deleted_at", "SYSDATETIME()")],
+        );
+        assert_eq!(
+            build_update_with_output(&patch).unwrap(),
+            "UPDATE [dbo].[users] SET [deleted_at] = SYSDATETIME() OUTPUT INSERTED.* WHERE [id] = 7"
         );
     }
 

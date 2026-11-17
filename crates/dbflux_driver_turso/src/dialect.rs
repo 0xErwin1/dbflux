@@ -14,6 +14,20 @@ pub struct TursoDialect;
 pub(crate) static TURSO_DIALECT: TursoDialect = TursoDialect;
 
 impl SqlDialect for TursoDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["CURRENT_TIMESTAMP", "datetime('now')"],
+            Some(TypeFamily::Date) => vec!["CURRENT_DATE", "date('now')"],
+            Some(TypeFamily::Time) => vec!["CURRENT_TIME"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) | None => Vec::new(),
+        }
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         quote_ident(name)
     }
@@ -59,7 +73,7 @@ impl SqlDialect for TursoDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -80,7 +94,7 @@ impl SqlDialect for TursoDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -417,6 +431,22 @@ impl CodeGenerator for TursoCodeGenerator {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn turso_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::TURSO_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("TIMESTAMP"),
+            vec!["CURRENT_TIMESTAMP", "datetime('now')"]
+        );
+        assert_eq!(dialect.type_value_expressions("text"), vec!["''"]);
+        assert_eq!(
+            dialect.type_value_expressions("mystery"),
+            Vec::<&str>::new()
+        );
+    }
+
     use super::*;
     use std::collections::BTreeMap;
 
@@ -592,6 +622,7 @@ mod tests {
             name: "id".into(),
             value: Value::Int(1),
             type_name: None,
+            expression: None,
         }];
         let sql = TURSO_DIALECT
             .build_upsert_statement(None, "t", &assignments, &["id".to_string()], &[])

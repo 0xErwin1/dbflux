@@ -4393,6 +4393,17 @@ mod tests {
             "document.data.context_menu.item.edit_in_modal",
             "document.data.context_menu.item.set_default",
             "document.data.context_menu.item.set_null",
+            "document.data.context_menu.item.set_value",
+            "document.data.context_menu.item.set_expression",
+            "document.data.context_menu.item.set_value_column_default",
+            "document.data.context_menu.item.set_value_type_values",
+            "document.data.context_menu.item.set_value_expression",
+            "document.data.context_menu.item.set_value_null",
+            "document.data.context_menu.item.set_value_no_default",
+            "document.data.context_menu.expression_confirm.list",
+            "document.data.context_menu.expression_confirm.cancel",
+            "document.data.context_menu.expression_confirm.confirm",
+            "document.data.grid.expression.placeholder",
             "document.data.context_menu.item.add_row",
             "document.data.context_menu.item.inspect_row",
             "document.data.context_menu.item.duplicate_row",
@@ -4410,7 +4421,7 @@ mod tests {
         ];
 
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");

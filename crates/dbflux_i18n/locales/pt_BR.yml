@@ -1611,6 +1611,13 @@ document:
         edit_in_modal: Editar em janela…
         set_default: Definir como padrão
         set_null: Definir como NULL
+        set_value: "Definir valor"
+        set_expression: "Definir como expressão…"
+        set_value_column_default: "Padrão da coluna"
+        set_value_type_values: "Valores do tipo · %{type}"
+        set_value_expression: "Expressão…"
+        set_value_null: "NULL"
+        set_value_no_default: "%{column} não tem valor padrão. Adicione um no design da tabela ou escolha um valor do tipo."
         add_row: Adicionar linha
         inspect_row: Inspecionar linha
         find_similar_rows: Encontrar linhas semelhantes
@@ -1632,6 +1639,10 @@ document:
           many: "%{count} linhas serão excluídas permanentemente. Isso não pode ser desfeito."
         cancel: Cancelar
         delete: Excluir
+      expression_confirm:
+        list: "Expressões escritas como SQL:"
+        cancel: "Cancelar"
+        confirm: "Salvar com expressões"
       filter:
         title: Filtrar
         cell_value: Valor da célula
@@ -1714,6 +1725,8 @@ document:
           insert_failed: "Falha ao inserir o documento: %{error}"
           update_failed: "Falha ao atualizar o documento: %{error}"
     grid:
+      expression:
+        placeholder: Expressão SQL
       edit_bar:
         clean: Nenhuma alteração não salva
         dirty:
@@ -4886,6 +4899,8 @@ settings:
       toggle_row_inspector: Alternar inspetor de linha
       find_similar_rows: Encontrar linhas semelhantes
       results_set_null: Definir célula como NULL
+      results_set_default: "Definir a célula como o padrão da coluna"
+      results_toggle_expression: "Alternar editor literal / expressão"
       open_context_menu: Abrir menu de contexto
       open_pane_actions: Abrir ações do painel
       menu_up: Menu para cima

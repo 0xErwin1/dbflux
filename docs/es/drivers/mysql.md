@@ -52,6 +52,7 @@ Base de datos relacional open-source popular.
   de una tabla origen, soporte de `TRUNCATE TABLE`, y un toggle de integridad
   referencial (`SET FOREIGN_KEY_CHECKS`) para migraciones seguras con FK. Tanto
   MySQL como MariaDB comparten este soporte.
+- Las inserciones y actualizaciones de filas aceptan expresiones SQL (`NOW()`, `UUID()`, `DEFAULT`) en una celda, escritas tal cual en lugar de como un literal entre comillas.
 - Envía el atributo de conexión `program_name` como `dbflux/<version>`, visible
   en `performance_schema.session_connect_attrs`.
 - Sondeo de privilegio de escritura: después de conectar, revisa `@@read_only`/
@@ -91,6 +92,7 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 
 ## Limitaciones
 
+- Una inserción que lleva una celda con expresión, o que hace que el servidor genere un id `AUTO_INCREMENT`, se completa sin devolver la fila guardada: el driver no puede saber qué fila escribió, así que la grilla no muestra los valores del servidor hasta que se recarga.
 - Los timeouts explícitos de sentencia y las solicitudes acotadas de métricas
   o inspección de instancia se rechazan antes de ejecutarse; las solicitudes
   sin límites mantienen la compatibilidad. El límite de filas retenidas no

@@ -214,6 +214,7 @@ impl TableSink {
                     name: name.clone(),
                     value: value.clone(),
                     type_name: column_types.get(index).cloned().flatten(),
+                    expression: None,
                 })
                 .collect();
 

@@ -633,6 +633,8 @@ edited.
 | `d d` / `Delete` | Delete the row |
 | `a a` / `Shift+a Shift+a` | Add / duplicate a row |
 | `Ctrl+n` | Set the cell to NULL |
+| `Ctrl+Shift+0` | Set the cell to its column default (stages the default expression) |
+| `Ctrl+Shift+I` | Flip the inline editor between literal and SQL expression, or open it as an expression |
 | `u` / `Ctrl+z` / `Cmd+z` | Undo |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo |
 | `e` | Expand or collapse a nested column (document grids) |

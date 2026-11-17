@@ -746,6 +746,7 @@ fn data_table_action(command: Command) -> Option<Box<dyn Action>> {
         Command::ResultsAddRow => Box::new(actions::AddRow),
         Command::ResultsDuplicateRow => Box::new(actions::DuplicateRow),
         Command::ResultsSetNull => Box::new(actions::SetNull),
+        Command::ResultsToggleExpression => Box::new(actions::ToggleExpression),
         Command::Undo => Box::new(actions::Undo),
         Command::Redo => Box::new(actions::Redo),
         Command::ToggleColumnGroup => Box::new(actions::ToggleColumnGroup),

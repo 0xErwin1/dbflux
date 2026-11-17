@@ -10,6 +10,20 @@ use dbflux_core::{PlaceholderStyle, SqlDialect, Value};
 pub struct RedshiftDialect;
 
 impl SqlDialect for RedshiftDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["CURRENT_TIMESTAMP", "GETDATE()"],
+            Some(TypeFamily::Date) => vec!["CURRENT_DATE"],
+            Some(TypeFamily::Time) => vec!["CURRENT_TIME"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) | None => Vec::new(),
+        }
+    }
+
     /// Redshift's `TEXT` is `VARCHAR(256)`, which truncates longer values.
     fn text_column_type(&self) -> &'static str {
         "VARCHAR(65535)"
@@ -88,6 +102,19 @@ pub static REDSHIFT_DIALECT: RedshiftDialect = RedshiftDialect;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redshift_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::RedshiftDialect;
+        assert_eq!(
+            dialect.type_value_expressions("timestamptz"),
+            vec!["CURRENT_TIMESTAMP", "GETDATE()"]
+        );
+        assert_eq!(dialect.type_value_expressions("uuid"), Vec::<&str>::new());
+        assert_eq!(dialect.type_value_expressions("varchar(256)"), vec!["''"]);
+    }
+
     use super::REDSHIFT_DIALECT;
     use dbflux_core::{
         ColumnInfo, PlaceholderStyle, QueryGenerator, ReadTemplateOperation, ReadTemplateRequest,

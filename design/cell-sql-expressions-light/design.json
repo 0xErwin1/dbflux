@@ -1,0 +1,21 @@
+{
+  "title": "Cell SQL expressions and type values · light",
+  "brief": "Data-grid cell as a SQL expression (S2), Set to default staged as an expression (S3), driver-supplied Set to type value and Set to expression… (S4). PostgreSQL public.loan_approvals; Bolt Byzantium islands look, light theme. Two directions: everything from a Set value submenu, or an inline literal/expression editor with a type-value suggestion list.",
+  "feature": "odd/tasks/cell-sql-expressions.md",
+  "artboards": [
+    {
+      "file": "01-context-submenu.html",
+      "title": "Set value submenu from the cell context menu",
+      "tradeoff": "All new actions in one discoverable submenu, each with a key; one extra menu level and a longer path to a free-form expression.",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "02-inline-expression-editor.html",
+      "title": "Inline editor with literal/expression toggle",
+      "tradeoff": "Short menu and one place to edit; type values are only discoverable once the editor is open, and the toggle adds a mode to learn.",
+      "width": 1440,
+      "height": 900
+    }
+  ]
+}

@@ -100,7 +100,7 @@ impl DataGridPanel {
         connected.table_details.get(&cache_key)
     }
 
-    pub(super) fn get_column_default(&self, col: usize, cx: &Context<Self>) -> Option<String> {
+    pub(super) fn get_column_default(&self, col: usize, cx: &App) -> Option<String> {
         let col_name = self.result.columns.get(col)?.name.clone();
         let columns = self.table_details_for(cx)?.columns.as_deref()?;
 

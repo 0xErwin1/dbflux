@@ -288,10 +288,11 @@ pub use sql::{
     PreparedTableAlter, ReindexRequest, SqlDialect, SqlGenerationOptions, SqlGenerationRequest,
     SqlOperation, SqlQueryBuilder, SqlValueMode, TableAlterExpectedColumn, TableAlterOperation,
     TableAlterOutcome, TableAlterPlanner, TableAlterPreview, TableAlterRequest, TableAlterRoute,
-    TransactionControl, TypeAttributeDefinition, TypeDefinition, classify_sql_transaction_control,
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_sql, generate_truncate, generate_update_template,
-    quote_double_quoted_identifier, validate_ddl_fragment,
+    TransactionControl, TypeAttributeDefinition, TypeDefinition, TypeFamily,
+    classify_sql_transaction_control, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
+    generate_truncate, generate_update_template, quote_double_quoted_identifier, type_family,
+    validate_ddl_fragment,
 };
 
 pub use pipeline::{

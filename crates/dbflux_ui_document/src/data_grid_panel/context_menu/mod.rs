@@ -29,6 +29,17 @@ use std::io::BufWriter;
 
 mod items;
 mod sections;
+mod set_value;
+
+pub(super) use set_value::SetValueEntry;
+
+/// State of the "Set value" flyout as the item rows draw it.
+pub(super) struct SetValueFlyout {
+    pub(super) open: bool,
+    pub(super) open_left: bool,
+    pub(super) selected: usize,
+    pub(super) entries: Vec<SetValueEntry>,
+}
 pub(super) mod toolbar;
 use sections::MenuRowCursor;
 
@@ -258,6 +269,7 @@ impl DataGridPanel {
             filter_submenu_open: false,
             order_submenu_open: false,
             toolbar_submenu_open: false,
+            set_value_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: false,
@@ -291,6 +303,7 @@ impl DataGridPanel {
             filter_submenu_open: false,
             order_submenu_open: false,
             toolbar_submenu_open: false,
+            set_value_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -358,6 +371,7 @@ impl DataGridPanel {
             filter_submenu_open: false,
             order_submenu_open: false,
             toolbar_submenu_open: false,
+            set_value_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -809,20 +823,24 @@ impl DataGridPanel {
         let inspect_row_enabled = !self.is_grouped_result();
 
         let base_items = match self.context_menu.as_ref() {
-            Some(menu) if !is_column_header => self.with_find_similar_rows(
-                self.adapt_menu_items_for_documents(
-                    Self::build_context_menu_items(
-                        is_editable,
+            Some(menu) if !is_column_header => self.with_set_value_menu(
+                self.with_find_similar_rows(
+                    self.adapt_menu_items_for_documents(
+                        Self::build_context_menu_items(
+                            is_editable,
+                            is_document_view,
+                            has_row_target,
+                            can_chart,
+                            inspect_row_enabled,
+                        ),
                         is_document_view,
-                        has_row_target,
-                        can_chart,
-                        inspect_row_enabled,
+                        cx,
                     ),
-                    is_document_view,
+                    menu,
+                    has_row_target,
                     cx,
                 ),
                 menu,
-                has_row_target,
                 cx,
             ),
             _ => Vec::new(),
@@ -890,9 +908,25 @@ impl DataGridPanel {
             })
             .unwrap_or_default();
 
+        // The rows of the "Set value" flyout: the action each runs, and
+        // whether it can run.
+        let set_value_actions: Vec<(ContextMenuAction, bool)> = self
+            .context_menu
+            .as_ref()
+            .filter(|m| m.set_value_submenu_open)
+            .map(|m| {
+                self.set_value_entries(m.col, cx)
+                    .into_iter()
+                    .map(|entry| (entry.action, !entry.disabled))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Determine count of items in the active submenu
         let active_submenu_count = if let Some(menu) = &self.context_menu {
-            if menu.filter_submenu_open {
+            if menu.set_value_submenu_open {
+                set_value_actions.len()
+            } else if menu.filter_submenu_open {
                 filter_submenu_actions.len()
             } else if menu.order_submenu_open {
                 3 // ASC, DESC, Remove
@@ -1020,7 +1054,13 @@ impl DataGridPanel {
                     });
                     cx.notify();
                 } else if let Some(ref mut menu) = self.context_menu {
-                    if menu.filter_submenu_open {
+                    if menu.set_value_submenu_open {
+                        if let Some((action, true)) =
+                            set_value_actions.get(menu.submenu_selected_index).copied()
+                        {
+                            self.handle_context_menu_action(action, window, cx);
+                        }
+                    } else if menu.filter_submenu_open {
                         if let Some(action) = filter_submenu_actions
                             .get(menu.submenu_selected_index)
                             .copied()
@@ -1079,7 +1119,14 @@ impl DataGridPanel {
                         && !item.disabled
                         && let Some(action) = item.action
                     {
-                        self.handle_context_menu_action(action, window, cx);
+                        if action == ContextMenuAction::SetValueMenu {
+                            menu.close_submenus();
+                            menu.set_value_submenu_open = true;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        } else {
+                            self.handle_context_menu_action(action, window, cx);
+                        }
                     }
                 }
                 true
@@ -1180,6 +1227,8 @@ impl DataGridPanel {
                 | ContextMenuAction::EditInModal
                 | ContextMenuAction::ViewValue
                 | ContextMenuAction::SetDefault
+                | ContextMenuAction::SetTypeValue(_)
+                | ContextMenuAction::SetExpression
                 | ContextMenuAction::SetNull
                 | ContextMenuAction::UnsetField
                 | ContextMenuAction::RevertCell
@@ -1687,22 +1736,36 @@ impl DataGridPanel {
                 self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
             let can_chart = self.can_chart_from_context_menu(cx);
             let inspect_row_enabled = !self.is_grouped_result();
-            let visible_items = self.with_find_similar_rows(
-                self.adapt_menu_items_for_documents(
-                    Self::build_context_menu_items(
-                        is_editable,
+            let visible_items = self.with_set_value_menu(
+                self.with_find_similar_rows(
+                    self.adapt_menu_items_for_documents(
+                        Self::build_context_menu_items(
+                            is_editable,
+                            menu.is_document_view,
+                            has_row_target,
+                            can_chart,
+                            inspect_row_enabled,
+                        ),
                         menu.is_document_view,
-                        has_row_target,
-                        can_chart,
-                        inspect_row_enabled,
+                        cx,
                     ),
-                    menu.is_document_view,
+                    menu,
+                    has_row_target,
                     cx,
                 ),
                 menu,
-                has_row_target,
                 cx,
             );
+            let set_value = SetValueFlyout {
+                open: menu.set_value_submenu_open,
+                open_left: submenus_open_left,
+                selected: menu.submenu_selected_index,
+                entries: if menu.set_value_submenu_open {
+                    self.set_value_entries(menu.col, cx)
+                } else {
+                    Vec::new()
+                },
+            };
             detail_rows = visible_items
                 .iter()
                 .filter(|item| item.detail.is_some())
@@ -1717,6 +1780,7 @@ impl DataGridPanel {
             Self::render_menu_item_rows(
                 selected_index,
                 &visible_items,
+                &set_value,
                 &mut menu_items,
                 &mut visual_index,
                 cx,
@@ -1866,6 +1930,14 @@ impl DataGridPanel {
                 }
             }
             ContextMenuAction::SetDefault => self.handle_set_default(menu.row, menu.col, cx),
+            // The trigger only opens its flyout.
+            ContextMenuAction::SetValueMenu => {}
+            ContextMenuAction::SetTypeValue(index) => {
+                self.handle_set_type_value(menu.row, menu.col, index, cx)
+            }
+            ContextMenuAction::SetExpression => {
+                self.handle_set_expression(menu.row, menu.col, window, cx)
+            }
             ContextMenuAction::UnsetField => self.handle_unset_field(menu.row, menu.col, cx),
             ContextMenuAction::RevertCell => self.handle_revert_cell(menu.row, menu.col, cx),
             ContextMenuAction::SetNull => self.handle_set_null(menu.row, menu.col, cx),
@@ -2487,7 +2559,9 @@ impl DataGridPanel {
             CellKind::Float(f) => dbflux_core::Value::Float(*f),
             CellKind::Text(s) | CellKind::Json(s) => dbflux_core::Value::Text(s.to_string()),
             CellKind::Bytes(len) => dbflux_core::Value::Bytes(vec![0u8; *len]),
-            CellKind::AutoGenerated(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::AutoGenerated(s) | CellKind::Expression(s) => {
+                dbflux_core::Value::Text(s.to_string())
+            }
             CellKind::Unsupported(s) => dbflux_core::Value::Text(s.to_string()),
             CellKind::Missing => dbflux_core::Value::Null,
             CellKind::Nested { .. } => dbflux_core::Value::Text(cell.display_text().to_string()),
@@ -2682,6 +2756,12 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_set_default(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        // A collection has no column default to restore, and a NULL staged
+        // here would be written into the document field.
+        if matches!(self.source, DataSource::Collection { .. }) {
+            return;
+        }
+
         // Get column default value from table details
         let default_value = self.get_column_default(col, cx);
 
@@ -2691,7 +2771,9 @@ impl DataGridPanel {
 
         table_state.update(cx, |state, cx| {
             let cell_value = if let Some(default) = default_value {
-                dbflux_components::components::data_table::model::CellValue::text(&default)
+                // The default is SQL, so it is staged as an expression the
+                // database evaluates, never as a quoted string.
+                dbflux_components::components::data_table::model::CellValue::expression(&default)
             } else {
                 dbflux_components::components::data_table::model::CellValue::null()
             };
@@ -3456,7 +3538,7 @@ impl DataGridPanel {
         });
 
         if let Some(insert_idx) = removed_insert {
-            self.renumber_queued_inserts_after_removal(insert_idx);
+            self.renumber_queued_inserts_after_removal(insert_idx, cx);
         }
     }
 
@@ -4020,6 +4102,21 @@ impl DataGridPanel {
             return None;
         }
 
+        // A pending insert can hold expressions; they are copied as written.
+        let expressions: Vec<Option<String>> = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| {
+                    cells
+                        .iter()
+                        .map(|cell| cell.as_expression().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let expression_of = |index: usize| expressions.get(index).cloned().flatten();
+
         let has_unsupported = row_values
             .iter()
             .any(|value| matches!(value, Value::Unsupported(_)));
@@ -4036,11 +4133,15 @@ impl DataGridPanel {
                     .iter()
                     .zip(row_values.iter())
                     .zip(col_types.iter())
-                    .map(|((name, value), type_name)| dbflux_core::ColumnAssignment {
-                        name: name.clone(),
-                        value: value.clone(),
-                        type_name: Some(type_name.clone()),
-                    })
+                    .enumerate()
+                    .map(
+                        |(index, ((name, value), type_name))| dbflux_core::ColumnAssignment {
+                            name: name.clone(),
+                            value: value.clone(),
+                            type_name: Some(type_name.clone()),
+                            expression: expression_of(index),
+                        },
+                    )
                     .collect();
 
                 let insert = RowInsert::with_typed_assignments(
@@ -4086,10 +4187,11 @@ impl DataGridPanel {
                     .enumerate()
                     .filter(|(idx, _)| !pk_indices.contains(idx))
                     .map(
-                        |(_, ((name, value), type_name))| dbflux_core::ColumnAssignment {
+                        |(index, ((name, value), type_name))| dbflux_core::ColumnAssignment {
                             name,
                             value,
                             type_name: Some(type_name),
+                            expression: expression_of(index),
                         },
                     )
                     .collect();
@@ -4308,6 +4410,9 @@ impl DataGridPanel {
             CellKind::Bytes(len) => Value::Bytes(vec![0u8; *len]),
             CellKind::Unsupported(type_name) => Value::Unsupported(type_name.to_string()),
             CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
+            // The expression travels beside the value, as
+            // `ColumnAssignment::expression`.
+            CellKind::Expression(_) => Value::Null,
             CellKind::Missing => Value::Null,
             CellKind::Nested { .. } => Value::Text(cell.display_text().to_string()),
         }

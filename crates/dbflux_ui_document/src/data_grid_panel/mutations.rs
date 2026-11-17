@@ -1,3 +1,4 @@
+use super::expression_gate::HeldSave;
 use super::utils::{extract_pk_columns, value_to_json};
 use super::*;
 use super::{
@@ -15,6 +16,21 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use gpui::*;
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+/// The assignment a grid cell stages: its expression, written verbatim, or
+/// its value, bound.
+fn cell_assignment(
+    name: &str,
+    type_name: &str,
+    cell: &dbflux_components::components::data_table::model::CellValue,
+) -> ColumnAssignment {
+    ColumnAssignment {
+        name: name.to_string(),
+        value: cell.to_value(),
+        type_name: Some(type_name.to_string()),
+        expression: cell.as_expression().map(str::to_owned),
+    }
+}
 
 fn parse_inline_document_value(input: &str) -> serde_json::Value {
     let trimmed = input.trim();
@@ -444,6 +460,10 @@ impl DataGridPanel {
             &dbflux_components::components::data_table::model::CellValue,
         )> = changes.iter().map(|(idx, cell)| (*idx, cell)).collect();
 
+        if self.hold_save_for_expression_confirm(HeldSave::Row(row_idx), batch_owned, cx) {
+            return;
+        }
+
         match &self.source {
             DataSource::Table {
                 profile_id,
@@ -552,11 +572,10 @@ impl DataGridPanel {
         let change_values: Vec<ColumnAssignment> = changes
             .iter()
             .filter_map(|&(col_idx, cell_value)| {
-                model.columns.get(col_idx).map(|col| ColumnAssignment {
-                    name: col.title.to_string(),
-                    value: cell_value.to_value(),
-                    type_name: Some(col.type_name.to_string()),
-                })
+                model
+                    .columns
+                    .get(col_idx)
+                    .map(|col| cell_assignment(&col.title, &col.type_name, cell_value))
             })
             .collect();
 
@@ -842,10 +861,19 @@ impl DataGridPanel {
                     )
                 });
 
+                let mut reload_for_expression = false;
                 table_state.update(cx, |state, cx| {
                     match returned_row {
                         Some(returned_row) => state.apply_returning_row(row_idx, &returned_row),
                         None if crud_result.returning_row.is_some() => {
+                            // The database evaluated any expression, and the
+                            // grid cannot see what it produced (a key may have
+                            // changed), so the row is reloaded below.
+                            reload_for_expression = state
+                                .edit_buffer()
+                                .row_changes(row_idx)
+                                .iter()
+                                .any(|(_, cell)| cell.as_expression().is_some());
                             state.keep_row_edits(row_idx)
                         }
                         None => {}
@@ -853,6 +881,9 @@ impl DataGridPanel {
                     state.edit_buffer_mut().clear_row(row_idx);
                     cx.notify();
                 });
+                if reload_for_expression {
+                    self.queue_reload_after_mutation(cx);
+                }
                 self.pending.toast = Some(PendingToast {
                     message: dbflux_i18n::t!("document.data.mutation.toast.saved"),
                     is_error: false,
@@ -899,6 +930,10 @@ impl DataGridPanel {
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.hold_save_for_expression_confirm(HeldSave::Insert(insert_idx), batch_owned, cx) {
+            return;
+        }
+
         match &self.source {
             DataSource::Collection {
                 profile_id,
@@ -1022,7 +1057,7 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
-                            panel.renumber_queued_inserts_after_removal(insert_idx);
+                            panel.renumber_queued_inserts_after_removal(insert_idx, cx);
                             panel.pending.toast = Some(PendingToast {
                                 message: dbflux_i18n::t!(
                                     "document.data.mutation.toast.document_inserted"
@@ -1087,18 +1122,14 @@ impl DataGridPanel {
             let mut assignments = Vec::new();
 
             for (col_idx, cell) in cells.iter().enumerate() {
-                let value = cell.to_value();
-
-                if matches!(value, Value::Null) {
+                // An expression is a value of its own: it is written even
+                // though its bound value is NULL.
+                if matches!(cell.to_value(), Value::Null) && cell.as_expression().is_none() {
                     continue;
                 }
 
                 if let Some(col) = model.columns.get(col_idx) {
-                    assignments.push(ColumnAssignment {
-                        name: col.title.to_string(),
-                        value,
-                        type_name: Some(col.type_name.to_string()),
-                    });
+                    assignments.push(cell_assignment(&col.title, &col.type_name, cell));
                 }
             }
 
@@ -1182,7 +1213,7 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
-                            panel.renumber_queued_inserts_after_removal(insert_idx);
+                            panel.renumber_queued_inserts_after_removal(insert_idx, cx);
                             panel.pending.toast = Some(PendingToast {
                                 message: dbflux_i18n::t!(
                                     "document.data.mutation.toast.row_inserted"
@@ -1727,7 +1758,13 @@ impl DataGridPanel {
     /// `remove_pending_insert_by_idx` shifts every later insert down one, so the
     /// indices the batch still holds would otherwise point at the wrong insert
     /// or past the end.
-    pub(super) fn renumber_queued_inserts_after_removal(&mut self, removed_idx: usize) {
+    pub(super) fn renumber_queued_inserts_after_removal(
+        &mut self,
+        removed_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.renumber_held_insert_after_removal(removed_idx, cx);
+
         let Some(remaining) = self.pending_batch_remaining.as_mut() else {
             return;
         };
@@ -2121,7 +2158,7 @@ impl DataGridPanel {
             // A write is already running; it chains the rows it still holds.
             return true;
         }
-        if self.pending_delete_confirm.is_some() {
+        if self.pending_delete_confirm.is_some() || self.pending_expression_confirm.is_some() {
             return true;
         }
         if self.pending_batch_remaining.is_some() {

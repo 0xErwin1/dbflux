@@ -199,6 +199,31 @@ A builder result falls back to **read-only** — with a toolbar hint explaining 
 Free-form SQL typed into the editor stays read-only; inline edit applies only to
 plain table browses and builder-generated SELECTs.
 
+### SQL expressions in cells
+
+A cell normally holds a literal: what you type is saved as a quoted value, so
+typing `now()` stores the text `now()`. To save a SQL expression the database
+evaluates (`now()`, `gen_random_uuid()`), mark the cell as an expression
+explicitly. Text is never detected as an expression.
+
+- **Set value** in the cell menu opens a submenu with **Column default**
+  (disabled, with the reason, when the column has no default), the values the
+  connection's dialect offers for the column's type, **NULL**, and
+  **Expression…**.
+- In the inline editor, `Ctrl+Shift+I` flips between literal and expression
+  mode, and opens the editor in expression mode when none is open. In
+  expression mode the editor shows an `ƒx` marker and lists the type's values
+  under the cell; `Up` / `Down` put one in the input and `Enter` saves it.
+- **Set to default** (`Ctrl+Shift+0`) stages the column's default expression.
+
+An expression cell is drawn with `ƒx` in the accent color, and copying it
+copies the expression text. A save that writes an expression asks for
+confirmation first, because the expression is placed in the statement as
+written instead of being bound as a value. Declining does not save that
+expression and keeps its edits staged. In a batch save the rows before it are
+already written, and the rows after it are not. Only SQL tables offer
+expressions; document grids do not.
+
 ### Aggregated results
 
 When a result comes from a grouped (`GROUP BY`) query, rows show the aggregated

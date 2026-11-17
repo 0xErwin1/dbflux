@@ -5,6 +5,21 @@ pub struct DuckDbDialect;
 pub(crate) static DUCKDB_DIALECT: DuckDbDialect = DuckDbDialect;
 
 impl SqlDialect for DuckDbDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["now()", "CURRENT_TIMESTAMP"],
+            Some(TypeFamily::Date) => vec!["CURRENT_DATE", "today()"],
+            Some(TypeFamily::Time) => vec!["CURRENT_TIME"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) => vec!["gen_random_uuid()"],
+            None => Vec::new(),
+        }
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         format!("\"{}\"", name.replace('"', "\"\""))
     }
@@ -122,9 +137,7 @@ impl SqlDialect for DuckDbDialect {
         let values = join(
             assignments
                 .iter()
-                .map(|assignment| {
-                    self.value_to_literal_typed(&assignment.value, assignment.type_name.as_deref())
-                })
+                .map(|assignment| self.assignment_to_sql(assignment))
                 .collect(),
         );
         let conflict = join(
@@ -147,10 +160,7 @@ impl SqlDialect for DuckDbDialect {
                     format!(
                         "{} = {}",
                         self.quote_identifier(&assignment.name),
-                        self.value_to_literal_typed(
-                            &assignment.value,
-                            assignment.type_name.as_deref()
-                        )
+                        self.assignment_to_sql(assignment)
                     )
                 })
                 .collect(),
@@ -169,6 +179,25 @@ fn has_time_zone(column_type: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn duckdb_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::DUCKDB_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("TIMESTAMP WITH TIME ZONE"),
+            vec!["now()", "CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("UUID"),
+            vec!["gen_random_uuid()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("DATE"),
+            vec!["CURRENT_DATE", "today()"]
+        );
+    }
+
     use super::DUCKDB_DIALECT;
     use dbflux_core::{SqlDialect, Value};
 

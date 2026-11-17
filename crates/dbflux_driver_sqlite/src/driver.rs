@@ -193,6 +193,20 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
 pub struct SqliteDialect;
 
 impl SqlDialect for SqliteDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["CURRENT_TIMESTAMP", "datetime('now')"],
+            Some(TypeFamily::Date) => vec!["CURRENT_DATE", "date('now')"],
+            Some(TypeFamily::Time) => vec!["CURRENT_TIME"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) | None => Vec::new(),
+        }
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         sqlite_quote_ident(name)
     }
@@ -238,7 +252,7 @@ impl SqlDialect for SqliteDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -260,7 +274,7 @@ impl SqlDialect for SqliteDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -2956,6 +2970,24 @@ fn resolve_relation_name(conn: &RusqliteConnection, table: &str) -> Result<Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sqlite_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::SQLITE_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("DATETIME"),
+            vec!["CURRENT_TIMESTAMP", "datetime('now')"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("date"),
+            vec!["CURRENT_DATE", "date('now')"]
+        );
+        assert_eq!(dialect.type_value_expressions("INTEGER"), vec!["0"]);
+        assert_eq!(dialect.type_value_expressions("uuid"), Vec::<&str>::new());
+        assert_eq!(dialect.type_value_expressions("blob"), Vec::<&str>::new());
+    }
+
     use super::{
         RusqliteConnection, SqliteConnectionState, SqliteDialect, SqliteDriver, kind_from_decltype,
         plan_sqlite_semantic_request, sqlite_generate_create_table,

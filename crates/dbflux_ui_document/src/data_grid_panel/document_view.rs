@@ -128,6 +128,7 @@ impl DataGridPanel {
                         filter_submenu_open: false,
                         order_submenu_open: false,
                         toolbar_submenu_open: false,
+                        set_value_submenu_open: false,
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,

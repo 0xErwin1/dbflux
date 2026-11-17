@@ -690,6 +690,7 @@ mod close_completion;
 mod collection_views;
 mod column_header_menu;
 mod export_all;
+mod expressions;
 mod facets;
 mod fk_label_identity;
 mod fk_navigation;

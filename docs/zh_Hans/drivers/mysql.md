@@ -23,6 +23,7 @@
 - 例程定义：通过 `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` 获取完整的 `CREATE FUNCTION` 或 `CREATE PROCEDURE` 主体（只读；在查看器中定义不可编辑，也不可执行）。
 - 多语句脚本（若干以 `;` 分隔的语句）会被切分并逐条执行，每条都走预编译路径，每个语句返回一个结果集。服务端拒绝预编译的语句（例如 MySQL 上的 `START TRANSACTION` 或 `BEGIN`）会改走文本协议执行。显式行数限制在脚本及服务端结果集之间总共最多保留 N 行；即使 N 为零，也会标记实际被省略的行。后续写入操作仍会执行完成，错误会继续传递。
 - 数据传输引擎：原生的多行 `INSERT` 批量装载（`BULK_INSERT`）、依据源表列生成的驱动程序原生 `CREATE TABLE` DDL、`TRUNCATE TABLE` 支持，以及用于外键安全迁移的参照完整性开关（`SET FOREIGN_KEY_CHECKS`）。MySQL 与 MariaDB 共享这套能力。
+- 行插入和更新接受单元格中的 SQL 表达式（`NOW()`、`UUID()`、`DEFAULT`），按原样写入，而不是作为带引号的字面量。
 - 以 `dbflux/<version>` 发送 `program_name` 连接属性，可在 `performance_schema.session_connect_attrs` 中看到。
 - 写入权限探测：连接后，会检查 `@@read_only`/`@@super_read_only` 以及 `SHOW GRANTS` 中当前用户，以识别只读副本，或缺少 `INSERT`/`UPDATE`/`DELETE` 授权的角色；当服务器本来就会拒绝写入时，会把解析出的变更策略收紧为只读（无副作用；MariaDB 没有 `@@super_read_only`，此时回退为只检查 `@@read_only`）。
 
@@ -52,6 +53,7 @@
 
 ## 限制
 
+- 携带表达式单元格的插入，或由服务器生成 `AUTO_INCREMENT` id 的插入，会成功但不返回已存储的行：驱动无法确定写入的是哪一行，因此在重新加载之前，网格不会显示服务器端的值。
 - 显式语句超时和有界实例指标/检查器请求会在执行前被拒绝；无界请求保持兼容。保留行数上限不限制字节数、服务端工作量、引擎内存分配或运行时间。未验证托管 MariaDB。
 - 仅支持 SQL 的驱动程序；不提供文档型或键值 API。
 - MariaDB 没有 `information_schema.VIEW_TABLE_USAGE`，因此删除表确认会在视图定义中搜索 `` `database`.`table` `` 名称来查找依赖视图；只通过另一个视图读取该表的视图不会被列出。
