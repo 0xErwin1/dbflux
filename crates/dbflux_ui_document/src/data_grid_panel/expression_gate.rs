@@ -95,9 +95,12 @@ impl DataGridPanel {
 
     /// Keeps the insert a confirmation holds pointing at the same insert
     /// after another one leaves the edit buffer. When the held insert itself
-    /// was removed there is nothing left to confirm, so the confirmation is
-    /// dropped.
-    pub(super) fn renumber_held_insert_after_removal(&mut self, removed_idx: usize) {
+    /// was removed the confirmation is dropped and its batch released.
+    pub(super) fn renumber_held_insert_after_removal(
+        &mut self,
+        removed_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
         let Some(held) = self.pending_expression_confirm.as_mut() else {
             return;
         };
@@ -107,7 +110,16 @@ impl DataGridPanel {
 
         match (*held_idx).cmp(&removed_idx) {
             std::cmp::Ordering::Less => {}
-            std::cmp::Ordering::Equal => self.pending_expression_confirm = None,
+            std::cmp::Ordering::Equal => {
+                // Nothing is left to confirm, and a batch parked on it would
+                // never resume: release it as declining does, edits staged.
+                if let Some(held) = self.pending_expression_confirm.take()
+                    && held.batch_owned
+                {
+                    self.abandon_close_apply(cx);
+                }
+                cx.notify();
+            }
             std::cmp::Ordering::Greater => *held_idx -= 1,
         }
     }

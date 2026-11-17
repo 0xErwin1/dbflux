@@ -861,10 +861,19 @@ impl DataGridPanel {
                     )
                 });
 
+                let mut reload_for_expression = false;
                 table_state.update(cx, |state, cx| {
                     match returned_row {
                         Some(returned_row) => state.apply_returning_row(row_idx, &returned_row),
                         None if crud_result.returning_row.is_some() => {
+                            // The database evaluated any expression, and the
+                            // grid cannot see what it produced (a key may have
+                            // changed), so the row is reloaded below.
+                            reload_for_expression = state
+                                .edit_buffer()
+                                .row_changes(row_idx)
+                                .iter()
+                                .any(|(_, cell)| cell.as_expression().is_some());
                             state.keep_row_edits(row_idx)
                         }
                         None => {}
@@ -872,6 +881,9 @@ impl DataGridPanel {
                     state.edit_buffer_mut().clear_row(row_idx);
                     cx.notify();
                 });
+                if reload_for_expression {
+                    self.queue_reload_after_mutation(cx);
+                }
                 self.pending.toast = Some(PendingToast {
                     message: dbflux_i18n::t!("document.data.mutation.toast.saved"),
                     is_error: false,
@@ -1045,7 +1057,7 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
-                            panel.renumber_queued_inserts_after_removal(insert_idx);
+                            panel.renumber_queued_inserts_after_removal(insert_idx, cx);
                             panel.pending.toast = Some(PendingToast {
                                 message: dbflux_i18n::t!(
                                     "document.data.mutation.toast.document_inserted"
@@ -1201,7 +1213,7 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
-                            panel.renumber_queued_inserts_after_removal(insert_idx);
+                            panel.renumber_queued_inserts_after_removal(insert_idx, cx);
                             panel.pending.toast = Some(PendingToast {
                                 message: dbflux_i18n::t!(
                                     "document.data.mutation.toast.row_inserted"
@@ -1746,8 +1758,12 @@ impl DataGridPanel {
     /// `remove_pending_insert_by_idx` shifts every later insert down one, so the
     /// indices the batch still holds would otherwise point at the wrong insert
     /// or past the end.
-    pub(super) fn renumber_queued_inserts_after_removal(&mut self, removed_idx: usize) {
-        self.renumber_held_insert_after_removal(removed_idx);
+    pub(super) fn renumber_queued_inserts_after_removal(
+        &mut self,
+        removed_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.renumber_held_insert_after_removal(removed_idx, cx);
 
         let Some(remaining) = self.pending_batch_remaining.as_mut() else {
             return;

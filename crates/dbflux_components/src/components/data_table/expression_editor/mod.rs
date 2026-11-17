@@ -27,10 +27,10 @@ pub(super) fn expression_placeholder() -> SharedString {
 }
 
 /// The element the editing cell draws in expression mode.
-/// How far a key press moves the suggestion: plain Down and Up only, so a
-/// shifted arrow stays a selection gesture of the input.
+/// How far a key press moves the suggestion: plain Down and Up only, so an
+/// arrow with any modifier stays a gesture of the input.
 fn suggestion_step(keystroke: &gpui::Keystroke) -> Option<isize> {
-    if keystroke.modifiers.shift {
+    if keystroke.modifiers.modified() {
         return None;
     }
 

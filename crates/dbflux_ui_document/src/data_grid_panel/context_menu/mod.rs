@@ -3538,7 +3538,7 @@ impl DataGridPanel {
         });
 
         if let Some(insert_idx) = removed_insert {
-            self.renumber_queued_inserts_after_removal(insert_idx);
+            self.renumber_queued_inserts_after_removal(insert_idx, cx);
         }
     }
 

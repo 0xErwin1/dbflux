@@ -599,8 +599,8 @@ fn a_held_insert_follows_the_inserts_removed_before_it(cx: &mut TestAppContext) 
         fixture.table_state.update(app, |state, _| {
             state.edit_buffer_mut().remove_pending_insert_by_idx(0)
         });
-        fixture.panel.update(app, |panel, _| {
-            panel.renumber_queued_inserts_after_removal(0)
+        fixture.panel.update(app, |panel, cx| {
+            panel.renumber_queued_inserts_after_removal(0, cx)
         });
     });
 
@@ -621,4 +621,83 @@ fn a_held_insert_follows_the_inserts_removed_before_it(cx: &mut TestAppContext) 
         .find(|assignment| assignment.name == "name")
         .expect("name");
     assert_eq!(name.value, dbflux_core::Value::Text("second".into()));
+}
+
+/// Removing the insert a batch confirmation holds releases the batch, as
+/// declining the confirmation does, and leaves the other edits staged.
+#[gpui::test]
+fn removing_the_held_batch_insert_releases_the_batch(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx);
+
+    let held_idx = window.update(|_, app| {
+        fixture.table_state.update(app, |state, _| {
+            state.edit_buffer_mut().add_pending_insert_after(
+                0,
+                vec![
+                    CellValue::null(),
+                    CellValue::null(),
+                    CellValue::expression("now()"),
+                ],
+            )
+        })
+    });
+    window.update(|_, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.batch_op_in_flight = true;
+            panel.close_after_apply = true;
+            panel.handle_commit_insert(held_idx, true, cx);
+        })
+    });
+    assert!(window.update(|_, app| fixture.panel.read(app).has_expression_confirm()));
+
+    window.update(|_, app| {
+        fixture.table_state.update(app, |state, _| {
+            state
+                .edit_buffer_mut()
+                .remove_pending_insert_by_idx(held_idx)
+        });
+        fixture.panel.update(app, |panel, cx| {
+            panel.renumber_queued_inserts_after_removal(held_idx, cx)
+        });
+    });
+
+    window.update(|_, app| {
+        let panel = fixture.panel.read(app);
+        assert!(!panel.has_expression_confirm());
+        assert!(!panel.batch_op_in_flight, "the batch is no longer parked");
+        assert!(
+            !panel.close_after_apply,
+            "a waiting close is told it failed"
+        );
+    });
+}
+
+/// A save whose returned row cannot be placed in the grid, and that wrote an
+/// expression, reloads the grid: the base row would otherwise keep a key the
+/// expression changed.
+#[gpui::test]
+fn an_unplaced_row_after_an_expression_save_queues_a_reload(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx);
+
+    for (value, expect_reload) in [
+        (CellValue::expression("now()"), true),
+        (CellValue::text("bob"), false),
+    ] {
+        window.update(|_, app| {
+            fixture.table_state.update(app, |state, cx| {
+                state.stage_cell_value(0, 2, value.clone());
+                cx.notify();
+            });
+            fixture.panel.update(app, |panel, cx| {
+                panel.pending.refresh = false;
+                // Two values for a three-column grid: it cannot be projected.
+                let returned = dbflux_core::CrudResult::new(
+                    1,
+                    Some(vec![dbflux_core::Value::Int(1), dbflux_core::Value::Int(2)]),
+                );
+                panel.handle_save_result(0, Ok(returned), false, cx);
+                assert_eq!(panel.pending.refresh, expect_reload);
+            });
+        });
+    }
 }
