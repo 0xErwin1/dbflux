@@ -176,6 +176,7 @@ components:
     literal: 字符
     env: 环境变量
     dotenv: "Dotenv 文件"
+    file: "密钥文件"
     secret: AWS 云密钥管理
     parameter: AWS 参数存储
     auth: 认证会话字段
@@ -183,10 +184,13 @@ components:
     placeholder:
       env: "VARIABLE_NAME"
       dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
     hint:
       env: "DBFlux 每次连接时从环境变量 %{name} 读取。DBFlux 不保存该值。"
       dotenv: "DBFlux 每次连接时从 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
       dotenv_missing_key: "在路径后添加键：~/path/to/file.env#KEY"
+      file: "DBFlux 每次连接时从 %{path} 读取。该文件必须只有您能读取。"
+      file_with_key: "DBFlux 每次连接时从 JSON 文件 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
   file_picker:
     browse: 浏览…
   column_projection:
@@ -333,6 +337,7 @@ connection_manager:
     seconds: 秒
     connection_name: 连接名称
     password: 密码
+    password_unreadable: "无法读取已保存的密码：系统密钥环可能已锁定"
     key_passphrase_optional: 密钥口令（可选）
     ssh_password: SSH 密码
     ca_cert_path: CA 证书路径
@@ -1430,6 +1435,7 @@ document:
       copy_error: 复制错误
       result_tab_title: "结果 %{index}"
       count_rows_failed: 无法统计查询的行数
+      next_rows_failed: "无法加载查询的更多行"
       error:
         select_source: 请至少选择一个来源
         start_time_required: 需要开始时间
@@ -1595,6 +1601,7 @@ document:
       header: "%{column} · 第 %{row} 行"
       item:
         copy: 复制
+        copy_column_name: 复制列名
         view_document: 查看文档
         add_document: 添加文档
         duplicate_document: 复制文档
@@ -1604,6 +1611,13 @@ document:
         edit_in_modal: 在弹窗中编辑…
         set_default: 设为默认值
         set_null: 设为 NULL
+        set_value: "设置值"
+        set_expression: "设为表达式…"
+        set_value_column_default: "列默认值"
+        set_value_type_values: "类型值 · %{type}"
+        set_value_expression: "表达式…"
+        set_value_null: "NULL"
+        set_value_no_default: "%{column} 没有默认值。请在表设计中添加，或选择一个类型值。"
         add_row: 添加行
         inspect_row: 检查行
         find_similar_rows: 查找相似行
@@ -1625,6 +1639,10 @@ document:
           many: "%{count} 行将被永久删除。此操作无法撤销。"
         cancel: 取消
         delete: 删除
+      expression_confirm:
+        list: "以 SQL 写入的表达式："
+        cancel: "取消"
+        confirm: "连同表达式一起保存"
       filter:
         title: 筛选
         cell_value: 单元格值
@@ -1707,6 +1725,8 @@ document:
           insert_failed: "插入文档失败：%{error}"
           update_failed: "更新文档失败：%{error}"
     grid:
+      expression:
+        placeholder: SQL 表达式
       edit_bar:
         clean: 无未保存的更改
         dirty:
@@ -1759,6 +1779,7 @@ document:
           of_total: "已加载 %{loaded}/%{total} 行"
           count: 统计行数
           load_all: 加载全部行
+          loading_next: "正在加载更多行…"
         pending_changes:
           one: "%{count} 处待处理更改"
           many: "%{count} 处待处理更改"
@@ -1781,7 +1802,13 @@ document:
           csv: CSV
           json_pretty: JSON（美化）
           json_compact: JSON（紧凑）
-          json_lines: "JSON（每行一个对象）"
+          json: JSON
+          json_lines: "JSON Lines（每行一个对象）"
+          html: HTML
+          markdown: Markdown
+          xml: XML
+          sql: SQL
+          spreadsheet: 电子表格
           text: 文本
           binary: 二进制
           hex: Hex
@@ -2153,6 +2180,7 @@ document:
       run: 执行
     tables:
       selected_count: "已选择 %{count} 张表用于导出"
+      required: "请至少选择一张要导出的表。"
     format_options:
       format_label: 格式
       output_folder_label: "文件夹"
@@ -2164,8 +2192,34 @@ document:
       segment_size_hint: "每个文件分段的行数"
       segment_size_placeholder: 分段 / 分块大小
       segment_size_invalid: 必须为大于等于 1 的整数；已保留之前的值。
+      delimiter_label: "分隔符"
+      delimiter:
+        comma: "逗号 ( , )"
+        semicolon: "分号 ( ; )"
+        tab: "制表符"
+        pipe: "竖线 ( | )"
+      encoding_label: "编码"
+      encoding:
+        utf8: "UTF-8"
+        utf8_bom: "UTF-8（带 BOM）"
+        utf16le: "UTF-16LE"
+        windows1252: "Windows-1252"
+      null_text_label: "NULL 文本"
+      null_text_placeholder: "空"
+      null_text_hint: "写入 NULL 值的位置。留空时，只有改用其他文本（如 \\N）才能区分 NULL 和空字符串。"
+      sql_batch_size_label: "每条 INSERT 的行数"
+      sql_batch_size_placeholder: "500"
+      sql_batch_size_hint: "每条 INSERT 语句写入的行数。若驱动程序的上限更低，则以该上限为准。"
+      sql_batch_size_invalid: "必须是不小于 1 的整数。"
+      date_format_label: "日期"
+      date_format:
+        rfc3339: "RFC 3339"
+        date_time: "YYYY-MM-DD HH:MM:SS"
+        epoch: "Epoch（秒）"
       error:
         no_dialog_fallback_failed: "没有可用的文件夹选择器且无法创建回退导出目录：%{error}"
+      sql_unavailable: "此连接不提供 SQL：其驱动无法生成 INSERT 语句。请改为导出 CSV 或 JSON。"
+      folder_required: "请选择文件的写入文件夹。"
     confirm:
       title: 查看导出计划
       summary: "%{count} 张表，格式 %{format}，导出到 %{folder}"
@@ -2197,10 +2251,18 @@ document:
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
       cancelled: "%{table}：已在 %{rows} 行后取消"
+      not_attempted_after_failure: "%{table}：未尝试：导出在失败的表处停止"
     footer:
       back: 返回
       continue: 继续
       close: 关闭
+      reason:
+        tables: "选择一张表之前，“继续”不可用。"
+        folder: "选择文件夹之前，“继续”不可用。"
+        batch_size: "“每条 INSERT 的行数”有效之前，“继续”不可用。"
+        segment_size: "“分块大小”有效之前，“继续”不可用。"
+    done:
+      closing_failed: "请关闭此对话框，修复上述原因后重新导出。已写入的文件会保留在文件夹中。没有 manifest.json 时无法将整个文件夹导入，但每个已完成的 CSV 或 JSON 文件仍可通过“选择文件”导入；对于 CSV 文件，单个文件不含这些设置，请先把分隔符、编码和 NULL 文本设为与本次导出一致。"
   file:
     error:
       source_changed: "文件在打开后已在别处被修改，因此未保存任何内容，你的编辑仍然保留。要查看新内容，请放弃编辑并选择从文件重新加载，然后重新编辑。"
@@ -2400,7 +2462,7 @@ document:
       one: "导入 %{count} 张表"
       many: "导入 %{count} 张表"
     rail:
-      pick_folder: 选择文件夹
+      pick_folder: 选择来源
       configure: 配置
       confirm: 确认
       run: 执行
@@ -2413,6 +2475,10 @@ document:
         no_connection: 此配置没有活动连接
         no_dialog: 此平台没有可用的文件夹选择器
         invalid_bundle: "无效的导入捆绑包：%{error}"
+        no_connection_next: "请先连接到该配置，然后重新打开导入。"
+        no_dialog_next: "请在提供文件对话框的桌面会话中启动 DBFlux，然后重试。"
+        invalid_bundle_next: "请选择导出所写入的文件夹：其中包含 manifest.json。若只导入单个文件，请改用“选择文件…”。"
+      reading_hint: "正在读取清单。读取完成前两个按钮均不可用。"
     configure:
       mode_placeholder: 模式
       target_placeholder: 目标列
@@ -2421,6 +2487,225 @@ document:
       apply_mapping: 应用映射
       continue: 继续
       unmatched_source: "未匹配的源列将被跳过，除非重新映射：%{names}"
+      truncate_unavailable: "此连接无法清空表，因此不列出 Truncate。请改选 Recreate 来替换该表。"
+    pick_file:
+      description: "或将单个文件导入到一张表：CSV、JSON、JSON Lines、XML 或电子表格。"
+      description_sql: "或将单个文件导入到一张表：CSV、JSON、JSON Lines、XML 或电子表格。.sql 文件会在 SQL 连接上作为脚本运行。"
+      choose_file: "选择文件…"
+      reading_file: "正在读取文件…"
+      dialog_title: "选择要导入的文件"
+      filter_label: "CSV、JSON、JSON Lines、XML 和电子表格"
+      filter_label_sql: "CSV、JSON、JSON Lines、XML、电子表格和 SQL"
+      error:
+        unsupported: "只能导入 .csv、.json、.jsonl、.xml、.xlsx、.xlsm、.xls 和 .ods 文件。"
+        unsupported_sql: "只能导入 .csv、.json、.jsonl、.xml、.xlsx、.xlsm、.xls、.ods 和 .sql 文件。"
+        invalid_file: "无法读取文件：%{error}"
+        unsupported_next: "请选择扩展名为上述之一的文件。"
+        lookup_failed: "无法查找目标表：%{error}"
+        next_csv: "请在上方选择其他编码或分隔符：选择后会立即重新读取文件。"
+        next_json: "请修复文件中的 JSON 后重新选择，或选择其他文件。"
+        next_xml: "请修复文件中的 XML 后重新选择，或选择其他文件。"
+        next_spreadsheet: "请确认该文件是没有密码的有效工作簿后重新选择，或选择其他文件。"
+        next_lookup: "请检查表名以及你对该连接的访问权限，然后再次点击“使用该表”。"
+      reading_hint: "正在读取文件。读取完成前两个按钮均不可用。"
+    file:
+      source: "文件：%{file}（%{format}）"
+      target_table_label: "目标表"
+      target_table_placeholder: "表名（默认为文件名）"
+      use_table: "使用该表"
+      null_text_hint: "文件中表示 NULL 的文本。文本为空时，空字段即为 NULL。"
+      json_no_options: "JSON 和 JSON Lines 没有导入选项：列和 NULL 由文件本身决定。"
+      xml_no_options: "XML 没有导入选项：列和 NULL 由文件本身决定。"
+      spreadsheet_header: "第 1 行是表头。电子表格没有分隔符或编码选项：列由工作表决定，空单元格为 NULL。"
+      sheet_label: "工作表"
+      sheet_hint: "每次导入读取一个工作表。只列出可见的工作表。选择其他工作表后会立即重新读取文件。"
+      sheet_single: "此工作簿只有一个工作表，无需选择。"
+    sheet:
+      empty:
+        message: "工作表“%{sheet}”为空：没有任何行。"
+        next: "请在上方选择其他工作表，或在电子表格应用中为此工作表添加表头行和数据，保存后重新选择文件。"
+        next_single: "请在电子表格应用中为此工作表添加表头行和数据，保存后重新选择文件。"
+      header:
+        message: "工作表“%{sheet}”的第 1 行不是有效的表头：%{problems}。"
+        next: "请在电子表格应用中为第 1 行的每一列设置唯一名称，保存后重新选择文件，或在上方选择其他工作表。"
+        next_single: "请在电子表格应用中为第 1 行的每一列设置唯一名称，保存后重新选择文件。"
+        blank_one: "第 %{columns} 列为空"
+        blank_many: "第 %{columns} 列为空"
+        duplicate_two: "第 %{columns} 列的名称都是“%{name}”"
+        duplicate_many: "第 %{columns} 列的名称都是“%{name}”"
+      cell:
+        message: "工作表“%{sheet}”第 %{row} 行第 %{column} 列（“%{name}”）的值为错误 %{code}。"
+        next: "请在电子表格应用中修正或清除该单元格，保存后重新选择文件。公式按文件中最后保存的结果读取。"
+      large:
+        message: "工作表“%{sheet}”有 %{cells} 个单元格，超过 %{limit} 的上限。整个工作表会读入内存，因此无法导入。"
+        next: "请在电子表格应用中将其导出为 CSV（另存为 → CSV）并改为导入该 CSV，或在上方选择较小的工作表。"
+        next_single: "请在电子表格应用中将其导出为 CSV（另存为 → CSV）并改为导入该 CSV。"
+      list_and: "%{head}和%{last}"
+      list_more: "%{list}等另外 %{count} 列"
+    script:
+      title: "运行 SQL 脚本"
+      task: "运行 SQL 脚本"
+      thousands_separator: ","
+      classification:
+        metadata: "元数据"
+        read: "读取"
+        write: "写入"
+        destructive: "破坏性"
+        admin: "管理"
+        admin_safe: "管理（安全）"
+        admin_destructive: "管理（破坏性）"
+      error:
+        unreadable: "无法读取文件：%{path}：%{message}"
+        unreadable_next: "请确认你有权读取该文件，或选择其他文件。"
+        not_utf8: "无法读取脚本：它不是有效的 UTF-8（第 %{position} 个字节无效）。SQL 脚本按 UTF-8 读取，没有编码选项。"
+        not_utf8_next: "请在编辑器中将文件另存为 UTF-8，然后重新选择。"
+        too_large: "此脚本为 %{size}，超过了在此运行脚本的 %{limit} 上限。"
+        too_large_next: "请改用数据库自带的命令行客户端运行。将其拆分为较小的文件也可以，但每个文件都是单独运行的：后面的文件失败时无法撤销前面的文件。"
+        empty: "脚本中没有语句：文件为空，或只包含注释。"
+        empty_next: "请选择至少包含一条语句的文件。"
+        not_sql: "无法在此连接上运行 SQL 脚本：它使用的是 %{language} 查询语言，而不是 SQL。"
+        not_sql_next: "请连接到 SQL 连接并在那里打开导入，或选择 CSV、JSON 或 JSON Lines 文件将数据导入此连接。"
+        other_next: "请检查脚本和选项，然后重试。"
+        interrupt_failed: "无法停止正在运行的语句：%{error}。它会在运行停止之前结束。"
+        session_open_failed: "无法为脚本打开单独的会话，因此没有运行任何内容：%{error}"
+        session_cleanup_failed: "无法干净地释放脚本的单独会话：%{error}"
+        conditional_transaction: "此脚本有一个控制事务的版本条件注释（第 %{line} 行），它是否运行取决于服务器。"
+        conditional_transaction_next: "请用数据库自带的命令行客户端运行该脚本。"
+        session_commit: "此脚本在第 %{line} 行（%{statement}）%{change}，这会让此连接在运行后停留在手动提交模式。"
+        session_commit_next: "请删除该语句，或用数据库自带的命令行客户端运行该脚本。"
+        session_change_autocommit: "关闭了 autocommit"
+        session_change_implicit: "开启了隐式事务"
+        client_directive: "此脚本使用了客户端命令 %{directive}（第 %{line} 行），只有数据库的命令行客户端能理解它。"
+        client_directive_next: "请用数据库自带的命令行客户端运行该脚本，或删除 %{directive} 行并以分号结束每条语句。"
+        split_routine: "此脚本有一个从第 %{line} 行开始的例程体，其中的语句以“;”结尾，因此无法在这里拆分为语句。"
+        split_routine_next: "请用数据库自带的命令行客户端运行该脚本。"
+        copy_stdin: "此脚本有一个 COPY … FROM stdin 数据块（第 %{line} 行），只有 psql 命令行客户端能加载它。"
+        copy_stdin_next: "请改用 psql 运行。"
+        psql_meta: "此脚本使用了 psql 命令 %{command}（第 %{line} 行），只有 psql 命令行客户端能理解它。"
+        psql_meta_next: "请改用 psql 运行该脚本：删除它会让其余语句在此连接上运行，而这可能不是它所选择的数据库。"
+        self_managed: "此脚本自行管理事务（第 %{line} 行的 %{keyword}），因此不能在一个事务中运行。"
+        self_managed_next: "请关闭“在一个事务中运行”；之后由脚本自己的语句决定保存什么。"
+        read_only:
+          one: "此连接为只读，脚本中有 %{count} 条语句会更改数据、结构或权限。"
+          many: "此连接为只读，脚本中有 %{count} 条语句会更改数据、结构或权限。"
+        read_only_next: "请打开读写连接来运行它。只读取数据的脚本可以在这里运行。"
+      configure:
+        file: "文件：%{file}（SQL 脚本）"
+        script_label: "脚本"
+        script_summary:
+          one: "%{count} 条语句，%{size}"
+          many: "%{count} 条语句，%{size}"
+        preview_label: "预览"
+        preview_more:
+          one: "另有 %{count} 条语句"
+          many: "另有 %{count} 条语句"
+        preview_hint: "徽标是编辑器使用的分类。没有 WHERE 的 DELETE 和 UPDATE 会被标记。"
+        preview_sequence_hint: "更改序列的语句（setval、nextval、ALTER SEQUENCE）按写入统计，因此只读连接会拒绝它们。"
+        no_where: "无 WHERE"
+        on_error_label: "出错时"
+        on_error_stop: "遇到第一个错误时停止"
+        on_error_continue: "出错后继续"
+        on_error_stop_hint: "运行会在第一条失败的语句处停止，之后的语句不会运行。"
+        on_error_continue_hint: "所有语句都会运行。失败的语句会在最后列出，其余的会保留。"
+        transaction_label: "事务"
+        transaction_checkbox: "在一个事务中运行"
+        transaction_hint: "如果某条语句失败，事务中所做的更改会被回滚。在最后一条语句成功之前，不会保存任何内容。序列的更改（setval、nextval）不会被回滚撤销。"
+        transaction_unchecked_hint: "每条语句单独运行，并在运行时保存，因此失败时已运行的语句会保留。"
+        transaction_off_continue: "已关闭：在此连接上，失败的语句会中止事务，运行无法在它之后继续。选择“遇到第一个错误时停止”即可在一个事务中运行。"
+        transaction_unavailable: "无法使用单个事务：此连接不支持事务。每条语句单独运行，并在运行时保存，因此失败时已运行的语句会保留。"
+        transaction_self_managed_commit: "已关闭：此脚本自行管理事务（第 %{line} 行的 %{keyword}）。它按原样运行：其中每个 %{keyword} 都会保存它之前的更改。"
+        transaction_self_managed: "已关闭：此脚本自行管理事务（第 %{line} 行的 %{keyword}）。它按原样运行：由脚本自己的事务语句决定保存什么。"
+        ddl_commits: "在此连接上，CREATE、ALTER 和 DROP 在运行时就会保存，并且会一并保存它们之前的所有语句。回滚只能撤销最后一条此类语句之后所做的更改。"
+      footer:
+        read_only: "“继续”已关闭：连接为只读。"
+        running_transaction: "“取消运行”会在当前语句结束后停止。事务性更改会被回滚；序列的更改（setval、nextval）不会。"
+        running_kept: "“取消运行”会在当前语句结束后停止。已运行的语句会保留。"
+        cancelling_transaction: "正在等待当前语句停止。之后事务会被回滚。"
+        cancelling_kept: "正在等待当前语句停止。已运行的语句会保留。"
+      confirm:
+        destructive_lead:
+          one: "此脚本的 %{total} 条语句中有 %{count} 条具有破坏性："
+          many: "此脚本的 %{total} 条语句中有 %{count} 条具有破坏性："
+        plain_lead:
+          one: "此脚本有 %{count} 条语句，没有破坏性语句。它将在此连接上运行："
+          many: "此脚本有 %{count} 条语句，没有破坏性语句。它将在此连接上运行："
+        warning: "脚本结束后，破坏性语句无法撤销。确认后继续。"
+        danger_line: "%{count} × %{message}"
+        first_label: "前 %{shown} 条，共 %{total} 条"
+        first_line: "#%{index} %{snippet}"
+        how_transaction: "它在一个事务中运行，并在第一个错误处停止。"
+        how_each_stop: "每条语句在运行时保存，运行会在第一个错误处停止。"
+        how_each_continue: "每条语句在运行时保存，出错后运行会继续。"
+        how_self_stop: "它按原样运行：由脚本自己的事务语句决定保存什么，运行会在第一个错误处停止。"
+        how_self_continue: "它按原样运行：由脚本自己的事务语句决定保存什么，出错后运行会继续。"
+        run: "运行脚本"
+        proceed: "是，运行脚本"
+      running:
+        title: "正在运行第 %{index} / %{total} 条语句"
+        current: "当前语句"
+        starting: "正在启动…"
+        transaction_line: "单个事务：在最后一条语句成功之前，不会保存任何内容。"
+        no_transaction_line: "无事务：每条语句在运行时保存。"
+        cancel: "取消运行"
+        cancelling: "正在取消…"
+      toast:
+        completed: "脚本已完成"
+      done:
+        finished:
+          one: "脚本已完成：%{count} 条语句已运行，用时 %{elapsed}"
+          many: "脚本已完成：%{count} 条语句已运行，用时 %{elapsed}"
+        committed: "已提交：更改已保存。"
+        saved_as_run: "每条语句在运行时已保存。"
+        with_errors: "脚本已完成但有错误：%{total} 条语句中 %{ran} 条已运行，%{failed} 条失败"
+        with_errors_next: "已运行的语句已保留；失败的 %{failed} 条已跳过。请检查失败的语句以及其后依赖它们的语句，核对并整理这次部分运行的结果，保留或恢复脚本需要的会话设置（例如 SET search_path 或 SET NAMES），然后再运行修正后的语句：后面的语句可能是在本应由失败语句修改的数据上运行的。"
+        failure_label: "#%{index} · 第 %{line} 行"
+        cancelled: "脚本在 %{total} 条语句中的 %{ran} 条之后被取消"
+        rolled_back_cancelled: "已回滚：事务性更改已被撤销，因此没有保存任何内容。序列的更改（setval、nextval）不会被回滚撤销。"
+        cancelled_rolled_back_next: "准备好后，请选择文件并重新运行。"
+        nothing_ran: "没有运行任何语句，因此没有任何更改。"
+        cancelled_kept:
+          one: "%{count} 条语句已运行并保留：它在运行时已保存。"
+          many: "%{count} 条语句已运行并保留：每条都在运行时已保存。"
+        cancelled_kept_next: "重新运行前请从文件中删除它们，否则它们会运行两次。请为其余语句保留或恢复脚本需要的会话设置（例如 SET search_path 或 SET NAMES）。"
+        stopped: "脚本在 %{total} 条语句中的第 %{index} 条处停止"
+        failed_statement: "失败的语句 · 第 %{line} 行"
+        database_error: "数据库错误：%{error}"
+        rolled_back_before:
+          one: "已回滚：它之前 %{count} 条语句的事务性更改已被撤销。序列的更改（setval、nextval）不会被回滚撤销。"
+          many: "已回滚：它之前 %{count} 条语句的事务性更改已被撤销。序列的更改（setval、nextval）不会被回滚撤销。"
+        rolled_back_first: "已回滚：没有保存任何内容。序列的更改（setval、nextval）不会被回滚撤销。"
+        rolled_back_nothing_saved: "已回滚：没有保存任何内容。"
+        stopped_rolled_back_next: "请在文件中修正该语句，然后选择文件并重新运行。"
+        kept_before:
+          one: "它之前的 %{count} 条语句已运行并保留。"
+          many: "它之前的 %{count} 条语句已运行并保留。"
+        nothing_before_it: "它之前没有运行任何语句。"
+        not_run_range: "第 %{from} 条到第 %{total} 条语句未运行。"
+        not_run_single: "第 %{index} 条语句未运行。"
+        stopped_kept_next: "请修正第 %{index} 条语句，并核对前 %{before} 条语句已经做出的更改。运行其余语句之前，请保留或恢复脚本需要的会话设置（例如 SET search_path 或 SET NAMES），然后只运行剩下的语句，否则它们会运行两次。"
+        use_transaction_next: "下次请开启“在一个事务中运行”，以避免只运行一部分。"
+        fix_first_next: "请修正第 %{index} 条语句，然后重新运行脚本。"
+        commit_failed: "脚本已停止：无法提交事务"
+        commit_failed_next: "请检查连接，然后选择文件并重新运行。"
+        unresolved: "脚本结束时结果不明确"
+        unresolved_message: "无法结束事务：%{error}"
+        unresolved_next: "在进行其他操作之前，请先检查数据库的状态：事务可能仍处于打开状态，脚本的一部分也可能已保存。关闭连接即可结束打开的事务。"
+        ddl_not_undone: "在此连接上，CREATE、ALTER 和 DROP 在运行时就会保存，因此回滚没有撤销它们。"
+        not_run: "脚本未运行"
+        not_run_next: "没有运行任何内容。请修复上面的原因，然后重新运行脚本。"
+        partially_kept: "部分已保存：直到第 %{index} 条语句（第 %{line} 行）的所有内容都已保存，因为它在此连接上会自行提交，其后的语句也可能已保存。"
+        partially_kept_no_line: "部分已保存：直到第 %{index} 条语句的所有内容都已保存，因为它在此连接上会自行提交，其后的语句也可能已保存。"
+        partially_kept_next: "再次运行脚本之前，请检查数据库并核对已保存的内容，否则已保存的语句会运行两次。"
+        script_rolled_back: "脚本在其自身事务之外运行的语句在运行时已保存。脚本打开的事务已被回滚，因此它在其中所做的更改没有保存。 序列的更改（setval、nextval）不会被回滚撤销。"
+        stopped_own_transaction_next: "请修正第 %{index} 条语句，在数据库中检查它之前的哪些语句已保存并核对更改。保留或恢复脚本需要的会话设置（例如 SET search_path 或 SET NAMES），然后只运行缺少的部分，否则已保存的语句会运行两次。"
+        cancelled_own_transaction_next: "再次运行脚本之前，请在数据库中检查哪些语句已保存并核对更改，否则已保存的语句会运行两次。"
+        possibly_open_rolled_back: "脚本在事务之外使用了 SAVEPOINT，因此 DBFlux 发出了 ROLLBACK，以防有事务被遗留为打开状态。数据库已经提交的更改会保留。"
+        ended_without_commit: "脚本结束时没有 COMMIT，因此它打开的事务已被回滚。"
+        ended_without_commit_next: "请在脚本末尾添加 COMMIT 以保存其更改。"
+        ended_without_commit_next_or: "请在脚本末尾添加 COMMIT 以保存其更改，或开启“在一个事务中运行”。"
+        left_open: "脚本结束时仍有事务处于打开状态"
+        left_open_message: "无法回滚脚本的事务：%{error}"
+        left_open_next: "此连接上可能仍有事务处于打开状态。请断开并重新连接以结束它，并在进行其他操作之前先检查数据库的状态。"
     mapping_mode:
       create: 创建
       existing: 已存在（仅插入）
@@ -2428,7 +2713,8 @@ document:
       skip: 跳过
       truncate: 清空（TRUNCATE + 插入）
     confirm:
-      body: "这将在加载数据前删除并重建或清空以下表：%{tables}"
+      body: "这将在加载数据前删除并重建或清空以下表："
+      table_line: "%{table} — %{mode}"
       warning: 此操作无法撤销。确认以继续。
       back: 返回
       proceed: 是，继续
@@ -2441,6 +2727,7 @@ document:
     done:
       cancelled_rows: "导入停止前已导入 %{rows} 行。"
       close: 关闭
+      closing_failed: "请关闭此对话框并修复上述原因。已完成的表会保留在目标中；若重新导入，请对它们选择“跳过”。在不支持事务的目标上，失败的表中在出错前已写入的行也会保留。"
     error:
       no_connection: 此导入没有活动连接
     toast:
@@ -2457,6 +2744,15 @@ document:
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
       cancelled: "%{table}：已在 %{rows} 行后取消"
+      not_attempted_after_failure: "%{table}：未尝试：导入在失败的表处停止"
+    footer:
+      reason:
+        file_read: "文件读取完成之前，“继续”不可用。"
+        sheet_empty: "“继续”不可用：工作表“%{sheet}”没有任何行。"
+        sheet_header: "“继续”不可用：第 1 行的每一列都需要唯一名称。"
+        sheet_cell: "“继续”不可用：某个单元格的值为错误值。"
+        sheet_large: "“继续”不可用：工作表超过 %{limit} 个单元格。"
+      cancel: "取消"
   instance_inspector:
     task_label: "检查器：%{metric_id}"
     connection_not_found: 未找到连接
@@ -3413,6 +3709,31 @@ document:
     new: 新建标签页
     close_named: "关闭 %{title}"
     unsaved_changes: 未保存的更改
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "关闭标签页"
+    retry: "重试"
+    removed:
+      title: "此密钥已被删除"
+      body: "%{name} 已不在存储中。此标签页不会读取或写入任何内容。请关闭它，并在密钥被重新创建后再次打开。"
+      draft_title: "已删除 — 保留了你未保存的文本"
+      draft_body: "%{name} 已被删除，因此无法保存任何内容。下面的文本为只读；请复制所需内容，然后丢弃。"
+    scheduled:
+      draft_title: "已安排删除 — 保留了你未保存的文本"
+      draft_body: "%{name} 已安排删除，因此无法保存任何内容。下面的文本为只读。恢复该密钥后可再次编辑，或丢弃该文本。"
+    region_mismatch:
+      title: "此连接位于另一个区域"
+      body: "%{name} 属于 %{region}，而连接位于 %{live}。在连接回到 %{region} 之前，此标签页不会读取或写入任何内容。"
+    footer:
+      value_scope: "值仅在此标签页中可见，关闭时清除"
+      hint:
+        reveal: "显示"
+        edit: "编辑"
+        roll_back: "回滚"
+    rotation_badge:
+      on: "轮换已开启"
+      off: "轮换已关闭"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "搜索在存储端执行，绝不会列出值"
@@ -3420,6 +3741,9 @@ document:
       refresh: "刷新"
     load_more: "加载下一页"
     loading_more: "正在加载下一页…"
+    region:
+      label: "区域"
+      switch_failed: "无法切换到区域 %{region}：%{error}"
     columns:
       name: "名称"
       description: "描述"
@@ -3446,29 +3770,60 @@ document:
     error:
       connection_unavailable: "连接不可用"
       store_unavailable: "该连接没有存储 %{store}"
+      may_have_landed: "服务可能在失败之前已应用该更改。请先检查该密钥，再重试。"
+      audit_unrecorded: "无法将该失败写入审计记录。"
     footer:
       loaded:
         one: "已加载 %{count} 个密钥"
         many: "已加载 %{count} 个密钥"
+      paths:
+        one: "%{count} 个路径"
+        many: "%{count} 个路径"
+      parameters:
+        one: "%{count} 个参数"
+        many: "%{count} 个参数"
+      tree_summary: "%{path} 下已加载 %{paths} · %{parameters}"
+      flat_summary: "%{path} 下 %{parameters}"
       hint:
         open: "打开"
         retrieve: "获取值"
-        copy_id: "复制 ID"
+        copy_arn: "复制 ARN"
         filter: "筛选"
         up: "上移"
     status:
       list_timing:
         one: "列出 · %{count} 个密钥 · %{millis} ms"
         many: "列出 · %{count} 个密钥 · %{millis} ms"
+      list_timing_parameters:
+        one: "列出 · %{count} 个参数 · %{millis} ms"
+        many: "列出 · %{count} 个参数 · %{millis} ms"
       describe_timing: "描述 · %{millis} ms"
       retrieve_timing: "获取值 · %{millis} ms"
       duration_tooltip: "上次存储调用的客户端耗时"
+    date:
+      short: "%{month}%{day}日 %{time}"
+      short_with_year: "%{year}年%{month}%{day}日 %{time}"
+      months:
+        jan: "1月"
+        feb: "2月"
+        mar: "3月"
+        apr: "4月"
+        may: "5月"
+        jun: "6月"
+        jul: "7月"
+        aug: "8月"
+        sep: "9月"
+        oct: "10月"
+        nov: "11月"
+        dec: "12月"
     rotation:
       off: "关闭"
       enabled: "已启用"
       disabled: "已禁用"
       every_days: "每 %{count} 天"
       every_hours: "每 %{count} 小时"
+      on_schedule: "按计划"
+      window: "时间窗口"
       schedule_with_window: "%{schedule} · 时间窗口 %{window}（%{expression}）"
       title: "轮换"
       status: "状态"
@@ -3478,6 +3833,7 @@ document:
       last: "上次轮换"
     details:
       none: "选择一个密钥以查看其详细信息"
+      close: "关闭"
       loading: "正在加载详细信息…"
       failed: "无法加载详细信息"
       title: "密钥详细信息"
@@ -3492,7 +3848,29 @@ document:
       created: "创建时间"
       last_changed: "上次更改"
       last_retrieved: "上次获取"
-      versions: "版本"
+      open_in_tab: "在标签页中打开"
+      resize: "调整详情面板大小"
+    versions:
+      title: "版本"
+      history_title: "历史记录"
+      count:
+        one: "%{count} 个版本"
+        many: "%{count} 个版本"
+      column:
+        version: "版本"
+        labels: "暂存标签"
+        created: "创建时间"
+      no_labels: "无标签"
+      history_version: "v%{id}"
+      loading: "正在加载版本…"
+      failed: "无法加载版本"
+      scheduled_for_deletion: "已计划删除；恢复后即可查看其版本"
+      not_connected: "未连接；连接后即可查看版本"
+      retrieve: "获取版本 %{version}"
+      back_to_current: "返回当前版本"
+      shown: "正在显示版本 %{version}"
+      not_current: "这不是当前版本。获取操作会被审计，值不会。"
+      current_unknown: "当前版本暂时未知。获取操作会被审计，值不会。"
     tags:
       title: "标签"
       none: "无标签"
@@ -3501,10 +3879,19 @@ document:
       body: "%{name} 属于 %{service}。%{service} 负责轮换和更新它，因此 DBFlux 以只读方式显示。"
     action:
       copy_resource_id: "复制 ARN"
+    context_menu:
+      copy_name: "复制名称"
+      copy_path: "复制路径"
+      arn_loading: "ARN 将随详情一起加载…"
+      arn_missing: "存储未报告资源标识符"
+      arn_failed: "无法加载详情：%{error}"
+      open_in_tab: "在标签页中打开"
     toast:
       value_copied: "已将值复制到剪贴板"
       resource_id_copied: "已将 ARN 复制到剪贴板"
       error_copied: "已将错误复制到剪贴板"
+      name_copied: "已将名称复制到剪贴板"
+      path_copied: "已将路径复制到剪贴板"
     value:
       title: "值"
       not_loaded: "值未加载"
@@ -3517,7 +3904,21 @@ document:
       view:
         key_value: "键/值"
         plaintext: "纯文本"
-      plaintext_only: "仅当值可解析为只含标量值的单层 JSON 对象时才会打开键/值视图。嵌套 JSON、数组和其他任何文本都以纯文本打开。"
+        key_value_unavailable: "键/值视图不可用：该值不是只含标量值的单层 JSON 对象。"
+      kind:
+        dotenv:
+          one: "dotenv · %{count} 行"
+          many: "dotenv · %{count} 行"
+        json_keys:
+          one: "JSON · %{count} 个键"
+          many: "JSON · %{count} 个键"
+        json_items:
+          one: "JSON · %{count} 项"
+          many: "JSON · %{count} 项"
+        text:
+          one: "文本 · %{count} 行"
+          many: "文本 · %{count} 行"
+        binary: "二进制"
       binary_size: "二进制 · %{size}"
       read_only: "只读"
       binary_note: "二进制值由其他工具写入。DBFlux 以 base64 显示且不会编辑它们。"
@@ -3537,6 +3938,155 @@ document:
       metadata_loaded: "元数据已加载 · 仅值获取失败"
       deletion_scheduled: "计划于 %{date} 删除"
       deletion_scheduled_body: "在恢复之前无法获取其值。"
+      deletion_scheduled_unknown: "已计划删除"
+
+    edit:
+      open: "编辑值"
+      save: "保存为新版本"
+      discard: "放弃"
+      hint: "保存会写入一个新版本并将其设为当前版本。文本将按此处的内容原样保存。"
+      invalid_json: "存储的值是 JSON，而编辑后的文本不是有效的 JSON：%{error}"
+      unsaved_block: "%{name} 有未保存的编辑。请先保存或放弃。"
+      connection_replaced: "编辑该值时连接已被替换。请放弃编辑器，并在保存前重新获取该值。"
+      refused_managed: "%{name} 的值由 %{service} 管理，因此无法编辑。"
+      refused_deletion: "%{name} 已安排删除，在恢复之前无法编辑其值。"
+      change_summary: "未保存的值编辑"
+      find: "查找"
+      modified: "已修改"
+      footer:
+        version: "版本 %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "已更改 1 行"
+        changed_other: "已更改 %{count} 行"
+        saving_note: "保存会创建新版本并将其设为当前版本"
+        caret: "第 %{line} 行，第 %{column} 列"
+      changed_elsewhere: "此密钥已在别处更改。保存会在其上写入新版本。"
+      hint_formatted: "保存会写入新版本并将其设为当前版本。格式化视图会把原本为单行的值还原为单行，把原本为多行的值按此处文本保存；原始视图按此处文本原样保存。"
+      mode:
+        formatted: "格式化"
+        raw: "原始"
+        toggle: "在格式化与原始之间切换"
+    dialog:
+      cancel: "取消"
+    write:
+      refused_managed: "%{name} 由 %{service} 管理，因此无法在此更改。"
+      refused_deletion: "%{name} 已安排删除。请先恢复再更改。"
+      region_switching: "正在切换区域。请等连接稳定后重试；未写入任何内容。"
+      connection_replaced: "此对话框打开期间连接已被替换。未写入任何内容。请从当前连接重新打开。"
+      details_stale: "显示的详情来自之前的连接，正在重新读取；请稍后再试。"
+      in_progress: "另一项更改仍在写入。请等待其完成。"
+      landed_on_previous_session: "连接被替换后有一项更改完成。它写入的是之前的连接，此文档未更新；请刷新以查看当前状态。"
+    rollback:
+      button: "回滚"
+      action: "回滚到版本 %{version}"
+      footnote: "回滚会把所选版本设为当前版本，并把原来的当前版本保留为上一版本。不会重写任何值。"
+      title: "回滚 %{name}"
+      lead: "要把版本 %{version} 设为 %{name} 的当前版本吗？"
+      effect: "读取当前版本的应用将收到所选版本的值。目前的版本 %{current} 仍作为上一版本保留。"
+      confirm: "回滚"
+      done: "%{name} 现在使用版本 %{version}"
+      no_earlier_version: "%{name} 没有可回滚的更早版本。"
+      history_loading: "版本仍在加载。请稍后再试。"
+      pending_reason: "此版本由未完成的轮换暂存，因此无法回滚到它。"
+      only_pending: "所有较早版本都由未完成的轮换暂存，无法回滚。"
+    delete:
+      button: "删除"
+      title:
+        secret: "删除密钥"
+        parameter: "删除参数"
+      lead_scheduled: "要删除 %{name} 吗？读取它的应用会立即开始失败：在恢复之前该密钥不可用。恢复期只限制可恢复的时长。"
+      lead_irreversible: "要删除 %{name} 吗？此操作无法撤销。参数会立即被移除，读取它的应用将立刻开始失败。"
+      window_label: "恢复期"
+      window_option: "%{count} 天"
+      window_hint: "在此期间内可以恢复该密钥。"
+      confirm_label:
+        secret: "输入密钥名称以确认"
+        parameter: "输入参数名称以确认"
+      confirm_placeholder: "名称"
+      confirm_aria: "输入 %{name} 以确认删除"
+      confirm_scheduled: "安排删除"
+      confirm_irreversible: "永久删除"
+      done: "已删除 %{name}"
+      done_scheduled: "%{name} 已安排在 %{date} 删除"
+      done_scheduled_undated: "%{name} 已安排删除"
+      scheduled_detail: "%{name} 已于 %{deleted} 删除，恢复期为 %{days} 天。恢复之前无法获取其值。"
+      row_deleted: "删除时间"
+      row_deletes_on: "将于以下时间删除"
+    restore:
+      button: "恢复密钥"
+      done: "已恢复 %{name}"
+    rotate:
+      button: "立即轮换"
+      immediately: "立即轮换"
+      refused_off: "%{name} 的轮换已关闭。请先在“编辑轮换”中开启，再进行轮换。"
+      done: "已开始轮换 %{name}"
+      done_version: "已开始轮换 %{name}；版本 %{version} 将在轮换完成后成为当前版本"
+      title: "立即轮换 %{name}"
+      lead: "要立即轮换 %{name} 吗？"
+      effect: "这会立即运行该密钥的轮换函数并创建一个在轮换完成后成为当前版本的新版本。在此之前，读取该密钥的应用仍会收到旧值。"
+      confirm: "立即轮换"
+    rotation_edit:
+      button: "编辑轮换"
+      title: "编辑 %{name} 的轮换"
+      enabled: "自动轮换此密钥"
+      schedule: "计划"
+      schedule_hint: "rate(30 days)、rate(12 hours) 或六个字段的 cron(...) 表达式。"
+      schedule_placeholder: "rate(30 days)"
+      window: "轮换时间窗口"
+      window_hint: "整数小时，从 1h 到 24h。留空则保留当前窗口。"
+      window_placeholder: "4h"
+      function: "轮换函数"
+      function_hint: "负责轮换该密钥的函数，使用其 ARN。留空则保留当前函数。"
+      function_placeholder: "函数 ARN"
+      already_off: "轮换已经关闭。"
+      confirm: "保存轮换"
+      done: "已更新 %{name} 的轮换"
+      unfinished: "轮换已关闭，但版本 %{version} 仍保留着一次未完成轮换的待定阶段。"
+      unfinished_title: "已取消的轮换让版本 %{version} 处于待定状态"
+      unfinished_body: "请检查版本 %{version} 背后的凭据，然后移动或删除它的待定阶段。在此之前，之后的轮换可能会被拒绝。"
+    tags_edit:
+      button: "编辑标签"
+      title: "编辑 %{name} 的标签"
+      lead: "更改标签不会触及值或任何版本。"
+      key_placeholder: "键"
+      value_placeholder: "值"
+      key_label: "标签 %{row} 的键"
+      value_label: "标签 %{row} 的值"
+      remove: "移除标签"
+      add: "添加标签"
+      confirm: "保存标签"
+      done: "已更新 %{name} 的标签"
+      no_change: "没有任何标签与该密钥现有的标签不同。"
+      duplicate: "键 %{key} 出现在多于一行中。"
+    description_edit:
+      button: "编辑描述"
+      title: "编辑 %{name} 的描述"
+      label: "描述"
+      placeholder: "无描述"
+      confirm: "保存描述"
+      confirm_version: "另存为新版本"
+      done: "已更新 %{name} 的描述"
+      done_version: "已更新 %{name} 的描述；版本 %{version} 包含新的描述"
+      rewrites_title: "这会把值重新写成一个新版本"
+      rewrites_body: "此存储只能通过重新写入值来更改描述，因此保存会创建新版本。值、类型和键保持不变。"
+    create:
+      button_secret: "新建密钥"
+      button_parameter: "新建参数"
+      title_secret: "新建密钥"
+      title_parameter: "新建参数"
+      name: "名称"
+      name_placeholder: "名称"
+      type: "类型"
+      value: "值"
+      description: "描述"
+      description_placeholder: "可选"
+      tier: "层级"
+      key: "加密密钥"
+      key_placeholder: "默认密钥"
+      tags: "标签"
+      confirm: "创建"
+      done: "已创建 %{name}"
+      exists: "%{name} 已存在。请换一个名称；创建绝不会替换已有的密钥。"
 document_tree:
   search_placeholder: 搜索…
   view:
@@ -3943,6 +4493,14 @@ palette:
       name: 聚焦任务面板
     toggle_sidebar:
       name: 切换侧边栏
+    toggle_full_screen:
+      name: 切换全屏
+    increase_interface_size:
+      name: "增大界面尺寸"
+    decrease_interface_size:
+      name: "减小界面尺寸"
+    reset_interface_size:
+      name: "重置界面尺寸"
     toggle_editor:
       name: 切换编辑器面板
     toggle_results:
@@ -4062,6 +4620,13 @@ settings:
       option:
         default: "默认"
         compact: "紧凑"
+    scrollbars:
+      help: "应用于所有窗口。"
+      label: "显示滚动条"
+      option:
+        while_scrolling: "滚动时"
+        on_hover: "悬停时"
+        always: "始终"
     language:
       label: 语言
       option:
@@ -4334,6 +4899,8 @@ settings:
       toggle_row_inspector: 切换行检查器
       find_similar_rows: 查找相似行
       results_set_null: 将单元格设为 NULL
+      results_set_default: "将单元格设为列默认值"
+      results_toggle_expression: "切换字面量 / 表达式编辑器"
       open_context_menu: 打开上下文菜单
       open_pane_actions: 打开面板操作
       menu_up: 菜单上移
@@ -4355,6 +4922,10 @@ settings:
       cancel_task: 取消任务
       clear_finished_tasks: 清除已完成任务
       toggle_sidebar: 切换侧边栏
+      toggle_full_screen: 切换全屏
+      increase_interface_size: "增大界面尺寸"
+      decrease_interface_size: "减小界面尺寸"
+      reset_interface_size: "重置界面尺寸"
       open_settings: 打开设置
       open_login_modal: 打开认证配置文件登录
       open_sso_wizard: 打开 AWS SSO 向导
@@ -4414,6 +4985,8 @@ settings:
       toggle_console: 显示或隐藏控制台
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
+      edit_value: 编辑值
+      roll_back_version: "回滚到上一版本"
       copy_preview: 复制预览
       import_items: "导入…"
       import_from_client: "从其他客户端导入…"
@@ -4470,6 +5043,7 @@ settings:
       add_panel_picker: "添加面板选择器"
       mcp_approvals: "MCP 审批"
       migrate_wizard: "迁移向导"
+      import_wizard: "导入向导"
       vim_normal: "Vim 普通模式"
     category:
       global: 全局
@@ -5147,6 +5721,8 @@ sidebar:
     new_script_folder: 新建文件夹
     reveal_file_manager: 在文件管理器中显示
     copy_path: 复制路径
+    copy_column_name: 复制列名
+    copy_field_name: 复制字段名
     schema_diff_unsupported: Schema 差异仅适用于关系型连接。
     new_dashboard: 新建仪表盘…
     import_dashboard: 从 JSON 导入仪表盘…
@@ -5188,6 +5764,11 @@ sidebar:
     dashboards: "仪表板"
     connections: 连接
     scripts: 脚本
+  root_section:
+    confirm_message: "要对“%{item}”执行“%{action}”吗？"
+    action:
+      delete_bucket: "删除存储桶"
+      delete_bucket_description: "删除该存储桶。只能删除空存储桶，且此操作无法撤销。"
   task:
     connecting: "正在连接 %{name}"
     disconnecting: "正在断开 %{name}"
@@ -5196,7 +5777,7 @@ sidebar:
     disconnect_hook_cancelled: 断开 Hook 已取消
     post_disconnect_hook_cancelled: 断开后 Hook 已取消
     loading_event_streams: "正在加载事件流：%{name}"
-    listing_buckets: "正在列出存储桶：%{name}"
+    listing_root_section: "正在列出%{section}：%{name}"
     loading_database_schema: "正在加载 Schema：%{name}"
     connecting_to_database: "正在连接数据库：%{name}"
     refreshing_database: "正在刷新数据库：%{name}"
@@ -5244,7 +5825,16 @@ sidebar:
       indexes: "加载索引失败：%{error}"
       foreign_keys: "加载外键失败：%{error}"
       routines: "加载例程失败：%{error}"
-    list_buckets_failed: "列出存储桶失败：%{error}"
+    list_root_section_failed: "列出%{section}失败：%{error}"
+    root_section_action_failed: "对 %{item} 执行%{action}失败：%{error}"
+    root_section_action_audit_failed: "已对 %{item} 执行%{action}，但未能记录其审计事件：%{error}"
+    root_section_action_connection_changed: "未对 %{item} 执行%{action}：请求操作后连接已更改。"
+    root_section_action_refused:
+      read_only: "未执行%{action}：此连接为只读。"
+      read_only_profile: "未执行%{action}：此连接的配置文件设置为只读。"
+      read_only_server: "未执行%{action}：服务器拒绝了此连接的修改。"
+      approval_unavailable: "未执行%{action}：此连接需要审批，而侧边栏操作暂不支持审批。"
+    root_section_invalid_id: "已跳过驱动声明的根分区 \"%{section}\"：分区 ID 必须唯一，且不能包含 \"|\"。"
     code_generation_failed: "代码生成失败：%{error}"
     loading_event_streams: 正在加载事件流…
     load_schema_failed: "加载 Schema 失败：%{error}"
@@ -5316,6 +5906,7 @@ sidebar:
       error_retry: "错误：%{error} — 点击重试"
       connect_failed: "连接失败：%{error}"
       remote_listing_count: "%{label}（%{count}）"
+      load_more: "加载更多"
       remote_dashboards_error_retry: "错误：%{error} — 折叠再展开以重试"
       used_by_objects:
         one: 被 1 个对象使用

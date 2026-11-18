@@ -52,6 +52,8 @@ pub enum DocumentKind {
     Console,
     // One store of a secret-store connection (DatabaseCategory::SecretStore)
     SecretStore,
+    // One secret of a secret-store connection in its own tab
+    Secret,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -86,6 +88,7 @@ pub enum DocumentIcon {
     McpApprovals,
     Migrate,
     SecretStore,
+    Secret,
 }
 
 impl DocumentIcon {
@@ -109,6 +112,7 @@ impl DocumentIcon {
             Self::McpApprovals => "bot",
             Self::Migrate => "arrow-up-down",
             Self::SecretStore => "lock",
+            Self::Secret => "key-round",
         }
     }
 }

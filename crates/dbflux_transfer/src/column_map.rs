@@ -2,7 +2,10 @@
 
 use dbflux_core::{TransferColumn, Value};
 
+use dbflux_export::DateFormat;
+
 use crate::pipeline::ColumnMap;
+use crate::value_codec::decode_for_type;
 
 /// Resolves a source-to-target column mapping once, by name, and projects
 /// rows accordingly.
@@ -84,6 +87,43 @@ impl AutoColumnMap {
             target_columns: target_columns.to_vec(),
             warnings,
         }
+    }
+}
+
+/// Wraps an [`AutoColumnMap`] for a file that carries no source types: every
+/// projected value is decoded by the type of the target column it lands in, so
+/// one source column bound to several targets yields a value per target's own
+/// type (`true` is `1` in a `BOOLEAN` column and `'true'` in a `TEXT` one).
+/// Dates are read in the file's date format.
+pub(crate) struct DecodingColumnMap {
+    inner: AutoColumnMap,
+    date_format: DateFormat,
+}
+
+impl DecodingColumnMap {
+    pub(crate) fn new(inner: AutoColumnMap, date_format: DateFormat) -> Self {
+        Self { inner, date_format }
+    }
+}
+
+impl ColumnMap for DecodingColumnMap {
+    fn project(&self, src: &[Value]) -> Vec<Value> {
+        self.inner
+            .project(src)
+            .into_iter()
+            .zip(self.inner.target_columns())
+            .map(|(value, target)| {
+                decode_for_type(value, target.type_name.as_deref(), self.date_format)
+            })
+            .collect()
+    }
+
+    fn target_columns(&self) -> &[TransferColumn] {
+        self.inner.target_columns()
+    }
+
+    fn warnings(&self) -> &[String] {
+        self.inner.warnings()
     }
 }
 
@@ -264,5 +304,91 @@ mod tests {
             ]
         );
         assert!(map.warnings().is_empty());
+    }
+
+    fn typed(name: &str, type_name: Option<&str>) -> TransferColumn {
+        TransferColumn {
+            name: name.to_string(),
+            type_name: type_name.map(str::to_string),
+            nullable: true,
+            is_primary_key: false,
+        }
+    }
+
+    fn bind(target: &str, source: &str) -> ColumnMappingOverride {
+        ColumnMappingOverride {
+            target_column: target.to_string(),
+            source_column: Some(source.to_string()),
+        }
+    }
+
+    #[test]
+    fn decoding_map_decodes_each_binding_of_one_source_by_its_own_target_type() {
+        let source = vec![typed("code", None), typed("loose", None)];
+        let target = vec![
+            typed("numeric_code", Some("INTEGER")),
+            typed("original_code", Some("TEXT")),
+            typed("flag", Some("BOOLEAN")),
+            typed("note", Some("TEXT")),
+        ];
+        let overrides = vec![
+            bind("numeric_code", "code"),
+            bind("original_code", "code"),
+            bind("flag", "loose"),
+            bind("note", "loose"),
+        ];
+        let map = DecodingColumnMap::new(
+            AutoColumnMap::with_overrides(&source, &target, &overrides),
+            DateFormat::default(),
+        );
+
+        let projected = map.project(&[
+            Value::Text("00123".to_string()),
+            Value::Text("true".to_string()),
+        ]);
+
+        assert_eq!(
+            projected,
+            vec![
+                Value::Int(123),
+                Value::Text("00123".to_string()),
+                Value::Bool(true),
+                Value::Text("true".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn decoding_map_leaves_json_scalars_and_nulls_and_untyped_targets_as_read() {
+        let source = vec![typed("a", None), typed("b", None), typed("c", None)];
+        let target = vec![
+            typed("a", Some("TEXT")),
+            typed("b", Some("INTEGER")),
+            typed("c", None),
+        ];
+        let map =
+            DecodingColumnMap::new(AutoColumnMap::new(&source, &target), DateFormat::default());
+
+        let projected = map.project(&[Value::Int(5), Value::Null, Value::Text("7".to_string())]);
+
+        assert_eq!(
+            projected,
+            vec![Value::Int(5), Value::Null, Value::Text("7".to_string())]
+        );
+    }
+
+    #[test]
+    fn decoding_map_reads_epoch_numbers_for_temporal_targets_only() {
+        let source = vec![typed("when", None), typed("count", None)];
+        let target = vec![
+            typed("when", Some("TIMESTAMP")),
+            typed("count", Some("INTEGER")),
+        ];
+        let map = DecodingColumnMap::new(AutoColumnMap::new(&source, &target), DateFormat::Epoch);
+
+        let projected = map.project(&[Value::Int(1_709_634_030), Value::Int(9)]);
+
+        assert!(matches!(projected[0], Value::DateTime(_)), "{projected:?}");
+        assert_eq!(projected[1], Value::Int(9));
     }
 }

@@ -76,6 +76,7 @@ Microsoft SQL Server driver for DBFlux, built on the
   capped at 1000 rows per statement per T-SQL's `VALUES` row limit, exposed
   via `DriverLimits::max_bulk_insert_rows`) and driver-native `CREATE TABLE`
   DDL from a source table's columns (`TRUNCATE_TABLE` is also supported).
+- SQL export: a table with an `IDENTITY` column is wrapped in `SET IDENTITY_INSERT [schema].[table] ON;` and `OFF;`, so the script replays into an empty copy of the table with the original ids (`Connection::identity_columns` reads them from `sys.columns`). Computed columns, `rowversion` (`timestamp`) columns and the `GENERATED ALWAYS AS ROW START/END` period columns of a temporal table (`sys.columns.generated_always_type`, SQL Server 2016+) are left out of the statements so the server computes them again (`Connection::generated_columns`). For an unqualified table name the lookups resolve the table with `OBJECT_ID`, as the server does.
 - Batched primary-key row lookup (`fetch_rows_by_pks`): one
   `WHERE pk IN (...)` statement per chunk of at most 100 values, with an
   optional column projection; used to resolve foreign-key labels in the data
@@ -129,6 +130,30 @@ Requires the `VIEW SERVER STATE` permission.
   the `ALTER ANY CONNECTION` permission. On older or restricted logins,
   the KILL itself may fail with a permission error; the driver surfaces
   that to the user.
+
+### Dropped sessions
+
+- Each session's socket has TCP keepalive enabled (first probe after 60
+  seconds idle), so NAT gateways, firewalls and load balancers that drop
+  silent connections keep the session open.
+- When the server or the network drops the session anyway, the next call
+  fails with an I/O error (broken pipe, connection reset or unexpected end
+  of file). The driver drops the dead client and marks the connection for
+  reconnection, the same way it does after a cancel.
+- Metadata reads (databases, tables, views, table and view details, schema
+  types, indexes, foreign keys and routines) open a new session, restore the
+  active database and retry once, so opening a table after an idle period
+  works without reconnecting by hand.
+- Row edits (insert, update, delete), browsing, counting and the row and
+  dependency lookups open the new session before they run, so they work
+  without reconnecting by hand once a previous call has detected the drop.
+  If nothing detected it yet, the first operation fails and is not replayed;
+  a failed write is never replayed. Recovery is serialized, so concurrent callers share one new
+  session instead of each replacing the other's. A server error that reports
+  a killed session (596, 233, 6005) is treated the same way as a dropped
+  socket.
+- A query batch is never retried, because the server may already have run
+  it. Its error is shown, and the next query or ping opens a new session.
 
 ### Schema discovery
 

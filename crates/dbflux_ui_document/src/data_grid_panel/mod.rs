@@ -5,6 +5,7 @@ pub(crate) mod context_menu;
 mod document_view;
 mod documents;
 mod export_all;
+mod expression_gate;
 mod facets;
 pub(crate) mod filter_bar;
 mod fk_display;
@@ -287,6 +288,12 @@ pub enum DataGridEvent {
     /// Open the row a foreign-key value points at (see
     /// [`ReferencedRowTarget`]).
     OpenReferencedRow { target: ReferencedRowTarget },
+
+    /// Fetch the next rows of a result the row limit cut short, because its
+    /// last row came into view. Only emitted when the host offered it; the
+    /// host answers with [`DataGridPanel::append_next_rows`] or
+    /// [`DataGridPanel::next_rows_failed`].
+    NextRowsRequested,
 }
 
 /// What the footer offers for a query result the editor row limit cut short.
@@ -296,6 +303,8 @@ pub(crate) struct LimitedRowActions {
     pub(crate) count: bool,
     /// The host can run the query again without the row limit.
     pub(crate) load_all: bool,
+    /// The host can fetch the next rows when the last one comes into view.
+    pub(crate) next_rows: bool,
 }
 
 /// The total row count of a limited result, as far as it is known.
@@ -313,6 +322,8 @@ pub(crate) enum LimitedRowTotal {
 pub(crate) struct LimitedRows {
     pub(crate) actions: LimitedRowActions,
     pub(crate) total: LimitedRowTotal,
+    /// The host is fetching the next rows.
+    pub(crate) loading_next: bool,
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
@@ -369,6 +380,15 @@ enum EditState {
     #[default]
     Navigating,
     Editing,
+}
+
+/// A text field of the query bar above the grid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum QueryInput {
+    Filter,
+    Limit,
+    Projection,
+    Sort,
 }
 
 /// Sort state for in-memory sorting (QueryResult source only).
@@ -438,6 +458,8 @@ struct TableContextMenu {
     order_submenu_open: bool,
     /// Whether the "Toolbar" submenu (the results toolbar buttons) is open.
     toolbar_submenu_open: bool,
+    /// Whether the "Set value" submenu is open.
+    set_value_submenu_open: bool,
     /// Currently selected menu item index (for keyboard navigation).
     selected_index: usize,
     /// Selected index within the active submenu.
@@ -462,6 +484,7 @@ impl TableContextMenu {
             || self.filter_submenu_open
             || self.order_submenu_open
             || self.toolbar_submenu_open
+            || self.set_value_submenu_open
     }
 
     /// Hovering a plain item closes whatever submenu was open, as native
@@ -472,6 +495,7 @@ impl TableContextMenu {
         self.filter_submenu_open = false;
         self.order_submenu_open = false;
         self.toolbar_submenu_open = false;
+        self.set_value_submenu_open = false;
     }
 }
 
@@ -714,6 +738,10 @@ struct FocusState {
     focus_mode: GridFocusMode,
     toolbar_focus: ToolbarFocus,
     edit_state: EditState,
+    /// The query bar field holding the keyboard, tracked from its focus
+    /// events so every way into the field (click, Tab, a command) turns the
+    /// grid's single-key shortcuts off while the user types.
+    focused_query_input: Option<QueryInput>,
     switching_input: bool,
     context_menu_focus: FocusHandle,
     /// Holds the keyboard while the export menu is open, so the menu keys
@@ -892,6 +920,10 @@ pub struct DataGridPanel {
     side_panels_hosted: bool,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
+    /// A save that writes SQL expressions, held until the user confirms it.
+    pending_expression_confirm: Option<expression_gate::PendingExpressionConfirm>,
+    /// Set while a confirmed save re-enters the gate, so it runs once.
+    expression_confirmed: bool,
     pending_batch_remaining: Option<PendingBatchRemaining>,
     /// A close is waiting on the staged edits being applied.
     ///
@@ -1166,7 +1198,11 @@ impl DataGridPanel {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
+                InputEvent::Focus => {
+                    this.query_input_focused(QueryInput::Filter, cx);
+                }
                 InputEvent::Blur => {
+                    this.query_input_blurred(QueryInput::Filter, cx);
                     this.exit_edit_mode(window, cx);
                 }
                 InputEvent::Change => {
@@ -1201,7 +1237,11 @@ impl DataGridPanel {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
+                InputEvent::Focus => {
+                    this.query_input_focused(QueryInput::Limit, cx);
+                }
                 InputEvent::Blur => {
+                    this.query_input_blurred(QueryInput::Limit, cx);
                     this.exit_edit_mode(window, cx);
                 }
                 _ => {}
@@ -1417,6 +1457,7 @@ impl DataGridPanel {
                 focus_mode: GridFocusMode::default(),
                 toolbar_focus: ToolbarFocus::default(),
                 edit_state: EditState::default(),
+                focused_query_input: None,
                 switching_input: false,
                 context_menu_focus,
                 export_menu_focus: cx.focus_handle(),
@@ -1480,6 +1521,8 @@ impl DataGridPanel {
             side_panels_hosted: false,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
+            pending_expression_confirm: None,
+            expression_confirmed: false,
             pending_batch_remaining: None,
             close_after_apply: false,
             batch_op_in_flight: false,

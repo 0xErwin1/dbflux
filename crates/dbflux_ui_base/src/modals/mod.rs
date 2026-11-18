@@ -45,6 +45,7 @@ pub mod test_host {
     ) -> (Entity<M>, FocusHandle, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         cx.update(crate::keymap::init_keymap);
+        cx.update(dbflux_components::modals::modal::install_modal_seams);
 
         let (host, window) = cx.add_window_view(|window, cx| Host {
             outside: cx.focus_handle(),

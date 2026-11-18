@@ -34,20 +34,25 @@ impl<R: Read + Seek> Package<R> {
     /// Returns the zip entry that stores a part. Part names compare without
     /// regard to ASCII case, so an exact match is tried first and a
     /// case-insensitive one after it.
-    pub(crate) fn entry_name(&self, part: &str) -> Option<String> {
+    pub(crate) fn entry_name(&self, part: &str) -> Result<Option<String>, SheetWriteError> {
         if self.archive.index_for_name(part).is_some() {
-            return Some(part.to_string());
+            return Ok(Some(part.to_string()));
         }
 
-        self.archive
-            .file_names()
-            .find(|name| name.eq_ignore_ascii_case(part))
-            .map(str::to_string)
+        for name in self.archive.file_names() {
+            let name = name.map_err(SheetWriteError::from_read)?;
+
+            if name.eq_ignore_ascii_case(part) {
+                return Ok(Some(name.to_string()));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Reads a part, or returns `None` when the package does not have it.
     pub(crate) fn read_part(&mut self, part: &str) -> Result<Option<Vec<u8>>, SheetWriteError> {
-        let Some(entry_name) = self.entry_name(part) else {
+        let Some(entry_name) = self.entry_name(part)? else {
             return Ok(None);
         };
 

@@ -572,7 +572,12 @@ impl RpcClient {
         session_id: Uuid,
         patch: dbflux_core::RowPatch,
     ) -> Result<dbflux_core::CrudResult, RpcError> {
-        let body = self.call(Some(session_id), DriverRequestBody::UpdateRow { patch })?;
+        let request = if patch.changes.iter().any(|change| change.is_expression()) {
+            DriverRequestBody::UpdateRowV2 { patch }
+        } else {
+            DriverRequestBody::UpdateRow { patch }
+        };
+        let body = self.call(Some(session_id), request)?;
 
         match body {
             DriverResponseBody::CrudResult { result } => Ok(result.into()),
@@ -588,7 +593,16 @@ impl RpcClient {
         session_id: Uuid,
         insert: dbflux_core::RowInsert,
     ) -> Result<dbflux_core::CrudResult, RpcError> {
-        let body = self.call(Some(session_id), DriverRequestBody::InsertRow { insert })?;
+        let request = if insert
+            .assignments
+            .iter()
+            .any(|assignment| assignment.is_expression())
+        {
+            DriverRequestBody::InsertRowV2 { insert }
+        } else {
+            DriverRequestBody::InsertRow { insert }
+        };
+        let body = self.call(Some(session_id), request)?;
 
         match body {
             DriverResponseBody::CrudResult { result } => Ok(result.into()),
@@ -823,6 +837,63 @@ impl RpcClient {
         }
     }
 
+    // === Root sections (v1.9) ===
+
+    pub fn root_sections(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<dbflux_core::RootSectionDef>, RpcError> {
+        match self.call(Some(session_id), DriverRequestBody::RootSections)? {
+            DriverResponseBody::RootSections { sections } => Ok(sections),
+            DriverResponseBody::Error(e) => Err(root_section_error(e)),
+            _ => Err(RpcError::Protocol(
+                "Unexpected response to RootSections".into(),
+            )),
+        }
+    }
+
+    pub fn root_section_items(
+        &self,
+        session_id: Uuid,
+        section_id: &str,
+        page_token: Option<&str>,
+    ) -> Result<dbflux_core::RootSectionPage, RpcError> {
+        let body = DriverRequestBody::RootSectionItems {
+            section_id: section_id.to_string(),
+            page_token: page_token.map(str::to_string),
+        };
+
+        match self.call(Some(session_id), body)? {
+            DriverResponseBody::RootSectionPage { page } => Ok(page),
+            DriverResponseBody::Error(e) => Err(root_section_error(e)),
+            _ => Err(RpcError::Protocol(
+                "Unexpected response to RootSectionItems".into(),
+            )),
+        }
+    }
+
+    pub fn execute_root_section_action(
+        &self,
+        session_id: Uuid,
+        section_id: &str,
+        item_id: &str,
+        action_id: &str,
+    ) -> Result<(), RpcError> {
+        let body = DriverRequestBody::ExecuteRootSectionAction {
+            section_id: section_id.to_string(),
+            item_id: item_id.to_string(),
+            action_id: action_id.to_string(),
+        };
+
+        match self.call(Some(session_id), body)? {
+            DriverResponseBody::RootSectionActionDone => Ok(()),
+            DriverResponseBody::Error(e) => Err(root_section_error(e)),
+            _ => Err(RpcError::Protocol(
+                "Unexpected response to ExecuteRootSectionAction".into(),
+            )),
+        }
+    }
+
     // === Internal helpers ===
 
     /// Send a request and return the response body, handling errors generically.
@@ -1007,6 +1078,17 @@ fn validate_response_protocol_version(
     }
 
     Ok(())
+}
+
+/// Keeps the "not supported" meaning of a host refusal, so a driver that
+/// stops declaring a section or action reads as `DbError::NotSupported`.
+fn root_section_error(error: dbflux_ipc::driver_protocol::DriverRpcError) -> RpcError {
+    match error.code {
+        dbflux_ipc::driver_protocol::DriverRpcErrorCode::UnsupportedMethod => {
+            RpcError::UnsupportedMethod(error.message)
+        }
+        _ => RpcError::Driver(error.message),
+    }
 }
 
 #[cfg(test)]

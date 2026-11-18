@@ -109,9 +109,39 @@ overlay 使用你系统的 nixpkgs 构建所有软件包，因此预构建二进
 - 如果你的 flake 使用 `dbflux.packages.<system>.*`，请改用 overlay，或在其中添加 `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";`。
 - 使用 `nix run` 或 `nix profile install` 时，添加 `--override-input nixpkgs nixpkgs`。这样会使用你的 flake 注册表解析出的 `nixpkgs` 构建 DBFlux。在由 flake 构建的 NixOS 系统上，系统注册表会将其指向系统自身的 nixpkgs，除非你的用户注册表（优先级更高）中有条目将其指向别处。
 
+### Homebrew
+
+DBFlux tap 会安装预构建二进制文件，并将 `dbflux` 链接到 Homebrew 的 `bin` 中：
+
+```bash
+brew install --cask 0xErwin1/dbflux/dbflux
+```
+
+升级：
+
+```bash
+brew update && brew upgrade --cask dbflux
+```
+
 ## macOS
 
 DBFlux 的 macOS 版本未使用 Apple 开发者证书签名。首次打开时，会看到关于“身份不明的开发者”的警告。
+
+### Homebrew
+
+最简单的方式是使用 DBFlux tap，它会将 `DBFlux.app` 安装到 `/Applications`：
+
+```bash
+brew install --cask 0xErwin1/dbflux/dbflux
+```
+
+升级：
+
+```bash
+brew update && brew upgrade --cask dbflux
+```
+
+DBFlux 未经过公证（notarization），因此 cask 会在安装后移除 `com.apple.quarantine` 属性，Gatekeeper 不会阻止首次启动。如果你更愿意自己批准该应用，请按下文所述手动安装 DMG。
 
 ### 安装
 

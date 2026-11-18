@@ -502,12 +502,14 @@ pub(super) struct LoadAllRows {
     pub(super) origin: ResultOrigin,
 }
 
-/// The connection, database and execution context a query result came from.
+/// The connection, database, execution context and language a query result
+/// came from.
 #[derive(Clone)]
 pub(super) struct ResultOrigin {
     connection_id: Uuid,
     context: ExecutionSessionContext,
     exec_ctx: ExecutionContext,
+    language: QueryLanguage,
 }
 
 /// The result-tab collection and its selection cursor.
@@ -1154,6 +1156,7 @@ impl CodeDocument {
         );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.invalidate_execution_session_if_context_changed(cx);
+            this.sync_external_query_cancellation(cx);
             this.sync_context_dropdowns(cx);
             this.try_fetch_pending_routine_definition(cx);
             this.sync_vim_setting(cx);

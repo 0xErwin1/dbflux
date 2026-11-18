@@ -2,12 +2,21 @@ use crate::*;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
+/// Why duplicating a profile stopped before committing the copy.
+#[derive(Debug)]
+enum DuplicateProfileError {
+    /// The keyring would not hand over the source password.
+    PasswordRead(dbflux_core::DbError),
+    /// The copied password could not be written to the keyring.
+    PasswordSave(dbflux_core::DbError),
+}
+
 #[allow(clippy::result_large_err)]
 fn duplicate_profile_in_state(
     state: &mut AppStateEntity,
     profile_id: Uuid,
     cx: &mut Context<AppStateEntity>,
-) -> Result<Option<Uuid>, dbflux_core::DbError> {
+) -> Result<Option<Uuid>, DuplicateProfileError> {
     let Some(original) = state
         .profiles()
         .iter()
@@ -21,7 +30,21 @@ fn duplicate_profile_in_state(
         .connection_tree()
         .find_by_profile(profile_id)
         .and_then(|node| node.parent_id);
-    let password = state.get_password(&original);
+    // Only a profile that keeps its password in the keyring needs the read to
+    // succeed; any other profile is copied without the keyring entry.
+    let password = match state.get_password(&original) {
+        Ok(password) => password,
+        Err(error) if dbflux_core::password_lives_in_keyring(&original) => {
+            return Err(DuplicateProfileError::PasswordRead(error));
+        }
+        Err(error) => {
+            log::warn!(
+                "Duplicating profile {} without its keyring entry, which could not be read: {error}",
+                original.id
+            );
+            None
+        }
+    };
     let ssh_password = state.get_ssh_password(&original);
 
     let mut cloned = original;
@@ -30,7 +53,9 @@ fn duplicate_profile_in_state(
     let new_id = cloned.id;
 
     if let Some(password) = password.as_ref() {
-        state.save_password(&cloned, password)?;
+        state
+            .save_password(&cloned, password)
+            .map_err(DuplicateProfileError::PasswordSave)?;
     }
 
     state.add_profile_in_folder(cloned.clone(), folder_id);
@@ -139,12 +164,19 @@ impl Sidebar {
         let new_id = match clone_result {
             Ok(Some(new_id)) => new_id,
             Ok(None) => return,
-            Err(_) => {
-                report_error(
-                    UserFacingError::new(
-                        ErrorKind::Storage,
-                        "Unable to save the copied connection password to the system keyring. Unlock it and try again.",
+            Err(error) => {
+                let (summary, cause) = match error {
+                    DuplicateProfileError::PasswordRead(cause) => (
+                        "Unable to read the connection password from the system keyring. Unlock it and try again.",
+                        cause,
                     ),
+                    DuplicateProfileError::PasswordSave(cause) => (
+                        "Unable to save the copied connection password to the system keyring. Unlock it and try again.",
+                        cause,
+                    ),
+                };
+                report_error(
+                    UserFacingError::new(ErrorKind::Storage, summary).with_cause(cause.to_string()),
                     cx,
                 );
                 return;
@@ -398,6 +430,7 @@ mod tests {
     use dbflux_ui_base::AppStateEntity;
     use gpui::{AppContext as _, Entity, TestAppContext};
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 
@@ -411,6 +444,7 @@ mod tests {
     #[derive(Clone)]
     struct SecretStoreFixture {
         outcome: Arc<Mutex<PasswordWriteOutcome>>,
+        read_fails: Arc<AtomicBool>,
         values: Arc<Mutex<HashMap<String, SecretString>>>,
         writes: Arc<Mutex<Vec<String>>>,
     }
@@ -419,6 +453,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 outcome: Arc::new(Mutex::new(PasswordWriteOutcome::Success)),
+                read_fails: Arc::new(AtomicBool::new(false)),
                 values: Arc::new(Mutex::new(HashMap::new())),
                 writes: Arc::new(Mutex::new(Vec::new())),
             }
@@ -446,6 +481,12 @@ mod tests {
         }
 
         fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, dbflux_core::DbError> {
+            if self.read_fails.load(Ordering::SeqCst) {
+                return Err(dbflux_core::DbError::IoError(std::io::Error::other(
+                    "Cannot get secret of a locked object",
+                )));
+            }
+
             #[expect(
                 clippy::unwrap_in_result,
                 reason = "test fixture keeps the crate's existing panic-on-poisoned-mutex \
@@ -593,6 +634,7 @@ mod tests {
             app_state
                 .read(cx)
                 .get_password(profile)
+                .expect("keyring read succeeds")
                 .expect("profile secret remains readable")
                 .expose_secret()
                 .to_string()
@@ -647,6 +689,79 @@ mod tests {
             .parse::<Uuid>()
             .expect("clone target secret reference contains a UUID");
         assert_ne!(target_id, source.id, "clone target UUID is fresh");
+    }
+
+    #[gpui::test]
+    fn duplicate_profile_read_failure_does_not_block_a_profile_without_a_saved_password(
+        cx: &mut TestAppContext,
+    ) {
+        let app_state = test_app_state(cx);
+        let fixture = SecretStoreFixture::new();
+        install_secret_store(&app_state, fixture.clone(), cx);
+        let mut source = source_profile();
+        source.save_password = false;
+        app_state.update(cx, |state, _| {
+            state.add_profile_in_folder(source.clone(), None);
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        #[expect(
+            clippy::result_large_err,
+            reason = "duplicate_profile_in_state is production API returning DbError; the test \
+                      only asserts is_ok, so boxing the Err just to shrink the closure would \
+                      diverge from the exercised signature"
+        )]
+        let result = app_state.update(cx, |state, cx| {
+            duplicate_profile_in_state(state, source.id, cx)
+        });
+
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "a profile that does not keep its password in the keyring is still copied"
+        );
+        assert_eq!(profiles(&app_state, cx).len(), 2);
+    }
+
+    #[gpui::test]
+    fn duplicate_profile_read_failure_commits_no_clone_and_writes_nothing(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let fixture = SecretStoreFixture::new();
+        install_secret_store(&app_state, fixture.clone(), cx);
+        let source = source_profile();
+        seed_source(&app_state, &source, cx);
+        let writes_before = fixture
+            .writes
+            .lock()
+            .expect("test store write log lock poisoned")
+            .len();
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        #[expect(
+            clippy::result_large_err,
+            reason = "duplicate_profile_in_state is production API returning DbError; the test \
+                      only asserts is_err, so boxing the Err just to shrink the closure would \
+                      diverge from the exercised signature"
+        )]
+        let result = app_state.update(cx, |state, cx| {
+            duplicate_profile_in_state(state, source.id, cx)
+        });
+
+        assert!(
+            result.is_err(),
+            "a locked keyring must not yield a passwordless clone"
+        );
+        assert_eq!(profiles(&app_state, cx).len(), 1);
+        assert_eq!(
+            fixture
+                .writes
+                .lock()
+                .expect("test store write log lock poisoned")
+                .len(),
+            writes_before,
+            "no clone secret is written"
+        );
+        fixture.read_fails.store(false, Ordering::SeqCst);
+        assert_eq!(password(&app_state, &source, cx), "source password");
     }
 
     #[gpui::test]

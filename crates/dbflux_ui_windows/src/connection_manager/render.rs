@@ -1383,12 +1383,7 @@ impl Render for ConnectionManagerWindow {
         let show_ssh_passphrase = self.form.show_ssh_passphrase;
         let show_ssh_password = self.form.show_ssh_password;
 
-        let secret_placeholder = self
-            .form
-            .password_value_source_selector
-            .read(cx)
-            .source_placeholder(cx)
-            .unwrap_or_else(|| self.secret_field_label(cx));
+        let secret_placeholder = self.password_placeholder(password_source_is_literal, cx);
 
         self.form.input_password.update(cx, |state, cx| {
             let should_mask = password_source_is_literal && !show_password;

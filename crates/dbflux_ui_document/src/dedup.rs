@@ -129,6 +129,17 @@ pub enum DocumentKey {
     /// hierarchical store navigates that tab.
     SecretStore { profile_id: Uuid, store_id: String },
 
+    /// One secret of a secret-store connection in its own tab. The `region`
+    /// is part of the identity because names are region-scoped; `version` is
+    /// the version the tab was opened at (`None` for the current value).
+    Secret {
+        profile_id: Uuid,
+        store_id: String,
+        name: String,
+        version: Option<String>,
+        region: Option<String>,
+    },
+
     /// The prefix/object tree browser opened for a single bucket.
     /// Deduplicated by `(profile_id, bucket)` — one per bucket per connection.
     ObjectBrowser { profile_id: Uuid, bucket: String },

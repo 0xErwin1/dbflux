@@ -519,6 +519,138 @@ fn empty_project_and_sort_slots_show_their_placeholders(cx: &mut TestAppContext)
     });
 }
 
+/// "Filter by value" ANDs onto a filter typed in relaxed JSON instead of
+/// replacing it, and leaves a filter that does not parse as typed.
+#[gpui::test]
+fn filter_by_value_keeps_a_relaxed_json_filter(cx: &mut TestAppContext) {
+    let (app_state, profile_id) = register_builder_stub_connection(
+        cx,
+        dbflux_core::DatabaseCategory::Document,
+        dbflux_core::QueryLanguage::MongoQuery,
+        None,
+    );
+    let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+    let filter_after = |typed: &'static str, window: &mut VisualTestContext| {
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel
+                    .filter_bar
+                    .filter_input
+                    .update(cx, |input, cx| input.set_value(typed, window, cx));
+                panel.apply_mongo_filter(&serde_json::json!({ "total": 3 }), window, cx);
+                panel.filter_bar.filter_input.read(cx).value().to_string()
+            })
+        })
+    };
+
+    let composed = filter_after("{status: 'open'}", window);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&composed).expect("composed filter is JSON"),
+        serde_json::json!({ "$and": [{ "status": "open" }, { "total": 3 }] })
+    );
+
+    assert_eq!(filter_after("{status: }", window), "{status: }");
+}
+
+/// A focused query bar field takes the typed letters, whichever way the
+/// focus got there; the grid keys come back once it lets go.
+#[gpui::test]
+fn a_focused_query_bar_field_reports_text_input(cx: &mut TestAppContext) {
+    use dbflux_app::keymap::ContextId;
+
+    use crate::data_grid_panel::documents::builder::tests::StubDocumentConnection;
+
+    // The project and sort slots render only for a driver with query slots.
+    let (app_state, profile_id) = register_stub_connection(
+        cx,
+        Arc::new(StubDocumentConnection::new(
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::DocumentFeatures::QUERY_SLOTS,
+            false,
+        )),
+    );
+    let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+    window.update(|_, app| {
+        panel.update(app, |panel, cx| {
+            panel.apply_collection_result(
+                profile_id,
+                CollectionRef::new("metrics", "system"),
+                Pagination::default(),
+                None,
+                nested_document_rows(),
+                cx,
+            );
+        });
+    });
+    // Input focus events fire only in an active window, as on a desktop.
+    window.update(|window, _| window.activate_window());
+    window.run_until_parked();
+
+    let context =
+        |window: &mut VisualTestContext| window.update(|_, cx| panel.read(cx).active_context(cx));
+
+    assert_eq!(
+        context(window),
+        ContextId::Results,
+        "with no field focused the grid keys stay active"
+    );
+
+    let focus_filter = |window: &mut VisualTestContext| {
+        window.update(|window, cx| {
+            let input = panel.read(cx).filter_bar.filter_input.clone();
+            input.update(cx, |input, cx| input.focus(window, cx));
+        });
+        window.run_until_parked();
+    };
+    let focus_limit = |window: &mut VisualTestContext| {
+        window.update(|window, cx| {
+            let input = panel.read(cx).filter_bar.limit_input.clone();
+            input.update(cx, |input, cx| input.focus(window, cx));
+        });
+        window.run_until_parked();
+    };
+    let focus_projection = |window: &mut VisualTestContext| {
+        window.update(|window, cx| {
+            let input = panel.read(cx).collection.projection_input.clone();
+            input.update(cx, |input, cx| input.focus(window, cx));
+        });
+        window.run_until_parked();
+    };
+    let focus_sort = |window: &mut VisualTestContext| {
+        window.update(|window, cx| {
+            let input = panel.read(cx).collection.sort_input.clone();
+            input.update(cx, |input, cx| input.focus(window, cx));
+        });
+        window.run_until_parked();
+    };
+
+    focus_filter(window);
+    assert_eq!(context(window), ContextId::TextInput, "filter field");
+
+    focus_projection(window);
+    assert_eq!(context(window), ContextId::TextInput, "project field");
+
+    focus_sort(window);
+    assert_eq!(context(window), ContextId::TextInput, "sort field");
+
+    focus_limit(window);
+    assert_eq!(context(window), ContextId::TextInput, "limit field");
+
+    window.update(|window, cx| {
+        let focus_handle = panel.read(cx).focus_handle.clone();
+        window.focus(&focus_handle, cx);
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        context(window),
+        ContextId::Results,
+        "leaving the query bar gives the keys back to the grid"
+    );
+}
+
 #[gpui::test]
 fn non_document_collection_still_opens_as_a_table(cx: &mut TestAppContext) {
     let (app_state, profile_id) = register_builder_stub_connection(

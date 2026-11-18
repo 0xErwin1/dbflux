@@ -488,6 +488,108 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens one secret in its own tab, or focuses the tab that already shows
+    /// it. The key carries the region the listing was loaded under, so the
+    /// same name in two regions gets two tabs.
+    /// Opens the secret the active tab asked to have opened in a tab of its
+    /// own, if it asked. The secret store listing raises the request from its
+    /// expand button and its row menu.
+    pub(in crate::ui::views::workspace) fn open_pending_secret(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active_id = self.tab_manager.read(cx).active_id();
+        let pending = active_id.and_then(|id| {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.document(id).and_then(|tab| {
+                    tab.take_pending_open_secret(cx)
+                        .map(|request| (tab.connection_id(cx), request))
+                })
+            })
+        });
+
+        if let Some((Some(profile_id), request)) = pending {
+            self.open_secret_document(profile_id, request, window, cx);
+        }
+    }
+
+    pub(in crate::ui::views::workspace) fn open_secret_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        request: crate::ui::document::SecretOpenRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = crate::ui::document::DocumentKey::Secret {
+            profile_id,
+            store_id: request.store_id.clone(),
+            name: request.name.clone(),
+            version: request.version.clone(),
+            region: request.region.clone(),
+        };
+
+        if let Some(id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| mgr.activate(id, cx));
+            self.set_focus(FocusTarget::Document, window, cx);
+
+            // The tab that exists takes the editor the way a key press would.
+            if request.edit {
+                let tab_manager = self.tab_manager.clone();
+                tab_manager.update(cx, |mgr, cx| {
+                    if let Some(tab) = mgr.document(id) {
+                        tab.dispatch_command(crate::keymap::Command::EditValue, window, cx);
+                    }
+                });
+            }
+            return;
+        }
+
+        // The tab reads its store's capabilities from the live connection when
+        // it is created, and keeps them: without one it would stay empty after
+        // a reconnect, with no writes and no history.
+        let connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        if !connected {
+            let message =
+                documents_no_active_connection_message(NoActiveConnectionKind::SecretStore);
+            Toast::error(message.clone())
+                .meta_right(now_hms())
+                .action(copy_action(message))
+                .push(cx);
+            return;
+        }
+
+        let edit = request.edit;
+        let doc = cx.new(|cx| {
+            crate::ui::document::SecretDocument::new(
+                profile_id,
+                request.store_id,
+                request.name,
+                request.version,
+                request.region,
+                self.app_state.clone(),
+                cx,
+            )
+        });
+
+        if edit {
+            doc.update(cx, |doc, cx| doc.begin_edit(cx));
+        }
+
+        let pane = crate::ui::document::SecretDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Opens the document of one secret store, or focuses the store's
     /// existing tab. A `path` of a hierarchical store opens at that path, and
     /// navigates an existing tab to it.
@@ -560,10 +662,75 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens what a driver-declared root section folder presents.
+    pub(in crate::ui::views::workspace) fn open_root_section(
+        &mut self,
+        profile_id: uuid::Uuid,
+        section_id: &str,
+        presentation: dbflux_core::RootSectionPresentation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match presentation {
+            dbflux_core::RootSectionPresentation::ObjectContainerTable => {
+                self.open_object_store_buckets_document(profile_id, window, cx);
+            }
+            other => {
+                log::warn!("Root section {section_id} declares unsupported presentation {other:?}")
+            }
+        }
+    }
+
+    /// Reloads the open document that shows a root section presentation of
+    /// `profile_id`, after an action changed the section's items.
+    pub(in crate::ui::views::workspace) fn refresh_root_section_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        presentation: Option<dbflux_core::RootSectionPresentation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = match presentation {
+            Some(dbflux_core::RootSectionPresentation::ObjectContainerTable) => {
+                crate::ui::document::DocumentKey::ObjectStoreBucketsRoot { profile_id }
+            }
+            _ => return,
+        };
+
+        let tab_manager = self.tab_manager.clone();
+        tab_manager.update(cx, |manager, cx| {
+            let Some(id) = manager.find_by_key(&key, cx) else {
+                return;
+            };
+            if let Some(tab) = manager.document(id) {
+                tab.dispatch_command(crate::keymap::Command::RefreshSchema, window, cx);
+            }
+        });
+    }
+
+    /// Opens what an item of a driver-declared root section presents.
+    pub(in crate::ui::views::workspace) fn open_root_section_item(
+        &mut self,
+        profile_id: uuid::Uuid,
+        item_id: String,
+        presentation: dbflux_core::RootItemPresentation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match presentation {
+            dbflux_core::RootItemPresentation::ObjectBrowser => {
+                self.open_object_browser(profile_id, item_id, window, cx);
+            }
+            other => log::warn!(
+                "Root section item {item_id} declares unsupported presentation {other:?}"
+            ),
+        }
+    }
+
     /// Opens the prefix/object tree browser for a single bucket, or focuses
     /// the existing one for that `(profile_id, bucket)` pair. Reached from
-    /// the buckets table's Enter-on-row action and the sidebar's
-    /// `OpenObjectStoreBucket` event.
+    /// the buckets table's Enter-on-row action and from activating an item
+    /// of a root section that presents an object browser.
     pub(in crate::ui::views::workspace) fn open_object_browser(
         &mut self,
         profile_id: uuid::Uuid,
@@ -1980,6 +2147,116 @@ mod tests {
             1,
             "only the fresh tab browsed under the equality"
         );
+    }
+
+    /// Opens the section's containers table the way activating its sidebar
+    /// folder does, for a profile connected to `store`.
+    fn open_connected_section(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        store: std::sync::Arc<
+            crate::ui::views::workspace::actions::delimited::tests::ObjectStoreFake,
+        >,
+    ) -> uuid::Uuid {
+        let profile_id =
+            crate::ui::views::workspace::actions::delimited::tests::connect_object_store(
+                window, workspace, store,
+            );
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+
+        window.update(|_, cx| {
+            sidebar.update(cx, |_, cx| {
+                cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenRootSection {
+                    profile_id,
+                    section_id: "buckets".to_string(),
+                    presentation: dbflux_core::RootSectionPresentation::ObjectContainerTable,
+                });
+            });
+        });
+        window.run_until_parked();
+
+        profile_id
+    }
+
+    /// For a connected profile the section event opens the containers table
+    /// and the item event opens the object browser of that item.
+    #[gpui::test]
+    fn root_section_events_open_the_declared_documents(cx: &mut TestAppContext) {
+        use crate::ui::views::workspace::actions::delimited::tests::{BUCKET, ObjectStoreFake};
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        let profile_id =
+            open_connected_section(window, &workspace, ObjectStoreFake::with_objects(&[]));
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+
+        window.update(|_, cx| {
+            sidebar.update(cx, |_, cx| {
+                cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenRootSectionItem {
+                    profile_id,
+                    section_id: "buckets".to_string(),
+                    item_id: BUCKET.to_string(),
+                    presentation: dbflux_core::RootItemPresentation::ObjectBrowser,
+                });
+            });
+        });
+        window.run_until_parked();
+
+        let opened = window.update(|_, cx| {
+            let tabs = workspace.read(cx).tab_manager.read(cx);
+            (
+                tabs.find_by_key(&DocumentKey::ObjectStoreBucketsRoot { profile_id }, cx)
+                    .is_some(),
+                tabs.find_by_key(
+                    &DocumentKey::ObjectBrowser {
+                        profile_id,
+                        bucket: BUCKET.to_string(),
+                    },
+                    cx,
+                )
+                .is_some(),
+            )
+        });
+        assert_eq!(opened, (true, true));
+    }
+
+    /// A successful sidebar action on a section reloads the open document
+    /// that presents that section, so it does not keep showing stale items.
+    #[gpui::test]
+    fn a_successful_root_section_action_reloads_the_open_section_document(cx: &mut TestAppContext) {
+        use crate::ui::views::workspace::actions::delimited::tests::{BUCKET, ObjectStoreFake};
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[]);
+        let profile_id = open_connected_section(window, &workspace, store.clone());
+        let listings_before = store.bucket_listings();
+        assert!(listings_before >= 1, "opening the table lists the buckets");
+
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+        window.update(|_, cx| {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.dispatch_root_section_action(
+                    dbflux_ui_sidebar::RootSectionActionRequest {
+                        profile_id,
+                        section_id: "buckets".to_string(),
+                        section_presentation: Some(
+                            dbflux_core::RootSectionPresentation::ObjectContainerTable,
+                        ),
+                        item_id: BUCKET.to_string(),
+                        item_label: BUCKET.to_string(),
+                        action: dbflux_core::RootSectionAction {
+                            id: "inspect".to_string(),
+                            label: dbflux_core::LocalizedText::plain("Inspect"),
+                            description: None,
+                            classification: dbflux_core::ExecutionClassification::Read,
+                        },
+                    },
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(store.bucket_listings(), listings_before + 1);
     }
 }
 

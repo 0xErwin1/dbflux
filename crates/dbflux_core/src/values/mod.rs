@@ -1,6 +1,8 @@
 mod cache;
 mod dotenv;
 mod resolver;
+mod secret_file;
+mod source_file;
 
 use std::fmt;
 use std::future::Future;
@@ -16,6 +18,7 @@ pub use dotenv::{
     MAX_ENTRIES as DOTENV_MAX_ENTRIES, MAX_FILE_BYTES as DOTENV_MAX_FILE_BYTES, read_dotenv_value,
 };
 pub use resolver::CompositeValueResolver;
+pub use secret_file::{MAX_FILE_BYTES as SECRET_FILE_MAX_FILE_BYTES, read_secret_file};
 
 /// Structured error from a value provider (Secrets Manager, SSM, etc.)
 /// with enough context to display actionable diagnostics in the UI.
@@ -174,6 +177,15 @@ pub enum ValueRef {
         path: String,
         key: String,
     },
+    /// A secret file owned by another tool (sops-nix, secretspec, systemd
+    /// credentials), read each time the value is used. `json_key` selects one
+    /// top-level field of a JSON object; without it the whole file minus one
+    /// trailing newline is the value.
+    File {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        json_key: Option<String>,
+    },
     Secret {
         provider: String,
         locator: String,
@@ -206,6 +218,13 @@ impl ValueRef {
         Self::Dotenv {
             path: path.into(),
             key: key.into(),
+        }
+    }
+
+    pub fn file(path: impl Into<String>, json_key: Option<String>) -> Self {
+        Self::File {
+            path: path.into(),
+            json_key,
         }
     }
 
@@ -304,6 +323,9 @@ pub enum ValueOrigin {
         path: String,
         key: String,
     },
+    SecretFile {
+        path: String,
+    },
     SecretProvider {
         provider: String,
         locator_summary: String,
@@ -385,6 +407,29 @@ mod tests {
             ValueRef::Dotenv { path, key } if path == "~/.config/app.env" && key == "DB_PASSWORD"
         ));
         assert!(fv.0.needs_resolution());
+        assert_eq!(serde_json::to_string(&fv.0).expect("serialize"), json);
+    }
+
+    #[test]
+    fn file_ref_round_trips_through_serde() {
+        let json = r#"{"source":"file","path":"/run/secrets/db"}"#;
+        let fv: FieldValue = serde_json::from_str(json).expect("deserialize file ref");
+
+        assert!(matches!(
+            &fv.0,
+            ValueRef::File { path, json_key: None } if path == "/run/secrets/db"
+        ));
+        assert!(fv.0.needs_resolution());
+        assert_eq!(serde_json::to_string(&fv.0).expect("serialize"), json);
+
+        let json = r#"{"source":"file","path":"~/.config/db.json","json_key":"password"}"#;
+        let fv: FieldValue = serde_json::from_str(json).expect("deserialize keyed file ref");
+
+        assert!(matches!(
+            &fv.0,
+            ValueRef::File { path, json_key: Some(key) }
+                if path == "~/.config/db.json" && key == "password"
+        ));
         assert_eq!(serde_json::to_string(&fv.0).expect("serialize"), json);
     }
 

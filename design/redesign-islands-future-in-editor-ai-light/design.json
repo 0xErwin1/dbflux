@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: Future: in-editor AI (DBF-216) · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Migrate, AI, notifications, secrets, row \"Future: in-editor AI (DBF-216) · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-ai-draft.html",
+      "title": "In-editor AI: draft at the cursor (DBF-216)",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-ai-optimize.html",
+      "title": "In-editor AI: optimize with the plan (DBF-216)",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-light-settings-ai.html",
+      "title": "Settings: AI assist (DBF-216)",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    }
+  ]
+}

@@ -34,12 +34,26 @@ const SUMMARY_KEYS: usize = 3;
 const VALUE_PREVIEW_CHARS: usize = 120;
 
 /// A staged, uncommitted grid edit of one field of the shown document.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum PendingFieldEdit {
     /// The field takes this value on commit.
     Set(Value),
     /// The field is removed on commit.
     Unset,
+}
+
+/// Not derived: `Value::PartialEq` promotes numerically equal values, so a
+/// staged `Set(Float(1.0))` over `Set(Int(1))` would pass as unchanged and
+/// [`DocumentInspectorContent::set_pending`] would skip the repaint, leaving
+/// a stale row.
+impl PartialEq for PendingFieldEdit {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PendingFieldEdit::Set(a), PendingFieldEdit::Set(b)) => a.same_representation(b),
+            (PendingFieldEdit::Unset, PendingFieldEdit::Unset) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Staged edits of the shown document, by field path.
@@ -748,6 +762,57 @@ mod tests {
             let content = content.read(cx);
             assert_eq!(content.document_index(), 1);
             assert!(!content.rows()[1].expanded, "customer stays collapsed");
+        });
+    }
+
+    #[gpui::test]
+    fn a_representation_only_staged_edit_still_repaints_the_row(cx: &mut gpui::TestAppContext) {
+        use super::{DocumentInspectorContent, DocumentInspectorSnapshot};
+        use gpui::AppContext as _;
+
+        let snapshot = |pending| DocumentInspectorSnapshot {
+            document_index: 0,
+            document: document(&[("qty", Value::Int(1))]),
+            field_order: vec!["qty".to_string()],
+            pending,
+        };
+
+        let content = cx.update(|cx| {
+            cx.new(|cx| {
+                DocumentInspectorContent::new(
+                    snapshot(vec![(
+                        vec!["qty".to_string()],
+                        PendingFieldEdit::Set(Value::Int(1)),
+                    )]),
+                    cx,
+                )
+            })
+        });
+
+        cx.update(|cx| {
+            content.update(cx, |content, cx| {
+                content.set_pending(
+                    vec![(
+                        vec!["qty".to_string()],
+                        PendingFieldEdit::Set(Value::Float(1.0)),
+                    )],
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            let content = content.read(cx);
+            let row = content
+                .rows()
+                .iter()
+                .find(|row| row.key == "qty")
+                .expect("qty row");
+            assert!(row.pending);
+            assert_eq!(
+                row.type_label, "dbl",
+                "the row shows the staged representation, not the stale one"
+            );
         });
     }
 }

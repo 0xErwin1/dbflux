@@ -1,6 +1,7 @@
 use super::{
     DataGridEvent, DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState,
-    PendingRequery, ReferencedRowTarget, ResultViewMode, TableReload, ToolbarFocus, row_inspector,
+    PendingRequery, QueryInput, ReferencedRowTarget, ResultViewMode, TableReload, ToolbarFocus,
+    row_inspector,
 };
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::{Direction, Edge, SortState as TableSortState};
@@ -616,6 +617,20 @@ impl DataGridPanel {
         }
     }
 
+    pub(super) fn query_input_focused(&mut self, input: QueryInput, cx: &mut Context<Self>) {
+        self.focus.focused_query_input = Some(input);
+        cx.notify();
+    }
+
+    /// Clears the field only if it still holds the keyboard: moving between
+    /// two fields can deliver the new field's focus before the old one's blur.
+    pub(super) fn query_input_blurred(&mut self, input: QueryInput, cx: &mut Context<Self>) {
+        if self.focus.focused_query_input == Some(input) {
+            self.focus.focused_query_input = None;
+            cx.notify();
+        }
+    }
+
     pub fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.focus.switching_input {
             self.focus.switching_input = false;
@@ -674,6 +689,21 @@ impl DataGridPanel {
                     return true;
                 }
                 _ => return true, // Block other commands while modal is open
+            }
+        }
+
+        // A save that writes SQL expressions waits for the user.
+        if self.pending_expression_confirm.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_expressions(window, cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_expressions(window, cx);
+                    return true;
+                }
+                _ => return true,
             }
         }
 
@@ -925,6 +955,19 @@ impl DataGridPanel {
                 true
             }
             Command::FindSimilarRows => self.find_similar_rows(cx),
+            Command::ResultsSetDefault => {
+                let active = self.grid_table.table_state.as_ref().and_then(|state| {
+                    let state = state.read(cx);
+                    state
+                        .is_editable()
+                        .then(|| state.selection().active)
+                        .flatten()
+                });
+                if let Some(coord) = active {
+                    self.handle_set_default(coord.row, coord.col, cx);
+                }
+                true
+            }
             _ => false,
         }
     }

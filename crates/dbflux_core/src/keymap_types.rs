@@ -117,6 +117,11 @@ pub enum Command {
     /// Shows the rows nearest to the active row by its vector column.
     FindSimilarRows,
     ResultsSetNull,
+    /// Sets the active cell to its column's default expression.
+    ResultsSetDefault,
+    /// Flips the inline cell editor between literal and SQL expression, or
+    /// opens it in expression mode.
+    ResultsToggleExpression,
     // Context menu
     OpenContextMenu,
     /// Opens the menu of the focused pane's actions (its toolbar buttons and
@@ -148,6 +153,13 @@ pub enum Command {
     /// Removes every finished task from the background tasks panel.
     ClearFinishedTasks,
     ToggleSidebar,
+    ToggleFullScreen,
+    /// Makes the interface, editor and data grid text one step larger.
+    IncreaseInterfaceSize,
+    /// Makes the interface, editor and data grid text one step smaller.
+    DecreaseInterfaceSize,
+    /// Restores the default interface, editor and data grid text sizes.
+    ResetInterfaceSize,
     OpenSettings,
     OpenLoginModal,
     OpenSsoWizard,
@@ -262,6 +274,12 @@ pub enum Command {
     ToggleConsole,
     LoadMore,
     EditExpiry,
+    /// Opens the editor on the value of the selected entry (the secret
+    /// store's Edit value).
+    EditValue,
+    /// Rolls the selected secret back to its most recent earlier version
+    /// (the secret store's Roll back, `b`).
+    RollBackVersion,
     CopyPreview,
     /// Imports entries from a file into the list that has the keyboard (the
     /// profile lists of the settings window).
@@ -308,6 +326,10 @@ impl Command {
             "focus_results" => Some(Command::FocusResults),
             "focus_tasks" => Some(Command::FocusBackgroundTasks),
             "toggle_sidebar" => Some(Command::ToggleSidebar),
+            "toggle_full_screen" => Some(Command::ToggleFullScreen),
+            "increase_interface_size" => Some(Command::IncreaseInterfaceSize),
+            "decrease_interface_size" => Some(Command::DecreaseInterfaceSize),
+            "reset_interface_size" => Some(Command::ResetInterfaceSize),
             "toggle_editor" => Some(Command::ToggleEditor),
             "toggle_results" => Some(Command::ToggleResults),
             "toggle_results_position" => Some(Command::ToggleResultsPosition),
@@ -424,6 +446,8 @@ impl Command {
             Command::ToggleRowInspector => "Toggle row inspector",
             Command::FindSimilarRows => "Find similar rows",
             Command::ResultsSetNull => "Set cell to NULL",
+            Command::ResultsSetDefault => "Set cell to column default",
+            Command::ResultsToggleExpression => "Toggle literal / expression editor",
             Command::OpenContextMenu => "Open context menu",
             Command::OpenPaneActions => "Open pane actions",
             Command::MenuUp => "Menu up",
@@ -447,6 +471,10 @@ impl Command {
             Command::CancelTask => "Cancel task",
             Command::ClearFinishedTasks => "Clear finished tasks",
             Command::ToggleSidebar => "Toggle sidebar",
+            Command::ToggleFullScreen => "Toggle full screen",
+            Command::IncreaseInterfaceSize => "Increase interface size",
+            Command::DecreaseInterfaceSize => "Decrease interface size",
+            Command::ResetInterfaceSize => "Reset interface size",
             Command::OpenSettings => "Open settings",
             Command::OpenLoginModal => "Open auth profile login",
             Command::OpenSsoWizard => "Open AWS SSO wizard",
@@ -524,6 +552,8 @@ impl Command {
             Command::ToggleConsole => "Toggle console",
             Command::LoadMore => "Load more",
             Command::EditExpiry => "Edit expiry…",
+            Command::EditValue => "Edit value",
+            Command::RollBackVersion => "Roll back to the previous version",
             Command::CopyPreview => "Copy preview",
             Command::ImportItems => "Import…",
             Command::ImportFromClient => "Import from another client…",
@@ -625,6 +655,8 @@ impl Command {
             Command::ToggleRowInspector => "toggle_row_inspector",
             Command::FindSimilarRows => "find_similar_rows",
             Command::ResultsSetNull => "results_set_null",
+            Command::ResultsSetDefault => "results_set_default",
+            Command::ResultsToggleExpression => "results_toggle_expression",
             Command::OpenContextMenu => "open_context_menu",
             Command::OpenPaneActions => "open_pane_actions",
             Command::MenuUp => "menu_up",
@@ -648,6 +680,10 @@ impl Command {
             Command::CancelTask => "cancel_task",
             Command::ClearFinishedTasks => "clear_finished_tasks",
             Command::ToggleSidebar => "toggle_sidebar",
+            Command::ToggleFullScreen => "toggle_full_screen",
+            Command::IncreaseInterfaceSize => "increase_interface_size",
+            Command::DecreaseInterfaceSize => "decrease_interface_size",
+            Command::ResetInterfaceSize => "reset_interface_size",
             Command::OpenSettings => "open_settings",
             Command::OpenLoginModal => "open_login_modal",
             Command::OpenSsoWizard => "open_sso_wizard",
@@ -726,6 +762,8 @@ impl Command {
             Command::ToggleConsole => "toggle_console",
             Command::LoadMore => "load_more",
             Command::EditExpiry => "edit_expiry",
+            Command::EditValue => "edit_value",
+            Command::RollBackVersion => "roll_back_version",
             Command::CopyPreview => "copy_preview",
             Command::ImportItems => "import_items",
             Command::ImportFromClient => "import_from_client",
@@ -843,6 +881,8 @@ impl Command {
             Command::ToggleRowInspector,
             Command::FindSimilarRows,
             Command::ResultsSetNull,
+            Command::ResultsSetDefault,
+            Command::ResultsToggleExpression,
             Command::OpenContextMenu,
             Command::OpenPaneActions,
             Command::MenuUp,
@@ -864,6 +904,10 @@ impl Command {
             Command::CancelTask,
             Command::ClearFinishedTasks,
             Command::ToggleSidebar,
+            Command::ToggleFullScreen,
+            Command::IncreaseInterfaceSize,
+            Command::DecreaseInterfaceSize,
+            Command::ResetInterfaceSize,
             Command::OpenSettings,
             Command::OpenLoginModal,
             Command::OpenSsoWizard,
@@ -932,6 +976,8 @@ impl Command {
             Command::ToggleConsole,
             Command::LoadMore,
             Command::EditExpiry,
+            Command::EditValue,
+            Command::RollBackVersion,
             Command::CopyPreview,
             Command::ImportItems,
             Command::ImportFromClient,
@@ -1036,6 +1082,8 @@ impl Command {
             | Command::ToggleRowInspector
             | Command::FindSimilarRows
             | Command::ResultsSetNull
+            | Command::ResultsSetDefault
+            | Command::ResultsToggleExpression
             | Command::OpenContextMenu
             | Command::MenuUp
             | Command::MenuDown
@@ -1058,6 +1106,10 @@ impl Command {
             | Command::CancelTask
             | Command::ClearFinishedTasks
             | Command::ToggleSidebar
+            | Command::ToggleFullScreen
+            | Command::IncreaseInterfaceSize
+            | Command::DecreaseInterfaceSize
+            | Command::ResetInterfaceSize
             | Command::TogglePanel
             | Command::OpenSettings
             | Command::OpenLoginModal
@@ -1139,6 +1191,8 @@ impl Command {
             Command::ToggleConsole => "View",
             Command::LoadMore => "Navigation",
             Command::EditExpiry => "Actions",
+            Command::EditValue => "Actions",
+            Command::RollBackVersion => "Actions",
             Command::CopyPreview => "Actions",
             Command::ImportItems
             | Command::ImportFromClient
@@ -1183,6 +1237,10 @@ impl Command {
                 | Command::ToggleResultsPosition
                 | Command::ToggleTasks
                 | Command::ToggleSidebar
+                | Command::ToggleFullScreen
+                | Command::IncreaseInterfaceSize
+                | Command::DecreaseInterfaceSize
+                | Command::ResetInterfaceSize
                 | Command::OpenLoginModal
                 | Command::OpenSsoWizard
                 | Command::OpenAuditViewer
@@ -1323,6 +1381,10 @@ pub enum ContextId {
     /// The table migration wizard document (its steps and footer).
     MigrateWizard,
 
+    /// The import wizard dialog: its configure step's choices (the CSV
+    /// delimiter and encoding, each table's mapping mode and columns).
+    ImportWizard,
+
     /// An editor with Vim mode in Normal or Visual mode, where the leader
     /// key starts a sequence (`<leader> a`).
     VimNormal,
@@ -1370,6 +1432,7 @@ impl ContextId {
             ContextId::AddPanelPicker => None,
             ContextId::McpApprovals => Some(ContextId::Global),
             ContextId::MigrateWizard => Some(ContextId::Global),
+            ContextId::ImportWizard => None,
             ContextId::VimNormal => None,
         }
     }
@@ -1408,6 +1471,7 @@ impl ContextId {
                 | ContextId::TextInput
                 | ContextId::Dropdown
                 | ContextId::SqlPreviewModal
+                | ContextId::ImportWizard
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
                 | ContextId::ContextMenu
@@ -1462,6 +1526,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "Add Panel Picker",
             ContextId::McpApprovals => "MCP Approvals",
             ContextId::MigrateWizard => "Migrate Wizard",
+            ContextId::ImportWizard => "Import Wizard",
             ContextId::VimNormal => "Vim Normal",
         }
     }
@@ -1504,6 +1569,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "add_panel_picker",
             ContextId::McpApprovals => "mcp_approvals",
             ContextId::MigrateWizard => "migrate_wizard",
+            ContextId::ImportWizard => "import_wizard",
             ContextId::VimNormal => "vim_normal",
         }
     }
@@ -1546,6 +1612,7 @@ impl ContextId {
             ContextId::AddPanelPicker,
             ContextId::McpApprovals,
             ContextId::MigrateWizard,
+            ContextId::ImportWizard,
             ContextId::VimNormal,
         ]
     }
@@ -1588,6 +1655,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "AddPanelPicker",
             ContextId::McpApprovals => "McpApprovals",
             ContextId::MigrateWizard => "MigrateWizard",
+            ContextId::ImportWizard => "ImportWizard",
             ContextId::VimNormal => "VimNormal",
         }
     }
@@ -1626,10 +1694,31 @@ impl ContextId {
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",
             ContextId::SqlPreviewModal => "SqlPreviewModal && !Input",
+            // A dialog: its keys stay out of a text field and of an open
+            // dropdown, which answer their own.
+            ContextId::ImportWizard => "ImportWizard && !Input && !Dropdown",
             // An editor inside a dialog takes the leader too: the Vim wrapper
             // hands its commands to the dialog, never to the document behind.
             ContextId::VimNormal => "VimNormal",
             context => context.as_gpui_context(),
+        }
+    }
+
+    /// The predicate that keeps a binding's key out of a focused text field
+    /// inside this context, for the contexts that hold text fields of their
+    /// own.
+    ///
+    /// A text input binds no printable key itself, so a bare letter bound at
+    /// the window root takes the character before the field ever sees it.
+    /// The keymap answers that by narrowing the binding to `!Input`; `None`
+    /// leaves the binding on the context's default predicate, which is what
+    /// every context without a text field wants.
+    pub fn predicate_outside_input(&self) -> Option<&'static str> {
+        match self {
+            ContextId::Results => Some("Results && !Modal && !Input"),
+            ContextId::Audit => Some("Audit && !Modal && !Input"),
+            ContextId::Inspector => Some("Inspector && !Modal && !Input"),
+            _ => None,
         }
     }
 
@@ -1644,6 +1733,7 @@ impl ContextId {
                 | ContextId::Modal
                 | ContextId::KeyValue
                 | ContextId::SqlPreviewModal
+                | ContextId::ImportWizard
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
                 | ContextId::VimNormal
@@ -1720,6 +1810,10 @@ mod tests {
             "focus_results",
             "focus_tasks",
             "toggle_sidebar",
+            "toggle_full_screen",
+            "increase_interface_size",
+            "decrease_interface_size",
+            "reset_interface_size",
             "toggle_editor",
             "toggle_results",
             "toggle_results_position",
@@ -1808,6 +1902,9 @@ mod tests {
             Command::ShowScriptsView,
             Command::ShowDashboardsView,
             Command::AddExternalScriptsFolder,
+            Command::IncreaseInterfaceSize,
+            Command::DecreaseInterfaceSize,
+            Command::ResetInterfaceSize,
         ] {
             assert_eq!(Command::from_palette_id(command.id()), Some(command));
             assert!(command.is_global(), "{command:?} is a workspace command");

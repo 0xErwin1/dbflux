@@ -43,6 +43,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(add_panel_picker_layer());
     stack.add_layer(mcp_approvals_layer());
     stack.add_layer(migrate_wizard_layer());
+    stack.add_layer(import_wizard_layer());
     stack.add_layer(vim_normal_layer());
 
     stack
@@ -203,6 +204,42 @@ fn global_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("b", Modifiers::primary()),
         Command::ToggleSidebar,
+    );
+
+    // Ctrl+Cmd+F is the macOS full-screen convention; F11 elsewhere.
+    #[cfg(target_os = "macos")]
+    let full_screen = KeyChord::new(
+        "f",
+        Modifiers {
+            ctrl: true,
+            platform: true,
+            ..Modifiers::none()
+        },
+    );
+    #[cfg(not(target_os = "macos"))]
+    let full_screen = KeyChord::new("f11", Modifiers::none());
+    layer.bind(full_screen, Command::ToggleFullScreen);
+
+    // Interface size, as in most desktop apps. `+` and `=` share a key on
+    // common layouts, and some platforms report the chord with Shift held as
+    // `+`, so every form of that key makes the interface larger.
+    for key in ["=", "+"] {
+        layer.bind(
+            KeyChord::new(key, Modifiers::primary()),
+            Command::IncreaseInterfaceSize,
+        );
+        layer.bind(
+            KeyChord::new(key, Modifiers::primary_shift()),
+            Command::IncreaseInterfaceSize,
+        );
+    }
+    layer.bind(
+        KeyChord::new("-", Modifiers::primary()),
+        Command::DecreaseInterfaceSize,
+    );
+    layer.bind(
+        KeyChord::new("0", Modifiers::primary()),
+        Command::ResetInterfaceSize,
     );
 
     // Tab context menu — stays Ctrl+M everywhere: Cmd+M is the system
@@ -542,6 +579,15 @@ fn results_layer() -> KeymapLayer {
         Command::NewQueryTab,
     );
 
+    // The secret store's Edit value; other documents leave it unhandled.
+    layer.bind(KeyChord::new("e", Modifiers::none()), Command::EditValue);
+
+    // The secret store's Roll back; other documents leave it unhandled.
+    layer.bind(
+        KeyChord::new("b", Modifiers::none()),
+        Command::RollBackVersion,
+    );
+
     // Panel navigation (Ctrl+hjkl) — vim-style, literal Ctrl on every platform.
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusToolbar);
@@ -666,6 +712,10 @@ fn results_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("s", Modifiers::shift()),
         Command::FindSimilarRows,
+    );
+    layer.bind(
+        KeyChord::new("0", Modifiers::ctrl_shift()),
+        Command::ResultsSetDefault,
     );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
@@ -1505,6 +1555,14 @@ fn data_table_layer() -> KeymapLayer {
         KeyChord::new("n", Modifiers::ctrl()),
         Command::ResultsSetNull,
     );
+    // The literal / expression editor toggle. Ctrl+E and Ctrl+Shift+E belong
+    // to the input component and the export menu, so it takes Ctrl+Shift+I.
+    // It also works inside the cell input, to flip an open editor.
+    layer.bind_with_predicate(
+        KeyChord::new("i", Modifiers::ctrl_shift()),
+        Command::ResultsToggleExpression,
+        "DataTable",
+    );
 
     // Undo / redo: the standard primary chords plus the vim-style `u` and
     // `ctrl-r`, kept literal as familiar editor aliases.
@@ -2094,6 +2152,29 @@ fn migrate_wizard_layer() -> KeymapLayer {
         Command::Cancel,
         from_field,
     );
+
+    layer
+}
+
+/// Keys of the import wizard's configure step. J and K move the cursor over
+/// its choices (the CSV delimiter and encoding, then each table's mapping
+/// mode, target column and source column); H and L (or the arrows) pick the
+/// previous or next delimiter and encoding. Enter, which the dialog hands to
+/// its owner, picks the next delimiter or encoding, or opens the dropdown
+/// under the cursor. The keys stay with a text field and an open dropdown.
+fn import_wizard_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::ImportWizard);
+
+    for (key, command) in [
+        ("j", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+    ] {
+        layer.bind(KeyChord::new(key, Modifiers::none()), command);
+    }
 
     layer
 }

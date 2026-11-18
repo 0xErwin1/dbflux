@@ -1,0 +1,48 @@
+{
+  "title": "DBFlux redesign: Bolt Byzantium design system",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: the Bolt Byzantium design system (foundations, brand, app and web components, interaction states).",
+  "artboards": [
+    {
+      "file": "01-ds-brand.html",
+      "title": "Brand & app icons",
+      "tradeoff": "Brand and app icons: keeps the amber bolt consistent across sizes; covers identity only.",
+      "width": 1600,
+      "height": 1473
+    },
+    {
+      "file": "02-ds-foundations.html",
+      "title": "Foundations",
+      "tradeoff": "Foundations sheet: every token in one board for exact reuse; long to scan.",
+      "width": 1600,
+      "height": 3125
+    },
+    {
+      "file": "03-ds-web.html",
+      "title": "Web components",
+      "tradeoff": "Web components: site building blocks that match the app; no page composition.",
+      "width": 1600,
+      "height": 1792
+    },
+    {
+      "file": "04-ds-app.html",
+      "title": "App components",
+      "tradeoff": "App components: the desktop building blocks in one place; no full screens.",
+      "width": 1600,
+      "height": 1250
+    },
+    {
+      "file": "05-ds-app-plan.html",
+      "title": "App component plan",
+      "tradeoff": "Component plan: maps each app component to its build order; planning, not visuals.",
+      "width": 1600,
+      "height": 2982
+    },
+    {
+      "file": "06-ds-states.html",
+      "title": "Interaction states",
+      "tradeoff": "Interaction states: hover, focus, pressed and disabled side by side; static, no live behavior.",
+      "width": 1920,
+      "height": 1160
+    }
+  ]
+}

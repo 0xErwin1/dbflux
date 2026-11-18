@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: Islands: every pane floats on the desk · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Workspace and documents, row \"Islands: every pane floats on the desk · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-table.html",
+      "title": "Table view + row inspector",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-menu.html",
+      "title": "Cell menu",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-light-editor.html",
+      "title": "Query editor + results",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

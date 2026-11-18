@@ -9,7 +9,7 @@
 //! `Value` payloads can be written but never read back.
 //!
 //! These tests round-trip every request and response variant with the
-//! version-1.8 envelope and assert that the decoded value re-encodes to the
+//! version-1.9 envelope and assert that the decoded value re-encodes to the
 //! exact bytes it came from, which catches both truncation and field
 //! omission. Targeted tests cover the payload shapes that regressed: JSON documents
 //! carried as `JsonText`, and every formerly-skipped field on a wire-crossing
@@ -22,20 +22,23 @@ use std::time::Duration;
 
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGeneratorInfo, CollectionBrowseRequest,
-    CollectionCountRequest, CollectionRef, ColumnInfo, ColumnKind, ColumnMeta, CrudResult,
-    CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbKind, DbSchemaInfo,
-    DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, DriverFormDef,
-    DriverMetadata, DriverMetadataBuilder, ExecutionContext, ExecutionSourceContext,
-    ExplainRequest, FormSection, FormTab, HashDeleteRequest, HashSetRequest, KeyBulkGetRequest,
-    KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
-    KeyLoadState, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest,
-    KeyTtlRequest, KeyType, KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest,
-    ListSetRequest, PlannedQuery, QueryLanguage, QueryRequest, QueryResult, RelationalSchema,
-    RowDelete, RowIdentity, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
-    StreamDeleteRequest, StreamEntryId, StreamMaxLen, TableBrowseRequest, TableCountRequest,
-    TableInfo, TableRef, Value, ValueRepr, ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
+    CollectionCountRequest, CollectionRef, ColumnAssignment, ColumnInfo, ColumnKind, ColumnMeta,
+    CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbKind,
+    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
+    DriverFormDef, DriverMetadata, DriverMetadataBuilder, ExecutionClassification,
+    ExecutionContext, ExecutionSourceContext, ExplainRequest, FormSection, FormTab,
+    HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
+    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState,
+    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest,
+    KeyType, KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest,
+    LocalizedText, PlannedQuery, QueryLanguage, QueryRequest, QueryResult, RelationalSchema,
+    RootItemPresentation, RootSectionAction, RootSectionDef, RootSectionItem, RootSectionPage,
+    RootSectionPresentation, RowDelete, RowIdentity, RowInsert, RowPatch, SchemaColumnInfo,
+    SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
+    SemanticPlan, SemanticPlanKind, SemanticRequest, SetAddRequest, SetRemoveRequest,
+    StreamAddRequest, StreamDeleteRequest, StreamEntryId, StreamMaxLen, TableBrowseRequest,
+    TableCountRequest, TableInfo, TableRef, Value, ValueRepr, ViewInfo, ZSetAddRequest,
+    ZSetRemoveRequest,
 };
 use dbflux_ipc::driver_protocol::{
     CollectionBrowseRequestDto, CollectionCountRequestDto, CrudResultDto, DocumentDeleteDto,
@@ -48,8 +51,8 @@ use dbflux_ipc::{
     EventSeverityDto, ProtocolVersion, QueryRequestDto, QueryResultChunk, QueryResultDto,
     QueryResultSetsDto, ResultSetDto,
 };
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -697,6 +700,32 @@ fn request_variants() -> Vec<(&'static str, DriverRequestBody)> {
             "KvKeyCount",
             DriverRequestBody::KvKeyCount { keyspace: Some(2) },
         ),
+        ("RootSections", DriverRequestBody::RootSections),
+        (
+            "RootSectionItems",
+            DriverRequestBody::RootSectionItems {
+                section_id: "buckets".to_string(),
+                page_token: Some("page-2".to_string()),
+            },
+        ),
+        (
+            "ExecuteRootSectionAction",
+            DriverRequestBody::ExecuteRootSectionAction {
+                section_id: "buckets".to_string(),
+                item_id: "logs".to_string(),
+                action_id: "delete".to_string(),
+            },
+        ),
+        (
+            "InsertRowV2",
+            DriverRequestBody::InsertRowV2 {
+                insert: row_insert(),
+            },
+        ),
+        (
+            "UpdateRowV2",
+            DriverRequestBody::UpdateRowV2 { patch: row_patch() },
+        ),
     ]
 }
 
@@ -957,7 +986,71 @@ fn response_variants() -> Vec<(&'static str, DriverResponseBody)> {
                 results: query_result_sets_dto(),
             },
         ),
+        (
+            "RootSections",
+            DriverResponseBody::RootSections {
+                sections: vec![full_root_section(), bare_root_section()],
+            },
+        ),
+        (
+            "RootSectionPage",
+            DriverResponseBody::RootSectionPage {
+                page: root_section_page(),
+            },
+        ),
+        (
+            "RootSectionActionDone",
+            DriverResponseBody::RootSectionActionDone,
+        ),
     ]
+}
+
+/// A section with every optional field set.
+fn full_root_section() -> RootSectionDef {
+    RootSectionDef {
+        id: "buckets".to_string(),
+        label: LocalizedText::keyed("sidebar.buckets", "Buckets"),
+        counted_label_key: Some("sidebar.buckets_count".to_string()),
+        empty_label: LocalizedText::keyed("sidebar.no_buckets", "No buckets"),
+        presentation: Some(RootSectionPresentation::ObjectContainerTable),
+        item_presentation: RootItemPresentation::ObjectBrowser,
+        opens_on_profile_activation: true,
+        item_actions: vec![RootSectionAction {
+            id: "delete".to_string(),
+            label: LocalizedText::keyed("sidebar.delete_bucket", "Delete bucket"),
+            description: Some(LocalizedText::plain("Deletes the bucket")),
+            classification: ExecutionClassification::AdminDestructive,
+        }],
+    }
+}
+
+/// A section with every optional field unset.
+fn bare_root_section() -> RootSectionDef {
+    RootSectionDef {
+        id: "topics".to_string(),
+        label: LocalizedText::plain("Topics"),
+        counted_label_key: None,
+        empty_label: LocalizedText::plain("No topics"),
+        presentation: None,
+        item_presentation: RootItemPresentation::ObjectBrowser,
+        opens_on_profile_activation: false,
+        item_actions: vec![RootSectionAction {
+            id: "inspect".to_string(),
+            label: LocalizedText::plain("Inspect"),
+            description: None,
+            classification: ExecutionClassification::Read,
+        }],
+    }
+}
+
+fn root_section_page() -> RootSectionPage {
+    RootSectionPage {
+        items: vec![RootSectionItem {
+            id: "logs".to_string(),
+            label: "logs".to_string(),
+        }],
+        next_page_token: Some("page-2".to_string()),
+    }
 }
 
 /// Names a request variant. The match has no wildcard arm, so adding a
@@ -1023,6 +1116,11 @@ fn request_variant_name(body: &DriverRequestBody) -> &'static str {
         DriverRequestBody::GenerateCode { .. } => "GenerateCode",
         DriverRequestBody::SchemaColumns { .. } => "SchemaColumns",
         DriverRequestBody::KvKeyCount { .. } => "KvKeyCount",
+        DriverRequestBody::RootSections => "RootSections",
+        DriverRequestBody::RootSectionItems { .. } => "RootSectionItems",
+        DriverRequestBody::ExecuteRootSectionAction { .. } => "ExecuteRootSectionAction",
+        DriverRequestBody::InsertRowV2 { .. } => "InsertRowV2",
+        DriverRequestBody::UpdateRowV2 { .. } => "UpdateRowV2",
     }
 }
 
@@ -1071,6 +1169,9 @@ fn response_variant_name(body: &DriverResponseBody) -> &'static str {
         DriverResponseBody::ExecuteResultSets { .. } => "ExecuteResultSets",
         DriverResponseBody::ExecuteWithHandleResultSets { .. } => "ExecuteWithHandleResultSets",
         DriverResponseBody::BrowseResultSets { .. } => "BrowseResultSets",
+        DriverResponseBody::RootSections { .. } => "RootSections",
+        DriverResponseBody::RootSectionPage { .. } => "RootSectionPage",
+        DriverResponseBody::RootSectionActionDone => "RootSectionActionDone",
     }
 }
 
@@ -1151,6 +1252,32 @@ fn every_request_variant_round_trips() {
 fn every_response_variant_round_trips() {
     for (name, body) in response_variants() {
         assert_postcard_roundtrip_named(name, &response_envelope(body));
+    }
+}
+
+#[test]
+fn root_section_def_round_trips_with_optional_fields_set_and_unset() {
+    for section in [full_root_section(), bare_root_section()] {
+        assert_postcard_roundtrip(&section);
+
+        let encoded = postcard::to_allocvec(&section).expect("encode");
+        let decoded: RootSectionDef = postcard::from_bytes(&encoded).expect("decode");
+        assert_eq!(decoded, section);
+    }
+}
+
+#[test]
+fn root_section_page_round_trips_on_the_last_page() {
+    for page in [
+        root_section_page(),
+        RootSectionPage {
+            items: Vec::new(),
+            next_page_token: None,
+        },
+    ] {
+        let encoded = postcard::to_allocvec(&page).expect("encode");
+        let decoded: RootSectionPage = postcard::from_bytes(&encoded).expect("decode");
+        assert_eq!(decoded, page);
     }
 }
 
@@ -1399,6 +1526,227 @@ fn row_patch_and_insert_without_type_names_round_trip() {
 }
 
 #[test]
+fn row_patch_and_insert_with_expressions_round_trip() {
+    let insert = RowInsert::with_typed_assignments(
+        "users".to_string(),
+        Some("public".to_string()),
+        vec![
+            ColumnAssignment::expression("id", "gen_random_uuid()"),
+            ColumnAssignment::typed("name", Value::Text("now()".to_string()), "text"),
+        ],
+    );
+    assert_postcard_roundtrip(&insert);
+
+    let encoded = postcard::to_allocvec(&insert).expect("encode");
+    let decoded: RowInsert = postcard::from_bytes(&encoded).expect("decode");
+    assert_eq!(
+        decoded.assignments[0].expression.as_deref(),
+        Some("gen_random_uuid()")
+    );
+    assert_eq!(decoded.assignments[0].value, Value::Null);
+    assert!(decoded.assignments[1].expression.is_none());
+    assert_eq!(
+        decoded.assignments[1].value,
+        Value::Text("now()".to_string())
+    );
+    assert_eq!(decoded.assignments[1].type_name.as_deref(), Some("text"));
+
+    let patch = RowPatch::with_typed_changes(
+        RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+        "users".to_string(),
+        None,
+        vec![
+            ColumnAssignment::new("name", Value::Text("Ada".to_string())),
+            ColumnAssignment::expression("deleted_at", "now()"),
+        ],
+    );
+    assert_postcard_roundtrip(&patch);
+
+    let encoded = postcard::to_allocvec(&patch).expect("encode");
+    let decoded: RowPatch = postcard::from_bytes(&encoded).expect("decode");
+    assert!(decoded.changes[0].expression.is_none());
+    assert_eq!(decoded.changes[1].expression.as_deref(), Some("now()"));
+}
+
+/// The v1.9 `RowInsert` wire shape, copied byte-for-byte from before cell
+/// expressions existed. A v1.9 peer decodes exactly this and ignores trailing
+/// bytes, so the old request variants must never carry more.
+#[derive(Serialize, Deserialize)]
+struct BaselineRowInsertV19 {
+    table: String,
+    schema: Option<String>,
+    columns: Vec<String>,
+    values: Vec<Value>,
+    column_types: Vec<Option<String>>,
+}
+
+/// The v1.9 `RowPatch` wire shape; see [`BaselineRowInsertV19`].
+#[derive(Serialize, Deserialize)]
+struct BaselineRowPatchV19 {
+    identity: RowIdentity,
+    table: String,
+    schema: Option<String>,
+    changes: Vec<(String, Value)>,
+    change_types: Vec<Option<String>>,
+}
+
+fn typed_insert() -> RowInsert {
+    RowInsert::with_typed_assignments(
+        "users".to_string(),
+        Some("public".to_string()),
+        vec![
+            ColumnAssignment::typed("name", Value::Text("Ada".to_string()), "text"),
+            ColumnAssignment::new("age", Value::Int(36)),
+        ],
+    )
+}
+
+fn typed_patch() -> RowPatch {
+    RowPatch::with_typed_changes(
+        RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+        "users".to_string(),
+        None,
+        vec![
+            ColumnAssignment::typed("name", Value::Text("Ada".to_string()), "text"),
+            ColumnAssignment::new("age", Value::Int(36)),
+        ],
+    )
+}
+
+#[test]
+fn insert_row_without_expressions_keeps_the_v1_9_frame_byte_for_byte() {
+    let body = DriverRequestBody::InsertRow {
+        insert: typed_insert(),
+    };
+    let encoded = postcard::to_allocvec(&body).expect("encode");
+
+    let baseline = BaselineRowInsertV19 {
+        table: "users".to_string(),
+        schema: Some("public".to_string()),
+        columns: vec!["name".to_string(), "age".to_string()],
+        values: vec![Value::Text("Ada".to_string()), Value::Int(36)],
+        column_types: vec![Some("text".to_string()), None],
+    };
+    let expected = postcard::to_allocvec(&baseline).expect("baseline");
+
+    assert_eq!(&encoded[1..], expected.as_slice());
+    assert_postcard_roundtrip(&body);
+}
+
+#[test]
+fn update_row_without_expressions_keeps_the_v1_9_frame_byte_for_byte() {
+    let body = DriverRequestBody::UpdateRow {
+        patch: typed_patch(),
+    };
+    let encoded = postcard::to_allocvec(&body).expect("encode");
+
+    let baseline = BaselineRowPatchV19 {
+        identity: RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+        table: "users".to_string(),
+        schema: None,
+        changes: vec![
+            ("name".to_string(), Value::Text("Ada".to_string())),
+            ("age".to_string(), Value::Int(36)),
+        ],
+        change_types: vec![Some("text".to_string()), None],
+    };
+    let expected = postcard::to_allocvec(&baseline).expect("baseline");
+
+    assert_eq!(&encoded[1..], expected.as_slice());
+    assert_postcard_roundtrip(&body);
+}
+
+#[test]
+fn a_v1_9_frame_decodes_into_the_old_request_variants() {
+    let baseline = BaselineRowInsertV19 {
+        table: "users".to_string(),
+        schema: None,
+        columns: vec!["name".to_string()],
+        values: vec![Value::Text("Ada".to_string())],
+        column_types: vec![],
+    };
+    let reference = postcard::to_allocvec(&DriverRequestBody::InsertRow {
+        insert: typed_insert(),
+    })
+    .expect("encode");
+    let mut frame = vec![reference[0]];
+    frame.extend(postcard::to_allocvec(&baseline).expect("baseline"));
+
+    match postcard::from_bytes::<DriverRequestBody>(&frame).expect("decode") {
+        DriverRequestBody::InsertRow { insert } => {
+            assert_eq!(insert.assignments.len(), 1);
+            assert!(insert.assignments[0].expression.is_none());
+        }
+        other => panic!("expected InsertRow, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_old_row_variants_refuse_to_drop_an_expression() {
+    let insert = DriverRequestBody::InsertRow {
+        insert: RowInsert::with_typed_assignments(
+            "users".to_string(),
+            None,
+            vec![ColumnAssignment::expression("id", "gen_random_uuid()")],
+        ),
+    };
+    assert!(postcard::to_allocvec(&insert).is_err());
+
+    let update = DriverRequestBody::UpdateRow {
+        patch: RowPatch::with_typed_changes(
+            RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "users".to_string(),
+            None,
+            vec![ColumnAssignment::expression("deleted_at", "now()")],
+        ),
+    };
+    assert!(postcard::to_allocvec(&update).is_err());
+}
+
+#[test]
+fn the_v2_row_variants_carry_expressions_and_are_appended_last() {
+    let insert = DriverRequestBody::InsertRowV2 {
+        insert: RowInsert::with_typed_assignments(
+            "users".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("id", "gen_random_uuid()"),
+                ColumnAssignment::new("name", Value::Text("Ada".to_string())),
+            ],
+        ),
+    };
+    assert_postcard_roundtrip(&insert);
+    let encoded = postcard::to_allocvec(&insert).expect("encode");
+    match postcard::from_bytes::<DriverRequestBody>(&encoded).expect("decode") {
+        DriverRequestBody::InsertRowV2 { insert } => {
+            assert_eq!(
+                insert.assignments[0].expression.as_deref(),
+                Some("gen_random_uuid()")
+            );
+            assert!(insert.assignments[1].expression.is_none());
+        }
+        other => panic!("expected InsertRowV2, got {other:?}"),
+    }
+
+    let update = DriverRequestBody::UpdateRowV2 {
+        patch: RowPatch::with_typed_changes(
+            RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "users".to_string(),
+            None,
+            vec![ColumnAssignment::expression("deleted_at", "now()")],
+        ),
+    };
+    assert_postcard_roundtrip(&update);
+    let encoded = postcard::to_allocvec(&update).expect("encode");
+    match postcard::from_bytes::<DriverRequestBody>(&encoded).expect("decode") {
+        DriverRequestBody::UpdateRowV2 { patch } => {
+            assert_eq!(patch.changes[0].expression.as_deref(), Some("now()"));
+        }
+        other => panic!("expected UpdateRowV2, got {other:?}"),
+    }
+}
+
+#[test]
 fn execution_context_without_source_round_trips() {
     let request = QueryRequest {
         execution_context: Some(ExecutionContext {
@@ -1543,4 +1891,32 @@ fn database_category_variants_keep_their_postcard_indices() {
         let decoded: DatabaseCategory = postcard::from_bytes(&bytes).expect("decode category");
         assert_eq!(decoded, category);
     }
+}
+
+/// The base `RowInsert`/`RowPatch` wire shapes default their trailing type
+/// vectors, so a self-describing frame that omits them still decodes through
+/// the frozen v1.9 shapes. `postcard` frames are positional and unaffected.
+#[test]
+fn self_describing_row_write_frames_without_type_vectors_still_decode() {
+    let insert: DriverRequestBody = serde_json::from_value(json!({
+        "InsertRow": {
+            "insert": { "table": "users", "schema": null, "columns": [], "values": [] }
+        }
+    }))
+    .expect("insert frame without column_types");
+    assert!(matches!(insert, DriverRequestBody::InsertRow { .. }));
+
+    let patch: DriverRequestBody = serde_json::from_value(json!({
+        "UpdateRow": {
+            "patch": {
+                "identity": serde_json::to_value(RowIdentity::composite(vec![], vec![]))
+                    .expect("identity"),
+                "table": "users",
+                "schema": null,
+                "changes": []
+            }
+        }
+    }))
+    .expect("patch frame without change_types");
+    assert!(matches!(patch, DriverRequestBody::UpdateRow { .. }));
 }

@@ -3,6 +3,25 @@
 
 use dbflux_core::{SecretListPage, SecretSummary};
 
+/// Entries a listing loads on its own. Past this the manual row takes over:
+/// every page is a provider call that costs money and time, and the listing is
+/// not virtualized, so a listing of thousands of rows would be slower than the
+/// click it saves.
+pub(super) const AUTO_CONTINUE_ENTRY_LIMIT: usize = 1_000;
+
+/// Upper bound a page request carries. Stores clamp to their own limit (100
+/// for Secrets Manager, 50 for Parameter Store), so this asks for the largest
+/// page each one is willing to give instead of letting the service pick, which
+/// is what made every listing look truncated.
+pub(super) const LARGEST_PAGE_ENTRIES: u32 = 1_000;
+
+/// Whether a listing that just landed a page keeps loading on its own: only
+/// while the store says there is more and the listing is still under the
+/// limit.
+pub(super) fn keeps_loading(loaded: usize, has_more: bool) -> bool {
+    has_more && loaded < AUTO_CONTINUE_ENTRY_LIMIT
+}
+
 /// How a hierarchical store lists the current path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathMode {
@@ -23,6 +42,11 @@ pub struct SecretListing {
     pub loading: bool,
     pub error: Option<String>,
     generation: u64,
+
+    /// A reload that keeps what is listed until its first page lands, so the
+    /// rows (and the selection that points at one of them) do not vanish
+    /// while the store answers.
+    replace_on_apply: bool,
 }
 
 impl SecretListing {
@@ -33,11 +57,26 @@ impl SecretListing {
         self.loading = true;
         self.error = None;
 
+        self.replace_on_apply = false;
+
         if first_page {
             self.entries.clear();
             self.child_paths.clear();
             self.next_page_token = None;
         }
+
+        self.generation
+    }
+
+    /// Starts a reload of the first page that leaves the listed rows in
+    /// place until the page lands, and then replaces them. A write that
+    /// changed a row's metadata reloads this way, so the selected row stays
+    /// selected.
+    pub fn begin_reload(&mut self) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        self.loading = true;
+        self.error = None;
+        self.replace_on_apply = true;
 
         self.generation
     }
@@ -48,6 +87,11 @@ impl SecretListing {
     pub fn apply_page(&mut self, generation: u64, page: SecretListPage) -> bool {
         if generation != self.generation {
             return false;
+        }
+
+        if std::mem::take(&mut self.replace_on_apply) {
+            self.entries.clear();
+            self.child_paths.clear();
         }
 
         for entry in page.entries {
@@ -77,6 +121,17 @@ impl SecretListing {
         self.loading = false;
         self.error = Some(message);
         true
+    }
+
+    /// The generation of the latest load started.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Whether the next page to land replaces the listed rows (a reload that
+    /// kept them until then) instead of appending to them.
+    pub fn replaces_on_next_page(&self) -> bool {
+        self.replace_on_apply
     }
 
     pub fn has_more(&self) -> bool {

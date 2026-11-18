@@ -23,6 +23,7 @@ indexmap.workspace = true
 log = "0.4"
 serde_json = { workspace = true }
 sha2.workspace = true
+socket2 = "0.6"
 tiberius = { version = "0.12", default-features = false, features = ["chrono", "tds73", "rustls", "sql-browser-tokio"] }
 tokio = { workspace = true, features = ["net", "io-util", "time", "macros"] }
 tokio-util = { version = "0.7", features = ["compat"] }

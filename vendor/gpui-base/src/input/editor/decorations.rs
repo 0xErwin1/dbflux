@@ -1,4 +1,4 @@
-use crate::input::EditorMode;
+use crate::input::{EditorMode, InputMode};
 use std::{collections::BTreeMap, ops::Range};
 
 use gpui::{App, Context, HighlightStyle, Hsla, WeakEntity};
@@ -90,8 +90,55 @@ struct DecorationCollectionId(usize);
 /// [`IEditorDecorationsCollection`](https://microsoft.github.io/monaco-editor/typedoc/interfaces/editor_editor_api.editor.IEditorDecorationsCollection.html).
 #[derive(Clone, Debug)]
 pub struct TextDecorationCollection {
-    state: WeakEntity<InputBaseState<EditorMode>>,
+    owner: TextDecorationOwner,
     id: DecorationCollectionId,
+}
+
+/// The input a [`TextDecorationCollection`] belongs to. Code editors and
+/// single-line fields keep their own collections; the handle is one type so a
+/// host can style either without naming the mode.
+#[derive(Clone, Debug)]
+enum TextDecorationOwner {
+    Editor(WeakEntity<InputBaseState<EditorMode>>),
+    Field(WeakEntity<InputBaseState<InputMode>>),
+}
+
+impl TextDecorationCollection {
+    fn update(&self, cx: &mut App, f: impl FnOnce(&Rope, &mut DecorationCollections) -> bool) {
+        // A dropped input leaves nothing to decorate, so the update is a no-op.
+        let _updated = match &self.owner {
+            TextDecorationOwner::Editor(state) => state.update(cx, |state, cx| {
+                if f(&state.text, &mut state.extras.decorations) {
+                    cx.notify();
+                }
+            }),
+            TextDecorationOwner::Field(state) => state.update(cx, |state, cx| {
+                if f(&state.text, &mut state.extras.decorations) {
+                    cx.notify();
+                }
+            }),
+        };
+    }
+
+    fn ranges(&self, cx: &App) -> Vec<Range<usize>> {
+        let collect = |collections: &DecorationCollections| {
+            collections
+                .get(self.id)
+                .unwrap_or_default()
+                .iter()
+                .map(|decoration| decoration.range.clone())
+                .collect()
+        };
+        match &self.owner {
+            TextDecorationOwner::Editor(state) => {
+                state.read_with(cx, |state, _| collect(&state.extras.decorations))
+            }
+            TextDecorationOwner::Field(state) => {
+                state.read_with(cx, |state, _| collect(&state.extras.decorations))
+            }
+        }
+        .unwrap_or_default()
+    }
 }
 
 impl TextDecorationCollection {
@@ -100,11 +147,8 @@ impl TextDecorationCollection {
     /// This corresponds to Monaco's
     /// [`IEditorDecorationsCollection.set`](https://microsoft.github.io/monaco-editor/typedoc/interfaces/editor_editor_api.editor.IEditorDecorationsCollection.html#set).
     pub fn set(&self, decorations: Vec<TextDecoration>, cx: &mut App) {
-        let _ = self.state.update(cx, |state, cx| {
-            let decorations = normalize(&state.text, decorations);
-            if state.extras.decorations.set(self.id, decorations) {
-                cx.notify();
-            }
+        self.update(cx, |text, collections| {
+            collections.set(self.id, normalize(text, decorations))
         });
     }
 
@@ -113,11 +157,8 @@ impl TextDecorationCollection {
     /// This corresponds to Monaco's
     /// [`IEditorDecorationsCollection.append`](https://microsoft.github.io/monaco-editor/typedoc/interfaces/editor_editor_api.editor.IEditorDecorationsCollection.html#append).
     pub fn append(&self, decorations: Vec<TextDecoration>, cx: &mut App) {
-        let _ = self.state.update(cx, |state, cx| {
-            let decorations = normalize(&state.text, decorations);
-            if state.extras.decorations.append(self.id, decorations) {
-                cx.notify();
-            }
+        self.update(cx, |text, collections| {
+            collections.append(self.id, normalize(text, decorations))
         });
     }
 
@@ -134,18 +175,7 @@ impl TextDecorationCollection {
     /// This corresponds to Monaco's
     /// [`IEditorDecorationsCollection.getRanges`](https://microsoft.github.io/monaco-editor/typedoc/interfaces/editor_editor_api.editor.IEditorDecorationsCollection.html#getRanges).
     pub fn get_ranges(&self, cx: &App) -> Vec<Range<usize>> {
-        self.state
-            .read_with(cx, |state, _| {
-                state
-                    .extras
-                    .decorations
-                    .get(self.id)
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|decoration| decoration.range.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.ranges(cx)
     }
 }
 
@@ -548,7 +578,34 @@ impl InputBaseState<EditorMode> {
         let id = self.extras.decorations.create(decorations);
         cx.notify();
         TextDecorationCollection {
-            state: cx.entity().downgrade(),
+            owner: TextDecorationOwner::Editor(cx.entity().downgrade()),
+            id,
+        }
+    }
+}
+
+impl InputBaseState<InputMode> {
+    /// Create an independently managed collection of text decorations for a
+    /// single-line field.
+    ///
+    /// The same contract as the code editor's
+    /// [`InputBaseState::<EditorMode>::create_decorations_collection`]: ranges
+    /// are UTF-8 byte offsets into [`Self::value`], follow edits, do not grow
+    /// when typing at an edge, and are not rendered while the field is masked.
+    /// The styles are drawn while the field is being edited as well as at rest.
+    /// Replacing the whole value with [`Self::set_value`] transforms the ranges
+    /// as one edit, which usually removes them; set them again afterwards.
+    /// A mask pattern that rewrites the text clears every collection.
+    pub fn create_decorations_collection(
+        &mut self,
+        decorations: Vec<TextDecoration>,
+        cx: &mut Context<Self>,
+    ) -> TextDecorationCollection {
+        let decorations = normalize(&self.text, decorations);
+        let id = self.extras.decorations.create(decorations);
+        cx.notify();
+        TextDecorationCollection {
+            owner: TextDecorationOwner::Field(cx.entity().downgrade()),
             id,
         }
     }

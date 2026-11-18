@@ -104,7 +104,7 @@ las versiones menores se negocian de forma determinista dentro de esa línea
 mayor. Hasta v1.7 las versiones menores son aditivas; v1.8 es una corrección
 del formato de wire que cambia cómo se codifican algunos payloads existentes, y
 toda forma que se decodificaba antes es idéntica byte a byte (ver **Corrección
-del formato de wire** más abajo).
+del formato de wire** más abajo). v1.9 vuelve a ser aditiva. v1.10 también es aditiva: añade dos variantes de solicitud y deja todos los payloads de v1.9 idénticos byte a byte (ver **Expresiones SQL de celda** más abajo).
 
 Solicitud del cliente:
 
@@ -122,6 +122,8 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
+        ProtocolVersion::new(1, 9),
+        ProtocolVersion::new(1, 10),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -340,6 +342,50 @@ decodificaba antes de v1.8 es idéntica byte a byte en v1.8; solo cambian los
 bytes de las formas que ningún peer podía decodificar, así que los peers con
 versiones menores anteriores siguen funcionando.
 
+### Secciones raíz (v1.9+)
+
+Un driver puede declarar secciones que se muestran en la raíz de su conexión en
+la barra lateral, como los buckets de S3. Los payloads son los tipos de sección
+raíz de `dbflux_core`, transportados tal cual:
+
+| Solicitud | Respuesta |
+| --- | --- |
+| `RootSections` | `RootSections { sections }`, un `Vec<RootSectionDef>` en orden de visualización |
+| `RootSectionItems { section_id, page_token }` | `RootSectionPage { page }`; `page_token` es `None` para la primera página y el `next_page_token` de la página anterior después |
+| `ExecuteRootSectionAction { section_id, item_id, action_id }` | `RootSectionActionDone` |
+
+El host despacha las tres solicitudes a `Connection::root_section_source` de la
+conexión. Un driver sin fuente responde `UnsupportedMethod`
+(`Driver does not declare root sections`), y un error del driver responde como
+cualquier otro `Error`. En una sesión que negoció una versión menor anterior, el
+host rechaza las solicitudes con `VersionMismatch`
+(`root section requests require driver RPC protocol 1.9 or newer`) sin llamar al
+driver.
+
+Las seis variantes se agregan después de la última variante de v1.8 de su enum,
+por la razón de índices en el wire descrita arriba. El cliente expone las
+secciones raíz solo cuando la sesión negoció v1.9 o posterior y los metadatos
+del driver declaran `DriverCapabilities::ROOT_SECTIONS`; si no, `IpcConnection`
+quita esa capacidad y no envía nada. `IpcConnection` obtiene la declaración una
+vez por conexión y la guarda en caché; si la obtención falla, devuelve el error
+sin guardarlo, así que el host lo muestra con una fila para reintentar y vuelve a
+pedirla desde ahí. Un id de sección no puede contener `|`; el host rechaza e
+informa esa declaración. El host oculta una sección cuya presentación abre un
+documento de almacenamiento de objetos en una conexión sin `object_store_api`.
+`IpcConnection` no lo tiene, porque todavía no existe un RPC de almacenamiento
+de objetos, y las dos presentaciones disponibles hasta ahora
+(`ObjectContainerTable` y `ObjectBrowser`) son de ese tipo, así que las
+secciones de un driver externo quedan ocultas hasta que exista una presentación
+sin esa necesidad. Cada
+`RootSectionAction` lleva su `ExecutionClassification`, así que el host confirma
+y audita las acciones de los drivers externos igual que las de los integrados.
+
+### Expresiones SQL de celda (v1.10)
+
+v1.10 añade dos variantes de solicitud, `InsertRowV2 { insert }` y `UpdateRowV2 { patch }`, añadidas después de la última variante v1.9 del enum de solicitudes por el motivo de índice de wire descrito arriba. Llevan `RowInsert` y `RowPatch` con una lista extra cada uno, añadida después del último campo: `column_expressions` y `change_expressions`, un `Vec<Option<String>>` paralelo a las columnas. Una entrada no vacía es una expresión SQL que el driver escribe tal cual en lugar del literal del valor (`gen_random_uuid()`, `now()`), y el valor enviado para esa columna es `Null`. Un literal nunca se promueve a expresión: solo una entrada de esta lista lo es, de modo que un texto como `now()` sigue siendo una cadena entre comillas.
+
+`InsertRow` y `UpdateRow` conservan exactamente su forma de wire de v1.9 y no tienen lugar para una expresión: el codificador se niega a serializarla en vez de descartarla, porque postcard ignora los bytes sobrantes y un par más antiguo ejecutaría la escritura con la columna en `Null`. Por eso el cliente envía las variantes antiguas en toda escritura sin expresión, y los pares v1.9 siguen funcionando en ambas direcciones. Una escritura con expresión se envía como `InsertRowV2` o `UpdateRowV2` solo en una sesión que negoció v1.10 o posterior; en una sesión más antigua `IpcConnection` devuelve `NotSupported` (`the negotiated driver RPC protocol does not support SQL expressions in row writes`) sin enviar ningún frame. Un driver host atiende tanto las variantes antiguas como las V2. Un driver que no está basado en SQL nunca construye la sentencia y rechaza las inserciones y actualizaciones de filas como ya lo hace. Las herramientas MCP nunca producen una expresión, porque la entrada de las herramientas solo se convierte en valores.
+
 ## Contrato RPC de auth-provider
 
 La familia activa de la API auth-provider RPC es `auth_provider_rpc` en `1.3`.
@@ -471,6 +517,7 @@ de nuevo los campos obligatorios del lado del servidor.
 | `Execute` → `ExecuteResult` (`ExecuteResultSets` desde v1.7) | ejecución de query |
 | `Schema` → `Schema`              | snapshot de schema                              |
 | `ListDatabases` → `Databases`    | listado de bases de datos                       |
+| `RootSections` → `RootSections`, `RootSectionItems` → `RootSectionPage`, `ExecuteRootSectionAction` → `RootSectionActionDone` (v1.9+) | secciones raíz de la barra lateral |
 
 El protocolo también soporta operaciones de browse, CRUD, key-value y generación
 de código. Ver `crates/dbflux_ipc/src/driver_protocol.rs` para el conjunto

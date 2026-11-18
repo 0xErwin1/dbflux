@@ -109,9 +109,39 @@ overlay는 시스템의 nixpkgs로 모든 패키지를 빌드하므로, 사전 �
 - flake에서 `dbflux.packages.<system>.*`를 사용한다면 overlay로 바꾸거나 `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";`를 추가하세요.
 - `nix run` 또는 `nix profile install`을 사용한다면 `--override-input nixpkgs nixpkgs`를 추가하세요. flake 레지스트리가 해석한 `nixpkgs`로 DBFlux를 빌드합니다. flake로 빌드된 NixOS 시스템에서는 시스템 레지스트리가 이를 시스템 자체의 nixpkgs로 연결하지만, 우선순위가 더 높은 사용자 레지스트리 항목이 다른 곳으로 연결할 수도 있습니다.
 
+### Homebrew
+
+DBFlux tap은 미리 빌드된 바이너리를 설치하고 `dbflux`를 Homebrew의 `bin`에 연결합니다:
+
+```bash
+brew install --cask 0xErwin1/dbflux/dbflux
+```
+
+업그레이드:
+
+```bash
+brew update && brew upgrade --cask dbflux
+```
+
 ## macOS
 
 macOS용 DBFlux는 Apple 개발자 인증서로 서명되어 있지 않습니다. 처음 열 때 "인증되지 않은 개발자"에 대한 경고가 표시됩니다.
+
+### Homebrew
+
+가장 쉬운 방법은 DBFlux tap입니다. `DBFlux.app`을 `/Applications`에 설치합니다:
+
+```bash
+brew install --cask 0xErwin1/dbflux/dbflux
+```
+
+업그레이드:
+
+```bash
+brew update && brew upgrade --cask dbflux
+```
+
+DBFlux는 공증(notarization)을 받지 않았으므로, cask가 설치 후 `com.apple.quarantine` 속성을 제거하여 Gatekeeper가 첫 실행을 막지 않습니다. 앱을 직접 승인하려면 아래 설명대로 DMG를 수동으로 설치하세요.
 
 ### 설치
 

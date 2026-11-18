@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: Columnar tables (ClickHouse, Redshift) · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Tables, files and facets, row \"Columnar tables (ClickHouse, Redshift) · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-columnar.html",
+      "title": "Columnar: data grid with column profiles + table anatomy",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-columnar-profile.html",
+      "title": "Columnar: column profile view",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-light-columnar-partitions.html",
+      "title": "Columnar: partitions, parts and merges",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

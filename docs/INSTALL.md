@@ -109,9 +109,39 @@ The overlay builds every package with your system's nixpkgs, so the prebuilt bin
 - If your flake uses `dbflux.packages.<system>.*`, switch to the overlay or add `inputs.dbflux.inputs.nixpkgs.follows = "nixpkgs";` to it.
 - With `nix run` or `nix profile install`, add `--override-input nixpkgs nixpkgs`. It builds DBFlux with the `nixpkgs` your flake registry resolves. On a NixOS system built from a flake, the system registry points it at the system's own nixpkgs, unless an entry in your user registry, which takes priority, points it elsewhere.
 
+### Homebrew
+
+The DBFlux tap installs the prebuilt binary and links `dbflux` into Homebrew's `bin`:
+
+```bash
+brew install --cask 0xErwin1/dbflux/dbflux
+```
+
+Upgrade it with:
+
+```bash
+brew update && brew upgrade --cask dbflux
+```
+
 ## macOS
 
 DBFlux for macOS is not signed with an Apple developer certificate. When opening for the first time, you'll see a warning about an "unidentified developer".
+
+### Homebrew
+
+The easiest path is the DBFlux tap, which installs `DBFlux.app` into `/Applications`:
+
+```bash
+brew install --cask 0xErwin1/dbflux/dbflux
+```
+
+Upgrade it with:
+
+```bash
+brew update && brew upgrade --cask dbflux
+```
+
+DBFlux is not notarized, so the cask removes the `com.apple.quarantine` attribute after installing and Gatekeeper does not block the first launch. To approve the app yourself instead, install the DMG by hand as described below.
 
 ### Installation
 

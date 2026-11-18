@@ -35,6 +35,7 @@ use dbflux_components::tokens::{
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -340,6 +341,9 @@ impl Render for DataGridPanel {
             })
             .when(self.pending_delete_confirm.is_some(), |d| {
                 d.child(self.render_delete_confirm_modal(&st.theme, cx))
+            })
+            .when(self.pending_expression_confirm.is_some(), |d| {
+                d.child(self.render_expression_confirm_modal(cx))
             })
             .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
                 d.child(self.document_view.cell_editor.clone())
@@ -1916,12 +1920,13 @@ impl DataGridPanel {
                         )
                         .disabled(!can_apply)
                         .on_click(move |_, _, cx| {
-                            panel_clone.update(cx, |p, cx| {
-                                // The returned bounds are intentionally discarded:
-                                // the parent CodeDocument's TimeRangeChanged
-                                // subscription drives re-execution.
-                                let _ = p.apply_custom_range(cx);
-                            });
+                            // The returned bounds are intentionally discarded:
+                            // the parent CodeDocument's TimeRangeChanged
+                            // subscription drives re-execution.
+                            let applied = panel_clone.update(cx, |p, cx| p.apply_custom_range(cx));
+                            if let Err(error) = applied {
+                                report_error(UserFacingError::new(ErrorKind::User, error), cx);
+                            }
                         }),
                     );
 
@@ -3731,6 +3736,9 @@ impl DataGridPanel {
                     self.rows_footer(row_count)
                 },
             ))
+            .when(self.limited_rows.loading_next, |d| {
+                d.child(Text::caption(crate::labels::loading_next_rows_label()))
+            })
             // A result with rows has no room for the notices in its body, so
             // the footer carries them, cut to the space it has.
             .when(!self.is_statement_without_result_set(), |d| {

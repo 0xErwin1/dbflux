@@ -28,7 +28,8 @@ pantalla contrae el sidebar.
 - `Enter` abre el elemento seleccionado (por ejemplo, una tabla abre un data
   grid).
 - `r` refresca el schema; `d` desconecta la conexión activa.
-- `m` abre el menú contextual del elemento seleccionado.
+- `m` abre el menú contextual del elemento seleccionado. En una columna o un
+  campo de colección, el menú copia su nombre.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/tree-dark.webp">

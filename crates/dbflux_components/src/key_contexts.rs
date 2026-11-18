@@ -10,9 +10,9 @@ pub const CODE_EDITOR: &str = "CodeEditor";
 /// The connections and scripts sidebar.
 pub const SIDEBAR_PANEL: &str = "SidebarPanel";
 /// The activity rail on the left edge of the workspace.
-pub const ACTIVITY_RAIL: &str = "ActivityRail";
+pub const ACTIVITY_RAIL: &str = bolt::composites::ACTIVITY_RAIL_KEY_CONTEXT;
 /// The command search field in the title bar.
-pub const COMMAND_SEARCH: &str = "CommandSearch";
+pub const COMMAND_SEARCH: &str = bolt::composites::COMMAND_SEARCH_KEY_CONTEXT;
 /// A result panel: the grid, record, chart and text views and their bars.
 pub const RESULT_PANEL: &str = "ResultPanel";
 /// The row inspector beside a grid.

@@ -20,7 +20,8 @@
 - `/`는 사이드바 검색/필터에 포커스를 맞춥니다.
 - `Enter`는 선택한 항목을 엽니다(예: 테이블을 열면 데이터 그리드가 열립니다).
 - `r`은 스키마를 새로고침하고, `d`는 활성 연결을 끊습니다.
-- `m`은 선택한 항목의 상황에 맞는 메뉴를 엽니다.
+- `m`은 선택한 항목의 상황에 맞는 메뉴를 엽니다. 열이나 컬렉션 필드에서는
+  메뉴로 이름을 복사할 수 있습니다.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/tree-dark.webp">

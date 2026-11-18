@@ -1,0 +1,34 @@
+{
+  "title": "DBFlux redesign: Files: Parquet and CSV · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Tables, files and facets, row \"Files: Parquet and CSV · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-parquet-data.html",
+      "title": "Files: Parquet Data view (shipped, with SORT badges)",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-parquet-columns.html",
+      "title": "Files: Parquet Columns view (shipped, with source and file date)",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-csv-columns.html",
+      "title": "Files: CSV Columns view, profiling the whole file",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "04-isl-duckdb-columns.html",
+      "title": "DuckDB table: Columns tab with storage compression",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

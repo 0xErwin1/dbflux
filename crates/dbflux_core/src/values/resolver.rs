@@ -92,6 +92,15 @@ impl CompositeValueResolver {
         crate::values::read_dotenv_value(path, key).map(|value| value.expose_secret().to_string())
     }
 
+    /// Synchronously reads the secret behind a [`ValueRef::File`] ref.
+    ///
+    /// Not cached: the file is read on every use so rotation is picked up.
+    /// Shared with the synchronous switch-database path.
+    pub(crate) fn resolve_file_ref(path: &str, json_key: Option<&str>) -> Result<String, DbError> {
+        crate::values::read_secret_file(path, json_key)
+            .map(|value| value.expose_secret().to_string())
+    }
+
     /// Resolve a single `ValueRef` to a concrete value.
     pub async fn resolve(
         &self,
@@ -121,6 +130,15 @@ impl CompositeValueResolver {
                         path: path.clone(),
                         key: key.clone(),
                     },
+                ))
+            }
+
+            ValueRef::File { path, json_key } => {
+                let value = Self::resolve_file_ref(path, json_key.as_deref())?;
+
+                Ok(ResolvedValue::new(
+                    value,
+                    ValueOrigin::SecretFile { path: path.clone() },
                 ))
             }
 
@@ -602,6 +620,37 @@ mod tests {
         ));
 
         write("TOKEN=second\n");
+        let second = resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
+        assert_eq!(second.expose_secret(), "second");
+    }
+
+    #[tokio::test]
+    async fn resolve_file_reads_the_file_on_each_use() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("db-password");
+        let write = |content: &str| {
+            let staged = directory.path().join("db-password.new");
+            std::fs::write(&staged, content).expect("write secret file");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600))
+                    .expect("restrict secret file");
+            }
+            std::fs::rename(&staged, &path).expect("rotate secret file");
+        };
+        let value_ref = ValueRef::file(path.to_string_lossy(), None);
+        let resolver = test_resolver();
+
+        write("first\n");
+        let first = resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
+        assert_eq!(first.expose_secret(), "first");
+        assert!(matches!(
+            first.origin(),
+            ValueOrigin::SecretFile { path: origin } if *origin == path.to_string_lossy()
+        ));
+
+        write("second\n");
         let second = resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
         assert_eq!(second.expose_secret(), "second");
     }

@@ -1,14 +1,16 @@
 use crate::audit::AuditEventEmitDto;
-use crate::envelope::{DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, ProtocolVersion};
+use crate::envelope::{
+    DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, DRIVER_RPC_V1_9, DRIVER_RPC_V1_10, ProtocolVersion,
+};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
     CollectionRef, ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo,
     DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, DriverFormDef,
     DriverMetadata, ExecutionContext, ExplainRequest, Pagination, QueryRequest, QueryResult,
-    QueryResultShape, Row, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticFilter,
-    SemanticPlan, SemanticRequest, TableBrowseRequest, TableCountRequest, TableInfo, Value,
-    ViewInfo,
+    QueryResultShape, RootSectionDef, RootSectionPage, Row, RowDelete, RowInsert, RowPatch,
+    SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticFilter, SemanticPlan, SemanticRequest, TableBrowseRequest,
+    TableCountRequest, TableInfo, Value, ViewInfo,
 };
 use dbflux_core::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -548,6 +550,15 @@ pub fn protocol_carries_result_sets(version: ProtocolVersion) -> bool {
         || (version.major == DRIVER_RPC_V1_7.major && version.minor >= DRIVER_RPC_V1_7.minor)
 }
 
+/// Whether the root section requests (`RootSections`, `RootSectionItems`,
+/// `ExecuteRootSectionAction`) and their responses are available on a session
+/// that negotiated `version`. Introduced in v1.9; an older peer cannot decode
+/// those variants, so neither side sends them to it.
+pub fn protocol_carries_root_sections(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_V1_9.major
+        || (version.major == DRIVER_RPC_V1_9.major && version.minor >= DRIVER_RPC_V1_9.minor)
+}
+
 /// Whether `Execute` and `ExecuteWithHandle` may carry `QueryRequestDto::limit`
 /// on a session that negotiated `version`.
 ///
@@ -657,9 +668,11 @@ pub enum DriverRequestBody {
     },
     // === CRUD operations ===
     UpdateRow {
+        #[serde(with = "row_patch_v1_9")]
         patch: RowPatch,
     },
     InsertRow {
+        #[serde(with = "row_insert_v1_9")]
         insert: RowInsert,
     },
     DeleteRow {
@@ -774,6 +787,187 @@ pub enum DriverRequestBody {
     KvKeyCount {
         keyspace: Option<u32>,
     },
+    // v1.9: driver-declared sidebar root sections, appended after the last
+    // v1.8 variant. Sent only on sessions that negotiated v1.9 or newer.
+    RootSections,
+    RootSectionItems {
+        section_id: String,
+        page_token: Option<String>,
+    },
+    ExecuteRootSectionAction {
+        section_id: String,
+        item_id: String,
+        action_id: String,
+    },
+    // v1.10: row writes whose assignments may carry SQL expressions, appended
+    // after the last v1.9 variant. `InsertRow`/`UpdateRow` keep the v1.9 shape
+    // so older peers decode them; a frame with an expression uses these.
+    InsertRowV2 {
+        insert: RowInsert,
+    },
+    UpdateRowV2 {
+        patch: RowPatch,
+    },
+}
+
+/// The v1.9 wire shape of `RowInsert`, frozen so `InsertRow` stays decodable by
+/// v1.9 peers. `postcard` ignores trailing bytes, so any field added after
+/// these would make an old peer silently run the write without it; expressions
+/// travel in `InsertRowV2` instead.
+mod row_insert_v1_9 {
+    use dbflux_core::{ColumnAssignment, RowInsert, Value};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser};
+
+    #[derive(Serialize, Deserialize)]
+    struct Shape {
+        table: String,
+        schema: Option<String>,
+        columns: Vec<String>,
+        values: Vec<Value>,
+        #[serde(default)]
+        column_types: Vec<Option<String>>,
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        insert: &RowInsert,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        if insert
+            .assignments
+            .iter()
+            .any(ColumnAssignment::is_expression)
+        {
+            return Err(ser::Error::custom(
+                "InsertRow cannot carry SQL expressions; use InsertRowV2",
+            ));
+        }
+
+        let any_typed = insert.assignments.iter().any(|a| a.type_name.is_some());
+        Shape {
+            table: insert.table.clone(),
+            schema: insert.schema.clone(),
+            columns: insert.assignments.iter().map(|a| a.name.clone()).collect(),
+            values: insert.assignments.iter().map(|a| a.value.clone()).collect(),
+            column_types: if any_typed {
+                insert
+                    .assignments
+                    .iter()
+                    .map(|a| a.type_name.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        }
+        .serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<RowInsert, D::Error> {
+        let shape = Shape::deserialize(deserializer)?;
+        if shape.columns.len() != shape.values.len() {
+            return Err(de::Error::custom(
+                "InsertRow columns and values differ in length",
+            ));
+        }
+
+        let assignments = shape
+            .columns
+            .into_iter()
+            .zip(shape.values)
+            .enumerate()
+            .map(|(index, (name, value))| ColumnAssignment {
+                name,
+                value,
+                type_name: shape.column_types.get(index).cloned().flatten(),
+                expression: None,
+            })
+            .collect();
+
+        Ok(RowInsert::with_typed_assignments(
+            shape.table,
+            shape.schema,
+            assignments,
+        ))
+    }
+}
+
+/// The v1.9 wire shape of `RowPatch`; see `row_insert_v1_9`.
+mod row_patch_v1_9 {
+    use dbflux_core::{ColumnAssignment, RowIdentity, RowPatch, Value};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, ser};
+
+    #[derive(Serialize, Deserialize)]
+    struct Shape {
+        identity: RowIdentity,
+        table: String,
+        schema: Option<String>,
+        changes: Vec<(String, Value)>,
+        #[serde(default)]
+        change_types: Vec<Option<String>>,
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        patch: &RowPatch,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        if patch.changes.iter().any(ColumnAssignment::is_expression) {
+            return Err(ser::Error::custom(
+                "UpdateRow cannot carry SQL expressions; use UpdateRowV2",
+            ));
+        }
+
+        let any_typed = patch.changes.iter().any(|a| a.type_name.is_some());
+        Shape {
+            identity: patch.identity.clone(),
+            table: patch.table.clone(),
+            schema: patch.schema.clone(),
+            changes: patch
+                .changes
+                .iter()
+                .map(|a| (a.name.clone(), a.value.clone()))
+                .collect(),
+            change_types: if any_typed {
+                patch.changes.iter().map(|a| a.type_name.clone()).collect()
+            } else {
+                Vec::new()
+            },
+        }
+        .serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<RowPatch, D::Error> {
+        let shape = Shape::deserialize(deserializer)?;
+        let changes = shape
+            .changes
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, value))| ColumnAssignment {
+                name,
+                value,
+                type_name: shape.change_types.get(index).cloned().flatten(),
+                expression: None,
+            })
+            .collect();
+
+        Ok(RowPatch::with_typed_changes(
+            shape.identity,
+            shape.table,
+            shape.schema,
+            changes,
+        ))
+    }
+}
+
+/// Whether `InsertRowV2` and `UpdateRowV2`, the row writes that carry SQL
+/// expressions, are available on a session that negotiated `version`.
+/// Introduced in v1.10; an older peer cannot decode them, so a write with an
+/// expression is refused locally instead of being sent.
+pub fn protocol_carries_cell_expressions(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_V1_10.major
+        || (version.major == DRIVER_RPC_V1_10.major && version.minor >= DRIVER_RPC_V1_10.minor)
 }
 
 /// Request envelope for driver RPC operations.
@@ -950,6 +1144,15 @@ pub enum DriverResponseBody {
     BrowseResultSets {
         results: QueryResultSetsDto,
     },
+    // v1.9: answers to the root section requests, appended after the last
+    // v1.8 variant.
+    RootSections {
+        sections: Vec<RootSectionDef>,
+    },
+    RootSectionPage {
+        page: RootSectionPage,
+    },
+    RootSectionActionDone,
 }
 
 /// Response envelope for driver RPC operations.
@@ -1020,13 +1223,14 @@ mod tests {
     use super::{
         DriverRequestBody, DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
         DriverRpcError, DriverRpcErrorCode, QueryRequestDto, QueryResultDto, QueryResultSetsDto,
-        QueryResultShapeDto, ResultSetDto, protocol_carries_request_row_limit,
-        protocol_carries_result_sets,
+        QueryResultShapeDto, ResultSetDto, protocol_carries_cell_expressions,
+        protocol_carries_request_row_limit, protocol_carries_result_sets,
+        protocol_carries_root_sections,
     };
     use crate::ProtocolVersion;
     use dbflux_core::{
         ExecutionContext, ExecutionSourceContext, KeyGetRequest, KeyGetResult, QueryRequest,
-        QueryResult,
+        QueryResult, RowInsert, RowPatch,
     };
     use std::time::Duration;
     use uuid::Uuid;
@@ -1879,6 +2083,86 @@ mod tests {
         assert!(protocol_carries_request_row_limit(ProtocolVersion::new(
             2, 0
         )));
+    }
+
+    #[test]
+    fn cell_expression_requests_need_v1_10() {
+        assert!(!protocol_carries_cell_expressions(ProtocolVersion::new(
+            1, 9
+        )));
+        assert!(protocol_carries_cell_expressions(ProtocolVersion::new(
+            1, 10
+        )));
+        assert!(protocol_carries_cell_expressions(ProtocolVersion::new(
+            2, 0
+        )));
+    }
+
+    #[test]
+    fn row_expression_requests_are_appended_after_the_last_v1_9_request_variant() {
+        let insert = RowInsert::with_typed_assignments("t".into(), None, Vec::new());
+        let patch = RowPatch::with_typed_changes(
+            dbflux_core::RowIdentity::composite(vec![], vec![]),
+            "t".into(),
+            None,
+            Vec::new(),
+        );
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::InsertRowV2 { insert }),
+            61
+        );
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::UpdateRowV2 { patch }),
+            62
+        );
+    }
+
+    #[test]
+    fn root_section_requests_need_v1_9() {
+        assert!(!protocol_carries_root_sections(ProtocolVersion::new(1, 0)));
+        assert!(!protocol_carries_root_sections(ProtocolVersion::new(1, 8)));
+        assert!(protocol_carries_root_sections(ProtocolVersion::new(1, 9)));
+        assert!(protocol_carries_root_sections(ProtocolVersion::new(2, 0)));
+    }
+
+    #[test]
+    fn root_section_requests_are_appended_after_the_last_v1_8_request_variant() {
+        assert_eq!(wire_variant_index(&DriverRequestBody::RootSections), 58);
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::RootSectionItems {
+                section_id: "buckets".into(),
+                page_token: None,
+            }),
+            59
+        );
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::ExecuteRootSectionAction {
+                section_id: "buckets".into(),
+                item_id: "logs".into(),
+                action_id: "delete".into(),
+            }),
+            60
+        );
+    }
+
+    #[test]
+    fn root_section_responses_are_appended_after_the_last_v1_8_response_variant() {
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::RootSections {
+                sections: Vec::new()
+            }),
+            40
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::RootSectionPage {
+                page: dbflux_core::RootSectionPage::default()
+            }),
+            41
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::RootSectionActionDone),
+            42
+        );
     }
 
     #[test]

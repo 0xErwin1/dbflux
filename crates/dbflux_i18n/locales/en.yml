@@ -176,6 +176,7 @@ components:
     literal: Literal
     env: Environment Variable
     dotenv: "Dotenv File"
+    file: "Secret File"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Auth Session Field
@@ -183,10 +184,13 @@ components:
     placeholder:
       env: "VARIABLE_NAME"
       dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
     hint:
       env: "Read from the environment variable %{name} each time DBFlux connects. DBFlux does not store the value."
       dotenv: "Read from %{key} in %{path} each time DBFlux connects. The file must be readable only by you."
       dotenv_missing_key: "Add the key after the path: ~/path/to/file.env#KEY"
+      file: "Read from %{path} each time DBFlux connects. The file must be readable only by you."
+      file_with_key: "Read from %{key} in the JSON file %{path} each time DBFlux connects. The file must be readable only by you."
   file_picker:
     browse: "Browse…"
   column_projection:
@@ -333,6 +337,7 @@ connection_manager:
     seconds: seconds
     connection_name: Connection name
     password: Password
+    password_unreadable: "Saved password could not be read: the system keyring may be locked"
     key_passphrase_optional: Key passphrase (optional)
     ssh_password: SSH password
     ca_cert_path: Path to CA certificate
@@ -1430,6 +1435,7 @@ document:
       copy_error: Copy error
       result_tab_title: "Result %{index}"
       count_rows_failed: Could not count the rows of the query
+      next_rows_failed: "Could not load more rows of the query"
       error:
         select_source: Select at least one source
         start_time_required: Start time is required
@@ -1595,6 +1601,7 @@ document:
       header: "%{column} · row %{row}"
       item:
         copy: Copy
+        copy_column_name: Copy column name
         view_document: View document
         add_document: Add document
         duplicate_document: Duplicate document
@@ -1604,6 +1611,13 @@ document:
         edit_in_modal: Edit in modal…
         set_default: Set to default
         set_null: Set to NULL
+        set_value: "Set value"
+        set_expression: "Set to expression…"
+        set_value_column_default: "Column default"
+        set_value_type_values: "Type values · %{type}"
+        set_value_expression: "Expression…"
+        set_value_null: "NULL"
+        set_value_no_default: "%{column} has no default. Add one in the table design, or pick a type value."
         add_row: Add row
         inspect_row: Inspect row
         find_similar_rows: Find similar rows
@@ -1625,6 +1639,10 @@ document:
           many: "%{count} rows will be permanently deleted. This cannot be undone."
         cancel: Cancel
         delete: Delete
+      expression_confirm:
+        list: "Expressions written as SQL:"
+        cancel: "Cancel"
+        confirm: "Save with expressions"
       filter:
         title: Filter
         cell_value: Cell value
@@ -1707,6 +1725,8 @@ document:
           insert_failed: "Failed to insert document: %{error}"
           update_failed: "Failed to update document: %{error}"
     grid:
+      expression:
+        placeholder: SQL expression
       edit_bar:
         clean: No unsaved changes
         dirty:
@@ -1759,6 +1779,7 @@ document:
           of_total: "%{loaded}/%{total} rows loaded"
           count: Count rows
           load_all: Load all rows
+          loading_next: "Loading more rows…"
         pending_changes:
           one: "%{count} pending change"
           many: "%{count} pending changes"
@@ -1781,7 +1802,13 @@ document:
           csv: CSV
           json_pretty: "JSON (pretty)"
           json_compact: "JSON (compact)"
-          json_lines: "JSON (one object per line)"
+          json: JSON
+          json_lines: "JSON Lines (one object per line)"
+          html: HTML
+          markdown: Markdown
+          xml: XML
+          sql: SQL
+          spreadsheet: Spreadsheet
           text: Text
           binary: Binary
           hex: Hex
@@ -2153,6 +2180,7 @@ document:
       run: Run
     tables:
       selected_count: "%{count} table(s) selected for export"
+      required: "Select at least one table to export."
     format_options:
       format_label: Format
       output_folder_label: "Folder"
@@ -2164,8 +2192,34 @@ document:
       segment_size_hint: "rows per file segment"
       segment_size_placeholder: Segment / chunk size
       segment_size_invalid: "Must be a whole number of 1 or more; kept the previous value."
+      delimiter_label: "Delimiter"
+      delimiter:
+        comma: "Comma ( , )"
+        semicolon: "Semicolon ( ; )"
+        tab: "Tab"
+        pipe: "Pipe ( | )"
+      encoding_label: "Encoding"
+      encoding:
+        utf8: "UTF-8"
+        utf8_bom: "UTF-8 with BOM"
+        utf16le: "UTF-16LE"
+        windows1252: "Windows-1252"
+      null_text_label: "NULL text"
+      null_text_placeholder: "Empty"
+      null_text_hint: "Written for NULL values. With empty text, NULL and an empty string only differ if you choose another text, such as \\N."
+      sql_batch_size_label: "Rows per INSERT"
+      sql_batch_size_placeholder: "500"
+      sql_batch_size_hint: "Rows written in each INSERT statement. A driver with a lower limit caps this value."
+      sql_batch_size_invalid: "Must be a whole number of 1 or more."
+      date_format_label: "Dates"
+      date_format:
+        rfc3339: "RFC 3339"
+        date_time: "YYYY-MM-DD HH:MM:SS"
+        epoch: "Epoch (seconds)"
       error:
         no_dialog_fallback_failed: "No folder picker available and the fallback export directory could not be created: %{error}"
+      sql_unavailable: "SQL isn't available for this connection: its driver can't generate INSERT statements. Export as CSV or JSON instead."
+      folder_required: "Choose the folder the files are written to."
     confirm:
       title: Review export plan
       summary: "%{count} table(s) as %{format} to %{folder}"
@@ -2197,10 +2251,18 @@ document:
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
       cancelled: "%{table}: cancelled after %{rows} row(s)"
+      not_attempted_after_failure: "%{table}: not attempted: the export stopped at the failed table"
     footer:
       back: Back
       continue: Continue
       close: Close
+      reason:
+        tables: "Continue is off until a table is selected."
+        folder: "Continue is off until you choose a folder."
+        batch_size: "Continue is off until Rows per INSERT is valid."
+        segment_size: "Continue is off until Chunk size is valid."
+    done:
+      closing_failed: "Close this dialog, fix the cause above and export again. Files already written stay in the folder. Without a manifest.json the folder can't be imported as a whole, but each completed CSV or JSON file can still be imported with Choose File; for a CSV file, first set the delimiter, encoding and NULL text to match this export, because a loose CSV does not carry them."
   file:
     error:
       source_changed: "The file was changed elsewhere since it was opened, so nothing was saved and your edits are kept. To see its new content, discard your edits and choose Reload from file, then make them again."
@@ -2400,7 +2462,7 @@ document:
       one: "Import %{count} table"
       many: "Import %{count} tables"
     rail:
-      pick_folder: Pick Folder
+      pick_folder: Pick Source
       configure: Configure
       confirm: Confirm
       run: Run
@@ -2413,6 +2475,10 @@ document:
         no_connection: No active connection for this profile
         no_dialog: No folder picker available on this platform
         invalid_bundle: "Invalid import bundle: %{error}"
+        no_connection_next: "Connect to the profile, then open the import again."
+        no_dialog_next: "Start DBFlux in a desktop session that offers a file dialog, then try again."
+        invalid_bundle_next: "Choose the folder Export wrote: it holds manifest.json. To import a single file, use Choose File… instead."
+      reading_hint: "Reading the manifest. Both buttons are off until it finishes."
     configure:
       mode_placeholder: Mode
       target_placeholder: Target column
@@ -2421,6 +2487,225 @@ document:
       apply_mapping: Apply Mapping
       continue: Continue
       unmatched_source: "Unmatched source column(s), will be skipped unless remapped: %{names}"
+      truncate_unavailable: "This connection can't truncate tables, so Truncate isn't listed. Choose Recreate to replace the table instead."
+    pick_file:
+      description: "Or import a single file into one table: CSV, JSON, JSON Lines, XML or a spreadsheet."
+      description_sql: "Or import a single file into one table: CSV, JSON, JSON Lines, XML or a spreadsheet. A .sql file runs as a script on a SQL connection."
+      choose_file: "Choose File…"
+      reading_file: "Reading file…"
+      dialog_title: "Choose File to Import"
+      filter_label: "CSV, JSON, JSON Lines, XML and spreadsheets"
+      filter_label_sql: "CSV, JSON, JSON Lines, XML, spreadsheets and SQL"
+      error:
+        unsupported: "Only .csv, .json, .jsonl, .xml, .xlsx, .xlsm, .xls and .ods files can be imported."
+        unsupported_sql: "Only .csv, .json, .jsonl, .xml, .xlsx, .xlsm, .xls, .ods and .sql files can be imported."
+        invalid_file: "Cannot read the file: %{error}"
+        unsupported_next: "Choose a file with one of those extensions."
+        lookup_failed: "Could not look up the target table: %{error}"
+        next_csv: "Choose another encoding or delimiter above: the file is read again as soon as you pick one."
+        next_json: "Fix the JSON in the file and choose it again, or choose another file."
+        next_xml: "Fix the XML in the file and choose it again, or choose another file."
+        next_spreadsheet: "Check that the file is a valid workbook without a password and choose it again, or choose another file."
+        next_lookup: "Check the table name and your access to the connection, then press Use Table again."
+      reading_hint: "Reading the file. Both buttons are off until it finishes."
+    file:
+      source: "File: %{file} (%{format})"
+      target_table_label: "Target table"
+      target_table_placeholder: "Table name (defaults to the file name)"
+      use_table: "Use Table"
+      null_text_hint: "Text in the file that stands for NULL. With empty text, an empty field is NULL."
+      json_no_options: "JSON and JSON Lines have no import options: the file itself defines the columns and the NULLs."
+      xml_no_options: "XML has no import options: the file itself defines the columns and the NULLs."
+      spreadsheet_header: "Row 1 is the header. A spreadsheet has no delimiter or encoding options: the sheet defines the columns, and an empty cell is NULL."
+      sheet_label: "Sheet"
+      sheet_hint: "Each import reads one sheet. Only visible worksheets are listed. Choosing another sheet reads the file again at once."
+      sheet_single: "This workbook has one sheet, so there is nothing to choose."
+    sheet:
+      empty:
+        message: "Sheet “%{sheet}” is empty: it has no rows."
+        next: "Pick another sheet above, or add a header row and data to this sheet in the spreadsheet app, save, and choose the file again."
+        next_single: "Add a header row and data to this sheet in the spreadsheet app, save, and choose the file again."
+      header:
+        message: "Row 1 of sheet “%{sheet}” is not a valid header: %{problems}."
+        next: "Give every column of row 1 a unique name in the spreadsheet app, save, and choose the file again, or pick another sheet above."
+        next_single: "Give every column of row 1 a unique name in the spreadsheet app, save, and choose the file again."
+        blank_one: "column %{columns} is blank"
+        blank_many: "columns %{columns} are blank"
+        duplicate_two: "columns %{columns} are both named “%{name}”"
+        duplicate_many: "columns %{columns} are all named “%{name}”"
+      cell:
+        message: "Sheet “%{sheet}”, row %{row}, column %{column} (“%{name}”) holds the error %{code}."
+        next: "Fix or clear that cell in the spreadsheet app, save, and choose the file again. Formulas are read as the result last saved in the file."
+      large:
+        message: "Sheet “%{sheet}” has %{cells} cells, over the limit of %{limit}. The whole sheet is read into memory, so it cannot be imported."
+        next: "Export it as CSV from the spreadsheet app (Save as → CSV) and import the CSV instead, or pick a smaller sheet above."
+        next_single: "Export it as CSV from the spreadsheet app (Save as → CSV) and import the CSV instead."
+      list_and: "%{head} and %{last}"
+      list_more: "%{list} and %{count} more"
+    script:
+      title: "Run SQL script"
+      task: "Run SQL script"
+      thousands_separator: ","
+      classification:
+        metadata: "Metadata"
+        read: "Read"
+        write: "Write"
+        destructive: "Destructive"
+        admin: "Admin"
+        admin_safe: "Admin (safe)"
+        admin_destructive: "Admin (destructive)"
+      error:
+        unreadable: "Cannot read the file: %{path}: %{message}"
+        unreadable_next: "Check that you can read the file, or choose another one."
+        not_utf8: "Cannot read the script: it is not valid UTF-8 (invalid byte at position %{position}). SQL scripts are read as UTF-8 and have no encoding option."
+        not_utf8_next: "Save the file as UTF-8 in your editor and choose it again."
+        too_large: "This script is %{size}, over the %{limit} limit for running a script here."
+        too_large_next: "Run it with the database's own command-line client instead. Splitting it into smaller files also works, but each file runs on its own: a later file that fails cannot undo an earlier one."
+        empty: "The script has no statements: the file is empty or holds only comments."
+        empty_next: "Choose a file that has at least one statement."
+        not_sql: "Cannot run a SQL script on this connection: it uses the %{language} query language, not SQL."
+        not_sql_next: "Connect to a SQL connection and open the import there, or choose a CSV, JSON or JSON Lines file to import data into this connection."
+        other_next: "Check the script and the options, then try again."
+        interrupt_failed: "Could not stop the statement in progress: %{error}. It will finish before the run stops."
+        session_open_failed: "Could not open a separate session for the script, so nothing ran: %{error}"
+        session_cleanup_failed: "The script's separate session could not be released cleanly: %{error}"
+        conditional_transaction: "This script has a version-conditional comment (line %{line}) that controls transactions, and whether it runs depends on the server."
+        conditional_transaction_next: "Run the script with the database's own command-line client."
+        session_commit: "This script %{change} on line %{line} (%{statement}), which would leave this connection in manual-commit mode after the run."
+        session_commit_next: "Remove that statement, or run the script with the database's own command-line client."
+        session_change_autocommit: "turns off autocommit"
+        session_change_implicit: "turns on implicit transactions"
+        client_directive: "This script uses the client command %{directive} (line %{line}), which only a database command-line client understands."
+        client_directive_next: "Run the script with the database's own command-line client, or remove the %{directive} lines and end each statement with a semicolon."
+        split_routine: "This script has a routine body starting on line %{line} whose statements end with \";\", so it cannot be split into statements here."
+        split_routine_next: "Run the script with the database's own command-line client."
+        copy_stdin: "This script has a COPY … FROM stdin data block (line %{line}), which only the psql command-line client can load."
+        copy_stdin_next: "Run it with psql instead."
+        psql_meta: "This script uses the psql command %{command} (line %{line}), which only the psql command-line client understands."
+        psql_meta_next: "Run the script with psql instead: removing it would run the remaining statements on this connection, which may not be the database it selects."
+        self_managed: "This script manages its own transactions (%{keyword} on line %{line}), so it cannot run in one transaction."
+        self_managed_next: "Turn off “Run in one transaction”; the script's own statements then decide what is saved."
+        read_only:
+          one: "This connection is read-only, and %{count} statement in the script changes data, structure or permissions."
+          many: "This connection is read-only, and %{count} statements in the script change data, structure or permissions."
+        read_only_next: "Open a read-write connection to run it. A script that only reads can run here."
+      configure:
+        file: "File: %{file} (SQL script)"
+        script_label: "Script"
+        script_summary:
+          one: "%{count} statement, %{size}"
+          many: "%{count} statements, %{size}"
+        preview_label: "Preview"
+        preview_more:
+          one: "and %{count} more statement"
+          many: "and %{count} more statements"
+        preview_hint: "The badge is the classification the editor uses. DELETE and UPDATE without WHERE are marked."
+        preview_sequence_hint: "Statements that change a sequence (setval, nextval, ALTER SEQUENCE) count as Write, so a read-only connection refuses them."
+        no_where: "No WHERE"
+        on_error_label: "On error"
+        on_error_stop: "Stop at the first error"
+        on_error_continue: "Continue after errors"
+        on_error_stop_hint: "The run stops at the first statement that fails. The statements after it do not run."
+        on_error_continue_hint: "Every statement runs. The ones that fail are listed at the end, and the others are kept."
+        transaction_label: "Transaction"
+        transaction_checkbox: "Run in one transaction"
+        transaction_hint: "If a statement fails, the changes made in the transaction are rolled back. Nothing is saved until the last statement succeeds. Sequence changes (setval, nextval) are not undone by a rollback."
+        transaction_unchecked_hint: "Each statement runs on its own and is saved as it runs, so a failure keeps the statements that already ran."
+        transaction_off_continue: "Off because a failed statement aborts the transaction on this connection, so the run could not continue after it. Choose “Stop at the first error” to run in one transaction."
+        transaction_unavailable: "One transaction is not available: this connection does not support transactions. Each statement runs on its own and is saved as it runs, so a failure keeps the statements that already ran."
+        transaction_self_managed_commit: "Off because this script manages its own transactions (%{keyword} at line %{line}). It runs as written: each %{keyword} in it saves the changes before it."
+        transaction_self_managed: "Off because this script manages its own transactions (%{keyword} at line %{line}). It runs as written: its own transaction statements decide what is saved."
+        ddl_commits: "CREATE, ALTER and DROP are saved as they run on this connection, and they also save every statement before them. A rollback only undoes changes made after the last such statement."
+      footer:
+        read_only: "Continue is off: the connection is read-only."
+        running_transaction: "Cancel Run stops after the statement in progress. Transactional changes are rolled back; sequence changes (setval, nextval) are not."
+        running_kept: "Cancel Run stops after the statement in progress. The statements already run are kept."
+        cancelling_transaction: "Waiting for the statement in progress to stop. The transaction is rolled back afterwards."
+        cancelling_kept: "Waiting for the statement in progress to stop. The statements already run are kept."
+      confirm:
+        destructive_lead:
+          one: "This script has %{count} destructive statement out of %{total}:"
+          many: "This script has %{count} destructive statements out of %{total}:"
+        plain_lead:
+          one: "This script has %{count} statement, none of them destructive. It will run on this connection:"
+          many: "This script has %{count} statements, none of them destructive. It will run on this connection:"
+        warning: "Destructive statements cannot be undone after the script finishes. Confirm to proceed."
+        danger_line: "%{count} × %{message}"
+        first_label: "First %{shown} of %{total}"
+        first_line: "#%{index} %{snippet}"
+        how_transaction: "It runs in one transaction and stops at the first error."
+        how_each_stop: "Each statement is saved as it runs, and the run stops at the first error."
+        how_each_continue: "Each statement is saved as it runs, and the run continues after errors."
+        how_self_stop: "It runs as written: the script's own transaction statements decide what is saved, and the run stops at the first error."
+        how_self_continue: "It runs as written: the script's own transaction statements decide what is saved, and the run continues after errors."
+        run: "Run script"
+        proceed: "Yes, run script"
+      running:
+        title: "Running statement %{index} of %{total}"
+        current: "Current statement"
+        starting: "Starting…"
+        transaction_line: "One transaction: Nothing is saved until the last statement succeeds."
+        no_transaction_line: "No transaction: Each statement is saved as it runs."
+        cancel: "Cancel Run"
+        cancelling: "Cancelling…"
+      toast:
+        completed: "Script completed"
+      done:
+        finished:
+          one: "Script finished: %{count} statement ran in %{elapsed}"
+          many: "Script finished: %{count} statements ran in %{elapsed}"
+        committed: "Committed: the changes are saved."
+        saved_as_run: "Every statement was saved as it ran."
+        with_errors: "Script finished with errors: %{ran} of %{total} statements ran, %{failed} failed"
+        with_errors_next: "The statements that ran were kept; the %{failed} that failed were skipped. Review the failed statements and the ones after them that depend on them, and reconcile the partial run, and keep or restore the session settings the script needs (for example SET search_path or SET NAMES), before running the fixed statements again: a later statement may have run against data that a failed one should have changed."
+        failure_label: "#%{index} · line %{line}"
+        cancelled: "Script cancelled after %{ran} of %{total} statements"
+        rolled_back_cancelled: "Rolled back: the transactional changes were undone, so nothing was saved. Sequence changes (setval, nextval) are not undone by a rollback."
+        cancelled_rolled_back_next: "Choose the file and run it again when you are ready."
+        nothing_ran: "No statement ran, so nothing changed."
+        cancelled_kept:
+          one: "%{count} statement ran and was kept: it was saved as it ran."
+          many: "%{count} statements ran and were kept: each was saved as it ran."
+        cancelled_kept_next: "Delete them from the file before you run it again, or they run twice. Keep or restore the session settings the script needs (for example SET search_path or SET NAMES) for the rest."
+        stopped: "Script stopped at statement %{index} of %{total}"
+        failed_statement: "Failed statement · line %{line}"
+        database_error: "Database error: %{error}"
+        rolled_back_before:
+          one: "Rolled back: the transactional changes of the %{count} statement before it were undone. Sequence changes (setval, nextval) are not undone by a rollback."
+          many: "Rolled back: the transactional changes of the %{count} statements before it were undone. Sequence changes (setval, nextval) are not undone by a rollback."
+        rolled_back_first: "Rolled back: nothing was saved. Sequence changes (setval, nextval) are not undone by a rollback."
+        rolled_back_nothing_saved: "Rolled back: nothing was saved."
+        stopped_rolled_back_next: "Fix that statement in the file, then choose the file and run it again."
+        kept_before:
+          one: "The %{count} statement before it ran and was kept."
+          many: "The %{count} statements before it ran and were kept."
+        nothing_before_it: "No statement ran before it."
+        not_run_range: "Statements %{from} to %{total} did not run."
+        not_run_single: "Statement %{index} did not run."
+        stopped_kept_next: "Fix statement %{index}, then reconcile the changes the first %{before} statements already made. Before running the rest, keep or restore the session settings the script needs (for example SET search_path or SET NAMES), then run only the remaining statements, or they run twice."
+        use_transaction_next: "Turn on “Run in one transaction” next time to avoid a partial run."
+        fix_first_next: "Fix statement %{index}, then run the script again."
+        commit_failed: "Script stopped: the transaction could not be committed"
+        commit_failed_next: "Check the connection, then choose the file and run it again."
+        unresolved: "Script ended without a clear outcome"
+        unresolved_message: "The transaction could not be ended: %{error}"
+        unresolved_next: "Check the state of the database before you run anything else: the transaction may still be open, or part of the script may be saved. Close the connection to end an open transaction."
+        ddl_not_undone: "CREATE, ALTER and DROP statements are saved as they run on this connection, so a rollback did not undo them."
+        not_run: "Script did not run"
+        not_run_next: "Nothing ran. Fix the cause above and run the script again."
+        partially_kept: "Partly saved: everything up to statement %{index} (line %{line}) was saved, because it commits on its own on this connection, and later statements may have been saved too."
+        partially_kept_no_line: "Partly saved: everything up to statement %{index} was saved, because it commits on its own on this connection, and later statements may have been saved too."
+        partially_kept_next: "Check the database and reconcile what was saved before you run the script again, or the statements that were saved run twice."
+        script_rolled_back: "Statements the script ran outside its own transactions were saved as they ran. The script's open transaction was rolled back, so what it had changed there was not saved. Sequence changes (setval, nextval) are not undone by a rollback."
+        stopped_own_transaction_next: "Fix statement %{index}, then check the database to see which statements before it were saved and reconcile the changes. Keep or restore the session settings the script needs (for example SET search_path or SET NAMES), then run only what is missing, or the saved statements run twice."
+        cancelled_own_transaction_next: "Check the database to see which statements were saved and reconcile the changes before you run the script again, or the saved statements run twice."
+        possibly_open_rolled_back: "The script used SAVEPOINT outside a transaction, so DBFlux issued a ROLLBACK in case one was left open. Changes the database had already committed stay."
+        ended_without_commit: "The script ended without COMMIT, so its open transaction was rolled back."
+        ended_without_commit_next: "Add a COMMIT at the end of the script to save its changes."
+        ended_without_commit_next_or: "Add a COMMIT at the end of the script to save its changes, or turn on “Run in one transaction”."
+        left_open: "Script ended with a transaction left open"
+        left_open_message: "The script's transaction could not be rolled back: %{error}"
+        left_open_next: "A transaction may still be open on this connection. Disconnect and reconnect to end it, and check the state of the database before you run anything else."
     mapping_mode:
       create: Create
       existing: Existing (insert only)
@@ -2428,7 +2713,8 @@ document:
       skip: Skip
       truncate: Truncate (empty + insert)
     confirm:
-      body: "This will drop-and-recreate or truncate the following table(s) before loading data: %{tables}"
+      body: "This will drop-and-recreate or truncate the following table(s) before loading data:"
+      table_line: "%{table} — %{mode}"
       warning: This cannot be undone. Confirm to proceed.
       back: Back
       proceed: "Yes, proceed"
@@ -2441,6 +2727,7 @@ document:
     done:
       cancelled_rows: "%{rows} row(s) were imported before the import stopped."
       close: Close
+      closing_failed: "Close this dialog and fix the cause above. Tables listed as completed stay in the target; choose Skip for them if you import again. On a target without transaction support, rows of the failed table written before the error also stay."
     error:
       no_connection: No active connection for this import
     toast:
@@ -2457,6 +2744,15 @@ document:
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
       cancelled: "%{table}: cancelled after %{rows} row(s)"
+      not_attempted_after_failure: "%{table}: not attempted: the import stopped at the failed table"
+    footer:
+      reason:
+        file_read: "Continue is off until the file has been read."
+        sheet_empty: "Continue is off: sheet “%{sheet}” has no rows."
+        sheet_header: "Continue is off: row 1 needs a unique name in every column."
+        sheet_cell: "Continue is off: a cell holds an error value."
+        sheet_large: "Continue is off: the sheet is over %{limit} cells."
+      cancel: "Cancel"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"
     connection_not_found: Connection not found
@@ -3413,6 +3709,31 @@ document:
     new: New tab
     close_named: "Close %{title}"
     unsaved_changes: Unsaved changes
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Close tab"
+    retry: "Retry"
+    removed:
+      title: "This secret was deleted"
+      body: "%{name} is no longer in the store. Nothing is read or written from this tab. Close it, and open the secret again if it is recreated."
+      draft_title: "Deleted — your unsaved text is kept"
+      draft_body: "%{name} was deleted, so nothing can be saved. The text below is read-only; copy what you need, then discard it."
+    scheduled:
+      draft_title: "Deletion scheduled — your unsaved text is kept"
+      draft_body: "%{name} is scheduled for deletion, so nothing can be saved. The text below is read-only. Restore the secret to edit it again, or discard the text."
+    region_mismatch:
+      title: "This connection is on another region"
+      body: "%{name} belongs to %{region}, and the connection is on %{live}. Nothing is read or written from this tab until the connection is back on %{region}."
+    footer:
+      value_scope: "Value visible in this tab only, cleared on close"
+      hint:
+        reveal: "reveal"
+        edit: "edit"
+        roll_back: "roll back"
+    rotation_badge:
+      on: "Rotation on"
+      off: "Rotation off"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "Search runs on the store, values are never listed"
@@ -3420,6 +3741,9 @@ document:
       refresh: "Refresh"
     load_more: "Load next page"
     loading_more: "Loading the next page…"
+    region:
+      label: "Region"
+      switch_failed: "Could not switch to region %{region}: %{error}"
     columns:
       name: "Name"
       description: "Description"
@@ -3446,29 +3770,60 @@ document:
     error:
       connection_unavailable: "The connection is not available"
       store_unavailable: "The connection has no store %{store}"
+      may_have_landed: "The service may have applied the change before it failed. Check the secret before trying again."
+      audit_unrecorded: "The failure could not be written to the audit trail."
     footer:
       loaded:
         one: "%{count} secret loaded"
         many: "%{count} secrets loaded"
+      paths:
+        one: "%{count} path"
+        many: "%{count} paths"
+      parameters:
+        one: "%{count} parameter"
+        many: "%{count} parameters"
+      tree_summary: "%{paths} · %{parameters} loaded under %{path}"
+      flat_summary: "%{parameters} under %{path}"
       hint:
         open: "open"
         retrieve: "retrieve value"
-        copy_id: "copy ID"
+        copy_arn: "copy ARN"
         filter: "filter"
         up: "up"
     status:
       list_timing:
         one: "List · %{count} secret · %{millis} ms"
         many: "List · %{count} secrets · %{millis} ms"
+      list_timing_parameters:
+        one: "List · %{count} parameter · %{millis} ms"
+        many: "List · %{count} parameters · %{millis} ms"
       describe_timing: "Describe · %{millis} ms"
       retrieve_timing: "Retrieve value · %{millis} ms"
       duration_tooltip: "Client-side duration of the last store call"
+    date:
+      short: "%{month} %{day}, %{time}"
+      short_with_year: "%{month} %{day}, %{year}, %{time}"
+      months:
+        jan: "Jan"
+        feb: "Feb"
+        mar: "Mar"
+        apr: "Apr"
+        may: "May"
+        jun: "Jun"
+        jul: "Jul"
+        aug: "Aug"
+        sep: "Sep"
+        oct: "Oct"
+        nov: "Nov"
+        dec: "Dec"
     rotation:
       off: "Off"
       enabled: "Enabled"
       disabled: "Disabled"
       every_days: "Every %{count} days"
       every_hours: "Every %{count} hours"
+      on_schedule: "On a schedule"
+      window: "Window"
       schedule_with_window: "%{schedule} · window %{window} (%{expression})"
       title: "Rotation"
       status: "Status"
@@ -3478,6 +3833,7 @@ document:
       last: "Last rotated"
     details:
       none: "Select a secret to see its details"
+      close: "Close"
       loading: "Loading the details…"
       failed: "The details could not be loaded"
       title: "Secret details"
@@ -3492,7 +3848,29 @@ document:
       created: "Created"
       last_changed: "Last changed"
       last_retrieved: "Last retrieved"
-      versions: "Versions"
+      open_in_tab: "Open in tab"
+      resize: "Resize the details pane"
+    versions:
+      title: "Versions"
+      history_title: "History"
+      count:
+        one: "%{count} version"
+        many: "%{count} versions"
+      column:
+        version: "Version"
+        labels: "Staging labels"
+        created: "Created"
+      no_labels: "no labels"
+      history_version: "v%{id}"
+      loading: "Loading the versions…"
+      failed: "The versions could not be loaded"
+      scheduled_for_deletion: "Scheduled for deletion; restore it to see its versions"
+      not_connected: "Not connected; connect to see the versions"
+      retrieve: "Retrieve version %{version}"
+      back_to_current: "Back to current"
+      shown: "Showing version %{version}"
+      not_current: "This is not the current version. The retrieval is audited, the value is not."
+      current_unknown: "The current version is not known right now. The retrieval is audited, the value is not."
     tags:
       title: "Tags"
       none: "No tags"
@@ -3501,10 +3879,19 @@ document:
       body: "%{name} belongs to %{service}. %{service} rotates and updates it, so DBFlux shows it read only."
     action:
       copy_resource_id: "Copy ARN"
+    context_menu:
+      copy_name: "Copy name"
+      copy_path: "Copy path"
+      arn_loading: "The ARN arrives with the details…"
+      arn_missing: "The store reports no resource identifier"
+      arn_failed: "The details could not be loaded: %{error}"
+      open_in_tab: "Open in tab"
     toast:
       value_copied: "Value copied to the clipboard"
       resource_id_copied: "ARN copied to the clipboard"
       error_copied: "Error copied to the clipboard"
+      name_copied: "Name copied to the clipboard"
+      path_copied: "Path copied to the clipboard"
     value:
       title: "Value"
       not_loaded: "Value not loaded"
@@ -3517,7 +3904,21 @@ document:
       view:
         key_value: "Key/value"
         plaintext: "Plaintext"
-      plaintext_only: "Key/value opens only when the value parses as a one-level JSON object with scalar values. Nested JSON, arrays and any other text open as plaintext."
+        key_value_unavailable: "Key/value is not available: the value is not a one-level JSON object with scalar values."
+      kind:
+        dotenv:
+          one: "dotenv · %{count} line"
+          many: "dotenv · %{count} lines"
+        json_keys:
+          one: "JSON · %{count} key"
+          many: "JSON · %{count} keys"
+        json_items:
+          one: "JSON · %{count} item"
+          many: "JSON · %{count} items"
+        text:
+          one: "text · %{count} line"
+          many: "text · %{count} lines"
+        binary: "binary"
       binary_size: "Binary · %{size}"
       read_only: "Read only"
       binary_note: "Binary values are written by other tools. DBFlux shows them as base64 and does not edit them."
@@ -3537,6 +3938,155 @@ document:
       metadata_loaded: "Metadata loaded · only the value failed"
       deletion_scheduled: "Deletion scheduled for %{date}"
       deletion_scheduled_body: "Its value cannot be retrieved until it is restored."
+      deletion_scheduled_unknown: "Deletion scheduled"
+
+    edit:
+      open: "Edit value"
+      save: "Save as new version"
+      discard: "Discard"
+      hint: "Saving writes a new version and makes it current. The text is saved exactly as it is here."
+      invalid_json: "The stored value was JSON, and the edited text is not valid JSON: %{error}"
+      unsaved_block: "%{name} has unsaved edits. Save or discard them first."
+      connection_replaced: "The connection was replaced while the value was being edited. Discard the editor and retrieve the value again before saving."
+      refused_managed: "The value of %{name} is managed by %{service}, so it cannot be edited."
+      refused_deletion: "Deletion is scheduled for %{name}, so its value cannot be edited until it is restored."
+      change_summary: "Unsaved value edits"
+      find: "Find"
+      modified: "modified"
+      footer:
+        version: "version %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "1 line changed"
+        changed_other: "%{count} lines changed"
+        saving_note: "Saving creates a new version and makes it current"
+        caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "This secret changed elsewhere. Saving writes a new version over it."
+      hint_formatted: "Saving writes a new version and makes it current. Formatted saves a value stored on one line back on one line, and a value stored on several lines as it is here; Raw saves the text exactly as it is here."
+      mode:
+        formatted: "Formatted"
+        raw: "Raw"
+        toggle: "Switch between Formatted and Raw"
+    dialog:
+      cancel: "Cancel"
+    write:
+      refused_managed: "%{name} is managed by %{service}, so it cannot be changed here."
+      refused_deletion: "Deletion is scheduled for %{name}. Restore it before changing it."
+      region_switching: "The region is being switched. Wait for the connection to settle, then try again; nothing was written."
+      connection_replaced: "The connection was replaced while this dialog was open. Nothing was written. Open it again from the current connection."
+      details_stale: "The details shown were read from a previous connection. They are being read again; try again in a moment."
+      in_progress: "Another change is still being written. Wait for it to finish."
+      landed_on_previous_session: "A change finished after the connection was replaced. It was written on the previous connection and this document was not updated; refresh it to see the current state."
+    rollback:
+      button: "Roll back"
+      action: "Roll back to version %{version}"
+      footnote: "Roll back makes the chosen version the current one and keeps the version that was current as the previous one. No value is rewritten."
+      title: "Roll back %{name}"
+      lead: "Make version %{version} the current version of %{name}?"
+      effect: "Applications that read the current version will receive the value of the chosen version. Version %{current}, current now, stays available as the previous version."
+      confirm: "Roll back"
+      done: "%{name} now uses version %{version}"
+      no_earlier_version: "%{name} has no earlier version to roll back to."
+      history_loading: "The versions are still loading. Try again in a moment."
+      pending_reason: "This version is staged by an unfinished rotation, so it cannot be rolled back to."
+      only_pending: "Every earlier version is staged by an unfinished rotation and cannot be rolled back to."
+    delete:
+      button: "Delete"
+      title:
+        secret: "Delete secret"
+        parameter: "Delete parameter"
+      lead_scheduled: "Delete %{name}? Applications that read it start failing immediately: the secret is unavailable until you restore it. The recovery window only limits how long it can be restored."
+      lead_irreversible: "Delete %{name}? This cannot be undone. The parameter is removed at once, and applications that read it start failing immediately."
+      window_label: "Recovery window"
+      window_option: "%{count} days"
+      window_hint: "You can restore the secret during this window."
+      confirm_label:
+        secret: "Type the secret name to confirm"
+        parameter: "Type the parameter name to confirm"
+      confirm_placeholder: "Name"
+      confirm_aria: "Type %{name} to confirm the deletion"
+      confirm_scheduled: "Schedule deletion"
+      confirm_irreversible: "Delete permanently"
+      done: "Deleted %{name}"
+      done_scheduled: "Deletion of %{name} is scheduled for %{date}"
+      done_scheduled_undated: "Deletion of %{name} is scheduled"
+      scheduled_detail: "%{name} was deleted on %{deleted} with a %{days} day recovery window. Its value cannot be retrieved until it is restored."
+      row_deleted: "Deleted"
+      row_deletes_on: "Deletes on"
+    restore:
+      button: "Restore secret"
+      done: "Restored %{name}"
+    rotate:
+      button: "Rotate now"
+      immediately: "Rotate immediately"
+      refused_off: "Rotation is off for %{name}. Turn it on with Edit rotation before rotating."
+      done: "Started a rotation of %{name}"
+      done_version: "Started a rotation of %{name}; version %{version} will become current when the rotation finishes"
+      title: "Rotate %{name} now"
+      lead: "Rotate %{name} now?"
+      effect: "This runs the secret's rotation function now and creates a new version that becomes current when the rotation finishes. Until then, applications that read the secret still receive the old value."
+      confirm: "Rotate now"
+    rotation_edit:
+      button: "Edit rotation"
+      title: "Edit rotation of %{name}"
+      enabled: "Rotate this secret automatically"
+      schedule: "Schedule"
+      schedule_hint: "rate(30 days), rate(12 hours) or a six-field cron(...) expression."
+      schedule_placeholder: "rate(30 days)"
+      window: "Rotation window"
+      window_hint: "Whole hours, from 1h to 24h. Empty keeps the current window."
+      window_placeholder: "4h"
+      function: "Rotation function"
+      function_hint: "The function that rotates the secret, as its ARN. Empty keeps the current function."
+      function_placeholder: "Function ARN"
+      already_off: "Rotation is already off."
+      confirm: "Save rotation"
+      done: "Updated the rotation of %{name}"
+      unfinished: "Rotation is off, but version %{version} still holds the pending stage of a rotation that never finished."
+      unfinished_title: "A cancelled rotation left version %{version} pending"
+      unfinished_body: "Check the credentials behind version %{version}, then move or remove its pending stage. Until then a later rotation can be refused."
+    tags_edit:
+      button: "Edit tags"
+      title: "Edit tags of %{name}"
+      lead: "Changing a tag does not touch the value or any version."
+      key_placeholder: "key"
+      value_placeholder: "value"
+      key_label: "Tag %{row} key"
+      value_label: "Tag %{row} value"
+      remove: "Remove tag"
+      add: "Add tag"
+      confirm: "Save tags"
+      done: "Updated the tags of %{name}"
+      no_change: "No tag differs from the ones the secret has."
+      duplicate: "The key %{key} appears in more than one row."
+    description_edit:
+      button: "Edit description"
+      title: "Edit description of %{name}"
+      label: "Description"
+      placeholder: "No description"
+      confirm: "Save description"
+      confirm_version: "Save as new version"
+      done: "Updated the description of %{name}"
+      done_version: "Updated the description of %{name}; version %{version} holds the new description"
+      rewrites_title: "This writes the value again as a new version"
+      rewrites_body: "This store changes a description only by writing the value again, so saving creates a new version. The value, its type and its key stay as they are."
+    create:
+      button_secret: "New secret"
+      button_parameter: "New parameter"
+      title_secret: "New secret"
+      title_parameter: "New parameter"
+      name: "Name"
+      name_placeholder: "Name"
+      type: "Type"
+      value: "Value"
+      description: "Description"
+      description_placeholder: "Optional"
+      tier: "Tier"
+      key: "Encryption key"
+      key_placeholder: "Default key"
+      tags: "Tags"
+      confirm: "Create"
+      done: "Created %{name}"
+      exists: "%{name} already exists. Choose another name; creating never replaces a secret."
 document_tree:
   search_placeholder: Search…
   view:
@@ -3943,6 +4493,14 @@ palette:
       name: Focus tasks panel
     toggle_sidebar:
       name: Toggle sidebar
+    toggle_full_screen:
+      name: Toggle full screen
+    increase_interface_size:
+      name: "Increase interface size"
+    decrease_interface_size:
+      name: "Decrease interface size"
+    reset_interface_size:
+      name: "Reset interface size"
     toggle_editor:
       name: Toggle editor panel
     toggle_results:
@@ -4062,6 +4620,13 @@ settings:
       option:
         default: "Default"
         compact: "Compact"
+    scrollbars:
+      help: "Applies to every window."
+      label: "Show scrollbars"
+      option:
+        while_scrolling: "While scrolling"
+        on_hover: "On hover"
+        always: "Always"
     language:
       label: Language
       option:
@@ -4334,6 +4899,8 @@ settings:
       toggle_row_inspector: Toggle row inspector
       find_similar_rows: Find similar rows
       results_set_null: Set cell to NULL
+      results_set_default: "Set cell to column default"
+      results_toggle_expression: "Toggle literal / expression editor"
       open_context_menu: Open context menu
       open_pane_actions: Open pane actions
       menu_up: Menu up
@@ -4355,6 +4922,10 @@ settings:
       cancel_task: Cancel task
       clear_finished_tasks: Clear finished tasks
       toggle_sidebar: Toggle sidebar
+      toggle_full_screen: Toggle full screen
+      increase_interface_size: "Increase interface size"
+      decrease_interface_size: "Decrease interface size"
+      reset_interface_size: "Reset interface size"
       open_settings: Open settings
       open_login_modal: Open auth profile login
       open_sso_wizard: Open AWS SSO wizard
@@ -4414,6 +4985,8 @@ settings:
       toggle_console: Toggle console
       load_more: Load more
       edit_expiry: Edit expiry…
+      edit_value: Edit value
+      roll_back_version: "Roll back to the previous version"
       copy_preview: Copy preview
       import_items: "Import…"
       import_from_client: "Import from another client…"
@@ -4470,6 +5043,7 @@ settings:
       add_panel_picker: "Add Panel Picker"
       mcp_approvals: "MCP Approvals"
       migrate_wizard: "Migrate Wizard"
+      import_wizard: "Import Wizard"
       vim_normal: "Vim Normal"
     category:
       global: Global
@@ -5149,6 +5723,8 @@ sidebar:
     new_script_folder: New folder
     reveal_file_manager: Reveal in file manager
     copy_path: Copy path
+    copy_column_name: Copy column name
+    copy_field_name: Copy field name
     schema_diff_unsupported: Schema diff is only available for relational connections.
     new_dashboard: New dashboard…
     import_dashboard: Import dashboard from JSON…
@@ -5190,6 +5766,11 @@ sidebar:
     dashboards: "Dashboards"
     connections: CONNECTIONS
     scripts: SCRIPTS
+  root_section:
+    confirm_message: "Run \"%{action}\" on \"%{item}\"?"
+    action:
+      delete_bucket: "Delete bucket"
+      delete_bucket_description: "Deletes the bucket. Only an empty bucket can be deleted, and this cannot be undone."
   task:
     connecting: "Connecting to %{name}"
     disconnecting: "Disconnecting %{name}"
@@ -5198,7 +5779,7 @@ sidebar:
     disconnect_hook_cancelled: Disconnect hook cancelled
     post_disconnect_hook_cancelled: Post-disconnect hook cancelled
     loading_event_streams: "Loading event streams: %{name}"
-    listing_buckets: "Listing buckets: %{name}"
+    listing_root_section: "Listing %{section}: %{name}"
     loading_database_schema: "Loading schema: %{name}"
     connecting_to_database: "Connecting to database: %{name}"
     refreshing_database: "Refreshing database: %{name}"
@@ -5246,7 +5827,16 @@ sidebar:
       indexes: "Failed to load indexes: %{error}"
       foreign_keys: "Failed to load foreign keys: %{error}"
       routines: "Failed to load routines: %{error}"
-    list_buckets_failed: "Failed to list buckets: %{error}"
+    list_root_section_failed: "Failed to list %{section}: %{error}"
+    root_section_action_failed: "%{action} failed for %{item}: %{error}"
+    root_section_action_audit_failed: "%{action} on %{item} succeeded, but its audit event was not recorded: %{error}"
+    root_section_action_connection_changed: "%{action} was not run on %{item}: the connection changed after the action was requested."
+    root_section_action_refused:
+      read_only: "%{action} was not run: this connection is read-only."
+      read_only_profile: "%{action} was not run: this connection's profile is set to read-only."
+      read_only_server: "%{action} was not run: the server rejected mutations for this connection."
+      approval_unavailable: "%{action} was not run: this connection requires approval, which is not available for sidebar actions yet."
+    root_section_invalid_id: "The driver declared the root section \"%{section}\", which was skipped: section ids must be unique and cannot contain \"|\"."
     code_generation_failed: "Code generation failed: %{error}"
     loading_event_streams: Loading event streams…
     load_schema_failed: "Failed to load schema: %{error}"
@@ -5318,6 +5908,7 @@ sidebar:
       error_retry: "Error: %{error} — click to retry"
       connect_failed: "Connection failed: %{error}"
       remote_listing_count: "%{label} (%{count})"
+      load_more: "Load more"
       remote_dashboards_error_retry: "Error: %{error} — collapse and expand to retry"
       used_by_objects:
         one: Used by 1 object

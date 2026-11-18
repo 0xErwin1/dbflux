@@ -151,6 +151,31 @@ Requiere el permiso `VIEW SERVER STATE`.
   restringidos, el propio KILL puede fallar con un error de permisos; el driver
   lo muestra al usuario.
 
+### Sesiones caídas
+
+- El socket de cada sesión tiene TCP keepalive activado (primer sondeo tras
+  60 segundos de inactividad), para que los gateways NAT, firewalls y
+  balanceadores que cortan conexiones silenciosas mantengan la sesión abierta.
+- Si aun así el servidor o la red cortan la sesión, la siguiente llamada
+  falla con un error de I/O (broken pipe, connection reset o fin de archivo
+  inesperado). El driver descarta el cliente muerto y marca la conexión para
+  reconectar, igual que tras una cancelación.
+- Las lecturas de metadatos (bases de datos, tablas, vistas, detalles de
+  tablas y vistas, tipos, índices, foreign keys y rutinas del schema) abren
+  una sesión nueva, restauran la base de datos activa y reintentan una vez,
+  así que abrir una tabla tras un rato inactivo funciona sin reconectar a mano.
+- Las ediciones de filas (insert, update, delete), la navegación, el conteo y
+  las consultas de filas y dependencias abren la sesión nueva antes de
+  ejecutarse, así que funcionan sin reconectar a mano una vez que una llamada
+  anterior detectó la caída. Si nada la detectó todavía, la primera operación
+  falla y no se repite; una escritura fallida nunca se repite. La recuperación está serializada, de modo
+  que los llamadores concurrentes comparten una sola sesión nueva en lugar de
+  reemplazarse entre sí. Un error del servidor que indica una sesión terminada
+  (596, 233, 6005) se trata igual que un socket caído.
+- Un batch de queries nunca se reintenta, porque el servidor puede haberlo
+  ejecutado ya. Se muestra su error, y la siguiente query o ping abre una
+  sesión nueva.
+
 ### Descubrimiento de schema
 
 - Bases de datos (`sys.databases`, oculta las bases de datos de sistema).

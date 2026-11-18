@@ -181,5 +181,17 @@ const options = LOCALES.map((target) => ({
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') close();
     });
+
+    // An explicit choice outranks the browser's languages on the next visit to the root.
+    menu.addEventListener('click', (event) => {
+      const option = event.target instanceof Element ? event.target.closest('a[hreflang]') : null;
+      const locale = option?.getAttribute('hreflang');
+      if (!locale) return;
+      try {
+        localStorage.setItem('dbflux-locale', locale);
+      } catch {
+        // Storage can be unavailable in privacy-restricted browsing contexts.
+      }
+    });
   });
 </script>

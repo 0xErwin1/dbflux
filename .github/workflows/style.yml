@@ -152,7 +152,7 @@ jobs:
             python: python3
           # Native arm64; vendored-openssl matches build.yml (the runner has no
           # pkg-config-discoverable OpenSSL, so openssl-sys must build it).
-          - os: macos-14
+          - os: macos-15
             extra_features: ",vendored-openssl"
             python: python3
           # Native x86_64-msvc; OpenSSL is resolved on the runner as in build.yml.
@@ -251,7 +251,8 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
 
       - name: Install cargo-machete
-        run: cargo install cargo-machete --locked
+        # 0.10.1 uses an unstable library feature and fails to build on stable.
+        run: cargo install cargo-machete --version 0.9.2 --locked
 
       - name: Check for unused dependencies
         run: cargo machete

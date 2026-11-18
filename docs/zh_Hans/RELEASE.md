@@ -303,6 +303,8 @@ rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全�
 
 AUR 的 `PKGBUILD` 位于**外部 AUR 仓库**，而非本仓库。它仅在稳定版标签时更新。
 
+Homebrew cask 位于外部 tap `0xErwin1/homebrew-dbflux`。对于已发布的稳定版标签，`homebrew-tap` 作业会自动更新它；请确认该作业已成功（见 [Homebrew tap](#homebrew-tap)）。
+
 ## nightly 工作机制
 
 `.github/workflows/nightly.yml` 每天 UTC 时间 03:17 运行：
@@ -360,11 +362,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## 下游渠道
 
-| 标签类型（GitHub Release）   | AUR       | Nix flake（本仓库）                              | nixpkgs（未来） |
-|------------------------------|-----------|--------------------------------------------------|-----------------|
-| nightly（预发布）            | 跳过      | 自动固定——nightly 引用上的 `#dbflux-nightly`    | 跳过            |
-| `-rc.N`（预发布）            | 跳过      | 更新发布分支与 `main` 的 `release-info`          | 跳过            |
-| 稳定版 `vX.Y.Z`（已发布）    | 更新并推送 | 更新发布分支与 `main` 的 `release-info`          | 更新并发起 PR   |
+| 标签类型（GitHub Release）   | AUR       | Nix flake（本仓库）                              | nixpkgs（未来） | Homebrew tap |
+|------------------------------|-----------|--------------------------------------------------|-----------------|-------------------------|
+| nightly（预发布）            | 跳过      | 自动固定——nightly 引用上的 `#dbflux-nightly`    | 跳过            | 跳过 |
+| `-rc.N`（预发布）            | 跳过      | 更新发布分支与 `main` 的 `release-info`          | 跳过            | 跳过 |
+| 稳定版 `vX.Y.Z`（已发布）    | 更新并推送 | 更新发布分支与 `main` 的 `release-info`          | 更新并发起 PR   | 自动——`homebrew-tap` 作业 |
 
 ### AUR
 
@@ -404,6 +406,28 @@ nix build .#dbflux-bin --no-link --print-out-paths
 ```bash
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 ```
+
+### Homebrew tap
+
+`.github/workflows/release.yml` 中的 `homebrew-tap` 作业在发布作业之后运行，且仅针对已发布的稳定版标签（RC、nightly 与草稿从不运行）。它下载该 release 的四个 `.sha256` 文件（两个 macOS DMG 与两个 Linux tarball），用 `scripts/homebrew_cask.py` 生成 `Casks/dbflux.rb`，并推送到 [`0xErwin1/homebrew-dbflux`](https://github.com/0xErwin1/homebrew-dbflux)。
+
+| 情况 | 行为 |
+|------|------|
+| 缺少 `HOMEBREW_TAP_TOKEN` | 作业给出警告并跳过；tap 保留之前的版本。 |
+| 令牌过期或被撤销 | 作业失败。续期令牌、更新 secret，然后重新运行作业或手动更新 cask。 |
+| 标签早于 tap 中的版本（旧产品线上的补丁） | cask 保持不变并给出警告。tap 绝不回退。 |
+
+`HOMEBREW_TAP_TOKEN` 是一个 fine-grained 个人访问令牌，权限为 **Contents: read and write**，仅限 `0xErwin1/homebrew-dbflux`。
+
+作业失败后如需手动更新 cask，将该 release 的四个 `.sha256` 文件下载到同一目录，然后运行：
+
+```bash
+python3 scripts/homebrew_cask.py --version X.Y.Z \
+  --checksums <包含四个 .sha256 文件的目录> \
+  --output <tap 检出目录>/Casks/dbflux.rb
+```
+
+在 tap 检出目录中提交并推送该变更。
 
 ### nixpkgs（未来）
 

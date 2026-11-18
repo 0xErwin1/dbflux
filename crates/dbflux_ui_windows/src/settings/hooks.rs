@@ -1369,7 +1369,7 @@ impl HooksSection {
             .flex()
             .flex_col()
             .child(toolbar)
-            .child(
+            .child(layout::scrolled_list_viewport(
                 div()
                     .id("hooks-list-scroll")
                     .flex_1()
@@ -1385,7 +1385,8 @@ impl HooksSection {
                     })
                     .children(rows)
                     .child(self.render_protected_hook_rows(cx)),
-            )
+                &self.hook_list_scroll_handle,
+            ))
     }
 
     fn render_protected_hook_rows(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

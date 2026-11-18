@@ -812,6 +812,7 @@ fn tab_icon(icon: super::types::DocumentIcon) -> AppIcon {
         DocumentIcon::McpApprovals => AppIcon::Bot,
         DocumentIcon::Migrate => AppIcon::ArrowUpDown,
         DocumentIcon::SecretStore => AppIcon::Lock,
+        DocumentIcon::Secret => AppIcon::KeyRound,
     }
 }
 

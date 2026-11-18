@@ -352,9 +352,9 @@ fn mimetype_first_and_stored() {
 
     let mut archive = zip::ZipArchive::new(Cursor::new(patched)).unwrap();
     let mut mimetype = archive.by_index(0).unwrap();
-    assert_eq!(mimetype.name(), "mimetype");
+    assert_eq!(mimetype.name().unwrap().as_ref(), "mimetype");
     assert_eq!(mimetype.compression(), CompressionMethod::Stored);
-    assert!(mimetype.extra_data().is_none_or(<[u8]>::is_empty));
+    assert!(mimetype.extra_data().is_none_or(|data| data.is_empty()));
 
     let mut text = String::new();
     mimetype.read_to_string(&mut text).unwrap();

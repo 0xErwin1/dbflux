@@ -836,6 +836,13 @@ impl CodeDocument {
             || self
                 .current_execution_context(cx)
                 .is_some_and(|current| current.same_as(&session_context));
+        // A rerun keeps the language its result ran in: the editor's language
+        // may have changed since, and the rows must come from the same
+        // dialect. The new origin carries it on, so later pages inherit it.
+        let language = rerun_origin
+            .as_ref()
+            .map(|origin| origin.language.clone())
+            .unwrap_or_else(|| self.effective_language().clone());
         let exec_ctx = rerun_origin
             .map(|origin| origin.exec_ctx)
             .unwrap_or_else(|| self.source.exec_ctx.clone());
@@ -843,6 +850,7 @@ impl CodeDocument {
             connection_id: conn_id,
             context: session_context.clone(),
             exec_ctx: exec_ctx.clone(),
+            language: language.clone(),
         };
 
         if on_session {
@@ -900,7 +908,7 @@ impl CodeDocument {
             query.clone(),
             active_database,
             &exec_ctx,
-            self.effective_language().clone(),
+            language,
             row_limit,
         );
 
@@ -955,20 +963,42 @@ impl CodeDocument {
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
             let session_binding = session_binding.clone();
+            let dispatch_token = cancel_token.clone();
             async move {
-                if on_session {
-                    session_binding.execute(connection, session_database, &request)
+                // The editor is released as soon as its task is cancelled, so a
+                // cancel that lands before this worker runs must keep the
+                // statement from reaching the database at all.
+                let execution = if dispatch_token.is_cancelled() {
+                    None
+                } else if on_session {
+                    session_binding.execute_unless_cancelled(
+                        connection,
+                        session_database,
+                        &request,
+                        &dispatch_token,
+                    )
                 } else {
-                    super::execution_session::SessionExecution {
+                    Some(super::execution_session::SessionExecution {
                         result: connection.execute(&request),
                         isolated: false,
+                    })
+                };
+
+                match execution {
+                    Some(execution) => (true, execution),
+                    None => {
+                        let skipped = super::execution_session::SessionExecution {
+                            result: Err(DbError::Cancelled),
+                            isolated: false,
+                        };
+                        (false, skipped)
                     }
                 }
             }
         });
 
         cx.spawn(async move |this, cx| {
-            let session_execution = task.await;
+            let (dispatched, session_execution) = task.await;
             let session_isolated = session_execution.isolated;
             let result = session_execution.result;
 
@@ -996,7 +1026,10 @@ impl CodeDocument {
             } else if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
-                if let Err(error) = connection.cleanup_after_cancel() {
+                // The cleanup rolls back the connection's transaction. A query
+                // that never reached the driver left nothing to undo, and
+                // rolling back would discard a transaction the user opened.
+                if dispatched && let Err(error) = connection.cleanup_after_cancel() {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
 
@@ -1968,6 +2001,9 @@ impl CodeDocument {
                     this.pending.load_all_rows = Some(grid.entity_id());
                     cx.notify();
                 }
+                DataGridEvent::NextRowsRequested => {
+                    this.fetch_next_rows(grid, cx);
+                }
                 DataGridEvent::ApplyVisualQuery(_)
                 | DataGridEvent::ClearVisualQuery
                 | DataGridEvent::OpenEditorWithContent { .. } => {
@@ -2032,6 +2068,7 @@ impl CodeDocument {
         LimitedRowActions {
             count: reads && *language == QueryLanguage::Sql,
             load_all: reads,
+            next_rows: reads,
         }
     }
 
@@ -2095,7 +2132,7 @@ impl CodeDocument {
             dbflux_core::count_query_from_sql(&query),
             origin.context.database.clone(),
             &origin.exec_ctx,
-            self.effective_language().clone(),
+            origin.language.clone(),
             count_row_limit,
         );
         let task = self.execute_in_result_context(origin.context, request, cx);
@@ -2126,6 +2163,60 @@ impl CodeDocument {
                                     dbflux_i18n::t!("document.code.execution.count_rows_failed"),
                                 )
                                 .with_cause(error),
+                                cx,
+                            );
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Fetches the next editor-row-limit rows of the query behind a result tab
+    /// and appends them, where the query ran.
+    ///
+    /// Runs the query again with a limit one page higher and keeps
+    /// the rows past the loaded ones, so every page re-reads the earlier ones.
+    /// Drivers have no shared offset; move to cursor or `OFFSET` paging if
+    /// deep scrolling gets slow.
+    fn fetch_next_rows(&mut self, grid: Entity<DataGridPanel>, cx: &mut Context<Self>) {
+        let Some((query, origin)) = self.result_tab_query(&grid, cx) else {
+            grid.update(cx, |grid, cx| grid.next_rows_failed(cx));
+            return;
+        };
+
+        let generation = grid.read(cx).result_generation();
+        let page = self.app_state.read(cx).general_settings().editor_row_limit;
+        let limit = grid.read(cx).loaded_row_count().saturating_add(page);
+        let row_limit = enforces_request_row_limit(origin.context.root.as_ref()).then_some(limit);
+        let request = query_request_for_execution(
+            query,
+            origin.context.database.clone(),
+            &origin.exec_ctx,
+            origin.language.clone(),
+            row_limit,
+        );
+        let task = self.execute_in_result_context(origin.context, request, cx);
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                grid.update(cx, |grid, cx| {
+                    if grid.result_generation() != generation {
+                        return;
+                    }
+                    match result {
+                        Ok(result) => grid.append_next_rows(result, cx),
+                        Err(error) => {
+                            grid.next_rows_failed(cx);
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Driver,
+                                    dbflux_i18n::t!("document.code.execution.next_rows_failed"),
+                                )
+                                .with_cause(error.to_string()),
                                 cx,
                             );
                         }
@@ -2174,15 +2265,47 @@ impl CodeDocument {
         self.execute_query_internal(query, false, ReadOnlyEnforcement::None, window, cx);
     }
 
+    /// Releases the editor when its running query task was cancelled outside
+    /// it, from the Background tasks panel. The driver call keeps running
+    /// until the database answers the cancel, and its completion still records
+    /// the cancellation; without this the editor kept showing a run the user
+    /// had already cancelled for as long as that call blocked.
+    pub(super) fn sync_external_query_cancellation(&mut self, cx: &mut Context<Self>) {
+        if self.state != DocumentState::Executing {
+            return;
+        }
+
+        let Some(task) = self.execution.active_query_task.as_ref() else {
+            return;
+        };
+
+        let cancelled = self
+            .app_state
+            .read(cx)
+            .tasks()
+            .get(task.task_id)
+            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+
+        if cancelled {
+            self.release_cancelled_execution(cx);
+        }
+    }
+
+    fn release_cancelled_execution(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) = self.execution.active_execution_index
+            && let Some(record) = self.execution.execution_history.get_mut(index)
+            && record.finished_at.is_none()
+        {
+            record.finished_at = Some(Instant::now());
+        }
+
+        self.state = DocumentState::Clean;
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
-            if let Some(index) = self.execution.active_execution_index
-                && let Some(record) = self.execution.execution_history.get_mut(index)
-                && record.finished_at.is_none()
-            {
-                record.finished_at = Some(Instant::now());
-            }
-
             if let Some(task) = self.execution.active_query_task.as_ref() {
                 if !task.uses_isolated_session {
                     self.app_state
@@ -2204,9 +2327,7 @@ impl CodeDocument {
                 self.app_state.read(cx).cancel_query_for_target(&target);
             }
 
-            self.state = DocumentState::Clean;
-            cx.emit(DocumentEvent::MetaChanged);
-            cx.notify();
+            self.release_cancelled_execution(cx);
         }
     }
 

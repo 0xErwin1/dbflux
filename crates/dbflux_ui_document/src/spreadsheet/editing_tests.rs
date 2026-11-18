@@ -481,7 +481,9 @@ fn without_entry(bytes: &[u8], removed: &str) -> Vec<u8> {
     for index in 0..archive.len() {
         let entry = archive.by_index_raw(index).expect("the entry must read");
 
-        if entry.name() != removed {
+        let entry_name = entry.name().expect("the entry name must read");
+
+        if entry_name != removed {
             writer.raw_copy_file(entry).expect("the entry must copy");
         }
     }

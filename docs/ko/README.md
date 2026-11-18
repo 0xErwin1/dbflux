@@ -77,6 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 Windows 인스톨러 — 는 [Releases](https://github.com/0xErwin1/dbflux/releases)
 페이지에 있습니다. 서명되지 않은 macOS 및 Windows 빌드에 대한 Gatekeeper와
 SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](INSTALL.md)에 있습니다.
+macOS와 Linux에서는 Homebrew로 `brew install --cask 0xErwin1/dbflux/dbflux`를 실행해 설치할 수 있습니다.
 
 ## 기능
 

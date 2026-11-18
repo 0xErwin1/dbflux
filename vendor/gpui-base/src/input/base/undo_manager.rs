@@ -145,6 +145,24 @@ impl UndoManager {
         true
     }
 
+    pub(super) fn discard_edit_group(&mut self, id: u64) -> bool {
+        if self.active_group != Some(id) {
+            return false;
+        }
+        if self
+            .undo_transactions
+            .last()
+            .is_some_and(|last| last.group_id == Some(id))
+        {
+            self.undo_transactions.pop();
+        }
+        self.active_group = None;
+        self.group_selections_before = None;
+        self.group_has_entry = false;
+        self.break_transaction_coalescing();
+        true
+    }
+
     /// The intent requested for the next recorded change, taken by the edit
     /// that records it.
     pub(super) fn take_pending_intent(&mut self) -> Option<EditIntent> {

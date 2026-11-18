@@ -27,6 +27,7 @@ pub struct Textarea {
     role: RoleOverride,
     accessibility_id: Option<SharedString>,
     aria_label: Option<SharedString>,
+    redacted: bool,
 
     /// An optional context menu builder to allow a custom context menu.
     ///
@@ -81,6 +82,7 @@ impl Textarea {
             role: RoleOverride::default(),
             accessibility_id: None,
             aria_label: None,
+            redacted: false,
             context_menu_builder: None,
             paste_handler: None,
             token_renderer: None,
@@ -137,6 +139,14 @@ impl Textarea {
 
     pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
         self.aria_label = Some(label.into());
+        self
+    }
+
+    /// Mark the textarea as carrying a secret: rendered-frame observers
+    /// redact it and the text never reaches the accessibility tree. See
+    /// [`Input::redacted`].
+    pub fn redacted(mut self, redacted: bool) -> Self {
+        self.redacted = redacted;
         self
     }
 
@@ -206,6 +216,7 @@ impl Textarea {
             .when_some(self.height, |this, height| this.h(height))
             .when_some(self.accessibility_id, |this, id| this.accessibility_id(id))
             .when_some(self.aria_label, |this, label| this.aria_label(label))
+            .redacted(self.redacted)
             .when_some(self.context_menu_builder, |this, build| {
                 this.context_menu(move |menu, window, cx| build(menu, window, cx))
             })

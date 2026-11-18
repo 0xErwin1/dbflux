@@ -318,18 +318,36 @@ fn shared_instance(
         .map_err(|_| DbError::connection_failed("DuckDB instance registry poisoned"))?;
     entries.retain(|entry| entry.strong_count() > 0);
 
-    let raw = match entries.iter().find_map(Weak::upgrade) {
+    let (raw, startup_catalog, startup_schema) = match entries.iter().find_map(Weak::upgrade) {
         Some(existing) if existing.settings() != settings => {
             return Err(DbError::connection_failed(
                 "This DuckDB database is already open with different DuckLake or Init SQL \
                  settings. Disconnect the other connection to it first.",
             ));
         }
-        Some(existing) => existing.try_clone()?,
-        None => open_instance(path, settings)?,
+        Some(existing) => (
+            existing.try_clone()?,
+            existing.startup_catalog(),
+            existing.startup_schema(),
+        ),
+        None => {
+            let raw = open_instance(path, settings)?;
+            let (catalog, schema) = raw
+                .query_row("SELECT current_database(), current_schema()", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .map_err(|error| DbError::connection_failed(format_duckdb_error(&error)))?;
+            (raw, catalog, schema)
+        }
     };
 
-    let shared = Arc::new(SharedDuckDb::new(raw, key.to_string(), settings.clone()));
+    let shared = Arc::new(SharedDuckDb::new(
+        raw,
+        key.to_string(),
+        settings.clone(),
+        startup_catalog,
+        startup_schema,
+    ));
     entries.push(Arc::downgrade(&shared));
     Ok(shared)
 }
@@ -347,6 +365,8 @@ pub(crate) fn fork_instance(shared: &SharedDuckDb) -> Result<Arc<SharedDuckDb>, 
         shared.try_clone()?,
         shared.key().to_string(),
         shared.settings().clone(),
+        shared.startup_catalog(),
+        shared.startup_schema(),
     ));
     entries.push(Arc::downgrade(&forked));
     Ok(forked)
@@ -546,6 +566,103 @@ mod tests {
         assert_eq!(
             scalar(second.as_ref(), "SELECT count(*) FROM t"),
             Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn a_joining_connection_starts_in_the_catalog_and_schema_init_sql_selected() {
+        let config = DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: Some(
+                "ATTACH ':memory:' AS lake; CREATE SCHEMA lake.gold; \
+                 CREATE TABLE lake.gold.t AS SELECT 1 AS id; USE lake.gold"
+                    .into(),
+            ),
+        };
+        let driver = DuckDbDriver::new();
+        let profile = profile(config);
+        let first = driver.connect(&profile).unwrap();
+        // A refresh reconnects while an editor session still holds the instance.
+        let session = first.execution_session_factory().unwrap().open().unwrap();
+        drop(first);
+        let second = driver.connect(&profile).unwrap();
+
+        assert_eq!(second.active_database().as_deref(), Some("lake"));
+        assert_eq!(
+            scalar(second.as_ref(), "SELECT current_schema()"),
+            Value::Text("gold".into())
+        );
+        assert_eq!(
+            scalar(second.as_ref(), "SELECT count(*) FROM t"),
+            Value::Int(1)
+        );
+        drop(session);
+    }
+
+    #[test]
+    fn a_detached_startup_catalog_does_not_prevent_cloning() {
+        let config = DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: Some(
+                "ATTACH ':memory:' AS lake; CREATE SCHEMA lake.gold; USE lake.gold".into(),
+            ),
+        };
+        let driver = DuckDbDriver::new();
+        let profile = profile(config);
+        let first = driver.connect(&profile).unwrap();
+        let factory = first.execution_session_factory().unwrap();
+        let session = factory.open().unwrap();
+        session
+            .connection()
+            .execute(&QueryRequest::new("USE memory"))
+            .unwrap();
+        first.set_active_database(Some("memory")).unwrap();
+        first.execute(&QueryRequest::new("DETACH lake")).unwrap();
+
+        let second = driver
+            .connect(&profile)
+            .expect("reconnect after detaching the startup catalog");
+        let another_session = factory
+            .open()
+            .expect("open a session after detaching the startup catalog");
+
+        let session_connection = another_session.connection();
+        for connection in [second.as_ref(), session_connection.as_ref()] {
+            assert_eq!(connection.active_database().as_deref(), Some("memory"));
+            assert_eq!(
+                scalar(connection, "SELECT current_schema()"),
+                Value::Text("main".into())
+            );
+            assert_eq!(scalar(connection, "SELECT 42"), Value::Int(42));
+        }
+        drop(another_session);
+        drop(session);
+    }
+
+    #[test]
+    fn execution_session_still_follows_the_roots_active_catalog() {
+        let config = DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: Some(
+                "ATTACH ':memory:' AS lake; CREATE SCHEMA lake.gold; USE lake.gold".into(),
+            ),
+        };
+        let driver = DuckDbDriver::new();
+        let root = driver.connect(&profile(config)).unwrap();
+        root.set_active_database(Some("memory")).unwrap();
+
+        let session = root.execution_session_factory().unwrap().open().unwrap();
+        let connection = session.connection();
+        assert_eq!(connection.active_database().as_deref(), Some("memory"));
+        assert_eq!(
+            scalar(connection.as_ref(), "SELECT current_schema()"),
+            Value::Text("main".into())
         );
     }
 

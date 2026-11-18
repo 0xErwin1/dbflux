@@ -16,6 +16,7 @@ pub enum RefKind {
     Literal,
     Env,
     Dotenv,
+    File,
     Secret,
     Param,
     Auth,
@@ -27,6 +28,7 @@ impl RefKind {
             RefKind::Literal => "literal",
             RefKind::Env => "env",
             RefKind::Dotenv => "dotenv",
+            RefKind::File => "file",
             RefKind::Secret => "secret",
             RefKind::Param => "param",
             RefKind::Auth => "auth",
@@ -38,6 +40,7 @@ impl RefKind {
             "literal" => Some(RefKind::Literal),
             "env" => Some(RefKind::Env),
             "dotenv" => Some(RefKind::Dotenv),
+            "file" => Some(RefKind::File),
             "secret" => Some(RefKind::Secret),
             "param" => Some(RefKind::Param),
             "auth" => Some(RefKind::Auth),
@@ -304,6 +307,30 @@ impl ConnectionProfileValueRefDto {
             ref_json_key: None,
             literal_value: None,
             env_key: Some(key),
+            secret_locator: None,
+            param_name: None,
+            auth_field: None,
+        }
+    }
+
+    /// A secret file ref stores the file path in `ref_value` and the optional
+    /// JSON key in `ref_json_key`, so it needs no column of its own.
+    pub fn new_file(
+        profile_id: String,
+        ref_key: String,
+        path: String,
+        json_key: Option<String>,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            profile_id,
+            ref_key,
+            ref_kind: "file".to_string(),
+            ref_value: path,
+            ref_provider: None,
+            ref_json_key: json_key,
+            literal_value: None,
+            env_key: None,
             secret_locator: None,
             param_name: None,
             auth_field: None,

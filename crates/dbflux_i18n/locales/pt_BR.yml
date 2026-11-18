@@ -176,6 +176,7 @@ components:
     literal: Literal
     env: Variável de ambiente
     dotenv: "Arquivo dotenv"
+    file: "Arquivo de segredo"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Campo da sessão de autenticação
@@ -183,10 +184,13 @@ components:
     placeholder:
       env: "NOME_DA_VARIAVEL"
       dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
     hint:
       env: "Lido da variável de ambiente %{name} sempre que o DBFlux se conecta. O DBFlux não guarda o valor."
       dotenv: "Lido de %{key} em %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
       dotenv_missing_key: "Adicione a chave depois do caminho: ~/caminho/do/arquivo.env#CHAVE"
+      file: "Lido de %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
+      file_with_key: "Lido de %{key} no arquivo JSON %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
   file_picker:
     browse: "Procurar…"
   column_projection:
@@ -333,6 +337,7 @@ connection_manager:
     seconds: segundos
     connection_name: Nome da conexão
     password: Senha
+    password_unreadable: "Não foi possível ler a senha salva: o chaveiro do sistema pode estar bloqueado"
     key_passphrase_optional: Senha da chave (opcional)
     ssh_password: Senha SSH
     ca_cert_path: Caminho do certificado da CA
@@ -1430,6 +1435,7 @@ document:
       copy_error: Copiar erro
       result_tab_title: "Resultado %{index}"
       count_rows_failed: Não foi possível contar as linhas da consulta
+      next_rows_failed: "Não foi possível carregar mais linhas da consulta"
       error:
         select_source: Selecione pelo menos uma origem
         start_time_required: O horário inicial é obrigatório
@@ -1595,6 +1601,7 @@ document:
       header: "%{column} · linha %{row}"
       item:
         copy: Copiar
+        copy_column_name: Copiar nome da coluna
         view_document: Ver documento
         add_document: Adicionar documento
         duplicate_document: Duplicar documento
@@ -1604,6 +1611,13 @@ document:
         edit_in_modal: Editar em janela…
         set_default: Definir como padrão
         set_null: Definir como NULL
+        set_value: "Definir valor"
+        set_expression: "Definir como expressão…"
+        set_value_column_default: "Padrão da coluna"
+        set_value_type_values: "Valores do tipo · %{type}"
+        set_value_expression: "Expressão…"
+        set_value_null: "NULL"
+        set_value_no_default: "%{column} não tem valor padrão. Adicione um no design da tabela ou escolha um valor do tipo."
         add_row: Adicionar linha
         inspect_row: Inspecionar linha
         find_similar_rows: Encontrar linhas semelhantes
@@ -1625,6 +1639,10 @@ document:
           many: "%{count} linhas serão excluídas permanentemente. Isso não pode ser desfeito."
         cancel: Cancelar
         delete: Excluir
+      expression_confirm:
+        list: "Expressões escritas como SQL:"
+        cancel: "Cancelar"
+        confirm: "Salvar com expressões"
       filter:
         title: Filtrar
         cell_value: Valor da célula
@@ -1707,6 +1725,8 @@ document:
           insert_failed: "Falha ao inserir o documento: %{error}"
           update_failed: "Falha ao atualizar o documento: %{error}"
     grid:
+      expression:
+        placeholder: Expressão SQL
       edit_bar:
         clean: Nenhuma alteração não salva
         dirty:
@@ -1759,6 +1779,7 @@ document:
           of_total: "%{loaded}/%{total} linhas carregadas"
           count: Contar linhas
           load_all: Carregar todas as linhas
+          loading_next: "Carregando mais linhas…"
         pending_changes:
           one: "%{count} alteração pendente"
           many: "%{count} alterações pendentes"
@@ -1781,7 +1802,13 @@ document:
           csv: CSV
           json_pretty: "JSON (formatado)"
           json_compact: "JSON (compacto)"
-          json_lines: "JSON (um objeto por linha)"
+          json: JSON
+          json_lines: "JSON Lines (um objeto por linha)"
+          html: HTML
+          markdown: Markdown
+          xml: XML
+          sql: SQL
+          spreadsheet: Planilha
           text: Texto
           binary: Binário
           hex: Hex
@@ -2153,6 +2180,7 @@ document:
       run: Executar
     tables:
       selected_count: "%{count} tabela(s) selecionada(s) para exportação"
+      required: "Selecione pelo menos uma tabela para exportar."
     format_options:
       format_label: Formato
       output_folder_label: "Pasta"
@@ -2164,8 +2192,34 @@ document:
       segment_size_hint: "linhas por segmento de arquivo"
       segment_size_placeholder: Tamanho do segmento / bloco
       segment_size_invalid: "Deve ser um número inteiro maior ou igual a 1; o valor anterior foi mantido."
+      delimiter_label: "Delimitador"
+      delimiter:
+        comma: "Vírgula ( , )"
+        semicolon: "Ponto e vírgula ( ; )"
+        tab: "Tabulação"
+        pipe: "Barra vertical ( | )"
+      encoding_label: "Codificação"
+      encoding:
+        utf8: "UTF-8"
+        utf8_bom: "UTF-8 com BOM"
+        utf16le: "UTF-16LE"
+        windows1252: "Windows-1252"
+      null_text_label: "Texto para NULL"
+      null_text_placeholder: "Vazio"
+      null_text_hint: "Escrito nos valores NULL. Com o texto vazio, NULL e string vazia só se distinguem se você escolher outro texto, como \\N."
+      sql_batch_size_label: "Linhas por INSERT"
+      sql_batch_size_placeholder: "500"
+      sql_batch_size_hint: "Linhas escritas em cada instrução INSERT. Se o driver tiver um limite menor, esse limite prevalece."
+      sql_batch_size_invalid: "Deve ser um número inteiro de 1 ou mais."
+      date_format_label: "Datas"
+      date_format:
+        rfc3339: "RFC 3339"
+        date_time: "YYYY-MM-DD HH:MM:SS"
+        epoch: "Epoch (segundos)"
       error:
         no_dialog_fallback_failed: "Nenhum seletor de pastas disponível e o diretório alternativo de exportação não pôde ser criado: %{error}"
+      sql_unavailable: "SQL não está disponível para esta conexão: o driver dela não consegue gerar instruções INSERT. Exporte como CSV ou JSON."
+      folder_required: "Escolha a pasta onde os arquivos serão gravados."
     confirm:
       title: Revisar plano de exportação
       summary: "%{count} tabela(s) como %{format} em %{folder}"
@@ -2197,10 +2251,18 @@ document:
       failed: "%{table}: FALHOU — %{error}"
       not_attempted: "%{table}: não tentada"
       cancelled: "%{table}: cancelada após %{rows} linha(s)"
+      not_attempted_after_failure: "%{table}: não tentada: a exportação parou na tabela que falhou"
     footer:
       back: Voltar
       continue: Continuar
       close: Fechar
+      reason:
+        tables: "Continuar fica desativado até que uma tabela seja selecionada."
+        folder: "Continuar fica desativado até que você escolha uma pasta."
+        batch_size: "Continuar fica desativado até que Linhas por INSERT seja válido."
+        segment_size: "Continuar fica desativado até que Tamanho do bloco seja válido."
+    done:
+      closing_failed: "Feche este diálogo, corrija a causa indicada acima e exporte novamente. Os arquivos já gravados permanecem na pasta. Sem um manifest.json a pasta não pode ser importada inteira, mas cada arquivo CSV ou JSON concluído ainda pode ser importado com Escolher arquivo; para um CSV, antes defina o delimitador, a codificação e o texto NULL iguais aos desta exportação, pois um CSV avulso não os traz."
   file:
     error:
       source_changed: "O arquivo foi alterado em outro lugar desde que foi aberto, então nada foi salvo e suas edições foram mantidas. Para ver o novo conteúdo, descarte suas edições e escolha Recarregar do arquivo, e depois refaça-as."
@@ -2400,7 +2462,7 @@ document:
       one: "Importar %{count} tabela"
       many: "Importar %{count} tabelas"
     rail:
-      pick_folder: Escolher pasta
+      pick_folder: Escolher origem
       configure: Configurar
       confirm: Confirmar
       run: Executar
@@ -2413,6 +2475,10 @@ document:
         no_connection: Nenhuma conexão ativa para este perfil
         no_dialog: Nenhum seletor de pastas disponível nesta plataforma
         invalid_bundle: "Pacote de importação inválido: %{error}"
+        no_connection_next: "Conecte-se ao perfil e abra a importação novamente."
+        no_dialog_next: "Inicie o DBFlux em uma sessão de desktop que ofereça um diálogo de arquivos e tente novamente."
+        invalid_bundle_next: "Escolha a pasta que a exportação gravou: ela contém manifest.json. Para importar um único arquivo, use Escolher arquivo… em vez disso."
+      reading_hint: "Lendo o manifesto. Os dois botões ficam desativados até terminar."
     configure:
       mode_placeholder: Modo
       target_placeholder: Coluna de destino
@@ -2421,6 +2487,225 @@ document:
       apply_mapping: Aplicar mapeamento
       continue: Continuar
       unmatched_source: "Coluna(s) de origem sem correspondência, serão ignoradas a menos que sejam remapeadas: %{names}"
+      truncate_unavailable: "Esta conexão não consegue truncar tabelas, então Truncate não aparece. Escolha Recreate para substituir a tabela."
+    pick_file:
+      description: "Ou importe um único arquivo em uma tabela: CSV, JSON, JSON Lines, XML ou uma planilha."
+      description_sql: "Ou importe um único arquivo em uma tabela: CSV, JSON, JSON Lines, XML ou uma planilha. Um arquivo .sql é executado como script em uma conexão SQL."
+      choose_file: "Escolher arquivo…"
+      reading_file: "Lendo arquivo…"
+      dialog_title: "Escolher arquivo para importar"
+      filter_label: "CSV, JSON, JSON Lines, XML e planilhas"
+      filter_label_sql: "CSV, JSON, JSON Lines, XML, planilhas e SQL"
+      error:
+        unsupported: "Somente arquivos .csv, .json, .jsonl, .xml, .xlsx, .xlsm, .xls e .ods podem ser importados."
+        unsupported_sql: "Somente arquivos .csv, .json, .jsonl, .xml, .xlsx, .xlsm, .xls, .ods e .sql podem ser importados."
+        invalid_file: "Não foi possível ler o arquivo: %{error}"
+        unsupported_next: "Escolha um arquivo com uma dessas extensões."
+        lookup_failed: "Não foi possível consultar a tabela de destino: %{error}"
+        next_csv: "Escolha outra codificação ou delimitador acima: o arquivo é lido novamente assim que você escolher um."
+        next_json: "Corrija o JSON no arquivo e escolha-o novamente, ou escolha outro arquivo."
+        next_xml: "Corrija o XML no arquivo e escolha-o novamente, ou escolha outro arquivo."
+        next_spreadsheet: "Verifique se o arquivo é uma pasta de trabalho válida e sem senha e escolha-o novamente, ou escolha outro arquivo."
+        next_lookup: "Verifique o nome da tabela e seu acesso à conexão, e pressione Usar tabela novamente."
+      reading_hint: "Lendo o arquivo. Os dois botões ficam desativados até terminar."
+    file:
+      source: "Arquivo: %{file} (%{format})"
+      target_table_label: "Tabela de destino"
+      target_table_placeholder: "Nome da tabela (padrão: nome do arquivo)"
+      use_table: "Usar tabela"
+      null_text_hint: "Texto do arquivo que representa NULL. Com texto vazio, um campo vazio é NULL."
+      json_no_options: "JSON e JSON Lines não têm opções de importação: o próprio arquivo define as colunas e os NULL."
+      xml_no_options: "XML não tem opções de importação: o próprio arquivo define as colunas e os NULL."
+      spreadsheet_header: "A linha 1 é o cabeçalho. Uma planilha não tem opções de delimitador nem de codificação: a planilha define as colunas e uma célula vazia é NULL."
+      sheet_label: "Planilha"
+      sheet_hint: "Cada importação lê uma planilha. Somente as planilhas visíveis são listadas. Ao escolher outra planilha, o arquivo é lido novamente na hora."
+      sheet_single: "Esta pasta de trabalho tem uma só planilha, então não há nada a escolher."
+    sheet:
+      empty:
+        message: "A planilha “%{sheet}” está vazia: não tem linhas."
+        next: "Escolha outra planilha acima, ou adicione uma linha de cabeçalho e dados a esta planilha no aplicativo de planilhas, salve e escolha o arquivo novamente."
+        next_single: "Adicione uma linha de cabeçalho e dados a esta planilha no aplicativo de planilhas, salve e escolha o arquivo novamente."
+      header:
+        message: "A linha 1 da planilha “%{sheet}” não é um cabeçalho válido: %{problems}."
+        next: "Dê a cada coluna da linha 1 um nome único no aplicativo de planilhas, salve e escolha o arquivo novamente, ou escolha outra planilha acima."
+        next_single: "Dê a cada coluna da linha 1 um nome único no aplicativo de planilhas, salve e escolha o arquivo novamente."
+        blank_one: "a coluna %{columns} está em branco"
+        blank_many: "as colunas %{columns} estão em branco"
+        duplicate_two: "as colunas %{columns} têm ambas o nome “%{name}”"
+        duplicate_many: "as colunas %{columns} têm todas o nome “%{name}”"
+      cell:
+        message: "A planilha “%{sheet}”, linha %{row}, coluna %{column} (“%{name}”) contém o erro %{code}."
+        next: "Corrija ou apague essa célula no aplicativo de planilhas, salve e escolha o arquivo novamente. As fórmulas são lidas como o último resultado salvo no arquivo."
+      large:
+        message: "A planilha “%{sheet}” tem %{cells} células, acima do limite de %{limit}. A planilha inteira é lida na memória, então não pode ser importada."
+        next: "Exporte-a como CSV no aplicativo de planilhas (Salvar como → CSV) e importe o CSV, ou escolha uma planilha menor acima."
+        next_single: "Exporte-a como CSV no aplicativo de planilhas (Salvar como → CSV) e importe o CSV."
+      list_and: "%{head} e %{last}"
+      list_more: "%{list} e mais %{count}"
+    script:
+      title: "Executar script SQL"
+      task: "Executar script SQL"
+      thousands_separator: "."
+      classification:
+        metadata: "Metadados"
+        read: "Leitura"
+        write: "Escrita"
+        destructive: "Destrutiva"
+        admin: "Admin"
+        admin_safe: "Admin (segura)"
+        admin_destructive: "Admin (destrutiva)"
+      error:
+        unreadable: "Não foi possível ler o arquivo: %{path}: %{message}"
+        unreadable_next: "Verifique se você pode ler o arquivo ou escolha outro."
+        not_utf8: "Não foi possível ler o script: ele não é UTF-8 válido (byte inválido na posição %{position}). Scripts SQL são lidos como UTF-8 e não têm opção de codificação."
+        not_utf8_next: "Salve o arquivo como UTF-8 no seu editor e escolha-o novamente."
+        too_large: "Este script tem %{size}, acima do limite de %{limit} para executar um script aqui."
+        too_large_next: "Execute-o com o cliente de linha de comando do próprio banco de dados. Dividi-lo em arquivos menores também funciona, mas cada arquivo é executado por conta própria: um arquivo posterior que falhe não pode desfazer um anterior."
+        empty: "O script não tem instruções: o arquivo está vazio ou contém apenas comentários."
+        empty_next: "Escolha um arquivo que tenha pelo menos uma instrução."
+        not_sql: "Não é possível executar um script SQL nesta conexão: ela usa a linguagem de consulta %{language}, não SQL."
+        not_sql_next: "Conecte-se a uma conexão SQL e abra a importação lá, ou escolha um arquivo CSV, JSON ou JSON Lines para importar dados nesta conexão."
+        other_next: "Verifique o script e as opções e tente novamente."
+        interrupt_failed: "Não foi possível parar a instrução em andamento: %{error}. Ela terminará antes de a execução parar."
+        session_open_failed: "Não foi possível abrir uma sessão separada para o script, então nada foi executado: %{error}"
+        session_cleanup_failed: "A sessão separada do script não pôde ser liberada corretamente: %{error}"
+        conditional_transaction: "Este script tem um comentário condicional por versão (linha %{line}) que controla transações, e se ele é executado depende do servidor."
+        conditional_transaction_next: "Execute o script com o cliente de linha de comando do próprio banco de dados."
+        session_commit: "Este script %{change} na linha %{line} (%{statement}), o que deixaria esta conexão em modo de confirmação manual após a execução."
+        session_commit_next: "Remova essa instrução, ou execute o script com o cliente de linha de comando do próprio banco de dados."
+        session_change_autocommit: "desativa o autocommit"
+        session_change_implicit: "ativa as transações implícitas"
+        client_directive: "Este script usa o comando de cliente %{directive} (linha %{line}), que só um cliente de linha de comando de banco de dados entende."
+        client_directive_next: "Execute o script com o cliente de linha de comando do próprio banco de dados, ou remova as linhas %{directive} e termine cada instrução com ponto e vírgula."
+        split_routine: "Este script tem um corpo de rotina que começa na linha %{line} e cujas instruções terminam com \";\", então ele não pode ser dividido em instruções aqui."
+        split_routine_next: "Execute o script com o cliente de linha de comando do próprio banco de dados."
+        copy_stdin: "Este script tem um bloco de dados COPY … FROM stdin (linha %{line}), que só o cliente de linha de comando psql consegue carregar."
+        copy_stdin_next: "Execute-o com o psql."
+        psql_meta: "Este script usa o comando do psql %{command} (linha %{line}), que só o cliente de linha de comando psql entende."
+        psql_meta_next: "Execute o script com o psql: removê-lo executaria as instruções restantes nesta conexão, que pode não ser o banco de dados que ele seleciona."
+        self_managed: "Este script gerencia suas próprias transações (%{keyword} na linha %{line}), então não pode ser executado em uma única transação."
+        self_managed_next: "Desative “Executar em uma única transação”; as próprias instruções do script decidem então o que é salvo."
+        read_only:
+          one: "Esta conexão é somente leitura, e %{count} instrução do script altera dados, estrutura ou permissões."
+          many: "Esta conexão é somente leitura, e %{count} instruções do script alteram dados, estrutura ou permissões."
+        read_only_next: "Abra uma conexão de leitura e escrita para executá-lo. Um script que apenas lê pode ser executado aqui."
+      configure:
+        file: "Arquivo: %{file} (script SQL)"
+        script_label: "Script"
+        script_summary:
+          one: "%{count} instrução, %{size}"
+          many: "%{count} instruções, %{size}"
+        preview_label: "Pré-visualização"
+        preview_more:
+          one: "e mais %{count} instrução"
+          many: "e mais %{count} instruções"
+        preview_hint: "A etiqueta é a classificação que o editor usa. DELETE e UPDATE sem WHERE estão marcados."
+        preview_sequence_hint: "Instruções que alteram uma sequência (setval, nextval, ALTER SEQUENCE) contam como Escrita, então uma conexão somente leitura as recusa."
+        no_where: "Sem WHERE"
+        on_error_label: "Em caso de erro"
+        on_error_stop: "Parar no primeiro erro"
+        on_error_continue: "Continuar após erros"
+        on_error_stop_hint: "A execução para na primeira instrução que falha. As instruções seguintes não são executadas."
+        on_error_continue_hint: "Todas as instruções são executadas. As que falham são listadas no final e as outras são mantidas."
+        transaction_label: "Transação"
+        transaction_checkbox: "Executar em uma única transação"
+        transaction_hint: "Se uma instrução falhar, as alterações feitas na transação são desfeitas. Nada é salvo até que a última instrução tenha sucesso. Alterações de sequências (setval, nextval) não são desfeitas por um rollback."
+        transaction_unchecked_hint: "Cada instrução é executada por conta própria e salva ao ser executada, então uma falha mantém as instruções que já foram executadas."
+        transaction_off_continue: "Desativada porque uma instrução com falha aborta a transação nesta conexão, então a execução não poderia continuar depois dela. Escolha “Parar no primeiro erro” para executar em uma única transação."
+        transaction_unavailable: "Uma única transação não está disponível: esta conexão não oferece suporte a transações. Cada instrução é executada por conta própria e salva ao ser executada, então uma falha mantém as instruções que já foram executadas."
+        transaction_self_managed_commit: "Desativada porque este script gerencia suas próprias transações (%{keyword} na linha %{line}). Ele é executado como está: cada %{keyword} nele salva as alterações anteriores."
+        transaction_self_managed: "Desativada porque este script gerencia suas próprias transações (%{keyword} na linha %{line}). Ele é executado como está: suas próprias instruções de transação decidem o que é salvo."
+        ddl_commits: "CREATE, ALTER e DROP são salvos ao serem executados nesta conexão e também salvam todas as instruções anteriores. Um rollback só desfaz as alterações feitas depois da última dessas instruções."
+      footer:
+        read_only: "Continuar está desativado: a conexão é somente leitura."
+        running_transaction: "Cancelar execução para após a instrução em andamento. As alterações transacionais são desfeitas; as alterações de sequências (setval, nextval) não."
+        running_kept: "Cancelar execução para após a instrução em andamento. As instruções já executadas são mantidas."
+        cancelling_transaction: "Aguardando a instrução em andamento parar. Depois a transação é desfeita."
+        cancelling_kept: "Aguardando a instrução em andamento parar. As instruções já executadas são mantidas."
+      confirm:
+        destructive_lead:
+          one: "Este script tem %{count} instrução destrutiva de %{total}:"
+          many: "Este script tem %{count} instruções destrutivas de %{total}:"
+        plain_lead:
+          one: "Este script tem %{count} instrução, nenhuma destrutiva. Ele será executado nesta conexão:"
+          many: "Este script tem %{count} instruções, nenhuma destrutiva. Ele será executado nesta conexão:"
+        warning: "Instruções destrutivas não podem ser desfeitas depois que o script termina. Confirme para continuar."
+        danger_line: "%{count} × %{message}"
+        first_label: "Primeiras %{shown} de %{total}"
+        first_line: "#%{index} %{snippet}"
+        how_transaction: "Ele é executado em uma única transação e para no primeiro erro."
+        how_each_stop: "Cada instrução é salva ao ser executada, e a execução para no primeiro erro."
+        how_each_continue: "Cada instrução é salva ao ser executada, e a execução continua após erros."
+        how_self_stop: "Ele é executado como está: as próprias instruções de transação do script decidem o que é salvo, e a execução para no primeiro erro."
+        how_self_continue: "Ele é executado como está: as próprias instruções de transação do script decidem o que é salvo, e a execução continua após erros."
+        run: "Executar script"
+        proceed: "Sim, executar script"
+      running:
+        title: "Executando a instrução %{index} de %{total}"
+        current: "Instrução atual"
+        starting: "Iniciando…"
+        transaction_line: "Uma única transação: nada é salvo até que a última instrução tenha sucesso."
+        no_transaction_line: "Sem transação: cada instrução é salva ao ser executada."
+        cancel: "Cancelar execução"
+        cancelling: "Cancelando…"
+      toast:
+        completed: "Script concluído"
+      done:
+        finished:
+          one: "Script concluído: %{count} instrução executada em %{elapsed}"
+          many: "Script concluído: %{count} instruções executadas em %{elapsed}"
+        committed: "Confirmado: as alterações estão salvas."
+        saved_as_run: "Cada instrução foi salva ao ser executada."
+        with_errors: "Script concluído com erros: %{ran} de %{total} instruções executadas, %{failed} falharam"
+        with_errors_next: "As instruções executadas foram mantidas; as %{failed} que falharam foram ignoradas. Revise as instruções com falha e as seguintes que dependem delas, concilie a execução parcial e mantenha ou restaure as configurações de sessão de que o script precisa (por exemplo SET search_path ou SET NAMES) antes de executar novamente as instruções corrigidas: uma instrução posterior pode ter sido executada sobre dados que uma com falha deveria ter alterado."
+        failure_label: "#%{index} · linha %{line}"
+        cancelled: "Script cancelado após %{ran} de %{total} instruções"
+        rolled_back_cancelled: "Desfeito: as alterações transacionais foram revertidas, então nada foi salvo. Alterações de sequências (setval, nextval) não são desfeitas por um rollback."
+        cancelled_rolled_back_next: "Escolha o arquivo e execute-o novamente quando quiser."
+        nothing_ran: "Nenhuma instrução foi executada, então nada mudou."
+        cancelled_kept:
+          one: "%{count} instrução foi executada e mantida: foi salva ao ser executada."
+          many: "%{count} instruções foram executadas e mantidas: cada uma foi salva ao ser executada."
+        cancelled_kept_next: "Apague-as do arquivo antes de executá-lo novamente, ou elas serão executadas duas vezes. Mantenha ou restaure as configurações de sessão de que o script precisa (por exemplo SET search_path ou SET NAMES) para o restante."
+        stopped: "Script parado na instrução %{index} de %{total}"
+        failed_statement: "Instrução com falha · linha %{line}"
+        database_error: "Erro do banco de dados: %{error}"
+        rolled_back_before:
+          one: "Desfeito: as alterações transacionais da %{count} instrução anterior foram revertidas. Alterações de sequências (setval, nextval) não são desfeitas por um rollback."
+          many: "Desfeito: as alterações transacionais das %{count} instruções anteriores foram revertidas. Alterações de sequências (setval, nextval) não são desfeitas por um rollback."
+        rolled_back_first: "Desfeito: nada foi salvo. Alterações de sequências (setval, nextval) não são desfeitas por um rollback."
+        rolled_back_nothing_saved: "Desfeito: nada foi salvo."
+        stopped_rolled_back_next: "Corrija essa instrução no arquivo, depois escolha o arquivo e execute-o novamente."
+        kept_before:
+          one: "A %{count} instrução anterior foi executada e mantida."
+          many: "As %{count} instruções anteriores foram executadas e mantidas."
+        nothing_before_it: "Nenhuma instrução foi executada antes dela."
+        not_run_range: "As instruções %{from} a %{total} não foram executadas."
+        not_run_single: "A instrução %{index} não foi executada."
+        stopped_kept_next: "Corrija a instrução %{index} e concilie as alterações que as primeiras %{before} instruções já fizeram. Antes de executar o restante, mantenha ou restaure as configurações de sessão de que o script precisa (por exemplo SET search_path ou SET NAMES) e execute apenas as instruções restantes, ou elas serão executadas duas vezes."
+        use_transaction_next: "Ative “Executar em uma única transação” da próxima vez para evitar uma execução parcial."
+        fix_first_next: "Corrija a instrução %{index} e execute o script novamente."
+        commit_failed: "Script parado: não foi possível confirmar a transação"
+        commit_failed_next: "Verifique a conexão, depois escolha o arquivo e execute-o novamente."
+        unresolved: "O script terminou sem um resultado claro"
+        unresolved_message: "Não foi possível encerrar a transação: %{error}"
+        unresolved_next: "Verifique o estado do banco de dados antes de executar qualquer outra coisa: a transação pode continuar aberta, ou parte do script pode estar salva. Feche a conexão para encerrar uma transação aberta."
+        ddl_not_undone: "CREATE, ALTER e DROP são salvos ao serem executados nesta conexão, então um rollback não os desfez."
+        not_run: "O script não foi executado"
+        not_run_next: "Nada foi executado. Corrija a causa indicada acima e execute o script novamente."
+        partially_kept: "Salvo em parte: tudo até a instrução %{index} (linha %{line}) foi salvo, porque ela confirma por conta própria nesta conexão, e as instruções seguintes também podem ter sido salvas."
+        partially_kept_no_line: "Salvo em parte: tudo até a instrução %{index} foi salvo, porque ela confirma por conta própria nesta conexão, e as instruções seguintes também podem ter sido salvas."
+        partially_kept_next: "Verifique o banco de dados e concilie o que foi salvo antes de executar o script novamente, ou as instruções salvas serão executadas duas vezes."
+        script_rolled_back: "As instruções que o script executou fora de suas próprias transações foram salvas ao serem executadas. A transação aberta do script foi desfeita, então o que ela havia alterado ali não foi salvo. Alterações de sequências (setval, nextval) não são desfeitas por um rollback."
+        stopped_own_transaction_next: "Corrija a instrução %{index}, verifique no banco de dados quais das anteriores foram salvas e concilie as alterações. Mantenha ou restaure as configurações de sessão de que o script precisa (por exemplo SET search_path ou SET NAMES) e execute apenas o que falta, ou as instruções salvas serão executadas duas vezes."
+        cancelled_own_transaction_next: "Verifique no banco de dados quais instruções foram salvas e concilie as alterações antes de executar o script novamente, ou as instruções salvas serão executadas duas vezes."
+        possibly_open_rolled_back: "O script usou SAVEPOINT fora de uma transação, então o DBFlux emitiu um ROLLBACK caso uma tivesse ficado aberta. As alterações que o banco de dados já havia confirmado permanecem."
+        ended_without_commit: "O script terminou sem COMMIT, então sua transação aberta foi desfeita."
+        ended_without_commit_next: "Adicione um COMMIT no final do script para salvar suas alterações."
+        ended_without_commit_next_or: "Adicione um COMMIT no final do script para salvar suas alterações, ou ative “Executar em uma única transação”."
+        left_open: "O script terminou com uma transação aberta"
+        left_open_message: "Não foi possível desfazer a transação do script: %{error}"
+        left_open_next: "Uma transação ainda pode estar aberta nesta conexão. Desconecte e reconecte para encerrá-la e verifique o estado do banco de dados antes de executar qualquer outra coisa."
     mapping_mode:
       create: Criar
       existing: Existente (somente inserir)
@@ -2428,7 +2713,8 @@ document:
       skip: Ignorar
       truncate: Truncar (esvaziar + inserir)
     confirm:
-      body: "Isto excluirá e recriará ou truncará a(s) seguinte(s) tabela(s) antes de carregar os dados: %{tables}"
+      body: "Isto excluirá e recriará ou truncará a(s) seguinte(s) tabela(s) antes de carregar os dados:"
+      table_line: "%{table} — %{mode}"
       warning: Isto não pode ser desfeito. Confirme para continuar.
       back: Voltar
       proceed: "Sim, continuar"
@@ -2441,6 +2727,7 @@ document:
     done:
       cancelled_rows: "%{rows} linha(s) foram importadas antes de a importação parar."
       close: Fechar
+      closing_failed: "Feche este diálogo e corrija a causa indicada acima. As tabelas concluídas permanecem no destino; escolha Ignorar para elas se importar novamente. Em um destino sem suporte a transações, as linhas da tabela com falha gravadas antes do erro também permanecem."
     error:
       no_connection: Nenhuma conexão ativa para esta importação
     toast:
@@ -2457,6 +2744,15 @@ document:
       failed: "%{table}: FALHOU — %{error}"
       not_attempted: "%{table}: não tentada"
       cancelled: "%{table}: cancelada após %{rows} linha(s)"
+      not_attempted_after_failure: "%{table}: não tentada: a importação parou na tabela que falhou"
+    footer:
+      reason:
+        file_read: "Continuar fica desativado até que o arquivo seja lido."
+        sheet_empty: "Continuar está desativado: a planilha “%{sheet}” não tem linhas."
+        sheet_header: "Continuar está desativado: a linha 1 precisa de um nome único em cada coluna."
+        sheet_cell: "Continuar está desativado: uma célula contém um valor de erro."
+        sheet_large: "Continuar está desativado: a planilha passa de %{limit} células."
+      cancel: "Cancelar"
   instance_inspector:
     task_label: "Inspetor: %{metric_id}"
     connection_not_found: Conexão não encontrada
@@ -3413,6 +3709,31 @@ document:
     new: Nova aba
     close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Fechar aba"
+    retry: "Tentar novamente"
+    removed:
+      title: "Este segredo foi excluído"
+      body: "%{name} não está mais no armazenamento. Esta aba não lê nem grava nada. Feche-a e abra o segredo novamente se ele for recriado."
+      draft_title: "Excluído — seu texto não salvo foi mantido"
+      draft_body: "%{name} foi excluído, então nada pode ser salvo. O texto abaixo é somente leitura; copie o que precisar e depois descarte-o."
+    scheduled:
+      draft_title: "Exclusão agendada — seu texto não salvo foi mantido"
+      draft_body: "%{name} está com a exclusão agendada, então nada pode ser salvo. O texto abaixo é somente leitura. Restaure o segredo para editá-lo de novo, ou descarte o texto."
+    region_mismatch:
+      title: "Esta conexão está em outra região"
+      body: "%{name} pertence a %{region} e a conexão está em %{live}. Esta aba não lê nem grava nada até a conexão voltar para %{region}."
+    footer:
+      value_scope: "Valor visível apenas nesta aba, apagado ao fechar"
+      hint:
+        reveal: "revelar"
+        edit: "editar"
+        roll_back: "reverter"
+    rotation_badge:
+      on: "Rotação ativa"
+      off: "Rotação desativada"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "A busca roda no cofre; os valores nunca são listados"
@@ -3420,6 +3741,9 @@ document:
       refresh: "Atualizar"
     load_more: "Carregar a próxima página"
     loading_more: "Carregando a próxima página…"
+    region:
+      label: "Região"
+      switch_failed: "Não foi possível mudar para a região %{region}: %{error}"
     columns:
       name: "Nome"
       description: "Descrição"
@@ -3446,29 +3770,60 @@ document:
     error:
       connection_unavailable: "A conexão não está disponível"
       store_unavailable: "A conexão não tem o cofre %{store}"
+      may_have_landed: "O serviço pode ter aplicado a alteração antes de falhar. Verifique o segredo antes de tentar novamente."
+      audit_unrecorded: "Não foi possível registrar a falha na auditoria."
     footer:
       loaded:
         one: "%{count} segredo carregado"
         many: "%{count} segredos carregados"
+      paths:
+        one: "%{count} caminho"
+        many: "%{count} caminhos"
+      parameters:
+        one: "%{count} parâmetro"
+        many: "%{count} parâmetros"
+      tree_summary: "%{paths} · %{parameters} carregados em %{path}"
+      flat_summary: "%{parameters} em %{path}"
       hint:
         open: "abrir"
         retrieve: "obter valor"
-        copy_id: "copiar ID"
+        copy_arn: "copiar ARN"
         filter: "filtrar"
         up: "subir"
     status:
       list_timing:
         one: "Listagem · %{count} segredo · %{millis} ms"
         many: "Listagem · %{count} segredos · %{millis} ms"
+      list_timing_parameters:
+        one: "Listagem · %{count} parâmetro · %{millis} ms"
+        many: "Listagem · %{count} parâmetros · %{millis} ms"
       describe_timing: "Descrição · %{millis} ms"
       retrieve_timing: "Obter valor · %{millis} ms"
       duration_tooltip: "Duração no cliente da última chamada ao cofre"
+    date:
+      short: "%{day} %{month}, %{time}"
+      short_with_year: "%{day} %{month} %{year}, %{time}"
+      months:
+        jan: "jan"
+        feb: "fev"
+        mar: "mar"
+        apr: "abr"
+        may: "mai"
+        jun: "jun"
+        jul: "jul"
+        aug: "ago"
+        sep: "set"
+        oct: "out"
+        nov: "nov"
+        dec: "dez"
     rotation:
       off: "Desativada"
       enabled: "Ativada"
       disabled: "Desativada"
       every_days: "A cada %{count} dias"
       every_hours: "A cada %{count} horas"
+      on_schedule: "Em agenda"
+      window: "Janela"
       schedule_with_window: "%{schedule} · janela %{window} (%{expression})"
       title: "Rotação"
       status: "Status"
@@ -3478,6 +3833,7 @@ document:
       last: "Última rotação"
     details:
       none: "Selecione um segredo para ver os detalhes"
+      close: "Fechar"
       loading: "Carregando os detalhes…"
       failed: "Não foi possível carregar os detalhes"
       title: "Detalhes do segredo"
@@ -3492,7 +3848,29 @@ document:
       created: "Criado"
       last_changed: "Última alteração"
       last_retrieved: "Última obtenção"
-      versions: "Versões"
+      open_in_tab: "Abrir em uma aba"
+      resize: "Redimensionar o painel de detalhes"
+    versions:
+      title: "Versões"
+      history_title: "Histórico"
+      count:
+        one: "%{count} versão"
+        many: "%{count} versões"
+      column:
+        version: "Versão"
+        labels: "Rótulos de preparo"
+        created: "Criada"
+      no_labels: "sem rótulos"
+      history_version: "v%{id}"
+      loading: "Carregando as versões…"
+      failed: "Não foi possível carregar as versões"
+      scheduled_for_deletion: "Agendado para exclusão; restaure-o para ver as versões"
+      not_connected: "Sem conexão; conecte-se para ver as versões"
+      retrieve: "Recuperar a versão %{version}"
+      back_to_current: "Voltar para a atual"
+      shown: "Exibindo a versão %{version}"
+      not_current: "Não é a versão atual. A recuperação é auditada, o valor não."
+      current_unknown: "A versão atual não é conhecida no momento. A recuperação é auditada, o valor não."
     tags:
       title: "Tags"
       none: "Sem tags"
@@ -3501,10 +3879,19 @@ document:
       body: "%{name} pertence a %{service}. %{service} faz a rotação e a atualização, então o DBFlux o mostra somente leitura."
     action:
       copy_resource_id: "Copiar ARN"
+    context_menu:
+      copy_name: "Copiar nome"
+      copy_path: "Copiar caminho"
+      arn_loading: "O ARN chega com os detalhes…"
+      arn_missing: "O armazenamento não informa um identificador de recurso"
+      arn_failed: "Não foi possível carregar os detalhes: %{error}"
+      open_in_tab: "Abrir em uma aba"
     toast:
       value_copied: "Valor copiado para a área de transferência"
       resource_id_copied: "ARN copiado para a área de transferência"
       error_copied: "Erro copiado para a área de transferência"
+      name_copied: "Nome copiado para a área de transferência"
+      path_copied: "Caminho copiado para a área de transferência"
     value:
       title: "Valor"
       not_loaded: "Valor não carregado"
@@ -3517,7 +3904,21 @@ document:
       view:
         key_value: "Chave/valor"
         plaintext: "Texto simples"
-      plaintext_only: "Chave/valor só abre quando o valor é um objeto JSON de um nível com valores escalares. JSON aninhado, arrays e qualquer outro texto abrem como texto simples."
+        key_value_unavailable: "Chave/valor não está disponível: o valor não é um objeto JSON de um nível com valores escalares."
+      kind:
+        dotenv:
+          one: "dotenv · %{count} linha"
+          many: "dotenv · %{count} linhas"
+        json_keys:
+          one: "JSON · %{count} chave"
+          many: "JSON · %{count} chaves"
+        json_items:
+          one: "JSON · %{count} item"
+          many: "JSON · %{count} itens"
+        text:
+          one: "texto · %{count} linha"
+          many: "texto · %{count} linhas"
+        binary: "binário"
       binary_size: "Binário · %{size}"
       read_only: "Somente leitura"
       binary_note: "Valores binários são gravados por outras ferramentas. O DBFlux os mostra em base64 e não os edita."
@@ -3537,6 +3938,155 @@ document:
       metadata_loaded: "Metadados carregados · só o valor falhou"
       deletion_scheduled: "Exclusão agendada para %{date}"
       deletion_scheduled_body: "O valor não pode ser obtido até que seja restaurado."
+      deletion_scheduled_unknown: "Exclusão agendada"
+
+    edit:
+      open: "Editar valor"
+      save: "Salvar como nova versão"
+      discard: "Descartar"
+      hint: "Salvar grava uma nova versão e a torna atual. O texto é salvo exatamente como está aqui."
+      invalid_json: "O valor armazenado era JSON e o texto editado não é um JSON válido: %{error}"
+      unsaved_block: "%{name} tem edições não salvas. Salve ou descarte-as primeiro."
+      connection_replaced: "A conexão foi substituída enquanto o valor era editado. Descarte o editor e obtenha o valor novamente antes de salvar."
+      refused_managed: "O valor de %{name} é gerenciado por %{service}, portanto não pode ser editado."
+      refused_deletion: "A exclusão de %{name} está agendada, então seu valor não pode ser editado até ser restaurado."
+      change_summary: "Edições de valor não salvas"
+      find: "Localizar"
+      modified: "modificado"
+      footer:
+        version: "versão %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "1 linha alterada"
+        changed_other: "%{count} linhas alteradas"
+        saving_note: "Salvar cria uma nova versão e a torna atual"
+        caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "Este segredo mudou em outra visão. Salvar grava uma nova versão sobre ele."
+      hint_formatted: "Salvar grava uma nova versão e a torna a atual. Formatado grava de volta em uma única linha um valor armazenado em uma linha, e um valor armazenado em várias linhas como está aqui; Bruto salva o texto exatamente como está aqui."
+      mode:
+        formatted: "Formatado"
+        raw: "Bruto"
+        toggle: "Alternar entre Formatado e Bruto"
+    dialog:
+      cancel: "Cancelar"
+    write:
+      refused_managed: "%{name} é gerenciado por %{service}, então não pode ser alterado aqui."
+      refused_deletion: "A exclusão de %{name} está agendada. Restaure-o antes de alterá-lo."
+      region_switching: "A região está sendo trocada. Aguarde a conexão se estabilizar e tente novamente; nada foi gravado."
+      connection_replaced: "A conexão foi substituída enquanto este diálogo estava aberto. Nada foi gravado. Abra-o novamente a partir da conexão atual."
+      details_stale: "Os detalhes exibidos foram lidos de uma conexão anterior. Estão sendo lidos novamente; tente de novo em instantes."
+      in_progress: "Outra alteração ainda está sendo gravada. Aguarde o término."
+      landed_on_previous_session: "Uma alteração terminou depois que a conexão foi substituída. Ela foi gravada na conexão anterior e este documento não foi atualizado; atualize-o para ver o estado atual."
+    rollback:
+      button: "Reverter"
+      action: "Reverter para a versão %{version}"
+      footnote: "Reverter torna a versão escolhida a atual e mantém como anterior a versão que era a atual. Nenhum valor é regravado."
+      title: "Reverter %{name}"
+      lead: "Tornar a versão %{version} a versão atual de %{name}?"
+      effect: "Os aplicativos que leem a versão atual receberão o valor da versão escolhida. A versão %{current}, atual agora, continua disponível como versão anterior."
+      confirm: "Reverter"
+      done: "%{name} agora usa a versão %{version}"
+      no_earlier_version: "%{name} não tem uma versão anterior para a qual reverter."
+      history_loading: "As versões ainda estão sendo carregadas. Tente novamente em instantes."
+      pending_reason: "Esta versão está em etapa por uma rotação inacabada, então não é possível reverter para ela."
+      only_pending: "Todas as versões anteriores estão em etapa por uma rotação inacabada e não é possível reverter para elas."
+    delete:
+      button: "Excluir"
+      title:
+        secret: "Excluir segredo"
+        parameter: "Excluir parâmetro"
+      lead_scheduled: "Excluir %{name}? Os aplicativos que o leem começarão a falhar imediatamente: o segredo fica indisponível até ser restaurado. O período de recuperação só limita por quanto tempo ele pode ser restaurado."
+      lead_irreversible: "Excluir %{name}? Isso não pode ser desfeito. O parâmetro é removido imediatamente, e os aplicativos que o leem começarão a falhar logo em seguida."
+      window_label: "Período de recuperação"
+      window_option: "%{count} dias"
+      window_hint: "Você pode restaurar o segredo durante este período."
+      confirm_label:
+        secret: "Digite o nome do segredo para confirmar"
+        parameter: "Digite o nome do parâmetro para confirmar"
+      confirm_placeholder: "Nome"
+      confirm_aria: "Digite %{name} para confirmar a exclusão"
+      confirm_scheduled: "Agendar exclusão"
+      confirm_irreversible: "Excluir permanentemente"
+      done: "%{name} foi excluído"
+      done_scheduled: "A exclusão de %{name} está agendada para %{date}"
+      done_scheduled_undated: "A exclusão de %{name} está agendada"
+      scheduled_detail: "%{name} foi excluído em %{deleted} com um período de recuperação de %{days} dias. Seu valor não pode ser obtido até que seja restaurado."
+      row_deleted: "Excluído"
+      row_deletes_on: "Será excluído em"
+    restore:
+      button: "Restaurar segredo"
+      done: "%{name} foi restaurado"
+    rotate:
+      button: "Rotacionar agora"
+      immediately: "Rotacionar imediatamente"
+      refused_off: "A rotação está desativada para %{name}. Ative-a em Editar rotação antes de rotacionar."
+      done: "Uma rotação de %{name} foi iniciada"
+      done_version: "Uma rotação de %{name} foi iniciada; a versão %{version} será a atual quando a rotação terminar"
+      title: "Rotacionar %{name} agora"
+      lead: "Rotacionar %{name} agora?"
+      effect: "Isso executa agora a função de rotação do segredo e cria uma nova versão que passa a ser a atual quando a rotação termina. Até lá, os aplicativos que leem o segredo continuam recebendo o valor anterior."
+      confirm: "Rotacionar agora"
+    rotation_edit:
+      button: "Editar rotação"
+      title: "Editar a rotação de %{name}"
+      enabled: "Rotacionar este segredo automaticamente"
+      schedule: "Agendamento"
+      schedule_hint: "rate(30 days), rate(12 hours) ou uma expressão cron(...) de seis campos."
+      schedule_placeholder: "rate(30 days)"
+      window: "Janela de rotação"
+      window_hint: "Horas inteiras, de 1h a 24h. Vazio mantém a janela atual."
+      window_placeholder: "4h"
+      function: "Função de rotação"
+      function_hint: "A função que rotaciona o segredo, como seu ARN. Vazio mantém a função atual."
+      function_placeholder: "ARN da função"
+      already_off: "A rotação já está desativada."
+      confirm: "Salvar rotação"
+      done: "A rotação de %{name} foi atualizada"
+      unfinished: "A rotação está desativada, mas a versão %{version} ainda mantém a etapa pendente de uma rotação que nunca terminou."
+      unfinished_title: "Uma rotação cancelada deixou a versão %{version} pendente"
+      unfinished_body: "Verifique as credenciais da versão %{version} e depois mova ou remova sua etapa pendente. Até lá, uma rotação posterior pode ser recusada."
+    tags_edit:
+      button: "Editar tags"
+      title: "Editar as tags de %{name}"
+      lead: "Alterar uma tag não toca no valor nem em nenhuma versão."
+      key_placeholder: "chave"
+      value_placeholder: "valor"
+      key_label: "Chave da tag %{row}"
+      value_label: "Valor da tag %{row}"
+      remove: "Remover tag"
+      add: "Adicionar tag"
+      confirm: "Salvar tags"
+      done: "As tags de %{name} foram atualizadas"
+      no_change: "Nenhuma tag difere das que o segredo tem."
+      duplicate: "A chave %{key} aparece em mais de uma linha."
+    description_edit:
+      button: "Editar descrição"
+      title: "Editar a descrição de %{name}"
+      label: "Descrição"
+      placeholder: "Sem descrição"
+      confirm: "Salvar descrição"
+      confirm_version: "Salvar como nova versão"
+      done: "A descrição de %{name} foi atualizada"
+      done_version: "A descrição de %{name} foi atualizada; a versão %{version} contém a nova descrição"
+      rewrites_title: "Isso grava o valor novamente como uma nova versão"
+      rewrites_body: "Este armazenamento só altera uma descrição gravando o valor novamente, então salvar cria uma nova versão. O valor, seu tipo e sua chave permanecem como estão."
+    create:
+      button_secret: "Novo segredo"
+      button_parameter: "Novo parâmetro"
+      title_secret: "Novo segredo"
+      title_parameter: "Novo parâmetro"
+      name: "Nome"
+      name_placeholder: "Nome"
+      type: "Tipo"
+      value: "Valor"
+      description: "Descrição"
+      description_placeholder: "Opcional"
+      tier: "Nível"
+      key: "Chave de criptografia"
+      key_placeholder: "Chave padrão"
+      tags: "Tags"
+      confirm: "Criar"
+      done: "%{name} foi criado"
+      exists: "%{name} já existe. Escolha outro nome; criar nunca substitui um segredo."
 document_tree:
   search_placeholder: Buscar…
   view:
@@ -3943,6 +4493,14 @@ palette:
       name: Focar no painel de tarefas
     toggle_sidebar:
       name: Alternar barra lateral
+    toggle_full_screen:
+      name: Alternar tela cheia
+    increase_interface_size:
+      name: "Aumentar tamanho da interface"
+    decrease_interface_size:
+      name: "Diminuir tamanho da interface"
+    reset_interface_size:
+      name: "Redefinir tamanho da interface"
     toggle_editor:
       name: Alternar painel do editor
     toggle_results:
@@ -4062,6 +4620,13 @@ settings:
       option:
         default: "Padrão"
         compact: "Compacto"
+    scrollbars:
+      help: "Vale para todas as janelas."
+      label: "Mostrar barras de rolagem"
+      option:
+        while_scrolling: "Ao rolar"
+        on_hover: "Ao passar o cursor"
+        always: "Sempre"
     language:
       label: Idioma
       option:
@@ -4334,6 +4899,8 @@ settings:
       toggle_row_inspector: Alternar inspetor de linha
       find_similar_rows: Encontrar linhas semelhantes
       results_set_null: Definir célula como NULL
+      results_set_default: "Definir a célula como o padrão da coluna"
+      results_toggle_expression: "Alternar editor literal / expressão"
       open_context_menu: Abrir menu de contexto
       open_pane_actions: Abrir ações do painel
       menu_up: Menu para cima
@@ -4355,6 +4922,10 @@ settings:
       cancel_task: Cancelar tarefa
       clear_finished_tasks: Limpar tarefas concluídas
       toggle_sidebar: Alternar barra lateral
+      toggle_full_screen: Alternar tela cheia
+      increase_interface_size: "Aumentar tamanho da interface"
+      decrease_interface_size: "Diminuir tamanho da interface"
+      reset_interface_size: "Redefinir tamanho da interface"
       open_settings: Abrir configurações
       open_login_modal: Abrir login do perfil de autenticação
       open_sso_wizard: Abrir assistente AWS SSO
@@ -4414,6 +4985,8 @@ settings:
       toggle_console: Alternar console
       load_more: Carregar mais
       edit_expiry: Editar expiração…
+      edit_value: Editar valor
+      roll_back_version: "Reverter para a versão anterior"
       copy_preview: Copiar pré-visualização
       import_items: "Importar…"
       import_from_client: "Importar de outro cliente…"
@@ -4470,6 +5043,7 @@ settings:
       add_panel_picker: "Seletor de painéis"
       mcp_approvals: "Aprovações do MCP"
       migrate_wizard: "Assistente de migração"
+      import_wizard: "Assistente de importação"
       vim_normal: "Vim Normal"
     category:
       global: Global
@@ -5149,6 +5723,8 @@ sidebar:
     new_script_folder: Nova pasta
     reveal_file_manager: Mostrar no gerenciador de arquivos
     copy_path: Copiar caminho
+    copy_column_name: Copiar nome da coluna
+    copy_field_name: Copiar nome do campo
     schema_diff_unsupported: A comparação de schema só está disponível para conexões relacionais.
     new_dashboard: Novo dashboard…
     import_dashboard: Importar dashboard de JSON…
@@ -5190,6 +5766,11 @@ sidebar:
     dashboards: "Dashboards"
     connections: CONEXÕES
     scripts: SCRIPTS
+  root_section:
+    confirm_message: "Executar \"%{action}\" em \"%{item}\"?"
+    action:
+      delete_bucket: "Excluir bucket"
+      delete_bucket_description: "Exclui o bucket. Apenas um bucket vazio pode ser excluído, e isso não pode ser desfeito."
   task:
     connecting: "Conectando a %{name}"
     disconnecting: "Desconectando %{name}"
@@ -5198,7 +5779,7 @@ sidebar:
     disconnect_hook_cancelled: Hook de desconexão cancelado
     post_disconnect_hook_cancelled: Hook de pós-desconexão cancelado
     loading_event_streams: "Carregando fluxos de eventos: %{name}"
-    listing_buckets: "Listando buckets: %{name}"
+    listing_root_section: "Listando %{section}: %{name}"
     loading_database_schema: "Carregando schema: %{name}"
     connecting_to_database: "Conectando ao banco de dados: %{name}"
     refreshing_database: "Atualizando o banco de dados: %{name}"
@@ -5246,7 +5827,16 @@ sidebar:
       indexes: "Falha ao carregar os índices: %{error}"
       foreign_keys: "Falha ao carregar as chaves estrangeiras: %{error}"
       routines: "Falha ao carregar as rotinas: %{error}"
-    list_buckets_failed: "Falha ao listar os buckets: %{error}"
+    list_root_section_failed: "Falha ao listar %{section}: %{error}"
+    root_section_action_failed: "%{action} falhou para %{item}: %{error}"
+    root_section_action_audit_failed: "%{action} em %{item} foi concluída, mas o evento de auditoria não foi registrado: %{error}"
+    root_section_action_connection_changed: "%{action} não foi executada em %{item}: a conexão mudou depois que a ação foi solicitada."
+    root_section_action_refused:
+      read_only: "%{action} não foi executada: esta conexão é somente leitura."
+      read_only_profile: "%{action} não foi executada: o perfil desta conexão está configurado como somente leitura."
+      read_only_server: "%{action} não foi executada: o servidor rejeitou alterações para esta conexão."
+      approval_unavailable: "%{action} não foi executada: esta conexão exige aprovação, que ainda não está disponível para ações da barra lateral."
+    root_section_invalid_id: "O driver declarou a seção raiz \"%{section}\", que foi ignorada: ids de seção devem ser únicos e não podem conter \"|\"."
     code_generation_failed: "Falha na geração de código: %{error}"
     loading_event_streams: Carregando fluxos de eventos…
     load_schema_failed: "Falha ao carregar o schema: %{error}"
@@ -5318,6 +5908,7 @@ sidebar:
       error_retry: "Erro: %{error} — clique para tentar novamente"
       connect_failed: "Falha na conexão: %{error}"
       remote_listing_count: "%{label} (%{count})"
+      load_more: "Carregar mais"
       remote_dashboards_error_retry: "Erro: %{error} — recolha e expanda para tentar novamente"
       used_by_objects:
         one: Usado por 1 objeto

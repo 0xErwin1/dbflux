@@ -40,6 +40,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ColumnRight),
         ),
         (
+            "segmented-scrollbars-*",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
             "segmented-focus-on-launch-*",
             KeyboardPath::Command(Command::ColumnRight),
         ),

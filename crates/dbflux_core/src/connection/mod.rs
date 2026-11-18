@@ -15,10 +15,12 @@ pub(crate) mod profile;
 pub mod profile_manager;
 pub(crate) mod proxy;
 pub mod proxy_manager;
+pub(crate) mod root_section;
 pub(crate) mod secret_store;
 pub mod ssh_tunnel_manager;
 pub(crate) mod tree;
 pub mod tree_manager;
+pub(crate) mod uri;
 
 use crate::DbError;
 
@@ -65,7 +67,8 @@ pub use manager::{
     MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
     ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews,
     ResolvedProxy, SchemaCacheKey, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
-    SwitchDatabaseResult, TableDetailsPrepareError, WritePrivilege, compose_mutation_policy,
+    SwitchDatabaseResult, SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError,
+    WritePrivilege, compose_mutation_policy,
 };
 #[allow(deprecated)]
 pub use profile::{
@@ -80,3 +83,4 @@ pub use proxy_manager::ProxyManager;
 pub use ssh_tunnel_manager::SshTunnelManager;
 pub use tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use tree_manager::ConnectionTreeManager;
+pub use uri::{decode_uri_component, split_uri_host_port, uri_host};

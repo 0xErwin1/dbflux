@@ -1175,7 +1175,7 @@ impl SourceTargetPhase {
             .when(is_checkable, |parent| {
                 parent.child(checkbox_glyph(is_checked, theme))
             })
-            .when_some(row.icon, |parent, icon| {
+            .when_some(row.icon.clone(), |parent, icon| {
                 parent.child(Icon::new(icon).small().color(icon_color))
             })
             .child(Text::body(row.label.to_string()).color(text_color));

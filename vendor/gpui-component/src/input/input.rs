@@ -132,6 +132,7 @@ pub struct Input {
     role: RoleOverride,
     accessibility_id: Option<SharedString>,
     aria_label: Option<SharedString>,
+    redacted: bool,
 
     /// An optional context menu builder to allow a custom context menu on the input.
     ///
@@ -244,6 +245,7 @@ impl Input {
             role: RoleOverride::default(),
             accessibility_id: None,
             aria_label: None,
+            redacted: false,
             context_menu_builder: None,
             paste_handler: None,
             token_renderer: None,
@@ -339,6 +341,18 @@ impl Input {
     /// If unset, the role is inferred from multi-line mode and content type.
     pub fn role(mut self, role: impl Into<RoleOverride>) -> Self {
         self.role = role.into();
+        self
+    }
+
+    /// Mark the input as carrying a secret.
+    ///
+    /// Rendered-frame observers redact the element, and the text is withheld
+    /// from the accessibility tree entirely — no node of the AccessKit
+    /// update carries the value, so neither assistive technology nor UI
+    /// automation can read it. The input itself is unchanged: it edits,
+    /// focuses, copies (subject to masking) and draws exactly as before.
+    pub fn redacted(mut self, redacted: bool) -> Self {
+        self.redacted = redacted;
         self
     }
 
@@ -670,7 +684,7 @@ impl RenderOnce for Input {
         // Overlay content is measured during synchronization, before the input's
         // styled container applies its font and spacing to the element tree.
         let mut overlays = window.with_text_style(Some(self.style.text.clone()), |window| {
-            state.render_overlays(window, cx)
+            state.render_overlays(self.redacted, window, cx)
         });
         overlays
             .floating
@@ -685,7 +699,8 @@ impl RenderOnce for Input {
         // Tests read the same accessibility value as assistive technology.
         // Avoid materializing the rope in normal builds without a client.
         let accessibility_value = ((window.is_a11y_active() || cfg!(feature = "test-support"))
-            && exposes_accessibility_value(presentation.is_masked(), content_type))
+            && exposes_accessibility_value(presentation.is_masked(), content_type)
+            && !self.redacted)
         .then(|| state.text(cx).to_string());
         let input_focused =
             presentation.focus_handle().is_focused(window) && !presentation.is_disabled();
@@ -767,6 +782,7 @@ impl RenderOnce for Input {
                 })
             })
             .role(accessibility_role)
+            .when(self.redacted, |this| this.frame_redacted(true))
             .when_some(self.accessibility_id, |this, id| this.accessibility_id(id))
             .when_some(aria_label, |this, label| this.aria_label(label))
             .when_some(placeholder, |this, placeholder| {

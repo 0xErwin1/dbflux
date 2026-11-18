@@ -77,7 +77,7 @@ Notes:
 
 DBFlux connects and sends `Hello` first.
 
-The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are negotiated deterministically within that major line. Minor versions up to v1.7 are additive; v1.8 is a wire-format fix that changes how some existing payloads are encoded, and every shape that decoded before is byte-identical (see **Wire-format fix** below).
+The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are negotiated deterministically within that major line. Minor versions up to v1.7 are additive; v1.8 is a wire-format fix that changes how some existing payloads are encoded, and every shape that decoded before is byte-identical (see **Wire-format fix** below). v1.9 is additive again. v1.10 is additive too: it appends two request variants and leaves every v1.9 payload byte-identical (see **Cell SQL expressions** below).
 
 Client request:
 
@@ -95,6 +95,8 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
+        ProtocolVersion::new(1, 9),
+        ProtocolVersion::new(1, 10),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -218,6 +220,26 @@ A raw `serde_json::Value` could be written but never read back, because it deser
 
 The encoding is not gated by the negotiated version. A shape that decoded before v1.8 is byte-identical in v1.8; only shapes that no peer could decode change their bytes, so peers on older minors keep working.
 
+### Root sections (v1.9+)
+
+A driver can declare sections shown at the root of its connection in the sidebar, such as S3 buckets. The payloads are the `dbflux_core` root section types, carried as they are:
+
+| Request | Response |
+| --- | --- |
+| `RootSections` | `RootSections { sections }`, a `Vec<RootSectionDef>` in display order |
+| `RootSectionItems { section_id, page_token }` | `RootSectionPage { page }`; `page_token` is `None` for the first page and the previous page's `next_page_token` afterwards |
+| `ExecuteRootSectionAction { section_id, item_id, action_id }` | `RootSectionActionDone` |
+
+The host dispatches the three requests to the connection's `Connection::root_section_source`. A driver without a source answers `UnsupportedMethod` (`Driver does not declare root sections`), and a driver error answers as any other `Error`. A host refuses the requests on a session that negotiated an older minor with `VersionMismatch` (`root section requests require driver RPC protocol 1.9 or newer`), without calling the driver.
+
+The six variants are appended after the last v1.8 variant of their enum, for the wire-index reason described above. The client exposes root sections only when the session negotiated v1.9 or newer and the driver metadata declares `DriverCapabilities::ROOT_SECTIONS`; otherwise `IpcConnection` clears that capability and sends nothing. `IpcConnection` fetches the declaration once per connection and caches it; a failed fetch is returned as an error and not cached, so the host shows it with a retry row and asks again from there. A section id must not contain `|`; the host rejects and reports such a declaration. The host hides a section whose presentation opens an object-store document on a connection without `object_store_api`. `IpcConnection` has none, because no object-store RPC exists yet, and both presentations shipped so far (`ObjectContainerTable` and `ObjectBrowser`) are of that kind, so an external driver's sections stay hidden until a presentation without that need ships. Every `RootSectionAction` carries its `ExecutionClassification`, so the host confirms and audits actions the same way for external drivers as for built-in ones.
+
+### Cell SQL expressions (v1.10)
+
+v1.10 adds two request variants, `InsertRowV2 { insert }` and `UpdateRowV2 { patch }`, appended after the last v1.9 variant of the request enum for the wire-index reason described above. They carry `RowInsert` and `RowPatch` with one extra list each, appended after the last field: `column_expressions` and `change_expressions`, a `Vec<Option<String>>` parallel to the columns. A non-empty entry is a SQL expression the driver writes verbatim in place of the value literal (`gen_random_uuid()`, `now()`), and the value sent for that column is `Null`. A literal is never promoted to an expression: only an entry in this list is one, so text such as `now()` stays a quoted string.
+
+`InsertRow` and `UpdateRow` keep their exact v1.9 wire shape and have no room for an expression: the encoder refuses to serialize one rather than drop it, because postcard ignores trailing bytes and an older peer would otherwise run the write with the column set to `Null`. The client therefore sends the old variants for every write without an expression, so v1.9 peers keep working in both directions. A write with an expression is sent as `InsertRowV2` or `UpdateRowV2` only on a session that negotiated v1.10 or newer; on an older session `IpcConnection` returns `NotSupported` (`the negotiated driver RPC protocol does not support SQL expressions in row writes`) without sending a frame. A driver host serves both the old and the V2 variants. A driver that is not SQL-based never builds the statement and rejects row inserts and updates as it already does. The MCP tools never produce an expression, because tool input is converted to values only.
+
 ## Auth-provider RPC contract
 
 The active auth-provider RPC API family is `auth_provider_rpc` at `1.3`.
@@ -321,6 +343,7 @@ The service should parse `profile_json`, expect `DbConfig::External`, and valida
 | `Execute` → `ExecuteResult` (`ExecuteResultSets` from v1.7) | query execution |
 | `Schema` → `Schema` | schema snapshot |
 | `ListDatabases` → `Databases` | database list |
+| `RootSections` → `RootSections`, `RootSectionItems` → `RootSectionPage`, `ExecuteRootSectionAction` → `RootSectionActionDone` (v1.9+) | sidebar root sections |
 
 The protocol also supports browse, CRUD, key-value, and code generation operations. See `crates/dbflux_ipc/src/driver_protocol.rs` for the full enum set.
 

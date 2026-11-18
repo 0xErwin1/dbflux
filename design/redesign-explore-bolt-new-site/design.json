@@ -1,0 +1,48 @@
+{
+  "title": "DBFlux redesign: Bolt: new site",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Explorations, row \"Bolt: new site\".",
+  "artboards": [
+    {
+      "file": "01-bolt-system.html",
+      "title": "Bolt / system",
+      "tradeoff": "Bolt system sheet: one place for the chamfer geometry and tokens; a reference, not a screen.",
+      "width": 1440,
+      "height": 1060
+    },
+    {
+      "file": "02-site-home.html",
+      "title": "New site / home (interactive)",
+      "tradeoff": "Bolt site home: the bolt geometry as the landing page; strong brand, dense first screen.",
+      "width": 1440,
+      "height": 7500
+    },
+    {
+      "file": "03-bolt-about.html",
+      "title": "Bolt web / about",
+      "tradeoff": "Bolt web: carries the chamfer geometry onto the site; loud and memorable, harder to read at length.",
+      "width": 1440,
+      "height": 2560
+    },
+    {
+      "file": "04-bolt-docs.html",
+      "title": "Bolt web / docs page",
+      "tradeoff": "Bolt web: carries the chamfer geometry onto the site; loud and memorable, harder to read at length.",
+      "width": 1440,
+      "height": 1100
+    },
+    {
+      "file": "05-site-compare.html",
+      "title": "New site / compare (interactive)",
+      "tradeoff": "Comparison page: features side by side for evaluators; long and table-heavy.",
+      "width": 1440,
+      "height": 2560
+    },
+    {
+      "file": "06-site-vs-dbeaver.html",
+      "title": "New site / vs DBeaver",
+      "tradeoff": "DBFlux vs DBeaver page: direct answer for switchers; names a competitor, so it needs upkeep.",
+      "width": 1440,
+      "height": 3500
+    }
+  ]
+}

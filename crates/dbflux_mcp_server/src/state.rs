@@ -1121,6 +1121,12 @@ fn load_profile_value_refs(
                     path: entry.ref_value,
                 }
             }
+            dbflux_storage::repositories::connection_profile_value_refs::RefKind::File => {
+                ValueRef::File {
+                    path: entry.ref_value,
+                    json_key: entry.ref_json_key,
+                }
+            }
             dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
                 ValueRef::Secret {
                     provider: entry.ref_provider.ok_or_else(|| {

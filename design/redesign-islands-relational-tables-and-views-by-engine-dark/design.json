@@ -1,0 +1,34 @@
+{
+  "title": "DBFlux redesign: Relational tables (PostgreSQL) and views by engine · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Tables, files and facets, row \"Relational tables (PostgreSQL) and views by engine · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-relational.html",
+      "title": "Relational: data grid with planner column stats",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-relational-columns.html",
+      "title": "Relational: columns from pg_stats",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-relational-health.html",
+      "title": "Relational: indexes and table health",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "04-isl-engine-views.html",
+      "title": "Views by engine: summary",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1480
+    }
+  ]
+}

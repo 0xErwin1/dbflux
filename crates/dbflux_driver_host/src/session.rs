@@ -8,6 +8,7 @@ use dbflux_ipc::ProtocolVersion;
 use dbflux_ipc::driver_protocol::{
     DriverRequestBody, DriverResponseBody, DriverRpcErrorCode, QueryResultDto, QueryResultSetsDto,
     protocol_carries_request_row_limit, protocol_carries_result_sets,
+    protocol_carries_root_sections,
 };
 use uuid::Uuid;
 
@@ -219,19 +220,23 @@ pub(crate) fn dispatch(
         },
 
         // === CRUD operations ===
-        DriverRequestBody::UpdateRow { patch } => match conn.update_row(&patch) {
-            Ok(result) => DriverResponseBody::CrudResult {
-                result: result.into(),
-            },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::UpdateRow { patch } | DriverRequestBody::UpdateRowV2 { patch } => {
+            match conn.update_row(&patch) {
+                Ok(result) => DriverResponseBody::CrudResult {
+                    result: result.into(),
+                },
+                Err(e) => db_error_to_response(e),
+            }
+        }
 
-        DriverRequestBody::InsertRow { insert } => match conn.insert_row(&insert) {
-            Ok(result) => DriverResponseBody::CrudResult {
-                result: result.into(),
-            },
-            Err(e) => db_error_to_response(e),
-        },
+        DriverRequestBody::InsertRow { insert } | DriverRequestBody::InsertRowV2 { insert } => {
+            match conn.insert_row(&insert) {
+                Ok(result) => DriverResponseBody::CrudResult {
+                    result: result.into(),
+                },
+                Err(e) => db_error_to_response(e),
+            }
+        }
 
         DriverRequestBody::DeleteRow { delete } => match conn.delete_row(&delete) {
             Ok(result) => DriverResponseBody::CrudResult {
@@ -305,6 +310,12 @@ pub(crate) fn dispatch(
             kv.scan_keys(&request)
                 .map(|page| DriverResponseBody::KvScanResult { page })
         }),
+
+        body @ (DriverRequestBody::RootSections
+        | DriverRequestBody::RootSectionItems { .. }
+        | DriverRequestBody::ExecuteRootSectionAction { .. }) => {
+            dispatch_root_section(conn, negotiated_version, body)
+        }
 
         DriverRequestBody::KvKeyCount { keyspace } => dispatch_kv(conn, |kv| {
             kv.key_count(keyspace)
@@ -461,6 +472,55 @@ fn dispatch_kv(
     }
 }
 
+/// Serves the v1.9 root section requests from the driver's
+/// `RootSectionSource`. An older session never sends them, so one arriving on
+/// it is refused before the driver is reached.
+fn dispatch_root_section(
+    conn: &dyn Connection,
+    negotiated_version: ProtocolVersion,
+    body: DriverRequestBody,
+) -> DriverResponseBody {
+    if !protocol_carries_root_sections(negotiated_version) {
+        return rpc_error(
+            DriverRpcErrorCode::VersionMismatch,
+            "root section requests require driver RPC protocol 1.9 or newer",
+        );
+    }
+    let Some(source) = conn.root_section_source() else {
+        return rpc_error(
+            DriverRpcErrorCode::UnsupportedMethod,
+            "Driver does not declare root sections",
+        );
+    };
+
+    let result = match body {
+        DriverRequestBody::RootSections => source
+            .sections()
+            .map(|sections| DriverResponseBody::RootSections { sections }),
+        DriverRequestBody::RootSectionItems {
+            section_id,
+            page_token,
+        } => source
+            .list_items(&section_id, page_token.as_deref())
+            .map(|page| DriverResponseBody::RootSectionPage { page }),
+        DriverRequestBody::ExecuteRootSectionAction {
+            section_id,
+            item_id,
+            action_id,
+        } => source
+            .execute_action(&section_id, &item_id, &action_id)
+            .map(|()| DriverResponseBody::RootSectionActionDone),
+        _ => {
+            return rpc_error(
+                DriverRpcErrorCode::InvalidRequest,
+                "Not a root section request",
+            );
+        }
+    };
+
+    result.unwrap_or_else(db_error_to_response)
+}
+
 /// Refuses what the wrapped driver cannot be shown to enforce before it runs.
 /// A row limit passes only on a session that reports truncation back (v1.6+)
 /// and only to a driver whose metadata declares `REQUEST_ROW_LIMIT`.
@@ -515,7 +575,10 @@ mod tests {
         SemanticPlan, SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef,
     };
     use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
-    use dbflux_ipc::{DRIVER_RPC_V1_5, DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, DRIVER_RPC_VERSION};
+    use dbflux_ipc::{
+        DRIVER_RPC_V1_5, DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, DRIVER_RPC_V1_8, DRIVER_RPC_V1_9,
+        DRIVER_RPC_VERSION,
+    };
     use std::{
         sync::{
             Arc, Mutex,
@@ -1183,6 +1246,400 @@ mod tests {
                 assert!(error.message.contains("intentionally unsupported"));
             }
             other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    /// Driver that declares one root section, serves pages keyed by token and
+    /// records every action it runs.
+    struct RootSectionConnection {
+        metadata: dbflux_core::DriverMetadata,
+        actions: Mutex<Vec<(String, String, String)>>,
+        listed_tokens: Mutex<Vec<Option<String>>>,
+        fail_sections: bool,
+    }
+
+    impl RootSectionConnection {
+        fn new() -> Self {
+            Self {
+                metadata: DriverMetadataBuilder::new(
+                    "test",
+                    "Test",
+                    DatabaseCategory::ObjectStorage,
+                    QueryLanguage::Sql,
+                )
+                .capabilities(dbflux_core::DriverCapabilities::ROOT_SECTIONS)
+                .build(),
+                actions: Mutex::new(Vec::new()),
+                listed_tokens: Mutex::new(Vec::new()),
+                fail_sections: false,
+            }
+        }
+
+        fn section() -> dbflux_core::RootSectionDef {
+            dbflux_core::RootSectionDef {
+                id: "buckets".into(),
+                label: dbflux_core::LocalizedText::plain("Buckets"),
+                counted_label_key: None,
+                empty_label: dbflux_core::LocalizedText::plain("No buckets"),
+                presentation: None,
+                item_presentation: dbflux_core::RootItemPresentation::ObjectBrowser,
+                opens_on_profile_activation: false,
+                item_actions: Vec::new(),
+            }
+        }
+    }
+
+    impl dbflux_core::RootSectionSource for RootSectionConnection {
+        fn sections(&self) -> Result<Vec<dbflux_core::RootSectionDef>, DbError> {
+            if self.fail_sections {
+                return Err(DbError::query_failed("catalog unavailable"));
+            }
+            Ok(vec![Self::section()])
+        }
+
+        fn list_items(
+            &self,
+            section_id: &str,
+            page_token: Option<&str>,
+        ) -> Result<dbflux_core::RootSectionPage, DbError> {
+            if section_id != "buckets" {
+                return Err(DbError::object_not_found(section_id));
+            }
+            self.listed_tokens
+                .lock()
+                .map_err(|_| DbError::QueryFailed("tokens lock poisoned".into()))?
+                .push(page_token.map(str::to_string));
+            Ok(dbflux_core::RootSectionPage {
+                items: vec![dbflux_core::RootSectionItem {
+                    id: "logs".into(),
+                    label: "logs".into(),
+                }],
+                next_page_token: None,
+            })
+        }
+
+        fn execute_action(
+            &self,
+            section_id: &str,
+            item_id: &str,
+            action_id: &str,
+        ) -> Result<(), DbError> {
+            self.actions
+                .lock()
+                .map_err(|_| DbError::QueryFailed("actions lock poisoned".into()))?
+                .push((section_id.into(), item_id.into(), action_id.into()));
+            Ok(())
+        }
+    }
+
+    impl Connection for RootSectionConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Ok(QueryResult::empty())
+        }
+        fn execute_with_handle(
+            &self,
+            _req: &QueryRequest,
+        ) -> Result<(dbflux_core::QueryHandle, QueryResult), DbError> {
+            Err(DbError::NotSupported("not used in test".into()))
+        }
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+        fn root_section_source(&self) -> Option<&dyn dbflux_core::RootSectionSource> {
+            Some(self)
+        }
+    }
+
+    /// Driver that records the expression carried by every row write.
+    struct RowWriteConnection {
+        metadata: dbflux_core::DriverMetadata,
+        expressions: Mutex<Vec<Option<String>>>,
+    }
+
+    impl RowWriteConnection {
+        fn new() -> Self {
+            Self {
+                metadata: DriverMetadataBuilder::new(
+                    "test",
+                    "Test",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .build(),
+                expressions: Mutex::new(Vec::new()),
+            }
+        }
+
+        #[allow(clippy::result_large_err)]
+        fn record(&self, expression: Option<String>) -> Result<dbflux_core::CrudResult, DbError> {
+            self.expressions
+                .lock()
+                .map_err(|_| DbError::QueryFailed("expressions lock poisoned".into()))?
+                .push(expression);
+            Ok(dbflux_core::CrudResult::new(1, None))
+        }
+    }
+
+    impl Connection for RowWriteConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Ok(QueryResult::empty())
+        }
+        fn execute_with_handle(
+            &self,
+            _req: &QueryRequest,
+        ) -> Result<(dbflux_core::QueryHandle, QueryResult), DbError> {
+            Err(DbError::NotSupported("not used in test".into()))
+        }
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+        fn insert_row(
+            &self,
+            insert: &dbflux_core::RowInsert,
+        ) -> Result<dbflux_core::CrudResult, DbError> {
+            self.record(insert.assignments[0].expression.clone())
+        }
+        fn update_row(
+            &self,
+            patch: &dbflux_core::RowPatch,
+        ) -> Result<dbflux_core::CrudResult, DbError> {
+            self.record(patch.changes[0].expression.clone())
+        }
+    }
+
+    #[test]
+    fn host_serves_old_and_v2_row_writes_with_their_expressions() {
+        use dbflux_core::{ColumnAssignment, RowIdentity, RowInsert, RowPatch, Value};
+
+        let connection = RowWriteConnection::new();
+        let identity = || RowIdentity::composite(vec!["id".into()], vec![Value::Int(1)]);
+        let bodies = [
+            DriverRequestBody::InsertRow {
+                insert: RowInsert::with_typed_assignments(
+                    "t".into(),
+                    None,
+                    vec![ColumnAssignment::new("name", Value::Text("Ada".into()))],
+                ),
+            },
+            DriverRequestBody::UpdateRow {
+                patch: RowPatch::with_typed_changes(
+                    identity(),
+                    "t".into(),
+                    None,
+                    vec![ColumnAssignment::new("name", Value::Text("Ada".into()))],
+                ),
+            },
+            DriverRequestBody::InsertRowV2 {
+                insert: RowInsert::with_typed_assignments(
+                    "t".into(),
+                    None,
+                    vec![ColumnAssignment::expression("id", "gen_random_uuid()")],
+                ),
+            },
+            DriverRequestBody::UpdateRowV2 {
+                patch: RowPatch::with_typed_changes(
+                    identity(),
+                    "t".into(),
+                    None,
+                    vec![ColumnAssignment::expression("deleted_at", "now()")],
+                ),
+            },
+        ];
+
+        for body in bodies {
+            assert!(matches!(
+                dispatch(&connection, DRIVER_RPC_VERSION, body),
+                DriverResponseBody::CrudResult { .. }
+            ));
+        }
+
+        assert_eq!(
+            *connection.expressions.lock().expect("expressions lock"),
+            vec![
+                None,
+                None,
+                Some("gen_random_uuid()".to_string()),
+                Some("now()".to_string())
+            ]
+        );
+    }
+
+    fn root_section_bodies() -> [DriverRequestBody; 3] {
+        [
+            DriverRequestBody::RootSections,
+            DriverRequestBody::RootSectionItems {
+                section_id: "buckets".into(),
+                page_token: Some("page-2".into()),
+            },
+            DriverRequestBody::ExecuteRootSectionAction {
+                section_id: "buckets".into(),
+                item_id: "logs".into(),
+                action_id: "delete".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn v1_9_host_serves_root_sections_pages_and_actions() {
+        let connection = RootSectionConnection::new();
+        let [sections, items, action] = root_section_bodies();
+
+        match dispatch(&connection, DRIVER_RPC_V1_9, sections) {
+            DriverResponseBody::RootSections { sections } => {
+                assert_eq!(sections, vec![RootSectionConnection::section()]);
+            }
+            other => panic!("expected RootSections, got {other:?}"),
+        }
+        match dispatch(&connection, DRIVER_RPC_V1_9, items) {
+            DriverResponseBody::RootSectionPage { page } => {
+                assert_eq!(page.items.len(), 1);
+                assert_eq!(page.items[0].id, "logs");
+                assert_eq!(page.next_page_token, None);
+            }
+            other => panic!("expected RootSectionPage, got {other:?}"),
+        }
+        assert!(matches!(
+            dispatch(&connection, DRIVER_RPC_V1_9, action),
+            DriverResponseBody::RootSectionActionDone
+        ));
+
+        assert_eq!(
+            *connection.listed_tokens.lock().expect("tokens lock"),
+            vec![Some("page-2".to_string())]
+        );
+        assert_eq!(
+            *connection.actions.lock().expect("actions lock"),
+            vec![("buckets".into(), "logs".into(), "delete".into())]
+        );
+    }
+
+    #[test]
+    fn v1_9_host_reports_driver_errors_from_root_section_listings() {
+        let connection = RootSectionConnection::new();
+        let body = DriverRequestBody::RootSectionItems {
+            section_id: "missing".into(),
+            page_token: None,
+        };
+
+        match dispatch(&connection, DRIVER_RPC_V1_9, body) {
+            DriverResponseBody::Error(error) => {
+                assert_eq!(error.code, DriverRpcErrorCode::Driver);
+                assert!(error.message.contains("missing"), "{}", error.message);
+            }
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    /// A driver that cannot read its declarations answers with the ordinary
+    /// driver error, so the host asks again instead of seeing no sections.
+    #[test]
+    fn v1_9_host_reports_driver_errors_from_root_section_declarations() {
+        let connection = RootSectionConnection {
+            fail_sections: true,
+            ..RootSectionConnection::new()
+        };
+
+        match dispatch(
+            &connection,
+            DRIVER_RPC_V1_9,
+            DriverRequestBody::RootSections,
+        ) {
+            DriverResponseBody::Error(error) => {
+                assert_eq!(error.code, DriverRpcErrorCode::Driver);
+                assert!(
+                    error.message.contains("catalog unavailable"),
+                    "{}",
+                    error.message
+                );
+            }
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pre_v1_9_host_refuses_root_section_requests_before_reaching_the_driver() {
+        let connection = RootSectionConnection::new();
+
+        for body in root_section_bodies() {
+            match dispatch(&connection, DRIVER_RPC_V1_8, body) {
+                DriverResponseBody::Error(error) => {
+                    assert_eq!(error.code, DriverRpcErrorCode::VersionMismatch);
+                    assert_eq!(
+                        error.message,
+                        "root section requests require driver RPC protocol 1.9 or newer"
+                    );
+                }
+                other => panic!("expected a version mismatch, got {other:?}"),
+            }
+        }
+
+        assert!(
+            connection
+                .listed_tokens
+                .lock()
+                .expect("tokens lock")
+                .is_empty()
+        );
+        assert!(connection.actions.lock().expect("actions lock").is_empty());
+    }
+
+    #[test]
+    fn host_refuses_root_section_requests_for_a_driver_without_sections() {
+        let connection = SemanticPlanConnection::new(SemanticPlan::single_query(
+            SemanticPlanKind::Query,
+            dbflux_core::PlannedQuery::new(QueryLanguage::Sql, "SELECT 1"),
+        ));
+
+        for body in root_section_bodies() {
+            match dispatch(&connection, DRIVER_RPC_V1_9, body) {
+                DriverResponseBody::Error(error) => {
+                    assert_eq!(error.code, DriverRpcErrorCode::UnsupportedMethod);
+                    assert_eq!(error.message, "Driver does not declare root sections");
+                }
+                other => panic!("expected an unsupported method, got {other:?}"),
+            }
         }
     }
 }

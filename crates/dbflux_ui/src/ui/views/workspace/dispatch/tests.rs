@@ -125,3 +125,59 @@ fn create_folder_on_connections_tab_creates_a_folder(cx: &mut TestAppContext) {
     assert_eq!(routed, Some(true));
     assert_eq!(nodes_after, nodes_before + 1);
 }
+
+#[gpui::test]
+fn toggle_full_screen_enters_and_leaves_full_screen(cx: &mut TestAppContext) {
+    let app_state = init(cx);
+    let (workspace, window) = open_workspace(&app_state, cx);
+
+    let toggle = |window: &mut VisualTestContext| {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.route_command(Command::ToggleFullScreen, window, cx)
+            })
+        })
+    };
+
+    assert!(!window.update(|window, _| window.is_fullscreen()));
+
+    assert_eq!(toggle(window), Some(true));
+    assert!(window.update(|window, _| window.is_fullscreen()));
+
+    assert_eq!(toggle(window), Some(true));
+    assert!(!window.update(|window, _| window.is_fullscreen()));
+}
+
+/// The interface size commands move the saved font sizes from the
+/// workspace, whatever has focus.
+#[gpui::test]
+fn interface_size_commands_change_the_saved_font_sizes(cx: &mut TestAppContext) {
+    let app_state = init(cx);
+    let (workspace, window) = open_workspace(&app_state, cx);
+
+    let route = |window: &mut VisualTestContext, command: Command| {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.route_command(command, window, cx)
+            })
+        })
+    };
+    let ui_size = |window: &mut VisualTestContext| {
+        window.update(|_, cx| app_state.read(cx).general_settings().ui_font_size)
+    };
+
+    assert_eq!(route(window, Command::IncreaseInterfaceSize), Some(true));
+    assert_eq!(ui_size(window), 14.0);
+
+    assert_eq!(route(window, Command::DecreaseInterfaceSize), Some(true));
+    assert_eq!(route(window, Command::DecreaseInterfaceSize), Some(true));
+    assert_eq!(ui_size(window), 12.0);
+
+    assert_eq!(route(window, Command::ResetInterfaceSize), Some(true));
+    assert_eq!(ui_size(window), 13.0);
+    window.update(|_, cx| {
+        let settings = app_state.read(cx).general_settings();
+        assert_eq!(settings.editor_font_size, 13.0);
+        assert_eq!(settings.grid_font_size, 12.5);
+    });
+}

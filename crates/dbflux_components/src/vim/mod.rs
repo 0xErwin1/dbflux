@@ -1,18 +1,19 @@
 //! Opt-in modal editing (Vim Normal/Insert/Visual) for multi-line editors.
 //!
-//! `machine` decides what a key means and where the cursor goes, without a
-//! window or an input.
+//! The engine lives in `bolt::vim` and is re-exported here at the old paths.
+//! This module keeps the product's pieces: the `dbflux`-namespaced leader
+//! action the keymap dispatches (its action id is persisted in users'
+//! keybinding overrides, so the type stays here), the translated mode labels,
+//! and the installer for the product's [`VimSeams`] the moved engine reads.
 
-mod binding;
-pub mod machine;
+pub use bolt::vim::{
+    LeaderCommandHandler, RunCommandHandler, VIM_MODE_KEY, VimBinding, VimHost, VimMode, VimSeams,
+    VimSettingGlobal, machine, set_vim_seams, vim_enabled,
+};
 
-pub use binding::{VimBinding, VimHost};
-pub use machine::VimMode;
+use gpui::{Action, App, InteractiveElement as _, SharedString, Window};
 
-use gpui::{Action, App, Global, SharedString};
-
-/// Key under which an editor reports its Vim mode in the key context.
-pub const VIM_MODE_KEY: &str = "vim_mode";
+use crate::actions::RunCommand;
 
 /// Runs a keymap command from a Vim leader sequence (`<leader> a`).
 ///
@@ -47,29 +48,48 @@ pub fn vim_mode_label(mode: VimMode) -> String {
     }
 }
 
-/// GPUI global carrying the Vim mode setting (Settings > General), so editors
-/// in crates without the app state can follow it.
+/// Installs the product's Vim seams: the leader and run-command actions, the
+/// Vim and modal key contexts, and the translated mode labels.
 ///
-/// Absent means off: component tests that never publish it keep Vim disabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct VimSettingGlobal {
-    pub enabled: bool,
-}
-
-impl Global for VimSettingGlobal {}
-
-/// Publishes the Vim mode setting. Observers of the global run only when the
-/// value changes.
-pub fn set_vim_enabled(cx: &mut App, enabled: bool) {
-    if vim_enabled(cx) == enabled && cx.has_global::<VimSettingGlobal>() {
+/// Call it once at startup, before the first window; `theme::init` does,
+/// right after the keymap seams. [`set_vim_enabled`] also installs it, so an
+/// app or a component test that switches Vim on without the startup path
+/// still gets the seams.
+pub fn install_vim_seams(cx: &mut App) {
+    if cx.has_global::<VimSeams>() {
         return;
     }
 
-    cx.set_global(VimSettingGlobal { enabled });
+    set_vim_seams(
+        cx,
+        VimSeams {
+            leader_key_context: dbflux_core::keymap_types::ContextId::VimNormal.as_gpui_context(),
+            modal_key_context: crate::modals::MODAL_KEY_CONTEXT,
+            mode_label: |mode| vim_mode_label(mode).into(),
+            make_run_command_action: |command| Box::new(RunCommand::from_user_binding(command)),
+            capture_leader_action: |element, on_command| {
+                element.capture_action(
+                    move |action: &LeaderCommand, window: &mut Window, cx: &mut App| {
+                        on_command(&action.command, window, cx);
+                        cx.stop_propagation();
+                    },
+                )
+            },
+            capture_run_command: |element, on_command| {
+                element.capture_action(
+                    move |action: &RunCommand, window: &mut Window, cx: &mut App| {
+                        on_command(action, action.from_user_binding, window, cx);
+                    },
+                )
+            },
+        },
+    );
 }
 
-/// Whether Vim mode is on, as last published with [`set_vim_enabled`].
-pub fn vim_enabled(cx: &App) -> bool {
-    cx.try_global::<VimSettingGlobal>()
-        .is_some_and(|setting| setting.enabled)
+/// Publishes the Vim mode setting, installing the product's seams first so
+/// an app or a component test that switches Vim on without the startup path
+/// still gets them. Observers of the global run only when the value changes.
+pub fn set_vim_enabled(cx: &mut App, enabled: bool) {
+    install_vim_seams(cx);
+    bolt::vim::set_vim_enabled(cx, enabled);
 }

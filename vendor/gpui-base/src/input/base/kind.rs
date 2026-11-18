@@ -27,7 +27,9 @@ use gpui::{Div, Entity, Stateful, Window};
 use ropey::Rope;
 
 use super::decorations::DecorationCollections;
-use super::lsp::{ContextMenuContent, HoverDefinition, InlineCompletion};
+use super::lsp::{
+    CompletionSelectionReader, ContextMenuContent, HoverDefinition, InlineCompletion,
+};
 use crate::input::{
     HighlightStyleResolver, InputEdit, InputHighlighter, RangeDecoration, SyntaxContext,
     TextDecoration,
@@ -334,11 +336,37 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
 impl InputModeKind for InputMode {
     const MULTI_LINE: bool = false;
 
-    /// A single-line field needs nothing beyond the shared engine. Masking,
-    /// validation and number stepping live there: together they are ~120 bytes
-    /// and their access sites sit inside the shared edit path, so separating
-    /// them would cost more in dispatch than it saves.
-    type Extras = ();
+    /// Masking, validation and number stepping live in the shared engine:
+    /// together they are ~120 bytes and their access sites sit inside the
+    /// shared edit path, so separating them would cost more in dispatch than it
+    /// saves. Only host text decorations are kept here.
+    type Extras = FieldExtras;
+
+    fn reset_annotations(state: &mut InputBaseState<Self>) {
+        state.extras.decorations.clear();
+    }
+
+    fn adjust_annotations(
+        state: &mut InputBaseState<Self>,
+        range: &std::ops::Range<usize>,
+        new_len: usize,
+    ) {
+        state.extras.decorations.adjust_for_edit(range, new_len);
+    }
+}
+
+/// What a single-line field adds on top of the shared engine: the text
+/// decorations a host installs with
+/// [`InputBaseState::<InputMode>::create_decorations_collection`].
+#[derive(Default)]
+pub struct FieldExtras {
+    pub(crate) decorations: DecorationCollections,
+}
+
+impl InputExtras for FieldExtras {
+    fn decoration_layers(&self) -> Vec<&[TextDecoration]> {
+        self.decorations.iter().collect()
+    }
 }
 impl InputModeKind for TextareaMode {
     const MULTI_LINE: bool = true;
@@ -359,6 +387,7 @@ pub struct EditorExtras {
     pub(crate) hover_popover: Option<HoverPopoverState>,
     pub(crate) hover_definition: HoverDefinition,
     pub(crate) context_menu_task: Task<anyhow::Result<()>>,
+    pub(crate) completion_selection_reader: Option<CompletionSelectionReader>,
 }
 
 impl Default for EditorExtras {
@@ -372,6 +401,7 @@ impl Default for EditorExtras {
             hover_popover: None,
             hover_definition: HoverDefinition::default(),
             context_menu_task: Task::ready(Ok(())),
+            completion_selection_reader: None,
         }
     }
 }

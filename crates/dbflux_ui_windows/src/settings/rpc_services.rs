@@ -132,7 +132,7 @@ fn service_form_rows(
     rows
 }
 
-fn service_row_max_col(row: ServiceFormRow) -> usize {
+pub(super) fn service_row_max_col(row: ServiceFormRow) -> usize {
     match row {
         ServiceFormRow::Arg(_) => 1,
         ServiceFormRow::Kind | ServiceFormRow::EnvKey(_) => 2,
@@ -687,10 +687,12 @@ impl ServicesSection {
             }
         }
 
-        if self.svc_form_cursor + 1 < rows.len() {
-            self.svc_form_cursor += 1;
-            self.svc_env_col = 0;
-        }
+        self.svc_form_cursor = if self.svc_form_cursor + 1 < rows.len() {
+            self.svc_form_cursor + 1
+        } else {
+            0
+        };
+        self.svc_env_col = 0;
     }
 
     pub(super) fn svc_tab_prev(&mut self) {
@@ -699,12 +701,14 @@ impl ServicesSection {
             return;
         }
 
-        if self.svc_form_cursor > 0 {
-            self.svc_form_cursor -= 1;
-            let rows = self.svc_form_rows();
-            if let Some(row) = rows.get(self.svc_form_cursor) {
-                self.svc_env_col = service_row_max_col(*row);
-            }
+        let rows = self.svc_form_rows();
+        self.svc_form_cursor = if self.svc_form_cursor > 0 {
+            self.svc_form_cursor - 1
+        } else {
+            rows.len().saturating_sub(1)
+        };
+        if let Some(row) = rows.get(self.svc_form_cursor) {
+            self.svc_env_col = service_row_max_col(*row);
         }
     }
 
@@ -939,7 +943,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .child(toolbar)
-            .child(
+            .child(layout::scrolled_list_viewport(
                 div()
                     .id("services-list-scroll")
                     .flex_1()
@@ -952,7 +956,8 @@ impl ServicesSection {
                         list.child(layout::master_list_empty(empty_services_message()))
                     })
                     .children(rows),
-            )
+                &self.svc_list_scroll_handle,
+            ))
     }
 
     /// Whether the keyboard cursor is on `row` (and on `column` of it).

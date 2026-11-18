@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: New site: variants and Ember",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Explorations, row \"New site: variants and Ember\".",
+  "artboards": [
+    {
+      "file": "01-site-restrained.html",
+      "title": "V1 Restrained: amber only for actions",
+      "tradeoff": "Restrained site: minimal color and decoration; easy to read, easy to forget.",
+      "width": 1440,
+      "height": 7500
+    },
+    {
+      "file": "02-site-paper.html",
+      "title": "V2 Paper: light, ink band",
+      "tradeoff": "Paper site: light, print-like and calm; quiet, weaker brand presence.",
+      "width": 1440,
+      "height": 7500
+    },
+    {
+      "file": "03-site-electric.html",
+      "title": "V3 Electric: blue accent, amber only in the mark",
+      "tradeoff": "Electric site: saturated accents and high energy; eye-catching, tiring on long pages.",
+      "width": 1440,
+      "height": 7500
+    },
+    {
+      "file": "04-site-ember.html",
+      "title": "Ember: full site",
+      "tradeoff": "Ember site: warm editorial serif; inviting, less technical.",
+      "width": 1440,
+      "height": 7500
+    },
+    {
+      "file": "05-site-byzantium.html",
+      "title": "V4 Byzantium: #702963",
+      "tradeoff": "Byzantium site: deep color and strong contrast; the most distinctive, the least neutral.",
+      "width": 1440,
+      "height": 7500
+    }
+  ]
+}

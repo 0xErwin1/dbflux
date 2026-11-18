@@ -59,6 +59,61 @@ impl Workspace {
 /// island, `IslandMetrics::GAP` of desk on its left. A click inside makes the
 /// document the focused area again, but leaves keyboard focus where the
 /// panel put it (a search field, the panel itself).
+/// Title, message, confirm label and variant of the sidebar's inline
+/// confirmation: a declared root section action brings its own copy, every
+/// other case is a delete or drop.
+fn inline_confirm_copy(
+    modal_state: &dbflux_ui_sidebar::DeleteModalState<'_>,
+) -> (String, String, String, ModalVariant) {
+    if let Some(action) = &modal_state.root_action {
+        return (
+            action.title.clone(),
+            action.message.clone(),
+            action.confirm_label.clone(),
+            ModalVariant::Danger,
+        );
+    }
+
+    let title = if modal_state.multi_count.is_some() {
+        dbflux_i18n::t!("workspace.action.delete")
+    } else if modal_state.is_ddl {
+        dbflux_i18n::t!("workspace.action.drop")
+    } else if modal_state.is_folder {
+        dbflux_i18n::t!("workspace.action.delete_folder")
+    } else {
+        dbflux_i18n::t!("workspace.action.delete_connection")
+    };
+
+    let message = if let Some(count) = modal_state.multi_count {
+        crate::ui::labels::workspace_delete_selected_message(count)
+    } else if modal_state.is_ddl {
+        crate::ui::labels::workspace_drop_object_message(
+            modal_state.object_type,
+            modal_state.item_name,
+        )
+    } else if modal_state.is_folder {
+        crate::ui::labels::workspace_delete_folder_message(modal_state.item_name)
+    } else {
+        crate::ui::labels::workspace_delete_connection_message(modal_state.item_name)
+    };
+
+    if modal_state.is_ddl {
+        (
+            title,
+            message,
+            dbflux_i18n::t!("workspace.action.drop"),
+            ModalVariant::Danger,
+        )
+    } else {
+        (
+            title,
+            message,
+            dbflux_i18n::t!("workspace.action.delete"),
+            ModalVariant::Default,
+        )
+    }
+}
+
 fn document_side_island(
     panel: DocumentSidePanel,
     cx: &mut Context<Workspace>,
@@ -230,6 +285,16 @@ impl Render for Workspace {
             self.set_focus(self.focus_target, window, cx);
         }
 
+        // Runs after the overlays' own focus restore, which may point at the
+        // document that closed. A focus move made while the overlay was open
+        // changed the target and wins.
+        if self.focus_sidebar_after_overlays && self.overlay_context(cx).is_none() {
+            self.focus_sidebar_after_overlays = false;
+            if self.focus_target == FocusTarget::Sidebar {
+                self.set_focus(FocusTarget::Sidebar, window, cx);
+            }
+        }
+
         // Open the login modal on behalf of a settings-window auth-profile login.
         if let Some((provider_name, profile_name, url)) = self.pending_login_modal_open.take() {
             self.login_modal.update(cx, |modal, cx| {
@@ -332,19 +397,27 @@ impl Render for Workspace {
                             .flex()
                             .flex_col()
                             .size_full()
+                            // Record that the document area owns the input
+                            // without moving the keyboard: the click's own
+                            // target already took it. `set_focus` here would
+                            // steal it back from the field the click just
+                            // focused — the query bar of a document collection
+                            // on the first click after the sidebar held the
+                            // keyboard — and leave the grid's single-key
+                            // shortcuts claiming every typed letter (#1234).
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
+                                cx.listener(|this, _, _, cx| {
                                     if this.focus_target != FocusTarget::Document {
-                                        this.set_focus(FocusTarget::Document, window, cx);
+                                        this.mark_focus_target(FocusTarget::Document, cx);
                                     }
                                 }),
                             )
                             .on_mouse_down(
                                 MouseButton::Right,
-                                cx.listener(|this, _, window, cx| {
+                                cx.listener(|this, _, _, cx| {
                                     if this.focus_target != FocusTarget::Document {
-                                        this.set_focus(FocusTarget::Document, window, cx);
+                                        this.mark_focus_target(FocusTarget::Document, cx);
                                     }
                                 }),
                             )
@@ -964,42 +1037,8 @@ impl Render for Workspace {
                     let sidebar_close = self.sidebar.clone();
                     let sidebar_enter = self.sidebar.clone();
 
-                    let title = if modal_state.multi_count.is_some() {
-                        dbflux_i18n::t!("workspace.action.delete")
-                    } else if modal_state.is_ddl {
-                        dbflux_i18n::t!("workspace.action.drop")
-                    } else if modal_state.is_folder {
-                        dbflux_i18n::t!("workspace.action.delete_folder")
-                    } else {
-                        dbflux_i18n::t!("workspace.action.delete_connection")
-                    };
-
-                    let message = if let Some(count) = modal_state.multi_count {
-                        crate::ui::labels::workspace_delete_selected_message(count)
-                    } else if modal_state.is_ddl {
-                        crate::ui::labels::workspace_drop_object_message(
-                            modal_state.object_type,
-                            modal_state.item_name,
-                        )
-                    } else if modal_state.is_folder {
-                        crate::ui::labels::workspace_delete_folder_message(modal_state.item_name)
-                    } else {
-                        crate::ui::labels::workspace_delete_connection_message(
-                            modal_state.item_name,
-                        )
-                    };
-
-                    let confirm_label = if modal_state.is_ddl {
-                        dbflux_i18n::t!("workspace.action.drop")
-                    } else {
-                        dbflux_i18n::t!("workspace.action.delete")
-                    };
-                    let variant = if modal_state.is_ddl {
-                        ModalVariant::Danger
-                    } else {
-                        ModalVariant::Default
-                    };
-
+                    let (title, message, confirm_label, variant) =
+                        inline_confirm_copy(&modal_state);
                     let body = Text::body(message).into_any_element();
 
                     let footer = div()
@@ -1007,7 +1046,11 @@ impl Render for Workspace {
                         .gap(Spacing::SM)
                         .child(
                             Button::new(
-                                "delete-cancel",
+                                if modal_state.root_action.is_some() {
+                                    "root-section-action-cancel"
+                                } else {
+                                    "delete-cancel"
+                                },
                                 dbflux_i18n::t!("workspace.action.cancel"),
                             )
                             .on_click(move |_, _, cx| {
@@ -1017,13 +1060,20 @@ impl Render for Workspace {
                             }),
                         )
                         .child(
-                            Button::new("delete-confirm", confirm_label)
-                                .when(modal_state.is_ddl, |b| b.danger())
-                                .on_click(move |_, _, cx| {
-                                    sidebar_confirm.update(cx, |this, cx| {
-                                        this.confirm_modal_delete(cx);
-                                    });
-                                }),
+                            Button::new(
+                                if modal_state.root_action.is_some() {
+                                    "root-section-action-confirm"
+                                } else {
+                                    "delete-confirm"
+                                },
+                                confirm_label,
+                            )
+                            .when(variant == ModalVariant::Danger, |b| b.danger())
+                            .on_click(move |_, _, cx| {
+                                sidebar_confirm.update(cx, |this, cx| {
+                                    this.confirm_modal_delete(cx);
+                                });
+                            }),
                         )
                         .into_any_element();
 

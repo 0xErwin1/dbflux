@@ -10,7 +10,10 @@ use std::time::Duration;
 /// Whether `item_id` is an error placeholder row, whose label is the full
 /// failure message and is usually wider than the sidebar.
 fn is_error_retry_row(item_id: &str) -> bool {
-    item_id.starts_with("object-retry|") || item_id.starts_with("metrics-retry|")
+    item_id.starts_with("object-retry|")
+        || item_id.starts_with("metrics-retry|")
+        || item_id.starts_with(crate::root_sections::DECLARATIONS_RETRY_PREFIX)
+        || item_id.starts_with(crate::root_sections::LISTING_RETRY_PREFIX)
 }
 
 /// Whether a row draws its chevron pointing down.
@@ -1416,8 +1419,8 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::InstanceInspectorLeaf => Some(AppIcon::Server),
         SchemaNodeKind::InstanceOverviewLeaf => Some(AppIcon::Layers),
         SchemaNodeKind::InstanceFolder => Some(AppIcon::Server),
-        SchemaNodeKind::Bucket => Some(AppIcon::Box),
-        SchemaNodeKind::BucketsFolder => Some(AppIcon::Box),
+        SchemaNodeKind::RootSectionItem => Some(AppIcon::Box),
+        SchemaNodeKind::RootSection => Some(AppIcon::Box),
         SchemaNodeKind::SecretStore => Some(AppIcon::Lock),
         SchemaNodeKind::SecretPath => Some(AppIcon::Folder),
         _ => None,
@@ -1540,8 +1543,8 @@ fn resolve_node_icon(
         }
         SchemaNodeKind::InstanceInspectorLeaf => (Some(AppIcon::Server), "", params.color_teal),
         SchemaNodeKind::InstanceOverviewLeaf => (Some(AppIcon::Layers), "", params.color_orange),
-        SchemaNodeKind::Bucket => (Some(AppIcon::Box), "", params.color_teal),
-        SchemaNodeKind::BucketsFolder => (Some(AppIcon::Box), "", params.color_orange),
+        SchemaNodeKind::RootSectionItem => (Some(AppIcon::Box), "", params.color_teal),
+        SchemaNodeKind::RootSection => (Some(AppIcon::Box), "", params.color_orange),
         SchemaNodeKind::SecretStore => (Some(AppIcon::Lock), "", params.color_orange),
         SchemaNodeKind::SecretPath => (Some(AppIcon::Folder), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
@@ -1652,6 +1655,8 @@ mod tests {
     fn error_placeholder_rows_are_recognised_by_their_retry_prefix() {
         assert!(is_error_retry_row("object-retry|profile|db"));
         assert!(is_error_retry_row("metrics-retry|profile|db"));
+        assert!(is_error_retry_row("root-sections-retry|profile"));
+        assert!(is_error_retry_row("root-section-retry|profile|buckets"));
         assert!(!is_error_retry_row("connect-failure|profile|0"));
     }
 

@@ -157,6 +157,7 @@ mod tests {
             columns,
             row_count: 3,
             fk_order_index: 0,
+            options: Default::default(),
         }
     }
 

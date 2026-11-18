@@ -7,10 +7,14 @@
 //! refreshed or the tab closes.
 
 use dbflux_core::chrono::{DateTime, Local, Utc};
+pub use dbflux_core::encode_base64;
 use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{SecretPayload, SecretValue};
 use uuid::Uuid;
+
+/// The masked text a value field shows until it is revealed.
+pub(crate) const MASK: &str = "••••••••••••";
 
 /// Audit action of a value retrieval that returned a value.
 pub const VALUE_RETRIEVED_ACTION: &str = "secret_value_retrieved";
@@ -74,11 +78,162 @@ impl ValueContent {
     }
 }
 
+/// What a retrieved value is, derived from its content alone. It holds
+/// counts, never text, so it is safe to draw next to a masked value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueKind {
+    /// Every non-empty, non-comment line is `KEY=VALUE`.
+    Dotenv {
+        lines: usize,
+    },
+    JsonObject {
+        keys: usize,
+    },
+    JsonArray {
+        items: usize,
+    },
+    Text {
+        lines: usize,
+    },
+    Binary,
+}
+
+impl ValueKind {
+    fn of(content: &ValueContent) -> Self {
+        let (ValueContent::KeyValue { text, .. } | ValueContent::Plaintext(text)) = content else {
+            return Self::Binary;
+        };
+
+        let text = text.expose_secret();
+
+        match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(serde_json::Value::Object(map)) => return Self::JsonObject { keys: map.len() },
+            Ok(serde_json::Value::Array(items)) => {
+                return Self::JsonArray { items: items.len() };
+            }
+            _ => {}
+        }
+
+        let lines = text.lines().count();
+
+        if is_dotenv(text) {
+            Self::Dotenv { lines }
+        } else {
+            Self::Text { lines }
+        }
+    }
+
+    /// "dotenv · 9 lines", "JSON · 6 keys", "text · 1 line".
+    pub fn label(self) -> String {
+        let (one, many, count) = match self {
+            Self::Dotenv { lines } => (
+                "document.secret_store.value.kind.dotenv.one",
+                "document.secret_store.value.kind.dotenv.many",
+                lines,
+            ),
+            Self::JsonObject { keys } => (
+                "document.secret_store.value.kind.json_keys.one",
+                "document.secret_store.value.kind.json_keys.many",
+                keys,
+            ),
+            Self::JsonArray { items } => (
+                "document.secret_store.value.kind.json_items.one",
+                "document.secret_store.value.kind.json_items.many",
+                items,
+            ),
+            Self::Text { lines } => (
+                "document.secret_store.value.kind.text.one",
+                "document.secret_store.value.kind.text.many",
+                lines,
+            ),
+            Self::Binary => return dbflux_i18n::t!("document.secret_store.value.kind.binary"),
+        };
+
+        dbflux_i18n::t!(if count == 1 { one } else { many }, count = count)
+    }
+}
+
+/// The `=` left over when a base64 token is split at its padding: `YWJj==`
+/// reads as the key `YWJj` with the value `=`. A real value may start with
+/// `=` (`PASSWORD==secret`); only one made of nothing else is padding.
+fn is_base64_padding(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c == '=')
+}
+
+/// At least one assignment, and every line that is not blank or a comment
+/// is one. A value that is one bare token is not an assignment: its padding
+/// looks like one. Among other lines, a `KEY==` line is an assignment whose
+/// value is `=`, because the token reading needs a value that is one token.
+fn is_dotenv(text: &str) -> bool {
+    let mut assignments = 0;
+    let bare_token = text.trim().lines().count() == 1;
+
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let assignment = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = assignment.split_once('=') else {
+            return false;
+        };
+
+        let mut chars = key.chars();
+        let valid_key = chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+
+        if !valid_key || (bare_token && is_base64_padding(value)) {
+            return false;
+        }
+
+        assignments += 1;
+    }
+
+    assignments > 0
+}
+
 /// Which view of a key/value secret is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueView {
     KeyValue,
     Plaintext,
+}
+
+/// The text the multi-line viewer draws for a value, decided once when the
+/// value is retrieved.
+#[derive(Debug)]
+struct ViewerText {
+    /// What the viewer draws: JSON pretty-printed with two spaces, or the
+    /// stored text with the line breaks it was stored with.
+    text: SecretString,
+}
+
+impl ViewerText {
+    /// The viewer a value needs, or `None` for a value that keeps its own
+    /// presentation: a key/value secret keeps its pairs, a binary one its
+    /// base64, and a value whose drawn text has a single line keeps the
+    /// single-line field it always had.
+    ///
+    /// A value the store keeps as JSON is drawn pretty-printed whenever it
+    /// does not open as key/value (nested objects, arrays). The stored text
+    /// stays the value's own, so Copy value copies what the store returned.
+    fn new(content: &ValueContent) -> Option<Self> {
+        let ValueContent::Plaintext(text) = content else {
+            return None;
+        };
+
+        let stored = text.expose_secret();
+        let drawn = match serde_json::from_str::<serde_json::Value>(stored) {
+            Ok(json) => serde_json::to_string_pretty(&json).unwrap_or_else(|_| stored.to_string()),
+            Err(_) => stored.to_string(),
+        };
+
+        (drawn.lines().count() > 1).then(|| Self {
+            text: SecretString::from(drawn),
+        })
+    }
 }
 
 /// A value fetched by an explicit retrieval.
@@ -88,6 +243,10 @@ pub struct RetrievedValue {
     pub content: ValueContent,
     pub retrieved_at: DateTime<Local>,
     pub view: ValueView,
+    kind: ValueKind,
+    /// What the multi-line viewer draws, `None` when the value keeps the
+    /// single-line field.
+    viewer: Option<ViewerText>,
     /// Which fields are drawn in plain text: one per key/value pair, or a
     /// single entry for the plaintext and binary views.
     revealed: Vec<bool>,
@@ -105,6 +264,8 @@ impl RetrievedValue {
 
         let mut retrieved = Self {
             version: value.version.clone(),
+            viewer: ViewerText::new(&content),
+            kind: ValueKind::of(&content),
             content,
             retrieved_at: Local::now(),
             view,
@@ -124,6 +285,40 @@ impl RetrievedValue {
                 .collect(),
             (content, _) => vec![(None, content.full_text())],
         }
+    }
+
+    /// Whether the value is drawn in the multi-line viewer instead of the
+    /// single-line field: its text has more than one line, because it holds
+    /// line breaks or because JSON that does not open as key/value is drawn
+    /// pretty-printed.
+    pub fn is_multiline(&self) -> bool {
+        self.viewer.is_some()
+    }
+
+    /// The lines the viewer draws, in order: the value's own lines once it is
+    /// revealed, one mask per line while it is hidden, so the line count
+    /// shows and the text never does. Empty when the value keeps the
+    /// single-line field.
+    pub fn viewer_lines(&self, revealed: bool) -> Vec<String> {
+        let Some(viewer) = &self.viewer else {
+            return Vec::new();
+        };
+
+        let text = viewer.text.expose_secret();
+
+        if revealed {
+            text.lines().map(str::to_string).collect()
+        } else {
+            vec![MASK.to_string(); text.lines().count()]
+        }
+    }
+
+    pub fn kind(&self) -> ValueKind {
+        self.kind
+    }
+
+    pub fn kind_label(&self) -> String {
+        self.kind.label()
     }
 
     pub fn field_count(&self) -> usize {
@@ -263,34 +458,4 @@ pub fn value_retrieval_event(
     }
 
     event
-}
-
-/// Standard base64 with padding (RFC 4648).
-pub fn encode_base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
-
-    for chunk in bytes.chunks(3) {
-        let first = chunk.first().copied().unwrap_or(0);
-        let second = chunk.get(1).copied();
-        let third = chunk.get(2).copied();
-
-        let triple = (u32::from(first) << 16)
-            | (u32::from(second.unwrap_or(0)) << 8)
-            | u32::from(third.unwrap_or(0));
-
-        let symbol = |shift: u32| {
-            ALPHABET
-                .get(((triple >> shift) & 0x3f) as usize)
-                .map_or('=', |symbol| char::from(*symbol))
-        };
-
-        encoded.push(symbol(18));
-        encoded.push(symbol(12));
-        encoded.push(if second.is_some() { symbol(6) } else { '=' });
-        encoded.push(if third.is_some() { symbol(0) } else { '=' });
-    }
-
-    encoded
 }

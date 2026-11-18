@@ -16,22 +16,24 @@ workspace = true
 [features]
 default = []
 # Enables `accessibility`, the accessible-name checks a rendered-surface test
-# runs against a captured frame. Enabled only by dev-dependencies.
-test-support = ["gpui/test-support"]
+# runs against a captured frame. Enabled only by dev-dependencies. The checks
+# live in `bolt`, so the feature forwards to Bolt's own `test-support`.
+test-support = ["gpui/test-support", "bolt/test-support"]
 
 [dependencies]
+bolt = { workspace = true, features = [
+    "syntax-javascript",
+    "syntax-python",
+    "syntax-bash",
+] }
 gpui.workspace = true
 gpui-component.workspace = true
 gpui-base = { path = "../../vendor/gpui-base" }
 dbflux_core.workspace = true
 dbflux_i18n.workspace = true
-tree-sitter.workspace = true
 tree-sitter-sequel.workspace = true
-tree-sitter-javascript.workspace = true
 tree-sitter-cypher.workspace = true
 tree-sitter-lua.workspace = true
-tree-sitter-python.workspace = true
-tree-sitter-bash.workspace = true
 tree-sitter-json.workspace = true
 thiserror.workspace = true
 log.workspace = true
@@ -42,6 +44,13 @@ uuid = { workspace = true }
 chrono.workspace = true
 
 [dev-dependencies]
+# The accessibility checks this crate's tests use live in `bolt` behind its
+# `test-support` feature, which a plain dependency build does not enable.
+bolt = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"
+# The registration test compares against the grammars bolt now bundles.
+tree-sitter-javascript.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-bash.workspace = true

@@ -446,6 +446,10 @@ corte, la promoción a stable y el EOL de un minor (ver [Sitio Web](#sitio-web))
 El `PKGBUILD` de AUR vive en un **repositorio AUR externo**, no en este repo.
 Solo se sube para tags stable.
 
+El cask de Homebrew vive en el tap externo `0xErwin1/homebrew-dbflux`. El job
+`homebrew-tap` lo actualiza automáticamente para los tags stable publicados;
+comprueba que el job haya terminado bien (ver [Tap de Homebrew](#tap-de-homebrew)).
+
 ## Cómo Funciona Nightly
 
 `.github/workflows/nightly.yml` corre diariamente a las 03:17 UTC:
@@ -535,11 +539,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Canales Downstream
 
-| Tipo de tag (GitHub Release) | AUR         | Nix flake (este repo)                                      | nixpkgs (futuro) |
-| ---------------------------- | ----------- | ---------------------------------------------------------- | ---------------- |
-| nightly (prerelease)         | se omite    | auto-fijado — `#dbflux-nightly` en la ref nightly          | se omite         |
-| `-rc.N` (prerelease)         | se omite    | actualiza el `release-info` de la release branch y de main | se omite         |
-| Stable `vX.Y.Z` (published)  | bump + push | actualiza el `release-info` de la release branch y de main | bump + PR        |
+| Tipo de tag (GitHub Release) | AUR         | Nix flake (este repo)                                      | nixpkgs (futuro) | Tap de Homebrew |
+| ---------------------------- | ----------- | ---------------------------------------------------------- | ---------------- | ------------------------------------ |
+| nightly (prerelease)         | se omite    | auto-fijado — `#dbflux-nightly` en la ref nightly          | se omite         | se omite |
+| `-rc.N` (prerelease)         | se omite    | actualiza el `release-info` de la release branch y de main | se omite         | se omite |
+| Stable `vX.Y.Z` (published)  | bump + push | actualiza el `release-info` de la release branch y de main | bump + PR        | automático — job `homebrew-tap` |
 
 ### AUR
 
@@ -587,6 +591,35 @@ vía:
 ```bash
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 ```
+
+### Tap de Homebrew
+
+El job `homebrew-tap` de `.github/workflows/release.yml` corre después del job
+de release, solo para tags stable publicados (nunca para RC, nightly ni
+drafts). Descarga los cuatro archivos `.sha256` del release (los dos DMG de
+macOS y los dos tarballs de Linux), genera `Casks/dbflux.rb` con
+`scripts/homebrew_cask.py` y lo sube a
+[`0xErwin1/homebrew-dbflux`](https://github.com/0xErwin1/homebrew-dbflux).
+
+| Caso | Comportamiento |
+|------|----------------|
+| Falta `HOMEBREW_TAP_TOKEN` | El job emite un warning y se omite; el tap conserva su versión anterior. |
+| Token vencido o revocado | El job falla. Renueva el token, actualiza el secret y vuelve a ejecutar el job o actualiza el cask manualmente. |
+| Tag más antiguo que la versión del tap (un patch de una línea anterior) | El cask no cambia y se emite un warning. El tap nunca retrocede. |
+
+`HOMEBREW_TAP_TOKEN` es un personal access token fine-grained con
+**Contents: read and write**, limitado a `0xErwin1/homebrew-dbflux`.
+
+Para actualizar el cask manualmente tras un job fallido, descarga los cuatro
+archivos `.sha256` del release en un directorio y ejecuta:
+
+```bash
+python3 scripts/homebrew_cask.py --version X.Y.Z \
+  --checksums <directorio con los cuatro .sha256> \
+  --output <checkout del tap>/Casks/dbflux.rb
+```
+
+Haz commit y push del cambio en el checkout del tap.
 
 ### nixpkgs (futuro)
 

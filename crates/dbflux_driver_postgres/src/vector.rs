@@ -3,8 +3,9 @@
 use dbflux_core::{
     CreateTableSpec, GeneratedMutation, GeneratedQuery, GeneratorError, MutationCategory,
     MutationRequest, MutationTemplateRequest, NearestNeighborRequest, ObjectFacet, QueryGenError,
-    QueryGenerator, QueryLanguage, ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
-    TableInfo, Value, VectorDistance, VectorFacet, VisualMutationSpec, VisualQuerySpec,
+    QueryGenerator, QueryLanguage, ReadTemplateRequest, SelectQuery, SqlDialect,
+    SqlMutationGenerator, TableInfo, Value, VectorDistance, VectorFacet, VisualMutationSpec,
+    VisualQuerySpec,
 };
 
 use crate::driver::{POSTGRES_DIALECT, pg_quote_ident, pg_quote_string, value_to_pg_literal};
@@ -138,7 +139,8 @@ pub(crate) struct PostgresQueryGenerator {
 impl PostgresQueryGenerator {
     pub(crate) const fn new() -> Self {
         Self {
-            inner: SqlMutationGenerator::new(&POSTGRES_DIALECT),
+            inner: SqlMutationGenerator::new(&POSTGRES_DIALECT)
+                .overriding_system_value_for_identity(),
         }
     }
 }
@@ -156,6 +158,68 @@ impl QueryGenerator for PostgresQueryGenerator {
 
     fn generate_template(&self, request: &MutationTemplateRequest<'_>) -> Option<GeneratedQuery> {
         self.inner.generate_template(request)
+    }
+
+    fn generate_bulk_insert_for_script(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        column_types: &[Option<String>],
+        identity_columns: &[String],
+        rows: &[&[Value]],
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        self.inner.generate_bulk_insert_for_script(
+            schema,
+            table,
+            columns,
+            column_types,
+            identity_columns,
+            rows,
+        )
+    }
+
+    /// One `setval` per column, moving its sequence past the values the
+    /// script wrote: to the largest for an ascending sequence and to the
+    /// smallest for a descending one, read from `pg_sequence.seqincrement`.
+    /// The value is clamped to the sequence's `MINVALUE`/`MAXVALUE`, and when
+    /// every restored value lies below the minimum of an ascending sequence (or
+    /// above the maximum of a descending one) `is_called` is false, so the next
+    /// value is that bound rather than a rejected `setval`. The value is cast to
+    /// `bigint` because a sequence owned by a `numeric` column yields `numeric`.
+    /// An empty table produces no row, so the sequence is left as it is; the
+    /// writer never emits this for one anyway.
+    fn script_table_sequence_resync(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        sequence_columns: &[String],
+    ) -> Option<String> {
+        if sequence_columns.is_empty() {
+            return None;
+        }
+
+        let qualified = POSTGRES_DIALECT.qualified_table(schema, table);
+        let statements: Vec<String> = sequence_columns
+            .iter()
+            .map(|column| {
+                let quoted = pg_quote_ident(column);
+                format!(
+                    "SELECT setval(seq.seqrelid, \
+                     (CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.{quoted}), seq.seqmin), seq.seqmax) \
+                     ELSE LEAST(GREATEST(MIN(src.{quoted}), seq.seqmin), seq.seqmax) END)::bigint, \
+                     CASE WHEN seq.seqincrement > 0 THEN MAX(src.{quoted}) >= seq.seqmin \
+                     ELSE MIN(src.{quoted}) <= seq.seqmax END) \
+                     FROM {qualified} AS src CROSS JOIN pg_catalog.pg_sequence AS seq \
+                     WHERE seq.seqrelid = pg_get_serial_sequence({}, {})::regclass \
+                     GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;",
+                    pg_quote_string(&qualified),
+                    pg_quote_string(column),
+                )
+            })
+            .collect();
+
+        Some(statements.join("\n"))
     }
 
     fn generate_read_template(&self, request: &ReadTemplateRequest<'_>) -> Option<GeneratedQuery> {

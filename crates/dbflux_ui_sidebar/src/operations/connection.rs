@@ -153,6 +153,13 @@ async fn wait_for_connection_teardown(
     }
 }
 
+/// Why a connect attempt stopped before it started.
+enum ConnectStop {
+    /// Another attempt for the same profile is in flight; nothing to report.
+    AlreadyConnecting,
+    Failed(PendingToast),
+}
+
 impl Sidebar {
     pub fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         let (prompt, remembered_password) = {
@@ -295,10 +302,7 @@ impl Sidebar {
         let (params, profile_name, pre_connect_hooks, post_connect_hooks, hook_context) =
             match self.app_state.update(cx, |state, _cx| {
                 if state.is_operation_pending(profile_id, None) {
-                    return Err(PendingToast {
-                        message: crate::labels::connection_already_pending_toast_label(),
-                        is_error: true,
-                    });
+                    return Err(ConnectStop::AlreadyConnecting);
                 }
 
                 let result = state.prepare_connect_profile_with_secrets(
@@ -308,10 +312,7 @@ impl Sidebar {
                 );
 
                 if result.is_ok() && !state.start_pending_operation(profile_id, None) {
-                    return Err(PendingToast {
-                        message: crate::labels::operation_started_elsewhere_toast_label(),
-                        is_error: true,
-                    });
+                    return Err(ConnectStop::AlreadyConnecting);
                 }
 
                 let diagnostic = result
@@ -338,12 +339,22 @@ impl Sidebar {
                     Err(error) => {
                         let toast = connect_prepare_error_toast(&error, diagnostic.as_ref());
                         state.record_connect_failure(profile_id, toast.message.clone());
-                        Err(toast)
+                        Err(ConnectStop::Failed(toast))
                     }
                 }
             }) {
                 Ok(p) => p,
-                Err(toast) => {
+                Err(ConnectStop::AlreadyConnecting) => {
+                    // A second request for a profile that is already
+                    // connecting (double click, repeated Enter, menu) is not
+                    // a failure: the attempt in flight serves it.
+                    log::info!(
+                        "Connect skipped: {}",
+                        crate::labels::connection_already_pending_toast_label()
+                    );
+                    return;
+                }
+                Err(ConnectStop::Failed(toast)) => {
                     self.pending_toast = Some(toast);
                     self.refresh_tree(cx);
                     cx.notify();
@@ -1672,5 +1683,141 @@ mod tests {
         fixture.state.read_with(cx, |state, _| {
             assert!(state.connections().contains_key(&profile_id))
         });
+    }
+
+    /// Clicks the row twice through the real element. The events are
+    /// dispatched without parking the scheduler, so a connect the click starts
+    /// stays in flight until the test lets the executor run.
+    fn double_click_row(item_id: &str, cx: &mut VisualTestContext) {
+        use gpui::{InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent};
+
+        let selector: &'static str = Box::leak(format!("row-{item_id}").into_boxed_str());
+        let bounds = cx.debug_bounds(selector).expect("the profile row is drawn");
+        let position = bounds.center();
+
+        for click_count in [1, 2] {
+            let down = MouseDownEvent {
+                position,
+                modifiers: Modifiers::default(),
+                button: MouseButton::Left,
+                click_count,
+                first_mouse: false,
+            };
+            let up = MouseUpEvent {
+                position,
+                modifiers: Modifiers::default(),
+                button: MouseButton::Left,
+                click_count,
+            };
+
+            cx.update(|window, cx| {
+                window.dispatch_event(down.to_platform_input(), cx);
+                window.dispatch_event(up.to_platform_input(), cx);
+            });
+        }
+    }
+
+    fn last_toast_title(cx: &mut VisualTestContext) -> Option<String> {
+        cx.update(|_, cx| {
+            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx)
+                .last_toast_title()
+        })
+    }
+
+    /// The number of toasts on the stack and the title of the newest.
+    fn toast_stack(cx: &mut VisualTestContext) -> (usize, Option<String>) {
+        cx.update(|_, cx| {
+            let host = cx
+                .global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx);
+            (host.toast_count(), host.last_toast_title())
+        })
+    }
+
+    #[gpui::test]
+    fn double_click_on_a_connection_connects_once_without_an_error(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = fixture.profile_id;
+        let item_id = dbflux_core::SchemaNodeId::Profile { profile_id }.to_string();
+        let pending_title = crate::labels::connection_already_pending_toast_label();
+
+        cx.run_until_parked();
+
+        // The connect runs on the background executor, which does not advance
+        // until the scheduler is parked: the first attempt holds its pending
+        // slot while the second double click arrives.
+        double_click_row(&item_id, cx);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.is_operation_pending(profile_id, None));
+        });
+        assert!(recorded(&fixture.passwords).is_empty());
+
+        double_click_row(&item_id, cx);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(
+                state.is_operation_pending(profile_id, None),
+                "the second request met the first attempt's pending slot"
+            );
+        });
+        let (during_count, during_title) = toast_stack(cx);
+        assert_ne!(during_title, Some(pending_title.clone()));
+
+        cx.run_until_parked();
+
+        assert_eq!(recorded(&fixture.passwords).len(), 1);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id));
+        });
+        // An earlier error toast would sit under the success one, so the
+        // whole stack is counted, not only its top.
+        let (count, title) = toast_stack(cx);
+        assert_ne!(title, Some(pending_title));
+        assert_eq!(
+            count,
+            during_count + 1,
+            "only the success toast was added; no error hides beneath it"
+        );
+    }
+
+    #[gpui::test]
+    fn double_click_while_a_connect_is_in_flight_reports_nothing(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = fixture.profile_id;
+        let item_id = dbflux_core::SchemaNodeId::Profile { profile_id }.to_string();
+
+        fixture.state.update(cx, |state, _| {
+            assert!(state.start_pending_operation(profile_id, None));
+        });
+        double_click_row(&item_id, cx);
+        cx.run_until_parked();
+
+        assert!(recorded(&fixture.passwords).is_empty());
+        assert_ne!(
+            last_toast_title(cx),
+            Some(crate::labels::connection_already_pending_toast_label())
+        );
+    }
+
+    #[gpui::test]
+    fn connect_requested_while_pending_reports_nothing(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture.state.update(cx, |state, _| {
+            assert!(state.start_pending_operation(profile_id, None));
+        });
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        assert!(recorded(&fixture.passwords).is_empty());
+        assert_ne!(
+            last_toast_title(cx),
+            Some(crate::labels::connection_already_pending_toast_label())
+        );
     }
 }

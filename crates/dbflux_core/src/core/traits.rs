@@ -417,6 +417,17 @@ pub trait DbDriver: Send + Sync {
         None
     }
 
+    /// Build a config targeting a specific cloud region, when supported.
+    ///
+    /// Drivers whose connections reach one region can override this to return
+    /// an updated config, which is what lets the user move a live connection to
+    /// another region without editing the profile. Drivers without a region
+    /// should return `None`, so a region switch is refused instead of silently
+    /// connecting to the same place.
+    fn with_region(&self, _config: &DbConfig, _region: &str) -> Option<DbConfig> {
+        None
+    }
+
     /// Whether this database type requires authentication.
     ///
     /// Default implementation checks for the AUTHENTICATION capability.
@@ -1347,6 +1358,29 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Returns the cloud region this connection reaches, if it reaches one.
+    ///
+    /// Drivers that advertise `DriverCapabilities::REGION_SWITCH` report the
+    /// region they connected with, which is also the value a region switch
+    /// starts from. Drivers without a region keep the `None` default.
+    fn current_region(&self) -> Option<String> {
+        None
+    }
+
+    /// Lists the cloud regions this connection can be moved to.
+    ///
+    /// Drivers that advertise `DriverCapabilities::REGION_SWITCH` ask the
+    /// provider for its regions with this connection's credentials, so a
+    /// caller sees exactly the regions this connection can reach. A driver
+    /// without a region inherits the default and reports `NotSupported` rather
+    /// than an empty list, because an empty list reads as "there is nowhere to
+    /// go" while the truth is "this connection has no regions".
+    fn available_regions(&self) -> Result<Vec<String>, DbError> {
+        Err(DbError::NotSupported(
+            "region listing not supported".to_string(),
+        ))
+    }
+
     /// Returns the database kind for this connection.
     fn kind(&self) -> DbKind;
 
@@ -1983,6 +2017,16 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Returns the sidebar root sections this connection declares.
+    ///
+    /// Drivers that implement `RootSectionSource` override this and advertise
+    /// `DriverCapabilities::ROOT_SECTIONS`; the rest inherit `None`.
+    fn root_section_source(
+        &self,
+    ) -> Option<&dyn crate::connection::root_section::RootSectionSource> {
+        None
+    }
+
     /// Returns the secret stores this connection exposes, in display order.
     ///
     /// Drivers that implement `SecretStoreSource` override this. Drivers without
@@ -2028,6 +2072,45 @@ pub trait Connection: Send + Sync {
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         None
+    }
+
+    /// Names of the table's columns the database generates itself (identity
+    /// columns that reject explicit values unless told otherwise). An SQL
+    /// export passes them to [`QueryGenerator::generate_bulk_insert_for_script`]
+    /// and the script prologue and epilogue hooks. Drivers without such
+    /// columns keep this default, an empty list.
+    fn identity_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Names of the table's columns whose values come from a sequence (identity
+    /// columns of either kind, serial columns). Explicit values written by an
+    /// SQL export do not advance a sequence, so the script's epilogue hook
+    /// resyncs them. Drivers without sequences keep this default, an empty
+    /// list.
+    fn sequence_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Names of the table's columns the database computes and rejects explicit
+    /// values for (stored generated columns, computed columns, row-version
+    /// columns). An SQL export leaves them out of its `INSERT` statements so
+    /// the database computes them again on replay. Drivers without such
+    /// columns keep this default, an empty list.
+    fn generated_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
     }
 
     fn semantic_planner(&self) -> Option<&dyn SemanticPlanner> {

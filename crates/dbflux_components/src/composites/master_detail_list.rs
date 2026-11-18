@@ -122,12 +122,14 @@ where
     } else {
         theme.muted_foreground
     };
+    let row_id = SharedString::from(format!("master-detail-row-{}", item.id));
 
-    ListRow::new(SharedString::from(format!("master-detail-row-{}", item.id)))
+    ListRow::new(row_id.clone())
         .selected(item.selected)
         .selection_bar(true)
         .focused(item.focused && !item.selected)
         .build(cx)
+        .debug_selector(move || row_id.to_string())
         .flex()
         .flex_col()
         .gap(MasterListMetrics::ROW_LINE_GAP)
@@ -248,6 +250,7 @@ where
 
     div()
         .id(config.id.clone())
+        .debug_selector(|| config.id.to_string())
         .w(config.width)
         .h_full()
         .flex_shrink_0()
@@ -261,13 +264,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{RowKind, master_detail_row_kind};
+    use super::{
+        MasterDetailActionKind, MasterDetailItem, MasterDetailListConfig, RowKind, Widths,
+        master_detail_row_kind, render_master_detail_list,
+    };
+    use gpui::{App, ScrollHandle, Window, div};
 
     #[test]
     fn plain_row_when_neither_selected_nor_focused() {
         assert_eq!(master_detail_row_kind(false, false), RowKind::Plain);
     }
-
     #[test]
     fn selected_row_when_selected_only() {
         assert_eq!(master_detail_row_kind(true, false), RowKind::Selected);
@@ -281,5 +287,68 @@ mod tests {
     #[test]
     fn selected_wins_when_both_selected_and_focused() {
         assert_eq!(master_detail_row_kind(true, true), RowKind::Selected);
+    }
+
+    /// Pins the panel's token-derived frame: the list column keeps exactly
+    /// its configured width and fills the height, the values the surface
+    /// commits to; any replacement rendering must reproduce them exactly.
+    fn noop_select(_index: usize, _window: &mut Window, _cx: &mut App) {}
+
+    fn noop_action(_kind: MasterDetailActionKind, _window: &mut Window, _cx: &mut App) {}
+
+    fn one_item() -> MasterDetailItem {
+        MasterDetailItem {
+            id: "one".into(),
+            icon: None,
+            label: "First".into(),
+            detail: None,
+            badge: None,
+            selected: true,
+            focused: false,
+        }
+    }
+
+    #[gpui::test]
+    fn the_list_keeps_its_fixed_width_and_fills_the_height(cx: &mut gpui::TestAppContext) {
+        use gpui::Render;
+        use gpui::prelude::*;
+
+        struct ListHarness {
+            scroll: ScrollHandle,
+        }
+
+        impl Render for ListHarness {
+            fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let config = MasterDetailListConfig::default();
+                let items = [one_item()];
+                div().size_full().flex().child(render_master_detail_list(
+                    &config,
+                    &items,
+                    &self.scroll,
+                    noop_select,
+                    noop_action,
+                    cx,
+                ))
+            }
+        }
+
+        cx.update(crate::theme::init);
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let harness = cx.new(|_| ListHarness {
+                scroll: ScrollHandle::new(),
+            });
+            gpui_component::Root::new(harness, window, cx)
+        });
+        window.run_until_parked();
+
+        let frame = window
+            .debug_bounds("master-detail-list")
+            .expect("the list panel is laid out");
+        assert_eq!(frame.size.width, Widths::SETTINGS_LIST_PANEL);
+        let row = window
+            .debug_bounds("master-detail-row-one")
+            .expect("the row is laid out");
+        assert!(row.left() >= frame.left() && row.right() <= frame.right());
     }
 }
