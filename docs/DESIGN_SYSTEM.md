@@ -437,6 +437,54 @@ OptionGroup::new(
 .aria_label("Secrets in a bundle")
 ```
 
+### Cascading menus
+
+A cascading (flyout) menu is a tree of `MenuNode`s: a row with children is a
+submenu, and nothing else marks one. `MenuItem` rows are shared with the flat
+menus, so a checkable, danger or disabled row looks the same at every depth.
+
+```rust
+let nodes = vec![
+    MenuNode::header("Grid"),
+    MenuNode::checked("grid.options", "Show options", true),
+    MenuNode::row("Sort by").children(vec![
+        MenuNode::radio("sort.name", "Name", true),
+        MenuNode::radio("sort.size", "Size", false),
+        MenuNode::separator(),
+        MenuNode::action("sort.clear", "Clear"),
+    ]),
+    MenuNode::action("grid.delete", "Delete").danger(),
+];
+```
+
+Four pieces, and a surface owns the state:
+
+- `MenuNode` is the row tree. `id(..)` is the value activation reports back,
+  `children(..)` makes the row a submenu, `children_width(..)` replaces
+  `MenuMetrics::SUBMENU_WIDTH` for its flyout, and `keep_open(..)` overrides the
+  default, which is open for a checkable row and closed for every other row.
+- `MenuNav` holds the cursor: one path of row indices, so a level is open
+exactly when the path reaches it. `reset`, `step`, `open_child`, `back`,
+`close_all`, `hover` and `set_level` are the whole vocabulary, and they skip
+separators, headers and disabled rows.
+- `HoverIntent` decides when a hovered row opens. `enter`, `leave`,
+  `pointer_moved` and `mark_open` feed it, and `tick(now)` returns the due
+  `HoverTick`. It opens after `HOVER_OPEN_DELAY` and closes after
+  `HOVER_CLOSE_GRACE`, and `in_corridor` suppresses the close while the pointer
+  crosses the triangle between the row it left and the flyout it heads for.
+- `render_menu_tree` draws every open level and reports through one callback:
+  `Activated { id, path }`, `Opened { level, index }` and
+  `Hovered { level, index }`. Mount the result inside a full-size layer behind
+  `render_menu_overlay`, so an outside click dismisses the whole cascade.
+
+`place_flyout` is the pure placement policy. A flyout opens beside the parent
+with its first row level with the parent row, flips left when the right edge
+would overflow, slides up rather than growing past the bottom edge, and caps its
+height so content taller than the surface scrolls inside it. It takes the
+parent frame, the row top and a `FlyoutSpec`, and returns the side, the origin,
+the height cap and whether it scrolls — no window involved, so the policy is
+tested as arithmetic.
+
 ### Form popovers
 
 `Popover` is the floating surface a screen opens over one thing it is about: a

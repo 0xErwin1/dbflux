@@ -968,6 +968,15 @@ impl MenuMetrics {
     /// Trailing check mark of a checked row, sized like the submenu chevron.
     /// (13 px)
     pub const CHECK_ICON: Rems = ui(13.0);
+
+    /// Default width of a submenu flyout. (240 px)
+    pub const SUBMENU_WIDTH: Pixels = px(240.0);
+    /// How far a flyout overlaps its parent panel, so the two frames meet
+    /// instead of leaving a seam. (8 px)
+    pub const SUBMENU_OVERLAP: Pixels = px(8.0);
+    /// Gap kept between a flyout and the window edge it may flip against.
+    /// (6 px)
+    pub const FLYOUT_MARGIN: Pixels = px(6.0);
 }
 
 /// Geometry of the resize gutter between two panes (`composites::Splitter`),
