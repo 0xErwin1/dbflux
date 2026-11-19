@@ -3,7 +3,7 @@
 
 use calloop::RegistrationToken;
 use calloop::timer::{TimeoutAction, Timer};
-use gpui::{ExternalDragPayload, FileDropEvent, PlatformInput};
+use gpui::{CursorStyle, ExternalDragPayload, FileDropEvent, PlatformInput};
 use gpui_util::ResultExt as _;
 use x11rb::{
     connection::Connection as _,
@@ -44,6 +44,8 @@ pub(crate) struct XdndSource {
     uri_list: Vec<u8>,
     pointer_device: xinput::DeviceId,
     pointer_grabbed: bool,
+    /// Whether the grab's cursor shows that a drop would be taken.
+    cursor_shows_accepted: bool,
     keyboard_grabbed: bool,
     timeout: Option<RegistrationToken>,
 }
@@ -99,7 +101,10 @@ impl X11Client {
             return false;
         }
 
-        let pointer_grabbed = grab_pointer(&connection, x_window, pointer_device);
+        let refusing_cursor = state
+            .get_cursor_icon(CursorStyle::OperationNotAllowed)
+            .unwrap_or(x11rb::NONE);
+        let pointer_grabbed = grab_pointer(&connection, x_window, pointer_device, refusing_cursor);
         let keyboard_grabbed = grab_keyboard(&connection, x_window);
 
         let (x, y) = (i32::from(pointer.root_x), i32::from(pointer.root_y));
@@ -112,6 +117,7 @@ impl X11Client {
             uri_list: uri_list.into_bytes(),
             pointer_device,
             pointer_grabbed,
+            cursor_shows_accepted: false,
             keyboard_grabbed,
             timeout: None,
         });
@@ -291,6 +297,31 @@ impl X11Client {
                 Command::End => self.end_xdnd_source(),
             }
         }
+        self.refresh_xdnd_cursor();
+    }
+
+    /// Shows with the pointer's cursor whether a drop here would be taken, since a drag has no
+    /// icon of its own on X11. A grab's cursor can only change by grabbing again.
+    fn refresh_xdnd_cursor(&self) {
+        let mut state = self.0.borrow_mut();
+        let Some(source) = state.xdnd_source.as_ref() else {
+            return;
+        };
+        let accepted = source.session.drop_would_be_accepted();
+        if !source.pointer_grabbed || source.cursor_shows_accepted == accepted {
+            return;
+        }
+        let (window, device) = (source.window, source.pointer_device);
+        let style = if accepted {
+            CursorStyle::DragCopy
+        } else {
+            CursorStyle::OperationNotAllowed
+        };
+        let cursor = state.get_cursor_icon(style).unwrap_or(x11rb::NONE);
+        grab_pointer(&state.xcb_connection, window, device, cursor);
+        if let Some(source) = state.xdnd_source.as_mut() {
+            source.cursor_shows_accepted = accepted;
+        }
     }
 
     fn send_xdnd_message(
@@ -412,13 +443,14 @@ fn grab_pointer(
     connection: &XCBConnection,
     window: xproto::Window,
     device: xinput::DeviceId,
+    cursor: xproto::Cursor,
 ) -> bool {
     let reply = get_reply(
         || "Failed to grab the pointer for a drag",
         connection.xinput_xi_grab_device(
             window,
             x11rb::CURRENT_TIME,
-            x11rb::NONE,
+            cursor,
             device,
             GrabMode::ASYNC,
             GrabMode::ASYNC,

@@ -2150,7 +2150,7 @@ impl X11ClientState {
             .expect("Failed to initialize window refresh timer")
     }
 
-    fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
+    pub(crate) fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
         if let Some(cursor) = self.cursor_cache.get(&style) {
             return *cursor;
         }

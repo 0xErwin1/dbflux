@@ -228,6 +228,11 @@ impl SourceSession {
         }
     }
 
+    /// Whether releasing the button now would hand the files to a target that took them.
+    pub(crate) fn drop_would_be_accepted(&self) -> bool {
+        self.phase == Phase::Dragging && self.active.is_some_and(|active| active.accepted)
+    }
+
     #[cfg(test)]
     pub(crate) fn is_ended(&self) -> bool {
         self.phase == Phase::Ended
@@ -689,6 +694,21 @@ mod tests {
             session.status_received(status(0x200, true)),
             vec![position(0x200, 12, 22, 7)]
         );
+    }
+
+    #[test]
+    fn a_drop_is_accepted_only_after_the_target_says_so() {
+        let mut session = session();
+        assert!(!session.drop_would_be_accepted());
+        session.pointer_moved(Some(target(0x200)), 10, 20, 5);
+        assert!(!session.drop_would_be_accepted());
+        session.status_received(status(0x200, true));
+        assert!(session.drop_would_be_accepted());
+        session.pointer_moved(Some(target(0x300)), 400, 20, 6);
+        assert!(!session.drop_would_be_accepted());
+        session.status_received(status(0x300, true));
+        session.status_received(status(0x300, false));
+        assert!(!session.drop_would_be_accepted());
     }
 
     #[test]

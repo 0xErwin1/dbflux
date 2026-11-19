@@ -108,6 +108,21 @@ The first commit that added this directory carries the published source unchange
   left to the loop, and a failed registration is logged instead of panicking. The clipboard
   shares `send_bytes`. Covered by `drag_source::tests` and `clipboard::tests`.
 
+- `src/linux/wayland/drag_icon.rs`, `src/linux/wayland/client.rs`,
+  `src/linux/wayland/window.rs`, `src/linux/x11/xdnd_drag.rs`, `src/linux/x11/xdnd_source.rs`,
+  `src/linux/x11/client.rs`: a drag that leaves the window keeps a picture at the pointer.
+  Upstream passed no icon to `wl_data_device.start_drag`, so the compositor drew nothing once
+  the pointer left the window. A `wl_shm` icon surface is now rendered on the CPU
+  (`drag_icon::render`, no fonts or assets): a page or folder glyph (a folder only when every
+  dragged entry is one), a second glyph stacked behind it and a count badge (`99+` past 99)
+  when several entries are dragged. It is rendered at the source window's buffer scale, sits
+  below and right of the pointer, and is destroyed with the data source. A failure to build it
+  is logged and the drag goes on without an icon. X11 has no drag icon in XDND: the grabbed
+  pointer shows the `copy` cursor while the target under it accepted the drop and
+  `not-allowed` otherwise, switched by grabbing again with the new cursor. Covered by
+  `drag_icon::tests`, `xdnd_source::tests::a_drop_is_accepted_only_after_the_target_says_so`
+  and `client::tests::the_drag_icon_pixels_are_shared_through_a_file`.
+
 ## Refreshing
 
 Replace this directory with the new published crate, re-apply the patches above, and bump

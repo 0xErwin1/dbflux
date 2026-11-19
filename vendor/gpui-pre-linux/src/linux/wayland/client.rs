@@ -2,7 +2,7 @@ use std::{
     cell::{RefCell, RefMut},
     hash::Hash,
     os::{
-        fd::{AsRawFd, BorrowedFd, FromRawFd as _, RawFd},
+        fd::{AsFd as _, AsRawFd, BorrowedFd, FromRawFd as _, OwnedFd, RawFd},
         unix::net::UnixStream,
     },
     path::PathBuf,
@@ -93,6 +93,7 @@ use crate::linux::{
     wayland::{
         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
         cursor::Cursor,
+        drag_icon::{self, IconSpec},
         drag_source::{self, DragSession},
         serial::{Serial, SerialKind, SerialTracker},
         to_shape,
@@ -102,11 +103,12 @@ use crate::linux::{
 };
 use gpui::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, ExternalDragPayload,
-    FileDropEvent, ForegroundExecutor, GraphicalEnvironment, KeyDownEvent, KeyUpEvent, Keystroke,
-    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
-    MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay, PlatformFrameSignal, PlatformInput,
-    PlatformKeyboardLayout, PlatformWindow, Point, ScrollDelta, ScrollWheelEvent, SharedString,
-    Size, TouchPhase, WindowButtonLayout, WindowKind, WindowParams, point, px, size,
+    FileDragPaths, FileDropEvent, ForegroundExecutor, GraphicalEnvironment, KeyDownEvent,
+    KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay,
+    PlatformFrameSignal, PlatformInput, PlatformKeyboardLayout, PlatformWindow, Point, ScrollDelta,
+    ScrollWheelEvent, SharedString, Size, TouchPhase, WindowButtonLayout, WindowKind, WindowParams,
+    point, px, size,
 };
 use gpui_wgpu::{CompositorGpuHint, GpuContext};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
@@ -522,6 +524,67 @@ pub(crate) struct ExternalDrag {
     session: DragSession,
     /// Runs out when the target never reports `dnd_finished`.
     timeout: Option<RegistrationToken>,
+    /// The picture that follows the pointer; the drag works without it.
+    icon: Option<DragIcon>,
+}
+
+/// The surface the compositor draws next to the pointer during a drag, and the buffer it shows.
+struct DragIcon {
+    surface: wl_surface::WlSurface,
+    buffer: wl_buffer::WlBuffer,
+}
+
+impl DragIcon {
+    fn new(globals: &Globals, paths: &FileDragPaths, buffer_scale: u32) -> Option<Self> {
+        let spec = IconSpec::for_paths(paths)?;
+        let bitmap = drag_icon::render(spec, buffer_scale);
+        let fd = match shm_file(&bitmap.argb) {
+            Ok(fd) => fd,
+            Err(err) => {
+                log::warn!("failed to share the drag icon with the compositor: {err}");
+                return None;
+            }
+        };
+        let (width, height) = (bitmap.width as i32, bitmap.height as i32);
+        let pool = globals
+            .shm
+            .create_pool(fd.as_fd(), bitmap.argb.len() as i32, &globals.qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width,
+            height,
+            width * 4,
+            wl_shm::Format::Argb8888,
+            &globals.qh,
+            (),
+        );
+        pool.destroy();
+
+        let surface = globals.compositor.create_surface(&globals.qh, ());
+        surface.set_buffer_scale(bitmap.scale as i32);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        Some(Self { surface, buffer })
+    }
+
+    fn destroy(self) {
+        self.surface.destroy();
+        self.buffer.destroy();
+    }
+}
+
+/// An anonymous file holding `bytes`, for a `wl_shm` pool.
+fn shm_file(bytes: &[u8]) -> std::io::Result<OwnedFd> {
+    use std::io::Write as _;
+
+    let raw = unsafe { libc::memfd_create(c"gpui-drag-icon".as_ptr(), libc::MFD_CLOEXEC) };
+    if raw == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let mut file = std::fs::File::from(fd);
+    file.write_all(bytes)?;
+    Ok(file.into())
 }
 
 pub struct ClickState {
@@ -655,6 +718,7 @@ impl WaylandClientStatePtr {
         &self,
         surface: &wl_surface::WlSurface,
         payload: &ExternalDragPayload,
+        buffer_scale: u32,
     ) -> bool {
         let client = self.get_client();
         let mut state = client.borrow_mut();
@@ -681,7 +745,13 @@ impl WaylandClientStatePtr {
             data_device_manager.create_data_source(&state.globals.qh, DataSourceKind::Drag);
         source.offer(FILE_LIST_MIME_TYPE.to_string());
         source.set_actions(DndAction::Copy | DndAction::Move);
-        data_device.start_drag(Some(&source), surface, None, serial.as_raw());
+        let icon = DragIcon::new(&state.globals, paths, buffer_scale);
+        data_device.start_drag(
+            Some(&source),
+            surface,
+            icon.as_ref().map(|icon| &icon.surface),
+            serial.as_raw(),
+        );
 
         let previous = state.external_drag.replace(ExternalDrag {
             source,
@@ -689,12 +759,16 @@ impl WaylandClientStatePtr {
             window,
             session: DragSession::new(),
             timeout: None,
+            icon,
         });
         if let Some(previous) = previous {
             if let Some(token) = previous.timeout {
                 state.loop_handle.remove(token);
             }
             previous.source.destroy();
+            if let Some(icon) = previous.icon {
+                icon.destroy();
+            }
         }
         true
     }
@@ -3204,6 +3278,9 @@ impl WaylandClientStatePtr {
                 state.loop_handle.remove(token);
             }
             drag.source.destroy();
+            if let Some(icon) = drag.icon {
+                icon.destroy();
+            }
         }
         drop(state);
 
@@ -3328,6 +3405,17 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+
+    #[test]
+    fn the_drag_icon_pixels_are_shared_through_a_file() {
+        use std::io::{Read as _, Seek as _};
+
+        let mut file = std::fs::File::from(shm_file(b"pixels").expect("an anonymous file"));
+        file.rewind().expect("rewind");
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).expect("read");
+        assert_eq!(contents, b"pixels");
+    }
 
     #[test]
     fn a_new_keymap_keeps_the_held_modifiers() {

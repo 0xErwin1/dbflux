@@ -2,6 +2,7 @@ mod client;
 mod clipboard;
 mod cursor;
 mod display;
+mod drag_icon;
 mod drag_source;
 mod popup;
 mod serial;
