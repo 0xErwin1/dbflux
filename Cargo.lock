@@ -3552,6 +3552,7 @@ dependencies = [
  "postgres-native-tls",
  "ryu",
  "serde_json",
+ "tokio",
  "urlencoding",
  "uuid",
 ]
@@ -3587,6 +3588,7 @@ dependencies = [
  "postgres",
  "postgres-native-tls",
  "serde_json",
+ "tokio",
  "urlencoding",
  "uuid",
 ]

@@ -6,6 +6,8 @@ pub(crate) mod hook;
 pub(crate) mod instance_catalog;
 pub(crate) mod item_manager;
 pub mod manager;
+mod off_runtime_drop;
+pub use off_runtime_drop::OffRuntimeDrop;
 pub(crate) mod metric_catalog;
 
 pub use metric_catalog::{

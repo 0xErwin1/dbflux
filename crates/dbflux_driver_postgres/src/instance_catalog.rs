@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use dbflux_core::OffRuntimeDrop;
 use dbflux_core::{
     ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
     DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
@@ -18,12 +19,12 @@ use crate::driver::decoded_to_value;
 /// underlying `postgres` crate is blocking); the `async` wrapper satisfies
 /// the `InstanceCatalog` trait boundary.
 pub struct PgInstanceCatalog {
-    client: Arc<Mutex<Client>>,
+    client: Arc<Mutex<OffRuntimeDrop<Client>>>,
     pg_signal_backend: bool,
 }
 
 impl PgInstanceCatalog {
-    pub fn new(client: Arc<Mutex<Client>>) -> Self {
+    pub fn new(client: Arc<Mutex<OffRuntimeDrop<Client>>>) -> Self {
         Self {
             client,
             pg_signal_backend: false,
@@ -34,7 +35,7 @@ impl PgInstanceCatalog {
     ///
     /// Called once at connection time so that `row_actions` (a sync fn) can
     /// return the correctly filtered list without re-querying the database.
-    pub fn new_probed(client: Arc<Mutex<Client>>, pg_signal_backend: bool) -> Self {
+    pub fn new_probed(client: Arc<Mutex<OffRuntimeDrop<Client>>>, pg_signal_backend: bool) -> Self {
         Self {
             client,
             pg_signal_backend,
