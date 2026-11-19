@@ -582,7 +582,7 @@ impl Interactivity {
         &mut self,
         predicate: impl Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static,
     ) {
-        self.can_drop_predicate = Some(Box::new(predicate));
+        self.can_drop_predicate = Some(Rc::new(predicate));
     }
 
     /// Bind the given callback to click events of this element.
@@ -1815,7 +1815,7 @@ type ExternalDragPayloadResolver =
 
 type DropListener = Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>;
 
-type CanDropPredicate = Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static>;
+type CanDropPredicate = Rc<dyn Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static>;
 
 pub(crate) struct TooltipBuilder {
     build: Rc<dyn Fn(&mut Window, &mut App) -> AnyView + 'static>,
@@ -2982,6 +2982,24 @@ impl Interactivity {
         let can_drop_predicate = mem::take(&mut self.can_drop_predicate);
 
         if !drop_listeners.is_empty() {
+            let drop_types: SmallVec<[TypeId; 2]> =
+                drop_listeners.iter().map(|(type_id, _)| *type_id).collect();
+            window.on_drop_acceptance_probe({
+                let hitbox = hitbox.clone();
+                let can_drop_predicate = can_drop_predicate.clone();
+                move |probe, phase, window, cx| {
+                    if phase == DispatchPhase::Bubble
+                        && probe.accepted.get().is_none()
+                        && hitbox.is_hovered(window)
+                        && drop_types.contains(&probe.drag_type)
+                    {
+                        let can_drop = can_drop_predicate
+                            .as_ref()
+                            .is_none_or(|predicate| predicate(probe.value.as_ref(), window, cx));
+                        probe.accepted.set(Some(can_drop));
+                    }
+                }
+            });
             let hitbox = hitbox.clone();
             window.on_mouse_event({
                 move |_: &MouseUpEvent, phase, window, cx| {

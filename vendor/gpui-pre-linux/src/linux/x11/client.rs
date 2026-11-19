@@ -158,7 +158,11 @@ impl From<xim::ClientError> for EventHandlerError {
 pub struct Xdnd {
     other_window: xproto::Window,
     drag_type: u32,
+    /// The dragged paths were requested from the source.
+    requested: bool,
     retrieved: bool,
+    /// An `XdndPosition` is waiting for the paths before it can be answered with `XdndStatus`.
+    status_pending: bool,
     position: Point<Pixels>,
 }
 
@@ -938,7 +942,10 @@ impl X11Client {
                 }
 
                 if event.type_ == state.atoms.XdndEnter {
-                    state.xdnd_state.other_window = atom;
+                    state.xdnd_state = Xdnd {
+                        other_window: atom,
+                        ..Xdnd::default()
+                    };
                     if (arg1 & 0x1) == 0x1 {
                         state.xdnd_state.drag_type = xdnd_get_supported_atom(
                             &state.xcb_connection,
@@ -974,30 +981,48 @@ impl X11Client {
                         state.xdnd_state.position =
                             Point::new(px(pos.win_x as f32), px(pos.win_y as f32));
                     }
-                    if !state.xdnd_state.retrieved {
-                        check_reply(
-                            || "Failed to convert selection for drag and drop",
-                            state.xcb_connection.convert_selection(
-                                event.window,
-                                state.atoms.XdndSelection,
-                                state.xdnd_state.drag_type,
-                                state.atoms.XDND_DATA,
-                                arg3,
-                            ),
-                        )
-                        .log_err();
-                    }
-                    xdnd_send_status(
-                        &state.xcb_connection,
-                        &state.atoms,
-                        event.window,
-                        state.xdnd_state.other_window,
-                        arg4,
-                    );
                     let position = state.xdnd_state.position;
-                    drop(state);
-                    window
-                        .handle_input(PlatformInput::FileDrop(FileDropEvent::Pending { position }));
+                    if state.xdnd_state.drag_type == 0 {
+                        // Nothing offered can be read as paths.
+                        xdnd_send_status(
+                            &state.xcb_connection,
+                            &state.atoms,
+                            event.window,
+                            state.xdnd_state.other_window,
+                            false,
+                        );
+                    } else if !state.xdnd_state.retrieved {
+                        // The answer depends on what is dragged, so it waits for the paths.
+                        state.xdnd_state.status_pending = true;
+                        if !state.xdnd_state.requested {
+                            state.xdnd_state.requested = true;
+                            check_reply(
+                                || "Failed to convert selection for drag and drop",
+                                state.xcb_connection.convert_selection(
+                                    event.window,
+                                    state.atoms.XdndSelection,
+                                    state.xdnd_state.drag_type,
+                                    state.atoms.XDND_DATA,
+                                    arg3,
+                                ),
+                            )
+                            .log_err();
+                        }
+                    } else {
+                        drop(state);
+                        let result =
+                            window.handle_input(PlatformInput::FileDrop(FileDropEvent::Pending {
+                                position,
+                            }));
+                        let state = self.0.borrow();
+                        xdnd_send_status(
+                            &state.xcb_connection,
+                            &state.atoms,
+                            event.window,
+                            state.xdnd_state.other_window,
+                            result.external_drop_accepted.unwrap_or(true),
+                        );
+                    }
                 } else if event.type_ == state.atoms.XdndDrop {
                     xdnd_send_finished(
                         &state.xcb_connection,
@@ -1017,8 +1042,8 @@ impl X11Client {
             }
             Event::SelectionNotify(event) => {
                 let window = self.get_window(event.requestor)?;
-                let state = self.0.borrow_mut();
-                let reply = get_reply(
+                let mut state = self.0.borrow_mut();
+                let file_list = get_reply(
                     || "Failed to get XDND_DATA",
                     state.xcb_connection.get_property(
                         false,
@@ -1029,29 +1054,47 @@ impl X11Client {
                         1024,
                     ),
                 )
-                .log_err();
-                let Some(reply) = reply else {
+                .log_err()
+                .and_then(|reply| String::from_utf8(reply.value).ok());
+                let Some(file_list) = file_list else {
+                    if std::mem::take(&mut state.xdnd_state.status_pending) {
+                        xdnd_send_status(
+                            &state.xcb_connection,
+                            &state.atoms,
+                            event.requestor,
+                            state.xdnd_state.other_window,
+                            false,
+                        );
+                    }
                     return Some(());
                 };
-                if let Ok(file_list) = str::from_utf8(&reply.value) {
-                    let paths: SmallVec<[_; 2]> = file_list
-                        .lines()
-                        .filter_map(|path| Url::parse(path).log_err())
-                        .filter_map(|url| match url.to_file_path() {
-                            Ok(url) => Some(url),
-                            Err(()) => {
-                                log::error!("Failed turn {url:?} into a file path");
-                                None
-                            }
-                        })
-                        .collect();
-                    let input = PlatformInput::FileDrop(FileDropEvent::Entered {
-                        position: state.xdnd_state.position,
-                        paths: gpui::ExternalPaths(paths),
-                    });
-                    drop(state);
-                    window.handle_input(input);
-                    self.0.borrow_mut().xdnd_state.retrieved = true;
+                let paths: SmallVec<[_; 2]> = file_list
+                    .lines()
+                    .filter_map(|path| Url::parse(path).log_err())
+                    .filter_map(|url| match url.to_file_path() {
+                        Ok(url) => Some(url),
+                        Err(()) => {
+                            log::error!("Failed turn {url:?} into a file path");
+                            None
+                        }
+                    })
+                    .collect();
+                let input = PlatformInput::FileDrop(FileDropEvent::Entered {
+                    position: state.xdnd_state.position,
+                    paths: gpui::ExternalPaths(paths),
+                });
+                drop(state);
+                let result = window.handle_input(input);
+                let mut state = self.0.borrow_mut();
+                state.xdnd_state.retrieved = true;
+                if std::mem::take(&mut state.xdnd_state.status_pending) {
+                    xdnd_send_status(
+                        &state.xcb_connection,
+                        &state.atoms,
+                        event.requestor,
+                        state.xdnd_state.other_window,
+                        result.external_drop_accepted.unwrap_or(true),
+                    );
                 }
             }
             Event::ConfigureNotify(event) => {
@@ -2450,18 +2493,20 @@ fn xdnd_send_finished(
     xcb_connection.flush().log_err();
 }
 
+/// Answers an `XdndPosition`: whether a drop at the pointer would be taken, and if so as a copy.
 fn xdnd_send_status(
     xcb_connection: &XCBConnection,
     atoms: &XcbAtoms,
     source: xproto::Window,
     target: xproto::Window,
-    action: u32,
+    accepted: bool,
 ) {
+    let action = if accepted { atoms.XdndActionCopy } else { 0 };
     let message = ClientMessageEvent {
         format: 32,
         window: target,
         type_: atoms.XdndStatus,
-        data: ClientMessageData::from([source, 1, 0, 0, action]),
+        data: ClientMessageData::from([source, u32::from(accepted), 0, 0, action]),
         sequence: 0,
         response_type: xproto::CLIENT_MESSAGE_EVENT,
     };

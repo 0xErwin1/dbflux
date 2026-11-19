@@ -1195,17 +1195,19 @@ impl X11WindowStatePtr {
         }
     }
 
-    pub fn handle_input(&self, input: PlatformInput) {
+    pub fn handle_input(&self, input: PlatformInput) -> gpui::DispatchEventResult {
         if self.is_blocked() {
-            return;
+            return gpui::DispatchEventResult::default();
         }
+        let mut outcome = gpui::DispatchEventResult::default();
         let callback = self.callbacks.borrow_mut().input.take();
         if let Some(mut fun) = callback {
             let result = fun(input.clone());
             self.callbacks.borrow_mut().input = Some(fun);
             if !result.propagate {
-                return;
+                return result;
             }
+            outcome = result;
         }
         if let PlatformInput::KeyDown(event) = input {
             // only allow shift modifier when inserting text
@@ -1221,6 +1223,7 @@ impl X11WindowStatePtr {
                 }
             }
         }
+        outcome
     }
 
     pub fn handle_ime_commit(&self, text: String) {

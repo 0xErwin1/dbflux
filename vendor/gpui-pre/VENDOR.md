@@ -1,12 +1,13 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus seven patches. It exists so the
+This directory is the published `gpui-pre` crate source plus eight patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
 DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
 delivery visible in the log. The fourth lets the automation bridge fill a text input by its
 element id. The fifth lets a wrapper report a text input it does not render as read-only.
 The sixth adds letter spacing to text styles. The seventh adjusts key dispatch and focus
-visibility for the app keymap.
+visibility for the app keymap. The eighth reports to the platform whether a dragged file would
+be taken where the pointer is.
 
 ## Why
 
@@ -191,6 +192,29 @@ the Zed repository), so the behaviour is covered by DBFlux tests instead:
 `primitives::focus_ring::tests::moving_the_pointer_keeps_keyboard_focus_visible` in
 `dbflux_components`, and the Replace-mode tests in `dbflux_ui_document`'s Vim suite.
 
+### External drop acceptance
+
+A platform file drag that enters a window is answered by the display server's protocol before
+the app has said anything: X11's `XdndStatus` told the source to accept the drop wherever the
+pointer was, so a window offered files on elements that would ignore them (a row that refuses
+them in `can_drop`, plain chrome) showed the source an accepting cursor and received a drop
+that did nothing.
+
+`DispatchEventResult::external_drop_accepted` carries the answer. For
+`FileDropEvent::Entered` and `FileDropEvent::Pending`, `Window::dispatch_event` asks the
+elements under the pointer after dispatching the move, with a `DropAcceptanceProbe` sent
+through the mouse listeners. Every element with an `on_drop` listener registers a listener for
+the probe next to its mouse-up listener, so the probe reaches the same elements in the same
+order as the mouse-up that completes a drop: the first hovered element with a listener for the
+dragged type decides, and `can_drop` runs on the dragged value. The answer is `None` for every
+other event and when no drag is active, so a platform that does not look at it behaves as
+before. `can_drop` is shared between the two listeners, so `Interactivity::can_drop_predicate`
+is an `Rc`.
+
+The behaviour is covered by `linux::external_drop_tests` in `gpui-pre-linux`
+(`cargo test -p gpui-pre-linux --lib`), because this crate's own test suite does not build
+outside Zed's tree.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -216,7 +240,7 @@ delta to this directory.
   added frame cost and view-cache observation, `request_frame` / `frame_pending`, the
   AccessKit `Focus` redirect in `focus_observed_element`, wrapper interaction provenance and
   redaction of text inside redacted elements, and touched `src/view.rs` for the first time.
-  Patches 3 to 7 apply on top of it unchanged.
+  Patches 3 to 8 apply on top of it unchanged.
 - Patch 3: `subscription-drop-log.patch`, written for DBFlux against this directory with
   patches 1 and 2 applied — three files, 168 diff lines. It has no upstream counterpart.
 - Patch 4: `text-input-automation.patch`, written for DBFlux against this directory with
@@ -227,12 +251,14 @@ delta to this directory.
   patches 1 to 5 applied — five files, 279 diff lines. It has no upstream counterpart.
 - Patch 7: `keyboard-dispatch.patch`, written for DBFlux against this directory with
   patches 1 to 6 applied — three files, 171 diff lines. It has no upstream counterpart.
+- Patch 8: `external-drop-acceptance.patch`, written for DBFlux against this directory with
+  patches 1 to 7 applied — two files, 145 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
 The patches are applied in that order, and each one is written against the tree the
 previous ones produce. They were regenerated against 0.3.9 when the base moved from 0.3.5, so
-`refresh.sh 0.3.9` applies all seven without a reject and reproduces `src/` exactly. All use the same path layout (`a/crates/gpui/src/...`, applied with
+`refresh.sh 0.3.9` applies all eight without a reject and reproduces `src/` exactly. All use the same path layout (`a/crates/gpui/src/...`, applied with
 `-p3`).
 
 ### Manual merges

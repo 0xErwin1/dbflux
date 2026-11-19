@@ -1,5 +1,7 @@
 mod dispatcher;
 mod display_connection;
+#[cfg(test)]
+mod external_drop_tests;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod file_uri_list;
 mod headless;

@@ -80,6 +80,19 @@ The first commit that added this directory carries the published source unchange
   and `file_uri_list::tests`, plus `xdnd_drag::tests`, which find targets on a real X server
   named by `GPUI_X11_TEST_DISPLAY` (for example a scratch Xvfb) and skip without it.
 
+- `src/linux/x11/client.rs`, `src/linux/x11/window.rs`: the X11 target side refuses a drop that
+  nothing would take. Upstream answered every `XdndPosition` with `XdndStatus` accept and the
+  proposed action, so a source showed an accepting cursor over elements that ignore the
+  files. The status now follows `DispatchEventResult::external_drop_accepted` (the `gpui-pre`
+  patch `external-drop-acceptance.patch`): accept with `XdndActionCopy`, or no accept and
+  action `None`. The answer depends on the dragged paths, so the first status of a drag waits
+  for them to arrive (`status_pending`) and is sent once `FileDropEvent::Entered` has been
+  dispatched; later ones are sent after each `FileDropEvent::Pending`. A drag that offers no
+  type this backend reads, or whose paths cannot be read, is refused. A window that does not
+  report an answer (blocked, or no input callback) still accepts, as before. Wayland still
+  accepts the offer when it arrives. Covered by `linux::external_drop_tests`
+  (`cargo test -p gpui-pre-linux --lib`).
+
 ## Refreshing
 
 Replace this directory with the new published crate, re-apply the patches above, and bump
