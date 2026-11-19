@@ -2026,6 +2026,7 @@ dependencies = [
  "gpui-base",
  "gpui-component",
  "gpui-pre",
+ "gpui-pre-platform",
  "log",
  "serde",
  "serde_json",

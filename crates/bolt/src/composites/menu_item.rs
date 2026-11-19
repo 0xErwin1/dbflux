@@ -3,7 +3,7 @@ use gpui::*;
 use gpui_component::{ActiveTheme, IconName};
 
 use crate::icon::IconSource;
-use crate::primitives::{Chamfer, Icon, key_label};
+use crate::primitives::{Chamfer, ChamferRing, Icon, key_label};
 use crate::tokens::{
     Borders, ChamferCut, ChromeColorSlot, ChromeColors, ChromeEdgeRole, KbdMetrics, MenuMetrics,
 };
@@ -33,6 +33,7 @@ pub(crate) fn inspect_menu_chrome() -> MenuChromeInspection {
 /// Consumers map clicked indices to their own action types.
 /// Use builder methods to configure flags, then pass to
 /// [`render_menu_item`] or [`render_menu_container`].
+#[derive(Clone)]
 pub struct MenuItem {
     pub label: SharedString,
     pub icon: Option<IconSource>,
@@ -50,6 +51,9 @@ pub struct MenuItem {
     pub detail: Option<SharedString>,
     /// `Some` for a checkable row: `true` draws the trailing check mark.
     pub checked: Option<bool>,
+    /// A row that is one choice of a group, so only one of its siblings
+    /// carries the mark. Drawn like a checked row, reported as a radio item.
+    pub is_radio: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +175,7 @@ impl MenuItem {
             shortcut: None,
             detail: None,
             checked: None,
+            is_radio: false,
         }
     }
 
@@ -178,6 +183,15 @@ impl MenuItem {
     /// its label, and the row reports itself as a checkable menu item.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
+        self
+    }
+
+    /// Makes the row one choice of a group. Drawn like [`Self::checked`], but
+    /// reported as a radio item, which is what tells assistive technology that
+    /// exactly one sibling of the group is chosen.
+    pub fn radio(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self.is_radio = true;
         self
     }
 
@@ -250,6 +264,20 @@ pub fn menu_row(
     is_selected: bool,
     cx: &App,
 ) -> Stateful<Div> {
+    menu_row_with_ring(id, item, is_selected, false, cx)
+}
+
+/// [`menu_row`], optionally stroking the keyboard focus ring around it.
+///
+/// The ring only paints while focus is visible in the window, so a row reached
+/// by the pointer never wears it.
+pub(crate) fn menu_row_with_ring(
+    id: impl Into<ElementId>,
+    item: &MenuItem,
+    is_selected: bool,
+    focus_ring: bool,
+    cx: &App,
+) -> Stateful<Div> {
     let theme = cx.theme();
 
     let interaction_state = menu_item_interaction_state(item, is_selected);
@@ -273,6 +301,10 @@ pub fn menu_row(
         shape = shape.fill_hover(wash).interactive("menu-row-shape");
     }
 
+    if focus_ring {
+        shape = shape.ring(ChamferRing::focus(ChromeColors::tint(theme)));
+    }
+
     let id = id.into();
     let check_selector = format!("{id}-check");
     let key_id = format!("{id}-key");
@@ -285,6 +317,13 @@ pub fn menu_row(
         // renderers of their own, and this keeps the role honest if one is ever
         // drawn as a row.
         .when(is_item, |row| match item.checked {
+            Some(checked) if item.is_radio => {
+                row.role(Role::MenuItemRadio).aria_toggled(if checked {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+            }
             Some(checked) => row.role(Role::MenuItemCheckBox).aria_toggled(if checked {
                 Toggled::True
             } else {

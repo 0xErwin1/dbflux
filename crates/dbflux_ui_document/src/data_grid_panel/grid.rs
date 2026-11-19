@@ -529,24 +529,19 @@ impl DataGridPanel {
                             this.menu_row_actions()
                         };
 
-                        this.context_menu = Some(TableContextMenu {
-                            row: *row,
-                            col: *col,
-                            position: *position,
-                            sql_submenu_open: false,
-                            copy_query_submenu_open: false,
-                            filter_submenu_open: false,
-                            order_submenu_open: false,
-                            toolbar_submenu_open: false,
-                            set_value_submenu_open: false,
-                            selected_index: 0,
-                            submenu_selected_index: 0,
-                            is_document_view: false,
-                            is_column_header: *is_column_header,
-                            doc_field_path: None,
-                            doc_field_value: None,
-                            row_actions,
-                        });
+                        this.context_menu = Some(this.new_context_menu(
+                            ContextMenuTarget {
+                                row: *row,
+                                col: *col,
+                                position: *position,
+                                is_document_view: false,
+                                is_column_header: *is_column_header,
+                                doc_field_path: None,
+                                doc_field_value: None,
+                                row_actions,
+                            },
+                            cx,
+                        ));
                         this.pending.context_menu_focus = true;
                         cx.emit(DataGridEvent::Focused);
                         cx.notify();

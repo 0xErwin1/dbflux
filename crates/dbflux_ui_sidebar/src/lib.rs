@@ -23,6 +23,7 @@ mod tree_builder;
 
 use dbflux_app::AppState;
 use dbflux_components::components::tree_nav::{self, GutterInfo};
+use dbflux_components::composites::{HoverIntent, MenuNav, MenuNode};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::ModalFocus;
@@ -489,45 +490,47 @@ impl ContextMenuItem {
         !self.is_separator && !self.is_header
     }
 
-    pub fn to_menu_items(
-        items: &[ContextMenuItem],
-    ) -> Vec<dbflux_components::composites::MenuItem> {
-        items
-            .iter()
-            .map(|item| {
-                if item.is_separator {
-                    return dbflux_components::composites::MenuItem::separator();
-                }
+    /// The cascade row this menu row renders as: the same label, icon,
+    /// shortcut hint, separator, header and danger flags the menu has always
+    /// drawn, plus the rows of the submenu it opens, if it opens one.
+    pub fn to_menu_node(&self) -> MenuNode {
+        if self.is_separator {
+            return MenuNode::separator();
+        }
 
-                if item.is_header {
-                    return dbflux_components::composites::MenuItem::header(item.label.clone());
-                }
+        if self.is_header {
+            return MenuNode::header(self.label.clone());
+        }
 
-                let mut mi = dbflux_components::composites::MenuItem::new(item.label.clone());
+        let mut node = MenuNode::row(self.label.clone());
 
-                if let Some(shortcut) = item
-                    .action
-                    .shortcut_command()
-                    .and_then(sidebar_shortcut_label)
-                {
-                    mi = mi.shortcut(shortcut);
-                }
+        if let Some(shortcut) = self
+            .action
+            .shortcut_command()
+            .and_then(sidebar_shortcut_label)
+        {
+            node = node.shortcut(shortcut);
+        }
 
-                if let Some(icon) = item.icon.or_else(|| item.action.icon()) {
-                    mi = mi.icon(icon);
-                }
+        if let Some(icon) = self.icon.or_else(|| self.action.icon()) {
+            node = node.icon(icon);
+        }
 
-                if matches!(item.action, ContextMenuAction::Submenu(_)) {
-                    mi = mi.submenu();
-                }
+        if let ContextMenuAction::Submenu(children) = &self.action {
+            node = node.children(children.iter().map(ContextMenuItem::to_menu_node).collect());
+        }
 
-                if item.is_danger {
-                    mi = mi.danger();
-                }
+        if self.is_danger {
+            node = node.danger();
+        }
 
-                mi
-            })
-            .collect()
+        node
+    }
+
+    /// The rows of this menu as a Bolt cascade tree: one node per row, with
+    /// the rows of its submenu as its children.
+    pub fn to_menu_nodes(items: &[ContextMenuItem]) -> Vec<MenuNode> {
+        items.iter().map(ContextMenuItem::to_menu_node).collect()
     }
 }
 
@@ -865,10 +868,13 @@ impl Render for DragPreview {
 #[derive(Clone)]
 pub struct ContextMenuState {
     pub item_id: String,
-    pub selected_index: usize,
     pub items: Vec<ContextMenuItem>,
-    /// Stack of parent menus for submenu navigation
-    pub parent_stack: Vec<(Vec<ContextMenuItem>, usize)>,
+    /// The cursor of the cascade: one highlighted row per open level, so the
+    /// depth of the path is the depth of the open menu.
+    pub nav: MenuNav,
+    /// The open-on-hover decision: the row the pointer rests on, and the row
+    /// whose flyout is open.
+    pub hover: HoverIntent,
     /// Position where the menu should appear (captured from click or calculated)
     pub position: Point<Pixels>,
 }
@@ -2203,7 +2209,7 @@ impl Sidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContextMenuAction, ContextMenuItem, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
+    use super::{ContextMenuAction, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
     use super::{Sidebar, SidebarTab};
     use crate::operations::{connect_prepare_error_toast, format_connect_prepare_error};
     use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
@@ -2425,7 +2431,7 @@ mod tests {
     }
 
     #[test]
-    fn to_menu_items_maps_labels_and_icons() {
+    fn to_menu_nodes_maps_labels_and_icons() {
         use super::{ContextMenuAction, ContextMenuItem};
 
         let items = vec![
@@ -2433,18 +2439,18 @@ mod tests {
             ContextMenuItem::danger("Delete", ContextMenuAction::Delete),
         ];
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert_eq!(menu_items.len(), 2);
-        assert_eq!(menu_items[0].label.as_ref(), "Open");
-        assert!(menu_items[0].icon.is_some());
-        assert!(!menu_items[0].has_submenu);
-        assert_eq!(menu_items[1].label.as_ref(), "Delete");
-        assert!(menu_items[1].icon.is_some());
-        assert!(menu_items[1].is_danger);
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].item.label.as_ref(), "Open");
+        assert!(nodes[0].item.icon.is_some());
+        assert!(nodes[0].children.is_empty());
+        assert_eq!(nodes[1].item.label.as_ref(), "Delete");
+        assert!(nodes[1].item.icon.is_some());
+        assert!(nodes[1].item.is_danger);
     }
 
     #[test]
-    fn to_menu_items_marks_submenu_items() {
+    fn to_menu_nodes_builds_the_submenu_children() {
         use super::{ContextMenuAction, ContextMenuItem};
 
         let items = vec![ContextMenuItem::item(
@@ -2455,14 +2461,17 @@ mod tests {
             )]),
         )];
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert_eq!(menu_items.len(), 1);
-        assert!(menu_items[0].has_submenu);
-        assert!(menu_items[0].icon.is_none());
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].item.has_submenu);
+        assert!(nodes[0].item.icon.is_none());
+        // The submenu rows become the rows of the row's flyout.
+        assert_eq!(nodes[0].children.len(), 1);
+        assert_eq!(nodes[0].children[0].item.label.as_ref(), "Folder A");
     }
 
     #[test]
-    fn to_menu_items_uses_explicit_icon_override() {
+    fn to_menu_nodes_uses_explicit_icon_override() {
         use super::{ContextMenuAction, ContextMenuItem};
         use dbflux_components::icon::IconSource;
         use dbflux_components::icons::AppIcon;
@@ -2471,10 +2480,10 @@ mod tests {
             ContextMenuItem::item("Refresh", ContextMenuAction::Refresh).with_icon(AppIcon::Code),
         ];
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert_eq!(menu_items.len(), 1);
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert_eq!(nodes.len(), 1);
         assert!(matches!(
-            menu_items[0].icon.as_ref(),
+            nodes[0].item.icon.as_ref(),
             Some(IconSource::Svg(path)) if path.as_ref() == AppIcon::Code.path()
         ));
     }
@@ -2490,10 +2499,12 @@ mod tests {
 
         assert!(!items[0].is_selectable());
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert!(menu_items[0].is_header);
-        assert_eq!(menu_items[0].label.as_ref(), "public.orders");
-        assert!(!menu_items[1].is_header);
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert!(nodes[0].item.is_header);
+        assert_eq!(nodes[0].item.label.as_ref(), "public.orders");
+        assert!(!nodes[0].is_selectable());
+        assert!(!nodes[1].item.is_header);
+        assert!(nodes[1].is_selectable());
     }
 
     #[test]
@@ -2547,9 +2558,14 @@ mod tests {
             ContextMenuItem::item("View schema", ContextMenuAction::ViewSchema),
         ];
 
-        let shortcuts: Vec<Option<String>> = ContextMenuItem::to_menu_items(&items)
+        let shortcuts: Vec<Option<String>> = ContextMenuItem::to_menu_nodes(&items)
             .iter()
-            .map(|item| item.shortcut.as_ref().map(|shortcut| shortcut.to_string()))
+            .map(|node| {
+                node.item
+                    .shortcut
+                    .as_ref()
+                    .map(|shortcut| shortcut.to_string())
+            })
             .collect();
 
         assert_eq!(
@@ -2564,23 +2580,25 @@ mod tests {
     }
 
     #[test]
-    fn to_menu_items_empty_input_returns_empty() {
+    fn to_menu_nodes_empty_input_returns_empty() {
         use super::ContextMenuItem;
 
-        let menu_items = ContextMenuItem::to_menu_items(&[]);
-        assert!(menu_items.is_empty());
+        let nodes = ContextMenuItem::to_menu_nodes(&[]);
+        assert!(nodes.is_empty());
     }
 
     #[test]
-    fn to_menu_items_maps_separators() {
+    fn to_menu_nodes_maps_separators() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
         let items = vec![
             ContextMenuItem::item("Open", ContextMenuAction::Open),
             ContextMenuItem::separator(),
         ];
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert_eq!(menu_items.len(), 2);
-        assert!(menu_items[1].is_separator);
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes[1].item.is_separator);
     }
 
     #[test]

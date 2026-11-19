@@ -14,6 +14,7 @@ mod field_row;
 mod island;
 mod menu_item;
 mod menu_popup;
+mod menu_tree;
 mod popover;
 mod scroll_strip;
 mod shell_bar;
@@ -40,6 +41,11 @@ pub use menu_item::{
     render_separator,
 };
 pub use menu_popup::{render_menu_items, render_menu_overlay};
+pub use menu_tree::{
+    BackAction, ChildAction, FlyoutPlacement, FlyoutSide, FlyoutSpec, HOVER_CLOSE_GRACE,
+    HOVER_OPEN_DELAY, HoverIntent, HoverTick, LevelMetrics, MenuCursor, MenuNav, MenuNode,
+    MenuTreeEvent, MenuTreeLayout, in_corridor, level_height, place_flyout, render_menu_tree,
+};
 pub use popover::{
     HOVER_DELAY, HOVER_GRACE, Popover, PopoverPlacement, PopoverSide, PopoverState, place_popover,
 };
