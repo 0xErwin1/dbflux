@@ -93,6 +93,21 @@ The first commit that added this directory carries the published source unchange
   accepts the offer when it arrives. Covered by `linux::external_drop_tests`
   (`cargo test -p gpui-pre-linux --lib`).
 
+- `src/linux/wayland/drag_source.rs`, `src/linux/wayland/client.rs`,
+  `src/linux/wayland/clipboard.rs`: dropping files on another application finishes promptly.
+  Upstream ended the app's drag only on `dnd_finished` or `cancelled`, so a target that never
+  finishes (an older `wl_data_offer` version has no `finish`, and some targets finish late)
+  left the window in a drag, with the pointer stuck in drag state, until the source went away.
+  `DragSession` now ends the drag for the app (`FileDropEvent::Ended`) on `dnd_drop_performed`,
+  keeps the data source alive so the target can still read the data, and releases it on
+  `dnd_finished`, `cancelled` or after 10 s; `Ended` is sent exactly once per session. Events
+  of a source a newer drag replaced are ignored (it is destroyed on `cancelled`), and starting
+  a drag releases the previous source. `send_bytes` now writes to the target's pipe at once
+  (making it non-blocking) and closes it, so the target reads the data and the end of file
+  without waiting for another pass of the event loop; only what a full pipe cannot take is
+  left to the loop, and a failed registration is logged instead of panicking. The clipboard
+  shares `send_bytes`. Covered by `drag_source::tests` and `clipboard::tests`.
+
 ## Refreshing
 
 Replace this directory with the new published crate, re-apply the patches above, and bump
