@@ -1,45 +1,13 @@
-//! A runnable tour of the cascading-menu component (`bolt::composites`).
-//!
-//! This is the API example for a product mounting a cascading menu: it owns
-//! every piece of state the component does not, and wires the events the
-//! component reports into that state. Run one scenario at a time:
+//! A runnable tour of the cascading-menu component.
 //!
 //! ```text
 //! cargo run -p bolt --example menu_tree_demo -- nested
 //! ```
 //!
-//! The scenarios pick where the root panel sits and which rows it shows:
-//!
-//! - `nested` — a menu near the left whose submenu holds another submenu, so a
-//!   two-deep cascade sits on screen beside its parents.
-//! - `flip` — the root panel near the right edge, so its flyout must flip left
-//!   to stay inside the window.
-//! - `bottom` — the root panel near the bottom with a submenu taller than the
-//!   room below it, so the flyout slides up and scrolls internally.
-//! - `checks` — a submenu of checkable and radio rows; clicking one toggles the
-//!   demo's own state and re-renders the mark with the menu still open.
-//! - `keyboard` — the `nested` tree driven only by keys.
-//!
-//! What the demo owns, per the component's contract:
-//!
-//! - the row tree (`Vec<MenuNode>`), rebuilt from the scenario and from the
-//!   checkable state the demo keeps itself, so `checks` really re-renders;
-//! - one `MenuNav` and one `HoverIntent` for the whole open menu;
-//! - the hover timer: `MenuTreeEvent::Hovered` arms a `Timer` of the
-//!   component's `HOVER_OPEN_DELAY`, and when it fires the demo runs
-//!   `HoverIntent::tick` and, on `HoverTick::Open`, calls `MenuNav::hover` to
-//!   highlight the row and open its flyout, then `HoverIntent::mark_open`;
-//! - the keyboard path on the window's focused view: Down/Up step, Right or
-//!   Enter open or activate, Left/Escape back out, with
-//!   `MenuTreeLayout::keyboard_focus` set so the cursor row wears the ring;
-//! - the full-size layer that mounts `render_menu_tree` over
-//!   `render_menu_overlay`, so a click outside dismisses the cascade.
-//!
-//! The component reports no hover-leave, so this demo never feeds
-//! `HoverIntent::leave`/`pointer_moved`: a flyout closes by switching to
-//! another parent row, by the keyboard, or by an outside click. A product with
-//! window-wide pointer tracking can drive the close grace period and the
-//! travel corridor the same way it drives the open delay here.
+//! Scenarios: `nested`, `flip`, `bottom`, `checks`, `keyboard`. The demo owns
+//! everything the component does not — the row tree, one `MenuNav`, one
+//! `HoverIntent` and the hover timer — and maps the activated row's id to its
+//! own state, which is what a product has to do.
 
 use std::borrow::Cow;
 use std::time::Instant;

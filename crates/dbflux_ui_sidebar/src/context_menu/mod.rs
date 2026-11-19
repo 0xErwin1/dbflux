@@ -2362,8 +2362,12 @@ mod hover_tests {
     use gpui::{point, px};
     use std::time::{Duration, Instant};
 
+    /// One fixed origin for every instant a test uses, so a 1 ms margin is a
+    /// margin and not a race against the wall clock.
     fn at(millis: u64) -> Instant {
-        Instant::now() + Duration::from_millis(millis)
+        static BASE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+        *BASE.get_or_init(Instant::now) + Duration::from_millis(millis)
     }
 
     fn open_delay() -> u64 {

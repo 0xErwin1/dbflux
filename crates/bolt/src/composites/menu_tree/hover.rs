@@ -1,13 +1,9 @@
 //! When a hovered row opens its flyout, and when leaving one keeps it open.
 //!
-//! Two mechanisms keep a diagonal pointer journey from closing a cascade that
-//! the pointer is travelling toward:
-//!
-//! 1. The open is delayed, so sweeping across a row on the way somewhere else
-//!    does not spawn a flyout.
-//! 2. A close is delayed, and suppressed entirely while the pointer is inside
-//!    the safe triangle between the row it left and the flyout it is heading
-//!    for.
+//! A diagonal journey toward a child must not close it, so the open is delayed
+//! (sweeping across a row spawns nothing) and the close is delayed and
+//! suppressed while the pointer is inside the triangle between the row it left
+//! and the flyout it heads for.
 
 use crate::composites::menu_tree::placement::FlyoutSide;
 use gpui::{Bounds, Pixels, Point};

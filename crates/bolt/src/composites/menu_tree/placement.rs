@@ -1,10 +1,5 @@
-//! Where a flyout goes.
-//!
-//! The cascade is laid out in window space by this module rather than by the
-//! anchoring helper, because a submenu has to flip *horizontally* and the
-//! anchor helper only snaps. Every function here is pure: it takes the rects it
-//! needs and returns numbers, so the whole placement policy is testable without
-//! a window.
+//! Where a flyout goes. Pure rect arithmetic, because a submenu flips
+//! horizontally and the anchoring helper only snaps.
 
 use crate::composites::menu_tree::model::MenuNode;
 use gpui::{Bounds, Pixels, Point, Size, point, px};

@@ -1,23 +1,9 @@
-//! Cascading (flyout) menus.
+//! Cascading (flyout) menus: a tree of [`MenuNode`]s where a row with children
+//! opens a flyout beside it.
 //!
-//! A menu is a tree of [`MenuNode`]s. A node with children opens a flyout
-//! beside its row, and that flyout is itself a menu, so the cascade nests to
-//! any depth. The module has no product type and stores no closure: activation
-//! hands the row's [`MenuNode::id`] back to the caller, which maps it to its own
-//! action.
-//!
-//! The component is a plain state value plus render functions, not a GPUI
-//! entity — the same shape as the other shared surfaces a product owns and
-//! re-renders. A surface keeps one [`MenuNav`] and one [`HoverIntent`] per open
-//! menu, feeds pointer and keyboard events into them, and renders the cascade
-//! with [`render_menu_tree`].
-//!
-//! Four pieces are pure and tested without a window:
-//!
-//! - [`model`]: the row tree a product builds from its own state.
-//! - [`nav`]: the cursor path, and the keyboard transitions across levels.
-//! - [`placement`]: where a flyout goes, and when it flips or scrolls.
-//! - [`hover`]: when a hovered row opens, and when leaving keeps it open.
+//! The component is state plus pure render functions, not a GPUI entity, so the
+//! surface keeps ownership: it holds one [`MenuNav`] and one [`HoverIntent`] per
+//! open menu and maps the activated row's id to its own action.
 
 mod hover;
 mod model;

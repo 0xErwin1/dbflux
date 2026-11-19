@@ -1,14 +1,8 @@
-//! Drawing a cascading menu.
+//! Drawing a cascading menu: one absolutely positioned panel per open level,
+//! placed by [`place_flyout`].
 //!
-//! The cascade is one absolutely positioned panel per open level, positioned by
-//! [`place_flyout`] rather than by an anchoring helper, because a submenu has to
-//! flip horizontally and scroll internally and the anchor helper only snaps.
-//! Panels are siblings, so a scrolling parent never clips the flyout that hangs
-//! off it, and the child always paints over the parent.
-//!
-//! The surface that owns the menu supplies the state ([`MenuNav`]), the layout
-//! and one event callback. It keeps no closure in the model: a row reports its
-//! own `id` back, and the surface maps that to its action.
+//! The panels are siblings, so a scrolling parent never clips the flyout that
+//! hangs off it and the child paints over the parent.
 
 use std::rc::Rc;
 
