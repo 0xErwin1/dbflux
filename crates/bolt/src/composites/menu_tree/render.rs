@@ -230,7 +230,10 @@ fn render_row(context: RowContext<'_>) -> AnyElement {
         cx,
     } = context;
 
-    let row_id = SharedString::from(format!("{panel_id}-{level_index}-{index}"));
+    let row_id = node
+        .element_id
+        .clone()
+        .unwrap_or_else(|| SharedString::from(format!("{panel_id}-{level_index}-{index}")));
 
     if node.item.is_separator {
         let selector = format!("{row_id}-separator");

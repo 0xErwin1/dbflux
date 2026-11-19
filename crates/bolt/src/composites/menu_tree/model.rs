@@ -23,6 +23,13 @@ pub struct MenuNode {
     /// Whether activating this row leaves the menu open. Defaults to true for
     /// a checkable row and false for every other row.
     pub keep_open: Option<bool>,
+    /// The element id this row draws with, when the caller addresses rows by
+    /// name in its own tests or in UI automation.
+    ///
+    /// Unset, the renderer derives `{panel_id}-{level}-{index}`. Set, the id is
+    /// used verbatim, so a surface that already names its rows keeps those
+    /// names instead of inheriting a positional scheme.
+    pub element_id: Option<SharedString>,
 }
 
 impl MenuNode {
@@ -33,6 +40,7 @@ impl MenuNode {
             children: Vec::new(),
             children_width: None,
             keep_open: None,
+            element_id: None,
         }
     }
 
@@ -108,6 +116,13 @@ impl MenuNode {
 
     pub fn keep_open(mut self, keep_open: bool) -> Self {
         self.keep_open = Some(keep_open);
+        self
+    }
+
+    /// Names the element this row draws with, instead of the positional
+    /// `{panel_id}-{level}-{index}` the renderer derives.
+    pub fn element_id(mut self, element_id: impl Into<SharedString>) -> Self {
+        self.element_id = Some(element_id.into());
         self
     }
 
