@@ -26,6 +26,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* MCP disconnect now responds when closing an open PostgreSQL or Redshift connection (#1366).
+
 * **The Linux file picker finds an installed XDG portal** — On a Linux desktop with `xdg-desktop-portal` installed but neither `zenity` nor `kdialog`, file pickers failed with "No file picker is available on this platform" and exports were written straight to the fallback exports folder, because the portal binary is usually outside `PATH` and its process name is cut short by the kernel. DBFlux now looks for the portal's D-Bus session service file instead, and counts the portal only when an installed backend implements FileChooser, so the picker opens through the portal on Arch, NixOS and similar setups (#1361).
 
 * **Set to default writes the column default** — **Set to default** in the cell menu staged the column's default as text, so saving a column whose default is a function, such as `DEFAULT gen_random_uuid()` or `DEFAULT now()`, failed with an invalid input error. It now stages the default as an expression, so the database evaluates it (#1358).
