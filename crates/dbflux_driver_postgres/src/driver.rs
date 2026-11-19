@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dbflux_core::OffRuntimeDrop;
 use dbflux_core::ServerNotice;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
@@ -1252,7 +1253,7 @@ impl PostgresDriver {
             log::info!("[CONNECT] PostgreSQL connection established via URI");
 
             return Ok(Box::new(PostgresConnection {
-                client: Arc::new(Mutex::new(client)),
+                client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
                 notices,
                 ssh_tunnel: None,
                 cancel_token,
@@ -1280,7 +1281,7 @@ impl PostgresDriver {
         log::info!("[CONNECT] PostgreSQL connection established via URI");
 
         Ok(Box::new(PostgresConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             notices,
             ssh_tunnel: None,
             cancel_token,
@@ -1308,7 +1309,7 @@ impl PostgresDriver {
         log::info!("Successfully connected to {}:{}", params.host, params.port);
 
         Ok(Box::new(PostgresConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             notices,
             ssh_tunnel: None,
             cancel_token,
@@ -1369,7 +1370,7 @@ impl PostgresDriver {
         );
 
         Ok(Box::new(PostgresConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             notices,
             ssh_tunnel: Some(tunnel),
             cancel_token,
@@ -1477,7 +1478,7 @@ fn parse_pg_uri_sslmode(uri: &str) -> PgSslMode {
 }
 
 pub struct PostgresConnection {
-    client: Arc<Mutex<Client>>,
+    client: Arc<Mutex<OffRuntimeDrop<Client>>>,
     /// Notices the server sent on `client`. Only read under the `client`
     /// lock, so a drain sees exactly the notices of the calls made while it
     /// was held.

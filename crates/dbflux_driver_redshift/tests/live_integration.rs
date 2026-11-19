@@ -109,6 +109,11 @@ fn redshift_query_safety_refuses_protected_requests_before_prepare() -> Result<(
 
         let control = connection.execute(&QueryRequest::new("SELECT 42"))?;
         assert_eq!(control.rows.len(), 1);
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(runtime.spawn(async move { drop(connection) }))
+            .unwrap();
         Ok(())
     })
 }

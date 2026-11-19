@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::Duration;
 
+use dbflux_core::OffRuntimeDrop;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
@@ -636,7 +637,7 @@ impl RedshiftDriver {
         let cancel_token = client.cancel_token();
 
         Ok(Box::new(RedshiftConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             ssh_tunnel: None,
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),
@@ -668,7 +669,7 @@ impl RedshiftDriver {
         let cancel_token = client.cancel_token();
 
         Ok(Box::new(RedshiftConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             ssh_tunnel: None,
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),
@@ -706,7 +707,7 @@ impl RedshiftDriver {
         let cancel_token = client.cancel_token();
 
         Ok(Box::new(RedshiftConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             ssh_tunnel: Some(tunnel),
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),
