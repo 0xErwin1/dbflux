@@ -1,37 +1,43 @@
+use std::mem::{self, ManuallyDrop};
 use std::ops::{Deref, DerefMut};
-use std::{mem, sync::mpsc, thread};
+use std::{sync::mpsc, thread};
 
 /// Owns a blocking resource whose destructor must run outside Tokio.
-pub struct OffRuntimeDrop<T: Send + 'static>(Option<T>);
+pub struct OffRuntimeDrop<T: Send + 'static>(ManuallyDrop<T>);
 
 impl<T: Send + 'static> OffRuntimeDrop<T> {
     pub fn new(value: T) -> Self {
-        Self(Some(value))
+        Self(ManuallyDrop::new(value))
     }
 }
 
 impl<T: Send + 'static> Deref for OffRuntimeDrop<T> {
     type Target = T;
 
-    #[expect(clippy::expect_used, reason = "only Drop takes the value")]
     fn deref(&self) -> &T {
-        self.0.as_ref().expect("value is present until drop")
+        &self.0
     }
 }
 
 impl<T: Send + 'static> DerefMut for OffRuntimeDrop<T> {
-    #[expect(clippy::expect_used, reason = "only Drop takes the value")]
     fn deref_mut(&mut self) -> &mut T {
-        self.0.as_mut().expect("value is present until drop")
+        &mut self.0
     }
 }
 
 impl<T: Send + 'static> Drop for OffRuntimeDrop<T> {
+    #[expect(
+        unsafe_code,
+        reason = "`ManuallyDrop` moves the value out exactly once, in its owner's destructor"
+    )]
     fn drop(&mut self) {
         if tokio::runtime::Handle::try_current().is_err() {
+            // SAFETY: `drop` runs once and nothing reads `self.0` afterwards.
+            unsafe { ManuallyDrop::drop(&mut self.0) };
             return;
         }
-        let Some(value) = self.0.take() else { return };
+        // SAFETY: `drop` runs once and nothing reads `self.0` afterwards.
+        let value = unsafe { ManuallyDrop::take(&mut self.0) };
         // Capturing the value directly would drop it on this thread if spawn failed.
         let (sender, receiver) = mpsc::channel::<T>();
         if let Err(error) = thread::Builder::new()
