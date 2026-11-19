@@ -2999,4 +2999,61 @@ mod tests {
             PolicyDecision::Allow
         );
     }
+
+    #[test]
+    fn connectionless_scope_excludes_inactive_clients_and_never_allows_approval_tools() {
+        use dbflux_policy::{ExecutionClassification, PolicyDecision, PolicyDecisionReason};
+
+        let mut runtime =
+            runtime_with_clients("global-scope-inactive.sqlite", &["agent", "writer"]);
+        runtime
+            .upsert_trusted_client_mut(dbflux_mcp::TrustedClientDto {
+                id: "inactive".to_string(),
+                name: "inactive".to_string(),
+                issuer: None,
+                active: false,
+            })
+            .expect("trusted client loads");
+        assign_role_on_connection(&mut runtime, "conn-a", "agent", "builtin/admin");
+        assign_role_on_connection(&mut runtime, "conn-b", "writer", "builtin/write");
+        assign_role_on_connection(&mut runtime, "conn-c", "inactive", "builtin/admin");
+
+        create_global_assignments(&mut runtime).expect("global assignments save");
+
+        let global_actors: Vec<String> = runtime
+            .policy_assignments_for_engine()
+            .into_iter()
+            .filter(|assignment| assignment.scope.connection_id.is_empty())
+            .map(|assignment| assignment.actor_id)
+            .collect();
+        assert!(!global_actors.contains(&"inactive".to_string()));
+
+        assert_eq!(
+            evaluate_without_connection(
+                &runtime,
+                "writer",
+                "create_script",
+                ExecutionClassification::Write
+            ),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            evaluate_without_connection(
+                &runtime,
+                "writer",
+                "delete_script",
+                ExecutionClassification::Admin
+            ),
+            PolicyDecision::Deny(PolicyDecisionReason::ToolDenied)
+        );
+        assert_eq!(
+            evaluate_without_connection(
+                &runtime,
+                "agent",
+                "approve_execution",
+                ExecutionClassification::Admin
+            ),
+            PolicyDecision::Deny(PolicyDecisionReason::ToolDenied)
+        );
+    }
 }

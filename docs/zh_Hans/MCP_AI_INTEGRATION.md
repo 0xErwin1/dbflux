@@ -83,7 +83,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 5. **审批流程**：Ask 决定会把调用排入待审批执行队列。由人在 DBFlux 中批准或驳回；已批准的调用会在智能体以相同参数再次调用时执行一次。
 6. **审计追踪**：每一个决策都会追加到统一 SQLite 数据库的 `aud_audit_events` 表中，可查询、可导出。完整的事件结构参见 `docs/AUDIT.md`。
 
-不接收连接的工具（`list_connections`、脚本工具和审计工具）不经过连接闸门，而是在无连接的作用域中评估。在该作用域中，每个处于活动状态的受信任客户端都拥有 `builtin/read-only`，以及它在任何启用了 MCP 的连接上被分配的所有角色和策略。因此，在某个连接上可以写入的客户端可以创建和更新脚本，并同样受 Allow、Ask 或 Deny 决策约束；没有任何连接分配的客户端仍保持只读访问。该作用域在 MCP 服务器启动时计算，因此修改分配后请重启代理的 MCP 会话。
+不接收连接的工具（`list_connections`、除 `execute_script` 外的脚本工具、审计工具、`list_pending_executions` 与 `get_pending_execution`）不经过连接闸门，而是在无连接的作用域中评估。在该作用域中，每个处于活动状态的受信任客户端都拥有 `builtin/read-only`，以及它在任何启用了 MCP 的连接上被分配的所有角色和策略。因此，在某个连接上可以写入的客户端可以创建和更新脚本，并同样受 Allow、Ask 或 Deny 决策约束；没有任何连接分配的客户端仍保持只读访问。该作用域在 MCP 服务器启动时计算，因此修改分配后请重启代理的 MCP 会话。
 
 这六层都会在每一个 `tools/call` 请求中，于服务器进程内依次执行；任何一层都无法从客户端绕过。
 
@@ -124,8 +124,8 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 脚本 | `delete_script` | admin | 永久删除脚本 |
 | 脚本 | `execute_script` | computed | 对某个连接执行已保存的数据库查询脚本。执行类别由脚本内容推导。Lua、Python 和 Bash 脚本会被拒绝（见下文） |
 | 审批 | `request_execution` | admin | 把一次调用排队等待人工审批。批准后，以相同参数调用该工具本身即可执行一次 |
-| 审批 | `list_pending_executions` | read | 查看所有等待审批的执行 |
-| 审批 | `get_pending_execution` | read | 获取某个待审批执行的详情。被驳回的执行返回 `status: "rejected"` 以及审批人给出的原因 |
+| 审批 | `list_pending_executions` | read | 查看调用方客户端自己等待审批的执行；其他客户端的执行不会列出 |
+| 审批 | `get_pending_execution` | read | 获取调用方客户端某个待审批执行的详情；其他客户端的执行会报告为未找到。被驳回的执行返回 `status: "rejected"` 以及审批人给出的原因 |
 | 审批 | `approve_execution` | — | 通过 MCP 调用时始终被拒绝。由人在 DBFlux 中批准 |
 | 审批 | `reject_execution` | — | 通过 MCP 调用时始终被拒绝。由人在 DBFlux 中驳回 |
 | 审计 | `query_audit_logs` | read | 搜索并筛选审计追踪 |

@@ -107,8 +107,9 @@ Toda solicitud de IA se hace cumplir a través de todas estas capas, en orden:
    datos SQLite unificada y es consultable/exportable. Ver `docs/AUDIT.md` para
    el esquema completo de eventos.
 
-Las tools que no reciben conexión (`list_connections`, las de scripts y las de
-auditoría) no pasan por el gate de conexión y se evalúan en un scope sin
+Las tools que no reciben conexión (`list_connections`, las de scripts salvo
+`execute_script`, las de auditoría, `list_pending_executions` y
+`get_pending_execution`) no pasan por el gate de conexión y se evalúan en un scope sin
 conexión. En ese scope cada trusted client activo tiene `builtin/read-only` más
 todos los roles y policies que tenga asignados en cualquier conexión con MCP
 habilitado. Un cliente que puede escribir en una conexión puede, por lo tanto,
@@ -157,8 +158,8 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Scripts         | `delete_script`           | admin                                  | Elimina permanentemente un script                                                                                    |
 | Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado de consultas de base de datos contra una conexión. La clasificación se deriva del cuerpo del script. Los scripts Lua, Python y Bash se rechazan (ver más abajo) |
 | Aprobación      | `request_execution`       | admin                                  | Encola una llamada para que la apruebe una persona. Una vez aprobada, llama a la tool con los mismos argumentos para ejecutarla una vez |
-| Aprobación      | `list_pending_executions` | read                                   | Muestra todas las ejecuciones pendientes de aprobación                                                               |
-| Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente específica. Una rechazada devuelve `status: "rejected"` y el motivo |
+| Aprobación      | `list_pending_executions` | read                                   | Muestra las ejecuciones pendientes de aprobación del cliente que llama; las de otros clientes nunca se listan |
+| Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente del cliente que llama; la de otro cliente se informa como no encontrada. Una rechazada devuelve `status: "rejected"` y el motivo |
 | Aprobación      | `approve_execution`       | —                                      | Siempre se deniega por MCP. Una persona aprueba en DBFlux                                                            |
 | Aprobación      | `reject_execution`        | —                                      | Siempre se deniega por MCP. Una persona rechaza en DBFlux                                                            |
 | Auditoría       | `query_audit_logs`        | read                                   | Busca y filtra el audit trail                                                                                        |
