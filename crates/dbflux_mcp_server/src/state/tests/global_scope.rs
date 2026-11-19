@@ -205,3 +205,33 @@ fn connectionless_scope_excludes_inactive_clients_and_never_allows_approval_tool
         PolicyDecision::Deny(PolicyDecisionReason::ToolDenied)
     );
 }
+
+#[test]
+fn connectionless_tools_ignore_roles_that_no_longer_exist() {
+    use dbflux_policy::{ExecutionClassification, PolicyDecision};
+
+    let mut runtime = runtime_with_clients("global-scope-stale-role.sqlite", &["agent"]);
+    assign_role_on_connection(&mut runtime, "conn-a", "agent", "custom/deleted");
+    assign_role_on_connection(&mut runtime, "conn-b", "agent", "builtin/admin");
+
+    create_global_assignments(&mut runtime).expect("global assignments save");
+
+    assert_eq!(
+        evaluate_without_connection(
+            &runtime,
+            "agent",
+            "create_script",
+            ExecutionClassification::Write
+        ),
+        PolicyDecision::RequireApproval
+    );
+    assert_eq!(
+        evaluate_without_connection(
+            &runtime,
+            "agent",
+            "list_scripts",
+            ExecutionClassification::Metadata
+        ),
+        PolicyDecision::Allow
+    );
+}

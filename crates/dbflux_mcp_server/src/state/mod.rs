@@ -1393,10 +1393,16 @@ fn create_global_assignments(runtime: &mut McpRuntime) -> Result<(), String> {
         .filter(|assignment| !assignment.scope.connection_id.is_empty())
         .collect();
 
+    let known_role_ids: std::collections::HashSet<String> = runtime
+        .roles_for_engine()
+        .into_iter()
+        .map(|role| role.id)
+        .collect();
+
     let assignments: Vec<dbflux_policy::ConnectionPolicyAssignment> = clients
         .into_iter()
         .filter(|client| client.active)
-        .map(|client| global_assignment_for(client.id, &connection_assignments))
+        .map(|client| global_assignment_for(client.id, &connection_assignments, &known_role_ids))
         .collect();
 
     if !assignments.is_empty() {
@@ -1414,6 +1420,7 @@ fn create_global_assignments(runtime: &mut McpRuntime) -> Result<(), String> {
 fn global_assignment_for(
     actor_id: String,
     connection_assignments: &[dbflux_policy::ConnectionPolicyAssignment],
+    known_role_ids: &std::collections::HashSet<String>,
 ) -> dbflux_policy::ConnectionPolicyAssignment {
     let mut role_ids = std::collections::BTreeSet::from(["builtin/read-only".to_string()]);
     let mut policy_ids = std::collections::BTreeSet::new();
@@ -1422,7 +1429,15 @@ fn global_assignment_for(
         .iter()
         .filter(|assignment| assignment.actor_id == actor_id)
     {
-        role_ids.extend(assignment.role_ids.iter().cloned());
+        // A role deleted after it was bound lingers in the connection binding; copying it
+        // would make the engine fail every connectionless call with `MissingRole`.
+        role_ids.extend(
+            assignment
+                .role_ids
+                .iter()
+                .filter(|role_id| known_role_ids.contains(*role_id))
+                .cloned(),
+        );
         policy_ids.extend(assignment.policy_ids.iter().cloned());
     }
 
