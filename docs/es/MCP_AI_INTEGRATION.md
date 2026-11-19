@@ -107,6 +107,16 @@ Toda solicitud de IA se hace cumplir a través de todas estas capas, en orden:
    datos SQLite unificada y es consultable/exportable. Ver `docs/AUDIT.md` para
    el esquema completo de eventos.
 
+Las tools que no reciben conexión (`list_connections`, las de scripts y las de
+auditoría) no pasan por el gate de conexión y se evalúan en un scope sin
+conexión. En ese scope cada trusted client activo tiene `builtin/read-only` más
+todos los roles y policies que tenga asignados en cualquier conexión con MCP
+habilitado. Un cliente que puede escribir en una conexión puede, por lo tanto,
+crear y actualizar scripts, sujeto a las mismas decisiones Allow, Ask o Deny; un
+cliente sin asignaciones de conexión conserva acceso de solo lectura. El scope se
+calcula al arrancar el servidor MCP, así que reinicia la sesión MCP del agente
+después de cambiar asignaciones.
+
 Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 `tools/call`. Ninguna puede saltarse desde el lado del cliente.
 

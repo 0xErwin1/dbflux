@@ -83,6 +83,8 @@ Every AI request is enforced through all of these layers in order:
 5. **Approval path**: an Ask decision queues the call as a pending execution. A person approves or rejects it in DBFlux, and an approved call runs once when the agent repeats it with the same arguments.
 6. **Audit trail**: every decision is appended to `aud_audit_events` in the unified SQLite database and is queryable/exportable. See `docs/AUDIT.md` for the full event schema.
 
+Tools that take no connection (`list_connections`, the script tools and the audit tools) skip the connection gate and are evaluated against a scope with no connection. On that scope every active trusted client holds `builtin/read-only` plus every role and policy it is assigned on any connection with MCP enabled. A client that may write on one connection can therefore create and update scripts, subject to the same Allow, Ask or Deny decisions; a client with no connection assignments keeps read-only access. The scope is computed when the MCP server starts, so restart the agent's MCP session after changing assignments.
+
 All six layers run inside the server process on every `tools/call` request. None can be bypassed from the client side.
 
 ## 4. Canonical Tool Surface (v1)

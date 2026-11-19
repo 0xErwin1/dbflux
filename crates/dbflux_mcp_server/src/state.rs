@@ -308,9 +308,9 @@ impl ServerState {
         let profile_manager_clone = state.profile_manager.clone();
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                load_connection_policy_assignments(runtime_clone, profile_manager_clone).await;
-            });
-        });
+                load_connection_policy_assignments(runtime_clone, profile_manager_clone).await
+            })
+        })?;
 
         Ok(state)
     }
@@ -515,8 +515,6 @@ fn load_governance_into_runtime(
     let governance = load_governance_settings(config_dir)?;
 
     apply_governance_settings(runtime, &governance)?;
-
-    create_global_assignments(runtime)?;
 
     Ok(governance)
 }
@@ -1371,8 +1369,15 @@ fn load_governance_settings(
     })
 }
 
-/// Creates a global policy assignment (connection_id = "") for each trusted client.
-/// This allows clients to use tools that don't require a specific connection.
+/// Creates the assignment for tools that take no connection (connection_id = "")
+/// for each active trusted client.
+///
+/// Script and audit tools are not bound to a connection, so no connection-scoped
+/// binding ever applies to them. Each client gets `builtin/read-only` plus every
+/// role and policy it holds on any connection. Policies are additive grants, so a
+/// client trusted with writes on a connection can manage its scripts, while a
+/// client with no connection bindings keeps read-only access. This must run after
+/// the connection assignments are loaded.
 fn create_global_assignments(runtime: &mut McpRuntime) -> Result<(), String> {
     let clients = runtime
         .list_trusted_clients()
@@ -1382,19 +1387,16 @@ fn create_global_assignments(runtime: &mut McpRuntime) -> Result<(), String> {
         return Ok(());
     }
 
-    // Create assignments for each active client
+    let connection_assignments: Vec<dbflux_policy::ConnectionPolicyAssignment> = runtime
+        .policy_assignments_for_engine()
+        .into_iter()
+        .filter(|assignment| !assignment.scope.connection_id.is_empty())
+        .collect();
+
     let assignments: Vec<dbflux_policy::ConnectionPolicyAssignment> = clients
         .into_iter()
         .filter(|client| client.active)
-        .map(|client| dbflux_policy::ConnectionPolicyAssignment {
-            actor_id: client.id,
-            scope: dbflux_policy::PolicyBindingScope {
-                connection_id: String::new(),
-            },
-            // Grant read-only role by default for global operations
-            role_ids: vec!["builtin/read-only".to_string()],
-            policy_ids: vec![],
-        })
+        .map(|client| global_assignment_for(client.id, &connection_assignments))
         .collect();
 
     if !assignments.is_empty() {
@@ -1409,10 +1411,35 @@ fn create_global_assignments(runtime: &mut McpRuntime) -> Result<(), String> {
     Ok(())
 }
 
+fn global_assignment_for(
+    actor_id: String,
+    connection_assignments: &[dbflux_policy::ConnectionPolicyAssignment],
+) -> dbflux_policy::ConnectionPolicyAssignment {
+    let mut role_ids = std::collections::BTreeSet::from(["builtin/read-only".to_string()]);
+    let mut policy_ids = std::collections::BTreeSet::new();
+
+    for assignment in connection_assignments
+        .iter()
+        .filter(|assignment| assignment.actor_id == actor_id)
+    {
+        role_ids.extend(assignment.role_ids.iter().cloned());
+        policy_ids.extend(assignment.policy_ids.iter().cloned());
+    }
+
+    dbflux_policy::ConnectionPolicyAssignment {
+        actor_id,
+        scope: dbflux_policy::PolicyBindingScope {
+            connection_id: String::new(),
+        },
+        role_ids: role_ids.into_iter().collect(),
+        policy_ids: policy_ids.into_iter().collect(),
+    }
+}
+
 async fn load_connection_policy_assignments(
     runtime: Arc<RwLock<McpRuntime>>,
     profile_manager: Arc<RwLock<ProfileManager>>,
-) {
+) -> Result<(), String> {
     let profiles = {
         let pm = profile_manager.read().await;
         pm.profiles.clone()
@@ -1433,8 +1460,12 @@ async fn load_connection_policy_assignments(
 
     log::info!("Loaded {} connection policy assignments", loaded_count);
 
+    create_global_assignments(&mut rt)?;
+
     // Drain events after loading all assignments
     rt.drain_events();
+
+    Ok(())
 }
 
 fn load_profile_assignment(runtime: &mut McpRuntime, profile: &ConnectionProfile) -> bool {
@@ -2831,5 +2862,141 @@ mod tests {
             default_db_config_for_kind(dbflux_core::DbKind::Turso),
             dbflux_core::DbConfig::Turso { ref url } if url.is_empty()
         ));
+    }
+
+    fn runtime_with_clients(file_name: &str, client_ids: &[&str]) -> McpRuntime {
+        let mut runtime = runtime_for_governance_tests(file_name);
+
+        for role in builtin_roles() {
+            runtime.upsert_role_mut(role).expect("built-in role loads");
+        }
+
+        for policy in builtin_policies() {
+            runtime
+                .upsert_policy_mut(policy)
+                .expect("built-in policy loads");
+        }
+
+        for client_id in client_ids {
+            runtime
+                .upsert_trusted_client_mut(dbflux_mcp::TrustedClientDto {
+                    id: client_id.to_string(),
+                    name: client_id.to_string(),
+                    issuer: None,
+                    active: true,
+                })
+                .expect("trusted client loads");
+        }
+
+        runtime
+    }
+
+    fn assign_role_on_connection(
+        runtime: &mut McpRuntime,
+        connection_id: &str,
+        actor_id: &str,
+        role_id: &str,
+    ) {
+        runtime
+            .save_connection_policy_assignment_mut(dbflux_mcp::ConnectionPolicyAssignmentDto {
+                connection_id: connection_id.to_string(),
+                assignments: vec![dbflux_policy::ConnectionPolicyAssignment {
+                    actor_id: actor_id.to_string(),
+                    scope: dbflux_policy::PolicyBindingScope {
+                        connection_id: connection_id.to_string(),
+                    },
+                    role_ids: vec![role_id.to_string()],
+                    policy_ids: vec![],
+                }],
+            })
+            .expect("assignment saves");
+    }
+
+    fn evaluate_without_connection(
+        runtime: &McpRuntime,
+        actor_id: &str,
+        tool_id: &str,
+        classification: dbflux_policy::ExecutionClassification,
+    ) -> dbflux_policy::PolicyDecision {
+        dbflux_policy::PolicyEngine::new(
+            runtime.policy_assignments_for_engine(),
+            runtime.roles_for_engine(),
+            runtime.policies_for_engine(),
+        )
+        .evaluate(&dbflux_policy::PolicyEvaluationRequest {
+            actor_id: actor_id.to_string(),
+            connection_id: String::new(),
+            tool_id: tool_id.to_string(),
+            classification,
+        })
+        .expect("policy evaluates")
+    }
+
+    #[test]
+    fn connectionless_tools_follow_the_roles_a_client_holds_on_its_connections() {
+        use dbflux_policy::{ExecutionClassification, PolicyDecision};
+
+        let mut runtime = runtime_with_clients("global-scope-admin.sqlite", &["agent"]);
+        assign_role_on_connection(&mut runtime, "conn-a", "agent", "builtin/admin");
+
+        create_global_assignments(&mut runtime).expect("global assignments save");
+
+        assert_eq!(
+            evaluate_without_connection(
+                &runtime,
+                "agent",
+                "create_script",
+                ExecutionClassification::Write
+            ),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            evaluate_without_connection(
+                &runtime,
+                "agent",
+                "delete_script",
+                ExecutionClassification::Admin
+            ),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            evaluate_without_connection(
+                &runtime,
+                "agent",
+                "list_scripts",
+                ExecutionClassification::Metadata
+            ),
+            PolicyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn connectionless_tools_stay_read_only_for_a_client_without_connection_roles() {
+        use dbflux_policy::{ExecutionClassification, PolicyDecision, PolicyDecisionReason};
+
+        let mut runtime =
+            runtime_with_clients("global-scope-isolation.sqlite", &["agent", "other"]);
+        assign_role_on_connection(&mut runtime, "conn-a", "agent", "builtin/admin");
+
+        create_global_assignments(&mut runtime).expect("global assignments save");
+
+        assert_eq!(
+            evaluate_without_connection(
+                &runtime,
+                "other",
+                "create_script",
+                ExecutionClassification::Write
+            ),
+            PolicyDecision::Deny(PolicyDecisionReason::ToolDenied)
+        );
+        assert_eq!(
+            evaluate_without_connection(
+                &runtime,
+                "other",
+                "list_scripts",
+                ExecutionClassification::Metadata
+            ),
+            PolicyDecision::Allow
+        );
     }
 }
