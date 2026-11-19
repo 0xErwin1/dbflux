@@ -1,5 +1,10 @@
 use super::*;
+use dbflux_components::composites::{
+    BackAction, ChildAction, HOVER_OPEN_DELAY, HoverTick, MenuNav, MenuNode,
+};
 use dbflux_core::DdlCapabilities;
+use dbflux_ui_base::async_ext::AsyncUpdateResultExt;
+use std::time::Instant;
 
 /// Code-generation capabilities that fill the "Generate SQL" submenu of an
 /// index row.
@@ -167,57 +172,65 @@ pub(crate) fn menu_caption(item_id: &str) -> Option<String> {
 }
 
 impl ContextMenuState {
-    /// Transition the menu when the still-visible parent (left) menu is hovered at
-    /// `index` while a submenu is open. Returns `true` when the menu changed and the
-    /// view must redraw.
+    /// The pointer entered `index` of `level`: move the highlight there, and
+    /// close the flyout that hangs off a different row of the same level.
+    /// Resting on the row that owns the open flyout leaves the flyout fixed.
+    /// Returns whether the highlight moved.
     ///
-    /// Behaves like a standard nested menu instead of trailing the cursor: hovering the
-    /// item that owns the open submenu leaves it fixed, hovering a different item that
-    /// itself opens a submenu switches to (and re-anchors on) that item's submenu, and
-    /// hovering a plain item collapses the submenu back to the parent menu.
-    fn hover_parent_item(&mut self, index: usize) -> bool {
-        let Some((parent_items, owner_index)) = self.parent_stack.last() else {
-            return false;
+    /// This behaves like a standard nested menu rather than trailing the
+    /// cursor: hovering the row that owns the open flyout leaves it fixed,
+    /// hovering a different row of the same level switches the cascade to
+    /// that row, and hovering a plain row collapses the flyout.
+    fn hover_row(&mut self, level: usize, index: usize, now: Instant) -> bool {
+        let nodes = ContextMenuItem::to_menu_nodes(&self.items);
+        let depth_before = self.nav.cursor().depth();
+
+        let moved = if self.nav.cursor().highlight(level) == Some(index) {
+            false
+        } else {
+            self.nav.set_level(level, index, &nodes)
         };
 
-        if index == *owner_index {
-            return false;
+        if self.nav.cursor().depth() < depth_before {
+            // The highlight moved to another row of `level`, which closed the
+            // flyout that hung off the old row: the open record must not keep
+            // claiming that flyout is open.
+            self.hover.mark_open(level, None);
         }
 
-        let Some(item) = parent_items.get(index) else {
-            return false;
-        };
+        self.hover.enter(level, index, now);
 
-        if !item.is_selectable() {
-            return false;
-        }
+        moved
+    }
 
-        let submenu_items = match &item.action {
-            ContextMenuAction::Submenu(sub_items) => Some(sub_items.clone()),
-            _ => None,
-        };
-
-        match submenu_items {
-            Some(sub_items) => {
-                if let Some((_, owner_index)) = self.parent_stack.last_mut() {
-                    *owner_index = index;
-                }
-                self.items = sub_items;
-                self.selected_index = self
-                    .items
-                    .iter()
-                    .position(ContextMenuItem::is_selectable)
-                    .unwrap_or(0);
+    /// Runs one open-on-hover decision: opens the flyout of the row the
+    /// pointer has rested on for the open delay, if it opens one. Returns
+    /// whether the cascade changed.
+    fn hover_tick(&mut self, now: Instant) -> bool {
+        match self.hover.tick(now) {
+            HoverTick::Open(level, index) => {
+                let nodes = ContextMenuItem::to_menu_nodes(&self.items);
+                let before = self.nav.cursor().clone();
+                self.nav.hover(level, index, &nodes);
+                self.hover.mark_open(level, Some(index));
+                self.nav.cursor() != &before
             }
-            None => {
-                if let Some((parent_items, _)) = self.parent_stack.pop() {
-                    self.items = parent_items;
-                    self.selected_index = index;
-                }
+            // No pointer-left signal reaches the sidebar from the cascade
+            // render (the component reports `Hovered` rows only), so a level
+            // never closes from being left: hovering another row of the
+            // parent level closes it instead, in `hover_row`. The arm stays
+            // for the day a leave signal is wired.
+            HoverTick::CloseLevel(level) => {
+                let Some(owner) = self.nav.cursor().highlight(level) else {
+                    return false;
+                };
+                let nodes = ContextMenuItem::to_menu_nodes(&self.items);
+                let before = self.nav.cursor().clone();
+                self.nav.set_level(level, owner, &nodes);
+                self.nav.cursor() != &before
             }
+            HoverTick::Nothing => false,
         }
-
-        true
     }
 }
 
@@ -240,45 +253,6 @@ impl Sidebar {
         }
 
         items.append(&mut section_items);
-    }
-
-    fn first_selectable_index(items: &[ContextMenuItem]) -> usize {
-        items
-            .iter()
-            .position(ContextMenuItem::is_selectable)
-            .unwrap_or(0)
-    }
-
-    fn last_selectable_index(items: &[ContextMenuItem]) -> usize {
-        items
-            .iter()
-            .rposition(ContextMenuItem::is_selectable)
-            .unwrap_or(0)
-    }
-
-    fn next_selectable_index(items: &[ContextMenuItem], current_index: usize) -> Option<usize> {
-        items
-            .iter()
-            .enumerate()
-            .skip(current_index.saturating_add(1))
-            .find(|(_, item)| item.is_selectable())
-            .map(|(index, _)| index)
-    }
-
-    fn previous_selectable_index(items: &[ContextMenuItem], current_index: usize) -> Option<usize> {
-        // Menu navigation preserves selected_index <= items.len(), including
-        // zero for an empty submenu. Hover updates validate the index against
-        // the relevant items, and going back restores a saved selection with
-        // its parent items. This relies on that state invariant rather than a
-        // local bounds check.
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "`current_index` is maintained `<= items.len()` by the menu \
-                      state invariants described above"
-        )]
-        items[..current_index]
-            .iter()
-            .rposition(ContextMenuItem::is_selectable)
     }
 
     pub(super) fn view_table_schema(&mut self, item_id: &str, cx: &mut Context<Self>) {
@@ -319,11 +293,17 @@ impl Sidebar {
 
         self.context_menu = Some(ContextMenuState {
             item_id: item_id.to_string(),
-            selected_index: Self::first_selectable_index(&items),
             items,
-            parent_stack: Vec::new(),
+            nav: MenuNav::new(),
+            hover: HoverIntent::new(),
             position,
         });
+
+        if let Some(menu) = self.context_menu.as_mut() {
+            // The menu opens on its first selectable row, skipping the
+            // qualified-name header most menus carry.
+            menu.nav.reset(&ContextMenuItem::to_menu_nodes(&menu.items));
+        }
         cx.notify();
     }
 
@@ -357,11 +337,16 @@ impl Sidebar {
 
         self.context_menu = Some(ContextMenuState {
             item_id,
-            selected_index,
             items,
-            parent_stack: Vec::new(),
+            nav: MenuNav::new(),
+            hover: HoverIntent::new(),
             position: Point::default(),
         });
+
+        if let Some(menu) = self.context_menu.as_mut() {
+            let nodes = ContextMenuItem::to_menu_nodes(&menu.items);
+            menu.nav.set_level(0, selected_index, &nodes);
+        }
         self.context_menu_execute(cx);
 
         true
@@ -1754,76 +1739,132 @@ impl Sidebar {
         }
     }
 
+    /// Moves the highlight to the next selectable row of the deepest open
+    /// level, wrapping at the level's end.
     pub fn context_menu_select_next(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu
-            && let Some(next_index) = Self::next_selectable_index(&menu.items, menu.selected_index)
+        if let Some(menu) = self.context_menu.as_mut()
+            && menu
+                .nav
+                .step(&ContextMenuItem::to_menu_nodes(&menu.items), true)
         {
-            menu.selected_index = next_index;
             cx.notify();
         }
     }
 
+    /// Moves the highlight to the previous selectable row of the deepest open
+    /// level, wrapping at the level's start.
     pub fn context_menu_select_prev(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu
-            && let Some(previous_index) =
-                Self::previous_selectable_index(&menu.items, menu.selected_index)
+        if let Some(menu) = self.context_menu.as_mut()
+            && menu
+                .nav
+                .step(&ContextMenuItem::to_menu_nodes(&menu.items), false)
         {
-            menu.selected_index = previous_index;
             cx.notify();
         }
     }
 
+    /// Moves the highlight to the first selectable row of the deepest open
+    /// level.
     pub fn context_menu_select_first(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu {
-            let first = Self::first_selectable_index(&menu.items);
-
-            if menu.selected_index != first {
-                menu.selected_index = first;
-                cx.notify();
-            }
-        }
-    }
-
-    pub fn context_menu_select_last(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu {
-            let last = Self::last_selectable_index(&menu.items);
-
-            if menu.selected_index != last {
-                menu.selected_index = last;
-                cx.notify();
-            }
-        }
-    }
-
-    pub fn context_menu_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu {
-            let Some(item) = menu.items.get(index) else {
+        if let Some(menu) = self.context_menu.as_mut() {
+            let nodes = ContextMenuItem::to_menu_nodes(&menu.items);
+            let level = menu.nav.cursor().depth().saturating_sub(1);
+            let Some(first) = deepest_level_rows(&nodes, &menu.nav)
+                .iter()
+                .position(MenuNode::is_selectable)
+            else {
                 return;
             };
 
-            if !item.is_selectable() || menu.selected_index == index {
-                return;
+            if menu.nav.cursor().highlight(level) != Some(first)
+                && menu.nav.set_level(level, first, &nodes)
+            {
+                cx.notify();
             }
-
-            menu.selected_index = index;
-            cx.notify();
         }
     }
 
-    pub fn context_menu_parent_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
+    /// Moves the highlight to the last selectable row of the deepest open
+    /// level.
+    pub fn context_menu_select_last(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = self.context_menu.as_mut() {
+            let nodes = ContextMenuItem::to_menu_nodes(&menu.items);
+            let level = menu.nav.cursor().depth().saturating_sub(1);
+            let Some(last) = deepest_level_rows(&nodes, &menu.nav)
+                .iter()
+                .rposition(MenuNode::is_selectable)
+            else {
+                return;
+            };
+
+            if menu.nav.cursor().highlight(level) != Some(last)
+                && menu.nav.set_level(level, last, &nodes)
+            {
+                cx.notify();
+            }
+        }
+    }
+
+    /// The pointer entered `index` of `level` of the open menu: the highlight
+    /// follows it, and resting on a submenu row opens its flyout (see
+    /// [`Self::arm_context_menu_hover_open`]).
+    pub fn context_menu_row_hovered(&mut self, level: usize, index: usize, cx: &mut Context<Self>) {
         if let Some(menu) = self.context_menu.as_mut()
-            && menu.hover_parent_item(index)
+            && menu.hover_row(level, index, Instant::now())
         {
             cx.notify();
         }
+
+        if self
+            .context_menu
+            .as_ref()
+            .is_some_and(|menu| menu.hover.pending().is_some())
+        {
+            self.arm_context_menu_hover_open(cx);
+        }
     }
 
+    /// Enter or activate the highlighted row of the deepest open level:
+    /// Enter or Right on a submenu row opens its flyout, on a leaf row runs
+    /// its action and closes the menu.
     pub fn context_menu_execute(&mut self, cx: &mut Context<Self>) {
-        let Some(ref mut menu) = self.context_menu else {
+        let Some(menu) = self.context_menu.as_mut() else {
             return;
         };
 
-        let Some(item) = menu.items.get(menu.selected_index).cloned() else {
+        let nodes = ContextMenuItem::to_menu_nodes(&menu.items);
+
+        match menu.nav.open_child(&nodes) {
+            ChildAction::Opened => {
+                // Register the open in the hover intent, so resting the
+                // pointer on the owning row afterwards re-arms nothing and
+                // never resets the flyout's own highlight.
+                let depth = menu.nav.cursor().depth();
+                if depth >= 2
+                    && let Some(owner) = menu.nav.cursor().highlight(depth - 2)
+                {
+                    menu.hover.mark_open(depth - 2, Some(owner));
+                }
+                cx.notify();
+            }
+            ChildAction::None => {}
+            ChildAction::Activate => {
+                let path = menu.nav.cursor().path().to_vec();
+                self.context_menu_activated(&path, cx);
+            }
+        }
+    }
+
+    /// A leaf row of the open menu was activated, from a click or from
+    /// [`Self::context_menu_execute`]: runs the row's action and closes the
+    /// menu. No sidebar menu row keeps the menu open (none is checkable), so
+    /// every activation closes it.
+    pub fn context_menu_activated(&mut self, path: &[usize], cx: &mut Context<Self>) {
+        let Some(menu) = self.context_menu.as_mut() else {
+            return;
+        };
+
+        let Some(item) = Self::menu_item_at_path(&menu.items, path).cloned() else {
             return;
         };
 
@@ -1832,18 +1873,39 @@ impl Sidebar {
         }
 
         let item_id = menu.item_id.clone();
+        self.run_menu_action(item.action, item_id, cx);
 
-        match item.action {
-            ContextMenuAction::Submenu(sub_items) => {
-                // Navigate into submenu
-                let current_items = std::mem::take(&mut menu.items);
-                let current_index = menu.selected_index;
-                menu.parent_stack.push((current_items, current_index));
-                menu.items = sub_items;
-                menu.selected_index = Self::first_selectable_index(&menu.items);
-                cx.notify();
-                return;
-            }
+        self.context_menu = None;
+        cx.notify();
+    }
+
+    /// A submenu row of the open menu was clicked: open its flyout, keeping
+    /// the rest of the cascade.
+    pub fn context_menu_open_flyout(&mut self, level: usize, index: usize, cx: &mut Context<Self>) {
+        let Some(menu) = self.context_menu.as_mut() else {
+            return;
+        };
+
+        let nodes = ContextMenuItem::to_menu_nodes(&menu.items);
+        if menu.nav.hover(level, index, &nodes) {
+            menu.hover.mark_open(level, Some(index));
+            cx.notify();
+        }
+    }
+
+    /// Runs the action a menu row carries, on the node the menu was opened
+    /// on.
+    fn run_menu_action(
+        &mut self,
+        action: ContextMenuAction,
+        item_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            // A flyout row reports an open, never an activation, so this arm
+            // only guards a menu that changed under the pointer between
+            // render and click: there is nothing to run.
+            ContextMenuAction::Submenu(_) => {}
             ContextMenuAction::Open => {
                 let node_kind = parse_node_kind(&item_id);
                 match node_kind {
@@ -2135,58 +2197,67 @@ impl Sidebar {
                 self.request_root_section_action(&item_id, &action_id, cx);
             }
         }
-
-        // Close menu after executing action
-        self.context_menu = None;
-        cx.notify();
     }
 
-    /// Execute menu action at a specific index (for mouse clicks).
-    pub fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu {
-            if index >= menu.items.len() {
-                log::warn!(
-                    "context_menu_execute_at: invalid index {} for {} items",
-                    index,
-                    menu.items.len()
-                );
-                return;
-            }
-
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "the `index >= menu.items.len()` early return above bounds \
-                          this access"
-            )]
-            if !menu.items[index].is_selectable() {
-                return;
-            }
-
-            menu.selected_index = index;
-        }
-        self.context_menu_execute(cx);
-    }
-
+    /// Left or Escape inside the menu: closes the deepest open level only.
+    /// Returns `false` at the root, so the caller dismisses the whole menu.
     pub fn context_menu_go_back(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(ref mut menu) = self.context_menu else {
+        let Some(menu) = self.context_menu.as_mut() else {
             return false;
         };
 
-        if let Some((parent_items, parent_index)) = menu.parent_stack.pop() {
-            menu.items = parent_items;
-            menu.selected_index = parent_index;
-            cx.notify();
-            true
-        } else {
-            false
+        match menu.nav.back() {
+            BackAction::ClosedLevel => {
+                cx.notify();
+                true
+            }
+            BackAction::Dismissed => false,
         }
     }
 
-    /// Go back to parent menu and execute action at given index.
-    pub fn context_menu_parent_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.context_menu_go_back(cx) {
-            self.context_menu_execute_at(index, cx);
+    /// One open-on-hover decision, once the rest delay has passed: opens the
+    /// flyout of the row the pointer rested on (see
+    /// [`Self::arm_context_menu_hover_open`]).
+    fn context_menu_hover_tick(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = self.context_menu.as_mut()
+            && menu.hover_tick(Instant::now())
+        {
+            cx.notify();
         }
+    }
+
+    /// Schedules the open-on-hover decision for a row the pointer has
+    /// entered: after the rest delay, one tick applies it. The task is
+    /// fire-and-forget: a tick before the row's deadline decides nothing, and
+    /// a tick after the menu closed finds no menu.
+    fn arm_context_menu_hover_open(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(HOVER_OPEN_DELAY).await;
+            this.update(cx, |sidebar, cx| sidebar.context_menu_hover_tick(cx))
+                .log_if_dropped();
+        })
+        .detach();
+    }
+
+    /// The menu row `path` points at, following submenu rows down from the
+    /// root.
+    fn menu_item_at_path<'a>(
+        items: &'a [ContextMenuItem],
+        path: &[usize],
+    ) -> Option<&'a ContextMenuItem> {
+        let (last, parents) = path.split_last()?;
+
+        let mut level_items = items;
+
+        for index in parents {
+            let ContextMenuAction::Submenu(children) = &level_items.get(*index)?.action else {
+                return None;
+            };
+
+            level_items = children;
+        }
+
+        level_items.get(*last)
     }
 
     pub fn close_context_menu(&mut self, cx: &mut Context<Self>) {
@@ -2239,6 +2310,25 @@ impl Sidebar {
     }
 }
 
+/// The rows of the deepest open level of `nodes`, following the cursor path
+/// of `nav` down from the root.
+fn deepest_level_rows<'a>(nodes: &'a [MenuNode], nav: &MenuNav) -> &'a [MenuNode] {
+    let Some((_, parents)) = nav.cursor().path().split_last() else {
+        return nodes;
+    };
+
+    let mut rows = nodes;
+
+    for index in parents {
+        match rows.get(*index) {
+            Some(node) => rows = &node.children,
+            None => return &[],
+        }
+    }
+
+    rows
+}
+
 /// Whether the collection declares the time-series facet, the facet the
 /// measurement menu actions apply to.
 fn collection_has_time_series_facet(
@@ -2266,9 +2356,19 @@ fn lists_measurements(connected: &ConnectedProfile) -> bool {
 mod time_series_tests;
 
 #[cfg(test)]
-mod parent_hover_tests {
-    use super::{ContextMenuAction, ContextMenuItem, ContextMenuState};
+mod hover_tests {
+    use super::{ChildAction, ContextMenuAction, ContextMenuItem, ContextMenuState, MenuNav};
+    use dbflux_components::composites::{HOVER_OPEN_DELAY, HoverIntent};
     use gpui::{point, px};
+    use std::time::{Duration, Instant};
+
+    fn at(millis: u64) -> Instant {
+        Instant::now() + Duration::from_millis(millis)
+    }
+
+    fn open_delay() -> u64 {
+        HOVER_OPEN_DELAY.as_millis() as u64
+    }
 
     fn item(label: &str) -> ContextMenuItem {
         ContextMenuItem::item(label, ContextMenuAction::Open)
@@ -2278,69 +2378,115 @@ mod parent_hover_tests {
         ContextMenuItem::item(label, ContextMenuAction::Submenu(children))
     }
 
-    /// Top-level menu with two submenu items and one plain item, opened into the first
-    /// submenu (owner index 0).
-    fn state_in_first_submenu() -> ContextMenuState {
-        let export_children = vec![item("as CSV"), item("as JSON")];
-        let migrate_children = vec![item("to Postgres"), item("to MySQL")];
-
-        let top_items = vec![
-            submenu_item("Export Table", export_children.clone()),
-            submenu_item("Migrate Table", migrate_children),
+    /// Top-level menu with two submenu rows and one plain row: Export Table
+    /// with two children, Migrate Table with two, and Drop Table.
+    fn top_items() -> Vec<ContextMenuItem> {
+        vec![
+            submenu_item("Export Table", vec![item("as CSV"), item("as JSON")]),
+            submenu_item("Migrate Table", vec![item("to Postgres"), item("to MySQL")]),
             item("Drop Table"),
-        ];
+        ]
+    }
 
-        ContextMenuState {
+    /// The menu open on its root panel, the way `open_menu_for_item` leaves
+    /// it: highlighted on its first selectable row.
+    fn state_at_root() -> ContextMenuState {
+        let mut state = ContextMenuState {
             item_id: "table".to_string(),
-            selected_index: 0,
-            items: export_children,
-            parent_stack: vec![(top_items, 0)],
+            items: top_items(),
+            nav: MenuNav::new(),
+            hover: HoverIntent::new(),
             position: point(px(0.0), px(0.0)),
-        }
+        };
+        state
+            .nav
+            .reset(&ContextMenuItem::to_menu_nodes(&state.items));
+
+        state
+    }
+
+    /// The same menu with Export Table's flyout open, the way a click on that
+    /// row leaves it.
+    fn state_in_first_flyout() -> ContextMenuState {
+        let mut state = state_at_root();
+        let nodes = ContextMenuItem::to_menu_nodes(&state.items);
+        assert_eq!(state.nav.open_child(&nodes), ChildAction::Opened);
+        state.hover.mark_open(0, Some(0));
+
+        state
     }
 
     #[test]
-    fn hovering_the_owning_item_keeps_the_submenu_fixed() {
-        let mut state = state_in_first_submenu();
+    fn hovering_the_owning_row_keeps_the_flyout_fixed() {
+        let mut state = state_in_first_flyout();
 
-        let changed = state.hover_parent_item(0);
+        let changed = state.hover_row(0, 0, at(0));
 
         assert!(!changed);
-        assert_eq!(state.parent_stack.last().unwrap().1, 0);
-        assert_eq!(state.items.len(), 2);
-        assert_eq!(state.items[0].label, "as CSV");
+        // The flyout stays open on its own rows.
+        assert_eq!(state.nav.cursor().depth(), 2);
+        assert_eq!(state.nav.cursor().highlight(1), Some(0));
+        // Resting on the owning row re-opens nothing.
+        assert!(!state.hover_tick(at(open_delay())));
+        assert_eq!(state.nav.cursor().depth(), 2);
     }
 
     #[test]
-    fn hovering_another_submenu_item_switches_and_reanchors() {
-        let mut state = state_in_first_submenu();
+    fn hovering_another_submenu_row_switches_the_open_flyout() {
+        let mut state = state_in_first_flyout();
 
-        let changed = state.hover_parent_item(1);
+        assert!(state.hover_row(0, 1, at(0)));
+        // The old flyout closed the moment the highlight moved off its row.
+        assert_eq!(state.nav.cursor().depth(), 1);
+        assert_eq!(state.nav.cursor().highlight(0), Some(1));
 
-        assert!(changed);
-        assert_eq!(state.parent_stack.last().unwrap().1, 1);
-        assert_eq!(state.items[0].label, "to Postgres");
-        assert_eq!(state.selected_index, 0);
+        // The new flyout opens once the pointer has rested on its row, on the
+        // new owner, anchored on its first row.
+        assert!(state.hover_tick(at(open_delay())));
+        assert_eq!(state.nav.cursor().highlight(0), Some(1));
+        assert_eq!(state.nav.cursor().depth(), 2);
+        assert_eq!(state.nav.cursor().highlight(1), Some(0));
     }
 
     #[test]
-    fn hovering_a_plain_item_collapses_the_submenu() {
-        let mut state = state_in_first_submenu();
+    fn hovering_a_plain_row_collapses_the_flyout() {
+        let mut state = state_in_first_flyout();
 
-        let changed = state.hover_parent_item(2);
-
-        assert!(changed);
-        assert!(state.parent_stack.is_empty());
-        assert_eq!(state.selected_index, 2);
-        assert_eq!(state.items[0].label, "Export Table");
+        assert!(state.hover_row(0, 2, at(0)));
+        assert_eq!(state.nav.cursor().depth(), 1);
+        assert_eq!(state.nav.cursor().highlight(0), Some(2));
+        // Resting on the plain row opens nothing.
+        assert!(!state.hover_tick(at(open_delay())));
+        assert_eq!(state.nav.cursor().depth(), 1);
     }
 
     #[test]
-    fn hovering_with_no_submenu_open_does_nothing() {
-        let mut state = state_in_first_submenu();
-        state.parent_stack.clear();
+    fn a_flyout_opens_only_after_the_pointer_rests_on_its_row() {
+        let mut state = state_at_root();
 
-        assert!(!state.hover_parent_item(1));
+        assert!(state.hover_row(0, 1, at(0)));
+        // Sweeping onto the row is not resting on it: nothing opens yet.
+        assert!(!state.hover_tick(at(open_delay() - 1)));
+        assert_eq!(state.nav.cursor().depth(), 1);
+
+        assert!(state.hover_tick(at(open_delay())));
+        assert_eq!(state.nav.cursor().depth(), 2);
+        assert_eq!(state.nav.cursor().highlight(0), Some(1));
+        assert_eq!(state.nav.cursor().highlight(1), Some(0));
+    }
+
+    #[test]
+    fn sweeping_across_rows_without_resting_opens_no_flyout() {
+        let mut state = state_at_root();
+
+        state.hover_row(0, 0, at(0));
+        state.hover_row(0, 1, at(40));
+        state.hover_row(0, 2, at(80));
+
+        // No row was rested on, and the last one is plain.
+        assert!(!state.hover_tick(at(80 + open_delay())));
+        assert_eq!(state.nav.cursor().depth(), 1);
+        assert_eq!(state.nav.cursor().highlight(0), Some(2));
     }
 }
 
@@ -3049,7 +3195,7 @@ mod menu_availability_tests {
                         .iter()
                         .position(|item| matches!(item.action, ContextMenuAction::CopyColumnName))
                         .expect("menu offers the copy entry");
-                    sidebar.context_menu_execute_at(index, cx);
+                    sidebar.context_menu_activated(&[index], cx);
                     assert!(!sidebar.has_context_menu_open());
                 })
                 .expect("sidebar alive");
@@ -3170,7 +3316,7 @@ mod menu_availability_tests {
                     .iter()
                     .position(|item| matches!(item.action, ContextMenuAction::Open))
                     .expect("leaf menu has Open");
-                sidebar.context_menu_execute_at(open_index, cx);
+                sidebar.context_menu_activated(&[open_index], cx);
             });
         }
 
