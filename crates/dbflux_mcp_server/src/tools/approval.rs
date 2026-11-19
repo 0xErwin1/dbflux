@@ -2,7 +2,7 @@
 //!
 //! Provides tools for managing execution approvals:
 //! - `request_execution`: Request approval for a pending operation
-//! - `list_pending_executions`: List all pending executions
+//! - `list_pending_executions`: List the calling client's pending executions
 //! - `get_pending_execution`: Get details of a specific pending execution
 //! - `approve_execution` / `reject_execution`: always denied over MCP by
 //!   authorization; a person resolves pending executions in DBFlux
@@ -34,7 +34,9 @@ pub struct RequestExecutionParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListPendingExecutionsParams {
-    #[schemars(description = "Filter by actor ID (optional)")]
+    #[schemars(
+        description = "Filter by actor ID (optional). Only the calling client's own executions are ever listed"
+    )]
     pub actor_id: Option<String>,
 }
 
@@ -139,15 +141,18 @@ impl DbFluxServer {
                             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                     };
 
-                    // Filter by actor_id if provided
-                    let filtered: Vec<_> = if let Some(actor_id) = params.actor_id {
-                        pending_list
-                            .into_iter()
-                            .filter(|p| p.plan.actor_id == actor_id)
-                            .collect()
-                    } else {
-                        pending_list
-                    };
+                    // A client only sees its own queue: plans carry the full
+                    // call arguments, and the queue is shared by every client.
+                    let filtered: Vec<_> = pending_list
+                        .into_iter()
+                        .filter(|pending| pending.plan.actor_id == state.client_id)
+                        .filter(|pending| {
+                            params
+                                .actor_id
+                                .as_ref()
+                                .is_none_or(|actor_id| &pending.plan.actor_id == actor_id)
+                        })
+                        .collect();
 
                     let response = serde_json::json!({
                         "pending_executions": filtered,
@@ -187,9 +192,11 @@ impl DbFluxServer {
                             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                     };
 
-                    match execution.and_then(|execution| {
-                        pending_execution_status_response(&execution, now_epoch_ms())
-                    }) {
+                    match execution
+                        .filter(|execution| execution.plan.actor_id == state.client_id)
+                        .and_then(|execution| {
+                            pending_execution_status_response(&execution, now_epoch_ms())
+                        }) {
                         Some(response) => {
                             Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                         }

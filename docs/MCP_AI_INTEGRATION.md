@@ -83,6 +83,8 @@ Every AI request is enforced through all of these layers in order:
 5. **Approval path**: an Ask decision queues the call as a pending execution. A person approves or rejects it in DBFlux, and an approved call runs once when the agent repeats it with the same arguments.
 6. **Audit trail**: every decision is appended to `aud_audit_events` in the unified SQLite database and is queryable/exportable. See `docs/AUDIT.md` for the full event schema.
 
+Tools that take no connection (`list_connections`, the script tools except `execute_script`, the audit tools, `list_pending_executions` and `get_pending_execution`) skip the connection gate and are evaluated against a scope with no connection. On that scope every active trusted client holds `builtin/read-only` plus every role and policy it is assigned on any connection with MCP enabled. A client that may write on one connection can therefore create and update scripts, subject to the same Allow, Ask or Deny decisions; a client with no connection assignments keeps read-only access. The scope is computed when the MCP server starts, so restart the agent's MCP session after changing assignments.
+
 All six layers run inside the server process on every `tools/call` request. None can be bypassed from the client side.
 
 ## 4. Canonical Tool Surface (v1)
@@ -122,8 +124,8 @@ All six layers run inside the server process on every `tools/call` request. None
 | Scripts | `delete_script` | admin | Permanently remove a script |
 | Scripts | `execute_script` | computed | Execute a saved database-query script against a connection. Classification is derived from the script body. Lua, Python and Bash scripts are rejected (see below) |
 | Approval | `request_execution` | admin | Queue a call for approval by a person. Once approved, call the tool itself with the same arguments to run it once |
-| Approval | `list_pending_executions` | read | View all executions awaiting approval |
-| Approval | `get_pending_execution` | read | Retrieve details of a specific pending execution. A rejected one returns `status: "rejected"` and the reason the person gave |
+| Approval | `list_pending_executions` | read | View the calling client's executions awaiting approval; other clients' executions are never listed |
+| Approval | `get_pending_execution` | read | Retrieve details of one of the calling client's pending executions; another client's is reported as not found. A rejected one returns `status: "rejected"` and the reason the person gave |
 | Approval | `approve_execution` | — | Always denied over MCP. A person approves in DBFlux |
 | Approval | `reject_execution` | — | Always denied over MCP. A person rejects in DBFlux |
 | Audit | `query_audit_logs` | read | Search and filter the audit trail |

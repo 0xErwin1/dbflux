@@ -454,3 +454,47 @@ async fn agent_requests_approval_and_cannot_approve_it_itself() {
         .await;
     assert_eq!(counted["count"], json!(1));
 }
+
+#[tokio::test]
+async fn pending_executions_of_another_client_stay_hidden() {
+    let agent = start_agent(ADMIN_ROLE, None).await;
+
+    let other_pending_id = agent
+        .runtime
+        .write()
+        .await
+        .approval_service_mut()
+        .request_execution(&dbflux_approval::ExecutionPlan {
+            connection_id: "conn-of-another-client".to_string(),
+            actor_id: "another-client".to_string(),
+            tool_id: "delete_records".to_string(),
+            classification: dbflux_policy::ExecutionClassification::Destructive,
+            payload: json!({ "table": "secrets", "where": { "id": 1 } }),
+        })
+        .expect("queue another client's execution")
+        .id
+        .to_string();
+
+    let listed = agent.call_json("list_pending_executions", json!({})).await;
+    assert_eq!(listed["count"], json!(0), "{listed}");
+
+    let filtered = agent
+        .call_json(
+            "list_pending_executions",
+            json!({ "actor_id": "another-client" }),
+        )
+        .await;
+    assert_eq!(filtered["count"], json!(0), "{filtered}");
+
+    let error = agent
+        .try_call(
+            "get_pending_execution",
+            json!({ "pending_id": other_pending_id }),
+        )
+        .await
+        .expect_err("another client's execution must not be readable");
+    assert!(
+        error.to_string().contains("Pending execution not found"),
+        "{error}"
+    );
+}
