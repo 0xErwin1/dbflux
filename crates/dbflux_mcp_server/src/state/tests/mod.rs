@@ -967,3 +967,41 @@ fn turso_headless_config_uses_the_same_empty_url_default() {
         dbflux_core::DbConfig::Turso { ref url } if url.is_empty()
     ));
 }
+
+#[test]
+fn persisted_built_in_roles_keep_their_seeded_policies() {
+    use dbflux_core::{GovernanceSettings, PolicyRoleConfig};
+
+    let mut runtime = runtime_for_governance_tests("governance-persisted-builtin-role.sqlite");
+    for role in dbflux_mcp::builtin_roles() {
+        runtime.upsert_role_mut(role).expect("built-in role loads");
+    }
+
+    // The GUI persists every runtime role, built-ins included, and the repo keeps
+    // no policy ids for them.
+    let governance = GovernanceSettings {
+        mcp_enabled_by_default: false,
+        trusted_clients: vec![],
+        roles: vec![
+            PolicyRoleConfig {
+                id: "builtin/admin".to_string(),
+                policy_ids: vec![],
+            },
+            PolicyRoleConfig {
+                id: "custom/auditor".to_string(),
+                policy_ids: vec![],
+            },
+        ],
+        policies: vec![],
+    };
+
+    apply_governance_settings(&mut runtime, &governance).expect("governance applies");
+
+    let roles = runtime.roles_for_engine();
+    let admin = roles
+        .iter()
+        .find(|role| role.id == "builtin/admin")
+        .expect("builtin/admin stays registered");
+    assert_eq!(admin.policy_ids, vec!["builtin/admin".to_string()]);
+    assert!(roles.iter().any(|role| role.id == "custom/auditor"));
+}

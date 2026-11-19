@@ -473,7 +473,13 @@ fn apply_governance_settings(
             .map_err(|e| format!("failed to load trusted client: {e}"))?;
     }
 
-    for role in &governance.roles {
+    // The repo keeps no policy ids for roles, so a persisted built-in would replace
+    // the seeded definition with an empty one.
+    for role in governance
+        .roles
+        .iter()
+        .filter(|role| !dbflux_mcp::is_builtin(&role.id))
+    {
         runtime
             .upsert_role_mut(PolicyRoleDto {
                 id: role.id.clone(),
