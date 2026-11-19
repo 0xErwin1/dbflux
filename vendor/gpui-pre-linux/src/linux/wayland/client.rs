@@ -86,9 +86,10 @@ use super::{
 
 use crate::linux::{
     DOUBLE_CLICK_INTERVAL, LinuxCommon, LinuxKeyboardLayout, PIPE_READ_TIMEOUT, SCROLL_LINES,
-    capslock_from_xkb, cursor_style_to_icon_names, get_xkb_compose_state, is_within_click_distance,
-    keystroke_from_xkb, keystroke_underlying_dead_key, modifiers_from_xkb, new_xkb_context,
-    open_uri_internal, read_fd_with_timeout, reveal_path_internal,
+    capslock_from_xkb, cursor_style_to_icon_names, file_uri_list, get_xkb_compose_state,
+    is_within_click_distance, keystroke_from_xkb, keystroke_underlying_dead_key,
+    modifiers_from_xkb, new_xkb_context, open_uri_internal, read_fd_with_timeout,
+    reveal_path_internal,
     wayland::{
         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
         cursor::Cursor,
@@ -100,12 +101,11 @@ use crate::linux::{
 };
 use gpui::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, ExternalDragPayload,
-    FileDragPaths, FileDropEvent, ForegroundExecutor, GraphicalEnvironment, KeyDownEvent,
-    KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay,
-    PlatformFrameSignal, PlatformInput, PlatformKeyboardLayout, PlatformWindow, Point, ScrollDelta,
-    ScrollWheelEvent, SharedString, Size, TouchPhase, WindowButtonLayout, WindowKind, WindowParams,
-    point, px, size,
+    FileDropEvent, ForegroundExecutor, GraphicalEnvironment, KeyDownEvent, KeyUpEvent, Keystroke,
+    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
+    MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay, PlatformFrameSignal, PlatformInput,
+    PlatformKeyboardLayout, PlatformWindow, Point, ScrollDelta, ScrollWheelEvent, SharedString,
+    Size, TouchPhase, WindowButtonLayout, WindowKind, WindowParams, point, px, size,
 };
 use gpui_wgpu::{CompositorGpuHint, GpuContext};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
@@ -518,18 +518,6 @@ pub(crate) struct ExternalDrag {
     source: wl_data_source::WlDataSource,
     bytes: Vec<u8>,
     window: WaylandWindowStatePtr,
-}
-
-fn file_uri_list(paths: &FileDragPaths) -> String {
-    paths
-        .entries()
-        .iter()
-        .filter_map(|(path, _)| Url::from_file_path(path).ok())
-        .fold(String::new(), |mut list, url| {
-            list.push_str(url.as_str());
-            list.push_str("\r\n");
-            list
-        })
 }
 
 pub struct ClickState {
@@ -3435,37 +3423,6 @@ mod tests {
         fn commit_ime_state(&self) {
             self.commit_count.set(self.commit_count.get() + 1);
         }
-    }
-
-    #[test]
-    fn builds_terminated_uri_list_for_each_dragged_path() {
-        let paths = FileDragPaths::new([
-            (PathBuf::from("/tmp/first"), false),
-            (PathBuf::from("/tmp/nested directory"), true),
-        ]);
-
-        assert_eq!(
-            file_uri_list(&paths),
-            "file:///tmp/first\r\nfile:///tmp/nested%20directory\r\n"
-        );
-    }
-
-    #[test]
-    fn skips_paths_that_have_no_file_url() {
-        let paths = FileDragPaths::new([
-            (PathBuf::from("relative/path"), false),
-            (PathBuf::from("/tmp/absolute"), false),
-        ]);
-
-        assert_eq!(file_uri_list(&paths), "file:///tmp/absolute\r\n");
-    }
-
-    #[test]
-    fn builds_empty_uri_list_without_convertible_paths() {
-        assert!(file_uri_list(&FileDragPaths::default()).is_empty());
-        assert!(
-            file_uri_list(&FileDragPaths::new([(PathBuf::from("relative"), false)])).is_empty()
-        );
     }
 
     fn ime_cursor_bounds(x: f32) -> Bounds<Pixels> {

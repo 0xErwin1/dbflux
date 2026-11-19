@@ -1,7 +1,7 @@
 # Vendored `gpui-pre-linux`
 
 This directory is the complete published `gpui-pre-linux` 0.3.9 crate (Zed's `gpui_linux` at
-`zed@93d7456`) with two local patches to the Wayland client.
+`zed@93d7456`) with local patches to the Wayland and X11 clients, listed below.
 
 - Upstream: [`gpui-pre-linux` 0.3.9 on crates.io](https://crates.io/crates/gpui-pre-linux/0.3.9), from the crates.io registry archive `gpui-pre-linux-0.3.9.crate`.
 - License: Apache-2.0; see `LICENSE-APACHE` and the published `Cargo.toml`.
@@ -63,10 +63,28 @@ The first commit that added this directory carries the published source unchange
     so a callback that arrives first, or a late callback after a timer draw, adds no draw.
   Covered by `frame_loop_tests` (`cargo test -p gpui-pre-linux --lib`).
 
+- `src/linux/x11/xdnd_source.rs`, `src/linux/x11/xdnd_drag.rs`, `src/linux/x11/client.rs`,
+  `src/linux/x11/window.rs`, `src/linux/file_uri_list.rs`: an X11 window can drag files out to
+  other applications. Upstream implements only the XDND target side, so
+  `can_start_external_drag` stayed false and a drag past the window edge never left the
+  window. The window now owns `XdndSelection`, grabs the master pointer (and the keyboard, so
+  Escape cancels), follows the pointer down the window tree to the first window with
+  `XdndAware` (through `XdndProxy`, speaking the lower of its version and 5), and sends
+  `XdndEnter`/`XdndPosition`/`XdndLeave`/`XdndDrop`. It serves `text/uri-list` (and `TARGETS`)
+  for `XdndSelection`, encoded as on Wayland (`file_uri_list` moved to a module both
+  backends share). The protocol rules are `SourceSession`, a state machine that does no I/O:
+  one `XdndPosition` in flight until its `XdndStatus`, the status rectangle, a drop only when
+  the last status accepted (otherwise `XdndLeave`), `XdndFinished` or a 10 s timeout ending
+  the session, and exactly one `FileDropEvent::Ended` per session. Pointer and key events of
+  the dragging window are consumed while the session runs. Covered by `xdnd_source::tests`
+  and `file_uri_list::tests`, plus `xdnd_drag::tests`, which find targets on a real X server
+  named by `GPUI_X11_TEST_DISPLAY` (for example a scratch Xvfb) and skip without it.
+
 ## Refreshing
 
 Replace this directory with the new published crate, re-apply the patches above, and bump
 the `gpui-pre-platform` version in the root `Cargo.toml`. When a published `gpui-pre-linux`
 keeps the modifiers on a keymap change itself, drop that patch; when it keeps drawing while
-frame callbacks are withheld, drop that one. With neither left, delete this directory and its
+frame callbacks are withheld, drop that one; when it can start an X11 file drag, drop the XDND
+source. With neither left, delete this directory and its
 `[patch.crates-io]` entry.

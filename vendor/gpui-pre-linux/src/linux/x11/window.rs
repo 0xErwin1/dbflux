@@ -39,6 +39,8 @@ x11rb::atom_manager! {
     pub XcbAtoms: AtomsCookie {
         XA_ATOM,
         XdndAware,
+        XdndProxy,
+        TARGETS,
         XdndStatus,
         XdndEnter,
         XdndLeave,
@@ -1827,6 +1829,17 @@ impl PlatformWindow for X11Window {
             ),
         )
         .log_err();
+    }
+
+    fn can_start_external_drag(&self) -> bool {
+        true
+    }
+
+    fn start_external_drag(&self, payload: &gpui::ExternalDragPayload) -> bool {
+        let client = self.0.state.borrow().client.clone();
+        client
+            .get_client()
+            .is_some_and(|client| client.start_external_drag(self.0.x_window, payload))
     }
 
     fn start_window_move(&self) {
