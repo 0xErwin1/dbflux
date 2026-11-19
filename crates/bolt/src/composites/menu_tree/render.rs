@@ -119,8 +119,11 @@ pub fn render_menu_tree(
             })
             .collect::<Vec<AnyElement>>();
 
+        let level_selector = format!("{panel_id}-level-{level_index}");
+
         panels.push(
             menu_frame(cx)
+                .debug_selector(move || level_selector.clone())
                 .id(ElementId::Name(
                     format!("{panel_id}-level-{level_index}").into(),
                 ))

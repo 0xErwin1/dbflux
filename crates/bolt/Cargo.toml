@@ -56,6 +56,10 @@ tree-sitter-html = { workspace = true, optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+# The menu-tree example opens a real window: constructing a windowed GPUI
+# application is only possible through the platform crate, whose library is
+# `gpui_platform` (there is no `Application::new()` in this gpui revision).
+gpui-pre-platform.workspace = true
 # The syntax tests exercise every bundled grammar.
 bolt = { path = ".", features = [
     "syntax-json",
