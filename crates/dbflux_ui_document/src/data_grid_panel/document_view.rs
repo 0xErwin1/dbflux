@@ -119,28 +119,23 @@ impl DataGridPanel {
                     )]
                     let field_path: Vec<String> = node_id.path[1..].to_vec();
 
-                    this.context_menu = Some(TableContextMenu {
-                        row: *doc_index,
-                        col: 0,
-                        position: *position,
-                        sql_submenu_open: false,
-                        copy_query_submenu_open: false,
-                        filter_submenu_open: false,
-                        order_submenu_open: false,
-                        toolbar_submenu_open: false,
-                        set_value_submenu_open: false,
-                        selected_index: 0,
-                        submenu_selected_index: 0,
-                        is_document_view: true,
-                        is_column_header: false,
-                        doc_field_path: if field_path.is_empty() {
-                            None
-                        } else {
-                            Some(field_path)
+                    this.context_menu = Some(this.new_context_menu(
+                        ContextMenuTarget {
+                            row: *doc_index,
+                            col: 0,
+                            position: *position,
+                            is_document_view: true,
+                            is_column_header: false,
+                            doc_field_path: if field_path.is_empty() {
+                                None
+                            } else {
+                                Some(field_path)
+                            },
+                            doc_field_value: node_value.clone(),
+                            row_actions: Vec::new(),
                         },
-                        doc_field_value: node_value.clone(),
-                        row_actions: Vec::new(),
-                    });
+                        cx,
+                    ));
                     this.pending.context_menu_focus = true;
                     cx.emit(DataGridEvent::Focused);
                     cx.notify();

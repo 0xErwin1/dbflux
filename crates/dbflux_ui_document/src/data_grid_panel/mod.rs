@@ -47,6 +47,7 @@ use dbflux_components::components::data_table::{
 use dbflux_components::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState,
 };
+use dbflux_components::composites::{HoverIntent, MenuNav};
 use dbflux_components::controls::CompletionProvider;
 use dbflux_components::controls::{
     ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
@@ -448,22 +449,11 @@ struct TableContextMenu {
     col: usize,
     /// Screen position where the menu should appear.
     position: Point<Pixels>,
-    /// Whether the SQL generation submenu is open.
-    sql_submenu_open: bool,
-    /// Whether the "Copy as Query" submenu is open.
-    copy_query_submenu_open: bool,
-    /// Whether the "Filter" submenu is open.
-    filter_submenu_open: bool,
-    /// Whether the "Order" submenu is open.
-    order_submenu_open: bool,
-    /// Whether the "Toolbar" submenu (the results toolbar buttons) is open.
-    toolbar_submenu_open: bool,
-    /// Whether the "Set value" submenu is open.
-    set_value_submenu_open: bool,
-    /// Currently selected menu item index (for keyboard navigation).
-    selected_index: usize,
-    /// Selected index within the active submenu.
-    submenu_selected_index: usize,
+    /// The cascade's cursor: the highlighted row of every open level, whose
+    /// depth is how many levels the cascade draws.
+    nav: MenuNav,
+    /// The pointer's open-on-hover intent for the cascade.
+    hover: HoverIntent,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
     /// Whether this menu was opened by right-clicking a column header, which
@@ -477,25 +467,39 @@ struct TableContextMenu {
     row_actions: Vec<dbflux_core::InspectorRowAction>,
 }
 
-impl TableContextMenu {
-    fn any_submenu_open(&self) -> bool {
-        self.sql_submenu_open
-            || self.copy_query_submenu_open
-            || self.filter_submenu_open
-            || self.order_submenu_open
-            || self.toolbar_submenu_open
-            || self.set_value_submenu_open
-    }
+/// What a context menu was opened on: the cell (or the document field),
+/// where the menu appears, and the driver row actions it lists.
+struct ContextMenuTarget {
+    row: usize,
+    col: usize,
+    position: Point<Pixels>,
+    is_document_view: bool,
+    is_column_header: bool,
+    doc_field_path: Option<Vec<String>>,
+    doc_field_value: Option<dbflux_components::components::document_tree::NodeValue>,
+    row_actions: Vec<dbflux_core::InspectorRowAction>,
+}
 
-    /// Hovering a plain item closes whatever submenu was open, as native
-    /// menus do.
-    fn close_submenus(&mut self) {
-        self.sql_submenu_open = false;
-        self.copy_query_submenu_open = false;
-        self.filter_submenu_open = false;
-        self.order_submenu_open = false;
-        self.toolbar_submenu_open = false;
-        self.set_value_submenu_open = false;
+impl DataGridPanel {
+    /// A context menu opened on `target`, with its nav reset against the
+    /// freshly built tree, so the first frame draws the root panel: Bolt
+    /// draws nothing at cursor depth 0.
+    fn new_context_menu(&self, target: ContextMenuTarget, cx: &Context<Self>) -> TableContextMenu {
+        let mut menu = TableContextMenu {
+            row: target.row,
+            col: target.col,
+            position: target.position,
+            nav: MenuNav::new(),
+            hover: HoverIntent::new(),
+            is_document_view: target.is_document_view,
+            is_column_header: target.is_column_header,
+            doc_field_path: target.doc_field_path,
+            doc_field_value: target.doc_field_value,
+            row_actions: target.row_actions,
+        };
+        menu.nav
+            .reset(&context_menu::build_menu_tree(self, &menu, cx));
+        menu
     }
 }
 
