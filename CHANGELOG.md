@@ -26,6 +26,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **MCP script tools follow the client's connection roles** — Tools that take no connection, such as `create_script`, `update_script` and `delete_script`, were always evaluated as `builtin/read-only`, so an agent assigned Write or Admin on its connections got "tool denied by policy" when creating a script. The scope with no connection now grants each trusted client `builtin/read-only` plus every role and policy it holds on any MCP-enabled connection; a client without connection assignments stays read-only. `list_pending_executions` and `get_pending_execution` now return only the calling client's own executions, so one agent cannot read the arguments another agent queued. After governance was saved in Settings, the MCP server also loaded the built-in Read Only, Write and Admin roles without their policies, so they granted nothing; they now keep their built-in policies. See `docs/MCP_AI_INTEGRATION.md` § Governance Model.
+
 * MCP disconnect now responds when closing an open PostgreSQL or Redshift connection (#1366).
 
 * **The Linux file picker finds an installed XDG portal** — On a Linux desktop with `xdg-desktop-portal` installed but neither `zenity` nor `kdialog`, file pickers failed with "No file picker is available on this platform" and exports were written straight to the fallback exports folder, because the portal binary is usually outside `PATH` and its process name is cut short by the kernel. DBFlux now looks for the portal's D-Bus session service file instead, and counts the portal only when an installed backend implements FileChooser, so the picker opens through the portal on Arch, NixOS and similar setups (#1361).
