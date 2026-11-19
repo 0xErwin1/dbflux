@@ -3,7 +3,7 @@
 
 use dbflux_mcp::{McpRuntime, builtin_policies, builtin_roles};
 
-use super::create_global_assignments;
+use crate::state::create_global_assignments;
 
 fn runtime_with_clients(file_name: &str, client_ids: &[&str]) -> McpRuntime {
     let path = dbflux_audit::temp_sqlite_path(&format!(
