@@ -534,7 +534,7 @@ impl TelemetryState {
             install_id: Uuid::new_v4(),
             rotated_at: None,
             disclosure_dismissed: false,
-            level: Level::Minimal,
+            level: Level::Basic,
             last_basic_success: None,
             last_active_success: None,
             sent_builds: Vec::new(),
@@ -678,8 +678,15 @@ impl TelemetryState {
         }
     }
     /// Fixed-size foreground batch; callers persist the resulting state atomically.
+    /// Usage is counted only once the user has seen the disclosure and kept
+    /// Basic: Basic is preselected, so counting earlier would report activity
+    /// from before the user agreed to it.
+    fn counts_usage(&self) -> bool {
+        self.disclosure_dismissed && self.level == Level::Basic
+    }
+
     pub fn increment_batch(&mut self, counts: [(Feature, u16); 6]) {
-        if self.level != Level::Basic {
+        if !self.counts_usage() {
             return;
         }
         for (feature, amount) in counts {
@@ -691,7 +698,7 @@ impl TelemetryState {
     }
 
     pub fn increment(&mut self, feature: Feature) {
-        if self.level == Level::Basic {
+        if self.counts_usage() {
             let count = self.counters.entry(feature).or_default();
             *count = count.saturating_add(1).min(10_000);
         }
@@ -886,6 +893,7 @@ mod tests {
             channel: Channel::Stable,
         };
         let mut state = TelemetryState::new(now);
+        state.set_level(Level::Minimal);
         state.dismiss_disclosure();
         state
             .schedule(now, &build, Platform::Linux, Architecture::Amd64, "en", None)
@@ -959,6 +967,7 @@ mod tests {
     fn telemetry_minimal_ping_wire_and_rotation() {
         let now = clock();
         let mut state = TelemetryState::new(now);
+        state.set_level(Level::Minimal);
         let build = Build {
             version: "1.2.3-rc.1+metadata".into(),
             channel: Channel::Rc,
@@ -1100,10 +1109,47 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_new_state_defaults_to_minimal() {
-        let state = TelemetryState::new(clock());
+    fn telemetry_counts_nothing_before_the_disclosure_is_accepted() {
+        let mut state = TelemetryState::new(clock());
+        assert_eq!(state.level(), Level::Basic);
 
-        assert_eq!(state.level(), Level::Minimal);
+        state.increment(Feature::QueryRun);
+        state.increment_batch([
+            (Feature::QueryRun, 2),
+            (Feature::VisualQueryBuilder, 2),
+            (Feature::DashboardOpen, 2),
+            (Feature::ScriptRun, 2),
+            (Feature::McpTool, 2),
+            (Feature::SchemaInspect, 2),
+        ]);
+        assert!(state.counters.is_empty());
+
+        state.dismiss_disclosure();
+        state.increment(Feature::QueryRun);
+        assert_eq!(state.counters.get(&Feature::QueryRun), Some(&1));
+    }
+
+    #[test]
+    fn telemetry_new_state_preselects_basic_without_sending() {
+        let mut state = TelemetryState::new(clock());
+
+        assert_eq!(state.level(), Level::Basic);
+        assert!(!state.disclosure_dismissed());
+        state.increment(Feature::McpTool);
+        state
+            .schedule(
+                clock(),
+                &Build {
+                    version: "1.2.3".into(),
+                    channel: Channel::Stable,
+                },
+                Platform::Linux,
+                Architecture::Amd64,
+                "en",
+                None,
+            )
+            .expect("schedule before the disclosure");
+        assert!(state.pending().is_empty());
         assert!(!state.disclosure_dismissed());
     }
 
@@ -1179,6 +1225,7 @@ mod tests {
     fn telemetry_stored_off_row_with_a_queued_ping_loads_and_sends_nothing() {
         let now = clock();
         let mut state = TelemetryState::new(now);
+        state.set_level(Level::Minimal);
         state.dismiss_disclosure();
         schedule_fixture(&mut state, now);
         assert_eq!(pending_pings(&state), 1);
@@ -1346,6 +1393,8 @@ mod tests {
         ];
         let batch = features.map(|feature| (feature, u16::MAX));
         let mut state = TelemetryState::new(clock());
+        state.dismiss_disclosure();
+        state.set_level(Level::Minimal);
         state.increment_batch(batch);
         assert!(state.counters.is_empty());
         state.set_level(Level::Basic);
