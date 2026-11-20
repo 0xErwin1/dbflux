@@ -1,10 +1,12 @@
 # Política de privacidad
 
 DBFlux es una aplicación de escritorio local-first. La telemetría opcional tiene
-tres niveles: Apagado no envía nada, Mínimo (el valor por defecto) puede enviar
-un aviso seudónimo de instalación y compilación, y Básico, una activación
-separada, suma recuentos agregados de uso. Nunca envía identificadores de
-personas, consultas, resultados ni metadatos de conexión. El sitio web del proyecto no usa
+tres niveles: Apagado no envía nada, Mínimo envía un aviso de compilación y un
+evento de actividad semanal, y Básico (preseleccionado en el diálogo de
+bienvenida) envía un informe semanal con recuentos agregados de uso en lugar del
+evento de actividad. No se envía nada hasta que confirmas el aviso de
+bienvenida. Nunca envía identificadores de personas, consultas, resultados ni
+metadatos de conexión. El sitio web del proyecto no usa
 cookies ni carga scripts de terceros. Este documento describe esos límites y
 los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
 
@@ -13,10 +15,9 @@ los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
 1. El tráfico de base de datos va directamente a los servidores que configuras,
    con lo necesario para ejecutar las consultas que pides; la telemetría opcional
    es independiente.
-2. La telemetría tiene tres niveles: Apagado, Mínimo y Básico. Mínimo es el
-   valor por defecto y Apagado no envía nada. El envío necesita un destino
-   configurado explícitamente, que ninguna compilación publicada tiene, así que
-   por defecto no se envía nada en ningún nivel. Nunca envía
+2. La telemetría tiene tres niveles: Apagado, Mínimo y Básico. Básico viene
+   preseleccionado en el diálogo de bienvenida, pero no se envía nada hasta que
+   confirmas el aviso, y Apagado no envía nada. Nunca envía
    consultas, resultados, credenciales, rutas de archivos ni metadatos de
    conexión. Los detalles están en [Telemetría](#telemetría-opcional).
 3. No hay informes de fallos, analítica de uso más allá de la telemetría descrita
@@ -32,12 +33,12 @@ los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
 
 | Pregunta | Respuesta |
 |----------|-----------|
-| ¿DBFlux envía datos de uso a algún sitio? | Solo después de cerrar el aviso de bienvenida y con un destino configurado, que ninguna compilación publicada tiene. El nivel por defecto, Mínimo, envía un aviso de compilación y ningún dato de uso; las estadísticas de uso (Básico) son una activación separada y Apagado no envía nada. Ver [Telemetría](#telemetría-opcional). |
-| ¿Comprueba si hay actualizaciones? | No. Las actualizaciones se encuentran en la página de releases de GitHub. |
-| ¿Qué conexiones de red abre? | Las que configuras: servidores de base de datos, túneles SSH, proxies, APIs cloud y un destino de telemetría opcional bajo las condiciones siguientes. |
+| ¿DBFlux envía datos de uso a algún sitio? | Solo después de confirmar el aviso de bienvenida. Mínimo envía un aviso de compilación y un evento de actividad semanal, sin datos de uso. Básico, preseleccionado en el diálogo de bienvenida, sustituye el evento de actividad por un informe semanal que incluye recuentos de uso. Apagado no envía nada. Ver [Telemetría](#telemetría-opcional). |
+| ¿Comprueba si hay actualizaciones? | Sí, salvo que lo desactives. Al iniciar consulta la API de GitHub (`api.github.com`) por las últimas releases; no envía ningún identificador. Se desactiva con «Buscar una nueva versión en GitHub al iniciar» en Ajustes › Actualizaciones y privacidad. |
+| ¿Qué conexiones de red abre? | Las que configuras: servidores de base de datos, túneles SSH, proxies, APIs cloud y el destino de telemetría bajo las condiciones siguientes. |
 | ¿Dónde viven mis datos? | En tu máquina, en un único archivo SQLite más el llavero del sistema operativo para los secretos. |
 | ¿Guarda un registro de lo que hago? | El historial y el log de auditoría registran el trabajo localmente. Básico también conserva contadores agregados acotados; solo los informes de telemetría pueden enviarse automáticamente bajo las condiciones siguientes. |
-| ¿Se comparte algo con el proyecto? | Los informes de telemetría opcionales pueden llegar a un colector privado configurado. Los reportes de error y los logs llegan al proyecto solo cuando tú los adjuntas a un issue. |
+| ¿Se comparte algo con el proyecto? | Los eventos de telemetría llegan al colector del proyecto en `https://telemetry.dbflux.dev` una vez confirmado el aviso de bienvenida, salvo que el nivel sea Apagado. Los reportes de error y los logs llegan al proyecto solo cuando tú los adjuntas a un issue. |
 
 Las conexiones a una base de datos, un host SSH, un proxy o un proveedor cloud
 van directamente desde tu máquina al servidor que indicaste. El proyecto no
@@ -51,20 +52,30 @@ hacer copia de seguridad o reiniciar la aplicación por completo.
 
 DBFlux incluye un módulo de telemetría opcional. Es una funcionalidad
 compilada que puede excluirse por completo con `--no-default-features`, como
-las demás funcionalidades por defecto. No se envía nada salvo que se cumplan
-dos condiciones: hay un destino configurado (ninguna compilación publicada lo
-tiene, así que el envío no está disponible por defecto) y cerraste realmente el
-aviso de bienvenida mostrado de forma visible. Ocultarlo mediante código no
-confirma el aviso. Cerrar el aviso no es una activación de Básico: el nivel de
-estadísticas de uso es una elección separada, y sin destino configurado no se
-envía nada de ninguna manera. Cerrar el diálogo de bienvenida sin cambiar la
-selección mantiene Mínimo.
+las demás funcionalidades por defecto. Los eventos van a
+`https://telemetry.dbflux.dev`. No se envía nada y no se cuenta ningún uso hasta
+que confirmas el aviso de bienvenida mostrado de forma visible. Ocultarlo
+mediante código no es una confirmación.
+
+Básico viene preseleccionado en el diálogo de bienvenida, así que confirmar sin
+cambiar la selección aplica Básico; elige Mínimo o Apagado ahí para enviar
+menos. Si habías desactivado el diálogo de bienvenida, se abre una vez tras
+actualizar para que puedas elegir, y no vuelve a abrirse por este motivo.
 
 | Nivel | Qué envía |
 |-------|-----------|
-| Apagado | Nada: ni aviso ni informe de uso. No se pone nada en cola, y elegir Apagado borra todos los envíos pendientes y los contadores de uso. |
-| Mínimo (por defecto) | A lo sumo un aviso de versión por instalación y compilación: sistema operativo, arquitectura, versión y canal de la app, y un identificador aleatorio. Sin idioma del sistema, país ni recuentos de uso. |
-| Básico (activación) | Mínimo más un informe semanal: sistema operativo, idioma del sistema (no el de la interfaz), país (`ZZ` si se desconoce) y recuentos acotados de operaciones compatibles exitosas en las seis categorías siguientes. |
+| Apagado | Nada: ni aviso, ni evento de actividad, ni informe de uso. No se pone nada en cola, y elegir Apagado borra todos los envíos pendientes y los contadores de uso. |
+| Mínimo | Un aviso por cada compilación publicada, más un evento de actividad por semana: identificador aleatorio de instalación, versión de la app, canal, sistema operativo y arquitectura. Sin idioma del sistema, país ni recuentos de uso. |
+| Básico (preseleccionado) | El aviso de Mínimo, más un informe semanal en lugar del evento de actividad. El informe añade idioma del sistema (no el de la interfaz), país (ver abajo) y recuentos acotados de operaciones compatibles exitosas en las seis categorías siguientes. |
+
+**País.** La app no envía país; envía el valor de relleno `ZZ`. Solo en los
+informes de Básico, el colector guarda el país aproximado que Cloudflare resuelve
+en su borde. El colector nunca guarda la dirección IP. Cloudflare y Fly.io, que
+transportan la petición, conservan sus propios registros de peticiones.
+
+**Retención.** El colector conserva los eventos en bruto, incluido el
+identificador de instalación, durante 90 días desde su recepción. Después solo
+quedan recuentos sin identificadores.
 
 #### Qué operaciones cuentan
 
@@ -120,15 +131,15 @@ Datos que no cambian según el nivel:
 - Cada intento de entrega registra el contenido completo correlacionado, el nivel
   y el resultado en el [log de auditoría](#auditoría-y-privacidad) local. Las
   etiquetas legibles no cambian el almacenamiento, la copia, la exportación ni
-  el contenido enviado sin procesar. Los informes solo van al colector privado
-  configurado para ayudar a orientar el desarrollo.
+  el contenido enviado sin procesar. Los eventos solo van al colector del
+  proyecto en `https://telemetry.dbflux.dev` para ayudar a orientar el desarrollo.
 - Reiniciar el id de instalación en Configuración › Actualizaciones y
   privacidad reemplaza el identificador de inmediato y cancela los envíos
   pendientes; las compilaciones ya confirmadas siguen confirmadas.
 
 El nivel y los informes están en Configuración › Actualizaciones y
 privacidad. El nivel se aplica al guardar; reiniciar a los valores por
-defecto deja Mínimo sin tocar el id de instalación. Elegir Básico o guardar no
+defecto deja Básico sin tocar el id de instalación. Elegir Básico o guardar no
 promete un informe de red inmediato. Salir de Básico borra el informe Básico
 pendiente y los contadores, y Apagado también borra un aviso pendiente; un
 envío ya entregado a la red aún puede completarse. Confirmar una instantánea

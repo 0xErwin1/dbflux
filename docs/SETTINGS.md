@@ -221,16 +221,26 @@ stages the defaults without saving.
 
 DBFlux has an optional telemetry module with three levels:
 
-- **Off** — nothing is sent: no ping and no usage report. Nothing is queued.
-- **Minimal** (default) — at most one version ping per installation and build
-  after you dismiss the welcome disclosure: OS, architecture, version, channel
-  and a random rotating identifier. No system language, country or usage
-  counts.
-- **Basic** (separate opt-in) — Minimal plus a weekly report with OS, system language
-  (not the UI language), country (`ZZ` when unknown), and bounded counts of
+- **Off** — nothing is sent: no ping, no activity event and no usage report.
+  Nothing is queued.
+- **Minimal** — a ping once per published build, plus one activity event per
+  week: random installation identifier, version, channel, OS and architecture.
+  No system language, country or usage counts.
+- **Basic** (preselected in the Welcome dialog) — Minimal's ping, plus a weekly
+  report instead of the activity event. The report adds system language (not
+  the UI language), country, and bounded counts of
   supported successful query runs, visual builder runs, dashboard opens,
   script runs, MCP operations and schema inspections. These are whole-operation
   counts, including successful zero-row results, not row counts or timings.
+
+Nothing is sent and no usage is counted until you confirm the Welcome
+disclosure. If you had disabled the Welcome dialog, it opens once after
+updating so you can choose, and it does not open again for this reason.
+
+The app sends no country; it sends the placeholder `ZZ`. For Basic reports
+only, the collector stores the coarse country that Cloudflare resolves at its
+edge. The collector never stores the IP address; Cloudflare and Fly.io keep
+their own request logs.
 
 Background refreshes, partial failures, errors and cancellations do not count.
 Builder approvals without actual execution do not count; implicit dashboard
@@ -249,25 +259,24 @@ controls and pending approvals do not count. Permission is acquired after Allow
 and before work; credit follows completed primary work and successful execution
 Audit. See the privacy policy below for the complete coverage limits.
 
-Delivery needs a configured endpoint; no shipped build has one, so delivery is
-unavailable by default. Never sent: queries, results, credentials, file paths
+Events go to `https://telemetry.dbflux.dev`. Never sent: queries, results, credentials, file paths
 or connection metadata. See [Data & Privacy](../PRIVACY.md#telemetry-optional)
 for the full list of what a report contains and the operation coverage limits.
-Basic must be active and the visible welcome disclosure actually dismissed
+Basic must be active and the visible Welcome disclosure confirmed
 before work starts; unavailable sources or disabled/degraded Audit prevent
 credit. Saving Basic does not guarantee an immediate send. Leaving Basic clears
 the pending Basic report and the counters, and Off also clears a pending ping;
 a delivery already handed to the network may still complete. Delivery
 acknowledgement preserves newer increments. Installation and delivery UUIDs are pseudonymous; operation, query,
 client and person identifiers, tool names and per-engine statistics are not sent.
-ID rotation (about every 90 days or on reset) preserves acknowledged-build
-history and sends no old/new ID link or retirement notice. Readable report
+The installation id never rotates on a schedule; a reset preserves
+acknowledged-build history and sends no old/new ID link or retirement notice. Readable report
 labels do not alter raw payload storage, copy, export or transmission.
 
 | Control | Effect |
 |---------|--------|
 | Level (Off / Minimal / Basic) | The staged level; Left and Right or a click change it, Save applies it. |
-| Install id | A masked display of the pseudonymous identifier. **Reset id** rotates it at once, cancels pending sends, and keeps acknowledged builds. |
+| Install id | A masked display of the pseudonymous identifier. **Reset id** replaces it at once, cancels pending sends, and keeps acknowledged builds. |
 | Reports | The last confirmed report, read from the durable audit log. **View last report** opens a read-only viewer over the stored payload; **Open in Audit** opens the audit viewer at the report's correlation id. |
 
 ---

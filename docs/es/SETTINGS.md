@@ -234,18 +234,28 @@ en stages sin guardar.
 
 DBFlux tiene un módulo de telemetría opcional con tres niveles:
 
-- **Apagado** — no se envía nada: ni aviso ni informe de uso. No se pone nada
-  en cola.
-- **Mínimo** (por defecto) — a lo sumo un aviso de versión por instalación y
-  compilación después de cerrar el aviso de bienvenida: sistema operativo,
-  arquitectura, versión, canal y un identificador aleatorio que rota. Sin
-  idioma del sistema, país ni recuentos de uso.
-- **Básico** (activación separada) — Mínimo más un informe semanal con sistema
-  operativo, idioma del sistema (no el de la interfaz), país (`ZZ` si se
-  desconoce) y recuentos acotados de ejecuciones exitosas compatibles de
+- **Apagado** — no se envía nada: ni aviso, ni evento de actividad, ni informe
+  de uso. No se pone nada en cola.
+- **Mínimo** — un aviso por cada compilación publicada, más un evento de
+  actividad por semana: identificador aleatorio de instalación, versión, canal,
+  sistema operativo y arquitectura. Sin idioma del sistema, país ni recuentos
+  de uso.
+- **Básico** (preseleccionado en el diálogo de bienvenida) — el aviso de Mínimo,
+  más un informe semanal en lugar del evento de actividad. El informe añade
+  idioma del sistema (no el de la interfaz), país y recuentos acotados de
+  ejecuciones exitosas compatibles de
   consultas, visual builder, aperturas de dashboards, scripts, operaciones MCP
   e inspecciones de schema. Son recuentos de operaciones completas, incluidos
   resultados exitosos con cero filas, no de filas ni de tiempos.
+
+No se envía nada y no se cuenta ningún uso hasta que confirmas el aviso de
+bienvenida. Si habías desactivado el diálogo de bienvenida, se abre una vez tras
+actualizar para que puedas elegir, y no vuelve a abrirse por este motivo.
+
+La app no envía país; envía el valor de relleno `ZZ`. Solo en los informes de
+Básico, el colector guarda el país aproximado que Cloudflare resuelve en su
+borde. El colector nunca guarda la dirección IP; Cloudflare y Fly.io conservan
+sus propios registros de peticiones.
 
 Las actualizaciones en segundo plano, fallos parciales, errores y cancelaciones
 no cuentan. Las aprobaciones del builder sin ejecución no cuentan, ni la
@@ -267,20 +277,19 @@ antes del trabajo; el recuento llega tras completar el trabajo principal y
 registrar con éxito Audit de ejecución. Ver los límites completos en la política
 siguiente.
 
-El envío necesita un destino configurado; ninguna compilación publicada lo
-tiene, así que el envío no está disponible por defecto. Nunca se envían
+Los eventos van a `https://telemetry.dbflux.dev`. Nunca se envían
 consultas, resultados, credenciales, rutas de archivos ni metadatos de
 conexión. Ver [Datos y privacidad](PRIVACY.md#telemetría-opcional) para la
 lista completa de lo que contiene un informe y los límites de cobertura.
-Básico debe estar activo y el aviso visible de bienvenida debe haberse cerrado
-realmente antes de comenzar; fuentes no disponibles o Audit desactivado o
+Básico debe estar activo y el aviso visible de bienvenida debe haberse confirmado
+antes de comenzar; fuentes no disponibles o Audit desactivado o
 degradado impiden contabilizar. Guardar Básico no garantiza un envío inmediato.
 Salir de Básico borra el informe Básico pendiente y los contadores, y Apagado
 también borra un aviso pendiente; un envío ya entregado a la red aún puede
 completarse. Confirmar la entrega conserva incrementos posteriores. Los UUID de instalación y entrega son
 seudónimos; no se envían identificadores de operaciones, consultas, clientes o
-personas, nombres de herramientas ni estadísticas por motor. La rotación del ID
-(cada 90 días aproximadamente o al reiniciar) conserva las compilaciones
+personas, nombres de herramientas ni estadísticas por motor. El ID de instalación
+nunca rota por calendario; un reinicio conserva las compilaciones
 confirmadas y no envía vínculos entre IDs viejos y nuevos ni avisos de retirada.
 Las etiquetas legibles no alteran el almacenamiento, la copia, la exportación
 ni el envío del contenido sin procesar.
@@ -288,7 +297,7 @@ ni el envío del contenido sin procesar.
 | Control | Efecto |
 |---------|--------|
 | Nivel (Apagado / Mínimo / Básico) | El nivel en stages; Left y Right o un clic lo cambian, Save lo aplica. |
-| Id de instalación | Vista enmascarada del identificador seudónimo. **Reiniciar id** lo rota de inmediato, cancela los envíos pendientes y conserva las compilaciones confirmadas. |
+| Id de instalación | Vista enmascarada del identificador seudónimo. **Reiniciar id** lo reemplaza de inmediato, cancela los envíos pendientes y conserva las compilaciones confirmadas. |
 | Informes | El último informe confirmado, leído del audit log duradero. **Ver el último informe** abre un visor de solo lectura sobre el contenido almacenado; **Abrir en auditoría** abre el visor de auditoría con la correlación del informe. |
 
 ---

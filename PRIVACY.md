@@ -1,10 +1,11 @@
 # Privacy Policy
 
 DBFlux is a local-first desktop application. Optional telemetry has three
-levels: Off sends nothing, Minimal (the default) can send a pseudonymous
-installation/build ping, and Basic, a separate opt-in, adds aggregate usage
-counts. It never sends person identifiers, queries, results or
-connection metadata. The project website sets no cookies and loads no third-party
+levels: Off sends nothing, Minimal sends a build ping and one weekly activity
+event, and Basic (preselected in the Welcome dialog) sends a weekly report with
+aggregate usage counts instead of the activity event. Nothing is sent until you
+confirm the Welcome disclosure. It never sends person identifiers, queries,
+results or connection metadata. The project website sets no cookies and loads no third-party
 scripts. This document describes those boundaries and the infrastructure
 providers that see traffic on the way to you.
 
@@ -12,11 +13,10 @@ providers that see traffic on the way to you.
 
 1. Database traffic goes directly to the servers you configure, with only what
    is needed to run the queries you ask for; optional telemetry is separate.
-2. Telemetry has three levels: Off, Minimal and Basic. Minimal is the default
-   and Off sends nothing. Delivery needs an explicitly configured endpoint,
-   which no shipped build has, so nothing is sent by default at any level. It
-   sends no queries, results, credentials, file paths, or
-   connection metadata — ever. Details are in [Telemetry](#telemetry-optional).
+2. Telemetry has three levels: Off, Minimal and Basic. Basic is preselected in
+   the Welcome dialog, but nothing is sent until you confirm the disclosure,
+   and Off sends nothing. It sends no queries, results, credentials, file
+   paths, or connection metadata — ever. Details are in [Telemetry](#telemetry-optional).
 3. There is no crash reporting, no usage analytics beyond the telemetry above,
    and no account.
 4. The website and documentation are static pages. They set no cookies, load
@@ -29,12 +29,12 @@ providers that see traffic on the way to you.
 
 | Question | Answer |
 |----------|--------|
-| Does DBFlux send usage data anywhere? | Only after you have dismissed the welcome disclosure and an endpoint is configured, which no shipped build has. The default level, Minimal, sends a build ping and no usage data; usage statistics (Basic) are a separate opt-in, and Off sends nothing. See [Telemetry](#telemetry-optional). |
-| Does it check for updates? | No. Updates are found on the GitHub releases page. |
-| What network connections does it open? | The ones you configure: database servers, SSH tunnels, proxies, cloud APIs, and an optional telemetry endpoint under the conditions below. |
+| Does DBFlux send usage data anywhere? | Only after you have confirmed the Welcome disclosure. Minimal sends a build ping and a weekly activity event, with no usage data. Basic, preselected in the Welcome dialog, replaces the activity event with a weekly report that includes usage counts. Off sends nothing. See [Telemetry](#telemetry-optional). |
+| Does it check for updates? | Yes, unless you turn it off. At startup it asks the GitHub API (`api.github.com`) for the latest releases; no identifier is sent. Disable it with "Check GitHub for a new release at startup" in Settings › Updates & privacy. |
+| What network connections does it open? | The ones you configure: database servers, SSH tunnels, proxies, cloud APIs, and the telemetry endpoint under the conditions below. |
 | Where does my data live? | On your machine, in one SQLite file plus the operating system keyring for secrets. |
 | Does it keep a record of what I do? | Local history and the audit log record work on your machine. Basic also keeps bounded aggregate counters; only telemetry reports can be delivered automatically under the conditions below. |
-| Is anything shared with the project? | Optional telemetry reports can reach a configured private collector. Bug reports and logs reach the project only when you attach them to an issue yourself. |
+| Is anything shared with the project? | Telemetry events reach the project's collector at `https://telemetry.dbflux.dev` once you have confirmed the Welcome disclosure and unless the level is Off. Bug reports and logs reach the project only when you attach them to an issue yourself. |
 
 Connections to a database, an SSH host, a proxy, or a cloud provider go
 directly from your machine to the server you named. The project operates none
@@ -48,25 +48,35 @@ back up or fully reset the application.
 
 DBFlux ships with an optional telemetry module. It is a compiled-in feature
 that can be excluded entirely with `--no-default-features`, like the other
-default features. Nothing is sent unless two conditions hold: an endpoint is
-configured (no shipped build has one, so delivery is unavailable by default)
-and you have actually dismissed the visibly presented welcome disclosure.
-Hiding it programmatically is not acknowledgement. Dismissing the disclosure is
-not a Basic opt-in: the usage-statistics level is a separate choice, and with
-no endpoint configured nothing is delivered either way. Closing the welcome
-dialog without changing the selection keeps Minimal.
+default features. Events go to `https://telemetry.dbflux.dev`. Nothing is sent
+and no usage is counted until you confirm the visibly presented Welcome
+disclosure. Hiding it programmatically is not confirmation.
+
+Basic is preselected in the Welcome dialog, so confirming without changing the
+selection applies Basic; choose Minimal or Off there to send less. If you had
+disabled the Welcome dialog, it opens once after updating so you can choose,
+and it does not open again for this reason.
 
 | Level | What it sends |
 |-------|---------------|
-| Off | Nothing: no ping and no usage report. Nothing is queued, and choosing Off clears every pending delivery and the usage counters. |
-| Minimal (default) | At most one version ping per installation and build: OS, architecture, app version and channel, and a random identifier. No system language, country or usage counts. |
-| Basic (opt-in) | Minimal plus a weekly report: OS, system language (not the UI language), country (`ZZ` when unknown), and bounded counts of supported successful operations in the six categories below. |
+| Off | Nothing: no ping, no activity event and no usage report. Nothing is queued, and choosing Off clears every pending delivery and the usage counters. |
+| Minimal | A ping once per published build, plus one activity event per week: random installation identifier, app version, channel, OS and architecture. No system language, country or usage counts. |
+| Basic (preselected) | Minimal's ping, plus a weekly report instead of the activity event. The report adds system language (not the UI language), country (see below) and bounded counts of supported successful operations in the six categories below. |
+
+**Country.** The app sends no country; it sends the placeholder `ZZ`. For Basic
+reports only, the collector stores the coarse country that Cloudflare resolves
+at its edge. The collector never stores the IP address. Cloudflare and Fly.io,
+which carry the request, keep their own request logs.
+
+**Retention.** The collector keeps raw events, including the installation
+identifier, for 90 days after receipt. After that only identifier-free counts
+remain.
 
 #### Which operations count
 
 Counts measure whole operations, not rows or performance. A successful operation
 with zero rows can count. Background refreshes, partial failures, errors and
-cancellations do not count. Basic and the disclosure acknowledgement must already
+cancellations do not count. Basic and the disclosure confirmation must already
 be active when work starts; an unavailable source or disabled/degraded Audit
 prevents credit.
 
@@ -112,14 +122,14 @@ Facts that do not change with the level:
   statistics, per-engine counts, error reports or performance timings.
 - Every delivery attempt records the full correlated payload, level and outcome
   in the local [audit log](#audit-and-privacy). Readable display labels do not
-  change raw storage, copy, export or wire contents. Reports go only to the
-  configured private collector to help guide development.
+  change raw storage, copy, export or wire contents. Events go only to the
+  project's collector at `https://telemetry.dbflux.dev` to help guide development.
 - Resetting the installation id in Settings › Updates & privacy replaces the
   identifier at once and cancels pending sends; already-acknowledged builds
   stay acknowledged.
 
 The level and the reports live in Settings › Updates & privacy. The staged
-level applies when you save; resetting to defaults stages Minimal without
+level applies when you save; resetting to defaults stages Basic without
 touching the installation id. Choosing Basic or saving does not promise an
 immediate network report. Leaving Basic clears the pending Basic report and
 the counters, and Off also clears a pending ping; a delivery already handed to
