@@ -126,7 +126,6 @@ jobs:
             echo "::error::Expected exactly 1 workspace version line in Cargo.toml, found $MATCHES."
             exit 1
           fi
-          OLD_VERSION=$(grep '^version = "' Cargo.toml | sed 's/.*= *"\(.*\)"/\1/')
           sed -i "s|^version = \".*\"|version = \"${VERSION}\"|" Cargo.toml
           grep -qF "version = \"${VERSION}\"" Cargo.toml \
             || { echo "::error::Version stamp did not apply."; exit 1; }
@@ -135,20 +134,31 @@ jobs:
           # are the path packages (no `source` line) that carry the workspace
           # version; the vendored gpui crates and the gpui-mcp crates keep their
           # own versions and are left alone.
-          if [ "$OLD_VERSION" = "$VERSION" ]; then
-            # The release commit already carries this version (the release
-            # procedure bumps it before tagging): there is nothing to stamp, and
-            # neither file may differ from the commit.
-            if ! git diff --quiet -- Cargo.toml Cargo.lock; then
-              echo "::error::Cargo.toml already carries ${VERSION}, but Cargo.toml or Cargo.lock differ from the commit."
+          # Read the version the lockfile's workspace members carry from the
+          # dbflux package itself: a release commit that bumped only Cargo.toml
+          # leaves them on the previous version, and they still need stamping.
+          LOCK_OLD=$(awk '
+            /^\[\[package\]\]$/ { name = "" }
+            /^name = / { name = $3 }
+            name == "\"dbflux\"" && /^version = / { gsub(/"/, "", $3); print $3; exit }
+          ' Cargo.lock)
+          if [ -z "$LOCK_OLD" ]; then
+            echo "::error::Cargo.lock has no dbflux package version."
+            exit 1
+          fi
+          if [ "$LOCK_OLD" = "$VERSION" ]; then
+            # The release commit already carries this version in the lockfile:
+            # there is nothing to stamp, and it may not differ from the commit.
+            if ! git diff --quiet -- Cargo.lock; then
+              echo "::error::Cargo.lock already carries ${VERSION} but differs from the commit."
               exit 1
             fi
-            echo "Cargo.toml and Cargo.lock already carry ${VERSION}: nothing to stamp."
+            echo "Cargo.lock already carries ${VERSION}: nothing to stamp."
           else
             # The awk program counts its own replacements: counting lines that
             # carry the new version afterwards would also count registry
             # dependencies that happen to share it.
-            awk -v old="$OLD_VERSION" -v new="$VERSION" -v countfile="$RUNNER_TEMP/lock-stamp-count" '
+            awk -v old="$LOCK_OLD" -v new="$VERSION" -v countfile="$RUNNER_TEMP/lock-stamp-count" '
               function flush(   i, is_path) {
                 is_path = 1
                 for (i = 1; i <= n; i++) if (buf[i] ~ /^source = /) is_path = 0
@@ -633,7 +643,6 @@ jobs:
             echo "::error::Expected exactly 1 workspace version line in Cargo.toml, found $MATCHES."
             exit 1
           fi
-          OLD_VERSION=$(grep '^version = "' Cargo.toml | sed 's/.*= *"\(.*\)"/\1/')
           sed -i.bak "s|^version = \".*\"|version = \"${VERSION}\"|" Cargo.toml
           grep -qF "version = \"${VERSION}\"" Cargo.toml \
             || { echo "::error::Version stamp did not apply."; exit 1; }
@@ -642,20 +651,31 @@ jobs:
           # are the path packages (no `source` line) that carry the workspace
           # version; the vendored gpui crates and the gpui-mcp crates keep their
           # own versions and are left alone.
-          if [ "$OLD_VERSION" = "$VERSION" ]; then
-            # The release commit already carries this version (the release
-            # procedure bumps it before tagging): there is nothing to stamp, and
-            # neither file may differ from the commit.
-            if ! git diff --quiet -- Cargo.toml Cargo.lock; then
-              echo "::error::Cargo.toml already carries ${VERSION}, but Cargo.toml or Cargo.lock differ from the commit."
+          # Read the version the lockfile's workspace members carry from the
+          # dbflux package itself: a release commit that bumped only Cargo.toml
+          # leaves them on the previous version, and they still need stamping.
+          LOCK_OLD=$(awk '
+            /^\[\[package\]\]$/ { name = "" }
+            /^name = / { name = $3 }
+            name == "\"dbflux\"" && /^version = / { gsub(/"/, "", $3); print $3; exit }
+          ' Cargo.lock)
+          if [ -z "$LOCK_OLD" ]; then
+            echo "::error::Cargo.lock has no dbflux package version."
+            exit 1
+          fi
+          if [ "$LOCK_OLD" = "$VERSION" ]; then
+            # The release commit already carries this version in the lockfile:
+            # there is nothing to stamp, and it may not differ from the commit.
+            if ! git diff --quiet -- Cargo.lock; then
+              echo "::error::Cargo.lock already carries ${VERSION} but differs from the commit."
               exit 1
             fi
-            echo "Cargo.toml and Cargo.lock already carry ${VERSION}: nothing to stamp."
+            echo "Cargo.lock already carries ${VERSION}: nothing to stamp."
           else
             # The awk program counts its own replacements: counting lines that
             # carry the new version afterwards would also count registry
             # dependencies that happen to share it.
-            awk -v old="$OLD_VERSION" -v new="$VERSION" -v countfile="$RUNNER_TEMP/lock-stamp-count" '
+            awk -v old="$LOCK_OLD" -v new="$VERSION" -v countfile="$RUNNER_TEMP/lock-stamp-count" '
               function flush(   i, is_path) {
                 is_path = 1
                 for (i = 1; i <= n; i++) if (buf[i] ~ /^source = /) is_path = 0
@@ -984,7 +1004,6 @@ jobs:
             Write-Output "::error::Expected exactly 1 workspace version line in Cargo.toml, found $versionLines."
             exit 1
           }
-          $oldVersion = ($content | Select-String -Pattern '^version = "(.*)"$').Matches[0].Groups[1].Value
           $stamped = $content -replace '^version = ".*"', "version = `"$env:VERSION`""
           $stamped | Set-Content Cargo.toml
           if (-not (Select-String -Path Cargo.toml -Pattern ([regex]::Escape("version = `"$env:VERSION`"")))) {
@@ -1005,19 +1024,28 @@ jobs:
             $current.Add($line)
           }
           $blocks.Add($current)
+          # The members' current version comes from the dbflux package in the
+          # lockfile, which can lag Cargo.toml; see the Linux build job.
+          $dbfluxBlock = $blocks | Where-Object { $_ -ccontains 'name = "dbflux"' } | Select-Object -First 1
+          $lockVersionLine = $dbfluxBlock | Where-Object { $_ -like 'version = *' } | Select-Object -First 1
+          if (-not $lockVersionLine) {
+            Write-Output "::error::Cargo.lock has no dbflux package version."
+            exit 1
+          }
+          $lockOld = $lockVersionLine -replace '^version = "(.*)"$', '$1'
           $changed = 0
           $result = New-Object System.Collections.Generic.List[string]
           foreach ($block in $blocks) {
             $isPath = -not ($block | Where-Object { $_ -like 'source = *' })
             foreach ($line in $block) {
-              if ($isPath -and $line -ceq "version = `"$oldVersion`"") {
+              if ($isPath -and $lockOld -cne $env:VERSION -and $line -ceq "version = `"$lockOld`"") {
                 $line = "version = `"$env:VERSION`""
                 $changed++
               }
               $result.Add($line)
             }
           }
-          if ($changed -lt 1) {
+          if ($lockOld -cne $env:VERSION -and $changed -lt 1) {
             Write-Output "::error::Lockfile version stamp did not apply to any workspace member."
             exit 1
           }
