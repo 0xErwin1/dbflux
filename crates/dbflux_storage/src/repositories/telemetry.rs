@@ -255,7 +255,7 @@ mod tests {
                     Ok(())
                 })
                 .expect("new row");
-            assert_eq!(initial.level(), Level::Minimal);
+            assert_eq!(initial.level(), Level::Basic, "Basic is the default");
 
             let mut row = serde_json::to_value(&initial).expect("state JSON");
             row["level"] = stored.into();

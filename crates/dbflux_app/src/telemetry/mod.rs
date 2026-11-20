@@ -36,6 +36,10 @@ impl std::fmt::Display for TelemetryError {
 }
 impl std::error::Error for TelemetryError {}
 
+/// The production collector, compiled in so a release build reports without
+/// configuration. The transport still requires https and this exact path.
+pub const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.dbflux.dev/v1/events";
+
 #[derive(Clone, Default)]
 pub struct TelemetryConfig {
     endpoint: Option<Endpoint>,
@@ -59,15 +63,41 @@ impl TelemetryConfig {
     }
     /// This reader exists only when the app's optional telemetry module exists.
     /// Construction/startup never invokes it implicitly.
+    ///
+    /// Without overrides the compiled collector is used. `DBFLUX_TELEMETRY=off`
+    /// disables delivery regardless of any endpoint.
     pub fn from_environment(isolated: bool) -> Result<Self, TelemetryError> {
-        let endpoint = std::env::var("DBFLUX_TELEMETRY_ENDPOINT")
-            .map(Some)
-            .or_else(|error| match error {
-                std::env::VarError::NotPresent => Ok(None),
-                _ => Err(TelemetryError::InvalidConfiguration),
-            })?;
+        let read = |name: &str| match std::env::var(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(_) => Err(TelemetryError::InvalidConfiguration),
+        };
+        let switch = read("DBFLUX_TELEMETRY")?;
+        let endpoint = read("DBFLUX_TELEMETRY_ENDPOINT")?;
         let allow = std::env::var("DBFLUX_TELEMETRY_ALLOW_LOOPBACK_HTTP").ok();
-        Self::from_values(endpoint.as_deref(), allow.as_deref(), isolated)
+        Self::resolve(
+            endpoint.as_deref(),
+            allow.as_deref(),
+            isolated,
+            switch.as_deref(),
+        )
+    }
+    /// Pure resolution of the environment inputs. An invalid override fails
+    /// closed instead of falling back to the compiled endpoint.
+    fn resolve(
+        endpoint_override: Option<&str>,
+        allow_loopback: Option<&str>,
+        isolated: bool,
+        switch: Option<&str>,
+    ) -> Result<Self, TelemetryError> {
+        if switch.is_some_and(|value| value.trim().eq_ignore_ascii_case("off")) {
+            return Ok(Self::default());
+        }
+        Self::from_values(
+            Some(endpoint_override.unwrap_or(DEFAULT_TELEMETRY_ENDPOINT)),
+            allow_loopback,
+            isolated,
+        )
     }
 }
 
@@ -214,7 +244,7 @@ impl DeliveryJob {
             if !dispatch() {
                 return Ok(None);
             }
-            transport.attempt(&self.payload).map(Some)
+            guarded_request(|| transport.attempt(&self.payload)).map(Some)
         })
     }
     fn attempt_with(
@@ -306,6 +336,15 @@ impl DeliveryJob {
     }
 }
 /// Marker of the consent level stored with each delivery audit row.
+/// A panic inside the HTTP stack is reported as a retryable network failure so
+/// the delivery backs off instead of being retried on every tick.
+fn guarded_request(
+    request: impl FnOnce() -> Result<Acknowledgement, TransportError>,
+) -> Result<Acknowledgement, TransportError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(request))
+        .unwrap_or(Err(TransportError::Network))
+}
+
 fn level_marker(level: Level) -> &'static str {
     match level {
         Level::Off => "off",
@@ -554,7 +593,6 @@ impl TelemetryScheduler {
         let lease = &self.lease;
         let mut identity_changed = false;
         let result = self.repository.update(now, |state| {
-
             if state.install_id() != old_id {
                 identity_changed = true;
                 usage
@@ -769,7 +807,7 @@ impl TelemetryScheduler {
             return Ok(Preparation::Skipped(SkipReason::Busy));
         }
         self.lease = None;
-        self.update(now, |state| {
+        let schedule = |state: &mut TelemetryState| {
             state
                 .schedule(
                     now,
@@ -780,7 +818,15 @@ impl TelemetryScheduler {
                     None,
                 )
                 .map_err(|_| TelemetryRepositoryError::Update)
-        })?;
+        };
+        // Decide on the committed cache first: an idle tick must not open a
+        // write transaction on the UI thread. This owner is the only writer of
+        // its cache, so an unchanged candidate means there is nothing to store.
+        let mut candidate = self.state.clone();
+        schedule(&mut candidate).map_err(|_| TelemetryError::Storage)?;
+        if candidate != self.state {
+            self.update(now, schedule)?;
+        }
         self.suppressed.retain(|id| {
             self.state
                 .pending()
@@ -927,14 +973,15 @@ mod tests {
                 .expect("config"),
         )
     }
-    /// Deliveries that are build pings: a Minimal queue also holds the weekly
-    /// `active`, so a per-build assertion must not count every delivery.
+    /// Build pings only: the default Basic queue also holds the weekly report
+    /// and a Minimal queue the weekly `active`, so a per-build assertion must
+    /// not count every delivery.
     fn pending_pings(scheduler: &TelemetryScheduler) -> usize {
         scheduler
             .state()
             .pending()
             .iter()
-            .filter(|delivery| !delivery.is_active())
+            .filter(|delivery| delivery.json().contains("\"event\":\"ping\""))
             .count()
     }
     fn job(scheduler: &mut TelemetryScheduler, time: DateTime<Utc>) -> DeliveryJob {
@@ -1730,9 +1777,14 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_minimal_default_sends_one_ping_and_never_counts_usage() {
+    fn telemetry_minimal_level_sends_one_ping_and_never_counts_usage() {
         let (mut scheduler, audit, _) = configured();
-        assert_eq!(scheduler.state().level(), Level::Minimal);
+        assert_eq!(
+            scheduler.state().level(),
+            Level::Basic,
+            "Basic is the default"
+        );
+        scheduler.set_level(Level::Minimal, now()).expect("minimal");
         scheduler.disclosure_dismissed(now()).expect("dismiss");
         assert!(scheduler.usage_source(now()).expect("minimal").is_none());
 
@@ -1937,6 +1989,7 @@ mod tests {
     #[test]
     fn telemetry_dropped_owner_update_releases_finished_completion_lease() {
         let (mut scheduler, _, _) = configured();
+        scheduler.set_level(Level::Minimal, now()).expect("minimal");
         scheduler.disclosure_dismissed(now()).expect("dismiss");
         let queued = job(&mut scheduler, now());
         let payload = queued.payload().to_owned();
@@ -2021,6 +2074,7 @@ mod tests {
     #[test]
     fn telemetry_successful_completion_does_not_cancel_next_delivery() {
         let (mut scheduler, _, _) = configured();
+        scheduler.set_level(Level::Minimal, now()).expect("minimal");
         scheduler.disclosure_dismissed(now()).expect("dismiss");
         let ping = job(&mut scheduler, now());
         let completion = acknowledged(&ping);
@@ -2094,6 +2148,7 @@ mod tests {
     #[test]
     fn telemetry_dropped_job_releases_lease_and_permanent_failure_is_not_retried() {
         let (mut scheduler, _, _) = configured();
+        scheduler.set_level(Level::Minimal, now()).expect("minimal");
         scheduler.disclosure_dismissed(now()).expect("dismiss");
         let queued = job(&mut scheduler, now());
         let payload = queued.payload().to_owned();
@@ -2118,6 +2173,142 @@ mod tests {
             _ => panic!("unexpected preparation"),
         }
         assert_eq!(pending_pings(&scheduler), 1);
+    }
+    /// The 60 s tick runs on the UI thread: when nothing is due it must not
+    /// open a SQLite write transaction. The injected trigger makes any write
+    /// fail, so success proves the tick only read the cached state.
+    #[test]
+    fn telemetry_idle_prepare_does_not_write_storage() {
+        let (mut scheduler, _, storage) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        while let Ok(Preparation::Job(due)) = scheduler.prepare(now(), "en") {
+            scheduler
+                .complete(acknowledged(&due), now())
+                .expect("settle every due delivery");
+        }
+        fail_writes(&storage);
+        let later = now() + chrono::Duration::minutes(1);
+        assert!(matches!(
+            scheduler
+                .prepare(later, "en")
+                .expect("idle tick needs no write"),
+            Preparation::Skipped(SkipReason::NotDue)
+        ));
+        restore_writes(&storage);
+    }
+    #[test]
+    fn telemetry_prepare_before_the_disclosure_does_not_write_storage() {
+        let (mut scheduler, _, storage) = configured();
+        fail_writes(&storage);
+        assert!(matches!(
+            scheduler.prepare(now(), "en").expect("nothing to schedule"),
+            Preparation::Skipped(SkipReason::NotDue)
+        ));
+        restore_writes(&storage);
+    }
+    #[test]
+    fn telemetry_prepare_still_writes_when_a_delivery_becomes_due() {
+        let (mut scheduler, _, storage) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        while let Ok(Preparation::Job(due)) = scheduler.prepare(now(), "en") {
+            scheduler
+                .complete(acknowledged(&due), now())
+                .expect("settle every due delivery");
+        }
+        let week_later = now() + chrono::Duration::days(8);
+        let Preparation::Job(weekly) = scheduler.prepare(week_later, "en").expect("weekly") else {
+            panic!("the weekly report is due");
+        };
+        let persisted = storage
+            .telemetry()
+            .update(week_later, |_| Ok(()))
+            .expect("reload");
+        assert_eq!(persisted.pending()[0].json(), weekly.payload());
+    }
+    #[test]
+    fn telemetry_compiled_endpoint_is_the_production_collector() {
+        let config = TelemetryConfig::resolve(None, None, false, None).expect("default");
+        assert_eq!(
+            config.endpoint,
+            Some(
+                Endpoint::parse(Some("https://telemetry.dbflux.dev/v1/events"), false)
+                    .expect("production endpoint")
+            )
+        );
+        assert_eq!(
+            DEFAULT_TELEMETRY_ENDPOINT,
+            "https://telemetry.dbflux.dev/v1/events"
+        );
+    }
+    #[test]
+    fn telemetry_endpoint_override_replaces_the_default_under_the_transport_rules() {
+        let custom = "https://collector.example.test/v1/events";
+        let config = TelemetryConfig::resolve(Some(custom), None, false, None).expect("override");
+        assert_eq!(
+            config.endpoint,
+            Some(Endpoint::parse(Some(custom), false).expect("custom"))
+        );
+        for rejected in [
+            "http://collector.example.test/v1/events",
+            "https://collector.example.test/other",
+            "https://collector.example.test/v1/events?x=1",
+            "",
+        ] {
+            assert!(
+                TelemetryConfig::resolve(Some(rejected), None, false, None).is_err(),
+                "{rejected:?} must be rejected, never fall back to the default"
+            );
+        }
+    }
+    #[test]
+    fn telemetry_kill_switch_beats_the_compiled_default_and_any_override() {
+        for switch in ["off", "OFF", " Off "] {
+            let config = TelemetryConfig::resolve(None, None, false, Some(switch)).expect("off");
+            assert!(config.endpoint.is_none(), "{switch:?}");
+            let config = TelemetryConfig::resolve(
+                Some("https://collector.example.test/v1/events"),
+                None,
+                false,
+                Some(switch),
+            )
+            .expect("off with override");
+            assert!(config.endpoint.is_none(), "{switch:?}");
+        }
+        for other in ["on", "1", ""] {
+            let config = TelemetryConfig::resolve(None, None, false, Some(other)).expect("other");
+            assert!(config.endpoint.is_some(), "{other:?} is not a kill switch");
+        }
+    }
+    #[test]
+    fn telemetry_kill_switch_prepares_nothing_even_after_the_disclosure() {
+        let config = TelemetryConfig::resolve(None, None, false, Some("off")).expect("off");
+        let (mut scheduler, _, _) = fixture(config);
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        assert!(!scheduler.endpoint_configured());
+        assert!(matches!(
+            scheduler.prepare(now(), "en").expect("no endpoint"),
+            Preparation::Skipped(SkipReason::NoEndpoint)
+        ));
+    }
+    #[test]
+    fn telemetry_level_off_sends_nothing_with_the_compiled_default_endpoint() {
+        let config = TelemetryConfig::resolve(None, None, false, None).expect("default");
+        let (mut scheduler, _, _) = fixture(config);
+        scheduler.set_level(Level::Off, now()).expect("off");
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        assert!(matches!(
+            scheduler.prepare(now(), "en").expect("off"),
+            Preparation::Skipped(SkipReason::NotDue)
+        ));
+        assert!(scheduler.state().pending().is_empty());
+    }
+    #[test]
+    fn telemetry_a_panicking_request_becomes_a_retryable_failure() {
+        let outcome = guarded_request(|| panic!("injected transport panic"));
+        assert_eq!(outcome.err(), Some(TransportError::Network));
+        assert!(TransportError::Network.retryable());
+        let outcome = guarded_request(|| Err(TransportError::Conflict));
+        assert_eq!(outcome.err(), Some(TransportError::Conflict));
     }
     #[test]
     fn telemetry_default_endpoint_is_unavailable() {
