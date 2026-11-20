@@ -310,6 +310,7 @@ The site publishes one documentation set per minor, listed in `web/versions.json
 Per release, update all of the following to the exact same version:
 
 - `Cargo.toml` — `[workspace.package].version`. Workspace crates inherit via `version.workspace = true`.
+- `Cargo.lock` — the workspace members' `version` lines only (run `cargo update --workspace` after the `Cargo.toml` bump; no dependency may change). The release build stamps them if they lag, but a committed lockfile keeps local `--locked` builds of the tag working.
 - `flake.nix`
 - `resources/windows/installer.iss`
 - Manual review (does not inherit): `examples/custom_driver/Cargo.toml`.

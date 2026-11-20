@@ -1,7 +1,9 @@
 # Prebuilt-binary derivation for DBFlux.
 #
 # Pulls the matching tarball from the GitHub Release named by
-# ./release-info.nix and installs it into a Nix store path. Avoids
+# ./release-info.nix (./nightly-info.nix for the rolling nightly, whose url is a
+# per-build immutable asset, not the rolling tarball) and installs it into a Nix
+# store path. Avoids
 # compiling from source on the consumer machine.
 #
 # Supported systems: x86_64-linux, aarch64-linux.

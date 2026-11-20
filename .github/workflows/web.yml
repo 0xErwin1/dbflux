@@ -34,12 +34,14 @@ jobs:
         mode: [site, docs]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # The site reads each published version's docs out of its own git ref,
           # so a shallow clone cannot build anything but the current branch.
           fetch-depth: 0
 
+      # TODO: pin by full SHA (v4); it could not be resolved offline and no other
+      # workflow in this or the sibling repositories pins this version.
       - uses: pnpm/action-setup@v4
         with:
           version: 11
@@ -48,6 +50,7 @@ jobs:
       # near-identical ~170 MB entry that pushes the repository past its 10 GB
       # cache limit and evicts the Rust build caches. A frozen install from the
       # registry takes seconds.
+      # TODO: pin by full SHA (v4); not resolvable offline, see pnpm/action-setup.
       - uses: actions/setup-node@v4
         with:
           node-version: 24

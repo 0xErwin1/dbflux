@@ -12,6 +12,12 @@
 # Do NOT pin to main for this package. The `nightly` ref always contains
 # hashes that match the artifacts published in the rolling nightly release.
 #
+# Each `url` names a per-build immutable asset
+# (dbflux-linux-<arch>-<date>-<sha>-<run id>-<attempt>.tar.gz) that the workflow keeps for the 14
+# most recent builds per platform, so a pin of an older `nightly` commit keeps
+# working for that long. The rolling dbflux-linux-<arch>.tar.gz assets are for
+# humans and are never pinned.
+#
 # From-source nightly (no hash needed):
 #
 #   nix run github:0xErwin1/dbflux/nightly#dbflux-source
@@ -20,11 +26,11 @@
 
   artifacts = {
     "x86_64-linux" = {
-      url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/dbflux-linux-amd64.tar.gz";
+      url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/dbflux-linux-amd64-0000-00-00-0000000-0-0.tar.gz";
       hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     };
     "aarch64-linux" = {
-      url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/dbflux-linux-arm64.tar.gz";
+      url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/dbflux-linux-arm64-0000-00-00-0000000-0-0.tar.gz";
       hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     };
   };

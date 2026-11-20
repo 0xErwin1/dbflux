@@ -129,6 +129,68 @@ jobs:
           sed -i "s|^version = \".*\"|version = \"${VERSION}\"|" Cargo.toml
           grep -qF "version = \"${VERSION}\"" Cargo.toml \
             || { echo "::error::Version stamp did not apply."; exit 1; }
+          # Stamp the same version on the workspace members in Cargo.lock so the
+          # build can stay --locked: no dependency is ever re-resolved. Members
+          # are the path packages (no `source` line) that carry the workspace
+          # version; the vendored gpui crates and the gpui-mcp crates keep their
+          # own versions and are left alone.
+          # Read the version the lockfile's workspace members carry from the
+          # dbflux package itself: a release commit that bumped only Cargo.toml
+          # leaves them on the previous version, and they still need stamping.
+          LOCK_OLD=$(awk '
+            /^\[\[package\]\]$/ { name = "" }
+            /^name = / { name = $3 }
+            name == "\"dbflux\"" && /^version = / { gsub(/"/, "", $3); print $3; exit }
+          ' Cargo.lock)
+          if [ -z "$LOCK_OLD" ]; then
+            echo "::error::Cargo.lock has no dbflux package version."
+            exit 1
+          fi
+          if [ "$LOCK_OLD" = "$VERSION" ]; then
+            # The release commit already carries this version in the lockfile:
+            # there is nothing to stamp, and it may not differ from the commit.
+            if ! git diff --quiet -- Cargo.lock; then
+              echo "::error::Cargo.lock already carries ${VERSION} but differs from the commit."
+              exit 1
+            fi
+            echo "Cargo.lock already carries ${VERSION}: nothing to stamp."
+          else
+            # The awk program counts its own replacements: counting lines that
+            # carry the new version afterwards would also count registry
+            # dependencies that happen to share it.
+            awk -v old="$LOCK_OLD" -v new="$VERSION" -v countfile="$RUNNER_TEMP/lock-stamp-count" '
+              function flush(   i, is_path) {
+                is_path = 1
+                for (i = 1; i <= n; i++) if (buf[i] ~ /^source = /) is_path = 0
+                for (i = 1; i <= n; i++) {
+                  if (is_path && buf[i] == "version = \"" old "\"") {
+                    buf[i] = "version = \"" new "\""
+                    changed++
+                  }
+                  print buf[i]
+                }
+                n = 0
+              }
+              /^\[\[package\]\]$/ { flush() }
+              { buf[++n] = $0 }
+              END { flush(); print changed + 0 > countfile }
+            ' Cargo.lock > Cargo.lock.stamped
+            mv Cargo.lock.stamped Cargo.lock
+            STAMPED=$(cat "$RUNNER_TEMP/lock-stamp-count")
+            if [ "$STAMPED" -lt 1 ]; then
+              echo "::error::Lockfile version stamp did not apply to any workspace member."
+              exit 1
+            fi
+            # Only those version lines may differ from the committed lockfile.
+            NUMSTAT=$(git diff --numstat Cargo.lock | cut -f1,2)
+            if [ "$NUMSTAT" != "$(printf '%s\t%s' "$STAMPED" "$STAMPED")" ] \
+              || git diff -U0 Cargo.lock | grep '^[+-][^+-]' | grep -qv '^[+-]version = '; then
+              echo "::error::Lockfile stamp changed more than the workspace versions."
+              exit 1
+            fi
+          fi
+          # Keep the stamped lockfile to prove the build left it alone.
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.stamped"
 
       - name: Make room for the release build
         # The release build ran out of memory on these runners once the UI crates
@@ -149,10 +211,11 @@ jobs:
           df -h /
 
       - name: Build DBFlux
-        # No --locked here: the version stamp above mutates Cargo.toml, so cargo must
-        # refresh the workspace entries in Cargo.lock. Dependency-lock integrity is
-        # already enforced by the deterministic-tests and clippy gates (--locked) on
-        # this same commit; here only the local workspace version changes.
+        # The stamp above rewrites the workspace versions in Cargo.toml and
+        # Cargo.lock together, so the lockfile stays valid and no dependency is
+        # re-resolved. scripts/appimage-build.sh builds with --locked, so Cargo
+        # never rewrites the lockfile, and the check after the build requires it
+        # to be byte-identical to the stamped one.
         #
         # A sampler records memory, swap and the largest rustc processes every 30
         # seconds, like the macOS build, so a regression can be traced to memory
@@ -181,6 +244,9 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" target AppDir "$HOME/.cargo" "$HOME/.rustup"
 
           kill "$SAMPLER_PID"
+
+          cmp Cargo.lock "$RUNNER_TEMP/Cargo.lock.stamped" \
+            || { echo "::error::The build changed Cargo.lock: a dependency was re-resolved."; exit 1; }
 
       - name: Report build memory samples
         if: always()
@@ -580,14 +646,74 @@ jobs:
           sed -i.bak "s|^version = \".*\"|version = \"${VERSION}\"|" Cargo.toml
           grep -qF "version = \"${VERSION}\"" Cargo.toml \
             || { echo "::error::Version stamp did not apply."; exit 1; }
+          # Stamp the same version on the workspace members in Cargo.lock so the
+          # build can stay --locked: no dependency is ever re-resolved. Members
+          # are the path packages (no `source` line) that carry the workspace
+          # version; the vendored gpui crates and the gpui-mcp crates keep their
+          # own versions and are left alone.
+          # Read the version the lockfile's workspace members carry from the
+          # dbflux package itself: a release commit that bumped only Cargo.toml
+          # leaves them on the previous version, and they still need stamping.
+          LOCK_OLD=$(awk '
+            /^\[\[package\]\]$/ { name = "" }
+            /^name = / { name = $3 }
+            name == "\"dbflux\"" && /^version = / { gsub(/"/, "", $3); print $3; exit }
+          ' Cargo.lock)
+          if [ -z "$LOCK_OLD" ]; then
+            echo "::error::Cargo.lock has no dbflux package version."
+            exit 1
+          fi
+          if [ "$LOCK_OLD" = "$VERSION" ]; then
+            # The release commit already carries this version in the lockfile:
+            # there is nothing to stamp, and it may not differ from the commit.
+            if ! git diff --quiet -- Cargo.lock; then
+              echo "::error::Cargo.lock already carries ${VERSION} but differs from the commit."
+              exit 1
+            fi
+            echo "Cargo.lock already carries ${VERSION}: nothing to stamp."
+          else
+            # The awk program counts its own replacements: counting lines that
+            # carry the new version afterwards would also count registry
+            # dependencies that happen to share it.
+            awk -v old="$LOCK_OLD" -v new="$VERSION" -v countfile="$RUNNER_TEMP/lock-stamp-count" '
+              function flush(   i, is_path) {
+                is_path = 1
+                for (i = 1; i <= n; i++) if (buf[i] ~ /^source = /) is_path = 0
+                for (i = 1; i <= n; i++) {
+                  if (is_path && buf[i] == "version = \"" old "\"") {
+                    buf[i] = "version = \"" new "\""
+                    changed++
+                  }
+                  print buf[i]
+                }
+                n = 0
+              }
+              /^\[\[package\]\]$/ { flush() }
+              { buf[++n] = $0 }
+              END { flush(); print changed + 0 > countfile }
+            ' Cargo.lock > Cargo.lock.stamped
+            mv Cargo.lock.stamped Cargo.lock
+            STAMPED=$(cat "$RUNNER_TEMP/lock-stamp-count")
+            if [ "$STAMPED" -lt 1 ]; then
+              echo "::error::Lockfile version stamp did not apply to any workspace member."
+              exit 1
+            fi
+            # Only those version lines may differ from the committed lockfile.
+            NUMSTAT=$(git diff --numstat Cargo.lock | cut -f1,2)
+            if [ "$NUMSTAT" != "$(printf '%s\t%s' "$STAMPED" "$STAMPED")" ] \
+              || git diff -U0 Cargo.lock | grep '^[+-][^+-]' | grep -qv '^[+-]version = '; then
+              echo "::error::Lockfile stamp changed more than the workspace versions."
+              exit 1
+            fi
+          fi
 
       - name: Build DBFlux
         # vendored-openssl makes ssh2/libssh2 compile OpenSSL from source for the
         # target instead of linking the runner's system OpenSSL. Required to
         # cross-compile x86_64 on the Apple Silicon runner (no x86_64 OpenSSL is
         # present), and keeps both macOS binaries self-contained at runtime.
-        # No --locked: the version stamp above mutates Cargo.toml; see the Linux build
-        # step for the full rationale.
+        # --locked: the stamp above rewrites the workspace versions in Cargo.toml and
+        # Cargo.lock together; see the Linux build step.
         #
         # Both macOS entries turn off the release profile's link-time optimization.
         # With `lto = "thin"` the final `dbflux` crate is a single rustc process that
@@ -620,7 +746,7 @@ jobs:
           ) &
           SAMPLER_PID=$!
 
-          cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }} --timings
+          cargo build --release --locked --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }} --timings
 
           kill "$SAMPLER_PID"
 
@@ -884,11 +1010,51 @@ jobs:
             Write-Output "::error::Version stamp did not apply."
             exit 1
           }
+          # Stamp the same version on the workspace members in Cargo.lock so the
+          # build can stay --locked. Members are the path packages (no `source`
+          # line) that carry the workspace version; see the Linux build job.
+          $lock = [System.IO.File]::ReadAllText("$PWD/Cargo.lock") -split "`r?`n"
+          $blocks = New-Object System.Collections.Generic.List[object]
+          $current = New-Object System.Collections.Generic.List[string]
+          foreach ($line in $lock) {
+            if ($line -eq '[[package]]' -and $current.Count -gt 0) {
+              $blocks.Add($current)
+              $current = New-Object System.Collections.Generic.List[string]
+            }
+            $current.Add($line)
+          }
+          $blocks.Add($current)
+          # The members' current version comes from the dbflux package in the
+          # lockfile, which can lag Cargo.toml; see the Linux build job.
+          $dbfluxBlock = $blocks | Where-Object { $_ -ccontains 'name = "dbflux"' } | Select-Object -First 1
+          $lockVersionLine = $dbfluxBlock | Where-Object { $_ -like 'version = *' } | Select-Object -First 1
+          if (-not $lockVersionLine) {
+            Write-Output "::error::Cargo.lock has no dbflux package version."
+            exit 1
+          }
+          $lockOld = $lockVersionLine -replace '^version = "(.*)"$', '$1'
+          $changed = 0
+          $result = New-Object System.Collections.Generic.List[string]
+          foreach ($block in $blocks) {
+            $isPath = -not ($block | Where-Object { $_ -like 'source = *' })
+            foreach ($line in $block) {
+              if ($isPath -and $lockOld -cne $env:VERSION -and $line -ceq "version = `"$lockOld`"") {
+                $line = "version = `"$env:VERSION`""
+                $changed++
+              }
+              $result.Add($line)
+            }
+          }
+          if ($lockOld -cne $env:VERSION -and $changed -lt 1) {
+            Write-Output "::error::Lockfile version stamp did not apply to any workspace member."
+            exit 1
+          }
+          [System.IO.File]::WriteAllText("$PWD/Cargo.lock", ($result -join "`n"))
 
       - name: Build DBFlux
-        # No --locked: the version stamp above mutates Cargo.toml; see the Linux build
-        # step for the full rationale.
-        run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
+        # --locked: the stamp above rewrites the workspace versions in Cargo.toml and
+        # Cargo.lock together; see the Linux build step.
+        run: cargo build --release --locked --features "$env:FEATURES" --target x86_64-pc-windows-msvc
 
       # The default SignPath configuration has a pe-file root, not a zip-file.
       # Raw uploads use the file's name as the artifact name, regardless of name.
