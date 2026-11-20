@@ -12,6 +12,13 @@ fn init(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
     cx.update(gpui_component::init);
     cx.update(dbflux_components::theme::init);
     cx.update(dbflux_ui_base::keymap::init_keymap);
+    // A command that asks for a file or folder must never open the OS picker.
+    cx.update(|cx| {
+        dbflux_ui_base::file_dialog::install_open_target_override(
+            cx,
+            std::sync::Arc::new(|| None),
+        )
+    });
 
     cx.update(|cx| {
         cx.new(|_| {
@@ -73,6 +80,48 @@ fn every_command_is_routed_by_a_dispatch_domain(cx: &mut TestAppContext) {
         unrouted.is_empty(),
         "commands no dispatch domain routes: {unrouted:?}"
     );
+}
+
+/// The dispatch above walks this command too; it must ask the injected picker
+/// instead of the native dialog, and a dismissed picker changes nothing.
+#[gpui::test]
+fn add_external_scripts_folder_asks_the_injected_picker_not_the_os(cx: &mut TestAppContext) {
+    let app_state = init(cx);
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    cx.update(|cx| {
+        let asked = asked.clone();
+        dbflux_ui_base::file_dialog::install_open_target_override(
+            cx,
+            std::sync::Arc::new(move || {
+                asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                None
+            }),
+        )
+    });
+    let (workspace, window) = open_workspace(&app_state, cx);
+    let roots_before = window.update(|_, cx| {
+        app_state
+            .read(cx)
+            .scripts_directory()
+            .map(|dir| dir.external_roots().len())
+    });
+
+    let routed = window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.route_command(Command::AddExternalScriptsFolder, window, cx)
+        })
+    });
+    window.run_until_parked();
+
+    assert_eq!(routed, Some(true));
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let roots_after = window.update(|_, cx| {
+        app_state
+            .read(cx)
+            .scripts_directory()
+            .map(|dir| dir.external_roots().len())
+    });
+    assert_eq!(roots_after, roots_before);
 }
 
 fn route_create_folder_on_sidebar_tab(
