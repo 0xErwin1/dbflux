@@ -6131,7 +6131,7 @@ updates:
     level_off: "Apagado"
     level_minimal: "Mínimo"
     level_basic: "Básico"
-    level_hint: "Apagado no envía nada. Mínimo, el valor predeterminado, envía un aviso por compilación. Básico agrega un informe semanal de uso. El envío necesita un destino configurado y no está disponible por defecto."
+    level_hint: "Apagado no envía nada. Mínimo envía un aviso por compilación y un evento de actividad semanal. Básico, el valor predeterminado, reemplaza ese evento por un informe semanal de uso."
     what_is_sent: Qué se envía
     collected_build: "Compilación: versión, canal, sistema operativo, arquitectura"
     collected_language: "Idioma del sistema y país, semanal"
@@ -6143,7 +6143,7 @@ updates:
     collected_no: "—"
     counts_not_instrumented: "Recuentos acotados de operaciones compatibles exitosas. Sin actualizaciones, fallos ni cancelaciones; cobertura MCP limitada. Ver Política de privacidad."
     install_id: Id de instalación
-    install_id_hint: "Aleatorio y rotativo, seudónimo más que anónimo. No está ligado a ti ni a esta máquina. Reiniciarlo cancela los envíos pendientes y conserva las compilaciones confirmadas."
+    install_id_hint: "Aleatorio y estable hasta que lo reinicies, seudónimo más que anónimo. No está ligado a ti ni a esta máquina. Reiniciarlo cancela los envíos pendientes y conserva las compilaciones confirmadas."
     reset_install_id: Reiniciar id
     reset_install_id_title: "¿Reiniciar el id de instalación?"
     reset_install_id_body: "Un nuevo id aleatorio reemplaza al actual. Los envíos pendientes se cancelan y las compilaciones confirmadas siguen confirmadas."
@@ -6200,14 +6200,14 @@ updates:
     tagline: Un cliente pensado para el teclado para SQL, documentos, clave-valor, series temporales y almacenamiento de objetos.
     telemetry_save_failed: No se pudo guardar la confirmación del aviso de telemetría.
     telemetry_heading: Estadísticas de uso
-    telemetry_helper: "Ayuda al desarrollo. Mínimo es el nivel por defecto."
+    telemetry_helper: "Ayuda al desarrollo. Básico es el nivel por defecto."
     telemetry_off: "Apagado"
     telemetry_off_description: "No se envía nada."
     telemetry_minimal: "Mínimo"
-    telemetry_minimal_description: "Aviso por build: versión, canal, SO, arquitectura, ID rotativo."
+    telemetry_minimal_description: "Aviso por build y semanal: versión, SO, arq., ID aleatorio."
     telemetry_basic: "Básico"
     telemetry_basic_description: "Mínimo más informe semanal: idioma, país y conteos de uso."
-    telemetry_privacy: "ID seudónimo rotativo. Nunca consultas, resultados, credenciales, rutas ni metadatos de conexión. Informes completos en Audit local. Solo se envía tras elegir Empezar y con un colector configurado; si no, no se envía nada."
+    telemetry_privacy: "ID seudónimo aleatorio. Nunca consultas, resultados, credenciales, rutas ni metadatos de conexión. Informes completos en Audit local. No se envía nada hasta que eliges Empezar."
     whats_new: Novedades
     updates: Actualizaciones
     notify: Avisarme cuando salga una nueva versión

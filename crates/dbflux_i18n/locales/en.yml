@@ -6133,7 +6133,7 @@ updates:
     level_off: "Off"
     level_minimal: "Minimal"
     level_basic: "Basic"
-    level_hint: "Off sends nothing. Minimal, the default, sends one ping per build. Basic adds a weekly usage report. Delivery needs a configured endpoint and is unavailable by default."
+    level_hint: "Off sends nothing. Minimal sends one ping per build and a weekly activity event. Basic, the default, replaces that event with a weekly usage report."
     what_is_sent: What is sent
     collected_build: "Build: version, channel, OS, architecture"
     collected_language: "System language and country, weekly"
@@ -6145,7 +6145,7 @@ updates:
     collected_no: "—"
     counts_not_instrumented: "Bounded counts of supported successful operations. No refreshes, failures or cancellations; MCP coverage is limited. See Privacy policy."
     install_id: Install id
-    install_id_hint: "Random and rotating, pseudonymous rather than anonymous. Not tied to you or this machine. Resetting cancels pending sends and keeps acknowledged builds."
+    install_id_hint: "Random and stable until you reset it, pseudonymous rather than anonymous. Not tied to you or this machine. Resetting cancels pending sends and keeps acknowledged builds."
     reset_install_id: Reset id
     reset_install_id_title: Reset the installation id?
     reset_install_id_body: "A new random id replaces the current one. Pending sends are cancelled and acknowledged builds stay acknowledged."
@@ -6202,14 +6202,14 @@ updates:
     tagline: A keyboard-first client for SQL, documents, key-value, time series and object storage.
     telemetry_save_failed: Could not save the telemetry disclosure acknowledgement.
     telemetry_heading: Usage statistics
-    telemetry_helper: "Helps guide development. Minimal is the default."
+    telemetry_helper: "Helps guide development. Basic is the default."
     telemetry_off: "Off"
     telemetry_off_description: "Nothing is sent."
     telemetry_minimal: "Minimal"
-    telemetry_minimal_description: "Ping per build: version, channel, OS, architecture, rotating ID."
+    telemetry_minimal_description: "Ping per build and weekly: version, OS, arch, random ID."
     telemetry_basic: "Basic"
     telemetry_basic_description: "Minimal plus a weekly report: language, country and feature counts."
-    telemetry_privacy: "Pseudonymous rotating ID. Never queries, results, credentials, paths or connection metadata. Full reports in local Audit. Sent only after you choose Get started and with a configured collector; otherwise nothing is sent."
+    telemetry_privacy: "Pseudonymous random ID. Never queries, results, credentials, paths or connection metadata. Full reports in local Audit. Nothing is sent until you choose Get started."
     whats_new: What is new
     updates: Updates
     notify: Tell me when a new version is out

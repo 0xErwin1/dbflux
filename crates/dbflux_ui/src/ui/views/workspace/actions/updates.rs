@@ -19,9 +19,27 @@ fn telemetry_startup_dialog(dialog: StartupDialog, undisclosed: bool) -> Startup
     }
 }
 
+/// The dialog this start opens: the stored preferences decide, except that an
+/// install which never acknowledged the telemetry disclosure always gets
+/// Welcome, whatever those preferences say.
+#[cfg(feature = "telemetry")]
+fn startup_dialog_for_disclosure(
+    settings: &updates::UpdateSettings,
+    current_version: &str,
+    disclosure_dismissed: Option<bool>,
+) -> StartupDialog {
+    telemetry_startup_dialog(
+        updates::startup_dialog(settings, current_version),
+        telemetry_undisclosed(disclosure_dismissed),
+    )
+}
+
 #[cfg(all(test, feature = "telemetry"))]
 mod welcome_tests {
-    use super::{StartupDialog, telemetry_startup_dialog, telemetry_undisclosed, updates};
+    use super::{
+        StartupDialog, startup_dialog_for_disclosure, telemetry_startup_dialog,
+        telemetry_undisclosed, updates,
+    };
     use dbflux_app::updates::UpdateSettings;
 
     /// A scheduler that failed to initialize is `None`, and that must not be
@@ -75,6 +93,79 @@ mod welcome_tests {
                 "a dismissed disclosure keeps the stored decision"
             );
         }
+    }
+
+    /// One app start over the real telemetry state: decides the dialog the
+    /// way `start_update_flow` does, then records the start.
+    fn start_once(
+        app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        settings: &mut UpdateSettings,
+        cx: &mut gpui::TestAppContext,
+    ) -> StartupDialog {
+        cx.update(|cx| {
+            app_state
+                .update(cx, |state, _| {
+                    state.initialize_telemetry(
+                        dbflux_app::telemetry::TelemetryConfig::default(),
+                        dbflux_core::chrono::Utc::now(),
+                    )
+                })
+                .expect("telemetry initialized");
+            let dismissed = app_state
+                .read(cx)
+                .telemetry()
+                .map(|scheduler| scheduler.is_disclosure_dismissed());
+            let dialog = startup_dialog_for_disclosure(settings, "0.11.0", dismissed);
+            *settings = updates::record_startup(settings, "0.11.0", &dialog);
+            dialog
+        })
+    }
+
+    /// A v0.10 install whose user switched the welcome and what-is-new dialogs
+    /// off and has no telemetry row yet: Welcome opens once, and never again
+    /// after the disclosure is acknowledged, with the same preferences.
+    #[gpui::test]
+    fn v010_upgrade_sees_welcome_once_then_never_again(cx: &mut gpui::TestAppContext) {
+        let app_state = crate::ui::overlays::updates::test_support::test_app_state(cx);
+        let mut settings = UpdateSettings {
+            check_for_updates_on_startup: true,
+            show_whats_new_after_update: false,
+            last_run_version: Some("0.10.0".to_owned()),
+            skipped_update_version: None,
+            welcome_shown: true,
+        };
+        assert_eq!(
+            updates::startup_dialog(&settings, "0.11.0"),
+            StartupDialog::None,
+            "the v0.10 preferences alone open nothing"
+        );
+
+        assert_eq!(
+            start_once(&app_state, &mut settings, cx),
+            StartupDialog::Welcome
+        );
+        assert_eq!(
+            start_once(&app_state, &mut settings, cx),
+            StartupDialog::Welcome,
+            "closing the app without acknowledging keeps the disclosure due"
+        );
+
+        cx.update(|cx| {
+            app_state.update(cx, |state, _| {
+                state
+                    .telemetry_mut()
+                    .expect("scheduler")
+                    .disclosure_dismissed(dbflux_core::chrono::Utc::now())
+            })
+        })
+        .expect("disclosure dismissed");
+
+        assert_eq!(
+            start_once(&app_state, &mut settings, cx),
+            StartupDialog::None,
+            "an acknowledged disclosure never reopens Welcome"
+        );
+        assert!(settings.welcome_shown && !settings.show_whats_new_after_update);
     }
 
     /// Every stored preference that suppresses a startup dialog, combined
@@ -257,17 +348,19 @@ impl Workspace {
     pub fn start_update_flow(&mut self, cx: &mut Context<Self>) {
         let settings = self.app_state.read(cx).update_settings().clone();
         let current_version = updates::current_version();
+        #[cfg(not(feature = "telemetry"))]
         let dialog = updates::startup_dialog(&settings, current_version);
         #[cfg(feature = "telemetry")]
         let dialog = {
             self.start_telemetry(cx);
-            let undisclosed = telemetry_undisclosed(
+            startup_dialog_for_disclosure(
+                &settings,
+                current_version,
                 self.app_state
                     .read(cx)
                     .telemetry()
                     .map(|scheduler| scheduler.is_disclosure_dismissed()),
-            );
-            telemetry_startup_dialog(dialog, undisclosed)
+            )
         };
 
         let recorded = updates::record_startup(&settings, current_version, &dialog);

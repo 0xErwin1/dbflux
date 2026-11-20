@@ -6130,7 +6130,7 @@ updates:
     level_off: "끔"
     level_minimal: "최소"
     level_basic: "기본"
-    level_hint: "「끔」은 아무것도 보내지 않습니다. 「최소」가 기본값이며 빌드당 핑을 한 번 보냅니다. 「기본」은 주간 사용 보고서를 추가합니다. 전송에는 구성된 엔드포인트가 필요하며 기본적으로 불가능합니다."
+    level_hint: "「끔」은 아무것도 보내지 않습니다. 「최소」는 빌드당 핑 한 번과 주간 활동 이벤트를 보냅니다. 「기본」이 기본값이며 그 이벤트 대신 주간 사용 보고서를 보냅니다."
     what_is_sent: 전송 항목
     collected_build: "빌드: 버전, 채널, OS, 아키텍처"
     collected_language: "시스템 언어와 국가, 주간"
@@ -6142,7 +6142,7 @@ updates:
     collected_no: "—"
     counts_not_instrumented: "지원되는 성공 작업의 상한이 있는 횟수입니다. 새로고침, 실패, 취소는 제외하며 MCP 범위는 제한됩니다. 개인정보 처리방침을 참고하세요."
     install_id: 설치 ID
-    install_id_hint: "무작위이며 순환하고, 익명보다는 가명입니다. 사용자나 이 컴퓨터와 연결되지 않습니다. 재설정하면 대기 중인 전송이 취소되고 확인된 빌드는 유지됩니다."
+    install_id_hint: "무작위이며 재설정하기 전까지 유지되고, 익명보다는 가명입니다. 사용자나 이 컴퓨터와 연결되지 않습니다. 재설정하면 대기 중인 전송이 취소되고 확인된 빌드는 유지됩니다."
     reset_install_id: ID 재설정
     reset_install_id_title: 설치 ID를 재설정할까요?
     reset_install_id_body: "새 무작위 ID가 현재 ID를 대체합니다. 대기 중인 전송은 취소되고 확인된 빌드는 확인된 상태로 유지됩니다."
@@ -6199,14 +6199,14 @@ updates:
     tagline: SQL, 문서, 키-값, 시계열, 오브젝트 스토리지를 위한 키보드 중심 클라이언트입니다.
     telemetry_save_failed: 원격 측정 안내 확인을 저장하지 못했습니다.
     telemetry_heading: 사용 통계
-    telemetry_helper: "개발 방향에 도움이 됩니다. 기본값은 최소입니다."
+    telemetry_helper: "개발 방향에 도움이 됩니다. 「기본」이 기본값입니다."
     telemetry_off: "끔"
     telemetry_off_description: "아무것도 전송하지 않습니다."
     telemetry_minimal: "최소"
-    telemetry_minimal_description: "빌드당 핑 한 번: 버전, 채널, OS, 아키텍처, 순환 ID."
+    telemetry_minimal_description: "빌드별 및 주간 핑: 버전, OS, 아키텍처, 무작위 ID."
     telemetry_basic: "기본"
     telemetry_basic_description: "최소에 주간 보고서 추가: 시스템 언어, 국가, 기능 사용 횟수."
-    telemetry_privacy: "순환 가명 ID. 쿼리, 결과, 자격 증명, 경로, 연결 메타데이터는 전송하지 않습니다. 전체 보고서는 로컬 Audit에 기록됩니다. 시작하기를 선택한 후 수집기가 설정된 경우에만 전송하며, 없으면 전송하지 않습니다."
+    telemetry_privacy: "무작위 가명 ID. 쿼리, 결과, 자격 증명, 경로, 연결 메타데이터는 전송하지 않습니다. 전체 보고서는 로컬 Audit에 기록됩니다. 시작하기를 선택하기 전에는 아무것도 전송하지 않습니다."
     whats_new: 새로운 기능
     updates: 업데이트
     notify: 새 버전이 나오면 알림

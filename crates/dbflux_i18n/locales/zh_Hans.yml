@@ -6129,7 +6129,7 @@ updates:
     level_off: "关闭"
     level_minimal: "最小"
     level_basic: "基本"
-    level_hint: "「关闭」不发送任何内容。「最小」是默认值，每个构建发送一次版本通知。「基本」另外发送每周使用报告。发送需要配置端点，默认不可用。"
+    level_hint: "「关闭」不发送任何内容。「最小」每个构建发送一次版本通知，并每周发送一次活动事件。「基本」是默认值，以每周使用报告代替该事件。"
     what_is_sent: 发送内容
     collected_build: "构建：版本、渠道、操作系统、架构"
     collected_language: "系统语言和国家，每周"
@@ -6141,7 +6141,7 @@ updates:
     collected_no: "—"
     counts_not_instrumented: "受支持的成功操作的有上限计数。不含刷新、失败或取消；MCP 覆盖有限。参见隐私政策。"
     install_id: 安装 ID
-    install_id_hint: "随机且轮换，是假名而非匿名。不与您或此机器绑定。重置会取消待发送内容并保留已确认的构建。"
+    install_id_hint: "随机生成，重置前保持不变，是假名而非匿名。不与您或此机器绑定。重置会取消待发送内容并保留已确认的构建。"
     reset_install_id: 重置 ID
     reset_install_id_title: 重置安装 ID？
     reset_install_id_body: "新的随机 ID 将替换当前 ID。待发送内容会被取消，已确认的构建保持已确认状态。"
@@ -6198,14 +6198,14 @@ updates:
     tagline: 面向键盘操作的客户端，支持 SQL、文档、键值、时间序列和对象存储。
     telemetry_save_failed: 无法保存遥测提示的确认状态。
     telemetry_heading: 使用统计
-    telemetry_helper: "帮助确定开发方向。默认级别为「最小」。"
+    telemetry_helper: "帮助确定开发方向。默认级别为「基本」。"
     telemetry_off: "关闭"
     telemetry_off_description: "不发送任何内容。"
     telemetry_minimal: "最小"
-    telemetry_minimal_description: "每个构建一次版本通知：版本、渠道、OS、架构和轮换 ID。"
+    telemetry_minimal_description: "每个构建及每周一次通知：版本、OS、架构和随机 ID。"
     telemetry_basic: "基本"
     telemetry_basic_description: "在「最小」基础上发送周报：系统语言、国家和功能计数。"
-    telemetry_privacy: "轮换假名 ID。绝不发送查询、结果、凭据、路径或连接元数据。完整报告保存在本地 Audit。仅在选择「开始使用」后且配置了收集器时发送，否则不发送任何内容。"
+    telemetry_privacy: "随机假名 ID。绝不发送查询、结果、凭据、路径或连接元数据。完整报告保存在本地 Audit。选择「开始使用」之前不发送任何内容。"
     whats_new: 新功能
     updates: 更新
     notify: 有新版本时通知我

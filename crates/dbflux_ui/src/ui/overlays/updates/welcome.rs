@@ -60,7 +60,7 @@ const TELEMETRY_LEVELS: [TelemetryLevel; 3] = [
 
 /// The level shown as selected while the saved one is unavailable.
 #[cfg(feature = "telemetry")]
-const DEFAULT_TELEMETRY_LEVEL: TelemetryLevel = TelemetryLevel::Minimal;
+const DEFAULT_TELEMETRY_LEVEL: TelemetryLevel = TelemetryLevel::Basic;
 
 /// Padding of the telemetry choice cards.
 #[cfg(feature = "telemetry")]
@@ -1010,8 +1010,20 @@ mod tests {
     }
 
     #[cfg(feature = "telemetry")]
-    #[gpui::test]
-    fn closing_without_changing_the_selection_keeps_minimal(cx: &mut TestAppContext) {
+    #[test]
+    fn basic_is_the_preselected_level() {
+        assert_eq!(super::DEFAULT_TELEMETRY_LEVEL, TelemetryLevel::Basic);
+        assert_eq!(super::telemetry_level_index(TelemetryLevel::Basic), 2);
+    }
+
+    /// Opens Welcome over a fresh initialized state, presses `keys`, then
+    /// confirms with Get started. Returns the persisted level and the number
+    /// of acknowledgements the dialog emitted.
+    #[cfg(feature = "telemetry")]
+    fn confirm_welcome_after(
+        keys: &[&str],
+        cx: &mut TestAppContext,
+    ) -> (Option<TelemetryLevel>, usize) {
         let app_state = test_app_state(cx);
         initialize_telemetry(&app_state, cx);
         let state_for_view = app_state.clone();
@@ -1029,18 +1041,44 @@ mod tests {
         });
         window.update(|_, cx| dialog.update(cx, |dialog, cx| dialog.open(cx)));
         window.run_until_parked();
-        assert_eq!(
-            telemetry_level(&app_state, window),
-            Some(TelemetryLevel::Minimal)
-        );
 
+        for key in keys {
+            window.simulate_keystrokes(key);
+            window.run_until_parked();
+        }
         window.simulate_keystrokes("enter");
         window.run_until_parked();
 
-        assert_eq!(acknowledgements.get(), 1);
-        assert_eq!(
+        (
             telemetry_level(&app_state, window),
-            Some(TelemetryLevel::Minimal)
+            acknowledgements.get(),
+        )
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn closing_without_changing_the_selection_keeps_basic(cx: &mut TestAppContext) {
+        assert_eq!(
+            confirm_welcome_after(&[], cx),
+            (Some(TelemetryLevel::Basic), 1)
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn choosing_minimal_before_closing_persists_minimal(cx: &mut TestAppContext) {
+        assert_eq!(
+            confirm_welcome_after(&["left"], cx),
+            (Some(TelemetryLevel::Minimal), 1)
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn choosing_off_before_closing_persists_off(cx: &mut TestAppContext) {
+        assert_eq!(
+            confirm_welcome_after(&["left", "left"], cx),
+            (Some(TelemetryLevel::Off), 1)
         );
     }
 
@@ -1323,6 +1361,27 @@ mod tests {
             assert!(
                 privacy.contains(&button),
                 "{locale}: the privacy text must name the real button, got: {privacy}"
+            );
+        }
+    }
+
+    /// Basic is the preselected level, so no locale may still call Minimal
+    /// the default in the Welcome helper line.
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn welcome_helper_names_basic_as_the_default_in_every_locale() {
+        const MINIMAL: [&str; 4] = ["Minimal", "Mínimo", "최소", "最小"];
+
+        for (index, locale) in ["en", "es", "ko", "zh_Hans"].iter().enumerate() {
+            let helper = dbflux_i18n::t!("updates.welcome.telemetry_helper", locale = locale);
+            let basic = dbflux_i18n::t!("updates.welcome.telemetry_basic", locale = locale);
+            assert!(
+                helper.contains(&basic),
+                "{locale}: the helper must name Basic as the default, got: {helper}"
+            );
+            assert!(
+                !helper.contains(MINIMAL[index]),
+                "{locale}: the helper must not name Minimal, got: {helper}"
             );
         }
     }

@@ -53,7 +53,7 @@ const TELEMETRY_LEVELS: [TelemetryLevel; 3] = [
 
 /// The level staged when the saved one is unavailable, and by Reset.
 #[cfg(feature = "telemetry")]
-const DEFAULT_TELEMETRY_LEVEL: TelemetryLevel = TelemetryLevel::Minimal;
+const DEFAULT_TELEMETRY_LEVEL: TelemetryLevel = TelemetryLevel::Basic;
 
 /// Keyboard-navigable controls of the section, in visual order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1656,12 +1656,12 @@ mod telemetry_tests {
     }
 
     #[gpui::test]
-    fn a_new_install_stages_minimal_and_the_keys_step_through_three_levels(
+    fn a_new_install_stages_basic_and_the_keys_step_through_three_levels(
         cx: &mut TestAppContext,
     ) {
         let (harness, window) = open(cx);
-        assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Minimal));
-        assert_eq!(staged_level(&harness, window), TelemetryLevel::Minimal);
+        assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Basic));
+        assert_eq!(staged_level(&harness, window), TelemetryLevel::Basic);
 
         let press = |window: &mut VisualTestContext, key: &str| {
             let event = gpui::KeyDownEvent {
@@ -1696,9 +1696,33 @@ mod telemetry_tests {
 
         assert_eq!(
             saved_level(&harness, window),
-            Some(TelemetryLevel::Minimal),
+            Some(TelemetryLevel::Basic),
             "staging never writes"
         );
+    }
+
+    #[test]
+    fn basic_is_the_default_level_and_the_hint_names_it_in_every_locale() {
+        const MINIMAL_DEFAULT: [&str; 4] = [
+            "Minimal, the default",
+            "Mínimo, el valor predeterminado",
+            "「최소」가 기본값",
+            "「最小」是默认值",
+        ];
+
+        assert_eq!(super::DEFAULT_TELEMETRY_LEVEL, TelemetryLevel::Basic);
+        for (index, locale) in ["en", "es", "ko", "zh_Hans"].iter().enumerate() {
+            let hint = dbflux_i18n::t!("updates.settings.level_hint", locale = locale);
+            let basic = dbflux_i18n::t!("updates.settings.level_basic", locale = locale);
+            assert!(
+                !hint.contains(MINIMAL_DEFAULT[index]),
+                "{locale}: the hint must not call Minimal the default, got: {hint}"
+            );
+            assert!(
+                hint.contains(&basic),
+                "{locale}: the hint must name Basic, got: {hint}"
+            );
+        }
     }
 
     #[gpui::test]
@@ -1721,7 +1745,7 @@ mod telemetry_tests {
     }
 
     #[gpui::test]
-    fn reset_defaults_stages_minimal_without_touching_storage_or_the_install_id(
+    fn reset_defaults_stages_basic_without_touching_storage_or_the_install_id(
         cx: &mut TestAppContext,
     ) {
         let (harness, window) = open(cx);
@@ -1730,10 +1754,10 @@ mod telemetry_tests {
             .update(|_, cx| {
                 app_state.update(cx, |state, _| {
                     state
-                        .set_telemetry_level(TelemetryLevel::Basic, dbflux_core::chrono::Utc::now())
+                        .set_telemetry_level(TelemetryLevel::Off, dbflux_core::chrono::Utc::now())
                 })
             })
-            .expect("saved basic");
+            .expect("saved off");
 
         let (harness, window) = open_on(cx, app_state);
         let before = masked_id(&harness, window);
@@ -1744,10 +1768,10 @@ mod telemetry_tests {
                 .update(cx, |section, cx| section.reset_to_defaults(cx));
         });
 
-        assert_eq!(staged_level(&harness, window), TelemetryLevel::Minimal);
+        assert_eq!(staged_level(&harness, window), TelemetryLevel::Basic);
         assert_eq!(
             saved_level(&harness, window),
-            Some(TelemetryLevel::Basic),
+            Some(TelemetryLevel::Off),
             "reset stages, never persists"
         );
         assert_eq!(masked_id(&harness, window), before, "reset keeps the id");
