@@ -1235,13 +1235,12 @@ impl DataGridPanel {
         let Some(usage) = usage else {
             return;
         };
-        if self.builder_usage_is_current(&usage, cx) {
-            if let Err(error) = usage
+        if self.builder_usage_is_current(&usage, cx)
+            && let Err(error) = usage
                 .ticket
                 .record(dbflux_core::observability::usage::UsageFeature::VisualQueryBuilder)
-            {
-                log::warn!("Usage completion failed: {error:?}");
-            }
+        {
+            log::warn!("Usage completion failed: {error:?}");
         }
     }
 }

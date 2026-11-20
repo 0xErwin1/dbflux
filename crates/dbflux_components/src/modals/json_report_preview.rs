@@ -276,13 +276,13 @@ mod tests {
         }
     }
 
-    fn open_viewer<'a>(
-        cx: &'a mut TestAppContext,
+    fn open_viewer(
+        cx: &mut TestAppContext,
         request: JsonReportPreviewRequest,
     ) -> (
         Entity<Host>,
         Entity<ModalJsonReportPreview>,
-        &'a mut VisualTestContext,
+        &mut VisualTestContext,
     ) {
         super::super::modal::bind_modal_keys_for_tests(cx);
         cx.update(|cx| {
@@ -294,7 +294,7 @@ mod tests {
         let (host, window) = cx.add_window_view({
             let slot_for_view = slot_for_view.clone();
             move |_window, cx| {
-                let modal = cx.new(|cx| ModalJsonReportPreview::new(cx));
+                let modal = cx.new(ModalJsonReportPreview::new);
                 slot_for_view.borrow_mut().replace(modal.clone());
                 Host {
                     modal,

@@ -3,11 +3,11 @@
 //! scripted connection, so every credit lands through the ticket lifecycle the
 //! production code uses.
 
+use super::close_completion::mutation_run;
 use super::*;
 use crate::query_builder::{AssignmentRow, BuilderEvent, BuilderMode};
 use dbflux_components::modals::MutationConfirmOutcome;
 use std::collections::VecDeque;
-use super::close_completion::mutation_run;
 
 /// Connection that answers a table browse with whatever `rows` holds when the
 /// query runs, so a reload lands through the real request path.
@@ -59,7 +59,7 @@ impl dbflux_core::Connection for StubBrowseConnection {
     }
 
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("StubBrowseConnection::dialect is not reached by a raw browse")
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -70,10 +70,7 @@ impl dbflux_core::Connection for StubBrowseConnection {
         Ok(())
     }
 
-    fn execute(
-        &self,
-        _: &dbflux_core::QueryRequest,
-    ) -> Result<QueryResult, dbflux_core::DbError> {
+    fn execute(&self, _: &dbflux_core::QueryRequest) -> Result<QueryResult, dbflux_core::DbError> {
         Err(dbflux_core::DbError::NotSupported("stub".to_string()))
     }
 
@@ -213,8 +210,7 @@ struct UsageBuilderConnection {
     browse: StubBrowseConnection,
     executions: Arc<std::sync::atomic::AtomicUsize>,
     failure: bool,
-    program:
-        std::sync::Mutex<VecDeque<Result<QueryResult, dbflux_core::DbError>>>,
+    program: std::sync::Mutex<VecDeque<Result<QueryResult, dbflux_core::DbError>>>,
     commits: std::sync::atomic::AtomicUsize,
     gate: Option<Arc<BuilderWorkerGate>>,
 }
@@ -308,13 +304,12 @@ impl dbflux_core::Connection for UsageBuilderConnection {
         dbflux_core::Connection::browse_table(&self.browse, request)
     }
 
-    fn count_table(
-        &self,
-        _: &dbflux_core::TableCountRequest,
-    ) -> Result<u64, dbflux_core::DbError> {
-        let result = self.browse.rows.lock().map_err(|_| {
-            dbflux_core::DbError::NotSupported("poisoned fixture".to_string())
-        })?;
+    fn count_table(&self, _: &dbflux_core::TableCountRequest) -> Result<u64, dbflux_core::DbError> {
+        let result = self
+            .browse
+            .rows
+            .lock()
+            .map_err(|_| dbflux_core::DbError::NotSupported("poisoned fixture".to_string()))?;
         Ok(result.row_count() as u64)
     }
 
@@ -508,17 +503,15 @@ fn builder_actual_mutation_edits_invalidate_blocked_run(cx: &mut TestAppContext)
             builder.update(cx, |builder, cx| {
                 builder.switch_builder_mode(BuilderMode::Update, cx);
                 let state = builder.mutation_state.as_mut().expect("Update");
-                state
-                    .assignments
-                    .push(AssignmentRow {
-                        assignment: dbflux_core::Assignment {
-                            column: "name".to_string(),
-                            value: dbflux_core::AssignmentValue::Literal(
-                                dbflux_core::ScalarLiteral::Text("before".to_string()),
-                            ),
-                        },
-                        raw_text: "before".to_string(),
-                    });
+                state.assignments.push(AssignmentRow {
+                    assignment: dbflux_core::Assignment {
+                        column: "name".to_string(),
+                        value: dbflux_core::AssignmentValue::Literal(
+                            dbflux_core::ScalarLiteral::Text("before".to_string()),
+                        ),
+                    },
+                    raw_text: "before".to_string(),
+                });
                 state.exec_options.mode =
                     crate::data_grid_panel::mutation_executor::ExecutionMode::DirectAutocommit;
                 builder.refresh_mutation_preview_pure();
@@ -562,9 +555,7 @@ fn builder_actual_mutation_edits_invalidate_blocked_run(cx: &mut TestAppContext)
             "select_mode" => builder.update(cx, |builder, cx| {
                 builder.switch_builder_mode(BuilderMode::Select, cx)
             }),
-            "reset" => {
-                grid.update(cx, |grid, cx| assert!(grid.reset_builder_query(window, cx)))
-            }
+            "reset" => grid.update(cx, |grid, cx| assert!(grid.reset_builder_query(window, cx))),
             "clear_draft" => grid.update(cx, |grid, cx| grid.clear_builder_draft_spec(cx)),
             _ => {}
         });
@@ -673,7 +664,11 @@ fn builder_document_owner_liveness_with_retained_grid(cx: &mut TestAppContext) {
         window.update(|window, cx| {
             grid.update(cx, |grid, cx| {
                 if mutation {
-                    grid.handle_mutation_confirm_outcome(MutationConfirmOutcome::Confirmed, window, cx);
+                    grid.handle_mutation_confirm_outcome(
+                        MutationConfirmOutcome::Confirmed,
+                        window,
+                        cx,
+                    );
                 } else {
                     grid.process_pending_actions(window, cx);
                 }
@@ -756,9 +751,11 @@ fn builder_failed_terminal_outcome_rejects_actual_run_ticket(cx: &mut TestAppCon
             run.usage = pending.usage;
             let failure = grid.finish_mutation(
                 run,
-                Ok(crate::data_grid_panel::mutation_executor::MutationOutcome::Failed {
-                    error: "terminal fixture failure".to_string(),
-                }),
+                Ok(
+                    crate::data_grid_panel::mutation_executor::MutationOutcome::Failed {
+                        error: "terminal fixture failure".to_string(),
+                    },
+                ),
                 cx,
             );
             assert!(failure.is_some());
@@ -1057,11 +1054,9 @@ fn builder_select_origin_owner_and_epoch_matrix(cx: &mut TestAppContext) {
                             .reset(chrono::Utc::now())
                             .expect("reset");
                     }),
-                    "superseded" => panel.handle_builder_event(
-                        &BuilderEvent::RunRequested,
-                        window,
-                        cx,
-                    ),
+                    "superseded" => {
+                        panel.handle_builder_event(&BuilderEvent::RunRequested, window, cx)
+                    }
                     _ => {}
                 }
                 if !matches!(scenario, "dedup" | "closed") {
@@ -1166,11 +1161,6 @@ fn builder_mutation_origin_owner_and_outcome_matrix(cx: &mut TestAppContext) {
             let empty = keyed_result(&[]);
             let mut written = empty.clone();
             written.affected_rows = Some(1);
-            let failure = || {
-                Err(dbflux_core::DbError::NotSupported(
-                    "programmed DML/commit failure".to_string(),
-                ))
-            };
             let sequence = if scenario == "partial_chunked" {
                 let mut keys = keyed_result(&["1"]);
                 keys.columns.truncate(1);
@@ -1189,7 +1179,9 @@ fn builder_mutation_origin_owner_and_outcome_matrix(cx: &mut TestAppContext) {
                     Ok(empty.clone()),
                     Ok(keys),
                     Ok(empty.clone()),
-                    failure(),
+                    Err(dbflux_core::DbError::NotSupported(
+                        "programmed DML/commit failure".to_string(),
+                    )),
                     Ok(empty),
                 ]
             } else {
@@ -1197,15 +1189,13 @@ fn builder_mutation_origin_owner_and_outcome_matrix(cx: &mut TestAppContext) {
                     Ok(empty.clone()),
                     Ok(empty.clone()),
                     Ok(written),
-                    failure(),
+                    Err(dbflux_core::DbError::NotSupported(
+                        "programmed DML/commit failure".to_string(),
+                    )),
                     Ok(empty),
                 ]
             };
-            connection
-                .program
-                .lock()
-                .expect("program")
-                .extend(sequence);
+            connection.program.lock().expect("program").extend(sequence);
         }
         let (app_state, profile_id) = register_stub_connection(cx, connection.clone());
         cx.update(|cx| {

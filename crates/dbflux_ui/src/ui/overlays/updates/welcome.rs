@@ -401,7 +401,6 @@ impl WelcomeDialog {
         None
     }
 
-
     /// The privacy disclosure. It belongs above the footer rather than at the
     /// end of a column: as a column child it overflowed into the footer as
     /// soon as the welcome grew a telemetry section.
@@ -719,7 +718,7 @@ impl Render for WelcomeDialog {
         {
             use dbflux_ui_base::keymap::run_command;
             let dialog_for_keys = dialog.clone();
-            return div()
+            div()
                 // The workspace mounts this dialog as a flow sibling after
                 // the shell. The host must leave the normal flow or the
                 // absolutely positioned modal lands below the window with
@@ -748,7 +747,7 @@ impl Render for WelcomeDialog {
                     }
                 })
                 .child(modal)
-                .into_any_element();
+                .into_any_element()
         }
         #[cfg(not(feature = "telemetry"))]
         {
@@ -1049,10 +1048,7 @@ mod tests {
         window.simulate_keystrokes("enter");
         window.run_until_parked();
 
-        (
-            telemetry_level(&app_state, window),
-            acknowledgements.get(),
-        )
+        (telemetry_level(&app_state, window), acknowledgements.get())
     }
 
     #[cfg(feature = "telemetry")]

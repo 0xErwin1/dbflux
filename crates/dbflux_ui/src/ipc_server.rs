@@ -229,7 +229,8 @@ fn counter_request(sender: &SyncSender<CounterCommand>, body: CounterBody) -> Ip
     receive.wait(COUNTER_REPLY_TIMEOUT).unwrap_or(unavailable)
 }
 
-#[cfg(all(test, feature = "telemetry"))]
+#[cfg(test)]
+#[cfg(feature = "telemetry")]
 #[derive(Default)]
 struct AdoptionHooks<'a> {
     before: Option<Box<dyn FnOnce() + 'a>>,
@@ -562,7 +563,8 @@ async fn process_commands(
     }
 }
 
-#[cfg(all(test, feature = "telemetry", unix))]
+#[cfg(test)]
+#[cfg(all(feature = "telemetry", unix))]
 mod tests {
     use super::{
         AdoptionHooks, COUNTER_CAPACITY, COUNTER_LEASE, CounterBody, CounterCommand, CounterLedger,

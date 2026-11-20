@@ -2,7 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use dbflux_telemetry::TelemetryState;
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use std::borrow::Borrow;
 
 use crate::bootstrap::OwnedConnection;
 
@@ -16,12 +17,14 @@ pub enum TelemetryRepositoryError {
     Update,
 }
 
-pub struct TelemetryRepository {
-    connection: OwnedConnection,
+/// Generic over how the connection is held so that a repository owning a
+/// plain, non-shared connection needs no `Arc` around a `!Sync` handle.
+pub struct TelemetryRepository<C = OwnedConnection> {
+    connection: C,
 }
 
-impl TelemetryRepository {
-    pub fn new(connection: OwnedConnection) -> Self {
+impl<C: Borrow<Connection>> TelemetryRepository<C> {
+    pub fn new(connection: C) -> Self {
         Self { connection }
     }
 
@@ -34,7 +37,7 @@ impl TelemetryRepository {
         update: impl FnOnce(&mut TelemetryState) -> Result<(), TelemetryRepositoryError>,
     ) -> Result<TelemetryState, TelemetryRepositoryError> {
         let transaction =
-            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
+            Transaction::new_unchecked(self.connection.borrow(), TransactionBehavior::Immediate)
                 .map_err(|_| TelemetryRepositoryError::Storage)?;
         let stored: Option<(i64, String)> = transaction
             .query_row(
@@ -110,7 +113,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&connection)
             .expect("migrate");
-        let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+        let repository = TelemetryRepository::new(connection);
         let state = repository
             .update(clock(), |state| {
                 state.dismiss_disclosure();
@@ -132,13 +135,12 @@ mod tests {
             .replace("\"query_run\":1", "\"query_run\":1,\"query_run\":2")
             .into();
         let corrupt = serde_json::to_string(&persisted).expect("corruption fixture");
-        repository
-            .connection
-            .execute(
-                "UPDATE cfg_telemetry SET state_json = ?1 WHERE id = 1",
-                [&corrupt],
-            )
-            .expect("inject scratch corruption");
+        let raw: &Connection = repository.connection.borrow();
+        raw.execute(
+            "UPDATE cfg_telemetry SET state_json = ?1 WHERE id = 1",
+            [&corrupt],
+        )
+        .expect("inject scratch corruption");
         let called = std::cell::Cell::new(false);
         let error = repository
             .update(clock(), |_| {
@@ -148,8 +150,8 @@ mod tests {
             .expect_err("reject before publication");
         assert!(!called.get());
         assert_eq!(error.to_string(), "invalid persisted telemetry state");
-        let stored: String = repository
-            .connection
+        let raw: &Connection = repository.connection.borrow();
+        let stored: String = raw
             .query_row(
                 "SELECT state_json FROM cfg_telemetry WHERE id = 1",
                 [],
@@ -167,7 +169,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&connection)
             .expect("migrate");
-        let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+        let repository = TelemetryRepository::new(connection);
         let first = repository
             .update(clock(), |state| {
                 state.dismiss_disclosure();
@@ -183,9 +185,8 @@ mod tests {
             })
             .expect("new usage");
         drop(repository);
-        let repository = TelemetryRepository::new(std::sync::Arc::new(
-            rusqlite::Connection::open(&path).expect("restart"),
-        ));
+        let repository =
+            TelemetryRepository::new(rusqlite::Connection::open(&path).expect("restart"));
         let restarted = repository.update(clock(), queue).expect("retry");
         assert_eq!(restarted.pending(), first.pending());
         let ack = Acknowledgement::parse(
@@ -232,9 +233,8 @@ mod tests {
             .expect("off transaction");
         assert!(off.pending().is_empty());
         drop(repository);
-        let repository = TelemetryRepository::new(std::sync::Arc::new(
-            rusqlite::Connection::open(&path).expect("restart"),
-        ));
+        let repository =
+            TelemetryRepository::new(rusqlite::Connection::open(&path).expect("restart"));
         assert_eq!(
             repository.update(clock(), |_| Ok(())).expect("load off"),
             off
@@ -248,7 +248,7 @@ mod tests {
             MigrationRegistry::new()
                 .run_all(&connection)
                 .expect("migrate");
-            let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+            let repository = TelemetryRepository::new(connection);
             let initial = repository
                 .update(clock(), |state| {
                     state.dismiss_disclosure();
@@ -259,13 +259,12 @@ mod tests {
 
             let mut row = serde_json::to_value(&initial).expect("state JSON");
             row["level"] = stored.into();
-            repository
-                .connection
-                .execute(
-                    "UPDATE cfg_telemetry SET state_json = ?1 WHERE id = 1",
-                    [row.to_string()],
-                )
-                .expect("row written by an earlier build");
+            let raw: &Connection = repository.connection.borrow();
+            raw.execute(
+                "UPDATE cfg_telemetry SET state_json = ?1 WHERE id = 1",
+                [row.to_string()],
+            )
+            .expect("row written by an earlier build");
 
             let loaded = repository.update(clock(), queue).expect("load stored row");
             assert_eq!(loaded.level(), level, "{stored}");
@@ -291,7 +290,7 @@ mod tests {
                     connection
                         .busy_timeout(std::time::Duration::from_secs(5))
                         .expect("busy timeout");
-                    let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+                    let repository = TelemetryRepository::new(connection);
                     barrier.wait();
                     repository
                         .update(clock(), |state| {
@@ -310,7 +309,7 @@ mod tests {
             .map(|thread| thread.join().expect("worker"))
             .collect();
         assert_eq!(identities[0], identities[1]);
-        let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+        let repository = TelemetryRepository::new(connection);
         let state = repository
             .update(clock(), queue)
             .expect("snapshot both updates");
@@ -331,7 +330,7 @@ mod tests {
                 [],
             )
             .expect("corruption fixture");
-        let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+        let repository = TelemetryRepository::new(connection);
         let error = repository
             .update(clock(), |_| Ok(()))
             .expect_err("fail closed");
@@ -350,7 +349,7 @@ mod tests {
             MigrationRegistry::new()
                 .run_all(&connection)
                 .expect("migrate");
-            let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+            let repository = TelemetryRepository::new(connection);
             id = repository
                 .update(now, |_| Ok(()))
                 .expect("initialize")
@@ -369,7 +368,7 @@ mod tests {
             );
         }
         let connection = rusqlite::Connection::open(&path).expect("reopen");
-        let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
+        let repository = TelemetryRepository::new(connection);
         assert_eq!(
             repository
                 .update(now, |_| Ok(()))
@@ -387,10 +386,9 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&connection)
             .expect("migrate");
-        let repository = TelemetryRepository::new(std::sync::Arc::new(connection));
-        let other = TelemetryRepository::new(std::sync::Arc::new(
-            rusqlite::Connection::open(path).expect("open second"),
-        ));
+        let repository = TelemetryRepository::new(connection);
+        let other =
+            TelemetryRepository::new(rusqlite::Connection::open(path).expect("open second"));
         let now = clock();
         let first = repository.update(now, |_| Ok(())).expect("initialize");
         let second = other

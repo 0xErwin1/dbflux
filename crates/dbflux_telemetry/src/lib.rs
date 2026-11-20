@@ -896,7 +896,14 @@ mod tests {
         state.set_level(Level::Minimal);
         state.dismiss_disclosure();
         state
-            .schedule(now, &build, Platform::Linux, Architecture::Amd64, "en", None)
+            .schedule(
+                now,
+                &build,
+                Platform::Linux,
+                Architecture::Amd64,
+                "en",
+                None,
+            )
             .expect("schedule at Minimal");
 
         let kinds: Vec<&str> = state
@@ -912,7 +919,11 @@ mod tests {
                 }
             })
             .collect();
-        assert_eq!(kinds, vec!["ping", "active"], "Minimal sends ping plus active");
+        assert_eq!(
+            kinds,
+            vec!["ping", "active"],
+            "Minimal sends ping plus active"
+        );
 
         let active = state
             .pending
@@ -951,7 +962,14 @@ mod tests {
         basic.dismiss_disclosure();
         basic.set_level(Level::Basic);
         basic
-            .schedule(now, &build, Platform::Linux, Architecture::Amd64, "en", None)
+            .schedule(
+                now,
+                &build,
+                Platform::Linux,
+                Architecture::Amd64,
+                "en",
+                None,
+            )
             .expect("schedule at Basic");
         assert!(
             basic.pending.iter().any(|delivery| delivery.basic),
@@ -1054,7 +1072,11 @@ mod tests {
                 None,
             )
             .expect("acknowledged build");
-        assert_eq!(pending_pings(&state), 0, "an acknowledged build never pings again");
+        assert_eq!(
+            pending_pings(&state),
+            0,
+            "an acknowledged build never pings again"
+        );
         let other_build = Build {
             version: "1.2.3-rc.1+other".into(),
             channel: Channel::Rc,

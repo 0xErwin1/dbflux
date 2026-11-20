@@ -2,7 +2,7 @@
 //! job to a background executor. No SQLite connection crosses that boundary.
 
 use chrono::{DateTime, Utc};
-use dbflux_core::observability::usage::{UsageController, UsageFeature, UsageSource};
+use dbflux_core::observability::usage::{UsageController, UsageSource};
 use dbflux_core::observability::{
     EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
 };
@@ -457,6 +457,7 @@ pub fn last_report(
     let mut best: Option<(
         &dbflux_storage::repositories::audit::AuditEventDto,
         serde_json::Value,
+        String,
     )> = None;
     for event in &events {
         let Some(details_json) = event.details_json.as_deref() else {
@@ -465,36 +466,42 @@ pub fn last_report(
         let Ok(details) = serde_json::from_str::<serde_json::Value>(details_json) else {
             continue;
         };
-        if details["phase"].as_str() != Some("outcome") {
+        if details.get("phase").and_then(serde_json::Value::as_str) != Some("outcome") {
             continue;
         }
-        if !matches!(details["code"].as_str(), Some("stored") | Some("duplicate")) {
+        if !matches!(
+            details.get("code").and_then(serde_json::Value::as_str),
+            Some("stored") | Some("duplicate")
+        ) {
             continue;
         }
-        let Some(payload) = details["payload"].as_str().map(str::to_owned) else {
+        let Some(payload) = details
+            .get("payload")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+        else {
             continue;
         };
         if dbflux_telemetry::validate_payload(&payload).is_err() {
             continue;
         }
         let is_newer = match &best {
-            Some((current, _)) => {
+            Some((current, _, _)) => {
                 (event.created_at_epoch_ms, event.id) > (current.created_at_epoch_ms, current.id)
             }
             None => true,
         };
         if is_newer {
-            best = Some((event, details));
+            best = Some((event, details, payload));
         }
     }
-    if let Some((event, details)) = best {
-        let payload = details["payload"]
-            .as_str()
-            .expect("confirmed payload")
-            .to_owned();
+    if let Some((event, details, payload)) = best {
         return Ok(Some(TelemetryLastReport {
             payload_len: payload.len(),
-            level: details["level"].as_str().map(str::to_owned),
+            level: details
+                .get("level")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
             payload,
             ack_at_epoch_ms: event.created_at_epoch_ms,
             correlation: event
@@ -679,19 +686,22 @@ impl TelemetryScheduler {
                         if state.install_id() != expected_id {
                             return Err(TelemetryRepositoryError::Update);
                         }
-                        state.increment_batch(UsageFeature::ALL.map(|feature| {
-                            let (index, mapped) = match feature {
-                                UsageFeature::QueryRun => (0, Feature::QueryRun),
-                                UsageFeature::VisualQueryBuilder => {
-                                    (1, Feature::VisualQueryBuilder)
-                                }
-                                UsageFeature::DashboardOpen => (2, Feature::DashboardOpen),
-                                UsageFeature::ScriptRun => (3, Feature::ScriptRun),
-                                UsageFeature::McpTool => (4, Feature::McpTool),
-                                UsageFeature::SchemaInspect => (5, Feature::SchemaInspect),
-                            };
-                            (mapped, counts[index])
-                        }));
+                        let [
+                            query_run,
+                            visual_query_builder,
+                            dashboard_open,
+                            script_run,
+                            mcp_tool,
+                            schema_inspect,
+                        ] = counts;
+                        state.increment_batch([
+                            (Feature::QueryRun, query_run),
+                            (Feature::VisualQueryBuilder, visual_query_builder),
+                            (Feature::DashboardOpen, dashboard_open),
+                            (Feature::ScriptRun, script_run),
+                            (Feature::McpTool, mcp_tool),
+                            (Feature::SchemaInspect, schema_inspect),
+                        ]);
                         Ok(())
                     })
                     .map_err(|_| TelemetryError::Storage)?;
@@ -843,8 +853,10 @@ impl TelemetryScheduler {
         };
         let payload = delivery.json().to_owned();
         let basic = serde_json::from_str::<serde_json::Value>(&payload)
-            .map_err(|_| TelemetryError::Storage)?["event"]
-            == "basic";
+            .map_err(|_| TelemetryError::Storage)?
+            .get("event")
+            .and_then(serde_json::Value::as_str)
+            == Some("basic");
         let phase = Arc::new(AtomicU8::new(QUEUED));
         let id = delivery.id();
         self.lease = Some(Lease {
@@ -922,6 +934,7 @@ impl TelemetryScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::observability::usage::UsageFeature;
     use dbflux_storage::bootstrap::StorageRuntime;
     fn now() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")

@@ -72,8 +72,11 @@ pub async fn recv_telemetry_msg<R: tokio::io::AsyncRead + Unpin, T: DeserializeO
         return Err(io::Error::other("telemetry frame too large"));
     }
     let mut buffer = [0; TELEMETRY_FRAME_CAP];
-    reader.read_exact(&mut buffer[..length]).await?;
-    postcard::from_bytes(&buffer[..length]).map_err(|_| io::Error::other("invalid telemetry frame"))
+    let frame = buffer
+        .get_mut(..length)
+        .ok_or_else(|| io::Error::other("telemetry frame too large"))?;
+    reader.read_exact(frame).await?;
+    postcard::from_bytes(frame).map_err(|_| io::Error::other("invalid telemetry frame"))
 }
 
 #[cfg(test)]

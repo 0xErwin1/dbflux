@@ -292,7 +292,7 @@ mod tests {
             let capture_for_view = capture.clone();
             move |window, cx| {
                 window.observe_frames(&capture_for_view);
-                let modal = cx.new(|cx| ModalConfirm::new(cx));
+                let modal = cx.new(ModalConfirm::new);
                 slot.borrow_mut().replace(modal.clone());
                 Host {
                     modal,

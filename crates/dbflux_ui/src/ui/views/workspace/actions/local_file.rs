@@ -710,8 +710,8 @@ pub(super) mod tests {
         // for the workspace's own app state.
         #[cfg(feature = "telemetry")]
         let telemetry_owner = cx.update(|cx| {
-            let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
-                .expect("in-memory storage");
+            let runtime =
+                dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
             cx.new(|_| {
                 AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
             })

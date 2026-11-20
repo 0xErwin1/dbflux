@@ -439,7 +439,14 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.run_query_text_with(origin, query, in_new_tab, ReadOnlyEnforcement::None, window, cx);
+        self.run_query_text_with(
+            origin,
+            query,
+            in_new_tab,
+            ReadOnlyEnforcement::None,
+            window,
+            cx,
+        );
     }
 
     /// Runs `query` with the given read-only enforcement. Only auto-refresh
@@ -1668,19 +1675,18 @@ impl CodeDocument {
                 #[cfg(feature = "telemetry")]
                 if usage_current
                     && pending.usage_success
-                    && !metadata_extra
+                    && metadata_extra
                         .as_ref()
-                        .is_some_and(|extra| extra.get("script_failure").is_some())
+                        .is_none_or(|extra| extra.get("script_failure").is_none())
+                    && let Some(ticket) = pending.usage_ticket
                 {
-                    if let Some(ticket) = pending.usage_ticket {
-                        let feature = if is_script {
-                            dbflux_core::observability::usage::UsageFeature::ScriptRun
-                        } else {
-                            dbflux_core::observability::usage::UsageFeature::QueryRun
-                        };
-                        if let Err(error) = ticket.record(feature) {
-                            log::warn!("Usage completion failed: {error:?}");
-                        }
+                    let feature = if is_script {
+                        dbflux_core::observability::usage::UsageFeature::ScriptRun
+                    } else {
+                        dbflux_core::observability::usage::UsageFeature::QueryRun
+                    };
+                    if let Err(error) = ticket.record(feature) {
+                        log::warn!("Usage completion failed: {error:?}");
                     }
                 }
 

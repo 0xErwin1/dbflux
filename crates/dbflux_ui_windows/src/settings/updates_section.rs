@@ -167,11 +167,11 @@ impl UpdatesSection {
             #[cfg(feature = "telemetry")]
             telemetry_level: DEFAULT_TELEMETRY_LEVEL,
             #[cfg(feature = "telemetry")]
-            install_reset_confirm: cx.new(|cx| ModalConfirm::new(cx)),
+            install_reset_confirm: cx.new(ModalConfirm::new),
             #[cfg(feature = "telemetry")]
             report_state: ReportState::Loading,
             #[cfg(feature = "telemetry")]
-            report_preview: cx.new(|cx| ModalJsonReportPreview::new(cx)),
+            report_preview: cx.new(ModalJsonReportPreview::new),
             content_focused: false,
             cursor: 0,
             _subscriptions: vec![subscription],
@@ -1443,7 +1443,8 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "telemetry"))]
+#[cfg(test)]
+#[cfg(feature = "telemetry")]
 mod telemetry_tests {
     // Explicit imports: the parent's `gpui::*` glob would make `#[test]`
     // resolve to `gpui::test`, whose expansion recurses without bound.
@@ -1463,7 +1464,7 @@ mod telemetry_tests {
         section: Entity<UpdatesSection>,
     }
 
-    fn open<'a>(cx: &'a mut TestAppContext) -> (Harness, &'a mut VisualTestContext) {
+    fn open(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
         cx.update(|cx| {
@@ -1482,10 +1483,10 @@ mod telemetry_tests {
 
     /// Opens the section over an existing app state, so a test can change the
     /// saved state between two section lifetimes.
-    fn open_on<'a>(
-        cx: &'a mut TestAppContext,
+    fn open_on(
+        cx: &mut TestAppContext,
         app_state: Entity<AppStateEntity>,
-    ) -> (Harness, &'a mut VisualTestContext) {
+    ) -> (Harness, &mut VisualTestContext) {
         cx.update(|cx| {
             app_state.update(cx, |state, _| {
                 state.initialize_telemetry(
@@ -1656,9 +1657,7 @@ mod telemetry_tests {
     }
 
     #[gpui::test]
-    fn a_new_install_stages_basic_and_the_keys_step_through_three_levels(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_new_install_stages_basic_and_the_keys_step_through_three_levels(cx: &mut TestAppContext) {
         let (harness, window) = open(cx);
         assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Basic));
         assert_eq!(staged_level(&harness, window), TelemetryLevel::Basic);
@@ -1753,8 +1752,7 @@ mod telemetry_tests {
         window
             .update(|_, cx| {
                 app_state.update(cx, |state, _| {
-                    state
-                        .set_telemetry_level(TelemetryLevel::Off, dbflux_core::chrono::Utc::now())
+                    state.set_telemetry_level(TelemetryLevel::Off, dbflux_core::chrono::Utc::now())
                 })
             })
             .expect("saved off");

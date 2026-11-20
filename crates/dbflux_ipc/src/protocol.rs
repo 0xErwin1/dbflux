@@ -70,6 +70,16 @@ pub struct AppControlResponse {
     pub body: IpcResponse,
 }
 
+impl AppControlResponse {
+    pub fn ok(request_id: u64, body: IpcResponse) -> Self {
+        Self {
+            protocol_version: APP_CONTROL_VERSION,
+            request_id,
+            body,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,16 +156,6 @@ mod tests {
             assert_eq!(bytes[0], index);
             let decoded: IpcResponse = postcard::from_bytes(&bytes).unwrap();
             assert_eq!(postcard::to_allocvec(&decoded).unwrap(), bytes);
-        }
-    }
-}
-
-impl AppControlResponse {
-    pub fn ok(request_id: u64, body: IpcResponse) -> Self {
-        Self {
-            protocol_version: APP_CONTROL_VERSION,
-            request_id,
-            body,
         }
     }
 }

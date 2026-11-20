@@ -3041,9 +3041,7 @@ mod alter_table_integration_tests {
                 .into_iter()
                 .find(|policy| policy.id == "builtin/admin")
                 .expect("admin policy");
-            policy
-                .allowed_classes
-                .extend(policy.approval_classes.drain(..));
+            policy.allowed_classes.append(&mut policy.approval_classes);
             state
                 .runtime
                 .write()

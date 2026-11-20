@@ -35,7 +35,7 @@ impl SettingsCoordinator {
 
         let export_modal = cx.new(|cx| ExportBundleModal::new(app_state.clone(), window, cx));
         let import_panel = cx.new(|cx| ImportConnectionsPanel::new(app_state.clone(), window, cx));
-        let section_confirm = cx.new(|cx| ModalConfirm::new(cx));
+        let section_confirm = cx.new(ModalConfirm::new);
 
         let nav_search = cx.new(|cx| {
             dbflux_components::controls::InputState::new(window, cx)

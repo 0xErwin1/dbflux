@@ -156,7 +156,10 @@ impl UsageTicket {
         if self.used.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
             return Ok(false);
         }
-        gate.counts[index] = gate.counts[index].saturating_add(1).min(MAX_COUNT);
+        let Some(count) = gate.counts.get_mut(index) else {
+            return Ok(false);
+        };
+        *count = count.saturating_add(1).min(MAX_COUNT);
         Ok(true)
     }
 }

@@ -589,7 +589,10 @@ impl DataGridPanel {
 
         let task = cx.background_executor().spawn(async move {
             #[cfg(all(test, feature = "telemetry"))]
-            return super::tests::run_builder_fixture_worker(move || conn.execute(&request)).await;
+            return *super::tests::run_builder_fixture_worker(move || {
+                Box::new(conn.execute(&request))
+            })
+            .await;
             #[cfg(not(all(test, feature = "telemetry")))]
             conn.execute(&request)
         });

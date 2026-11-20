@@ -224,14 +224,11 @@ impl Workspace {
                 .dashboards
                 .dashboard_by_id(dashboard_id)
                 .is_some()
+                && let Some(ticket) = usage_ticket
+                && let Err(error) =
+                    ticket.record(dbflux_core::observability::usage::UsageFeature::DashboardOpen)
             {
-                if let Some(ticket) = usage_ticket {
-                    if let Err(error) = ticket
-                        .record(dbflux_core::observability::usage::UsageFeature::DashboardOpen)
-                    {
-                        log::warn!("Usage completion failed: {error:?}");
-                    }
-                }
+                log::warn!("Usage completion failed: {error:?}");
             }
             return;
         }
@@ -472,12 +469,11 @@ impl Workspace {
         });
         self.set_focus(FocusTarget::Document, window, cx);
         #[cfg(feature = "telemetry")]
-        if let Some(ticket) = usage_ticket {
-            if let Err(error) =
+        if let Some(ticket) = usage_ticket
+            && let Err(error) =
                 ticket.record(dbflux_core::observability::usage::UsageFeature::DashboardOpen)
-            {
-                log::warn!("Usage completion failed: {error:?}");
-            }
+        {
+            log::warn!("Usage completion failed: {error:?}");
         }
     }
 

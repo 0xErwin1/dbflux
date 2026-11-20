@@ -485,29 +485,25 @@ pub(crate) fn observe_final(result: &rmcp::model::CallToolResult) {
         .try_with(|evidence| {
             if let Some(evidence) = evidence {
                 evidence.completed.store(false, Ordering::Relaxed);
-                if result.content.len() != 1 {
+                let [content] = result.content.as_slice() else {
                     return;
-                }
-                if let Some(text) = result.content[0].as_text()
+                };
+                if let Some(text) = content.as_text()
                     && let Ok(value) = serde_json::from_str(&text.text)
                 {
                     evidence.observe_json(&value);
                 }
                 match evidence.tool {
                     // These two reviewed handlers return text only after their fallible primary work.
-                    "export_audit_logs" => {
-                        if result.content.len() == 1 && result.content[0].as_text().is_some() {
-                            evidence.completed.store(true, Ordering::Relaxed);
-                        }
+                    "export_audit_logs" if content.as_text().is_some() => {
+                        evidence.completed.store(true, Ordering::Relaxed);
                     }
-                    "delete_script" => {
-                        if result.content.len() == 1
-                            && result.content[0].as_text().is_some_and(|text| {
-                                text.text == r#"{"status": "Script deleted successfully"}"#
-                            })
-                        {
-                            evidence.completed.store(true, Ordering::Relaxed);
-                        }
+                    "delete_script"
+                        if content.as_text().is_some_and(|text| {
+                            text.text == r#"{"status": "Script deleted successfully"}"#
+                        }) =>
+                    {
+                        evidence.completed.store(true, Ordering::Relaxed);
                     }
                     _ => {}
                 }

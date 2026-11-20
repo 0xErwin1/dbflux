@@ -438,8 +438,8 @@ impl HooksSection {
         let hook_env_denylist_sub = notify_on_input_change(&input_hook_env_denylist, window, cx);
         let hook_timeout_sub = notify_on_input_change(&input_hook_timeout, window, cx);
 
-        let delete_confirm = cx.new(|cx| ModalConfirm::new(cx));
-        let protected_delete_confirm = cx.new(|cx| ModalConfirm::new(cx));
+        let delete_confirm = cx.new(ModalConfirm::new);
+        let protected_delete_confirm = cx.new(ModalConfirm::new);
         let delete_confirm_subscription =
             cx.subscribe(&delete_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
                 this.pending_delete_confirm_resolution = Some(*outcome);
@@ -1060,7 +1060,7 @@ mod confirm_tests {
         cx.new(|_| AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup"))
     }
 
-    fn open<'a>(cx: &'a mut TestAppContext) -> (Harness, &'a mut VisualTestContext) {
+    fn open(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
         cx.update(|cx| {
@@ -1189,9 +1189,9 @@ mod confirm_tests {
 
     /// A protected (unreadable) hook row, seeded the way the loader finds
     /// them: a saved canonical row whose payload is corrupted on disk.
-    fn open_with_protected_row<'a>(
-        cx: &'a mut TestAppContext,
-    ) -> (Harness, &'a mut VisualTestContext, String) {
+    fn open_with_protected_row(
+        cx: &mut TestAppContext,
+    ) -> (Harness, &mut VisualTestContext, String) {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage");
         let saved = dbflux_app::config_loader::save_hook_definitions(
             &runtime,

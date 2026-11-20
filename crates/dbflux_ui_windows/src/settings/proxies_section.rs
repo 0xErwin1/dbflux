@@ -137,8 +137,8 @@ impl ProxiesSection {
         let input_proxy_no_proxy =
             cx.new(|cx| InputState::new(window, cx).placeholder("localhost, 127.0.0.1, .internal"));
 
-        let delete_confirm = cx.new(|cx| ModalConfirm::new(cx));
-        let discard_confirm = cx.new(|cx| ModalConfirm::new(cx));
+        let delete_confirm = cx.new(ModalConfirm::new);
+        let discard_confirm = cx.new(ModalConfirm::new);
         let delete_confirm_subscription =
             cx.subscribe(&delete_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
                 this.pending_delete_confirm_resolution = Some(*outcome);
@@ -1135,7 +1135,7 @@ mod confirm_tests {
         }
     }
 
-    fn open<'a>(cx: &'a mut TestAppContext) -> (Harness, &'a mut VisualTestContext) {
+    fn open(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
         cx.update(|cx| {

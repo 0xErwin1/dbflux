@@ -10,7 +10,8 @@ mod render;
 mod shell;
 // Test-only composition harness for the telemetry usage counters; declared
 // here so it sits beside the other workspace test module.
-#[cfg(all(test, feature = "telemetry"))]
+#[cfg(test)]
+#[cfg(feature = "telemetry")]
 mod telemetry_composition_tests;
 use actions::TabPlacement;
 

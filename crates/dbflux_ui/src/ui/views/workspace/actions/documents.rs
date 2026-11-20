@@ -1538,7 +1538,10 @@ mod tests {
             name: &str,
         ) -> Result<dbflux_core::TableInfo, dbflux_core::DbError> {
             let attempt = {
-                let mut calls = self.detail_calls.lock().expect("detail calls");
+                let mut calls = self
+                    .detail_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 calls.push(name.to_string());
                 calls
                     .iter()

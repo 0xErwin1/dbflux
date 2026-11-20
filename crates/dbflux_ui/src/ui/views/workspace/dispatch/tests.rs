@@ -14,10 +14,7 @@ fn init(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
     cx.update(dbflux_ui_base::keymap::init_keymap);
     // A command that asks for a file or folder must never open the OS picker.
     cx.update(|cx| {
-        dbflux_ui_base::file_dialog::install_open_target_override(
-            cx,
-            std::sync::Arc::new(|| None),
-        )
+        dbflux_ui_base::file_dialog::install_open_target_override(cx, std::sync::Arc::new(|| None))
     });
 
     cx.update(|cx| {
