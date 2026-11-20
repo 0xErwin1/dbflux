@@ -260,15 +260,17 @@ jobs:
       # humans (replaced by every build) and a per-build immutable name that
       # nix/nightly-info.nix pins, so a pinned URL and its hash never drift.
       # The detached signature depends only on the bytes, so it is copied as
-      # is; the checksum file is regenerated for the per-build name.
+      # is; the checksum file is regenerated for the per-build name. The build
+      # id carries the run id and attempt besides the date and commit, so a
+      # rebuild of the same commit (a manual dispatch or a re-run) publishes
+      # new names instead of replacing bytes that an existing pin hashes.
       - name: Add per-build names for the Linux tarballs
         env:
-          DATE: ${{ needs.compute-version.outputs.date }}
-          SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
+          BUILD_ID: ${{ needs.compute-version.outputs.date }}-${{ needs.compute-version.outputs.short_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           for ARCH in amd64 arm64; do
-            BUILD_NAME="dbflux-linux-${ARCH}-${DATE}-${SHORT_SHA}"
+            BUILD_NAME="dbflux-linux-${ARCH}-${BUILD_ID}"
             cd "artifacts/linux-${ARCH}"
             cp "dbflux-linux-${ARCH}.tar.gz" "${BUILD_NAME}.tar.gz"
             cp "dbflux-linux-${ARCH}.tar.gz.asc" "${BUILD_NAME}.tar.gz.asc"
@@ -402,12 +404,12 @@ jobs:
       - name: Pin nix/nightly-info.nix and move nightly tag
         env:
           NIGHTLY_VERSION: ${{ needs.compute-version.outputs.version }}
-          DATE: ${{ needs.compute-version.outputs.date }}
           SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
+          BUILD_ID: ${{ needs.compute-version.outputs.date }}-${{ needs.compute-version.outputs.short_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          BUILD_AMD64="dbflux-linux-amd64-${DATE}-${SHORT_SHA}"
-          BUILD_ARM64="dbflux-linux-arm64-${DATE}-${SHORT_SHA}"
+          BUILD_AMD64="dbflux-linux-amd64-${BUILD_ID}"
+          BUILD_ARM64="dbflux-linux-arm64-${BUILD_ID}"
 
           # SRI hashes of the per-build tarballs, without requiring nix.
           # openssl and base64 are both available on ubuntu-latest.
@@ -472,38 +474,47 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
+          BUILD_ID: ${{ needs.compute-version.outputs.date }}-${{ needs.compute-version.outputs.short_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           KEEP_BUILDS: '14'
         run: |
           set -euo pipefail
           RELEASE_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly")
-          # The build's short sha is what ties its tarball, .deb and .rpm
-          # together: the tarball name ends in it and the package names carry
-          # it in the version (`-nightly+<sha>`, which GitHub may rewrite to
-          # `-nightly.<sha>` in the asset name).
+          # A tarball belongs to one build: its name ends in the build id
+          # (<date>-<sha>-<run id>-<attempt>), so two builds of the same commit
+          # count as two builds. The .deb and .rpm packages carry only the short
+          # sha in their version (`-nightly+<sha>`, which GitHub may rewrite to
+          # `-nightly.<sha>` in the asset name) and are shared by every build of
+          # that commit, so they are kept while any kept build has that sha.
           prune() {
             local ARCH="$1" PACKAGE_ARCH_RE="$2"
-            local TARBALL_RE="^dbflux-linux-${ARCH}-[0-9]{4}-[0-9]{2}-[0-9]{2}-([0-9a-f]+)\.tar\.gz(\.sha256|\.asc)?$"
+            local TARBALL_RE="^dbflux-linux-${ARCH}-([0-9]{4}-[0-9]{2}-[0-9]{2}-([0-9a-f]+)-[0-9]+-[0-9]+)\.tar\.gz(\.sha256|\.asc)?$"
             local PACKAGE_RE="-nightly[.+]([0-9a-f]+)[_.-].*${PACKAGE_ARCH_RE}\.(deb|rpm)(\.asc)?$"
-            local KEEP=("$SHORT_SHA") NAME ID
+            local KEEP_IDS=("$BUILD_ID") KEEP_SHAS=("$SHORT_SHA") NAME ID
             # Newest upload first.
             while read -r NAME; do
-              [[ "$NAME" =~ $TARBALL_RE ]] && KEEP+=("${BASH_REMATCH[1]}")
+              if [[ "$NAME" =~ $TARBALL_RE ]]; then
+                KEEP_IDS+=("${BASH_REMATCH[1]}")
+                KEEP_SHAS+=("${BASH_REMATCH[2]}")
+              fi
             done < <(
               jq -r '.assets | sort_by(.created_at) | reverse | .[].name' <<<"$RELEASE_JSON" |
-              grep -E "^dbflux-linux-${ARCH}-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]+\.tar\.gz$" |
+              grep -E "^dbflux-linux-${ARCH}-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]+-[0-9]+-[0-9]+\.tar\.gz$" |
               head -n "$KEEP_BUILDS"
             )
             while read -r ID NAME; do
-              local BUILD_SHA=""
+              local KEY="" K
+              local -a KEPT_SET=()
               if [[ "$NAME" =~ $TARBALL_RE ]]; then
-                BUILD_SHA="${BASH_REMATCH[1]}"
+                KEY="${BASH_REMATCH[1]}"
+                KEPT_SET=("${KEEP_IDS[@]}")
               elif [[ "$NAME" =~ $PACKAGE_RE ]]; then
-                BUILD_SHA="${BASH_REMATCH[1]}"
+                KEY="${BASH_REMATCH[1]}"
+                KEPT_SET=("${KEEP_SHAS[@]}")
               else
                 continue
               fi
-              local KEPT=false K
-              for K in "${KEEP[@]}"; do [[ "$BUILD_SHA" == "$K" ]] && KEPT=true && break; done
+              local KEPT=false
+              for K in "${KEPT_SET[@]}"; do [[ "$KEY" == "$K" ]] && KEPT=true && break; done
               if [[ "$KEPT" == false ]]; then
                 echo "Deleting $NAME (beyond the newest ${KEEP_BUILDS} ${ARCH} builds)"
                 gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${ID}"

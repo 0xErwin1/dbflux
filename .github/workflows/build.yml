@@ -135,35 +135,51 @@ jobs:
           # are the path packages (no `source` line) that carry the workspace
           # version; the vendored gpui crates and the gpui-mcp crates keep their
           # own versions and are left alone.
-          awk -v old="$OLD_VERSION" -v new="$VERSION" '
-            function flush(   i, is_path) {
-              is_path = 1
-              for (i = 1; i <= n; i++) if (buf[i] ~ /^source = /) is_path = 0
-              for (i = 1; i <= n; i++) {
-                if (is_path && buf[i] == "version = \"" old "\"") buf[i] = "version = \"" new "\""
-                print buf[i]
+          if [ "$OLD_VERSION" = "$VERSION" ]; then
+            # The release commit already carries this version (the release
+            # procedure bumps it before tagging): there is nothing to stamp, and
+            # neither file may differ from the commit.
+            if ! git diff --quiet -- Cargo.toml Cargo.lock; then
+              echo "::error::Cargo.toml already carries ${VERSION}, but Cargo.toml or Cargo.lock differ from the commit."
+              exit 1
+            fi
+            echo "Cargo.toml and Cargo.lock already carry ${VERSION}: nothing to stamp."
+          else
+            # The awk program counts its own replacements: counting lines that
+            # carry the new version afterwards would also count registry
+            # dependencies that happen to share it.
+            awk -v old="$OLD_VERSION" -v new="$VERSION" -v countfile="$RUNNER_TEMP/lock-stamp-count" '
+              function flush(   i, is_path) {
+                is_path = 1
+                for (i = 1; i <= n; i++) if (buf[i] ~ /^source = /) is_path = 0
+                for (i = 1; i <= n; i++) {
+                  if (is_path && buf[i] == "version = \"" old "\"") {
+                    buf[i] = "version = \"" new "\""
+                    changed++
+                  }
+                  print buf[i]
+                }
+                n = 0
               }
-              n = 0
-            }
-            /^\[\[package\]\]$/ { flush() }
-            { buf[++n] = $0 }
-            END { flush() }
-          ' Cargo.lock > Cargo.lock.stamped
-          mv Cargo.lock.stamped Cargo.lock
-          STAMPED=$(grep -c "^version = \"${VERSION}\"$" Cargo.lock)
-          if [ "$STAMPED" -lt 1 ]; then
-            echo "::error::Lockfile version stamp did not apply to any workspace member."
-            exit 1
+              /^\[\[package\]\]$/ { flush() }
+              { buf[++n] = $0 }
+              END { flush(); print changed + 0 > countfile }
+            ' Cargo.lock > Cargo.lock.stamped
+            mv Cargo.lock.stamped Cargo.lock
+            STAMPED=$(cat "$RUNNER_TEMP/lock-stamp-count")
+            if [ "$STAMPED" -lt 1 ]; then
+              echo "::error::Lockfile version stamp did not apply to any workspace member."
+              exit 1
+            fi
+            # Only those version lines may differ from the committed lockfile.
+            NUMSTAT=$(git diff --numstat Cargo.lock | cut -f1,2)
+            if [ "$NUMSTAT" != "$(printf '%s\t%s' "$STAMPED" "$STAMPED")" ] \
+              || git diff -U0 Cargo.lock | grep '^[+-][^+-]' | grep -qv '^[+-]version = '; then
+              echo "::error::Lockfile stamp changed more than the workspace versions."
+              exit 1
+            fi
           fi
-          # Only those version lines may differ from the committed lockfile.
-          NUMSTAT=$(git diff --numstat Cargo.lock | cut -f1,2)
-          if [ "$NUMSTAT" != "$(printf '%s\t%s' "$STAMPED" "$STAMPED")" ] \
-            || git diff -U0 Cargo.lock | grep '^[+-][^+-]' | grep -qv '^[+-]version = '; then
-            echo "::error::Lockfile stamp changed more than the workspace versions."
-            exit 1
-          fi
-          # The build runs inside scripts/appimage-build.sh, which does not pass
-          # --locked; keep the stamped lockfile to prove the build left it alone.
+          # Keep the stamped lockfile to prove the build left it alone.
           cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.stamped"
 
       - name: Make room for the release build
@@ -187,9 +203,9 @@ jobs:
       - name: Build DBFlux
         # The stamp above rewrites the workspace versions in Cargo.toml and
         # Cargo.lock together, so the lockfile stays valid and no dependency is
-        # re-resolved. scripts/appimage-build.sh runs cargo without --locked, so
-        # the check after the build requires the lockfile to be byte-identical
-        # to the stamped one.
+        # re-resolved. scripts/appimage-build.sh builds with --locked, so Cargo
+        # never rewrites the lockfile, and the check after the build requires it
+        # to be byte-identical to the stamped one.
         #
         # A sampler records memory, swap and the largest rustc processes every 30
         # seconds, like the macOS build, so a regression can be traced to memory
@@ -626,32 +642,49 @@ jobs:
           # are the path packages (no `source` line) that carry the workspace
           # version; the vendored gpui crates and the gpui-mcp crates keep their
           # own versions and are left alone.
-          awk -v old="$OLD_VERSION" -v new="$VERSION" '
-            function flush(   i, is_path) {
-              is_path = 1
-              for (i = 1; i <= n; i++) if (buf[i] ~ /^source = /) is_path = 0
-              for (i = 1; i <= n; i++) {
-                if (is_path && buf[i] == "version = \"" old "\"") buf[i] = "version = \"" new "\""
-                print buf[i]
+          if [ "$OLD_VERSION" = "$VERSION" ]; then
+            # The release commit already carries this version (the release
+            # procedure bumps it before tagging): there is nothing to stamp, and
+            # neither file may differ from the commit.
+            if ! git diff --quiet -- Cargo.toml Cargo.lock; then
+              echo "::error::Cargo.toml already carries ${VERSION}, but Cargo.toml or Cargo.lock differ from the commit."
+              exit 1
+            fi
+            echo "Cargo.toml and Cargo.lock already carry ${VERSION}: nothing to stamp."
+          else
+            # The awk program counts its own replacements: counting lines that
+            # carry the new version afterwards would also count registry
+            # dependencies that happen to share it.
+            awk -v old="$OLD_VERSION" -v new="$VERSION" -v countfile="$RUNNER_TEMP/lock-stamp-count" '
+              function flush(   i, is_path) {
+                is_path = 1
+                for (i = 1; i <= n; i++) if (buf[i] ~ /^source = /) is_path = 0
+                for (i = 1; i <= n; i++) {
+                  if (is_path && buf[i] == "version = \"" old "\"") {
+                    buf[i] = "version = \"" new "\""
+                    changed++
+                  }
+                  print buf[i]
+                }
+                n = 0
               }
-              n = 0
-            }
-            /^\[\[package\]\]$/ { flush() }
-            { buf[++n] = $0 }
-            END { flush() }
-          ' Cargo.lock > Cargo.lock.stamped
-          mv Cargo.lock.stamped Cargo.lock
-          STAMPED=$(grep -c "^version = \"${VERSION}\"$" Cargo.lock)
-          if [ "$STAMPED" -lt 1 ]; then
-            echo "::error::Lockfile version stamp did not apply to any workspace member."
-            exit 1
-          fi
-          # Only those version lines may differ from the committed lockfile.
-          NUMSTAT=$(git diff --numstat Cargo.lock | cut -f1,2)
-          if [ "$NUMSTAT" != "$(printf '%s\t%s' "$STAMPED" "$STAMPED")" ] \
-            || git diff -U0 Cargo.lock | grep '^[+-][^+-]' | grep -qv '^[+-]version = '; then
-            echo "::error::Lockfile stamp changed more than the workspace versions."
-            exit 1
+              /^\[\[package\]\]$/ { flush() }
+              { buf[++n] = $0 }
+              END { flush(); print changed + 0 > countfile }
+            ' Cargo.lock > Cargo.lock.stamped
+            mv Cargo.lock.stamped Cargo.lock
+            STAMPED=$(cat "$RUNNER_TEMP/lock-stamp-count")
+            if [ "$STAMPED" -lt 1 ]; then
+              echo "::error::Lockfile version stamp did not apply to any workspace member."
+              exit 1
+            fi
+            # Only those version lines may differ from the committed lockfile.
+            NUMSTAT=$(git diff --numstat Cargo.lock | cut -f1,2)
+            if [ "$NUMSTAT" != "$(printf '%s\t%s' "$STAMPED" "$STAMPED")" ] \
+              || git diff -U0 Cargo.lock | grep '^[+-][^+-]' | grep -qv '^[+-]version = '; then
+              echo "::error::Lockfile stamp changed more than the workspace versions."
+              exit 1
+            fi
           fi
 
       - name: Build DBFlux
