@@ -1,7 +1,7 @@
 # Vendored `gpui-pre-linux`
 
 This directory is the complete published `gpui-pre-linux` 0.3.9 crate (Zed's `gpui_linux` at
-`zed@93d7456`) with two local patches to the Wayland client.
+`zed@93d7456`) with local patches to the Wayland and X11 clients, listed below.
 
 - Upstream: [`gpui-pre-linux` 0.3.9 on crates.io](https://crates.io/crates/gpui-pre-linux/0.3.9), from the crates.io registry archive `gpui-pre-linux-0.3.9.crate`.
 - License: Apache-2.0; see `LICENSE-APACHE` and the published `Cargo.toml`.
@@ -63,10 +63,71 @@ The first commit that added this directory carries the published source unchange
     so a callback that arrives first, or a late callback after a timer draw, adds no draw.
   Covered by `frame_loop_tests` (`cargo test -p gpui-pre-linux --lib`).
 
+- `src/linux/x11/xdnd_source.rs`, `src/linux/x11/xdnd_drag.rs`, `src/linux/x11/client.rs`,
+  `src/linux/x11/window.rs`, `src/linux/file_uri_list.rs`: an X11 window can drag files out to
+  other applications. Upstream implements only the XDND target side, so
+  `can_start_external_drag` stayed false and a drag past the window edge never left the
+  window. The window now owns `XdndSelection`, grabs the master pointer (and the keyboard, so
+  Escape cancels), follows the pointer down the window tree to the first window with
+  `XdndAware` (through `XdndProxy`, speaking the lower of its version and 5), and sends
+  `XdndEnter`/`XdndPosition`/`XdndLeave`/`XdndDrop`. It serves `text/uri-list` (and `TARGETS`)
+  for `XdndSelection`, encoded as on Wayland (`file_uri_list` moved to a module both
+  backends share). The protocol rules are `SourceSession`, a state machine that does no I/O:
+  one `XdndPosition` in flight until its `XdndStatus`, the status rectangle, a drop only when
+  the last status accepted (otherwise `XdndLeave`), `XdndFinished` or a 10 s timeout ending
+  the session, and exactly one `FileDropEvent::Ended` per session. Pointer and key events of
+  the dragging window are consumed while the session runs. Covered by `xdnd_source::tests`
+  and `file_uri_list::tests`, plus `xdnd_drag::tests`, which find targets on a real X server
+  named by `GPUI_X11_TEST_DISPLAY` (for example a scratch Xvfb) and skip without it.
+
+- `src/linux/x11/client.rs`, `src/linux/x11/window.rs`: the X11 target side refuses a drop that
+  nothing would take. Upstream answered every `XdndPosition` with `XdndStatus` accept and the
+  proposed action, so a source showed an accepting cursor over elements that ignore the
+  files. The status now follows `DispatchEventResult::external_drop_accepted` (the `gpui-pre`
+  patch `external-drop-acceptance.patch`): accept with `XdndActionCopy`, or no accept and
+  action `None`. The answer depends on the dragged paths, so the first status of a drag waits
+  for them to arrive (`status_pending`) and is sent once `FileDropEvent::Entered` has been
+  dispatched; later ones are sent after each `FileDropEvent::Pending`. A drag that offers no
+  type this backend reads, or whose paths cannot be read, is refused. A window that does not
+  report an answer (blocked, or no input callback) still accepts, as before. Wayland still
+  accepts the offer when it arrives. Covered by `linux::external_drop_tests`
+  (`cargo test -p gpui-pre-linux --lib`).
+
+- `src/linux/wayland/drag_source.rs`, `src/linux/wayland/client.rs`,
+  `src/linux/wayland/clipboard.rs`: dropping files on another application finishes promptly.
+  Upstream ended the app's drag only on `dnd_finished` or `cancelled`, so a target that never
+  finishes (an older `wl_data_offer` version has no `finish`, and some targets finish late)
+  left the window in a drag, with the pointer stuck in drag state, until the source went away.
+  `DragSession` now ends the drag for the app (`FileDropEvent::Ended`) on `dnd_drop_performed`,
+  keeps the data source alive so the target can still read the data, and releases it on
+  `dnd_finished`, `cancelled` or after 10 s; `Ended` is sent exactly once per session. Events
+  of a source a newer drag replaced are ignored (it is destroyed on `cancelled`), and starting
+  a drag releases the previous source. `send_bytes` now writes to the target's pipe at once
+  (making it non-blocking) and closes it, so the target reads the data and the end of file
+  without waiting for another pass of the event loop; only what a full pipe cannot take is
+  left to the loop, and a failed registration is logged instead of panicking. The clipboard
+  shares `send_bytes`. Covered by `drag_source::tests` and `clipboard::tests`.
+
+- `src/linux/wayland/drag_icon.rs`, `src/linux/wayland/client.rs`,
+  `src/linux/wayland/window.rs`, `src/linux/x11/xdnd_drag.rs`, `src/linux/x11/xdnd_source.rs`,
+  `src/linux/x11/client.rs`: a drag that leaves the window keeps a picture at the pointer.
+  Upstream passed no icon to `wl_data_device.start_drag`, so the compositor drew nothing once
+  the pointer left the window. A `wl_shm` icon surface is now rendered on the CPU
+  (`drag_icon::render`, no fonts or assets): a page or folder glyph (a folder only when every
+  dragged entry is one), a second glyph stacked behind it and a count badge (`99+` past 99)
+  when several entries are dragged. It is rendered at the source window's buffer scale, sits
+  below and right of the pointer, and is destroyed with the data source. A failure to build it
+  is logged and the drag goes on without an icon. X11 has no drag icon in XDND: the grabbed
+  pointer shows the `copy` cursor while the target under it accepted the drop and
+  `not-allowed` otherwise, switched by grabbing again with the new cursor. Covered by
+  `drag_icon::tests`, `xdnd_source::tests::a_drop_is_accepted_only_after_the_target_says_so`
+  and `client::tests::the_drag_icon_pixels_are_shared_through_a_file`.
+
 ## Refreshing
 
 Replace this directory with the new published crate, re-apply the patches above, and bump
 the `gpui-pre-platform` version in the root `Cargo.toml`. When a published `gpui-pre-linux`
 keeps the modifiers on a keymap change itself, drop that patch; when it keeps drawing while
-frame callbacks are withheld, drop that one. With neither left, delete this directory and its
+frame callbacks are withheld, drop that one; when it can start an X11 file drag, drop the XDND
+source. With neither left, delete this directory and its
 `[patch.crates-io]` entry.

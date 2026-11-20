@@ -2452,6 +2452,20 @@ impl Window {
 pub struct DispatchEventResult {
     pub propagate: bool,
     pub default_prevented: bool,
+    /// For a platform file drag moving over the window ([`FileDropEvent::Entered`] and
+    /// [`FileDropEvent::Pending`]): whether an element under the pointer would take a drop of the
+    /// dragged data. `None` for every other event, and when there is no drag to ask about.
+    pub external_drop_accepted: Option<bool>,
+}
+
+/// Asks the drop listeners under the pointer whether they would take the active drag, without
+/// dropping it. Dispatched through the mouse listeners, so it reaches the same elements, in the
+/// same order, as the mouse-up that completes a drop.
+pub(crate) struct DropAcceptanceProbe {
+    pub(crate) drag_type: TypeId,
+    pub(crate) value: Arc<dyn Any>,
+    /// Set by the first listener of `drag_type` under the pointer, like the one that takes a drop.
+    pub(crate) accepted: Cell<Option<bool>>,
 }
 
 /// Indicates which region of the window is visible. Content falling outside of this mask will not be
@@ -6216,6 +6230,7 @@ impl Window {
             return DispatchEventResult {
                 propagate: true,
                 default_prevented: false,
+                external_drop_accepted: None,
             };
         }
         #[cfg(feature = "profiler")]
@@ -6249,6 +6264,10 @@ impl Window {
         cx.propagate_event = true;
         // Handlers may set this to true by calling `prevent_default`.
         self.default_prevented = false;
+        let is_file_drop_motion = matches!(
+            &event,
+            PlatformInput::FileDrop(FileDropEvent::Entered { .. } | FileDropEvent::Pending { .. })
+        );
 
         let event = match event {
             // Track the mouse position with our own state, since accessing the platform
@@ -6396,10 +6415,50 @@ impl Window {
         #[cfg(feature = "profiler")]
         self.window_profiler.end_input(caused_invalidation);
 
+        let propagate = cx.propagate_event;
+        let external_drop_accepted = if is_file_drop_motion {
+            self.probe_drop_acceptance(cx)
+        } else {
+            None
+        };
         DispatchEventResult {
-            propagate: cx.propagate_event,
+            propagate,
             default_prevented: self.default_prevented,
+            external_drop_accepted,
         }
+    }
+
+    /// Whether a drop of the active drag at the pointer would be taken, or `None` without a drag.
+    fn probe_drop_acceptance(&mut self, cx: &mut App) -> Option<bool> {
+        let drag = cx.active_drag.as_ref()?;
+        let probe = DropAcceptanceProbe {
+            drag_type: drag.value.as_ref().type_id(),
+            value: drag.value.clone(),
+            accepted: Cell::new(None),
+        };
+        let propagate = cx.propagate_event;
+        cx.propagate_event = true;
+        self.dispatch_mouse_event(&probe, cx);
+        cx.propagate_event = propagate;
+        Some(probe.accepted.get().unwrap_or(false))
+    }
+
+    /// Register a listener for [`DropAcceptanceProbe`]s on this node for the next frame.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub(crate) fn on_drop_acceptance_probe(
+        &mut self,
+        mut listener: impl FnMut(&DropAcceptanceProbe, DispatchPhase, &mut Window, &mut App) + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+
+        self.next_frame.mouse_listeners.push(Some(Box::new(
+            move |event: &dyn Any, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
+                if let Some(probe) = event.downcast_ref() {
+                    listener(probe, phase, window, cx)
+                }
+            },
+        )));
     }
 
     fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {

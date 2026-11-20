@@ -39,6 +39,8 @@ x11rb::atom_manager! {
     pub XcbAtoms: AtomsCookie {
         XA_ATOM,
         XdndAware,
+        XdndProxy,
+        TARGETS,
         XdndStatus,
         XdndEnter,
         XdndLeave,
@@ -1193,17 +1195,19 @@ impl X11WindowStatePtr {
         }
     }
 
-    pub fn handle_input(&self, input: PlatformInput) {
+    pub fn handle_input(&self, input: PlatformInput) -> gpui::DispatchEventResult {
         if self.is_blocked() {
-            return;
+            return gpui::DispatchEventResult::default();
         }
+        let mut outcome = gpui::DispatchEventResult::default();
         let callback = self.callbacks.borrow_mut().input.take();
         if let Some(mut fun) = callback {
             let result = fun(input.clone());
             self.callbacks.borrow_mut().input = Some(fun);
             if !result.propagate {
-                return;
+                return result;
             }
+            outcome = result;
         }
         if let PlatformInput::KeyDown(event) = input {
             // only allow shift modifier when inserting text
@@ -1219,6 +1223,7 @@ impl X11WindowStatePtr {
                 }
             }
         }
+        outcome
     }
 
     pub fn handle_ime_commit(&self, text: String) {
@@ -1827,6 +1832,17 @@ impl PlatformWindow for X11Window {
             ),
         )
         .log_err();
+    }
+
+    fn can_start_external_drag(&self) -> bool {
+        true
+    }
+
+    fn start_external_drag(&self, payload: &gpui::ExternalDragPayload) -> bool {
+        let client = self.0.state.borrow().client.clone();
+        client
+            .get_client()
+            .is_some_and(|client| client.start_external_drag(self.0.x_window, payload))
     }
 
     fn start_window_move(&self) {
