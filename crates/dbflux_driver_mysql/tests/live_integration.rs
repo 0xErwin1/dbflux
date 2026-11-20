@@ -114,6 +114,86 @@ fn mysql_fetch_dependents_lists_views_and_foreign_key_children() -> Result<(), D
     })
 }
 
+/// The text type MySQL uses for an untyped column holds a value longer than
+/// `TEXT`'s 65,535-byte limit, in strict mode.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_text_column_type_holds_values_longer_than_text() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        let text_type = connection.dialect().text_column_type();
+        connection.execute(&QueryRequest::new(
+            "SET SESSION sql_mode = 'STRICT_ALL_TABLES'",
+        ))?;
+        connection.execute(&QueryRequest::new(format!(
+            "CREATE TABLE long_text (v {text_type})"
+        )))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO long_text (v) VALUES (REPEAT('x', 65536))",
+        ))?;
+
+        let length =
+            connection.execute(&QueryRequest::new("SELECT CHAR_LENGTH(v) FROM long_text"))?;
+        assert_eq!(length.rows, vec![vec![dbflux_core::Value::Int(65536)]]);
+        Ok(())
+    })
+}
+
+/// `generated_columns` names the stored and virtual generated columns, leaves
+/// out expression defaults (`DEFAULT_GENERATED`), and an `INSERT` that omits
+/// the generated columns replays.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_generated_columns_exclude_defaults_and_replay() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE gen_cols (
+                id INT PRIMARY KEY,
+                price INT NOT NULL,
+                doubled INT GENERATED ALWAYS AS (price * 2) STORED,
+                tripled INT GENERATED ALWAYS AS (price * 3) VIRTUAL,
+                `123` INT GENERATED ALWAYS AS (price + 1) STORED,
+                `0123` INT GENERATED ALWAYS AS (price + 2) STORED,
+                label VARCHAR(40) DEFAULT (CONCAT('n', 1))
+            )",
+        ))?;
+
+        let expected = vec![
+            "doubled".to_string(),
+            "tripled".to_string(),
+            "123".to_string(),
+            "0123".to_string(),
+        ];
+        assert_eq!(connection.generated_columns(None, "gen_cols")?, expected);
+        assert_eq!(
+            connection.generated_columns(Some("testdb"), "gen_cols")?,
+            expected
+        );
+
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO gen_cols (id, price) VALUES (1, 5)",
+        ))?;
+        let replayed = connection.execute(&QueryRequest::new(
+            "SELECT doubled, tripled, `123`, `0123` FROM gen_cols",
+        ))?;
+        assert_eq!(
+            replayed.rows,
+            vec![vec![
+                Value::Int(10),
+                Value::Int(15),
+                Value::Int(6),
+                Value::Int(7)
+            ]]
+        );
+
+        Ok(())
+    })
+}
+
 #[test]
 #[ignore = "requires Docker daemon"]
 fn mysql_schema_introspection() -> Result<(), DbError> {

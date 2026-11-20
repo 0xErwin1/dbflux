@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dbflux_core::{CancelToken, Connection, TaskId, TaskKind, TaskTarget};
+use dbflux_export::FormatOptions;
 use dbflux_transfer::TableTransferStatus;
 use dbflux_transfer::export::{
     ExportOptions, ExportOutcome, ExportTable, ExportedTable, run_export,
@@ -26,8 +27,12 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
 use crate::export_wizard::ExportWizard;
+use crate::export_wizard::notes::{ResultKind, ResultRow};
 use crate::export_wizard::phases::{ExportPhase, RunState};
-use crate::labels::{export_summary_label, export_table_status_line, export_wizard_task_label};
+use crate::labels::{
+    export_not_attempted_after_failure_line, export_summary_label, export_table_status_line,
+    export_wizard_task_label,
+};
 use crate::progress_forwarding::spawn_task_progress_forwarder;
 
 /// Live counters for the running export: which table (by the wizard's fixed
@@ -101,6 +106,24 @@ pub(crate) fn build_export_tables(
     Ok(export_tables)
 }
 
+/// The engine's options for one run: the wizard's format choices travel with
+/// the format and segment size, so the files and the manifest use them.
+fn build_export_options<'a>(
+    driver_id: &'a str,
+    database: &'a str,
+    format: FileFormat,
+    segment_size: u32,
+    format_options: FormatOptions,
+) -> ExportOptions<'a> {
+    ExportOptions {
+        driver_id,
+        database,
+        format,
+        segment_size,
+        format_options,
+    }
+}
+
 /// The owned inputs handed to the off-thread run task.
 pub(crate) struct ExportRunContext {
     pub(crate) connection: Arc<dyn Connection>,
@@ -110,6 +133,7 @@ pub(crate) struct ExportRunContext {
     pub(crate) output_dir: PathBuf,
     pub(crate) format: FileFormat,
     pub(crate) segment_size: u32,
+    pub(crate) format_options: FormatOptions,
     pub(crate) cancel_token: CancelToken,
 }
 
@@ -131,7 +155,10 @@ struct RunResolution {
     report: Option<String>,
     toast_success: bool,
     summary: String,
-    warnings: Vec<String>,
+    /// One row per planned table, in plan order.
+    rows: Vec<ResultRow>,
+    /// The engine's own warnings, which belong to no table.
+    notes: Vec<String>,
 }
 
 fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResolution {
@@ -142,7 +169,8 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
             report: None,
             toast_success: false,
             summary: dbflux_i18n::t!("document.export_wizard.toast.cancelled"),
-            warnings: Vec::new(),
+            rows: result_rows(&outcome.tables),
+            notes: outcome.warnings,
         },
         Ok(outcome) => {
             let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
@@ -151,7 +179,8 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
             });
 
             let summary = summarize(&outcome);
-            let warnings = itemized_status_lines(&outcome.tables, &outcome.warnings);
+            let rows = result_rows(&outcome.tables);
+            let notes = outcome.warnings;
 
             match failed_table {
                 Some((table, error)) => RunResolution {
@@ -164,7 +193,8 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
                     )),
                     toast_success: false,
                     summary,
-                    warnings,
+                    rows,
+                    notes,
                 },
                 None => RunResolution {
                     task_action: RunTaskAction::Complete,
@@ -172,7 +202,8 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
                     report: None,
                     toast_success: true,
                     summary,
-                    warnings,
+                    rows,
+                    notes,
                 },
             }
         }
@@ -184,7 +215,8 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
                 report: Some(message.clone()),
                 toast_success: false,
                 summary: message,
-                warnings: Vec::new(),
+                rows: Vec::new(),
+                notes: Vec::new(),
             }
         }
     }
@@ -218,26 +250,28 @@ fn summarize(outcome: &ExportOutcome) -> String {
     export_summary_label(completed, rows, skipped, failed)
 }
 
-/// Renders one status line per planned table when the run left any table
-/// `Failed` or `NotStarted`, so the user sees exactly which tables succeeded,
-/// which one failed with what error, and which were never attempted — not
-/// just the last error swallowed into a single toast (R4-002/B-007). On a
-/// fully successful/skipped run, only the engine's own warnings are shown.
-fn itemized_status_lines(tables: &[ExportedTable], engine_warnings: &[String]) -> Vec<String> {
-    let has_issue = tables.iter().any(|t| {
-        matches!(
-            t.status,
-            TableTransferStatus::Failed { .. } | TableTransferStatus::NotStarted
-        )
-    });
+/// One result row per planned table, so the user sees which tables
+/// succeeded, which one failed with what error, which one a cancel stopped
+/// partway, and which were never attempted. A table never attempted because
+/// an earlier one failed says so.
+fn result_rows(tables: &[ExportedTable]) -> Vec<ResultRow> {
+    let stopped_by_failure = tables
+        .iter()
+        .any(|table| matches!(table.status, TableTransferStatus::Failed { .. }));
 
-    if !has_issue {
-        return engine_warnings.to_vec();
-    }
+    tables
+        .iter()
+        .map(|table| {
+            let kind = ResultKind::of(&table.status);
+            let text = if kind == ResultKind::NotAttempted && stopped_by_failure {
+                export_not_attempted_after_failure_line(&table_label(&table.schema, &table.name))
+            } else {
+                table_status_line(table)
+            };
 
-    let mut lines: Vec<String> = tables.iter().map(table_status_line).collect();
-    lines.extend(engine_warnings.iter().cloned());
-    lines
+            ResultRow { kind, text }
+        })
+        .collect()
 }
 
 fn table_status_line(table: &ExportedTable) -> String {
@@ -284,6 +318,7 @@ impl ExportWizard {
         let driver_id = connection.metadata().id.clone();
         let format = self.selected_format();
         let segment_size = self.segment_size;
+        let format_options = self.format_options.clone();
         let table_specs: Vec<(Option<String>, String)> = self
             .tables
             .iter()
@@ -293,7 +328,8 @@ impl ExportWizard {
         self.phase = ExportPhase::Run;
         self.run_state = RunState::Running;
         self.result_summary = None;
-        self.result_warnings.clear();
+        self.result_rows.clear();
+        self.result_notes.clear();
         *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = RunProgress::default();
 
         let output_dir = base_dir.join(format!(
@@ -365,6 +401,7 @@ impl ExportWizard {
                         output_dir,
                         format,
                         segment_size,
+                        format_options,
                         cancel_token,
                     },
                     task_id,
@@ -405,6 +442,7 @@ impl ExportWizard {
                 output_dir,
                 format,
                 segment_size,
+                format_options,
                 cancel_token,
             } = run;
             let output_dir_for_toast = output_dir.clone();
@@ -412,12 +450,13 @@ impl ExportWizard {
             let export_result = cx
                 .background_executor()
                 .spawn(async move {
-                    let options = ExportOptions {
-                        driver_id: &driver_id,
-                        database: &database,
+                    let options = build_export_options(
+                        &driver_id,
+                        &database,
                         format,
                         segment_size,
-                    };
+                        format_options,
+                    );
 
                     run_export(
                         &connection,
@@ -444,7 +483,8 @@ impl ExportWizard {
                 report,
                 toast_success,
                 summary,
-                warnings,
+                rows,
+                notes,
             } = resolve_run_outcome(export_result);
 
             // The run's task MUST reach a terminal state and any failure MUST
@@ -489,7 +529,8 @@ impl ExportWizard {
                 this.run_state = RunState::Done;
                 this.cancel_token = None;
                 this.result_summary = Some(summary);
-                this.result_warnings = warnings;
+                this.result_rows = rows;
+                this.result_notes = notes;
                 cx.notify();
             })
             .ok();
@@ -511,10 +552,42 @@ mod tests {
     // blows rustc's macro recursion limit in this crate — import only what
     // the tests need (see `import_wizard::tests` for the same constraint).
     use super::{
-        ExportOutcome, ExportedTable, RunTaskAction, itemized_status_lines, resolve_run_outcome,
-        summarize, table_status_line,
+        ExportOutcome, ExportedTable, ResultKind, ResultRow, RunTaskAction, build_export_options,
+        resolve_run_outcome, result_rows, summarize, table_status_line,
     };
-    use dbflux_transfer::{TableTransferStatus, TransferError};
+    use dbflux_export::{CsvDelimiter, DateFormat, FormatOptions, TextEncoding};
+    use dbflux_transfer::{FileFormat, TableTransferStatus, TransferError};
+
+    #[test]
+    fn the_chosen_format_options_reach_the_engine_options() {
+        let chosen = FormatOptions {
+            delimiter: CsvDelimiter::Semicolon,
+            encoding: TextEncoding::Windows1252,
+            null_text: "\\N".to_string(),
+            date_format: DateFormat::Epoch,
+            sql_batch_size: 50,
+        };
+
+        let options = build_export_options("postgres", "app", FileFormat::Csv, 250, chosen.clone());
+
+        assert_eq!(options.format_options, chosen);
+        assert_eq!(options.format, FileFormat::Csv);
+        assert_eq!(options.segment_size, 250);
+        assert_eq!(options.driver_id, "postgres");
+        assert_eq!(options.database, "app");
+    }
+
+    #[test]
+    fn default_choices_leave_the_engine_options_at_their_defaults() {
+        let options = build_export_options(
+            "sqlite",
+            "main",
+            FileFormat::Json,
+            500,
+            FormatOptions::default(),
+        );
+        assert!(options.format_options.is_default());
+    }
 
     fn exported(schema: Option<&str>, name: &str, status: TableTransferStatus) -> ExportedTable {
         ExportedTable {
@@ -540,7 +613,11 @@ mod tests {
     #[test]
     fn resolve_run_outcome_cancelled_run_skips_task_error_and_toast() {
         let result = Ok(outcome(
-            vec![exported(None, "users", TableTransferStatus::NotStarted)],
+            vec![
+                exported(None, "users", TableTransferStatus::Completed { rows: 4 }),
+                exported(None, "orders", TableTransferStatus::Cancelled { rows: 2 }),
+                exported(None, "items", TableTransferStatus::NotStarted),
+            ],
             Vec::new(),
             true,
         ));
@@ -552,7 +629,9 @@ mod tests {
         assert!(resolution.report.is_none());
         assert!(!resolution.toast_success);
         assert_eq!(resolution.summary, "Export cancelled");
-        assert!(resolution.warnings.is_empty());
+        assert_eq!(resolution.rows.len(), 3);
+        assert!(resolution.rows[1].text.contains("orders"));
+        assert!(resolution.rows[1].text.contains('2'));
     }
 
     #[test]
@@ -580,7 +659,7 @@ mod tests {
             resolution.summary,
             "Exported 2 table(s), 15 row(s) total (0 skipped)"
         );
-        assert!(resolution.warnings.is_empty());
+        assert!(resolution.notes.is_empty());
     }
 
     #[test]
@@ -625,7 +704,7 @@ mod tests {
         assert!(details.contains("users: completed (3 row(s))"));
         assert!(details.contains("orders: FAILED — constraint violation"));
         assert!(details.contains("line_items: not attempted"));
-        assert_eq!(resolution.warnings.len(), 3);
+        assert_eq!(resolution.rows.len(), 3);
     }
 
     #[test]
@@ -646,7 +725,7 @@ mod tests {
         );
         assert!(!resolution.toast_success);
         assert_eq!(resolution.summary, "Export failed: sink error: disk full");
-        assert!(resolution.warnings.is_empty());
+        assert!(resolution.notes.is_empty());
     }
 
     #[test]
@@ -674,18 +753,33 @@ mod tests {
     }
 
     #[test]
-    fn itemized_status_lines_returns_only_engine_warnings_when_every_table_finished_cleanly() {
+    fn result_rows_list_every_table_even_when_the_run_was_clean() {
         let tables = vec![
             exported(None, "a", TableTransferStatus::Completed { rows: 1 }),
             exported(None, "b", TableTransferStatus::Skipped),
         ];
-        let warnings = vec!["heads up".to_string()];
 
-        assert_eq!(itemized_status_lines(&tables, &warnings), warnings);
+        let rows = result_rows(&tables);
+
+        assert_eq!(
+            rows,
+            vec![
+                ResultRow {
+                    kind: ResultKind::Completed,
+                    text: "a: completed (1 row(s))".to_string()
+                },
+                ResultRow {
+                    kind: ResultKind::Skipped,
+                    text: "b: skipped".to_string()
+                },
+            ]
+        );
     }
 
+    /// A table the run never reached after a failure says why, with the
+    /// board's wording; without a failure (a cancel) it keeps the plain line.
     #[test]
-    fn itemized_status_lines_lists_every_table_when_any_table_failed_or_was_not_started() {
+    fn result_rows_explain_a_table_the_failure_stopped_the_run_before() {
         let tables = vec![
             exported(
                 Some("public"),
@@ -699,19 +793,28 @@ mod tests {
                     error: "timeout".to_string(),
                 },
             ),
-            exported(None, "c", TableTransferStatus::NotStarted),
+            exported(Some("public"), "c", TableTransferStatus::NotStarted),
         ];
-        let warnings = vec!["engine note".to_string()];
+
+        let rows = result_rows(&tables);
 
         assert_eq!(
-            itemized_status_lines(&tables, &warnings),
+            rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
             vec![
-                "public.a: completed (1 row(s))".to_string(),
-                "b: FAILED — timeout".to_string(),
-                "c: not attempted".to_string(),
-                "engine note".to_string(),
+                ResultKind::Completed,
+                ResultKind::Failed,
+                ResultKind::NotAttempted
             ]
         );
+        assert_eq!(rows[0].text, "public.a: completed (1 row(s))");
+        assert_eq!(rows[1].text, "b: FAILED — timeout");
+        assert_eq!(
+            rows[2].text,
+            "public.c: not attempted: the export stopped at the failed table"
+        );
+
+        let cancelled = result_rows(&[exported(None, "c", TableTransferStatus::NotStarted)]);
+        assert_eq!(cancelled[0].text, "c: not attempted");
     }
 
     #[test]

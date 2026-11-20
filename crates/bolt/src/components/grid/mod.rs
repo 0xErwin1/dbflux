@@ -225,6 +225,7 @@ pub fn cell_paint(
             CellTone::Success => colors.success,
             CellTone::Warning => colors.warning,
             CellTone::Danger => colors.danger,
+            CellTone::Expression => colors.tint,
             CellTone::Normal | CellTone::PendingInsert | CellTone::Error => {
                 if is_active {
                     colors.strong
@@ -454,6 +455,7 @@ pub fn render_rows(
                                         CellTone::Success => colors.success,
                                         CellTone::Warning => colors.warning,
                                         CellTone::Danger => colors.danger,
+                                        CellTone::Expression => colors.tint,
                                         CellTone::Normal
                                         | CellTone::PendingInsert
                                         | CellTone::Error => colors.foreground,

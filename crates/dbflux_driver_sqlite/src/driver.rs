@@ -193,6 +193,20 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
 pub struct SqliteDialect;
 
 impl SqlDialect for SqliteDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["CURRENT_TIMESTAMP", "datetime('now')"],
+            Some(TypeFamily::Date) => vec!["CURRENT_DATE", "date('now')"],
+            Some(TypeFamily::Time) => vec!["CURRENT_TIME"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) | None => Vec::new(),
+        }
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         sqlite_quote_ident(name)
     }
@@ -238,7 +252,7 @@ impl SqlDialect for SqliteDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -260,7 +274,7 @@ impl SqlDialect for SqliteDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -2359,13 +2373,12 @@ fn value_to_sqlite_literal(value: &Value) -> String {
             // SQLite stores decimals as REAL, quote as string literal
             format!("'{}'", sqlite_escape_string(s))
         }
-        Value::Text(s) => format!("'{}'", sqlite_escape_string(s)),
-        Value::Json(s) => format!("'{}'", sqlite_escape_string(s)),
+        Value::Text(s) | Value::Json(s) => sqlite_text_literal(s),
         Value::Bytes(b) => format!("X'{}'", hex::encode(b)),
         Value::DateTime(dt) => format!("'{}'", dt.to_rfc3339()),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
-        Value::ObjectId(id) => format!("'{}'", sqlite_escape_string(id)),
+        Value::ObjectId(id) => sqlite_text_literal(id),
         Value::Unsupported(_) => "NULL".to_string(),
         Value::Array(arr) => {
             let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
@@ -2378,7 +2391,44 @@ fn value_to_sqlite_literal(value: &Value) -> String {
     }
 }
 
-/// Escape a string for use inside a SQLite single-quoted literal.
+/// A quoted text literal. SQLite reads a statement up to its first NUL, so
+/// text holding one is written as its quoted segments joined with
+/// `char(0)`. Unlike a hex cast, this does not depend on the database's text
+/// encoding (UTF-8, UTF-16LE or UTF-16BE); text without a NUL stays a plain
+/// quoted literal.
+fn sqlite_text_literal(text: &str) -> String {
+    if !text.contains('\0') {
+        return format!("'{}'", sqlite_escape_string(text));
+    }
+
+    let segments: Vec<String> = text
+        .split('\0')
+        .map(|segment| format!("'{}'", sqlite_escape_string(segment)))
+        .collect();
+
+    format!("({})", sqlite_join_with_nul(&segments))
+}
+
+/// The most segments joined in one flat `||` chain. SQLite parses a chain as a
+/// left-deep tree and refuses one deeper than its expression depth limit
+/// (1000 by default), so a longer run is split into parenthesized halves.
+const SQLITE_MAX_FLAT_SEGMENTS: usize = 64;
+
+fn sqlite_join_with_nul(segments: &[String]) -> String {
+    const SEPARATOR: &str = " || char(0) || ";
+
+    if segments.len() <= SQLITE_MAX_FLAT_SEGMENTS {
+        return segments.join(SEPARATOR);
+    }
+
+    let (left, right) = segments.split_at(segments.len() / 2);
+    format!(
+        "({}){SEPARATOR}({})",
+        sqlite_join_with_nul(left),
+        sqlite_join_with_nul(right)
+    )
+}
+
 fn sqlite_escape_string(s: &str) -> String {
     s.replace('\'', "''")
 }
@@ -2920,15 +2970,33 @@ fn resolve_relation_name(conn: &RusqliteConnection, table: &str) -> Result<Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sqlite_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::SQLITE_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("DATETIME"),
+            vec!["CURRENT_TIMESTAMP", "datetime('now')"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("date"),
+            vec!["CURRENT_DATE", "date('now')"]
+        );
+        assert_eq!(dialect.type_value_expressions("INTEGER"), vec!["0"]);
+        assert_eq!(dialect.type_value_expressions("uuid"), Vec::<&str>::new());
+        assert_eq!(dialect.type_value_expressions("blob"), Vec::<&str>::new());
+    }
+
     use super::{
         RusqliteConnection, SqliteConnectionState, SqliteDialect, SqliteDriver, kind_from_decltype,
         plan_sqlite_semantic_request, sqlite_generate_create_table,
     };
     use dbflux_core::{
         ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, DriverCapabilities,
-        FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
-        SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily, Value,
-        WhereOperator,
+        FormValues, MutationRequest, QueryGenerator, QueryLanguage, RowInsert, SemanticRequest,
+        SqlDialect, SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily,
+        Value, WhereOperator,
     };
 
     /// The generated truncate, drop-index and version statements must stay
@@ -3731,6 +3799,139 @@ mod tests {
             connection.cancelled.load(Ordering::SeqCst),
             "NUL refusal erased an existing cancellation"
         );
+    }
+
+    #[test]
+    fn ordinary_text_literals_are_unchanged() {
+        assert_eq!(
+            super::value_to_sqlite_literal(&Value::Text("it's".to_string())),
+            "'it''s'"
+        );
+    }
+
+    #[test]
+    fn text_with_nul_bytes_is_written_as_segments_joined_with_char_zero() {
+        let literal = |text: &str| super::value_to_sqlite_literal(&Value::Text(text.to_string()));
+
+        assert_eq!(literal("a\0b"), "('a' || char(0) || 'b')");
+        assert_eq!(literal("\0a"), "('' || char(0) || 'a')");
+        assert_eq!(literal("a\0"), "('a' || char(0) || '')");
+        assert_eq!(
+            literal("a\0\0b"),
+            "('a' || char(0) || '' || char(0) || 'b')"
+        );
+        assert_eq!(literal("\0"), "('' || char(0) || '')");
+        assert_eq!(literal("it's\0"), "('it''s' || char(0) || '')");
+    }
+
+    fn replay_text_with_nul_bytes(encoding: &str) {
+        replay_text(encoding, "\0a\0\0b'c é\u{1F600}\0");
+    }
+
+    fn replay_text(encoding: &str, text: &str) {
+        let generator = SqlMutationGenerator::new(&super::SQLITE_DIALECT);
+        let text = text.to_string();
+        let row = [
+            Value::Int(1),
+            Value::Text(text.clone()),
+            Value::Json(text.clone()),
+        ];
+        let rows: [&[Value]; 1] = [&row];
+        let columns = ["id", "note", "doc"].map(str::to_string);
+        let statement = generator
+            .generate_bulk_insert(None, "notes", &columns, &[None, None, None], &rows)
+            .expect("generator succeeds")
+            .expect("sqlite renders inserts")
+            .text;
+        assert!(
+            !statement.contains('\0'),
+            "statement must not hold a raw NUL"
+        );
+
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        raw.execute_batch(&format!("PRAGMA encoding = '{encoding}'"))
+            .expect("set encoding");
+        raw.execute_batch("CREATE TABLE notes (id INTEGER, note TEXT, doc TEXT)")
+            .expect("create table");
+        raw.execute_batch(&format!("{statement};")).expect("replay");
+
+        let (note, doc, note_type, doc_type): (String, String, String, String) = raw
+            .query_row(
+                "SELECT note, doc, typeof(note), typeof(doc) FROM notes",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read back");
+        assert_eq!(note, text, "{encoding}");
+        assert_eq!(doc, text, "{encoding}");
+        assert_eq!(note_type, "text", "{encoding}");
+        assert_eq!(doc_type, "text", "{encoding}");
+    }
+
+    fn long_text_with_nul_runs() -> String {
+        format!(
+            "head'{}middle é{}\0tail{}",
+            "\0".repeat(2_000),
+            "\0x".repeat(700),
+            "\0".repeat(600)
+        )
+    }
+
+    #[test]
+    fn long_nul_runs_build_a_shallow_expression() {
+        let literal = super::value_to_sqlite_literal(&Value::Text("\0".repeat(2_000)));
+        let mut operators_per_level = vec![0usize];
+        let mut widest = 0usize;
+        for part in literal.split_inclusive(['(', ')', '|']) {
+            match part.chars().last() {
+                Some('(') => operators_per_level.push(0),
+                Some(')') => {
+                    operators_per_level.pop();
+                }
+                Some('|') => {
+                    if let Some(count) = operators_per_level.last_mut() {
+                        *count += 1;
+                        widest = widest.max(*count);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(widest <= 260, "{widest} pipes chained at one level");
+        assert!(
+            literal.matches(" || ").count() >= 4_000,
+            "every NUL still needs its separators"
+        );
+    }
+
+    #[test]
+    fn long_nul_runs_replay_in_utf8_databases() {
+        replay_text("UTF-8", &long_text_with_nul_runs());
+    }
+
+    #[test]
+    fn long_nul_runs_replay_in_utf16le_databases() {
+        replay_text("UTF-16le", &long_text_with_nul_runs());
+    }
+
+    #[test]
+    fn long_nul_runs_replay_in_utf16be_databases() {
+        replay_text("UTF-16be", &long_text_with_nul_runs());
+    }
+
+    #[test]
+    fn text_with_nul_bytes_replays_in_utf8_databases() {
+        replay_text_with_nul_bytes("UTF-8");
+    }
+
+    #[test]
+    fn text_with_nul_bytes_replays_in_utf16le_databases() {
+        replay_text_with_nul_bytes("UTF-16le");
+    }
+
+    #[test]
+    fn text_with_nul_bytes_replays_in_utf16be_databases() {
+        replay_text_with_nul_bytes("UTF-16be");
     }
 }
 

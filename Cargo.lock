@@ -2026,6 +2026,7 @@ dependencies = [
  "gpui-base",
  "gpui-component",
  "gpui-pre",
+ "gpui-pre-platform",
  "log",
  "serde",
  "serde_json",
@@ -3552,6 +3553,7 @@ dependencies = [
  "postgres-native-tls",
  "ryu",
  "serde_json",
+ "tokio",
  "urlencoding",
  "uuid",
 ]
@@ -3587,6 +3589,7 @@ dependencies = [
  "postgres",
  "postgres-native-tls",
  "serde_json",
+ "tokio",
  "urlencoding",
  "uuid",
 ]
@@ -3638,7 +3641,9 @@ dependencies = [
  "base64 0.22.1",
  "csv",
  "dbflux_core",
+ "encoding_rs",
  "hex",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
@@ -3909,10 +3914,15 @@ name = "dbflux_transfer"
 version = "0.11.0-dev.0"
 dependencies = [
  "csv",
+ "dbflux_byte_source",
  "dbflux_core",
  "dbflux_driver_postgres",
+ "dbflux_driver_sqlite",
  "dbflux_export",
+ "dbflux_spreadsheet",
  "dbflux_test_support",
+ "quick-xml 0.39.4",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

@@ -65,18 +65,21 @@ pub use connection::{
     HookContext, HookExecution, HookExecutionContext, HookExecutionMode, HookExecutor,
     HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner, Identifiable,
     InfluxVersion, InstallDatabaseConnectionOutcome, ItemManager, LuaCapabilities,
-    MetricQuerySeries, MutationPolicy, NavigatorView, OutputEvent, OutputReceiver, OutputSender,
-    OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProcessContainment,
-    ProcessExecutionError, ProcessExecutor, ProfileManager, ProfilePolicyResolver, ProxyAuth,
-    ProxyKind, ProxyManager, ProxyProfile, ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry,
-    RefreshViewsParams, RefreshedViews, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
-    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo,
-    SslMode, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams, SwitchDatabaseResult,
-    SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError, TestConnectionResult,
-    TreeLoadResult, TreeStore, WritePrivilege, compose_mutation_policy, detached_process_channel,
-    execute_streaming_process, host_matches_no_proxy, output_channel, ssl_mode_from_id,
-    ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
+    MetricQuerySeries, MutationPolicy, NavigatorView, OffRuntimeDrop, OutputEvent, OutputReceiver,
+    OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
+    ProcessContainment, ProcessExecutionError, ProcessExecutor, ProfileManager,
+    ProfilePolicyResolver, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, ReadOnlyReason,
+    RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews, ResolvedProxy,
+    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager,
+    SshTunnelProfile, SslInfo, SslMode, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
+    SwitchDatabaseResult, SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError,
+    TestConnectionResult, TreeLoadResult, TreeStore, WritePrivilege, compose_mutation_policy,
+    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
+    ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
+    ssl_mode_requires_root_cert,
 };
+
+pub use connection::{decode_uri_component, split_uri_host_port, uri_host};
 
 pub use connection::{
     DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace,
@@ -286,10 +289,11 @@ pub use sql::{
     PreparedTableAlter, ReindexRequest, SqlDialect, SqlGenerationOptions, SqlGenerationRequest,
     SqlOperation, SqlQueryBuilder, SqlValueMode, TableAlterExpectedColumn, TableAlterOperation,
     TableAlterOutcome, TableAlterPlanner, TableAlterPreview, TableAlterRequest, TableAlterRoute,
-    TransactionControl, TypeAttributeDefinition, TypeDefinition, classify_sql_transaction_control,
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_sql, generate_truncate, generate_update_template,
-    quote_double_quoted_identifier, validate_ddl_fragment,
+    TransactionControl, TypeAttributeDefinition, TypeDefinition, TypeFamily,
+    classify_sql_transaction_control, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
+    generate_truncate, generate_update_template, quote_double_quoted_identifier, type_family,
+    validate_ddl_fragment,
 };
 
 pub use pipeline::{

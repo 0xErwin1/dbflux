@@ -104,7 +104,7 @@ las versiones menores se negocian de forma determinista dentro de esa línea
 mayor. Hasta v1.7 las versiones menores son aditivas; v1.8 es una corrección
 del formato de wire que cambia cómo se codifican algunos payloads existentes, y
 toda forma que se decodificaba antes es idéntica byte a byte (ver **Corrección
-del formato de wire** más abajo). v1.9 vuelve a ser aditiva.
+del formato de wire** más abajo). v1.9 vuelve a ser aditiva. v1.10 también es aditiva: añade dos variantes de solicitud y deja todos los payloads de v1.9 idénticos byte a byte (ver **Expresiones SQL de celda** más abajo).
 
 Solicitud del cliente:
 
@@ -123,6 +123,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
         ProtocolVersion::new(1, 9),
+        ProtocolVersion::new(1, 10),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -378,6 +379,12 @@ secciones de un driver externo quedan ocultas hasta que exista una presentación
 sin esa necesidad. Cada
 `RootSectionAction` lleva su `ExecutionClassification`, así que el host confirma
 y audita las acciones de los drivers externos igual que las de los integrados.
+
+### Expresiones SQL de celda (v1.10)
+
+v1.10 añade dos variantes de solicitud, `InsertRowV2 { insert }` y `UpdateRowV2 { patch }`, añadidas después de la última variante v1.9 del enum de solicitudes por el motivo de índice de wire descrito arriba. Llevan `RowInsert` y `RowPatch` con una lista extra cada uno, añadida después del último campo: `column_expressions` y `change_expressions`, un `Vec<Option<String>>` paralelo a las columnas. Una entrada no vacía es una expresión SQL que el driver escribe tal cual en lugar del literal del valor (`gen_random_uuid()`, `now()`), y el valor enviado para esa columna es `Null`. Un literal nunca se promueve a expresión: solo una entrada de esta lista lo es, de modo que un texto como `now()` sigue siendo una cadena entre comillas.
+
+`InsertRow` y `UpdateRow` conservan exactamente su forma de wire de v1.9 y no tienen lugar para una expresión: el codificador se niega a serializarla en vez de descartarla, porque postcard ignora los bytes sobrantes y un par más antiguo ejecutaría la escritura con la columna en `Null`. Por eso el cliente envía las variantes antiguas en toda escritura sin expresión, y los pares v1.9 siguen funcionando en ambas direcciones. Una escritura con expresión se envía como `InsertRowV2` o `UpdateRowV2` solo en una sesión que negoció v1.10 o posterior; en una sesión más antigua `IpcConnection` devuelve `NotSupported` (`the negotiated driver RPC protocol does not support SQL expressions in row writes`) sin enviar ningún frame. Un driver host atiende tanto las variantes antiguas como las V2. Un driver que no está basado en SQL nunca construye la sentencia y rechaza las inserciones y actualizaciones de filas como ya lo hace. Las herramientas MCP nunca producen una expresión, porque la entrada de las herramientas solo se convierte en valores.
 
 ## Contrato RPC de auth-provider
 

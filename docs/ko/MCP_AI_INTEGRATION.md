@@ -83,6 +83,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 5. **승인 경로**: Ask 결정은 호출을 대기 중인 실행으로 큐에 넣습니다. 사람이 DBFlux에서 승인하거나 거부하며, 승인된 호출은 에이전트가 같은 인수로 다시 호출할 때 한 번 실행됩니다.
 6. **감사 기록**: 모든 결정은 통합 SQLite 데이터베이스의 `aud_audit_events`에 추가되며 조회와 내보내기가 가능합니다. 전체 이벤트 스키마는 `docs/AUDIT.md`를 참조하세요.
 
+연결을 받지 않는 도구(`list_connections`, `execute_script`를 제외한 스크립트 도구, 감사 도구, `list_pending_executions`, `get_pending_execution`)는 연결 게이트를 거치지 않고 연결이 없는 범위에서 평가됩니다. 이 범위에서 활성화된 모든 신뢰 클라이언트는 `builtin/read-only`와 함께, MCP가 활성화된 어떤 연결에서든 할당받은 모든 역할과 정책을 가집니다. 따라서 한 연결에서 쓰기가 허용된 클라이언트는 동일한 Allow, Ask, Deny 결정에 따라 스크립트를 만들고 수정할 수 있으며, 연결 할당이 없는 클라이언트는 읽기 전용 접근을 유지합니다. 이 범위는 MCP 서버가 시작될 때 계산되므로, 할당을 변경한 후에는 에이전트의 MCP 세션을 다시 시작하세요.
+
 여섯 계층은 모두 `tools/call` 요청마다 서버 프로세스 내부에서 실행됩니다. 어떤 계층도 클라이언트 쪽에서 우회할 수 없습니다.
 
 ## 4. 표준 도구 집합 (v1)
@@ -122,8 +124,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 스크립트 | `delete_script` | admin | 스크립트를 영구적으로 제거합니다 |
 | 스크립트 | `execute_script` | computed | 연결에 대해 저장된 데이터베이스 쿼리 스크립트를 실행합니다. 분류는 스크립트 본문에서 도출됩니다. Lua, Python, Bash 스크립트는 거부됩니다(아래 참조) |
 | 승인 | `request_execution` | admin | 사람의 승인을 받도록 호출을 큐에 넣습니다. 승인되면 같은 인수로 해당 도구를 직접 호출해 한 번 실행합니다 |
-| 승인 | `list_pending_executions` | read | 승인 대기 중인 모든 실행을 봅니다 |
-| 승인 | `get_pending_execution` | read | 특정 대기 중 실행의 세부 정보를 가져옵니다 |
+| 승인 | `list_pending_executions` | read | 호출한 클라이언트의 승인 대기 중인 실행을 봅니다. 다른 클라이언트의 실행은 표시되지 않습니다 |
+| 승인 | `get_pending_execution` | read | 호출한 클라이언트의 특정 대기 중 실행의 세부 정보를 가져옵니다. 다른 클라이언트의 실행은 찾을 수 없음으로 보고됩니다 |
 | 승인 | `approve_execution` | — | MCP로는 항상 거부됩니다. 사람이 DBFlux에서 승인합니다 |
 | 승인 | `reject_execution` | — | MCP로는 항상 거부됩니다. 사람이 DBFlux에서 거부합니다 |
 | 감사 | `query_audit_logs` | read | 감사 기록을 검색하고 필터링합니다 |

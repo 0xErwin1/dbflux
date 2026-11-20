@@ -29,6 +29,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
+use dbflux_core::{decode_uri_component, split_uri_host_port, uri_host};
 use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use mysql::prelude::*;
 use mysql::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
@@ -370,6 +371,26 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
 pub struct MysqlDialect;
 
 impl SqlDialect for MysqlDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["NOW()", "CURRENT_TIMESTAMP"],
+            Some(TypeFamily::Date) => vec!["CURDATE()", "CURRENT_DATE"],
+            Some(TypeFamily::Time) => vec!["CURTIME()"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) => vec!["UUID()"],
+            None => Vec::new(),
+        }
+    }
+
+    /// `TEXT` holds at most 65,535 bytes, which a long CSV field can exceed.
+    fn text_column_type(&self) -> &'static str {
+        "LONGTEXT"
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         mysql_quote_ident(name)
     }
@@ -419,7 +440,7 @@ impl SqlDialect for MysqlDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -436,7 +457,7 @@ impl SqlDialect for MysqlDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -937,14 +958,17 @@ impl DbDriver for MysqlDriver {
         };
 
         let db_part = if !database.is_empty() {
-            format!("/{}", database)
+            format!("/{}", urlencoding::encode(database))
         } else {
             String::new()
         };
 
         Some(format!(
             "mysql://{}{}:{}{}",
-            credentials, host, port, db_part
+            credentials,
+            uri_host(host),
+            port,
+            db_part
         ))
     }
 
@@ -964,6 +988,10 @@ impl DbDriver for MysqlDriver {
                     .unwrap_or_default()
                     .into_owned();
                 values.insert("user".to_string(), user);
+                let password = decode_uri_component(&credentials[colon + 1..]);
+                if !password.is_empty() {
+                    values.insert("password".to_string(), password);
+                }
             } else {
                 let user = urlencoding::decode(credentials)
                     .unwrap_or_default()
@@ -979,15 +1007,11 @@ impl DbDriver for MysqlDriver {
         };
 
         let database = database.split('?').next().unwrap_or(database);
-        values.insert("database".to_string(), database.to_string());
+        values.insert("database".to_string(), decode_uri_component(database));
 
-        if let Some(colon) = host_port.rfind(':') {
-            values.insert("host".to_string(), host_port[..colon].to_string());
-            values.insert("port".to_string(), host_port[colon + 1..].to_string());
-        } else {
-            values.insert("host".to_string(), host_port.to_string());
-            values.insert("port".to_string(), "3306".to_string());
-        }
+        let (host, port) = split_uri_host_port(host_port);
+        values.insert("host".to_string(), host.to_string());
+        values.insert("port".to_string(), port.unwrap_or("3306").to_string());
 
         Some(values)
     }
@@ -2003,6 +2027,38 @@ fn plan_mysql_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
     }
 }
 
+/// SQL that reads back the row an INSERT just wrote, or `None` when there is no
+/// reliable way to find it.
+///
+/// An expression cell (`NOW()`, `UUID()`) has no literal to match the row by,
+/// and the generated value is unknown, so an insert that carries one is not
+/// read back at all instead of matching the wrong row or none. The same holds
+/// when the server generated an id, because the AUTO_INCREMENT column is not
+/// known here.
+fn insert_readback_sql(
+    builder: &SqlQueryBuilder,
+    insert: &RowInsert,
+    last_insert_id: u64,
+) -> Option<String> {
+    if insert.assignments.iter().any(|a| a.is_expression()) {
+        return None;
+    }
+
+    // The generated id belongs to the AUTO_INCREMENT column, which the statement
+    // may not assign, so no assigned column can be matched against it.
+    if last_insert_id > 0 {
+        return None;
+    }
+
+    let (columns, values): (Vec<String>, Vec<Value>) = insert
+        .assignments
+        .iter()
+        .map(|a| (a.name.clone(), a.value.clone()))
+        .unzip();
+    let identity = RecordIdentity::composite(columns, values);
+    builder.build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
+}
+
 impl Connection for MysqlConnection {
     fn metadata(&self) -> &DriverMetadata {
         match self.kind {
@@ -2789,23 +2845,10 @@ impl Connection for MysqlConnection {
 
         let last_id = state.conn.last_insert_id();
 
-        let select_sql = if last_id > 0 {
-            let first_col = insert
-                .assignments
-                .first()
-                .map(|a| MYSQL_DIALECT.quote_identifier(&a.name))
-                .unwrap_or_else(|| "`id`".to_string());
-            let table = MYSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
-
-            format!(
-                "SELECT * FROM {} WHERE {} = {} LIMIT 1",
-                table, first_col, last_id
-            )
-        } else {
-            let identity = RecordIdentity::composite(insert.column_names(), insert.values());
-            builder
-                .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
-                .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?
+        // The INSERT already succeeded; a read-back that errors would report a
+        // failure for a committed write.
+        let Some(select_sql) = insert_readback_sql(&builder, insert, last_id) else {
+            return Ok(CrudResult::new(1, None));
         };
 
         log::debug!("[INSERT] Re-querying: {}", select_sql);
@@ -2924,6 +2967,14 @@ impl Connection for MysqlConnection {
         Some(&GENERATOR)
     }
 
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mysql_generated_columns_sql(
+            schema, table,
+        )))?;
+
+        Ok(generated_column_names(result.rows))
+    }
+
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
         plan_mysql_semantic_request(request)
     }
@@ -2979,6 +3030,56 @@ const VERSION_QUERY: &str = "SELECT VERSION()";
 #[cfg(test)]
 mod sql_statement_tests {
     use super::*;
+
+    fn literal_insert() -> RowInsert {
+        RowInsert::new(
+            "users".to_string(),
+            Some("app".to_string()),
+            vec!["name".to_string()],
+            vec![Value::Text("Ada".to_string())],
+        )
+    }
+
+    fn expression_insert() -> RowInsert {
+        RowInsert::with_typed_assignments(
+            "users".to_string(),
+            Some("app".to_string()),
+            vec![
+                dbflux_core::ColumnAssignment::new("name", Value::Text("Ada".to_string())),
+                dbflux_core::ColumnAssignment::expression("created_at", "NOW()"),
+            ],
+        )
+    }
+
+    #[test]
+    fn insert_is_not_read_back_by_an_assigned_column_when_an_id_was_generated() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        assert_eq!(insert_readback_sql(&builder, &literal_insert(), 7), None);
+    }
+
+    #[test]
+    fn insert_readback_matches_literal_columns_without_an_auto_increment_id() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        let sql = insert_readback_sql(&builder, &literal_insert(), 0).expect("read-back");
+        assert!(sql.contains("`name`") && sql.contains("'Ada'"), "{sql}");
+    }
+
+    #[test]
+    fn insert_with_an_expression_is_not_read_back() {
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
+
+        assert_eq!(insert_readback_sql(&builder, &expression_insert(), 0), None);
+        assert_eq!(insert_readback_sql(&builder, &expression_insert(), 9), None);
+    }
+
+    /// `TEXT` holds at most 65,535 bytes in MySQL, so a column created for an
+    /// untyped source uses `LONGTEXT`, which a long CSV field still fits.
+    #[test]
+    fn untyped_columns_are_created_as_longtext() {
+        assert_eq!(MYSQL_DIALECT.text_column_type(), "LONGTEXT");
+    }
 
     #[test]
     fn truncate_table_statement_matches_the_driver_contract() {
@@ -3977,6 +4078,48 @@ fn mysql_text_literal(s: &str) -> String {
     }
 }
 
+const GENERATED_COLUMN_NAME_PREFIX: &str = "c:";
+
+/// Column names from the rows of [`mysql_generated_columns_sql`], with the
+/// guard prefix removed. A row that is not prefixed text is skipped.
+fn generated_column_names(rows: Vec<Vec<Value>>) -> Vec<String> {
+    rows.into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(Value::Text(prefixed)) => prefixed
+                .strip_prefix(GENERATED_COLUMN_NAME_PREFIX)
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The columns MySQL and MariaDB compute and reject explicit values for
+/// (`GENERATED ALWAYS AS (...) STORED|VIRTUAL`), in column order. `EXTRA`
+/// reads `STORED GENERATED` / `VIRTUAL GENERATED`, and MariaDB may report
+/// `PERSISTENT`. A bare `%GENERATED%` match would also catch
+/// `DEFAULT_GENERATED`, an expression default that accepts explicit values.
+///
+/// Each name is selected behind [`GENERATED_COLUMN_NAME_PREFIX`]: the result
+/// reader decodes a text cell that looks like a number into an integer, which
+/// would drop a column named `123` and lose the zero of `0123`. A prefixed
+/// value can never parse as a number, so it always comes back as text.
+fn mysql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    let schema = match schema {
+        Some(schema) => mysql_text_literal(schema),
+        None => "DATABASE()".to_string(),
+    };
+
+    format!(
+        "SELECT CONCAT('{GENERATED_COLUMN_NAME_PREFIX}', COLUMN_NAME) \
+         FROM information_schema.COLUMNS \
+         WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = {} \
+         AND (EXTRA LIKE '%STORED GENERATED%' OR EXTRA LIKE '%VIRTUAL GENERATED%' \
+         OR EXTRA LIKE '%PERSISTENT%') \
+         ORDER BY ORDINAL_POSITION",
+        mysql_text_literal(table)
+    )
+}
+
 fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
     let query = r"
         SELECT table_name
@@ -4031,7 +4174,21 @@ fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError
 }
 
 fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
-    type ColumnMetadataRow = (String, String, String, Option<String>, Option<String>);
+    type ColumnMetadataRow = (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+
+    let server_version: Option<String> = conn
+        .query_first("SELECT VERSION()")
+        .map_err(|e| format_mysql_query_error(&e))?;
+    let server_quotes_literal_defaults = server_version
+        .as_deref()
+        .is_some_and(|version| version.to_ascii_lowercase().contains("mariadb"));
 
     let query = r"
         SELECT
@@ -4039,7 +4196,8 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
             column_type,
             is_nullable,
             column_default,
-            column_key
+            column_key,
+            extra
         FROM information_schema.columns
         WHERE table_schema = ?
           AND table_name = ?
@@ -4059,7 +4217,7 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
 
     Ok(rows
         .into_iter()
-        .map(|(name, type_name, nullable, default, key)| {
+        .map(|(name, type_name, nullable, default, key, extra)| {
             let is_pk = key.as_deref() == Some("PRI");
             if is_pk {
                 log::info!(
@@ -4070,17 +4228,58 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
                 );
             }
             let enum_values = parse_mysql_enum_or_set(&type_name);
+            let default_value = column_default_as_sql_for_type(
+                default,
+                &type_name,
+                extra.as_deref().unwrap_or_default(),
+                server_quotes_literal_defaults,
+            );
 
             ColumnInfo {
                 name,
                 type_name,
                 nullable: nullable == "YES",
-                default_value: default,
+                default_value,
                 is_primary_key: is_pk,
                 enum_values,
             }
         })
         .collect())
+}
+
+/// Returns a column default as SQL text, the form `ColumnInfo::default_value`
+/// holds for every driver.
+///
+/// MySQL 8 reports a literal default unquoted (`pending`, `00123`) and marks an
+/// expression default with `DEFAULT_GENERATED` in `EXTRA`; MySQL 5.7 has no
+/// such marker but only allows `CURRENT_TIMESTAMP` as an expression default,
+/// and only on temporal columns. MariaDB 10.2.7+ already quotes literals and
+/// writes expressions bare.
+fn column_default_as_sql_for_type(
+    default: Option<String>,
+    column_type: &str,
+    extra: &str,
+    server_quotes_literal_defaults: bool,
+) -> Option<String> {
+    let default = default?;
+
+    if server_quotes_literal_defaults || extra.to_ascii_uppercase().contains("DEFAULT_GENERATED") {
+        return Some(default);
+    }
+
+    let column_type = column_type.to_ascii_lowercase();
+    let is_temporal_column = ["timestamp", "datetime", "date", "time"]
+        .iter()
+        .any(|prefix| column_type.starts_with(prefix));
+    let upper = default.to_ascii_uppercase();
+    let is_timestamp_function = ["CURRENT_TIMESTAMP", "NOW(", "LOCALTIME"]
+        .iter()
+        .any(|prefix| upper.starts_with(prefix));
+    if is_temporal_column && is_timestamp_function {
+        return Some(default);
+    }
+
+    Some(mysql_text_literal(&default))
 }
 
 fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<IndexInfo>, DbError> {
@@ -4807,6 +5006,102 @@ fn resolve_write_privilege(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn column_defaults_are_returned_as_sql_text() {
+        use super::column_default_as_sql_for_type;
+
+        let own = |value: &str| Some(value.to_string());
+
+        assert_eq!(
+            column_default_as_sql_for_type(None, "varchar(20)", "", false),
+            None
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("pending"), "varchar(20)", "", false),
+            own("'pending'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("00123"), "varchar(20)", "", false),
+            own("'00123'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("it's"), "varchar(20)", "", false),
+            Some(super::mysql_text_literal("it's"))
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(
+                own("uuid()"),
+                "varchar(20)",
+                "DEFAULT_GENERATED",
+                false
+            ),
+            own("uuid()")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(
+                own("CURRENT_TIMESTAMP"),
+                "timestamp",
+                "on update CURRENT_TIMESTAMP",
+                false
+            ),
+            own("CURRENT_TIMESTAMP")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("'pending'"), "varchar(20)", "", true),
+            own("'pending'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("uuid()"), "varchar(20)", "", true),
+            own("uuid()")
+        );
+    }
+
+    #[test]
+    fn literal_defaults_survive_backslashes_and_timestamp_lookalikes() {
+        use super::{column_default_as_sql_for_type, mysql_text_literal};
+
+        let own = |value: &str| Some(value.to_string());
+
+        assert_eq!(
+            column_default_as_sql_for_type(own("a\\nb"), "varchar(20)", "", false),
+            Some(mysql_text_literal("a\\nb"))
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("tail\\"), "varchar(20)", "", false),
+            Some(mysql_text_literal("tail\\"))
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP"), "varchar(32)", "", false),
+            own("'CURRENT_TIMESTAMP'")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP"), "timestamp", "", false),
+            own("CURRENT_TIMESTAMP")
+        );
+        assert_eq!(
+            column_default_as_sql_for_type(own("CURRENT_TIMESTAMP(3)"), "datetime(3)", "", false),
+            own("CURRENT_TIMESTAMP(3)")
+        );
+    }
+
+    #[test]
+    fn mysql_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::MYSQL_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("datetime"),
+            vec!["NOW()", "CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("DATE"),
+            vec!["CURDATE()", "CURRENT_DATE"]
+        );
+        assert_eq!(dialect.type_value_expressions("uuid"), vec!["UUID()"]);
+        assert_eq!(dialect.type_value_expressions("varchar(20)"), vec!["''"]);
+        assert_eq!(dialect.type_value_expressions("blob"), Vec::<&str>::new());
+    }
+
     use super::rowid_pseudo_columns;
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
@@ -4823,6 +5118,59 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value, WritePrivilege,
     };
     use mysql::{Conn, Opts, OptsBuilder};
+
+    #[test]
+    fn mysql_generated_columns_query_selects_stored_virtual_and_persistent_columns() {
+        let sql = super::mysql_generated_columns_sql(Some("app"), "users");
+        assert!(sql.contains("TABLE_SCHEMA = 'app'"), "{sql}");
+        assert!(sql.contains("TABLE_NAME = 'users'"), "{sql}");
+        assert!(sql.contains("STORED GENERATED"), "{sql}");
+        assert!(sql.contains("VIRTUAL GENERATED"), "{sql}");
+        assert!(sql.contains("PERSISTENT"), "{sql}");
+        assert!(
+            !sql.contains("'%GENERATED%'"),
+            "DEFAULT_GENERATED columns accept explicit values: {sql}"
+        );
+        assert!(sql.ends_with("ORDER BY ORDINAL_POSITION"), "{sql}");
+        assert!(
+            super::mysql_generated_columns_sql(None, "users").contains("TABLE_SCHEMA = DATABASE()")
+        );
+    }
+
+    #[test]
+    fn mysql_generated_columns_query_prefixes_names_so_they_stay_text() {
+        let sql = super::mysql_generated_columns_sql(None, "users");
+        assert!(
+            sql.starts_with("SELECT CONCAT('c:', COLUMN_NAME) FROM"),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn generated_column_names_strips_the_prefix_and_keeps_numeric_names() {
+        let rows = vec![
+            vec![Value::Text("c:123".to_string())],
+            vec![Value::Text("c:0123".to_string())],
+            vec![Value::Text("c:doubled".to_string())],
+            vec![Value::Int(7)],
+            vec![Value::Text("unprefixed".to_string())],
+            vec![],
+        ];
+
+        assert_eq!(
+            super::generated_column_names(rows),
+            vec!["123".to_string(), "0123".to_string(), "doubled".to_string()]
+        );
+    }
+
+    #[test]
+    fn mysql_generated_columns_query_encodes_hostile_names_as_hex() {
+        let hostile = "a'; DROP TABLE x; --\\";
+        let sql = super::mysql_generated_columns_sql(Some(hostile), hostile);
+        let encoded = hex::encode(hostile.as_bytes());
+        assert_eq!(sql.matches(&format!("X'{encoded}'")).count(), 2, "{sql}");
+        assert!(!sql.contains("DROP TABLE"), "{sql}");
+    }
 
     #[test]
     fn dependents_from_rows_lists_views_then_deduplicated_foreign_key_children() {
@@ -5113,6 +5461,34 @@ mod tests {
             values.get("uri").map(String::as_str),
             Some("mysql://root:root@localhost:3306/app")
         );
+    }
+
+    #[test]
+    fn parse_uri_handles_ipv6_hosts_encoded_databases_and_passwords() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+
+        let parsed = driver
+            .parse_uri("mysql://alice:p%40ss@[::1]:3306/my%20db")
+            .expect("IPv6 URI should parse");
+        assert_eq!(parsed.get("host").map(String::as_str), Some("::1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("3306"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("my db"));
+        assert_eq!(parsed.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(parsed.get("password").map(String::as_str), Some("p@ss"));
+
+        let without_port = driver
+            .parse_uri("mysql://[2001:db8::7]/app")
+            .expect("IPv6 URI without port should parse");
+        assert_eq!(
+            without_port.get("host").map(String::as_str),
+            Some("2001:db8::7")
+        );
+        assert_eq!(without_port.get("port").map(String::as_str), Some("3306"));
+
+        let mut values = parsed.clone();
+        values.remove("password");
+        let built = driver.build_uri(&values, "p@ss").expect("URI should build");
+        assert_eq!(built, "mysql://alice:p%40ss@[::1]:3306/my%20db");
     }
 
     #[test]

@@ -572,7 +572,12 @@ impl RpcClient {
         session_id: Uuid,
         patch: dbflux_core::RowPatch,
     ) -> Result<dbflux_core::CrudResult, RpcError> {
-        let body = self.call(Some(session_id), DriverRequestBody::UpdateRow { patch })?;
+        let request = if patch.changes.iter().any(|change| change.is_expression()) {
+            DriverRequestBody::UpdateRowV2 { patch }
+        } else {
+            DriverRequestBody::UpdateRow { patch }
+        };
+        let body = self.call(Some(session_id), request)?;
 
         match body {
             DriverResponseBody::CrudResult { result } => Ok(result.into()),
@@ -588,7 +593,16 @@ impl RpcClient {
         session_id: Uuid,
         insert: dbflux_core::RowInsert,
     ) -> Result<dbflux_core::CrudResult, RpcError> {
-        let body = self.call(Some(session_id), DriverRequestBody::InsertRow { insert })?;
+        let request = if insert
+            .assignments
+            .iter()
+            .any(|assignment| assignment.is_expression())
+        {
+            DriverRequestBody::InsertRowV2 { insert }
+        } else {
+            DriverRequestBody::InsertRow { insert }
+        };
+        let body = self.call(Some(session_id), request)?;
 
         match body {
             DriverResponseBody::CrudResult { result } => Ok(result.into()),

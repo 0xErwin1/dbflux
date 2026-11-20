@@ -26,6 +26,7 @@ urlencoding.workspace = true
 uuid = { workspace = true }
 
 [dev-dependencies]
+tokio.workspace = true
 dbflux_test_support.workspace = true
 
 [lints]

@@ -372,6 +372,8 @@ impl DataGridPanel {
         );
         let document_presentation = self.document_presentation();
         let enum_options = enum_options_for_result(&self.result, column_details.as_deref());
+        let suggestion_source = self.expression_suggestion_source();
+        let expressions_allowed = self.offers_set_value_menu(cx);
 
         if let Some(table_state) = self.grid_table.table_state.clone() {
             // A reload reuses the state entity, so column widths, sort, scroll
@@ -410,6 +412,8 @@ impl DataGridPanel {
                 for (col_ix, options) in enum_options {
                     state.set_enum_options(col_ix, options);
                 }
+                state.set_expressions_allowed(expressions_allowed);
+                state.set_expression_suggestion_source(suggestion_source.clone());
 
                 carried_edits.map_or(0, |edits| state.restore_pending_edits(edits, cx))
             });
@@ -451,6 +455,8 @@ impl DataGridPanel {
             for (col_ix, options) in enum_options {
                 state.set_enum_options(col_ix, options);
             }
+            state.set_expressions_allowed(expressions_allowed);
+            state.set_expression_suggestion_source(suggestion_source);
 
             state
         });
@@ -523,23 +529,19 @@ impl DataGridPanel {
                             this.menu_row_actions()
                         };
 
-                        this.context_menu = Some(TableContextMenu {
-                            row: *row,
-                            col: *col,
-                            position: *position,
-                            sql_submenu_open: false,
-                            copy_query_submenu_open: false,
-                            filter_submenu_open: false,
-                            order_submenu_open: false,
-                            toolbar_submenu_open: false,
-                            selected_index: 0,
-                            submenu_selected_index: 0,
-                            is_document_view: false,
-                            is_column_header: *is_column_header,
-                            doc_field_path: None,
-                            doc_field_value: None,
-                            row_actions,
-                        });
+                        this.context_menu = Some(this.new_context_menu(
+                            ContextMenuTarget {
+                                row: *row,
+                                col: *col,
+                                position: *position,
+                                is_document_view: false,
+                                is_column_header: *is_column_header,
+                                doc_field_path: None,
+                                doc_field_value: None,
+                                row_actions,
+                            },
+                            cx,
+                        ));
                         this.pending.context_menu_focus = true;
                         cx.emit(DataGridEvent::Focused);
                         cx.notify();

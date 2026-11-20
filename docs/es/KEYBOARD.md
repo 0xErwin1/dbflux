@@ -662,6 +662,8 @@ foco y no se está editando ninguna celda.
 | `d d` / `Delete` | Borrar la fila |
 | `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
 | `Ctrl+n` | Poner la celda en NULL |
+| `Ctrl+Shift+0` | Poner la celda en el valor por defecto de la columna (prepara la expresión por defecto) |
+| `Ctrl+Shift+I` | Alternar el editor en línea entre literal y expresión SQL, o abrirlo como expresión |
 | `u` / `Ctrl+z` / `Cmd+z` | Deshacer |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |
@@ -865,6 +867,21 @@ Las teclas aparecen en el contexto Aprobaciones MCP de Settings > Keybindings.
 | `m` (o `Shift+F10`) | Acciones del panel: Continuar, Volver, fijar el modo de todas las tablas, aceptar el orden de carga, la confirmación, Iniciar migración, Cancelar migración mientras corre y Cerrar al terminar |
 
 Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
+
+## Asistente de importación
+
+En el paso de configuración, un cursor recorre las opciones que no toman foco por sí mismas: el desplegable Hoja de un libro importado (cuando tiene más de una hoja visible), el delimitador y la codificación CSV de un archivo importado y, luego, el modo de mapeo, la columna de destino y la columna de origen de cada tabla. `Tab` sigue llegando a los botones (**Use table**, **Apply mapping**, **Continue**).
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` | Mover el cursor a la opción siguiente / anterior |
+| `l` / `h` (o `Right` / `Left`) | En el delimitador o la codificación: elegir el siguiente / anterior y leer el archivo de nuevo |
+| `Enter` | En el delimitador o la codificación: elegir el siguiente. En la Hoja, un modo de mapeo, columna de destino o columna de origen: abrir su desplegable, que entonces usa `j` / `k` y `Enter` como en [Desplegables](#desplegables) |
+| `Escape` | En el campo de la tabla de destino o del texto NULL: salir del campo y devolver al diálogo las teclas anteriores. En un desplegable abierto: cerrar solo el desplegable y devolver las teclas al diálogo. En cualquier otro sitio: cerrar el asistente |
+
+En el paso de configuración de un script SQL, el cursor visita **Ante un error** y **Ejecutar en una sola transacción**: `l` / `h` y `Enter` en **Ante un error** eligen la otra opción, y `Enter` en la casilla de la transacción la alterna (se omite mientras "Continuar tras los errores" o una conexión sin transacciones la desactivan).
+
+Mientras un campo de texto o un desplegable abierto tiene el foco, estas teclas (incluido `Enter`) actúan sobre ese campo, no sobre el cursor. Aparecen en el contexto Import Wizard de Settings > Keybindings.
 
 ## Campos de texto
 

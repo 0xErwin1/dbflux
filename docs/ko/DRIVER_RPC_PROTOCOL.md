@@ -77,7 +77,7 @@ DBFlux는 `interprocess`를 통해 로컬 소켓을 사용합니다:
 
 DBFlux가 먼저 연결한 뒤 `Hello`를 보냅니다.
 
-현재 활성 드라이버 RPC API 패밀리는 `driver_rpc`입니다. 현재의 전용 드라이버 RPC 전송에서는 이 패밀리가 `Hello` 동안 와이어로 전송되는 대신 프로토콜 자체에 암묵적으로 포함됩니다. 호환성은 드라이버 RPC 엔드포인트와 선택된 프로토콜 메이저 버전으로 강제되며, 마이너 버전은 해당 메이저 라인 안에서 결정적으로 협상됩니다. v1.7까지의 마이너 버전은 추가 확장(additive)입니다. v1.8은 일부 기존 페이로드의 인코딩 방식을 바꾸는 와이어 형식 수정이며, 이전에 디코딩되던 모든 형태는 바이트 단위로 동일합니다(아래 **와이어 형식 수정** 참고). v1.9는 다시 추가 확장입니다.
+현재 활성 드라이버 RPC API 패밀리는 `driver_rpc`입니다. 현재의 전용 드라이버 RPC 전송에서는 이 패밀리가 `Hello` 동안 와이어로 전송되는 대신 프로토콜 자체에 암묵적으로 포함됩니다. 호환성은 드라이버 RPC 엔드포인트와 선택된 프로토콜 메이저 버전으로 강제되며, 마이너 버전은 해당 메이저 라인 안에서 결정적으로 협상됩니다. v1.7까지의 마이너 버전은 추가 확장(additive)입니다. v1.8은 일부 기존 페이로드의 인코딩 방식을 바꾸는 와이어 형식 수정이며, 이전에 디코딩되던 모든 형태는 바이트 단위로 동일합니다(아래 **와이어 형식 수정** 참고). v1.9는 다시 추가 확장입니다. v1.10도 추가 확장입니다. 요청 변형 두 개를 덧붙이고 v1.9의 모든 페이로드는 바이트 단위로 그대로 둡니다(아래 **셀 SQL 표현식** 참고).
 
 클라이언트 요청:
 
@@ -96,6 +96,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
         ProtocolVersion::new(1, 9),
+        ProtocolVersion::new(1, 10),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -232,6 +233,12 @@ v1.8은 요청 변형이나 응답 변형을 추가하지 않습니다. 대신 �
 호스트는 세 요청을 연결의 `Connection::root_section_source`로 전달합니다. 소스가 없는 드라이버는 `UnsupportedMethod`(`Driver does not declare root sections`)로 응답하고, 드라이버 오류는 다른 `Error`와 같은 방식으로 응답합니다. 이전 마이너 버전을 협상한 세션에서는 호스트가 드라이버를 호출하지 않고 `VersionMismatch`(`root section requests require driver RPC protocol 1.9 or newer`)로 요청을 거부합니다.
 
 여섯 개의 변형은 위에서 설명한 와이어 인덱스 이유로 각 열거형의 마지막 v1.8 변형 뒤에 추가됩니다. 클라이언트는 세션이 v1.9 이상을 협상했고 드라이버 메타데이터가 `DriverCapabilities::ROOT_SECTIONS`를 선언한 경우에만 루트 섹션을 노출합니다. 그렇지 않으면 `IpcConnection`은 해당 기능을 지우고 아무것도 보내지 않습니다. `IpcConnection`은 연결마다 선언을 한 번 가져와 캐시하며, 가져오기에 실패하면 오류를 반환하고 캐시하지 않으므로 호스트는 이를 다시 시도 행으로 표시하고 그 행에서 다시 요청합니다. 섹션 id에는 `|`를 넣을 수 없으며, 호스트는 그런 선언을 거부하고 알립니다. 호스트는 `object_store_api`가 없는 연결에서 개체 스토리지 문서를 여는 프레젠테이션의 섹션을 숨깁니다. 개체 스토리지 RPC가 아직 없으므로 `IpcConnection`에는 그것이 없고, 지금까지 제공된 두 프레젠테이션(`ObjectContainerTable`, `ObjectBrowser`)이 모두 그런 종류이므로, 그런 요구가 없는 프레젠테이션이 나오기 전까지 외부 드라이버의 섹션은 숨겨집니다. 모든 `RootSectionAction`은 `ExecutionClassification`을 포함하므로, 호스트는 외부 드라이버의 액션도 내장 드라이버와 같은 방식으로 확인하고 감사합니다.
+
+### 셀 SQL 표현식 (v1.10)
+
+v1.10은 요청 변형 두 개, `InsertRowV2 { insert }`와 `UpdateRowV2 { patch }`를 추가하며, 위에서 설명한 와이어 인덱스 이유로 요청 열거형의 마지막 v1.9 변형 뒤에 덧붙입니다. 이 변형은 `RowInsert`와 `RowPatch`를 담고, 각각 마지막 필드 뒤에 목록이 하나씩 더 있습니다. `column_expressions`와 `change_expressions`이며, 열과 나란히 놓이는 `Vec<Option<String>>`입니다. 비어 있지 않은 항목은 드라이버가 값 리터럴 대신 그대로 쓰는 SQL 표현식(`gen_random_uuid()`, `now()`)이고, 그 열로 보내는 값은 `Null`입니다. 리터럴은 표현식으로 승격되지 않습니다. 이 목록의 항목만 표현식이므로 `now()` 같은 텍스트는 따옴표가 붙은 문자열로 남습니다.
+
+`InsertRow`와 `UpdateRow`는 v1.9 와이어 형태를 그대로 유지하며 표현식을 담을 자리가 없습니다. postcard는 뒤에 남는 바이트를 무시하므로 이전 피어가 열을 `Null`로 둔 채 쓰기를 실행하게 되기 때문에, 인코더는 표현식을 버리지 않고 직렬화 자체를 거부합니다. 그래서 클라이언트는 표현식이 없는 모든 쓰기에 이전 변형을 보내고, v1.9 피어는 양방향 모두 계속 동작합니다. 표현식이 있는 쓰기는 v1.10 이상을 협상한 세션에서만 `InsertRowV2` 또는 `UpdateRowV2`로 보냅니다. 더 오래된 세션에서는 `IpcConnection`이 프레임을 보내지 않고 `NotSupported`(`the negotiated driver RPC protocol does not support SQL expressions in row writes`)를 반환합니다. 드라이버 호스트는 이전 변형과 V2 변형을 모두 처리합니다. SQL 기반이 아닌 드라이버는 문장을 만들지 않으며 지금처럼 행 삽입과 갱신을 거부합니다. MCP 도구는 표현식을 만들지 않습니다. 도구 입력은 값으로만 변환되기 때문입니다.
 
 ## 인증 프로바이더 RPC 계약
 

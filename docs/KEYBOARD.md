@@ -633,6 +633,8 @@ edited.
 | `d d` / `Delete` | Delete the row |
 | `a a` / `Shift+a Shift+a` | Add / duplicate a row |
 | `Ctrl+n` | Set the cell to NULL |
+| `Ctrl+Shift+0` | Set the cell to its column default (stages the default expression) |
+| `Ctrl+Shift+I` | Flip the inline editor between literal and SQL expression, or open it as an expression |
 | `u` / `Ctrl+z` / `Cmd+z` | Undo |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo |
 | `e` | Expand or collapse a nested column (document grids) |
@@ -827,6 +829,21 @@ The keys are listed under the MCP Approvals context in Settings > Keybindings.
 | `m` (or `Shift+F10`) | Pane actions: Continue, Back, set every table's mode, accept the load order, the acknowledgment, Start migration, Cancel migration while it runs and Close once it is done |
 
 The keys are listed under the Migrate Wizard context in Settings > Keybindings.
+
+## Import wizard
+
+On the configure step, a cursor walks the choices that take no focus of their own: the Sheet dropdown of an imported workbook (when it has more than one visible sheet), the CSV delimiter and encoding of an imported file, then each table's mapping mode, target column and source column. `Tab` still reaches the buttons (**Use table**, **Apply mapping**, **Continue**).
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` | Move the cursor to the next / previous choice |
+| `l` / `h` (or `Right` / `Left`) | On the delimiter or encoding: pick the next / previous one and read the file again |
+| `Enter` | On the delimiter or encoding: pick the next one. On the Sheet, a mapping mode, target column or source column: open its dropdown, which then takes `j` / `k` and `Enter` as in [Dropdowns](#dropdowns) |
+| `Escape` | In the target table or NULL text field: leave the field and give the keys above back to the dialog. On an open dropdown: close only the dropdown and give the keys back to the dialog. Anywhere else: close the wizard |
+
+On the configure step of a SQL script, the cursor visits **On error** and **Run in one transaction**: `l` / `h` and `Enter` on **On error** pick the other choice, and `Enter` on the transaction checkbox toggles it (it is skipped while "Continue after errors" or a connection without transactions turns it off).
+
+While a text field or an open dropdown has focus, these keys (including `Enter`) act on that field, not on the cursor. They are listed under the Import Wizard context in Settings > Keybindings.
 
 ## Text fields
 

@@ -807,26 +807,6 @@ impl FormSection for ProxiesSection {
         ProxiesSection::proxy_activate_current_field(self, window, cx);
     }
 
-    fn tab_next(&mut self) {
-        let mut nav = ProxyFormNav::new(
-            self.proxy_auth_selection,
-            self.editing_proxy_id,
-            self.proxy_form_field,
-        );
-        nav.tab_next();
-        self.proxy_form_field = nav.field();
-    }
-
-    fn tab_prev(&mut self) {
-        let mut nav = ProxyFormNav::new(
-            self.proxy_auth_selection,
-            self.editing_proxy_id,
-            self.proxy_form_field,
-        );
-        nav.tab_prev();
-        self.proxy_form_field = nav.field();
-    }
-
     fn validate_form_field(&mut self) {
         let mut nav = ProxyFormNav::new(
             self.proxy_auth_selection,

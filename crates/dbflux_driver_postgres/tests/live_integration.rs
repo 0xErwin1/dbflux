@@ -90,6 +90,24 @@ fn assert_text_array_matches_server_text(decoded: &Value, server_text: &Value) {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn postgres_drop_last_owner_in_tokio() -> Result<(), Box<dyn std::error::Error>> {
+    containers::with_postgres_url(|uri| {
+        let runtime = tokio::runtime::Runtime::new()?;
+        let (connection, _) = connect_postgres(uri.clone())?;
+        runtime.block_on(runtime.spawn(async move { drop(connection) }))?;
+
+        let (connection, _) = connect_postgres(uri)?;
+        let catalog = connection
+            .instance_catalog()
+            .ok_or("missing PostgreSQL instance catalog")?;
+        drop(connection);
+        runtime.block_on(runtime.spawn(async move { drop(catalog) }))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn postgres_live_connect_ping_query_and_schema() -> Result<(), DbError> {
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;

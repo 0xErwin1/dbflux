@@ -117,6 +117,11 @@ pub enum Command {
     /// Shows the rows nearest to the active row by its vector column.
     FindSimilarRows,
     ResultsSetNull,
+    /// Sets the active cell to its column's default expression.
+    ResultsSetDefault,
+    /// Flips the inline cell editor between literal and SQL expression, or
+    /// opens it in expression mode.
+    ResultsToggleExpression,
     // Context menu
     OpenContextMenu,
     /// Opens the menu of the focused pane's actions (its toolbar buttons and
@@ -441,6 +446,8 @@ impl Command {
             Command::ToggleRowInspector => "Toggle row inspector",
             Command::FindSimilarRows => "Find similar rows",
             Command::ResultsSetNull => "Set cell to NULL",
+            Command::ResultsSetDefault => "Set cell to column default",
+            Command::ResultsToggleExpression => "Toggle literal / expression editor",
             Command::OpenContextMenu => "Open context menu",
             Command::OpenPaneActions => "Open pane actions",
             Command::MenuUp => "Menu up",
@@ -648,6 +655,8 @@ impl Command {
             Command::ToggleRowInspector => "toggle_row_inspector",
             Command::FindSimilarRows => "find_similar_rows",
             Command::ResultsSetNull => "results_set_null",
+            Command::ResultsSetDefault => "results_set_default",
+            Command::ResultsToggleExpression => "results_toggle_expression",
             Command::OpenContextMenu => "open_context_menu",
             Command::OpenPaneActions => "open_pane_actions",
             Command::MenuUp => "menu_up",
@@ -872,6 +881,8 @@ impl Command {
             Command::ToggleRowInspector,
             Command::FindSimilarRows,
             Command::ResultsSetNull,
+            Command::ResultsSetDefault,
+            Command::ResultsToggleExpression,
             Command::OpenContextMenu,
             Command::OpenPaneActions,
             Command::MenuUp,
@@ -1071,6 +1082,8 @@ impl Command {
             | Command::ToggleRowInspector
             | Command::FindSimilarRows
             | Command::ResultsSetNull
+            | Command::ResultsSetDefault
+            | Command::ResultsToggleExpression
             | Command::OpenContextMenu
             | Command::MenuUp
             | Command::MenuDown
@@ -1368,6 +1381,10 @@ pub enum ContextId {
     /// The table migration wizard document (its steps and footer).
     MigrateWizard,
 
+    /// The import wizard dialog: its configure step's choices (the CSV
+    /// delimiter and encoding, each table's mapping mode and columns).
+    ImportWizard,
+
     /// An editor with Vim mode in Normal or Visual mode, where the leader
     /// key starts a sequence (`<leader> a`).
     VimNormal,
@@ -1415,6 +1432,7 @@ impl ContextId {
             ContextId::AddPanelPicker => None,
             ContextId::McpApprovals => Some(ContextId::Global),
             ContextId::MigrateWizard => Some(ContextId::Global),
+            ContextId::ImportWizard => None,
             ContextId::VimNormal => None,
         }
     }
@@ -1453,6 +1471,7 @@ impl ContextId {
                 | ContextId::TextInput
                 | ContextId::Dropdown
                 | ContextId::SqlPreviewModal
+                | ContextId::ImportWizard
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
                 | ContextId::ContextMenu
@@ -1507,6 +1526,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "Add Panel Picker",
             ContextId::McpApprovals => "MCP Approvals",
             ContextId::MigrateWizard => "Migrate Wizard",
+            ContextId::ImportWizard => "Import Wizard",
             ContextId::VimNormal => "Vim Normal",
         }
     }
@@ -1549,6 +1569,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "add_panel_picker",
             ContextId::McpApprovals => "mcp_approvals",
             ContextId::MigrateWizard => "migrate_wizard",
+            ContextId::ImportWizard => "import_wizard",
             ContextId::VimNormal => "vim_normal",
         }
     }
@@ -1591,6 +1612,7 @@ impl ContextId {
             ContextId::AddPanelPicker,
             ContextId::McpApprovals,
             ContextId::MigrateWizard,
+            ContextId::ImportWizard,
             ContextId::VimNormal,
         ]
     }
@@ -1633,6 +1655,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "AddPanelPicker",
             ContextId::McpApprovals => "McpApprovals",
             ContextId::MigrateWizard => "MigrateWizard",
+            ContextId::ImportWizard => "ImportWizard",
             ContextId::VimNormal => "VimNormal",
         }
     }
@@ -1671,6 +1694,9 @@ impl ContextId {
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",
             ContextId::SqlPreviewModal => "SqlPreviewModal && !Input",
+            // A dialog: its keys stay out of a text field and of an open
+            // dropdown, which answer their own.
+            ContextId::ImportWizard => "ImportWizard && !Input && !Dropdown",
             // An editor inside a dialog takes the leader too: the Vim wrapper
             // hands its commands to the dialog, never to the document behind.
             ContextId::VimNormal => "VimNormal",
@@ -1707,6 +1733,7 @@ impl ContextId {
                 | ContextId::Modal
                 | ContextId::KeyValue
                 | ContextId::SqlPreviewModal
+                | ContextId::ImportWizard
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
                 | ContextId::VimNormal

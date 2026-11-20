@@ -2074,6 +2074,45 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Names of the table's columns the database generates itself (identity
+    /// columns that reject explicit values unless told otherwise). An SQL
+    /// export passes them to [`QueryGenerator::generate_bulk_insert_for_script`]
+    /// and the script prologue and epilogue hooks. Drivers without such
+    /// columns keep this default, an empty list.
+    fn identity_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Names of the table's columns whose values come from a sequence (identity
+    /// columns of either kind, serial columns). Explicit values written by an
+    /// SQL export do not advance a sequence, so the script's epilogue hook
+    /// resyncs them. Drivers without sequences keep this default, an empty
+    /// list.
+    fn sequence_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Names of the table's columns the database computes and rejects explicit
+    /// values for (stored generated columns, computed columns, row-version
+    /// columns). An SQL export leaves them out of its `INSERT` statements so
+    /// the database computes them again on replay. Drivers without such
+    /// columns keep this default, an empty list.
+    fn generated_columns(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        Ok(Vec::new())
+    }
+
     fn semantic_planner(&self) -> Option<&dyn SemanticPlanner> {
         None
     }

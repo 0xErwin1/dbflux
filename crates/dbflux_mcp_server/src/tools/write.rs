@@ -289,6 +289,24 @@ impl DbFluxServer {
             .collect()
     }
 
+    /// Tool input is data: every value becomes a literal, so a string such as
+    /// `gen_random_uuid()` or an object with an `expression` key is bound as a
+    /// value and never written as SQL.
+    fn build_insert_assignments(
+        record: &BTreeMap<String, serde_json::Value>,
+        column_types: &BTreeMap<String, String>,
+    ) -> Vec<ColumnAssignment> {
+        record
+            .iter()
+            .map(|(name, value)| ColumnAssignment {
+                name: name.clone(),
+                value: json_to_db_value(value.clone()),
+                type_name: column_types.get(name).cloned(),
+                expression: None,
+            })
+            .collect()
+    }
+
     async fn insert_record_impl(
         state: ServerState,
         connection_id: &str,
@@ -328,14 +346,7 @@ impl DbFluxServer {
         let mut returned_records = Vec::new();
 
         for record in records {
-            let assignments: Vec<ColumnAssignment> = record
-                .iter()
-                .map(|(name, value)| ColumnAssignment {
-                    name: name.clone(),
-                    value: json_to_db_value(value.clone()),
-                    type_name: column_types.get(name).cloned(),
-                })
-                .collect();
+            let assignments = Self::build_insert_assignments(record, &column_types);
 
             let row_insert = RowInsert::with_typed_assignments(
                 table_ref.name.clone(),
@@ -447,6 +458,7 @@ impl DbFluxServer {
                 name: col.clone(),
                 value: json_to_db_value(val.clone()),
                 type_name: column_types.get(col).cloned(),
+                expression: None,
             })
             .collect();
 
@@ -601,6 +613,7 @@ impl DbFluxServer {
                 name: name.clone(),
                 value: json_to_db_value(value.clone()),
                 type_name: column_types.get(name).cloned(),
+                expression: None,
             })
             .collect();
 
@@ -682,6 +695,7 @@ impl DbFluxServer {
             .into_iter()
             .map(|(column, value)| ColumnAssignment {
                 type_name: column_types.get(&column).cloned(),
+                expression: None,
                 name: column,
                 value: json_to_db_value(value),
             })
@@ -788,6 +802,73 @@ mod tests {
         .expect_err("non-object set should fail");
 
         assert_eq!(error, "SET must be a JSON object");
+    }
+
+    #[test]
+    fn insert_records_input_never_produces_an_expression_assignment() {
+        let record: BTreeMap<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({
+                "id": "gen_random_uuid()",
+                "x": {"expression": "now()"},
+            }))
+            .expect("record");
+
+        let assignments = DbFluxServer::build_insert_assignments(
+            &record,
+            &BTreeMap::from([("id".to_string(), "uuid".to_string())]),
+        );
+
+        assert_eq!(assignments.len(), 2);
+        assert!(assignments.iter().all(|a| !a.is_expression()));
+        let id = assignments.iter().find(|a| a.name == "id").expect("id");
+        assert_eq!(id.value, Value::Text("gen_random_uuid()".to_string()));
+        assert_eq!(id.type_name.as_deref(), Some("uuid"));
+    }
+
+    #[test]
+    fn tool_input_never_produces_an_expression_assignment() {
+        let hostile = serde_json::json!({
+            "id": "gen_random_uuid()",
+            "deleted_at": {"expression": "now()"},
+            "note": "now()",
+        });
+
+        let mutation = DbFluxServer::build_relational_update_mutation(
+            TableRef::from_qualified("public.users"),
+            &serde_json::json!({"status": "active"}),
+            &hostile,
+            None,
+            &BTreeMap::new(),
+        )
+        .expect("relational update mutation should build");
+
+        let MutationRequest::SqlUpdateMany(update) = mutation else {
+            panic!("expected a sql update-many mutation");
+        };
+
+        assert_eq!(update.changes.len(), 3);
+        assert!(update.changes.iter().all(|change| !change.is_expression()));
+
+        let mutation = DbFluxServer::build_relational_upsert_mutation(
+            TableRef::from_qualified("public.users"),
+            &serde_json::json!({"id": 1, "created_at": {"expression": "now()"}}),
+            &["id".to_string()],
+            Some(&hostile),
+            &BTreeMap::new(),
+        )
+        .expect("relational upsert mutation should build");
+
+        let MutationRequest::SqlUpsert(upsert) = mutation else {
+            panic!("expected a sql upsert mutation");
+        };
+
+        assert!(
+            upsert
+                .assignments
+                .iter()
+                .chain(upsert.update_assignments.iter())
+                .all(|assignment| !assignment.is_expression())
+        );
     }
 
     #[test]

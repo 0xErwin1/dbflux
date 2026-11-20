@@ -1776,7 +1776,7 @@ pub(crate) fn import_mapping_mode_label(mode: dbflux_transfer::TableMappingMode)
     }
 }
 
-/// The import wizard's four rail entries (Pick Folder / Configure / Confirm
+/// The import wizard's four rail entries (Pick Source / Configure / Confirm
 /// / Run), in `WizardStep` render order, resolved once through the
 /// translation catalog rather than a `&'static str` array.
 pub(crate) fn import_rail_labels() -> [String; 4] {
@@ -1861,6 +1861,15 @@ pub(crate) fn import_table_status_line(table: &dbflux_transfer::import::Imported
             table = table.source_table
         ),
     }
+}
+
+/// The result row of a table the import never reached because an earlier one
+/// failed, saying why it was skipped.
+pub(crate) fn import_not_attempted_after_failure_line(table: &str) -> String {
+    dbflux_i18n::t!(
+        "document.import_wizard.status_line.not_attempted_after_failure",
+        table = table
+    )
 }
 
 /// Task-panel description for a running export, with the table count and
@@ -1962,6 +1971,15 @@ pub(crate) fn export_table_status_line(
             table = label
         ),
     }
+}
+
+/// The result row of a table the export never reached because an earlier one
+/// failed, saying why it was skipped.
+pub(crate) fn export_not_attempted_after_failure_line(label: &str) -> String {
+    dbflux_i18n::t!(
+        "document.export_wizard.status_line.not_attempted_after_failure",
+        table = label
+    )
 }
 
 /// The export wizard's running phase "Table N of M" position line, or the
@@ -2465,7 +2483,21 @@ pub(crate) fn export_all_format_label(format: dbflux_transfer::FileFormat) -> St
             dbflux_i18n::t!("document.data.grid.export.format.csv")
         }
         dbflux_transfer::FileFormat::Json => {
+            dbflux_i18n::t!("document.data.grid.export.format.json")
+        }
+        dbflux_transfer::FileFormat::JsonLines => {
             dbflux_i18n::t!("document.data.grid.export.format.json_lines")
+        }
+        dbflux_transfer::FileFormat::Html => {
+            dbflux_i18n::t!("document.data.grid.export.format.html")
+        }
+        dbflux_transfer::FileFormat::Markdown => {
+            dbflux_i18n::t!("document.data.grid.export.format.markdown")
+        }
+        dbflux_transfer::FileFormat::Xml => dbflux_i18n::t!("document.data.grid.export.format.xml"),
+        dbflux_transfer::FileFormat::Sql => dbflux_i18n::t!("document.data.grid.export.format.sql"),
+        dbflux_transfer::FileFormat::Spreadsheet => {
+            dbflux_i18n::t!("document.data.grid.export.format.spreadsheet")
         }
     }
 }
@@ -3864,6 +3896,9 @@ pub(crate) fn delimited_record_count_status(
 }
 
 #[cfg(test)]
+mod script_catalog_tests;
+
+#[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
     use super::mutation_approval_queue_failed_error;
@@ -4358,6 +4393,17 @@ mod tests {
             "document.data.context_menu.item.edit_in_modal",
             "document.data.context_menu.item.set_default",
             "document.data.context_menu.item.set_null",
+            "document.data.context_menu.item.set_value",
+            "document.data.context_menu.item.set_expression",
+            "document.data.context_menu.item.set_value_column_default",
+            "document.data.context_menu.item.set_value_type_values",
+            "document.data.context_menu.item.set_value_expression",
+            "document.data.context_menu.item.set_value_null",
+            "document.data.context_menu.item.set_value_no_default",
+            "document.data.context_menu.expression_confirm.list",
+            "document.data.context_menu.expression_confirm.cancel",
+            "document.data.context_menu.expression_confirm.confirm",
+            "document.data.grid.expression.placeholder",
             "document.data.context_menu.item.add_row",
             "document.data.context_menu.item.inspect_row",
             "document.data.context_menu.item.duplicate_row",
@@ -4375,7 +4421,7 @@ mod tests {
         ];
 
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
@@ -6565,6 +6611,22 @@ mod tests {
         "document.import_wizard.status_line.skipped",
         "document.import_wizard.status_line.failed",
         "document.import_wizard.status_line.not_attempted",
+        "document.import_wizard.pick_folder.error.no_connection_next",
+        "document.import_wizard.pick_folder.error.no_dialog_next",
+        "document.import_wizard.pick_folder.error.invalid_bundle_next",
+        "document.import_wizard.pick_folder.reading_hint",
+        "document.import_wizard.pick_file.reading_hint",
+        "document.import_wizard.pick_file.error.unsupported_next",
+        "document.import_wizard.pick_file.error.lookup_failed",
+        "document.import_wizard.pick_file.error.next_csv",
+        "document.import_wizard.pick_file.error.next_json",
+        "document.import_wizard.pick_file.error.next_lookup",
+        "document.import_wizard.file.json_no_options",
+        "document.import_wizard.configure.truncate_unavailable",
+        "document.import_wizard.footer.cancel",
+        "document.import_wizard.footer.reason.file_read",
+        "document.import_wizard.status_line.not_attempted_after_failure",
+        "document.import_wizard.done.closing_failed",
     ];
 
     /// PR 26a: every `document.import_wizard.*` key resolves to a
@@ -6720,6 +6782,9 @@ mod tests {
         "document.export_wizard.format_options.segment_size_label",
         "document.export_wizard.format_options.segment_size_placeholder",
         "document.export_wizard.format_options.segment_size_invalid",
+        "document.export_wizard.format_options.sql_batch_size_label",
+        "document.export_wizard.format_options.sql_batch_size_hint",
+        "document.export_wizard.format_options.sql_batch_size_invalid",
         "document.export_wizard.format_options.error.no_dialog_fallback_failed",
         "document.export_wizard.confirm.title",
         "document.export_wizard.confirm.summary",
@@ -6746,6 +6811,15 @@ mod tests {
         "document.export_wizard.footer.back",
         "document.export_wizard.footer.continue",
         "document.export_wizard.footer.close",
+        "document.export_wizard.format_options.sql_unavailable",
+        "document.export_wizard.format_options.folder_required",
+        "document.export_wizard.tables.required",
+        "document.export_wizard.footer.reason.tables",
+        "document.export_wizard.footer.reason.folder",
+        "document.export_wizard.footer.reason.batch_size",
+        "document.export_wizard.footer.reason.segment_size",
+        "document.export_wizard.status_line.not_attempted_after_failure",
+        "document.export_wizard.done.closing_failed",
     ];
 
     /// PR 26b: every `document.export_wizard.*` key resolves to a
@@ -8649,9 +8723,20 @@ mod tests {
         use dbflux_transfer::FileFormat;
 
         assert_eq!(super::export_all_format_label(FileFormat::Csv), "CSV");
+        assert_eq!(super::export_all_format_label(FileFormat::Json), "JSON");
         assert_eq!(
-            super::export_all_format_label(FileFormat::Json),
-            "JSON (one object per line)"
+            super::export_all_format_label(FileFormat::JsonLines),
+            "JSON Lines (one object per line)"
+        );
+        assert_eq!(super::export_all_format_label(FileFormat::Html), "HTML");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Markdown),
+            "Markdown"
+        );
+        assert_eq!(super::export_all_format_label(FileFormat::Xml), "XML");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Spreadsheet),
+            "Spreadsheet"
         );
     }
 }

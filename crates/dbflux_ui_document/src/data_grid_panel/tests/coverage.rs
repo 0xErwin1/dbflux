@@ -258,3 +258,37 @@ fn the_sql_builder_rail_is_covered(cx: &mut TestAppContext) {
         "{checked:?}"
     );
 }
+
+/// The confirmation a save with SQL expressions waits on: Enter confirms and
+/// Escape declines (`DataGridPanel::dispatch_command`).
+#[gpui::test]
+fn the_expression_confirmation_is_covered(cx: &mut TestAppContext) {
+    use crate::data_grid_panel::expression_gate::{HeldSave, PendingExpressionConfirm};
+
+    let (panel, window) = host_table_grid_with_rail(cx);
+    let capture = FrameCapture::observe(window);
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.pending_expression_confirm = Some(PendingExpressionConfirm {
+                save: HeldSave::Row(0),
+                batch_owned: false,
+                expressions: vec!["created_at = now()".to_string()],
+                kind: dbflux_core::DangerousQueryKind::RawExpressionInSet,
+            });
+            cx.notify();
+        });
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let checked = assert_covered(&panel, &capture, window);
+    assert!(
+        checked.iter().any(|id| id == "expression-confirm-btn"),
+        "{checked:?}"
+    );
+    assert!(
+        checked.iter().any(|id| id == "expression-cancel-btn"),
+        "{checked:?}"
+    );
+}

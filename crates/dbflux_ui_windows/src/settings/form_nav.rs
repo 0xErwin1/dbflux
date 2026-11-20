@@ -111,43 +111,6 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "`row_idx`/`col_idx` come from `position()` over the same \
-                  `rows` value; the successor index is guarded by \
-                  `col_idx + 1 < row.len()` and the next row by \
-                  `row_idx + 1 < rows.len() && !rows[row_idx + 1].is_empty()`"
-    )]
-    pub(super) fn tab_next(&mut self, rows: &[Vec<F>]) {
-        if let Some((row_idx, col_idx)) = self.position(rows) {
-            let row = &rows[row_idx];
-            if col_idx + 1 < row.len() {
-                self.focused = row[col_idx + 1];
-            } else if row_idx + 1 < rows.len() && !rows[row_idx + 1].is_empty() {
-                self.focused = rows[row_idx + 1][0];
-            }
-        }
-    }
-
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "`row_idx`/`col_idx` come from `position()` over the same \
-                  `rows` value; `col_idx > 0` guards the subtraction and \
-                  `row_idx > 0` guards the previous-row index"
-    )]
-    pub(super) fn tab_prev(&mut self, rows: &[Vec<F>]) {
-        if let Some((row_idx, col_idx)) = self.position(rows) {
-            if col_idx > 0 {
-                self.focused = rows[row_idx][col_idx - 1];
-            } else if row_idx > 0 {
-                let prev_row = &rows[row_idx - 1];
-                if let Some(last_field) = prev_row.last() {
-                    self.focused = *last_field;
-                }
-            }
-        }
-    }
-
     /// Resets to `fallback` if the current field is not present in `rows`.
     pub(super) fn validate(&mut self, rows: &[Vec<F>], fallback: F) {
         let is_valid = rows.iter().any(|row| row.contains(&self.focused));
@@ -215,22 +178,6 @@ mod tests {
         assert_eq!(nav.focused, F::B);
         nav.move_left(&rows);
         assert_eq!(nav.focused, F::B);
-    }
-
-    #[test]
-    fn tab_next_crosses_rows() {
-        let rows = grid();
-        let mut nav = FormGridNav::new(F::C);
-        nav.tab_next(&rows);
-        assert_eq!(nav.focused, F::D);
-    }
-
-    #[test]
-    fn tab_prev_crosses_rows() {
-        let rows = grid();
-        let mut nav = FormGridNav::new(F::D);
-        nav.tab_prev(&rows);
-        assert_eq!(nav.focused, F::C);
     }
 
     #[test]

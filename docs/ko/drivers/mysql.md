@@ -22,6 +22,7 @@
 - 루틴 정의: `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE`로 전체 `CREATE FUNCTION` 또는 `CREATE PROCEDURE` 본문을 가져옵니다(읽기 전용. 뷰어에서 정의를 편집하거나 실행할 수 없습니다).
 - 다중 문 스크립트(여러 개의 `;`로 구분된 문)는 문별로 분할 실행되며, 각 문은 타입이 지정된 prepared 경로로 실행되어 문마다 하나의 결과 집합을 반환합니다. 서버가 prepare를 거부하는 문(예: MySQL의 `START TRANSACTION`, `BEGIN`)은 텍스트 프로토콜로 실행됩니다. 명시적 행 제한은 스크립트와 서버 결과 집합 전체에서 최대 N행만 보관하며, N이 0이어도 실제로 생략된 행을 표시합니다. 이후 변경 작업은 끝까지 실행되고 오류는 전파됩니다.
 - 데이터 전송 엔진: 네이티브 다중 행 `INSERT` 대량 적재(`BULK_INSERT`), 원본 테이블의 열을 기반으로 한 드라이버 네이티브 `CREATE TABLE` DDL, `TRUNCATE TABLE` 지원, FK 안전 마이그레이션을 위한 참조 무결성 토글(`SET FOREIGN_KEY_CHECKS`). MySQL과 MariaDB 모두 이 기능을 지원합니다.
+- 행 삽입과 갱신은 셀에 SQL 표현식(`NOW()`, `UUID()`, `DEFAULT`)을 받으며, 따옴표가 붙은 리터럴 대신 그대로 씁니다.
 - `program_name` 연결 속성을 `dbflux/<version>`으로 전송하며, `performance_schema.session_connect_attrs`에서 확인할 수 있습니다.
 - 쓰기 권한 프로브: 연결 후 현재 사용자에 대해 `@@read_only`/`@@super_read_only`와 `SHOW GRANTS`를 확인하여 읽기 전용 복제본 또는 `INSERT`/`UPDATE`/`DELETE` 권한이 없는 역할을 감지하고, 서버가 어차피 쓰기를 거부할 상황이라면 확인된 변경 정책을 읽기 전용으로 강화합니다(부작용 없음. `@@super_read_only`가 없는 MariaDB에서는 `@@read_only`만 확인합니다).
 
@@ -51,6 +52,7 @@
 
 ## 제한 사항
 
+- 표현식 셀을 담은 삽입이나 서버가 `AUTO_INCREMENT` id를 생성하는 삽입은 저장된 행을 돌려주지 않고 성공합니다. 드라이버가 어떤 행을 썼는지 알 수 없으므로, 그리드는 다시 불러올 때까지 서버 쪽 값으로 갱신되지 않습니다.
 - 명시적 문 실행 시간 제한과 행 수 제한이 있는 인스턴스 지표/검사기 요청은 실행 전에 거부됩니다. 제한 없는 요청은 기존 동작을 유지합니다. 보관 행 수 제한은 바이트 수, 서버 작업량, 엔진 메모리 할당 또는 경과 시간을 제한하지 않습니다. 호스팅된 MariaDB는 검증하지 않았습니다.
 - SQL 전용 드라이버입니다. 문서 또는 키-값 API를 노출하지 않습니다.
 - `information_schema.VIEW_TABLE_USAGE`가 없는 MariaDB에서는 테이블 삭제 확인 창이 뷰 정의에서 `` `database`.`table` `` 이름을 검색해 종속 뷰를 찾으므로, 다른 뷰를 통해서만 테이블을 읽는 뷰는 표시되지 않습니다.

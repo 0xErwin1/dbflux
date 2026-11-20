@@ -55,7 +55,7 @@ use crate::ui::views::status_bar::OpenApprovalsRequested;
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::{CollapseTasksPanel, TasksPanel};
 use dbflux_components::icons::DriverIconTone;
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::tokens::Spacing;
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};

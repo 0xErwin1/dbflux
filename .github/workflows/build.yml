@@ -49,7 +49,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runs_on: ubuntu-latest
+            runs_on: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             deb_arch: amd64
             rpm_arch: x86_64

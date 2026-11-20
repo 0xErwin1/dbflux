@@ -30,6 +30,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
+use dbflux_core::{decode_uri_component, split_uri_host_port, uri_host};
 use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
 use tokio::net::TcpStream;
@@ -289,6 +290,41 @@ pub struct MssqlDialect;
 static MSSQL_DIALECT: MssqlDialect = MssqlDialect;
 
 impl SqlDialect for MssqlDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        let lowered = type_name.trim().to_ascii_lowercase();
+
+        // `timestamp` is the read-only `rowversion` type, and `bit` is the
+        // boolean-like type; neither maps onto the generic families.
+        if lowered.starts_with("timestamp") || lowered.starts_with("rowversion") {
+            return Vec::new();
+        }
+
+        if lowered.starts_with("bit") {
+            return vec!["1", "0"];
+        }
+
+        // `SYSDATETIME()` carries no offset, so SQL Server would store it as UTC.
+        if lowered.starts_with("datetimeoffset") {
+            return vec!["SYSDATETIMEOFFSET()"];
+        }
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["SYSDATETIME()", "GETDATE()"],
+            Some(TypeFamily::Date) => vec!["CAST(GETDATE() AS date)"],
+            Some(TypeFamily::Time) => vec!["CAST(GETDATE() AS time)"],
+            Some(TypeFamily::Uuid) => vec!["NEWID()"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Boolean) | None => Vec::new(),
+        }
+    }
+
+    fn text_column_type(&self) -> &'static str {
+        "NVARCHAR(MAX)"
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         // SQL Server uses [bracket] quoting. Any closing bracket inside the
         // identifier must be doubled to be safe.
@@ -477,6 +513,67 @@ fn value_to_mssql_literal(value: &Value) -> String {
 pub struct MssqlCodeGenerator;
 
 static MSSQL_CODE_GENERATOR: MssqlCodeGenerator = MssqlCodeGenerator;
+
+/// The text values of a result's first column.
+fn first_column_text(result: QueryResult) -> Vec<String> {
+    result
+        .rows
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(dbflux_core::Value::Text(name)) => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The `IDENTITY` columns of a table, in column order.
+fn mssql_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
+    mssql_column_lookup_sql(schema, table, "c.is_identity = 1")
+}
+
+/// The columns SQL Server computes and rejects explicit values for: computed
+/// columns, `rowversion` (`timestamp`) columns and the `GENERATED ALWAYS AS
+/// ROW START/END` period columns of a temporal table, in column order.
+/// `rowversion` is matched by its system type id (189), which an alias type
+/// over it shares. There is no join on `sys.types`: a CLR type such as
+/// `geography` has no row whose `user_type_id` equals its system type id, so
+/// a join would drop a computed column of that type.
+fn mssql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    mssql_column_lookup_sql(
+        schema,
+        table,
+        "(c.is_computed = 1 OR c.system_type_id = 189 OR c.generated_always_type <> 0)",
+    )
+}
+
+/// The names of the table's columns matching `predicate`. With a schema the
+/// table is found by name inside it; without one the object is resolved the
+/// way the server resolves an unqualified name, through `OBJECT_ID`, rather
+/// than assuming `SCHEMA_NAME()` (the default schema).
+fn mssql_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -> String {
+    match schema {
+        Some(schema) => format!(
+            "SELECT c.name FROM sys.columns c \
+             JOIN sys.tables t ON t.object_id = c.object_id \
+             JOIN sys.schemas s ON s.schema_id = t.schema_id \
+             WHERE {predicate} AND s.name = N'{}' AND t.name = N'{}' \
+             ORDER BY c.column_id",
+            MSSQL_DIALECT.escape_string(schema),
+            MSSQL_DIALECT.escape_string(table)
+        ),
+        None => format!(
+            "SELECT c.name FROM sys.columns c \
+             WHERE {predicate} AND c.object_id = OBJECT_ID(N'{}') \
+             ORDER BY c.column_id",
+            MSSQL_DIALECT.escape_string(&MSSQL_DIALECT.quote_identifier(table))
+        ),
+    }
+}
+
+/// A script that inserts explicit values into an `IDENTITY` column must turn
+/// `IDENTITY_INSERT` on for the table first, so the generator wraps it.
+static MSSQL_QUERY_GENERATOR: SqlMutationGenerator =
+    SqlMutationGenerator::new(&MSSQL_DIALECT).set_identity_insert_for_identity();
 
 impl MssqlCodeGenerator {
     fn quote(&self, name: &str) -> String {
@@ -778,7 +875,7 @@ impl DbDriver for MssqlDriver {
         };
 
         let db_part = if !database.is_empty() {
-            format!("/{}", database)
+            format!("/{}", urlencoding::encode(database))
         } else {
             String::new()
         };
@@ -794,7 +891,11 @@ impl DbDriver for MssqlDriver {
 
         Some(format!(
             "sqlserver://{}{}:{}{}{}",
-            credentials, host, port, db_part, query_part
+            credentials,
+            uri_host(host),
+            port,
+            db_part,
+            query_part
         ))
     }
 
@@ -840,21 +941,12 @@ impl DbDriver for MssqlDriver {
             Some((db, q)) => (db, q),
             None => (after_host, ""),
         };
-        values.insert("database".to_string(), database.to_string());
+        values.insert("database".to_string(), decode_uri_component(database));
 
-        // Split host_port into host[\instance][:port]. SSMS-style
-        // `host\instance` plus an optional `:port` suffix.
-        let (host_and_instance, port_str) = match host_port.rfind(':') {
-            Some(colon) => (&host_port[..colon], &host_port[colon + 1..]),
-            None => (host_port, "1433"),
-        };
-        let (host, instance) = match host_and_instance.find('\\') {
-            Some(bs) => (&host_and_instance[..bs], &host_and_instance[bs + 1..]),
-            None => (host_and_instance, ""),
-        };
+        let (host, instance, port) = split_mssql_host_port(host_port);
         values.insert("host".to_string(), host.to_string());
-        values.insert("port".to_string(), port_str.to_string());
-        if !instance.is_empty() {
+        values.insert("port".to_string(), port.unwrap_or("1433").to_string());
+        if let Some(instance) = instance.filter(|instance| !instance.is_empty()) {
             values.insert("instance".to_string(), instance.to_string());
         }
 
@@ -3288,8 +3380,21 @@ impl Connection for MssqlConnection {
     }
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
-        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MSSQL_DIALECT);
-        Some(&GENERATOR)
+        Some(&MSSQL_QUERY_GENERATOR)
+    }
+
+    fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mssql_identity_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
+    }
+
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mssql_generated_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
     }
 
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
@@ -4307,7 +4412,7 @@ fn build_insert_with_output(insert: &RowInsert) -> Result<String, DbError> {
     let values = insert
         .assignments
         .iter()
-        .map(|a| MSSQL_DIALECT.value_to_literal(&a.value))
+        .map(|a| MSSQL_DIALECT.assignment_to_sql(a))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -4326,7 +4431,7 @@ fn build_update_with_output(patch: &RowPatch) -> Result<String, DbError> {
             format!(
                 "{} = {}",
                 MSSQL_DIALECT.quote_identifier(&change.name),
-                MSSQL_DIALECT.value_to_literal(&change.value)
+                MSSQL_DIALECT.assignment_to_sql(change)
             )
         })
         .collect::<Vec<_>>()
@@ -4458,6 +4563,24 @@ struct UriQueryParams {
     application_name: Option<String>,
 }
 
+/// Splits an SSMS-style `host[\instance][:port]` authority into its host,
+/// instance and port. A bracketed IPv6 host is returned without brackets.
+fn split_mssql_host_port(host_port: &str) -> (&str, Option<&str>, Option<&str>) {
+    match host_port.split_once('\\') {
+        Some((host, instance_and_port)) => {
+            let (instance, port) = match instance_and_port.rsplit_once(':') {
+                Some((instance, port)) => (instance, Some(port)),
+                None => (instance_and_port, None),
+            };
+            (split_uri_host_port(host).0, Some(instance), port)
+        }
+        None => {
+            let (host, port) = split_uri_host_port(host_port);
+            (host, None, port)
+        }
+    }
+}
+
 fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Error> {
     let stripped = uri
         .strip_prefix("sqlserver://")
@@ -4481,25 +4604,17 @@ fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Err
         None => (query_part, ""),
     };
 
-    let (host_and_instance, explicit_port) = match host_port.rfind(':') {
-        Some(colon) => {
-            let port: u16 = host_port[colon + 1..].parse().map_err(|_| {
+    // The trailing `?instance=…` may also set the instance and wins if both
+    // are supplied (resolved by the caller).
+    let (host, instance_from_host, port) = split_mssql_host_port(host_port);
+    let explicit_port = port
+        .map(|port| {
+            port.parse::<u16>().map_err(|_| {
                 tiberius::error::Error::Conversion("invalid SQL Server URI port".into())
-            })?;
-            (&host_port[..colon], Some(port))
-        }
-        None => (host_port, None),
-    };
-
-    // SSMS-style `host\instance`. The trailing `?instance=…` may also set
-    // it and wins if both are supplied (resolved by the caller).
-    let (host, instance_from_host) = match host_and_instance.find('\\') {
-        Some(bs) => (
-            &host_and_instance[..bs],
-            Some(host_and_instance[bs + 1..].to_string()),
-        ),
-        None => (host_and_instance, None),
-    };
+            })
+        })
+        .transpose()?;
+    let instance_from_host = instance_from_host.map(str::to_string);
 
     Ok(ParsedMssqlUri {
         credentials,
@@ -5442,6 +5557,36 @@ fn dependents_from_rows(rows: Vec<(String, String, String)>) -> Vec<dbflux_core:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mssql_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::MSSQL_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("datetime2(7)"),
+            vec!["SYSDATETIME()", "GETDATE()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("datetimeoffset(7)"),
+            vec!["SYSDATETIMEOFFSET()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("date"),
+            vec!["CAST(GETDATE() AS date)"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("uniqueidentifier"),
+            vec!["NEWID()"]
+        );
+        assert_eq!(dialect.type_value_expressions("bit"), vec!["1", "0"]);
+        assert_eq!(
+            dialect.type_value_expressions("timestamp"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(dialect.type_value_expressions("nvarchar(50)"), vec!["''"]);
+        assert_eq!(dialect.type_value_expressions("xml"), Vec::<&str>::new());
+    }
+
     use super::*;
     use dbflux_core::{DefaultSpec, OrderByColumn};
 
@@ -5665,6 +5810,33 @@ mod tests {
         assert_eq!(
             sql,
             "INSERT INTO [dbo].[users] ([name], [age]) OUTPUT INSERTED.* VALUES (N'alice', 30)"
+        );
+    }
+
+    #[test]
+    fn insert_and_update_with_output_write_expressions_verbatim() {
+        let insert = RowInsert::with_typed_assignments(
+            "users".into(),
+            Some("dbo".into()),
+            vec![
+                ColumnAssignment::expression("id", "NEWID()"),
+                ColumnAssignment::new("name", Value::Text("alice".into())),
+            ],
+        );
+        assert_eq!(
+            build_insert_with_output(&insert).unwrap(),
+            "INSERT INTO [dbo].[users] ([id], [name]) OUTPUT INSERTED.* VALUES (NEWID(), N'alice')"
+        );
+
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".into()], vec![Value::Int(7)]),
+            "users".into(),
+            Some("dbo".into()),
+            vec![ColumnAssignment::expression("deleted_at", "SYSDATETIME()")],
+        );
+        assert_eq!(
+            build_update_with_output(&patch).unwrap(),
+            "UPDATE [dbo].[users] SET [deleted_at] = SYSDATETIME() OUTPUT INSERTED.* WHERE [id] = 7"
         );
     }
 
@@ -5962,6 +6134,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_uri_handles_ipv6_hosts_encoded_databases_and_passwords() {
+        let driver = MssqlDriver;
+
+        let parsed = driver
+            .parse_uri("sqlserver://alice:p%40ss@[::1]:1433/my%20db")
+            .expect("IPv6 URI should parse");
+        assert_eq!(parsed.get("host").map(String::as_str), Some("::1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("1433"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("my db"));
+        assert_eq!(parsed.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(parsed.get("password").map(String::as_str), Some("p@ss"));
+
+        let without_port = driver
+            .parse_uri("sqlserver://[2001:db8::7]/app")
+            .expect("IPv6 URI without port should parse");
+        assert_eq!(
+            without_port.get("host").map(String::as_str),
+            Some("2001:db8::7")
+        );
+        assert_eq!(without_port.get("port").map(String::as_str), Some("1433"));
+
+        let mut values = parsed.clone();
+        values.remove("password");
+        let built = driver.build_uri(&values, "p@ss").expect("URI should build");
+        assert_eq!(built, "sqlserver://alice:p%40ss@[::1]:1433/my%20db");
+    }
+
+    #[test]
     fn parse_uri_omits_password_when_credentials_have_no_colon() {
         let driver = MssqlDriver;
         let parsed = driver
@@ -6142,6 +6342,20 @@ mod tests {
             parsed.get("instance").map(String::as_str),
             Some("MSSQLSERVER2019")
         );
+    }
+
+    #[test]
+    fn split_mssql_uri_unbrackets_ipv6_hosts() {
+        let parsed = super::split_mssql_uri("sqlserver://sa:pw@[::1]:1433/app").expect("parsed");
+        assert_eq!(parsed.host, "::1");
+        assert_eq!(parsed.explicit_port, Some(1433));
+        assert_eq!(parsed.instance_from_host, None);
+
+        let parsed =
+            super::split_mssql_uri("sqlserver://sa:pw@[::1]\\SQLEXPRESS:1500/").expect("parsed");
+        assert_eq!(parsed.host, "::1");
+        assert_eq!(parsed.explicit_port, Some(1500));
+        assert_eq!(parsed.instance_from_host.as_deref(), Some("SQLEXPRESS"));
     }
 
     #[test]
@@ -6540,6 +6754,90 @@ mod tests {
         assert!(generated.text.starts_with("INSERT INTO "));
         assert!(generated.text.contains("VALUES"));
         assert_eq!(generated.text.matches("), (").count() + 1, 2);
+    }
+
+    #[test]
+    fn mssql_untyped_columns_use_nvarchar_max() {
+        assert_eq!(MSSQL_DIALECT.text_column_type(), "NVARCHAR(MAX)");
+    }
+
+    #[test]
+    fn mssql_identity_columns_query_names_the_table_and_defaults_the_schema() {
+        let sql = super::mssql_identity_columns_sql(Some("dbo"), "it's");
+        assert!(
+            sql.contains("s.name = N'dbo' AND t.name = N'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("c.is_identity = 1"));
+        assert!(!sql.contains("OBJECT_ID"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_unqualified_lookups_resolve_the_object_id_of_the_quoted_name() {
+        let hostile = "we]ird'name";
+        for sql in [
+            super::mssql_identity_columns_sql(None, hostile),
+            super::mssql_generated_columns_sql(None, hostile),
+        ] {
+            assert!(
+                sql.contains("c.object_id = OBJECT_ID(N'[we]]ird''name]')"),
+                "{sql}"
+            );
+            assert!(!sql.contains("SCHEMA_NAME()"), "{sql}");
+            assert!(!sql.contains("sys.schemas"), "{sql}");
+            assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
+        }
+    }
+
+    #[test]
+    fn mssql_generated_columns_query_selects_computed_and_rowversion_columns() {
+        let sql = super::mssql_generated_columns_sql(Some("dbo"), "it's");
+        assert!(
+            sql.contains("s.name = N'dbo' AND t.name = N'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("c.is_computed = 1"), "{sql}");
+        assert!(sql.contains("c.system_type_id = 189"), "{sql}");
+        assert!(
+            !sql.contains("JOIN sys.types"),
+            "a computed column of a CLR type has no matching sys.types row: {sql}"
+        );
+        assert!(!sql.contains("is_identity"), "{sql}");
+        assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_generated_columns_query_includes_temporal_period_columns() {
+        let sql = super::mssql_generated_columns_sql(Some("dbo"), "history");
+        assert!(sql.contains("c.generated_always_type <> 0"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_script_wraps_identity_tables_in_identity_insert() {
+        use dbflux_core::QueryGenerator;
+
+        let identity = vec!["id".to_string()];
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_prologue(Some("dbo"), "users", &identity),
+            Some("SET IDENTITY_INSERT [dbo].[users] ON;".to_string())
+        );
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_epilogue(Some("dbo"), "users", &identity),
+            Some("SET IDENTITY_INSERT [dbo].[users] OFF;".to_string())
+        );
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_prologue(Some("dbo"), "users", &[]),
+            None
+        );
+
+        let columns = vec!["id".to_string()];
+        let owned_rows = [vec![dbflux_core::Value::Int(7)]];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+        let script = MSSQL_QUERY_GENERATOR
+            .generate_bulk_insert_for_script(Some("dbo"), "users", &columns, &[], &identity, &rows)
+            .unwrap()
+            .expect("mssql renders script inserts");
+        assert_eq!(script.text, "INSERT INTO [dbo].[users] ([id]) VALUES (7)");
     }
 
     #[test]

@@ -746,6 +746,7 @@ fn data_table_action(command: Command) -> Option<Box<dyn Action>> {
         Command::ResultsAddRow => Box::new(actions::AddRow),
         Command::ResultsDuplicateRow => Box::new(actions::DuplicateRow),
         Command::ResultsSetNull => Box::new(actions::SetNull),
+        Command::ResultsToggleExpression => Box::new(actions::ToggleExpression),
         Command::Undo => Box::new(actions::Undo),
         Command::Redo => Box::new(actions::Redo),
         Command::ToggleColumnGroup => Box::new(actions::ToggleColumnGroup),
@@ -937,7 +938,8 @@ pub fn known_context_names() -> Vec<&'static str> {
 
 /// Element contexts whose bindings dispatch [`RunCommand`] to the element,
 /// which handles its own commands and propagates the others.
-pub const RUN_COMMAND_ELEMENT_CONTEXTS: &[ContextId] = &[ContextId::KeyValue];
+pub const RUN_COMMAND_ELEMENT_CONTEXTS: &[ContextId] =
+    &[ContextId::KeyValue, ContextId::ImportWizard];
 
 /// Key context of the code editor pane (see
 /// [`dbflux_components::key_contexts`] for every container identifier).
