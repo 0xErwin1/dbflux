@@ -1713,10 +1713,15 @@ mod tests {
                     )
                     .expect("scheduler");
                     let scheduler = app.telemetry_mut().expect("scheduler");
-                    if failure != "late_basic" {
+                    // Basic is the default level; "late_basic" starts below it and
+                    // only moves to Basic after the load was initiated.
+                    if failure == "late_basic" {
                         scheduler
-                            .set_basic(true, chrono::Utc::now())
-                            .expect("Basic");
+                            .set_level(
+                                dbflux_app::telemetry::TelemetryLevel::Minimal,
+                                chrono::Utc::now(),
+                            )
+                            .expect("Minimal");
                     }
                     if failure != "undisclosed" {
                         scheduler

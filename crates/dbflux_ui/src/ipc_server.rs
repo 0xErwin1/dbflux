@@ -602,11 +602,10 @@ mod tests {
                     )
                     .expect("scheduler");
                     let scheduler = app.telemetry_mut().expect("scheduler");
-                    if mode != "off" {
-                        scheduler
-                            .set_basic(true, chrono::Utc::now())
-                            .expect("Basic");
-                    }
+                    // Basic is the default level, so "off" must be set explicitly.
+                    scheduler
+                        .set_basic(mode != "off", chrono::Utc::now())
+                        .expect("level");
                     if mode != "undisclosed" {
                         scheduler
                             .disclosure_dismissed(chrono::Utc::now())
