@@ -72,6 +72,12 @@ which carry the request, keep their own request logs.
 identifier, for 90 days after receipt. After that only identifier-free counts
 remain.
 
+**Turning it off.** Choose Off in the Welcome dialog or in Settings › Updates &
+privacy. To disable delivery without opening the app, for example on managed
+machines, set the environment variable `DBFLUX_TELEMETRY=off`; it wins over
+every level and endpoint. A build made without the `telemetry` feature
+contains no telemetry code at all.
+
 #### Which operations count
 
 Counts measure whole operations, not rows or performance. A successful operation

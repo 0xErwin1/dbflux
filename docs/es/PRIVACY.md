@@ -77,6 +77,12 @@ transportan la petición, conservan sus propios registros de peticiones.
 identificador de instalación, durante 90 días desde su recepción. Después solo
 quedan recuentos sin identificadores.
 
+**Desactivarla.** Elige Apagado en el diálogo de bienvenida o en Ajustes ›
+Actualizaciones y privacidad. Para desactivar el envío sin abrir la app, por
+ejemplo en equipos gestionados, define la variable de entorno
+`DBFLUX_TELEMETRY=off`; tiene prioridad sobre cualquier nivel y destino. Una
+compilación sin la característica `telemetry` no contiene código de telemetría.
+
 #### Qué operaciones cuentan
 
 Los recuentos miden operaciones completas, no filas ni rendimiento. Una operación
