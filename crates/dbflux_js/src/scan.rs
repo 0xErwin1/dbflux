@@ -51,8 +51,11 @@ const WRITE_OR_WORSE_METHOD_NAMES: &[&str] = &[
     "drop",
     "dropDatabase",
     "createCollection",
-    "runCommand",
 ];
+
+/// Method names classified as `AdminDestructive`, kept separate so callers
+/// escalate the ceiling above `Destructive` only on a literal mention.
+const ADMIN_DESTRUCTIVE_METHOD_NAMES: &[&str] = &["runCommand"];
 
 /// Aggregation stages that write to a collection. `aggregate` itself is a
 /// read, so the scan must see the stage to flag the script; the engine
@@ -78,9 +81,21 @@ pub fn static_scan(source: &str) -> StaticScanOutcome {
     }
 }
 
+/// True if `source` mentions `runCommand` as a whole identifier.
+///
+/// Ignores computed member access (`docs[0]`, `db[m]`) so ordinary loops stay
+/// at `Destructive`, while [`crate::run`] still blocks a computed `runCommand`
+/// at dispatch.
+pub fn contains_run_command(source: &str) -> bool {
+    ADMIN_DESTRUCTIVE_METHOD_NAMES
+        .iter()
+        .any(|name| contains_word(source, name))
+}
+
 fn reachable_write_or_worse(source: &str) -> bool {
     WRITE_OR_WORSE_METHOD_NAMES
         .iter()
+        .chain(ADMIN_DESTRUCTIVE_METHOD_NAMES)
         .chain(OUTPUT_STAGE_NAMES)
         .any(|name| contains_word(source, name))
         || contains_computed_member_access(source)
@@ -281,5 +296,35 @@ mod tests {
             static_scan("const nums = [1, 2, 3]; db.users.find({id: {$in: nums}});"),
             StaticScanOutcome::Read
         );
+    }
+
+    #[test]
+    fn contains_run_command_detects_literal_run_command() {
+        assert!(contains_run_command(r#"db.runCommand({ ping: 1 });"#));
+        assert!(contains_run_command(
+            r#"const coll = "coll"; db.runCommand({ update: coll, updates: [] });"#
+        ));
+        assert_eq!(
+            static_scan(r#"const coll = "coll"; db.runCommand({ ping: 1 });"#),
+            StaticScanOutcome::RequiresConfirmation
+        );
+    }
+
+    #[test]
+    fn contains_run_command_ignores_longer_identifiers() {
+        assert!(!contains_run_command(
+            "const runCommandHelper = 1; db.users.find({});"
+        ));
+    }
+
+    #[test]
+    fn contains_run_command_ignores_writes_deletes_and_computed_access() {
+        for script in [
+            "db.users.deleteMany({});",
+            "const docs = db.users.find({}); print(docs[0]);",
+            "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+        ] {
+            assert!(!contains_run_command(script), "{script}");
+        }
     }
 }

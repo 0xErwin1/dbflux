@@ -1361,6 +1361,9 @@ document:
         script:
           title: Script peligroso
           body: Este script contiene sentencias potencialmente destructivas
+        admin_script:
+          title: Script de administración
+          body: Este script contiene comandos de administración y requiere confirmación de administrador
         mongo_delete_many:
           title: deleteMany con filtro vacío
           body: deleteMany con filtro vacío eliminará todos los documentos

@@ -6243,6 +6243,54 @@ mod tests {
                 );
             }
         }
+
+        #[test]
+        fn confirmed_run_command_script_reaches_server_and_computed_access_is_blocked() {
+            let connection = offline_connection();
+
+            let literal_script = r#"
+const coll = "coll";
+db.runCommand({
+  update: coll,
+  updates: [{ q: { a: 1 }, u: { $set: { b: 2 } }, multi: true }]
+});
+"#;
+            let literal_ceiling = MongoLanguageService
+                .classify_execution(literal_script)
+                .expect("runCommand script must classify");
+            assert_eq!(literal_ceiling, ExecutionClassification::AdminDestructive);
+
+            let result = connection
+                .execute(&QueryRequest::new(literal_script).with_confirmed_ceiling(literal_ceiling))
+                .expect("script must run");
+            let message = result
+                .metadata_extra
+                .as_ref()
+                .and_then(|extra| extra.get("script_failure"))
+                .and_then(|failure| failure["message"].as_str())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                is_server_selection_failure(&message),
+                "confirmed runCommand script must pass dispatch and reach for the server: {message}"
+            );
+
+            let computed_script = "const m = 'run' + 'Command'; db[m]({ ping: 1 });";
+            let computed_ceiling = MongoLanguageService
+                .classify_execution(computed_script)
+                .expect("computed-access script must classify");
+            assert_eq!(computed_ceiling, ExecutionClassification::Destructive);
+
+            let blocked_message = assert_script_stopped_before_the_server(
+                &connection,
+                &QueryRequest::new(computed_script).with_confirmed_ceiling(computed_ceiling),
+            );
+            assert!(
+                blocked_message.contains("AdminDestructive")
+                    && blocked_message.contains("Destructive ceiling"),
+                "computed runCommand must be blocked by the Destructive ceiling: {blocked_message}"
+            );
+        }
     }
 }
 

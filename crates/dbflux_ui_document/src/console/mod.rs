@@ -4,12 +4,12 @@
 //! `DriverCapabilities::NATIVE_CONSOLE`; nothing here names a driver.
 //! Commands run one at a time through `Connection::execute`, after the same
 //! checks as the code editor: the driver's language service validates them
-//! and flags dangerous commands, `classify_query_for_language` rates their
-//! impact, and the shared dangerous-query rules decide whether they run, ask
-//! first, or are refused. A confirmed command carries the governance ceiling
-//! the confirmation authorised (`QueryRequest::confirmed_ceiling`), every
-//! execution is audited like an editor query, and successful commands land
-//! in the shared query history that Up/Down recalls from.
+//! and flags dangerous commands, `classify_query_for_language_with_service`
+//! rates their impact, and the shared dangerous-query rules decide whether they
+//! run, ask first, or are refused. A confirmed command carries the governance
+//! ceiling the confirmation authorised (`QueryRequest::confirmed_ceiling`),
+//! every execution is audited like an editor query, and successful commands
+//! land in the shared query history that Up/Down recalls from.
 
 mod format;
 
@@ -31,7 +31,8 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     Connection, DangerousQueryKind, DbError, ExecutionClassification, HistoryEntry,
-    NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult, classify_query_for_language,
+    NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult,
+    classify_query_for_language_with_service,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -408,8 +409,11 @@ impl NativeConsole {
         }
 
         let dangerous = language_service.detect_dangerous(&command);
-        let classification =
-            classify_query_for_language(&connection.metadata().query_language, &command);
+        let classification = classify_query_for_language_with_service(
+            &connection.metadata().query_language,
+            &command,
+            Some(language_service),
+        );
 
         let gate = console_gate(dangerous, classification, |kind| {
             let state = self.app_state.read(cx);
@@ -480,7 +484,11 @@ impl NativeConsole {
         let classification = self
             .resolve_connection(cx)
             .map(|connection| {
-                classify_query_for_language(&connection.metadata().query_language, &pending.command)
+                classify_query_for_language_with_service(
+                    &connection.metadata().query_language,
+                    &pending.command,
+                    Some(connection.language_service()),
+                )
             })
             .unwrap_or(pending.ceiling);
 

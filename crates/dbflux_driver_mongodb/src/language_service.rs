@@ -42,6 +42,14 @@ impl LanguageService for MongoLanguageService {
                 // The scan proves the script cannot reach anything worse
                 // than a read: no up-front confirmation needed.
                 StaticScanOutcome::Read => None,
+                // A literal `runCommand` raises the confirmed ceiling to
+                // `AdminDestructive`, so the prompt asks for admin-level
+                // confirmation rather than the ordinary destructive one.
+                StaticScanOutcome::RequiresConfirmation
+                    if dbflux_js::contains_run_command(query) =>
+                {
+                    Some(DangerousQueryKind::AdminScript)
+                }
                 // Either the scan cannot prove safety, or the script uses a
                 // construct the engine rejects outright — both cases get one
                 // up-front confirmation. A rejected construct still aborts
@@ -64,9 +72,12 @@ impl LanguageService for MongoLanguageService {
     /// `None` — stage-1 single-statement classification is unchanged. A
     /// JS-looking script's ceiling comes from the same conservative static
     /// scan `detect_dangerous` uses: proven read-only classifies as `Read`;
-    /// anything the scan cannot prove safe (including a rejected construct,
-    /// which never dispatches) classifies as `Destructive`, the worst case a
-    /// dispatch-boundary classification could produce.
+    /// an unproven script that literally references `runCommand` classifies
+    /// as `AdminDestructive` (matching `ScriptMethod::RunCommand`); every
+    /// other unproven script (including computed member access such as
+    /// `docs[0]` or a rejected construct, which never dispatches) classifies
+    /// as `Destructive`, leaving a computed access that resolves to
+    /// `runCommand` blocked at the dispatch boundary.
     fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
         if !crate::query_parser::is_script_input(query) {
             return None;
@@ -74,6 +85,9 @@ impl LanguageService for MongoLanguageService {
 
         Some(match dbflux_js::static_scan(query) {
             StaticScanOutcome::Read => ExecutionClassification::Read,
+            StaticScanOutcome::RequiresConfirmation if dbflux_js::contains_run_command(query) => {
+                ExecutionClassification::AdminDestructive
+            }
             StaticScanOutcome::RequiresConfirmation | StaticScanOutcome::Rejected { .. } => {
                 ExecutionClassification::Destructive
             }
@@ -375,6 +389,39 @@ mod tests {
     }
 
     #[test]
+    fn run_command_script_classifies_as_admin_destructive_and_asks_for_admin_confirmation() {
+        let script = r#"
+const coll = "coll";
+db.runCommand({
+  update: coll,
+  updates: [{ q: { a: 1 }, u: { $set: { b: 2 } }, multi: true }]
+});
+"#;
+        assert_eq!(
+            MongoLanguageService.classify_execution(script),
+            Some(ExecutionClassification::AdminDestructive)
+        );
+        assert_eq!(
+            MongoLanguageService.detect_dangerous(script),
+            Some(DangerousQueryKind::AdminScript)
+        );
+        assert!(
+            DangerousQueryKind::AdminScript
+                .message()
+                .to_ascii_lowercase()
+                .contains("admin")
+        );
+        assert_eq!(
+            dbflux_core::classify_query_for_governance(
+                &QueryLanguage::MongoQuery,
+                script,
+                Some(&MongoLanguageService),
+            ),
+            ExecutionClassification::AdminDestructive
+        );
+    }
+
+    #[test]
     fn detect_dangerous_on_proven_read_only_script_requires_no_confirmation() {
         let script = "db.users.find({}); db.orders.aggregate([]);";
         assert_eq!(MongoLanguageService.detect_dangerous(script), None);
@@ -383,6 +430,51 @@ mod tests {
     #[test]
     fn detect_dangerous_on_unproven_script_requires_confirmation() {
         let script = "db.users.insertOne({name: 'a'}); db.users.find({});";
+        assert_eq!(
+            MongoLanguageService.detect_dangerous(script),
+            Some(DangerousQueryKind::Script)
+        );
+    }
+
+    #[test]
+    fn writes_and_deletes_without_run_command_stay_at_destructive() {
+        let script = "const coll = 'users'; db.users.insertOne({a: 1}); db.users.deleteMany({});";
+        assert_eq!(
+            MongoLanguageService.classify_execution(script),
+            Some(ExecutionClassification::Destructive)
+        );
+        assert_eq!(
+            MongoLanguageService.detect_dangerous(script),
+            Some(DangerousQueryKind::Script)
+        );
+    }
+
+    #[test]
+    fn computed_member_access_does_not_escalate_to_admin_destructive() {
+        for script in [
+            "const docs = db.users.find({}); print(docs[0]);",
+            "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+        ] {
+            assert_eq!(
+                MongoLanguageService.classify_execution(script),
+                Some(ExecutionClassification::Destructive),
+                "{script}"
+            );
+            assert_eq!(
+                MongoLanguageService.detect_dangerous(script),
+                Some(DangerousQueryKind::Script),
+                "{script}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_construct_with_run_command_does_not_escalate_to_admin_destructive() {
+        let script = "const res = await db.runCommand({ ping: 1 });";
+        assert_eq!(
+            MongoLanguageService.classify_execution(script),
+            Some(ExecutionClassification::Destructive)
+        );
         assert_eq!(
             MongoLanguageService.detect_dangerous(script),
             Some(DangerousQueryKind::Script)

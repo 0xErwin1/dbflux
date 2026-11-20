@@ -814,4 +814,54 @@ mod tests {
         assert!(outcome.failure.is_none());
         assert_eq!(outcome.print_output, "true");
     }
+
+    #[test]
+    fn run_command_dispatches_under_admin_destructive_ceiling() {
+        let host = FakeHost::with_responses(vec![Ok(ScriptOperationOutcome::default())]);
+        let outcome = run(
+            config(
+                r#"const coll = "coll"; db.runCommand({ update: coll, updates: [{ q: { a: 1 }, u: { $set: { b: 2 } }, multi: true }] });"#,
+                ExecutionClassification::AdminDestructive,
+            ),
+            &host,
+        )
+        .expect("run should not error");
+
+        assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+        assert_eq!(host.call_count(), 1);
+        assert_eq!(outcome.ledger.len(), 1);
+        assert_eq!(
+            outcome.ledger[0].classification,
+            Some(ExecutionClassification::AdminDestructive)
+        );
+        assert_eq!(outcome.ledger[0].outcome, ScriptLedgerOutcome::Success);
+    }
+
+    #[test]
+    fn computed_access_resolving_to_run_command_is_rejected_under_destructive_ceiling() {
+        let host = FakeHost::with_responses(vec![]);
+        let outcome = run(
+            config(
+                "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+                ExecutionClassification::Destructive,
+            ),
+            &host,
+        )
+        .expect("run should not error");
+
+        assert_eq!(host.call_count(), 0, "host must never be reached");
+        assert_eq!(outcome.ledger.len(), 1);
+        assert_eq!(
+            outcome.ledger[0].classification,
+            Some(ExecutionClassification::AdminDestructive)
+        );
+        let failure = outcome
+            .failure
+            .expect("computed runCommand must be rejected under Destructive ceiling");
+        assert!(failure.message.contains("AdminDestructive"), "{failure:?}");
+        assert!(
+            failure.message.contains("Destructive ceiling"),
+            "{failure:?}"
+        );
+    }
 }
