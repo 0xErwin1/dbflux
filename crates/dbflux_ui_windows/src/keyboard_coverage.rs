@@ -6,6 +6,17 @@
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_ui_base::keyboard_coverage::{KeyboardPath, SurfaceRegistry};
 
+/// The shared confirmation a settings section opens (discard changes, delete):
+/// Escape cancels it and Enter confirms it through the Modal key context.
+pub(crate) const SETTINGS_CONFIRM: SurfaceRegistry = SurfaceRegistry {
+    name: "settings confirmation",
+    contexts: &[ContextId::Modal],
+    entries: &[
+        ("confirm-cancel", KeyboardPath::Command(Command::Cancel)),
+        ("confirm-confirm", KeyboardPath::Command(Command::Execute)),
+    ],
+};
+
 /// The settings window. Ctrl+H and Ctrl+L move between the section list and
 /// the section; in a section the form ring (J and K, Tab) reaches every
 /// control, Enter or Space works it and H and L step a segmented field. The

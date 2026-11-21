@@ -695,3 +695,72 @@ fn a_superseded_report_lookup_is_discarded(cx: &mut TestAppContext) {
         });
     });
 }
+
+fn fixture_report(correlation: Option<uuid::Uuid>) -> TelemetryLastReport {
+    TelemetryLastReport {
+        payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
+        payload_len: REPORT_PAYLOAD_FIXTURE.len(),
+        level: None,
+        ack_at_epoch_ms: 1_767_225_600_000,
+        correlation,
+    }
+}
+
+/// Reporting a failed lookup emits `AppStateChanged`, which starts another
+/// lookup; a failure streak must report once or it would loop without input.
+#[gpui::test]
+fn a_failing_report_lookup_reports_once_per_streak(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+    let errors = |window: &mut VisualTestContext| {
+        window.update(|_, cx| harness.app_state.read(cx).unread_error_count)
+    };
+    let before = errors(window);
+
+    window.update(|_, cx| {
+        harness.section.update(cx, |section, cx| {
+            for _ in 0..3 {
+                let generation = section.report_generation;
+                section.apply_report_lookup(
+                    generation,
+                    Err(dbflux_app::telemetry::TelemetryError::Storage),
+                    cx,
+                );
+            }
+            assert!(matches!(section.report_state, ReportState::Failed));
+        });
+    });
+
+    assert_eq!(errors(window), before + 1);
+}
+
+/// The Open in audit button is disabled without a correlation id, and the
+/// keyboard path must not open an unfiltered audit view in its place.
+#[gpui::test]
+fn open_in_audit_requires_a_correlation_id(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+    let opened = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+    let counter = opened.clone();
+    let _subscription = window.update(|_, cx| {
+        cx.subscribe(
+            &harness.app_state,
+            move |_, _: &dbflux_ui_base::OpenAuditRequested, _| counter.set(counter.get() + 1),
+        )
+    });
+
+    window.update(|_, cx| {
+        harness.section.update(cx, |section, cx| {
+            section.report_state = ReportState::Ready(fixture_report(None));
+            section.activate(UpdatesRow::OpenInAudit, cx);
+        });
+    });
+    assert_eq!(opened.get(), 0);
+
+    window.update(|_, cx| {
+        harness.section.update(cx, |section, cx| {
+            section.report_state =
+                ReportState::Ready(fixture_report(Some(uuid::Uuid::from_u128(1))));
+            section.activate(UpdatesRow::OpenInAudit, cx);
+        });
+    });
+    assert_eq!(opened.get(), 1);
+}

@@ -145,6 +145,9 @@ pub(super) struct UpdatesSection {
     /// result of a newer one.
     #[cfg(feature = "telemetry")]
     report_generation: u64,
+    /// A failed lookup has already been reported to the user in this streak.
+    #[cfg(feature = "telemetry")]
+    report_failure_reported: bool,
     #[cfg(feature = "telemetry")]
     report_preview: Entity<ModalJsonReportPreview>,
     content_focused: bool,
@@ -185,6 +188,8 @@ impl UpdatesSection {
             report_state: ReportState::Loading,
             #[cfg(feature = "telemetry")]
             report_generation: 0,
+            #[cfg(feature = "telemetry")]
+            report_failure_reported: false,
             #[cfg(feature = "telemetry")]
             report_preview: cx.new(ModalJsonReportPreview::new),
             content_focused: false,
@@ -258,18 +263,30 @@ impl UpdatesSection {
             return;
         }
         self.report_state = match result {
-            Ok(Some(report)) => ReportState::Ready(report),
-            Ok(None) => ReportState::None,
+            Ok(Some(report)) => {
+                self.report_failure_reported = false;
+                ReportState::Ready(report)
+            }
+            Ok(None) => {
+                self.report_failure_reported = false;
+                ReportState::None
+            }
             Err(_) => {
                 // First catch site: one finite user-facing error; the
-                // payload or raw audit text never reaches the toast.
-                report_error(
-                    UserFacingError::new(
-                        ErrorKind::Storage,
-                        dbflux_i18n::t!("updates.settings.report_load_failed"),
-                    ),
-                    cx,
-                );
+                // payload or raw audit text never reaches the toast. Reporting
+                // emits `AppStateChanged`, which starts another lookup, so a
+                // failure streak reports once or the section would query and
+                // notify forever.
+                if !self.report_failure_reported {
+                    self.report_failure_reported = true;
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            dbflux_i18n::t!("updates.settings.report_load_failed"),
+                        ),
+                        cx,
+                    );
+                }
                 ReportState::Failed
             }
         };
@@ -463,11 +480,16 @@ impl UpdatesSection {
     /// Opens the audit viewer at the last report's real correlation id.
     #[cfg(feature = "telemetry")]
     fn open_last_report_in_audit(&mut self, cx: &mut Context<Self>) {
+        // The rendered button is disabled without a correlation id; the
+        // keyboard path must not open an unfiltered audit view instead.
         let ReportState::Ready(report) = &self.report_state else {
             return;
         };
+        let Some(correlation) = report.correlation else {
+            return;
+        };
         self.app_state.update(cx, |state, cx| {
-            state.request_open_audit(report.correlation, cx);
+            state.request_open_audit(Some(correlation), cx);
         });
     }
 
