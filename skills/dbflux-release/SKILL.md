@@ -146,7 +146,7 @@ Run on `release/vX.Y` when the RC is clean:
 3. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. Tag `vX.Y.0` on the release branch and push branch + tag.
 5. CI generates the stable release body via git-cliff (all user-visible commits since the previous stable tag).
-6. Verify downstream jobs and merge the generated metadata PRs after their checks pass. No manual website commit or AUR push is needed.
+6. Verify the downstream jobs, then merge each generated metadata PR after its checks pass, having run `nix build .#dbflux-bin --no-link --print-out-paths` against the generated pin and confirmed it succeeds. No manual website commit or AUR push is needed.
 
 ## Next Dev Cycle
 

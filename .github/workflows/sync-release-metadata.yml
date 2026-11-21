@@ -21,6 +21,7 @@ permissions:
 concurrency:
   group: release-metadata
   cancel-in-progress: false
+  queue: max
 
 jobs:
   metadata:

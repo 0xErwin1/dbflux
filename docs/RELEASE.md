@@ -244,9 +244,9 @@ job instead of shipping a 404.
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. Register the minor through the metadata PR after the first published tag.
+6. Tag `vX.Y.0-rc.0` on the release branch.
 
-7. Tag `vX.Y.0-rc.0` on the release branch.
+7. Once that tag publishes, the metadata PR registers the minor on the site. Review and merge it; an RC does not become the current release.
 
 The RC release body is generated from conventional commits automatically, so an RC needs no CHANGELOG step at all.
 

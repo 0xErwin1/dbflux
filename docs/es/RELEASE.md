@@ -322,9 +322,9 @@ fallar el job en lugar de publicar un 404.
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. El primer tag publicado registra el minor mediante un PR de metadatos.
+6. Tag `vX.Y.0-rc.0` en el release branch.
 
-7. Tag `vX.Y.0-rc.0` en el release branch.
+7. Cuando ese tag se publique, el PR de metadatos registra el minor en la web. Revísalo e intégralo; un RC no pasa a ser la versión actual.
 
 El cuerpo del release RC se genera automáticamente a partir de commits
 convencionales, así que un RC no necesita ningún paso de CHANGELOG.

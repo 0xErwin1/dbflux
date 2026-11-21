@@ -458,7 +458,7 @@ jobs:
 
   sync-channels:
     needs: [classify, release]
-    if: github.repository == '0xErwin1/dbflux' && needs.release.outputs.published == 'true' && needs.classify.outputs.draft == 'false' && !contains(needs.classify.outputs.version, '-dev.')
+    if: "!cancelled() && github.repository == '0xErwin1/dbflux' && needs.release.outputs.published == 'true' && needs.classify.outputs.draft == 'false' && !contains(needs.classify.outputs.version, '-dev.')
     uses: ./.github/workflows/sync-release-channels.yml
     with:
       tag: v${{ needs.classify.outputs.version }}

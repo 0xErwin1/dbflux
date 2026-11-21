@@ -217,9 +217,9 @@ fail-closed 방식으로 검증합니다. 업데이트는 AppImageUpdate 같은 
    - 커밋: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - 푸시합니다.
 
-6. 첫 태그가 게시되면 메타데이터 PR로 마이너 버전을 등록합니다.
+6. 릴리스 브랜치에 `vX.Y.0-rc.0` 태그를 붙입니다.
 
-7. 릴리스 브랜치에 `vX.Y.0-rc.0` 태그를 붙입니다.
+7. 해당 태그가 게시되면 메타데이터 PR이 사이트에 마이너 버전을 등록합니다. PR을 검토하고 병합하세요. RC는 현재 릴리스가 되지 않습니다.
 
 RC 릴리스 본문은 conventional commits에서 자동 생성되므로, RC에는 CHANGELOG 단계가 전혀 필요하지 않습니다.
 
