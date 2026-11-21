@@ -3036,6 +3036,19 @@ pub enum ClipboardEntry {
     Image(Image),
     /// A file entry
     ExternalPaths(crate::ExternalPaths),
+    /// Whether the files in this item were copied or cut. Only meaningful next to an
+    /// [`ClipboardEntry::ExternalPaths`] entry.
+    FileOperation(FileOperation),
+}
+
+/// What the application that put files on the clipboard wants a paste to do with them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FileOperation {
+    /// The files are duplicated at the destination.
+    #[default]
+    Copy,
+    /// The files are moved to the destination.
+    Cut,
 }
 
 impl ClipboardItem {
@@ -3072,6 +3085,44 @@ impl ClipboardItem {
         }
     }
 
+    /// Create a ClipboardItem holding files, which file managers paste according to `operation`.
+    pub fn new_files(paths: impl IntoIterator<Item = PathBuf>, operation: FileOperation) -> Self {
+        Self {
+            entries: vec![
+                ClipboardEntry::ExternalPaths(crate::ExternalPaths(paths.into_iter().collect())),
+                ClipboardEntry::FileOperation(operation),
+            ],
+        }
+    }
+
+    /// The paths of every file entry, or `None` when the item holds no files.
+    pub fn file_paths(&self) -> Option<Vec<PathBuf>> {
+        let mut found = false;
+        let mut paths = Vec::new();
+        for entry in &self.entries {
+            if let ClipboardEntry::ExternalPaths(external) = entry {
+                found = true;
+                paths.extend(external.0.iter().cloned());
+            }
+        }
+        found.then_some(paths)
+    }
+
+    /// Whether the files of this item were copied or cut, or `None` when it holds no files.
+    /// Files without an explicit operation count as copied.
+    pub fn file_operation(&self) -> Option<FileOperation> {
+        self.file_paths()?;
+        Some(
+            self.entries
+                .iter()
+                .find_map(|entry| match entry {
+                    ClipboardEntry::FileOperation(operation) => Some(*operation),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+        )
+    }
+
     /// Concatenates together all the ClipboardString entries in the item.
     /// Returns None if there were no ClipboardString entries.
     pub fn text(&self) -> Option<String> {
@@ -3088,6 +3139,9 @@ impl ClipboardItem {
                 if let ClipboardEntry::ExternalPaths(paths) = entry {
                     for path in &paths.0 {
                         use std::fmt::Write as _;
+                        if !answer.is_empty() {
+                            answer.push('\n');
+                        }
                         _ = write!(answer, "{}", path.display());
                     }
                 }

@@ -11,12 +11,12 @@ use strum::IntoEnumIterator;
 use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
+use crate::linux::file_uri_list::{
+    FileFormat, TEXT_MIME_TYPES, clipboard_item_from_files, file_clipboard_formats,
+};
 use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
 use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
 
-/// Text mime types that we'll offer to other programs.
-pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
-    ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
 
 /// Text mime types that we'll accept from other programs.
@@ -94,6 +94,25 @@ impl<T: ReceiveData> DataOffer<T> {
                 None
             }
         }
+    }
+
+    fn read_utf8(&self, connection: &Connection, format: FileFormat) -> Option<String> {
+        let mime_type = format.mime();
+        if !self.has_mime_type(mime_type) {
+            return None;
+        }
+        String::from_utf8(self.read_bytes(connection, mime_type)?).log_err()
+    }
+
+    /// The files another application copied or cut, when it offers them in a file format.
+    fn read_files(&self, connection: &Connection) -> Option<ClipboardItem> {
+        let gnome = self.read_utf8(connection, FileFormat::GnomeCopiedFiles);
+        if let Some(item) = clipboard_item_from_files(gnome.as_deref(), None, None) {
+            return Some(item);
+        }
+        let uri_list = self.read_utf8(connection, FileFormat::UriList)?;
+        let kde_cut = self.read_utf8(connection, FileFormat::KdeCutSelection);
+        clipboard_item_from_files(None, Some(&uri_list), kde_cut.as_deref())
     }
 
     fn read_text(&self, connection: &Connection) -> Option<ClipboardItem> {
@@ -175,19 +194,31 @@ impl Clipboard {
         self.self_mime.clone()
     }
 
-    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
-        if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
-            self.send_bytes(fd, text.as_bytes().to_owned());
+    pub fn item(&self) -> Option<&ClipboardItem> {
+        self.contents.as_ref()
+    }
+
+    pub fn primary_item(&self) -> Option<&ClipboardItem> {
+        self.primary_contents.as_ref()
+    }
+
+    pub fn send(&self, mime_type: String, fd: OwnedFd) {
+        if let Some(bytes) = self
+            .contents
+            .as_ref()
+            .and_then(|contents| bytes_for_mime_type(contents, &mime_type))
+        {
+            self.send_bytes(fd, bytes);
         }
     }
 
-    pub fn send_primary(&self, _mime_type: String, fd: OwnedFd) {
-        if let Some(text) = self
+    pub fn send_primary(&self, mime_type: String, fd: OwnedFd) {
+        if let Some(bytes) = self
             .primary_contents
             .as_ref()
-            .and_then(|contents| contents.text())
+            .and_then(|contents| bytes_for_mime_type(contents, &mime_type))
         {
-            self.send_bytes(fd, text.as_bytes().to_owned());
+            self.send_bytes(fd, bytes);
         }
     }
 
@@ -202,7 +233,8 @@ impl Clipboard {
         }
 
         let item = offer
-            .read_text(&self.connection)
+            .read_files(&self.connection)
+            .or_else(|| offer.read_text(&self.connection))
             .or_else(|| offer.read_image(&self.connection))?;
 
         self.cached_read = Some(item.clone());
@@ -220,7 +252,8 @@ impl Clipboard {
         }
 
         let item = offer
-            .read_text(&self.connection)
+            .read_files(&self.connection)
+            .or_else(|| offer.read_text(&self.connection))
             .or_else(|| offer.read_image(&self.connection))?;
 
         self.cached_primary_read = Some(item.clone());
@@ -230,6 +263,38 @@ impl Clipboard {
     pub fn send_bytes(&self, fd: OwnedFd, bytes: Vec<u8>) {
         send_bytes_on(&self.loop_handle, fd, bytes);
     }
+}
+
+/// The mime types an item is offered under. Files are offered as text too, so applications
+/// that only paste text still get the paths.
+pub(crate) fn offered_mime_types(item: Option<&ClipboardItem>) -> Vec<&'static str> {
+    let mut mime_types = TEXT_MIME_TYPES.to_vec();
+    let formats = item
+        .and_then(|item| Some((item.file_paths()?, item.file_operation()?)))
+        .map(|(paths, operation)| file_clipboard_formats(&paths, operation))
+        .unwrap_or_default();
+    mime_types.extend(
+        formats
+            .into_iter()
+            .map(|(format, _)| format)
+            .filter(|format| *format != FileFormat::Text)
+            .map(FileFormat::mime),
+    );
+    mime_types
+}
+
+/// The bytes an item sends for a mime type it offered, or `None` when it has none for it.
+fn bytes_for_mime_type(item: &ClipboardItem, mime_type: &str) -> Option<Vec<u8>> {
+    if let Some((paths, operation)) = item.file_paths().zip(item.file_operation()) {
+        let requested = FileFormat::from_mime(mime_type)?;
+        let formats = file_clipboard_formats(&paths, operation);
+        if !formats.is_empty() {
+            return formats
+                .into_iter()
+                .find_map(|(format, bytes)| (format == requested).then_some(bytes));
+        }
+    }
+    item.text().map(String::into_bytes)
 }
 
 /// Writes `bytes` to `fd` and closes it, which the reader sees as the end of the data.
@@ -310,6 +375,85 @@ mod tests {
     use calloop::EventLoop;
 
     use super::*;
+
+    #[test]
+    fn text_items_are_offered_and_sent_as_text_only() {
+        let item = ClipboardItem::new_string("hello".into());
+        assert_eq!(
+            offered_mime_types(Some(&item)),
+            ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"]
+        );
+        assert_eq!(offered_mime_types(None), offered_mime_types(Some(&item)));
+        for mime_type in ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"] {
+            assert_eq!(
+                bytes_for_mime_type(&item, mime_type),
+                Some(b"hello".to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn cut_files_are_offered_with_every_file_format() {
+        let item = ClipboardItem::new_files(
+            [std::path::PathBuf::from("/tmp/a b")],
+            gpui::FileOperation::Cut,
+        );
+        assert_eq!(
+            offered_mime_types(Some(&item)),
+            [
+                "text/plain;charset=utf-8",
+                "UTF8_STRING",
+                "text/plain",
+                "text/uri-list",
+                "x-special/gnome-copied-files",
+                "application/x-kde-cutselection",
+            ]
+        );
+        let sent = |mime_type| bytes_for_mime_type(&item, mime_type);
+        assert_eq!(sent("UTF8_STRING"), Some(b"/tmp/a b".to_vec()));
+        assert_eq!(
+            sent("text/uri-list"),
+            Some(b"file:///tmp/a%20b\r\n".to_vec())
+        );
+        assert_eq!(
+            sent("x-special/gnome-copied-files"),
+            Some(b"cut\nfile:///tmp/a%20b".to_vec())
+        );
+        assert_eq!(sent("application/x-kde-cutselection"), Some(b"1".to_vec()));
+        assert_eq!(sent("image/png"), None);
+    }
+
+    #[test]
+    fn copied_files_are_not_offered_as_a_kde_cut() {
+        let item = ClipboardItem::new_files(
+            [std::path::PathBuf::from("/tmp/a")],
+            gpui::FileOperation::Copy,
+        );
+        let offered = offered_mime_types(Some(&item));
+        assert!(offered.contains(&"x-special/gnome-copied-files"));
+        assert!(!offered.contains(&"application/x-kde-cutselection"));
+        assert_eq!(
+            bytes_for_mime_type(&item, "x-special/gnome-copied-files"),
+            Some(b"copy\nfile:///tmp/a".to_vec())
+        );
+        assert_eq!(
+            bytes_for_mime_type(&item, "application/x-kde-cutselection"),
+            None
+        );
+    }
+
+    #[test]
+    fn files_without_file_urls_fall_back_to_text() {
+        let item = ClipboardItem::new_files(
+            [std::path::PathBuf::from("relative")],
+            gpui::FileOperation::Copy,
+        );
+        assert_eq!(offered_mime_types(Some(&item)).len(), 3);
+        assert_eq!(
+            bytes_for_mime_type(&item, "text/plain"),
+            Some(b"relative".to_vec())
+        );
+    }
 
     fn pipe() -> (File, OwnedFd) {
         let mut fds = [0; 2];

@@ -27,7 +27,7 @@ use super::{
         Target,
     },
 };
-use crate::linux::file_uri_list;
+use crate::linux::drag_uri_list;
 
 /// How deep below the root window to look for a window that takes drops.
 const MAX_WINDOW_DEPTH: usize = 32;
@@ -57,7 +57,7 @@ impl X11Client {
         payload: &ExternalDragPayload,
     ) -> bool {
         let ExternalDragPayload::Files(paths) = payload;
-        let uri_list = file_uri_list(paths);
+        let uri_list = drag_uri_list(paths);
         if uri_list.is_empty() {
             return false;
         }

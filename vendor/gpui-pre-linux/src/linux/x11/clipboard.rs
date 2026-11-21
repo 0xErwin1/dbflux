@@ -50,6 +50,8 @@ use x11rb::{
 use gpui::{ClipboardItem, Image, ImageFormat, hash};
 use strum::IntoEnumIterator;
 
+use crate::linux::file_uri_list::{FileFormat, clipboard_item_from_files, file_clipboard_formats};
+
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 static CLIPBOARD: Mutex<Option<GlobalClipboard>> = parking_lot::const_mutex(None);
@@ -78,7 +80,9 @@ x11rb::atom_manager! {
         TEXT_MIME_UNKNOWN: b"text/plain",
 
         // HTML: b"text/html",
-        // URI_LIST: b"text/uri-list",
+        URI_LIST: b"text/uri-list",
+        GNOME_COPIED_FILES: b"x-special/gnome-copied-files",
+        KDE_CUT_SELECTION: b"application/x-kde-cutselection",
 
         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
         JPEG_MIME: ImageFormat::mime_type(ImageFormat::Jpeg).as_bytes(),
@@ -994,6 +998,41 @@ impl Clipboard {
         self.inner.write(data, selection, wait)
     }
 
+    /// Offers `item` to other applications: as files when it holds any with file URLs, as text
+    /// otherwise.
+    pub(crate) fn set_item(
+        &self,
+        item: &ClipboardItem,
+        selection: ClipboardKind,
+        wait: WaitConfig,
+    ) -> Result<()> {
+        let formats = item
+            .file_paths()
+            .zip(item.file_operation())
+            .map(|(paths, operation)| file_clipboard_formats(&paths, operation))
+            .unwrap_or_default();
+        if formats.is_empty() {
+            return self.set_text(Cow::Owned(item.text().unwrap_or_default()), selection, wait);
+        }
+        let data = formats
+            .into_iter()
+            .map(|(format, bytes)| ClipboardData {
+                bytes,
+                format: self.file_format_atom(format),
+            })
+            .collect();
+        self.inner.write(data, selection, wait)
+    }
+
+    fn file_format_atom(&self, format: FileFormat) -> Atom {
+        match format {
+            FileFormat::Text => self.inner.atoms.UTF8_STRING,
+            FileFormat::UriList => self.inner.atoms.URI_LIST,
+            FileFormat::GnomeCopiedFiles => self.inner.atoms.GNOME_COPIED_FILES,
+            FileFormat::KdeCutSelection => self.inner.atoms.KDE_CUT_SELECTION,
+        }
+    }
+
     fn image_format_atom(&self, format: ImageFormat) -> Atom {
         match format {
             ImageFormat::Png => self.inner.atoms.PNG__MIME,
@@ -1037,13 +1076,31 @@ impl Clipboard {
             self.inner.atoms.TEXT_MIME_UNKNOWN,
         ];
 
-        // image formats first, as they are more specific, and read will return the first
-        // format that the contents can be converted to
-        let mut format_atoms = Vec::with_capacity(image_entries.len() + text_format_atoms.len());
+        // Files come first, as they are the most specific, then images. `read` returns the
+        // first format that the contents can be converted to.
+        let file_format_atoms = [
+            self.inner.atoms.GNOME_COPIED_FILES,
+            self.inner.atoms.URI_LIST,
+        ];
+        let mut format_atoms = Vec::with_capacity(
+            file_format_atoms.len() + image_entries.len() + text_format_atoms.len(),
+        );
+        format_atoms.extend_from_slice(&file_format_atoms);
+        let non_file_start = format_atoms.len();
         format_atoms.extend(image_entries.iter().map(|(atom, _)| *atom));
         format_atoms.extend_from_slice(text_format_atoms);
 
-        let result = self.inner.read(&format_atoms, selection)?;
+        let mut result = self.inner.read(&format_atoms, selection)?;
+        if file_format_atoms.contains(&result.format) {
+            if let Some(item) = self.files_item(selection, &result) {
+                return Ok(item);
+            }
+            // Not files after all, such as the `http` links a browser also offers as a URI
+            // list: read the clipboard again as an image or text.
+            result = self
+                .inner
+                .read(&format_atoms[non_file_start..], selection)?;
+        }
 
         log::trace!(
             "read clipboard as format {:?}",
@@ -1070,6 +1127,21 @@ impl Clipboard {
             String::from_utf8(result.bytes).map_err(|_| Error::ConversionFailure)?
         };
         Ok(ClipboardItem::new_string(text))
+    }
+
+    /// The file item described by a clipboard read as one of the file formats. A URI list
+    /// is cut when the owner also offers the KDE cut selection as `1`.
+    fn files_item(&self, selection: ClipboardKind, read: &ClipboardData) -> Option<ClipboardItem> {
+        let body = String::from_utf8(read.bytes.clone()).ok()?;
+        if read.format == self.inner.atoms.GNOME_COPIED_FILES {
+            return clipboard_item_from_files(Some(&body), None, None);
+        }
+        let kde_cut = self
+            .inner
+            .read(&[self.inner.atoms.KDE_CUT_SELECTION], selection)
+            .ok()
+            .and_then(|data| String::from_utf8(data.bytes).ok());
+        clipboard_item_from_files(None, Some(&body), kde_cut.as_deref())
     }
 
     pub fn is_owner(&self, selection: ClipboardKind) -> bool {
