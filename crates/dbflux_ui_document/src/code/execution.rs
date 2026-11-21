@@ -631,6 +631,10 @@ impl CodeDocument {
         read_only: ReadOnlyEnforcement,
         cx: &mut Context<Self>,
     ) {
+        // Consent is read when the user starts the run, not after the
+        // preflight or the drift modal, so a level change in between cannot
+        // credit this query.
+        let usage_ticket = self.capture_usage_ticket(origin, cx);
         let Some(conn_id) = self.connection_id else {
             // No connection — nothing to preflight; execute directly via pending.
             self.pending.drift_query = Some(PendingDriftQuery {
@@ -640,6 +644,7 @@ impl CodeDocument {
                 action: DriftAction::ExecuteNow,
                 cache_updates: Vec::new(),
                 read_only,
+                usage_ticket,
             });
             cx.notify();
             return;
@@ -655,6 +660,7 @@ impl CodeDocument {
                 action: DriftAction::ExecuteNow,
                 cache_updates: Vec::new(),
                 read_only,
+                usage_ticket,
             });
             cx.notify();
             return;
@@ -692,6 +698,7 @@ impl CodeDocument {
                     action: DriftAction::ExecuteNow,
                     cache_updates: Vec::new(),
                     read_only,
+                    usage_ticket,
                 });
                 cx.notify();
                 return;
@@ -732,6 +739,7 @@ impl CodeDocument {
                             action: DriftAction::ExecuteNow,
                             cache_updates: Vec::new(),
                             read_only,
+                            usage_ticket,
                         });
                     }
 
@@ -744,6 +752,7 @@ impl CodeDocument {
                             action: DriftAction::ExecuteNow,
                             cache_updates: entries,
                             read_only,
+                            usage_ticket,
                         });
                     }
 
@@ -775,6 +784,7 @@ impl CodeDocument {
                             action: DriftAction::Pending,
                             cache_updates: all_updates,
                             read_only,
+                            usage_ticket,
                         });
 
                         doc.drift.schema_drift_modal.update(cx, |modal, cx| {
@@ -789,9 +799,10 @@ impl CodeDocument {
         .detach();
     }
 
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     fn execute_query_internal(
         &mut self,
-        _origin: ExecutionOrigin,
+        usage_ticket: Option<super::UsageTicket>,
         query: String,
         in_new_tab: bool,
         read_only: ReadOnlyEnforcement,
@@ -908,8 +919,6 @@ impl CodeDocument {
         self.clear_live_output();
         self.result_tabs.run_in_new_tab = in_new_tab;
 
-        #[cfg(feature = "telemetry")]
-        let usage_ticket = self.capture_usage_ticket(_origin, cx);
         let description = dbflux_core::truncate_string_safe(query.trim(), 80);
         let (task_id, cancel_token) = self.runner.start_primary_for_target(
             dbflux_core::TaskKind::Query,
@@ -1197,7 +1206,7 @@ impl CodeDocument {
                     #[cfg(feature = "telemetry")]
                     usage_cancel: cancel_token,
                     #[cfg(feature = "telemetry")]
-                    usage_session_generation: Some(session_generation),
+                    usage_session_generation: on_session.then_some(session_generation),
                 });
                 cx.notify();
             });
@@ -1263,8 +1272,9 @@ impl CodeDocument {
         self.dangerous_query_focus.restore(cx);
         self.focus(window, cx);
         cx.notify();
+        let usage_ticket = self.capture_usage_ticket(pending.origin, cx);
         self.execute_query_internal(
-            pending.origin,
+            usage_ticket,
             pending.query,
             pending.in_new_tab,
             ReadOnlyEnforcement::None,
@@ -1539,25 +1549,32 @@ impl CodeDocument {
         );
     }
 
-    #[cfg(feature = "telemetry")]
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     fn capture_usage_ticket(
         &mut self,
         origin: ExecutionOrigin,
         cx: &mut Context<Self>,
-    ) -> Option<dbflux_core::observability::usage::UsageTicket> {
-        if origin != ExecutionOrigin::User {
-            return None;
-        }
-        self.app_state.update(cx, |state, _| {
-            let source = state.telemetry_usage_source(chrono::Utc::now())?;
-            match source.ticket() {
-                Ok(ticket) => ticket,
-                Err(error) => {
-                    log::warn!("Usage ticket capture failed: {error:?}");
-                    None
-                }
+    ) -> Option<super::UsageTicket> {
+        #[cfg(feature = "telemetry")]
+        {
+            if origin != ExecutionOrigin::User {
+                return None;
             }
-        })
+            self.app_state.update(cx, |state, _| {
+                let source = state.telemetry_usage_source(chrono::Utc::now())?;
+                match source.ticket() {
+                    Ok(ticket) => ticket,
+                    Err(error) => {
+                        log::warn!("Usage ticket capture failed: {error:?}");
+                        None
+                    }
+                }
+            })
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            None
+        }
     }
 
     /// Turns auto-refresh off and tells the user why: the query cannot run
@@ -2296,7 +2313,9 @@ impl CodeDocument {
             dbflux_core::count_query_from_sql(&query),
             origin.context.database.clone(),
             &origin.exec_ctx,
-            self.effective_language().clone(),
+            // The count query is SQL by construction, whatever language the
+            // editor has been retargeted to since the result was produced.
+            dbflux_core::QueryLanguage::Sql,
             count_row_limit,
         );
         let task = self.execute_in_result_context(origin.context, request, cx);
@@ -2372,8 +2391,9 @@ impl CodeDocument {
             grid: grid_id,
             origin,
         });
+        let usage_ticket = self.capture_usage_ticket(ExecutionOrigin::User, cx);
         self.execute_query_internal(
-            ExecutionOrigin::User,
+            usage_ticket,
             query,
             false,
             ReadOnlyEnforcement::None,
@@ -3044,6 +3064,7 @@ impl CodeDocument {
             action: DriftAction::ExecuteNow,
             cache_updates: Vec::new(),
             read_only: pending.read_only,
+            usage_ticket: pending.usage_ticket,
         });
 
         cx.notify();
@@ -3097,7 +3118,7 @@ impl CodeDocument {
                 }
 
                 self.execute_query_internal(
-                    pending.origin,
+                    pending.usage_ticket,
                     pending.query,
                     pending.in_new_tab,
                     pending.read_only,
@@ -3109,7 +3130,7 @@ impl CodeDocument {
             DriftAction::ContinueStale => {
                 // User chose to proceed without updating the cache.
                 self.execute_query_internal(
-                    pending.origin,
+                    pending.usage_ticket,
                     pending.query,
                     pending.in_new_tab,
                     pending.read_only,
@@ -3599,6 +3620,7 @@ mod tests {
             action: DriftAction::Pending,
             cache_updates: Vec::new(),
             read_only: dbflux_core::ReadOnlyEnforcement::None,
+            usage_ticket: None,
         });
 
         assert!(
@@ -3627,6 +3649,7 @@ mod tests {
                 action: DriftAction::Pending,
                 cache_updates: Vec::new(),
                 read_only: dbflux_core::ReadOnlyEnforcement::None,
+                usage_ticket: None,
             }),
             ..Default::default()
         };

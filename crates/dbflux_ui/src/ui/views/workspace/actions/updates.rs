@@ -75,10 +75,15 @@ impl Workspace {
         }
         let isolated = cfg!(debug_assertions)
             && std::env::var("DBFLUX_TELEMETRY_ISOLATED").as_deref() == Ok("1");
-        let initialized = TelemetryConfig::from_environment(isolated).and_then(|config| {
-            self.app_state.update(cx, |state, _| {
-                state.initialize_telemetry(config, chrono::Utc::now())
-            })
+        // An invalid endpoint override disables delivery but keeps consent
+        // storage, so Settings can still save a level; it never falls back to
+        // the compiled collector.
+        let config = TelemetryConfig::from_environment(isolated).unwrap_or_else(|_| {
+            log::warn!("telemetry.invalid_endpoint_override");
+            TelemetryConfig::default()
+        });
+        let initialized = self.app_state.update(cx, |state, _| {
+            state.initialize_telemetry(config, chrono::Utc::now())
         });
         if initialized.is_err() {
             log::warn!("telemetry.startup_unavailable");
@@ -172,12 +177,15 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
-        let result = self.app_state.update(cx, |state, _| {
+        // Without a scheduler telemetry never initialized (for example an
+        // invalid endpoint override): nothing to acknowledge, nothing to report.
+        let Some(result) = self.app_state.update(cx, |state, _| {
             state
                 .telemetry_mut()
-                .ok_or(dbflux_app::telemetry::TelemetryError::Storage)?
-                .disclosure_dismissed(chrono::Utc::now())
-        });
+                .map(|scheduler| scheduler.disclosure_dismissed(chrono::Utc::now()))
+        }) else {
+            return;
+        };
         match result {
             Ok(()) => self.telemetry_wake.wake(),
             Err(_) => report_error(

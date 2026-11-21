@@ -389,6 +389,12 @@ mod tests {
                     dbflux_core::QueryLanguage::Sql,
                 )
                 .capabilities(capabilities)
+                // Unattended refresh runs only on a connection that enforces
+                // read-only execution.
+                .transactions(dbflux_core::TransactionCapabilities {
+                    supports_read_only: true,
+                    ..Default::default()
+                })
                 .build()
             })
         }
@@ -998,6 +1004,7 @@ mod tests {
 
         #[cfg(feature = "telemetry")]
         {
+            let queries_before_refresh = isolated.queries.load(Ordering::SeqCst);
             window.update(|window, cx| {
                 document.update(cx, |document, cx| {
                     document.pending.auto_refresh = true;
@@ -1006,6 +1013,12 @@ mod tests {
             });
             window.run_until_parked();
             window.run_until_parked();
+            assert_eq!(
+                isolated.queries.load(Ordering::SeqCst),
+                queries_before_refresh + 1,
+                "the automatic refresh must reach the isolated driver as a read"
+            );
+            assert!(window.update(|_, cx| document.read(cx).execution.active_query_task.is_none()));
             window.update(|_, cx| {
                 app_state.update(cx, |app, _| {
                     assert_eq!(

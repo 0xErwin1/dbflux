@@ -717,6 +717,13 @@ enum DriftAction {
     ContinueStale,
 }
 
+/// The consent ticket a run carries to completion. Without the `telemetry`
+/// feature nothing is ever captured, so the type carries no data.
+#[cfg(feature = "telemetry")]
+type UsageTicket = dbflux_core::observability::usage::UsageTicket;
+#[cfg(not(feature = "telemetry"))]
+type UsageTicket = std::convert::Infallible;
+
 /// A query paused by the schema-drift preflight or drift modal awaiting execution.
 struct PendingDriftQuery {
     origin: ExecutionOrigin,
@@ -728,6 +735,8 @@ struct PendingDriftQuery {
     /// `TableKey` is `(database, schema, table)`.
     cache_updates: Vec<(dbflux_core::TableKey, dbflux_core::TableInfo)>,
     read_only: ReadOnlyEnforcement,
+    /// Captured when the user started the run, before the preflight.
+    usage_ticket: Option<UsageTicket>,
 }
 
 /// Record of a query execution.

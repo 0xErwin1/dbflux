@@ -3964,12 +3964,15 @@ impl SchemaBulk {
     fn relation_is_complete(&self, table: &TableInfo) -> bool {
         // A relation present in the column map always takes the fabrication
         // path. Its Some(empty) indexes/FKs may be stand-ins for failed seams,
-        // so only successful bulk results prove those parts were loaded.
+        // so only successful bulk results prove those parts were loaded. Any
+        // other relation came from `table_details`, which never merges the
+        // bulk results, so only the fields it returned prove completeness.
         let fabricated = self.columns.contains_key(&table.name);
-        (table.columns.is_some() || fabricated)
-            && (self.fetched_indexes.is_some() || (!fabricated && table.indexes.is_some()))
-            && (self.fetched_foreign_keys.is_some()
-                || (!fabricated && table.foreign_keys.is_some()))
+        if fabricated {
+            self.fetched_indexes.is_some() && self.fetched_foreign_keys.is_some()
+        } else {
+            table.columns.is_some() && table.indexes.is_some() && table.foreign_keys.is_some()
+        }
     }
 
     /// The cache-seed view of this schema's bulk result: the rows exactly as

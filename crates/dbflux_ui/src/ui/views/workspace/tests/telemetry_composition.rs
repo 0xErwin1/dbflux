@@ -10,7 +10,7 @@
 //! always asserted. The payload freezes against a loopback endpoint; when no
 //! collector is configured the only delivery attempt is a guaranteed-refused
 //! loopback connection, and the test says so in its output instead of
-//! claiming wire coverage. With `DBFLUX_TELEMETRY_ENDPOINT` set (a local
+//! claiming wire coverage. With `DBFLUX_TELEMETRY_TEST_ENDPOINT` set (a local
 //! collector), the full delivery path runs and the scheduler's own
 //! completion disposition carries the assertion — the collector is never
 //! inspected by hand.
@@ -63,14 +63,18 @@ fn fixture_identity() -> Result<BuildIdentity, dbflux_app::telemetry::TelemetryE
     )
 }
 
-/// The endpoint under test. When the environment configures a collector the
-/// harness exercises the real wire; otherwise it falls back to a guaranteed
-/// refused loopback port so payload assembly and audit correlation stay
-/// testable without pretending to reach a collector.
+/// The endpoint under test. The application's own `DBFLUX_TELEMETRY_*`
+/// variables never reach this harness, so a developer's configuration cannot
+/// send test events anywhere. Only the explicit test opt-in
+/// `DBFLUX_TELEMETRY_TEST_ENDPOINT` exercises a real collector; otherwise the
+/// harness uses a guaranteed refused loopback port so payload assembly and
+/// audit correlation stay testable without pretending to reach a collector.
 fn telemetry_config() -> (TelemetryConfig, bool) {
-    match std::env::var("DBFLUX_TELEMETRY_ENDPOINT") {
+    let allow_loopback = std::env::var("DBFLUX_TELEMETRY_ALLOW_LOOPBACK_HTTP").ok();
+    match std::env::var("DBFLUX_TELEMETRY_TEST_ENDPOINT") {
         Ok(endpoint) if !endpoint.is_empty() => (
-            TelemetryConfig::from_environment(true).expect("configured telemetry"),
+            TelemetryConfig::from_values(Some(&endpoint), allow_loopback.as_deref(), true)
+                .expect("configured test telemetry endpoint"),
             true,
         ),
         _ => (
@@ -595,7 +599,7 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
     let collector_configured = harness.enable_telemetry();
     if !collector_configured {
         eprintln!(
-            "telemetry composition: DBFLUX_TELEMETRY_ENDPOINT is not configured; \
+            "telemetry composition: DBFLUX_TELEMETRY_TEST_ENDPOINT is not configured; \
              the harness asserts local payload assembly and durable audit \
              correlation against a refused loopback port, and does NOT claim \
              collector wire coverage"
@@ -647,9 +651,24 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
     harness.window.run_until_parked();
     harness.window.run_until_parked();
 
-    // -- producer 2: script_run (real bash interpreter, failure then success) -
+    // -- producer 2: script_run (failure then success) ------------------------
+    // Bash has no default interpreter on Windows, so the in-process Lua runner
+    // stands in there; the other platforms keep the real Bash interpreter.
     // The failing script is the negative control: a started-but-failed script
     // must never credit, so the final payload's script_run stays at exactly 1.
+    let (script_language, failing_script, passing_script) = if cfg!(windows) {
+        (
+            QueryLanguage::Lua,
+            "error('script failure')",
+            "print('script ok')",
+        )
+    } else {
+        (
+            QueryLanguage::Bash,
+            "printf 'script failure\\n'; exit 1",
+            "printf 'script ok\\n'",
+        )
+    };
     let (script_document, script_document_id, pane) = {
         let app_state = harness.app_state.clone();
         harness.window.update(|window, cx| {
@@ -657,7 +676,7 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
                 CodeDocument::new_with_language(
                     app_state.clone(),
                     None,
-                    QueryLanguage::Bash,
+                    script_language,
                     window,
                     cx,
                 )
@@ -669,10 +688,7 @@ fn five_gui_counters_compose_into_one_basic_payload(cx: &mut TestAppContext) {
     };
     harness.open_tab(pane, script_document_id);
     harness.window.run_until_parked();
-    for body in [
-        "printf 'script failure\\n'; exit 1",
-        "printf 'script ok\\n'",
-    ] {
+    for body in [failing_script, passing_script] {
         harness.window.update(|window, cx| {
             script_document.update(cx, |doc, cx| {
                 doc.set_content(body, window, cx);

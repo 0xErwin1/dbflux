@@ -2187,3 +2187,46 @@ fn tab_title_names_the_database_then_schema() {
         "orders \u{b7} schema"
     );
 }
+
+fn bulk_with_fetched_indexes_and_keys(fabricated: Option<&str>) -> super::SchemaBulk {
+    super::SchemaBulk {
+        columns: fabricated
+            .map(|name| (name.to_owned(), Vec::new()))
+            .into_iter()
+            .collect(),
+        indexes: std::collections::HashMap::new(),
+        foreign_keys: Vec::new(),
+        columns_ok: true,
+        fetched_columns: Some(Vec::new()),
+        fetched_indexes: Some(Vec::new()),
+        fetched_foreign_keys: Some(Vec::new()),
+    }
+}
+
+/// A relation the bulk column result omitted comes from `table_details`, which
+/// never merges the bulk indexes or keys, so successful bulk calls cannot make
+/// its missing fields count as loaded.
+#[test]
+fn a_fallback_relation_needs_its_own_indexes_and_keys_to_be_complete() {
+    let mut partial = make_table("orders", 2);
+    partial.indexes = None;
+    partial.foreign_keys = None;
+    let bulk = bulk_with_fetched_indexes_and_keys(None);
+    assert!(!bulk.relation_is_complete(&partial));
+
+    let mut full = make_table("orders", 2);
+    full.indexes = Some(dbflux_core::IndexData::Relational(Vec::new()));
+    full.foreign_keys = Some(Vec::new());
+    assert!(bulk.relation_is_complete(&full));
+}
+
+#[test]
+fn a_fabricated_relation_is_complete_when_the_bulk_calls_succeeded() {
+    let mut fabricated = make_table("orders", 2);
+    fabricated.indexes = Some(dbflux_core::IndexData::Relational(Vec::new()));
+    fabricated.foreign_keys = Some(Vec::new());
+    let mut bulk = bulk_with_fetched_indexes_and_keys(Some("orders"));
+    assert!(bulk.relation_is_complete(&fabricated));
+    bulk.fetched_foreign_keys = None;
+    assert!(!bulk.relation_is_complete(&fabricated));
+}
