@@ -23,7 +23,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 # Test-only TLS server surface; production code never links rustls directly.
-rustls = { version = "=0.23.44", default-features = false, features = [
+rustls = { version = "0.23", default-features = false, features = [
   "ring",
   "std",
   "tls12",
