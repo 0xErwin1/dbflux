@@ -243,6 +243,10 @@ impl GovernanceMiddleware {
         } else {
             None
         };
+        // Without a capability nothing can be credited, so no response is parsed
+        // for evidence. The call-wide claim stays taken, which keeps nested calls out.
+        #[cfg(feature = "telemetry")]
+        let evidence = evidence.filter(|_| capability.is_some());
 
         let operation = handler();
         #[cfg(feature = "telemetry")]
@@ -275,7 +279,16 @@ impl GovernanceMiddleware {
                     .is_some_and(|evidence| evidence.successful());
             // No detached cancellation cleanup: dropping this future abandons the
             // opaque capability to the foreground owner's bounded expiry policy.
-            let _finish_ack = self.usage_client.finish(capability, success).await;
+            // The tool result is already final and the handler must not rerun, so a
+            // missing acknowledgement is logged without payload data and nothing else.
+            if self
+                .usage_client
+                .finish(capability, success)
+                .await
+                .is_none()
+            {
+                log::debug!("mcp tool usage finish was not acknowledged");
+            }
         }
         (result, audit_result)
     }

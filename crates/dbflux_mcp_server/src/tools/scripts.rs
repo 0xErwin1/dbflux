@@ -453,6 +453,11 @@ where
         "execute_script: read-only enforcement was refused ({reason}); governing the script as a write"
     );
 
+    // The refused attempt ran nothing and its usage capability is spent, so the
+    // retry takes a fresh telemetry attempt after its own authorization.
+    #[cfg(feature = "telemetry")]
+    crate::telemetry_usage::reopen_call_claim();
+
     match attempt(ExecutionClassification::Write, ReadOnlyEnforcement::None).await {
         ScriptAttempt::Completed(result) => result,
         ScriptAttempt::ReadOnlyRefused(reason) => Err(ErrorData::internal_error(reason, None)),

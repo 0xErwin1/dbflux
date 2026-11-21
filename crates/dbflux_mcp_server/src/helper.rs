@@ -13,7 +13,9 @@ pub(crate) fn to_json_content<T: Serialize>(value: &T) -> Result<ContentBlock, E
     serde_json::to_string_pretty(value)
         .map(|serialized| {
             #[cfg(feature = "telemetry")]
-            if let Ok(value) = serde_json::from_str(&serialized) {
+            if crate::telemetry_usage::observing()
+                && let Ok(value) = serde_json::from_str(&serialized)
+            {
                 crate::telemetry_usage::observe_json(&value);
             }
             ContentBlock::text(serialized)
