@@ -1,5 +1,6 @@
 [
   { "id": "nightly", "ref": "main", "noindex": true },
+  { "id": "v0.11", "ref": "release/v0.11" },
   { "id": "v0.10", "ref": "release/v0.10", "current": true },
   { "id": "v0.9", "ref": "release/v0.9" },
   { "id": "v0.8", "ref": "release/v0.8" },
