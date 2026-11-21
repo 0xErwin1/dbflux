@@ -26,6 +26,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **MongoDB scripts with `runCommand` run after admin-level confirmation** — A MongoDB script containing `runCommand` failed even after confirming the prompt, because the confirmation only covered destructive operations while `runCommand` requires admin-level clearance. Scripts that call `runCommand` directly now ask for admin-level confirmation (and require an `AdminDestructive` policy over MCP), while other scripts keep the ordinary destructive confirmation and computed calls such as `db[m]` that resolve to `runCommand` remain blocked at dispatch (#1356).
 * **Set to default writes the column default** — **Set to default** in the cell menu staged the column's default as text, so saving a column whose default is a function, such as `DEFAULT gen_random_uuid()` or `DEFAULT now()`, failed with an invalid input error. It now stages the default as an expression, so the database evaluates it (#1358).
 * **SQLite text with a NUL byte is written intact** — A text value that contains a NUL byte was written as a quoted literal holding the raw byte, which SQLite reads as the end of the statement. It is now written as its quoted segments joined with `char(0)`, so SQL export and import keep every byte and the text type in UTF-8, UTF-16LE and UTF-16BE databases. A long run of NUL bytes is grouped in parentheses so the expression stays within SQLite's depth limit; text without a NUL is written as before (#805).
 

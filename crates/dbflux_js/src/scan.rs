@@ -51,8 +51,11 @@ const WRITE_OR_WORSE_METHOD_NAMES: &[&str] = &[
     "drop",
     "dropDatabase",
     "createCollection",
-    "runCommand",
 ];
+
+/// Method names classified as `AdminDestructive`, kept separate so callers
+/// escalate the ceiling above `Destructive` only on a literal mention.
+const ADMIN_DESTRUCTIVE_METHOD_NAMES: &[&str] = &["runCommand"];
 
 /// Aggregation stages that write to a collection. `aggregate` itself is a
 /// read, so the scan must see the stage to flag the script; the engine
@@ -78,9 +81,268 @@ pub fn static_scan(source: &str) -> StaticScanOutcome {
     }
 }
 
+/// True if `source` accesses `runCommand` as a literal dot-member property
+/// (e.g. `db.runCommand(...)` or `db?.runCommand(...)`) outside string
+/// literals, comments, and regex literals.
+///
+/// Quoted names (`'runCommand'`, `"runCommand"`), standalone identifiers
+/// (`const runCommand = ...`), and computed member access (`docs[0]`, `db[m]`)
+/// do not match, so ordinary loops and computed calls without a literal
+/// `.runCommand` access stay at `Destructive` while [`crate::run`] enforces the
+/// confirmed ceiling at dispatch.
+pub fn contains_run_command(source: &str) -> bool {
+    ADMIN_DESTRUCTIVE_METHOD_NAMES
+        .iter()
+        .any(|name| contains_member_property(source, name))
+}
+
+/// True if `source` contains `.target` as a member-access property outside
+/// string literals, comments, and regex literals (while still scanning
+/// expressions inside `${...}` template interpolations).
+fn contains_member_property(source: &str, target: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    let mut template_braces: Vec<usize> = Vec::new();
+    let mut regex_allowed = true;
+    let mut after_dot = false;
+
+    while let Some(&b) = bytes.get(i) {
+        if let Some(len) = line_terminator_len(bytes, i) {
+            i += len;
+            continue;
+        }
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if let Some(next) = skip_comment(bytes, i) {
+            i = next;
+            continue;
+        }
+        if b == b'/' && regex_allowed {
+            i = skip_regex(bytes, i + 1);
+            regex_allowed = false;
+            after_dot = false;
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            i = skip_quoted(bytes, i + 1, b);
+            regex_allowed = false;
+            after_dot = false;
+            continue;
+        }
+        if b == b'`' {
+            (i, regex_allowed) = enter_template_chunk(bytes, i + 1, &mut template_braces);
+            after_dot = false;
+            continue;
+        }
+        if b == b'{' || b == b'}' {
+            (i, regex_allowed) = step_template_brace(bytes, i, b, &mut template_braces);
+            after_dot = false;
+            continue;
+        }
+        if b.is_ascii_digit() {
+            while bytes.get(i).is_some_and(|&c| is_identifier_char(c)) {
+                i += 1;
+            }
+            regex_allowed = false;
+            after_dot = false;
+            continue;
+        }
+        if is_identifier_char(b) || b >= 0x80 {
+            let start = i;
+            while bytes.get(i).is_some_and(|&c| {
+                (is_identifier_char(c) || c >= 0x80) && line_terminator_len(bytes, i).is_none()
+            }) {
+                i += 1;
+            }
+            let ident = source.get(start..i).unwrap_or_default();
+            if after_dot && ident == target {
+                return true;
+            }
+            regex_allowed = !after_dot && is_regex_prefix_keyword(ident);
+            after_dot = false;
+            continue;
+        }
+        if b == b'.' && bytes.get(i + 1) == Some(&b'.') && bytes.get(i + 2) == Some(&b'.') {
+            i += 3;
+            regex_allowed = true;
+            after_dot = false;
+            continue;
+        }
+
+        after_dot = b == b'.';
+        regex_allowed = !matches!(b, b')' | b']' | b'.');
+        i += 1;
+    }
+
+    false
+}
+
+/// Length in bytes of an ECMAScript `LineTerminator` sequence (LF, CR, CRLF,
+/// U+2028, or U+2029) at `bytes[i]`, or `None`.
+fn line_terminator_len(bytes: &[u8], i: usize) -> Option<usize> {
+    match bytes.get(i)? {
+        b'\n' => Some(1),
+        b'\r' => Some(if bytes.get(i + 1) == Some(&b'\n') {
+            2
+        } else {
+            1
+        }),
+        0xE2 if bytes.get(i + 1) == Some(&0x80)
+            && matches!(bytes.get(i + 2), Some(0xA8 | 0xA9)) =>
+        {
+            Some(3)
+        }
+        _ => None,
+    }
+}
+
+fn step_template_brace(
+    bytes: &[u8],
+    i: usize,
+    brace: u8,
+    template_braces: &mut Vec<usize>,
+) -> (usize, bool) {
+    if brace == b'{' {
+        if let Some(depth) = template_braces.last_mut() {
+            *depth += 1;
+        }
+        return (i + 1, true);
+    }
+
+    if let Some(depth) = template_braces.last_mut() {
+        *depth -= 1;
+        if *depth == 0 {
+            template_braces.pop();
+            return enter_template_chunk(bytes, i + 1, template_braces);
+        }
+    }
+    (i + 1, true)
+}
+
+fn skip_comment(bytes: &[u8], i: usize) -> Option<usize> {
+    if bytes.get(i) != Some(&b'/') {
+        return None;
+    }
+    if bytes.get(i + 1) == Some(&b'/') {
+        let mut cursor = i + 2;
+        while cursor < bytes.len() {
+            if let Some(len) = line_terminator_len(bytes, cursor) {
+                return Some(cursor + len);
+            }
+            cursor += 1;
+        }
+        return Some(cursor);
+    }
+    if bytes.get(i + 1) == Some(&b'*') {
+        let mut cursor = i + 2;
+        while let Some(&c) = bytes.get(cursor) {
+            if c == b'*' && bytes.get(cursor + 1) == Some(&b'/') {
+                return Some(cursor + 2);
+            }
+            cursor += 1;
+        }
+        return Some(cursor);
+    }
+    None
+}
+
+fn enter_template_chunk(
+    bytes: &[u8],
+    start: usize,
+    template_braces: &mut Vec<usize>,
+) -> (usize, bool) {
+    let (next, entered_expr) = skip_template_chunk(bytes, start);
+    if entered_expr {
+        template_braces.push(1);
+    }
+    (next, entered_expr)
+}
+
+/// Reserved ECMAScript keywords that can precede an expression or statement
+/// starting with a regex literal (excluding contextual identifiers like `of`).
+fn is_regex_prefix_keyword(ident: &str) -> bool {
+    matches!(
+        ident,
+        "return" | "case" | "throw" | "in" | "typeof" | "void" | "delete" | "new" | "else" | "do"
+    )
+}
+
+fn skip_quoted(bytes: &[u8], mut i: usize, quote: u8) -> usize {
+    while let Some(&c) = bytes.get(i) {
+        if c == b'\\' {
+            i += 1;
+            if let Some(len) = line_terminator_len(bytes, i) {
+                i += len;
+            } else if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        if c == quote || c == b'\n' || c == b'\r' {
+            return i + 1;
+        }
+        i += 1;
+    }
+    i
+}
+
+fn skip_regex(bytes: &[u8], mut i: usize) -> usize {
+    let mut in_class = false;
+    while let Some(&c) = bytes.get(i) {
+        if c == b'\\' {
+            if let Some(len) = line_terminator_len(bytes, i + 1) {
+                return i + 1 + len;
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(len) = line_terminator_len(bytes, i) {
+            return i + len;
+        }
+        if c == b'[' {
+            in_class = true;
+        } else if c == b']' {
+            in_class = false;
+        } else if c == b'/' && !in_class {
+            i += 1;
+            while bytes.get(i).is_some_and(|&f| is_identifier_char(f)) {
+                i += 1;
+            }
+            return i;
+        }
+        i += 1;
+    }
+    i
+}
+
+fn skip_template_chunk(bytes: &[u8], mut i: usize) -> (usize, bool) {
+    while let Some(&c) = bytes.get(i) {
+        if c == b'\\' {
+            i += 1;
+            if let Some(len) = line_terminator_len(bytes, i) {
+                i += len;
+            } else if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'`' {
+            return (i + 1, false);
+        }
+        if c == b'$' && bytes.get(i + 1) == Some(&b'{') {
+            return (i + 2, true);
+        }
+        i += 1;
+    }
+    (i, false)
+}
+
 fn reachable_write_or_worse(source: &str) -> bool {
     WRITE_OR_WORSE_METHOD_NAMES
         .iter()
+        .chain(ADMIN_DESTRUCTIVE_METHOD_NAMES)
         .chain(OUTPUT_STAGE_NAMES)
         .any(|name| contains_word(source, name))
         || contains_computed_member_access(source)
@@ -281,5 +543,59 @@ mod tests {
             static_scan("const nums = [1, 2, 3]; db.users.find({id: {$in: nums}});"),
             StaticScanOutcome::Read
         );
+    }
+
+    #[test]
+    fn contains_run_command_detects_literal_run_command() {
+        for script in [
+            r#"db.runCommand({ ping: 1 });"#,
+            r#"const coll = "coll"; db.runCommand({ update: coll, updates: [] });"#,
+            r#"db?.runCommand({ ping: 1 });"#,
+            "db\n  /* comment */\n  .runCommand({ ping: 1 });",
+            r#"db.users.find({ name: /'/ }); db.runCommand({ ping: 1 });"#,
+            r#"const msg = "ends with \\"; db.runCommand({ ping: 1 });"#,
+            r#"print(`${db.runCommand({ ping: 1 })}`);"#,
+            "const of = 4; print(of / 2); db.runCommand({ ping: 1 });",
+            "const obj = { in: 4 }; print(obj.in / 2); db.runCommand({ ping: 1 });",
+            "const value = 1; // note\rdb.runCommand({ ping: 1 });",
+            "const value = 1; // note\u{2028}db.runCommand({ ping: 1 });",
+            "const value = 1; // note\u{2029}db.runCommand({ ping: 1 });",
+        ] {
+            assert!(contains_run_command(script), "{script}");
+        }
+        assert_eq!(
+            static_scan(r#"const coll = "coll"; db.runCommand({ ping: 1 });"#),
+            StaticScanOutcome::RequiresConfirmation
+        );
+    }
+
+    #[test]
+    fn contains_run_command_ignores_longer_identifiers() {
+        assert!(!contains_run_command(
+            "const runCommandHelper = 1; db.users.find({});"
+        ));
+    }
+
+    #[test]
+    fn contains_run_command_ignores_writes_deletes_computed_access_strings_and_comments() {
+        for script in [
+            "db.users.deleteMany({});",
+            "const docs = db.users.find({}); print(docs[0]);",
+            "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+            "const m = 'runCommand'; db[m]({ ping: 1 });",
+            "const runCommand = 'runCommand'; db[runCommand]({ ping: 1 });",
+            "const arr = [...runCommand]; db.users.insertOne({ arr });",
+            r#"db["runCommand"]({ ping: 1 });"#,
+            "const m = `runCommand`; db[m]({ ping: 1 });",
+            "const s = `hello ${{ a: 'runCommand' }.a} .runCommand`; db.users.insertOne({ s });",
+            r#"const msg = "escaped \" .runCommand"; db.users.insertOne({ msg });"#,
+            "const s = \"line1\\\r\n.runCommand\"; db.users.insertOne({ s });",
+            "const s = \"\u{2028}.runCommand\"; db.users.insertOne({ s });",
+            "const s = \"\u{2029}.runCommand\"; db.users.insertOne({ s });",
+            "// db.runCommand\n/* db.runCommand */\ndb.users.insertOne({ a: 1 });",
+            "db.users.find({ name: /.runCommand/i });",
+        ] {
+            assert!(!contains_run_command(script), "{script}");
+        }
     }
 }

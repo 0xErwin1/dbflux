@@ -48,6 +48,10 @@ pub struct ScriptLedgerEntry {
     /// `None` only when the method name itself did not resolve to a known
     /// [`ScriptMethod`] — there is nothing to classify.
     pub classification: Option<ExecutionClassification>,
+    /// `true` once the operation reached `ScriptOperationHost::dispatch`;
+    /// `false` for pre-dispatch rejections (cancellation, unknown method, or
+    /// ceiling violation).
+    pub dispatched: bool,
     pub outcome: ScriptLedgerOutcome,
     pub counts: ScriptOperationCounts,
 }
@@ -217,6 +221,7 @@ fn install_bindings<'js>(
                 &target_name,
                 &method,
                 None,
+                false,
                 message.clone(),
             );
             return Err(Exception::throw_message(&ctx, &message));
@@ -230,6 +235,7 @@ fn install_bindings<'js>(
                 &target_name,
                 &method,
                 None,
+                false,
                 message.clone(),
             );
             return Err(Exception::throw_message(&ctx, &message));
@@ -258,6 +264,7 @@ fn install_bindings<'js>(
                 &target_name,
                 &method,
                 Some(classification),
+                false,
                 message.clone(),
             );
             return Err(Exception::throw_message(&ctx, &message));
@@ -288,6 +295,7 @@ fn install_bindings<'js>(
                     &target_name,
                     &method,
                     Some(classification),
+                    true,
                     message.clone(),
                 );
                 Err(Exception::throw_message(&ctx, &message))
@@ -365,6 +373,7 @@ fn record_success(
         target,
         method,
         classification: Some(classification),
+        dispatched: true,
         outcome: ScriptLedgerOutcome::Success,
         counts: outcome.counts,
     });
@@ -377,6 +386,7 @@ fn record_failure(
     target_name: &str,
     method: &str,
     classification: Option<ExecutionClassification>,
+    dispatched: bool,
     message: String,
 ) -> usize {
     let mut collected = state.borrow_mut();
@@ -392,6 +402,7 @@ fn record_failure(
         target,
         method: method.to_string(),
         classification,
+        dispatched,
         outcome: ScriptLedgerOutcome::Failed { message },
         counts: ScriptOperationCounts::default(),
     });
@@ -641,7 +652,9 @@ mod tests {
             "the third statement must not dispatch"
         );
         assert_eq!(outcome.ledger.len(), 2);
+        assert!(outcome.ledger[0].dispatched);
         assert_eq!(outcome.ledger[0].outcome, ScriptLedgerOutcome::Success);
+        assert!(outcome.ledger[1].dispatched);
         assert!(matches!(
             &outcome.ledger[1].outcome,
             ScriptLedgerOutcome::Failed { message } if message.contains("boom")
@@ -813,5 +826,57 @@ mod tests {
 
         assert!(outcome.failure.is_none());
         assert_eq!(outcome.print_output, "true");
+    }
+
+    #[test]
+    fn run_command_dispatches_under_admin_destructive_ceiling() {
+        let host = FakeHost::with_responses(vec![Ok(ScriptOperationOutcome::default())]);
+        let outcome = run(
+            config(
+                r#"const coll = "coll"; db.runCommand({ update: coll, updates: [{ q: { a: 1 }, u: { $set: { b: 2 } }, multi: true }] });"#,
+                ExecutionClassification::AdminDestructive,
+            ),
+            &host,
+        )
+        .expect("run should not error");
+
+        assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+        assert_eq!(host.call_count(), 1);
+        assert_eq!(outcome.ledger.len(), 1);
+        assert!(outcome.ledger[0].dispatched);
+        assert_eq!(
+            outcome.ledger[0].classification,
+            Some(ExecutionClassification::AdminDestructive)
+        );
+        assert_eq!(outcome.ledger[0].outcome, ScriptLedgerOutcome::Success);
+    }
+
+    #[test]
+    fn computed_access_resolving_to_run_command_is_rejected_under_destructive_ceiling() {
+        let host = FakeHost::with_responses(vec![]);
+        let outcome = run(
+            config(
+                "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+                ExecutionClassification::Destructive,
+            ),
+            &host,
+        )
+        .expect("run should not error");
+
+        assert_eq!(host.call_count(), 0, "host must never be reached");
+        assert_eq!(outcome.ledger.len(), 1);
+        assert!(!outcome.ledger[0].dispatched);
+        assert_eq!(
+            outcome.ledger[0].classification,
+            Some(ExecutionClassification::AdminDestructive)
+        );
+        let failure = outcome
+            .failure
+            .expect("computed runCommand must be rejected under Destructive ceiling");
+        assert!(failure.message.contains("AdminDestructive"), "{failure:?}");
+        assert!(
+            failure.message.contains("Destructive ceiling"),
+            "{failure:?}"
+        );
     }
 }

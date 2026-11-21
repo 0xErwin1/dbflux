@@ -65,6 +65,19 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
     dbflux_core::DangerousAction::Confirm(kind)
 }
 
+/// Keying strictly on `kind` binds the granted ceiling to the confirmation
+/// prompt shown: only `AdminScript` unlocks `AdminDestructive`.
+pub(crate) fn confirmed_ceiling_for_dangerous(
+    kind: dbflux_core::DangerousQueryKind,
+) -> dbflux_core::ExecutionClassification {
+    match kind {
+        dbflux_core::DangerousQueryKind::AdminScript => {
+            dbflux_core::ExecutionClassification::AdminDestructive
+        }
+        _ => dbflux_core::ExecutionClassification::Destructive,
+    }
+}
+
 /// Returns `true` when the connection's profile is set to read-only and
 /// `query` would do more than read data or metadata.
 ///
@@ -915,14 +928,15 @@ impl CodeDocument {
         // Governance ceiling for a driver-dispatched multi-statement script
         // (see `QueryRequest::confirmed_ceiling`). Reusing `detect_dangerous`
         // here — rather than threading the earlier `run_query_text` call's
-        // result through `pending` — keeps this a pure re-derivation from
-        // the query text and connection, with no extra state to go stale.
-        // Any dangerous kind reaching this point was already either
-        // confirmed by the user or explicitly allowed by settings, so it is
-        // safe to raise the ceiling; an absent dangerous kind leaves the
-        // ceiling `None`, which the driver defaults to the restrictive
-        // `Read`. This never branches on a concrete driver id — the
-        // downstream driver decides whether the ceiling even applies to it.
+        // result through `pending` — keeps this a pure re-derivation from the
+        // query text and connection, with no extra state to go stale. Any
+        // dangerous kind reaching this point was already either confirmed by
+        // the user or explicitly allowed by settings, so it is safe to raise
+        // the ceiling (`AdminDestructive` for `AdminScript`, `Destructive`
+        // otherwise); an absent dangerous kind leaves the ceiling `None`,
+        // which the driver defaults to the restrictive `Read`. This never
+        // branches on a concrete driver id — the downstream driver decides
+        // whether the ceiling even applies to it.
         let confirmed_ceiling = self
             .app_state
             .read(cx)
@@ -933,10 +947,10 @@ impl CodeDocument {
                     .connection
                     .language_service()
                     .detect_dangerous(&query)
+                    .map(confirmed_ceiling_for_dangerous)
             });
-        if confirmed_ceiling.is_some() {
-            request =
-                request.with_confirmed_ceiling(dbflux_core::ExecutionClassification::Destructive);
+        if let Some(ceiling) = confirmed_ceiling {
+            request = request.with_confirmed_ceiling(ceiling);
         }
         request = request.with_read_only(read_only);
 
@@ -3550,6 +3564,25 @@ mod tests {
         );
 
         assert_ne!(en, es);
+    }
+
+    #[test]
+    fn confirmed_ceiling_for_dangerous_raises_only_admin_scripts() {
+        use super::confirmed_ceiling_for_dangerous;
+        use dbflux_core::{DangerousQueryKind, ExecutionClassification};
+
+        assert_eq!(
+            confirmed_ceiling_for_dangerous(DangerousQueryKind::AdminScript),
+            ExecutionClassification::AdminDestructive
+        );
+        assert_eq!(
+            confirmed_ceiling_for_dangerous(DangerousQueryKind::Script),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            confirmed_ceiling_for_dangerous(DangerousQueryKind::MongoDropDatabase),
+            ExecutionClassification::Destructive
+        );
     }
 }
 

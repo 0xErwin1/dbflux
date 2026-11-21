@@ -2093,6 +2093,7 @@ fn script_ledger_to_json(ledger: &[dbflux_js::ScriptLedgerEntry]) -> Vec<serde_j
                 "target": target,
                 "method": entry.method,
                 "classification": entry.classification,
+                "dispatched": entry.dispatched,
                 "outcome": outcome,
                 "message": message,
                 "counts": {
@@ -4674,6 +4675,7 @@ mod tests {
                 target: dbflux_core::ScriptTarget::Container("users".to_string()),
                 method: "deleteMany".to_string(),
                 classification: Some(dbflux_core::ExecutionClassification::Destructive),
+                dispatched: true,
                 outcome: dbflux_js::ScriptLedgerOutcome::Success,
                 counts: dbflux_core::ScriptOperationCounts {
                     deleted: Some(3),
@@ -4685,6 +4687,7 @@ mod tests {
                 target: dbflux_core::ScriptTarget::Database,
                 method: "dropDatabase".to_string(),
                 classification: Some(dbflux_core::ExecutionClassification::Destructive),
+                dispatched: false,
                 outcome: dbflux_js::ScriptLedgerOutcome::Failed {
                     message: "boom".to_string(),
                 },
@@ -4697,9 +4700,11 @@ mod tests {
         assert_eq!(json[0]["target"]["kind"], "container");
         assert_eq!(json[0]["target"]["name"], "users");
         assert_eq!(json[0]["method"], "deleteMany");
+        assert_eq!(json[0]["dispatched"], true);
         assert_eq!(json[0]["outcome"], "success");
         assert_eq!(json[0]["counts"]["deleted"], 3);
         assert_eq!(json[1]["target"]["kind"], "database");
+        assert_eq!(json[1]["dispatched"], false);
         assert_eq!(json[1]["outcome"], "failed");
         assert_eq!(json[1]["message"], "boom");
     }
@@ -6240,6 +6245,63 @@ mod tests {
                 assert!(
                     is_server_selection_failure(&message),
                     "{script}: a read must pass the ceiling and reach for the server: {message}"
+                );
+            }
+        }
+
+        #[test]
+        fn confirmed_run_command_script_reaches_server_and_computed_access_is_blocked() {
+            let connection = offline_connection();
+
+            let literal_script = r#"
+const coll = "coll";
+db.runCommand({
+  update: coll,
+  updates: [{ q: { a: 1 }, u: { $set: { b: 2 } }, multi: true }]
+});
+"#;
+            let literal_ceiling = MongoLanguageService
+                .classify_execution(literal_script)
+                .expect("runCommand script must classify");
+            assert_eq!(literal_ceiling, ExecutionClassification::AdminDestructive);
+
+            let result = connection
+                .execute(&QueryRequest::new(literal_script).with_confirmed_ceiling(literal_ceiling))
+                .expect("script must run");
+            let message = result
+                .metadata_extra
+                .as_ref()
+                .and_then(|extra| extra.get("script_failure"))
+                .and_then(|failure| failure["message"].as_str())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                is_server_selection_failure(&message),
+                "confirmed runCommand script must pass dispatch and reach for the server: {message}"
+            );
+
+            for computed_script in [
+                "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+                "const m = 'runCommand'; db[m]({ ping: 1 });",
+                "const runCommand = 'runCommand'; db[runCommand]({ ping: 1 });",
+            ] {
+                let computed_ceiling = MongoLanguageService
+                    .classify_execution(computed_script)
+                    .expect("computed-access script must classify");
+                assert_eq!(
+                    computed_ceiling,
+                    ExecutionClassification::Destructive,
+                    "{computed_script}"
+                );
+
+                let blocked_message = assert_script_stopped_before_the_server(
+                    &connection,
+                    &QueryRequest::new(computed_script).with_confirmed_ceiling(computed_ceiling),
+                );
+                assert!(
+                    blocked_message.contains("AdminDestructive")
+                        && blocked_message.contains("Destructive ceiling"),
+                    "computed runCommand must be blocked by the Destructive ceiling ({computed_script}): {blocked_message}"
                 );
             }
         }

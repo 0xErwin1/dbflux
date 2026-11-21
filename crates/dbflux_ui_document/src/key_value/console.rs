@@ -56,8 +56,12 @@ impl KeyValueDocument {
             }
             // A command may have changed the open key or the key list; the
             // value is cheap to re-read.
-            NativeConsoleEvent::Executed { succeeded, .. } => {
-                if *succeeded {
+            NativeConsoleEvent::Executed {
+                succeeded,
+                may_have_changed_data,
+                ..
+            } => {
+                if *succeeded || *may_have_changed_data {
                     self.reload_selected_value(cx);
                 }
             }

@@ -24,6 +24,7 @@ pub struct DangerousQuerySuppressions {
     drop: bool,
     alter: bool,
     script: bool,
+    admin_script: bool,
     mongo_delete_many: bool,
     mongo_update_many: bool,
     mongo_drop_collection: bool,
@@ -44,6 +45,7 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::Drop => self.drop,
             DangerousQueryKind::Alter => self.alter,
             DangerousQueryKind::Script => self.script,
+            DangerousQueryKind::AdminScript => self.admin_script,
             DangerousQueryKind::MongoDeleteMany => self.mongo_delete_many,
             DangerousQueryKind::MongoUpdateMany => self.mongo_update_many,
             DangerousQueryKind::MongoDropCollection => self.mongo_drop_collection,
@@ -66,6 +68,7 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::Drop => self.drop = true,
             DangerousQueryKind::Alter => self.alter = true,
             DangerousQueryKind::Script => self.script = true,
+            DangerousQueryKind::AdminScript => self.admin_script = true,
             DangerousQueryKind::MongoDeleteMany => self.mongo_delete_many = true,
             DangerousQueryKind::MongoUpdateMany => self.mongo_update_many = true,
             DangerousQueryKind::MongoDropCollection => self.mongo_drop_collection = true,
@@ -282,5 +285,22 @@ impl SessionFacade {
     #[allow(dead_code)]
     pub fn fail_shutdown(&self) {
         self.shutdown.fail();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn script_and_admin_script_suppressions_are_independent() {
+        let mut suppressions = DangerousQuerySuppressions::default();
+
+        suppressions.set_suppressed(DangerousQueryKind::Script);
+        assert!(suppressions.is_suppressed(DangerousQueryKind::Script));
+        assert!(!suppressions.is_suppressed(DangerousQueryKind::AdminScript));
+
+        suppressions.set_suppressed(DangerousQueryKind::AdminScript);
+        assert!(suppressions.is_suppressed(DangerousQueryKind::AdminScript));
     }
 }
