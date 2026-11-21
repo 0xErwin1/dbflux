@@ -3,6 +3,8 @@
 DBFlux는 **수명이 짧은 릴리스 브랜치를 곁들인 트렁크 기반 개발**을 사용합니다. 하나의 장기 브랜치(`main`)가 통합 대상이며, `release/vX.Y` 브랜치는 마이너 시리즈마다 안정화 기간에 생성되고 EOL 이후 폐기됩니다.
 
 이 문서는 사람이 읽는 참조 문서입니다. 자동화된 `dbflux-release` 스킬(`skills/dbflux-release/SKILL.md`)도 동일한 규칙을 따릅니다.
+> 아티팩트 게시 후 **Sync release channels**가 Nix와 웹사이트 메타데이터 PR을 열고 안정 릴리스에 한해 AUR을 갱신합니다. PR을 정상 절차로 병합하고 아래 예시의 웹 변경을 직접 푸시하지 마세요. 수동 패키지 절차는 복구용입니다. 재빌드 없이 재시도하려면 `main`에서 `sync-release-channels.yml`을 실행하고 `tag`와 `channel`(`metadata`, `aur`, `all`)을 지정하세요. `CHANNEL_PR_TOKEN`(콘텐츠 및 PR 쓰기), `AUR_SSH_PRIVATE_KEY`(전용 관리자), `AUR_KNOWN_HOSTS` 변수(별도로 검증한 호스트 키)를 설정하세요. Homebrew는 별도 작업을 사용합니다.
+
 ## 채널
 
 | 채널 (소스 브랜치)          | 태그 패턴           | GitHub 릴리스                      |
@@ -215,16 +217,7 @@ fail-closed 방식으로 검증합니다. 업데이트는 AppImageUpdate 같은 
    - 커밋: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - 푸시합니다.
 
-6. 계속 `main`에서, 웹사이트에 이 마이너를 등록합니다. `release/vX.Y`는 이미 origin에 있어야 합니다(4단계). 이유는 [웹사이트](#웹사이트)를 참조하세요. 항목을 `nightly` 바로 뒤에 `current` 없이 추가합니다 — RC는 현재 릴리스가 아닙니다:
-
-   ```json
-   { "id": "nightly", "ref": "main", "noindex": true },
-   { "id": "vX.Y", "ref": "release/vX.Y" },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
-   ```
-
-   - 커밋: `chore(web): add vX.Y to the site versions`.
-   - 푸시합니다.
+6. 첫 태그가 게시되면 메타데이터 PR로 마이너 버전을 등록합니다.
 
 7. 릴리스 브랜치에 `vX.Y.0-rc.0` 태그를 붙입니다.
 
@@ -246,15 +239,7 @@ RC가 깨끗할 때 `release/vX.Y`에서 수행합니다:
 3. 커밋: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. 릴리스 브랜치에 `vX.Y.0` 태그를 붙이고 브랜치 + 태그를 푸시합니다.
 5. CI가 이전 안정 태그 이후의 모든 사용자 대상 커밋에서 안정 릴리스 본문을 생성합니다.
-6. `main`에서, 새 마이너를 사이트의 현재 릴리스로 만듭니다: `web/versions.json`에서 `"current": true`를 `vX.(Y-1)`에서 `vX.Y`로 옮깁니다.
-
-   ```json
-   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
-   ```
-
-   - 커밋: `chore(web): make vX.Y the current site version`.
-   - 푸시합니다. 사이트는 `main`에서 배포되므로, 이 커밋이 `/docs/`를 `vX.Y`로 바꾸고 랜딩 페이지와 비교 페이지에 표시되는 제품 버전을 `X.Y.0`으로 바꿉니다.
+6. 웹사이트의 현재 버전을 갱신하는 메타데이터 PR을 검토합니다.
 
 릴리스 워크플로는 버전에 대응하는 `## [X.Y.Z]` 섹션이 `CHANGELOG.md`에 없는 안정 태그의 게시를 거부하므로, 2단계는 조용히 건너뛸 수 없습니다.
 

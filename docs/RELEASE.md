@@ -4,6 +4,8 @@ DBFlux uses **trunk-based development with short-lived release branches**. One l
 
 This document is the human-facing reference. The automated `dbflux-release` skill (`skills/dbflux-release/SKILL.md`) follows these same rules.
 
+> After artifacts publish, **Sync release channels** opens Nix and website metadata PRs and updates AUR for stable releases. Merge the metadata PRs normally; do not push the website edits in the cut or promotion examples below yourself. The manual package recipes are for recovery only. To replay without rebuilding, dispatch `sync-release-channels.yml` from `main` with `tag` and `channel` (`metadata`, `aur`, or `all`). Configure `CHANNEL_PR_TOKEN` (repository contents and pull requests: write), `AUR_SSH_PRIVATE_KEY` (dedicated package maintainer) and the `AUR_KNOWN_HOSTS` variable (independently verified host key). Homebrew keeps its separate job.
+
 ## Channels
 
 | Channel (source branch)     | Tag pattern         | GitHub release                    |
@@ -242,16 +244,7 @@ job instead of shipping a 404.
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. Still on `main`, register the minor on the website. `release/vX.Y` must already be on origin (step 4); see [Website](#website) for why. Add the entry right after `nightly`, without `current` — an RC is not the current release:
-
-   ```json
-   { "id": "nightly", "ref": "main", "noindex": true },
-   { "id": "vX.Y", "ref": "release/vX.Y" },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
-   ```
-
-   - Commit: `chore(web): add vX.Y to the site versions`.
-   - Push.
+6. Register the minor through the metadata PR after the first published tag.
 
 7. Tag `vX.Y.0-rc.0` on the release branch.
 
@@ -273,15 +266,7 @@ Run on `release/vX.Y` when the RC is clean:
 3. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. Tag `vX.Y.0` on the release branch and push branch + tag.
 5. CI generates the stable release body from every user-visible commit since the previous stable tag.
-6. On `main`, make the new minor the site's current release: in `web/versions.json`, move `"current": true` from `vX.(Y-1)` to `vX.Y`.
-
-   ```json
-   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
-   ```
-
-   - Commit: `chore(web): make vX.Y the current site version`.
-   - Push. The site deploys from `main`, so this commit switches `/docs/` to `vX.Y` and the product version shown on the landing and compare pages to `X.Y.0`.
+6. Review the metadata PR that promotes this minor on the website.
 
 The release workflow refuses to publish a stable tag whose version has no `## [X.Y.Z]` section in `CHANGELOG.md`, so step 2 cannot be skipped silently.
 
