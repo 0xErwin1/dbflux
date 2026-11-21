@@ -2,8 +2,7 @@ use super::*;
 
 #[test]
 fn telemetry_app_source_is_absent_uninitialized_and_degraded() {
-    let runtime =
-        dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("scratch storage");
+    let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("scratch storage");
     let mut state = AppState::new_with_storage_runtime(runtime).expect("app");
     let now = chrono::Utc::now();
     assert!(state.telemetry_usage_source(now).is_none());

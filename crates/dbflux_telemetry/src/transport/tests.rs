@@ -282,13 +282,11 @@ mod debug_http {
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 STORED.len()
             );
-            // The client gives up at 600 ms, so a late write may hit a closed socket.
-            if stream.write_all(head.as_bytes()).is_err() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(400));
-            if stream.write_all(STORED.as_bytes()).is_err() {
-                return;
+            // The client gives up at 600 ms, so the late body write may hit a
+            // closed socket; either outcome is fine for this test.
+            if stream.write_all(head.as_bytes()).is_ok() {
+                thread::sleep(Duration::from_millis(400));
+                stream.write_all(STORED.as_bytes()).ok();
             }
         });
         let transport =
