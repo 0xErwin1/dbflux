@@ -357,7 +357,7 @@ fn the_roving_choice_starts_at_the_saved_level(cx: &mut TestAppContext) {
 fn the_welcome_modal_covers_the_workspace_viewport(cx: &mut TestAppContext) {
     use gpui::{
         AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-        Render, Styled as _, Window, div as gpui_div, px, size,
+        Render, Styled as _, Window, div as gpui_div, point, px, size,
     };
 
     struct WorkspaceLikeHost {
@@ -455,22 +455,40 @@ fn the_welcome_modal_covers_the_workspace_viewport(cx: &mut TestAppContext) {
             );
         }
 
+        // A short window scrolls the updates column instead of letting it
+        // spill over the privacy box and the footer: the region stays inside
+        // the panel, and scrolled to its end it shows every card whole.
+        let updates_scroll = window.update(|_, cx| dialog.read(cx).updates_scroll.clone());
+        let columns = window
+            .debug_bounds("welcome-columns")
+            .expect("panel geometry");
+        let region = updates_scroll.bounds();
+        assert!(
+            region.origin.y >= columns.origin.y
+                && region.origin.y + region.size.height <= columns.origin.y + columns.size.height,
+            "the updates region spills out of the panel at {width}x{height}: {region:?}; panel: {columns:?}"
+        );
+        updates_scroll.set_offset(point(px(0.0), -updates_scroll.max_offset().y));
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+        let card_bounds =
+            card_ids.map(|id| window.debug_bounds(id).expect("card geometry is painted"));
+
         for (id, bounds) in card_ids.into_iter().zip(card_bounds) {
             assert!(
                 bounds.size.height <= px(112.0),
                 "compact card {id}: {bounds:?}"
             );
             assert!(bounds.size.height > px(0.0));
-            let columns = window
-                .debug_bounds("welcome-columns")
-                .expect("panel geometry");
-            let footer = window
-                .debug_bounds("welcome-footer")
-                .expect("footer geometry");
-            assert!(bounds.origin.y >= columns.origin.y);
-            assert!(bounds.origin.y + bounds.size.height <= footer.origin.y);
-            eprintln!("compact geometry {id}: {bounds:?}; panel: {columns:?}; footer: {footer:?}");
+            assert!(
+                bounds.origin.y >= region.origin.y
+                    && bounds.origin.y + bounds.size.height <= region.origin.y + region.size.height,
+                "card {id} is not whole inside the scrolled updates region at {width}x{height}: {bounds:?}; region: {region:?}"
+            );
         }
+        updates_scroll.set_offset(point(px(0.0), px(0.0)));
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
 
         let privacy = window
             .debug_bounds("welcome-privacy-box")
