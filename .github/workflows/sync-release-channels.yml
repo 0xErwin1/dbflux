@@ -1,0 +1,56 @@
+name: Sync release channels
+on:
+  workflow_call:
+    inputs:
+      tag: {required: true, type: string}
+    secrets:
+      CHANNEL_PR_TOKEN: {required: false}
+      AUR_SSH_PRIVATE_KEY: {required: false}
+  workflow_dispatch:
+    inputs:
+      tag: {description: Published stable or RC tag, required: true, type: string}
+      channel:
+        description: Channel to retry
+        type: choice
+        options: [all, metadata, aur]
+        default: all
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == '0xErwin1/dbflux'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a published release on its release branch
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ $TAG =~ ^v([0-9]+\.[0-9]+)\.[0-9]+(-rc\.[0-9]+)?$ ]]
+          branch="refs/remotes/origin/release/v${BASH_REMATCH[1]}"
+          git merge-base --is-ancestor "refs/tags/$TAG^{commit}" "$branch"
+          prerelease=false; [[ $TAG != *-rc.* ]] || prerelease=true
+          gh release view "$TAG" --json tagName,isDraft,isPrerelease | jq -e \
+            --arg tag "$TAG" --argjson rc "$prerelease" \
+            '.tagName == $tag and (.isDraft | not) and .isPrerelease == $rc'
+  metadata:
+    needs: validate
+    if: inputs.channel != 'aur'
+    uses: ./.github/workflows/sync-release-metadata.yml
+    with:
+      tag: ${{ inputs.tag }}
+    secrets:
+      CHANNEL_PR_TOKEN: ${{ secrets.CHANNEL_PR_TOKEN }}
+  aur:
+    needs: validate
+    if: inputs.channel != 'metadata' && !contains(inputs.tag, '-rc.')
+    uses: ./.github/workflows/sync-release-aur.yml
+    with:
+      tag: ${{ inputs.tag }}
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

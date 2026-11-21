@@ -1,0 +1,114 @@
+name: Sync release metadata
+
+# Called only after the parent validates publication, channel, canonical repo,
+# and release-branch ancestry. CHANNEL_PR_TOKEN needs contents and PR write.
+# Keep the implementation checkout separate: older release branches need not
+# contain this helper. No command pushes either target branch.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Published vX.Y.Z or vX.Y.Z-rc.N tag validated by the caller
+        required: true
+        type: string
+    secrets:
+      CHANNEL_PR_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-metadata
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: implementation
+          persist-credentials: false
+
+      - name: Resolve targets
+        id: targets
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          tag = os.environ['TAG']
+          match = re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.(0|[1-9][0-9]*))?', tag)
+          if not match:
+              raise SystemExit('expected vX.Y.Z or vX.Y.Z-rc.N')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'branch=release/v{match[1]}.{match[2]}', file=output)
+          PY
+
+      - name: Download published checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release-checksums" \
+            --pattern 'dbflux-linux-amd64.tar.gz.sha256' \
+            --pattern 'dbflux-linux-arm64.tar.gz.sha256'
+
+      - name: Checkout main target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: main-target
+          token: ${{ secrets.CHANNEL_PR_TOKEN }}
+          persist-credentials: false
+
+      - name: Checkout release target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.targets.outputs.branch }}
+          path: release-target
+          token: ${{ secrets.CHANNEL_PR_TOKEN }}
+          persist-credentials: false
+
+      - name: Advance pointers independently
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          for target in main-target release-target; do
+            PYTHONDONTWRITEBYTECODE=1 python3 implementation/scripts/release_metadata.py \
+              --tag "$TAG" --checksums "$RUNNER_TEMP/release-checksums" --root "$target"
+          done
+
+      # Deterministic per-target branches update existing PRs on replay;
+      # create-pull-request does nothing when the target already matches.
+      - name: Propose main metadata
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          token: ${{ secrets.CHANNEL_PR_TOKEN }}
+          path: main-target
+          base: main
+          branch: automation/release-metadata-main-${{ inputs.tag }}
+          add-paths: |
+            nix/release-info.nix
+            web/versions.json
+          commit-message: 'chore: sync release metadata for ${{ inputs.tag }}'
+          title: 'chore: sync release metadata for ${{ inputs.tag }}'
+          body: 'Advance Nix and website metadata from published release checksums. Each pointer independently rejects downgrades.'
+
+      - name: Propose release metadata
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          token: ${{ secrets.CHANNEL_PR_TOKEN }}
+          path: release-target
+          base: ${{ steps.targets.outputs.branch }}
+          branch: automation/metadata-${{ steps.targets.outputs.branch }}-${{ inputs.tag }}
+          add-paths: |
+            nix/release-info.nix
+            web/versions.json
+          commit-message: 'chore: sync release metadata for ${{ inputs.tag }}'
+          title: 'chore: sync release metadata for ${{ inputs.tag }}'
+          body: 'Advance this release line metadata from published release checksums without pushing the target branch.'

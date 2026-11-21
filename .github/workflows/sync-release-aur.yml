@@ -1,0 +1,122 @@
+name: Sync stable release to AUR
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Canonical published stable tag validated by the caller, including ancestry
+        required: true
+        type: string
+    secrets:
+      AUR_SSH_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-release-aur
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.render.outputs.changed }}
+      base: ${{ steps.render.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch public recipe and published assets
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          git clone https://aur.archlinux.org/dbflux.git aur
+          mkdir assets
+          for arch in amd64 arm64; do
+            for suffix in '' .sha256 .asc; do
+              name="dbflux-linux-${arch}.tar.gz${suffix}"
+              curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+                "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name}" -o "assets/$name"
+            done
+          done
+      - name: Update recipe without executing packaging code
+        id: render
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "base=$(git -C aur rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          result=$(python3 scripts/release_aur.py --tag "$TAG" --assets assets --pkgbuild aur/PKGBUILD)
+          echo "changed=$result" >> "$GITHUB_OUTPUT"
+      - name: Generate metadata as an unprivileged user without network or credentials
+        if: steps.render.outputs.changed == 'updated'
+        run: |
+          set -euo pipefail
+          docker build -t aur-srcinfo - <<'DOCKERFILE'
+          FROM archlinux:base
+          RUN pacman -Syu --noconfirm base-devel && useradd -m -u 1000 builder
+          USER builder
+          WORKDIR /package
+          ENTRYPOINT ["makepkg", "--printsrcinfo"]
+          DOCKERFILE
+          mkdir package
+          cp aur/PKGBUILD package/PKGBUILD
+          chmod 755 package
+          chmod 644 package/PKGBUILD
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --read-only --tmpfs /tmp -v "$PWD/package:/package:ro" aur-srcinfo > package/.SRCINFO
+      - uses: actions/upload-artifact@v4
+        if: steps.render.outputs.changed == 'updated'
+        with:
+          name: aur-recipe
+          path: |
+            package/PKGBUILD
+            package/.SRCINFO
+          include-hidden-files: true
+          retention-days: 1
+
+  publish:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'updated'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: aur-recipe
+          path: package
+      # AUR_KNOWN_HOSTS must contain independently verified aur.archlinux.org
+      # public host keys (OpenSSH known_hosts format). Never populate via live ssh-keyscan.
+      # Verify fingerprints against Arch's trusted published host-key fingerprints.
+      - name: Publish prepared files without running packaging code
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_KNOWN_HOSTS: ${{ vars.AUR_KNOWN_HOSTS }}
+          EXPECTED_BASE: ${{ needs.prepare.outputs.base }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          test -n "$AUR_SSH_PRIVATE_KEY"
+          test -n "$AUR_KNOWN_HOSTS"
+          umask 077
+          key_dir=$(mktemp -d)
+          trap 'rm -rf "$key_dir"' EXIT
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$key_dir/key"
+          printf '%s\n' "$AUR_KNOWN_HOSTS" > "$key_dir/known_hosts"
+          unset AUR_SSH_PRIVATE_KEY AUR_KNOWN_HOSTS
+          export GIT_SSH_COMMAND="ssh -i $key_dir/key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$key_dir/known_hosts -o GlobalKnownHostsFile=/dev/null"
+          git -c core.hooksPath=/dev/null clone ssh://aur@aur.archlinux.org/dbflux.git aur
+          # Fail rather than overwrite any intervening maintainer or release update.
+          test "$(git -C aur rev-parse HEAD)" = "$EXPECTED_BASE"
+          cp package/PKGBUILD package/.SRCINFO aur/
+          git -C aur config user.name 'DBFlux release automation'
+          git -C aur config user.email 'release@dbflux.dev'
+          git -C aur add -- PKGBUILD .SRCINFO
+          if ! git -C aur diff --cached --quiet; then
+            git -C aur -c core.hooksPath=/dev/null commit -m "Update dbflux to $TAG"
+            git -C aur -c core.hooksPath=/dev/null push origin HEAD:master
+          fi

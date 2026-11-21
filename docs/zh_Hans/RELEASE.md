@@ -4,6 +4,8 @@ DBFlux 采用**基于主干的开发模式，配合短生命周期的发布分�
 
 本文档是供人工查阅的参考。自动化的 `dbflux-release` 技能（`skills/dbflux-release/SKILL.md`）遵循相同规则。
 
+> 制品发布后，**Sync release channels** 会为 Nix 和网站元数据创建 PR，并仅为稳定版更新 AUR。请按正常流程合并 PR，不要手动推送下文切分或晋升示例中的网站修改。手动打包步骤仅用于恢复。如需重试而不重新构建，请从 `main` 运行 `sync-release-channels.yml`，指定 `tag` 和 `channel`（`metadata`、`aur` 或 `all`）。配置 `CHANNEL_PR_TOKEN`（内容和 PR 写入权限）、`AUR_SSH_PRIVATE_KEY`（专用维护者）及 `AUR_KNOWN_HOSTS` 变量（独立核验的主机密钥）。Homebrew 继续使用单独的任务。
+
 ## 渠道
 
 | 渠道（源分支）          | 标签模式              | GitHub Release            |
@@ -224,17 +226,9 @@ DBFlux 自身不会自更新。
    - 将每个带版本号的制品更新到 `X.(Y+1).0-dev.0`（`main` 现在指向下一个次版本）。
    - 提交信息：`chore(version): move main to X.(Y+1).0-dev.0 marker`。
    - 推送。
-6. 仍在 `main` 上，在网站中登记该次版本。`release/vX.Y` 必须已经在 origin 上（第 4 步）；原因见[网站](#网站)。将条目加在 `nightly` 之后，不带 `current`——rc 不是当前发布：
+6. 在发布分支上打标签 `vX.Y.0-rc.0` 并推送该标签：`git push origin vX.Y.0-rc.0`。
 
-   ```json
-   { "id": "nightly", "ref": "main", "noindex": true },
-   { "id": "vX.Y", "ref": "release/vX.Y" },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
-   ```
-
-   - 提交信息：`chore(web): add vX.Y to the site versions`。
-   - 推送。
-7. 在发布分支上打标签 `vX.Y.0-rc.0`。
+7. 该标签发布后，元数据 PR 会在网站中登记该次版本。请审核并合并该 PR；RC 不会成为当前发布。
 
 rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全不需要任何 CHANGELOG 步骤。
 
@@ -254,15 +248,7 @@ rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全�
 3. 提交信息：`chore(release): promote release/vX.Y to vX.Y.0`。
 4. 在发布分支上打标签 `vX.Y.0`，并推送分支与标签。
 5. CI 会根据自上一个稳定版标签以来的每个用户可见提交，生成稳定版发布说明正文。
-6. 在 `main` 上，将新的次版本设为站点的当前发布：在 `web/versions.json` 中，把 `"current": true` 从 `vX.(Y-1)` 移到 `vX.Y`。
-
-   ```json
-   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
-   ```
-
-   - 提交信息：`chore(web): make vX.Y the current site version`。
-   - 推送。站点从 `main` 部署，因此这个提交会把 `/docs/` 切换到 `vX.Y`，并把首页和对比页面显示的产品版本切换到 `X.Y.0`。
+6. 审核将该次版本设为网站当前版本的元数据 PR。
 
 发布工作流会拒绝发布一个在 `CHANGELOG.md` 中没有对应 `## [X.Y.Z]` 章节的稳定版标签，因此第 2 步不可能被无声地跳过。
 
@@ -278,8 +264,8 @@ rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全�
 
 | 事件 | `web/versions.json` 中的变更 | 提交信息 |
 |------|------------------------------|----------|
-| 切出（`release/vX.Y` 已推送） | 在 `nightly` 之后加入 `{ "id": "vX.Y", "ref": "release/vX.Y" }` | `chore(web): add vX.Y to the site versions` |
-| 稳定版（`vX.Y.0` 已打标签并推送） | 将 `"current": true` 移到 `vX.Y` | `chore(web): make vX.Y the current site version` |
+| 首个 RC（`vX.Y.0-rc.0` 已发布） | 在 `nightly` 之后加入 `{ "id": "vX.Y", "ref": "release/vX.Y" }` | 由 **Sync release channels** 创建的元数据 PR `chore: sync release metadata for vX.Y.0-rc.0` |
+| 稳定版（`vX.Y.0` 已发布） | 将 `"current": true` 移到 `vX.Y` | 由 **Sync release channels** 创建的元数据 PR `chore: sync release metadata for vX.Y.0` |
 | EOL（删除 `release/vX.Y` 之前） | 将 `vX.Y` 的 `ref` 改为其最后一个标签，例如 `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - **ref 必须先存在于 origin 上。** `web/scripts/fetch-docs.ts` 从每个条目的 git ref 读取文档，克隆中缺少该 ref 时会从 `origin` 拉取。无法读取的 ref 只会被跳过并给出警告，但随后构建会在渲染该版本页面时失败（`No materialised documentation for version "vX.Y"`）。在其分支推送之前合入的条目，或仍指向已删除分支的条目，都会让 `main` 上的每次站点部署失败。

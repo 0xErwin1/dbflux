@@ -4,6 +4,8 @@ DBFlux uses **trunk-based development with short-lived release branches**. One l
 
 This document is the human-facing reference. The automated `dbflux-release` skill (`skills/dbflux-release/SKILL.md`) follows these same rules.
 
+> After artifacts publish, **Sync release channels** opens Nix and website metadata PRs and updates AUR for stable releases. Merge the metadata PRs normally; do not push the website edits in the cut or promotion examples below yourself. The manual package recipes are for recovery only. To replay without rebuilding, dispatch `sync-release-channels.yml` from `main` with `tag` and `channel` (`metadata`, `aur`, or `all`). Configure `CHANNEL_PR_TOKEN` (repository contents and pull requests: write), `AUR_SSH_PRIVATE_KEY` (dedicated package maintainer) and the `AUR_KNOWN_HOSTS` variable (independently verified host key). Homebrew keeps its separate job.
+
 ## Channels
 
 | Channel (source branch)     | Tag pattern         | GitHub release                    |
@@ -242,18 +244,9 @@ job instead of shipping a 404.
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. Still on `main`, register the minor on the website. `release/vX.Y` must already be on origin (step 4); see [Website](#website) for why. Add the entry right after `nightly`, without `current` — an RC is not the current release:
+6. Tag `vX.Y.0-rc.0` on the release branch and push the tag: `git push origin vX.Y.0-rc.0`.
 
-   ```json
-   { "id": "nightly", "ref": "main", "noindex": true },
-   { "id": "vX.Y", "ref": "release/vX.Y" },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
-   ```
-
-   - Commit: `chore(web): add vX.Y to the site versions`.
-   - Push.
-
-7. Tag `vX.Y.0-rc.0` on the release branch.
+7. Once that tag publishes, the metadata PR registers the minor on the site. Review and merge it; an RC does not become the current release.
 
 The RC release body is generated from conventional commits automatically, so an RC needs no CHANGELOG step at all.
 
@@ -273,15 +266,7 @@ Run on `release/vX.Y` when the RC is clean:
 3. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. Tag `vX.Y.0` on the release branch and push branch + tag.
 5. CI generates the stable release body from every user-visible commit since the previous stable tag.
-6. On `main`, make the new minor the site's current release: in `web/versions.json`, move `"current": true` from `vX.(Y-1)` to `vX.Y`.
-
-   ```json
-   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
-   ```
-
-   - Commit: `chore(web): make vX.Y the current site version`.
-   - Push. The site deploys from `main`, so this commit switches `/docs/` to `vX.Y` and the product version shown on the landing and compare pages to `X.Y.0`.
+6. Review the metadata PR that promotes this minor on the website.
 
 The release workflow refuses to publish a stable tag whose version has no `## [X.Y.Z]` section in `CHANGELOG.md`, so step 2 cannot be skipped silently.
 
@@ -297,8 +282,8 @@ The site publishes one documentation set per minor, listed in `web/versions.json
 
 | Event | Change in `web/versions.json` | Commit |
 |-------|-------------------------------|--------|
-| Cut (`release/vX.Y` pushed) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | `chore(web): add vX.Y to the site versions` |
-| Stable (`vX.Y.0` tagged and pushed) | move `"current": true` to `vX.Y` | `chore(web): make vX.Y the current site version` |
+| First RC (`vX.Y.0-rc.0` published) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | metadata PR `chore: sync release metadata for vX.Y.0-rc.0`, opened by **Sync release channels** |
+| Stable (`vX.Y.0` published) | move `"current": true` to `vX.Y` | metadata PR `chore: sync release metadata for vX.Y.0`, opened by **Sync release channels** |
 | EOL (before `release/vX.Y` is deleted) | repoint `vX.Y`'s `ref` to its last tag, e.g. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - **The ref must exist on origin first.** `web/scripts/fetch-docs.ts` reads each entry from its git ref, fetching it from `origin` when the clone lacks it. A ref it cannot read is skipped with only a warning, but the build then fails rendering that version's pages (`No materialised documentation for version "vX.Y"`). An entry that lands before its branch is pushed, or that still names a deleted branch, breaks every site deploy from `main`.

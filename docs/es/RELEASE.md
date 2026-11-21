@@ -8,6 +8,8 @@ después de su EOL.
 Este documento es la referencia orientada a humanos. El skill automatizado
 `dbflux-release` (`skills/dbflux-release/SKILL.md`) sigue estas mismas reglas.
 
+> Tras publicar los artefactos, **Sync release channels** abre PR para Nix y la web y actualiza AUR solo para versiones estables. Integra los PR normalmente; no apliques manualmente los cambios de la web de los ejemplos de corte y promoción. Las recetas manuales sirven para recuperación. Para reintentar sin recompilar, ejecuta `sync-release-channels.yml` desde `main` con `tag` y `channel` (`metadata`, `aur` o `all`). Configura `CHANNEL_PR_TOKEN` (escritura de contenido y PR), `AUR_SSH_PRIVATE_KEY` (mantenedor dedicado) y la variable `AUR_KNOWN_HOSTS` (clave del servidor verificada por separado). Homebrew conserva su propio job.
+
 ## Canales
 
 | Canal (branch de origen)    | Patrón de tag       | GitHub release                       |
@@ -320,21 +322,9 @@ fallar el job en lugar de publicar un 404.
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. Todavía en `main`, registra el minor en el sitio web. `release/vX.Y` ya
-   tiene que estar en origin (paso 4); ver [Sitio Web](#sitio-web) para el
-   motivo. Agrega la entrada justo después de `nightly`, sin `current` — un RC
-   no es el release actual:
+6. Tag `vX.Y.0-rc.0` en el release branch y push del tag: `git push origin vX.Y.0-rc.0`.
 
-   ```json
-   { "id": "nightly", "ref": "main", "noindex": true },
-   { "id": "vX.Y", "ref": "release/vX.Y" },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
-   ```
-
-   - Commit: `chore(web): add vX.Y to the site versions`.
-   - Push.
-
-7. Tag `vX.Y.0-rc.0` en el release branch.
+7. Cuando ese tag se publique, el PR de metadatos registra el minor en la web. Revísalo e intégralo; un RC no pasa a ser la versión actual.
 
 El cuerpo del release RC se genera automáticamente a partir de commits
 convencionales, así que un RC no necesita ningún paso de CHANGELOG.
@@ -361,18 +351,7 @@ Ejecuta esto en `release/vX.Y` cuando el RC está limpio:
 4. Tag `vX.Y.0` en el release branch y push del branch + tag.
 5. CI genera el cuerpo del release stable a partir de todos los commits
    visibles para el usuario desde el último tag stable.
-6. En `main`, haz del nuevo minor el release actual del sitio: en
-   `web/versions.json`, mueve `"current": true` de `vX.(Y-1)` a `vX.Y`.
-
-   ```json
-   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
-   ```
-
-   - Commit: `chore(web): make vX.Y the current site version`.
-   - Push. El sitio se despliega desde `main`, así que este commit cambia
-     `/docs/` a `vX.Y` y la versión de producto que muestran la landing y las
-     páginas de comparación a `X.Y.0`.
+6. Revisa el PR de metadatos que marca este minor como estable en la web.
 
 El workflow de release se niega a publicar un tag stable cuya versión no tiene
 una sección `## [X.Y.Z]` en `CHANGELOG.md`, así que el paso 2 no puede saltarse
@@ -403,8 +382,8 @@ minor, siempre con un commit en `main`, porque el sitio se despliega desde
 
 | Evento | Cambio en `web/versions.json` | Commit |
 |--------|-------------------------------|--------|
-| Corte (push de `release/vX.Y`) | agregar `{ "id": "vX.Y", "ref": "release/vX.Y" }` justo después de `nightly` | `chore(web): add vX.Y to the site versions` |
-| Stable (`vX.Y.0` taggeado y pusheado) | mover `"current": true` a `vX.Y` | `chore(web): make vX.Y the current site version` |
+| Primer RC (`vX.Y.0-rc.0` publicado) | agregar `{ "id": "vX.Y", "ref": "release/vX.Y" }` justo después de `nightly` | PR de metadatos `chore: sync release metadata for vX.Y.0-rc.0`, abierto por **Sync release channels** |
+| Stable (`vX.Y.0` publicado) | mover `"current": true` a `vX.Y` | PR de metadatos `chore: sync release metadata for vX.Y.0`, abierto por **Sync release channels** |
 | EOL (antes de borrar `release/vX.Y`) | apuntar el `ref` de `vX.Y` a su último tag, p. ej. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - **El ref tiene que existir primero en origin.** `web/scripts/fetch-docs.ts`

@@ -124,16 +124,7 @@ When stabilization for a minor begins:
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-7. Still on `main`, register the minor on the website (see "Website"). Only after step 5's push: the ref must exist on origin or every site deploy from `main` fails. Add the entry right after `nightly` in `web/versions.json`, without `current` (an RC is not the current release):
-
-   ```json
-   { "id": "nightly", "ref": "main", "noindex": true },
-   { "id": "vX.Y", "ref": "release/vX.Y" },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
-   ```
-
-   - Commit: `chore(web): add vX.Y to the site versions`.
-   - Push.
+7. Do not edit `web/versions.json` during the cut. The published tag triggers a metadata PR.
 
 8. Tag `vX.Y.0-rc.0` on the release branch (see "Tag Procedure").
 
@@ -155,17 +146,7 @@ Run on `release/vX.Y` when the RC is clean:
 3. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. Tag `vX.Y.0` on the release branch and push branch + tag.
 5. CI generates the stable release body via git-cliff (all user-visible commits since the previous stable tag).
-6. On `main`, make `vX.Y` the site's current release: in `web/versions.json`, move `"current": true` from `vX.(Y-1)` to `vX.Y`.
-
-   ```json
-   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
-   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
-   ```
-
-   - Commit: `chore(web): make vX.Y the current site version`.
-   - Push. The site deploys from `main`, so this switches `/docs/` to `vX.Y` and the product version shown on the landing and compare pages to `X.Y.0`.
-
-After the GitHub Release publishes, run post-release steps (see "Post-Release Channels").
+6. Verify the downstream jobs, then merge each generated metadata PR after its checks pass, having run `nix build .#dbflux-bin --no-link --print-out-paths` against the generated pin and confirmed it succeeds. No manual website commit or AUR push is needed.
 
 ## Next Dev Cycle
 
@@ -206,7 +187,7 @@ These must all carry the exact same version number per release:
 
 Post-release (requires published artifacts):
 
-- `nix/release-info.nix` — see "Nix Bump" below.
+- `nix/release-info.nix` — see "Post-Release Channels" below.
 
 Not per release: `web/versions.json` changes only at the cut, the stable promote and the EOL of a minor (see "Website").
 
@@ -216,8 +197,8 @@ Not per release: `web/versions.json` changes only at the cut, the stable promote
 
 | Event | Change | Commit |
 |-------|--------|--------|
-| Cut (`release/vX.Y` pushed) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | `chore(web): add vX.Y to the site versions` |
-| Stable (`vX.Y.0` tagged and pushed) | move `"current": true` to `vX.Y` | `chore(web): make vX.Y the current site version` |
+| First RC (`vX.Y.0-rc.0` published) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | metadata PR `chore: sync release metadata for vX.Y.0-rc.0` |
+| Stable (`vX.Y.0` published) | move `"current": true` to `vX.Y` | metadata PR `chore: sync release metadata for vX.Y.0` |
 | EOL (before `release/vX.Y` is deleted) | repoint `vX.Y`'s `ref` to its last tag, e.g. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - The ref must exist on origin. `web/scripts/fetch-docs.ts` skips an unreadable ref with a warning, then the build fails rendering that version (`No materialised documentation for version "vX.Y"`).
@@ -240,43 +221,11 @@ git cherry-pick -x <sha>
 
 Sanity check: every non-release commit on `release/vX.Y` since branch-off should mention `(cherry picked from commit ...)` in its message.
 
-## Nix Bump
-
-The flake exposes a prebuilt-binary package (`dbflux-bin`, default) backed by `nix/release-info.nix`. Refresh it after **any published tag** (rc or stable):
-
-```bash
-ver=X.Y.Z   # or X.Y.Z-rc.N
-for arch in amd64 arm64; do
-  hex=$(curl -fsSL "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz.sha256" | awk '{print $1}')
-  nix-hash --to-sri --type sha256 "$hex"
-done
-```
-
-Update `nix/release-info.nix`: `version`, both `url` lines, both `hash` lines.
-
-Verify locally before committing:
-
-```bash
-nix build .#dbflux-bin --no-link --print-out-paths
-```
-
-## AUR Bump
-
-AUR is bumped only for **stable** tags (`vX.Y.Z` without suffix), in an **external AUR repository** (no `PKGBUILD` in this repo).
-
-AUR `pkgver` does not allow `-`. For stable releases: `pkgver=X.Y.Z` (no translation needed).
-
-Steps:
-1. Update `PKGBUILD`: `pkgver=X.Y.Z`, reset `pkgrel=1`.
-2. Regenerate `.SRCINFO`: `makepkg --printsrcinfo > .SRCINFO`.
-3. Commit + push to the AUR remote: `git commit -am "release: vX.Y.Z" && git push origin master`.
-
 ## Post-Release Channels
 
-| Tag kind    | GitHub Release | AUR         | Nix flake (this repo)                         | nixpkgs (future) |
-|-------------|----------------|-------------|-----------------------------------------------|------------------|
-| `-rc.N`     | prerelease     | skip        | bump release branch's + main's `release-info` | skip             |
-| Stable `vX.Y.Z` | published  | bump + push | bump release branch's + main's `release-info` | bump + PR        |
+After CI publishes the artifacts, `sync-release-channels.yml` opens metadata PRs for the release branch (Nix) and `main` (Nix and website when applicable). Review and merge those PRs normally. A stable release also updates AUR and Homebrew; an RC must not become the current website version. Nightly and website EOL pins are separate.
+
+If a channel fails, fix its configuration and replay **Sync release channels** from `main` for the existing published tag. Choose `metadata` or `aur`; do not rebuild, move the tag, or hand-edit hashes. Homebrew retains its own release job. See `docs/RELEASE.md` for credentials and fallback procedures.
 
 ## Anti-Patterns (explicit refusals)
 
