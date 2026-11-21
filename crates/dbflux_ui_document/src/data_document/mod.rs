@@ -6,7 +6,7 @@ use super::handle::DocumentEvent;
 use super::types::{DataSourceKind, DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::result_panel::{ResultPanel, ResultPanelEvent};
-use dbflux_core::{CollectionRef, ExecutionClassification, QueryResult, RefreshPolicy, TableRef};
+use dbflux_core::{CollectionRef, QueryResult, RefreshPolicy, TableRef};
 use dbflux_ui_base::AppStateEntity;
 use gpui::*;
 use std::sync::Arc;
@@ -132,19 +132,15 @@ impl DataDocument {
     ) {
         match event {
             NativeConsoleEvent::InputFocused => cx.emit(DocumentEvent::RequestFocus),
-            // A write may have changed the documents on screen.
+            // A write (or a script that wrote before failing mid-run) may have
+            // changed the documents on screen.
             NativeConsoleEvent::Executed {
-                succeeded,
-                classification,
+                may_have_changed_data,
+                ..
             } => {
-                let read_only = matches!(
-                    classification,
-                    ExecutionClassification::Metadata | ExecutionClassification::Read
-                );
-
-                if *succeeded && !read_only {
+                if *may_have_changed_data {
                     self.data_grid
-                        .update(cx, |grid, cx| grid.refresh(window, cx));
+                        .update(cx, |grid, cx| grid.request_refresh(window, cx));
                 }
             }
         }

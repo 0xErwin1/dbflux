@@ -2,9 +2,11 @@
 //! before it runs, how a result prints, and how Up/Down recall walks the
 //! history. Kept free of GPUI so it can be tested directly.
 
+use dbflux_core::observability::actions as audit_actions;
+use dbflux_core::observability::{EventOrigin, EventOutcome, EventRecord, EventSeverity};
 use dbflux_core::{
-    DangerousAction, DangerousQueryKind, ExecutionClassification, QueryResult, QueryResultShape,
-    Value,
+    DangerousAction, DangerousQueryKind, DbError, ExecutionClassification, QueryResult,
+    QueryResultShape, Value,
 };
 
 /// Commands offered by Up/Down recall.
@@ -125,6 +127,66 @@ pub(crate) fn has_console_output(result: &QueryResult) -> bool {
             || !set.rows.is_empty()
             || set.affected_rows.is_some()
     })
+}
+
+/// True when a console execution may have changed database state and hosts
+/// should refresh their displayed data.
+///
+/// Succeeded non-read commands may have mutated data. A multi-statement script
+/// that stopped mid-run (`script_failure`) does not roll back earlier
+/// statements or partial writes (such as a failed `insertMany` batch), so it
+/// still signals a possible change when any non-read ledger operation actually
+/// dispatched to the driver (or, without a ledger, when the failure happened
+/// after statement 0). Operations refused before dispatch do not count.
+pub(crate) fn execution_may_have_changed_data(
+    result: &Result<QueryResult, DbError>,
+    classification: ExecutionClassification,
+) -> bool {
+    let Ok(query_result) = result else {
+        return false;
+    };
+
+    if matches!(
+        classification,
+        ExecutionClassification::Metadata | ExecutionClassification::Read
+    ) {
+        return false;
+    }
+
+    let Some(failure) = query_result
+        .metadata_extra
+        .as_ref()
+        .and_then(|extra| extra.get("script_failure"))
+    else {
+        return true;
+    };
+
+    if let Some(ops) = query_result
+        .metadata_extra
+        .as_ref()
+        .and_then(|extra| extra.get("script_operations"))
+        .and_then(serde_json::Value::as_array)
+    {
+        return ops.iter().any(|op| {
+            let ran = op
+                .get("dispatched")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or_else(|| {
+                    op.get("outcome").and_then(serde_json::Value::as_str) == Some("success")
+                });
+            ran && !matches!(
+                op.get("classification")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value::<ExecutionClassification>(v).ok()),
+                Some(ExecutionClassification::Metadata | ExecutionClassification::Read)
+            )
+        });
+    }
+
+    failure
+        .get("index")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|index| index > 0)
 }
 
 /// A result as console lines, in the style of a command-line client: text
@@ -394,15 +456,87 @@ pub(crate) fn recall_list<'a>(
     commands
 }
 
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// The audit row of one console execution, shaped like the code editor's
+/// (`query_execute` / `query_execute_failed`, the query in `details_json`,
+/// driver-provided `metadata_extra` merged in).
+pub(crate) fn execution_audit_event(
+    template: EventRecord,
+    command: &str,
+    result: &Result<QueryResult, DbError>,
+    duration_ms: i64,
+) -> EventRecord {
+    let mut details = serde_json::Map::new();
+    details.insert(
+        "query".to_string(),
+        serde_json::Value::String(command.to_string()),
+    );
+    details.insert(
+        "source".to_string(),
+        serde_json::Value::String("console".to_string()),
+    );
+
+    let mut event = template.with_origin(EventOrigin::local());
+    event.ts_ms = now_ms();
+    event.duration_ms = Some(duration_ms);
+
+    match result {
+        Ok(result) => {
+            if let Some(extra) = &result.metadata_extra {
+                for (key, value) in extra {
+                    if key == dbflux_core::SERVER_NOTICES_METADATA_KEY {
+                        continue;
+                    }
+                    details.insert(key.clone(), value.clone());
+                }
+            }
+
+            if let Some(message) = script_failure_message(result) {
+                event.level = EventSeverity::Error;
+                event.outcome = EventOutcome::Failure;
+                event.error_message = Some(message.clone());
+                event = event
+                    .with_typed_action(audit_actions::QUERY_EXECUTE_FAILED)
+                    .with_summary(format!("Query failed: {message}"));
+            } else {
+                let (count, label) = match result.affected_rows {
+                    Some(count) => (count, "affected"),
+                    None => (result.rows.len() as u64, "returned"),
+                };
+                event = event
+                    .with_typed_action(audit_actions::QUERY_EXECUTE)
+                    .with_summary(format!("Query executed successfully: {count} rows {label}"));
+            }
+        }
+        Err(error) => {
+            event.level = EventSeverity::Error;
+            event.outcome = EventOutcome::Failure;
+            event.error_message = Some(error.to_string());
+            event = event
+                .with_typed_action(audit_actions::QUERY_EXECUTE_FAILED)
+                .with_summary(format!("Query failed: {error}"));
+        }
+    }
+
+    event.details_json = Some(serde_json::Value::Object(details).to_string());
+    event
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ConsoleGate, ConsoleTone, HISTORY_LIMIT, RESULT_LINE_LIMIT, console_gate,
-        format_console_result, recall_list, step_history,
+        execution_may_have_changed_data, format_console_result, recall_list, step_history,
     };
     use dbflux_core::{
-        ColumnKind, ColumnMeta, DangerousAction, DangerousQueryKind, ExecutionClassification,
-        QueryResult, Value, classify_query_for_language,
+        ColumnKind, ColumnMeta, DangerousAction, DangerousQueryKind, DbError,
+        ExecutionClassification, QueryResult, Value, classify_query_for_language,
     };
     use std::collections::BTreeMap;
     use std::time::Duration;
@@ -677,5 +811,103 @@ mod tests {
         assert_eq!(commands.len(), HISTORY_LIMIT);
         assert_eq!(commands.last().map(String::as_str), Some("GET 104"));
         assert!(commands.iter().all(|command| !command.contains('\n')));
+    }
+
+    #[test]
+    fn execution_may_have_changed_data_tracks_partial_script_writes() {
+        let ok_empty = || QueryResult::json(Vec::new(), Vec::new(), Duration::ZERO);
+
+        assert!(!execution_may_have_changed_data(
+            &Err(DbError::query_failed("boom")),
+            ExecutionClassification::Write,
+        ));
+        assert!(!execution_may_have_changed_data(
+            &Ok(ok_empty()),
+            ExecutionClassification::Read,
+        ));
+        assert!(execution_may_have_changed_data(
+            &Ok(ok_empty()),
+            ExecutionClassification::Write,
+        ));
+
+        let mut failed_at_zero = ok_empty();
+        failed_at_zero.metadata_extra = Some(std::collections::HashMap::from([
+            (
+                "script_operations".to_string(),
+                serde_json::json!([{
+                    "index": 0,
+                    "dispatched": false,
+                    "outcome": "failed",
+                    "classification": "write",
+                }]),
+            ),
+            (
+                "script_failure".to_string(),
+                serde_json::json!({ "index": 0, "message": "blocked" }),
+            ),
+        ]));
+        assert!(!execution_may_have_changed_data(
+            &Ok(failed_at_zero),
+            ExecutionClassification::Destructive,
+        ));
+
+        let mut failed_dispatched_write = ok_empty();
+        failed_dispatched_write.metadata_extra = Some(std::collections::HashMap::from([
+            (
+                "script_operations".to_string(),
+                serde_json::json!([{
+                    "index": 0,
+                    "dispatched": true,
+                    "outcome": "failed",
+                    "classification": "write",
+                }]),
+            ),
+            (
+                "script_failure".to_string(),
+                serde_json::json!({ "index": 0, "message": "duplicate key in insertMany" }),
+            ),
+        ]));
+        assert!(execution_may_have_changed_data(
+            &Ok(failed_dispatched_write),
+            ExecutionClassification::Destructive,
+        ));
+
+        let mut read_then_fail = ok_empty();
+        read_then_fail.metadata_extra = Some(std::collections::HashMap::from([
+            (
+                "script_operations".to_string(),
+                serde_json::json!([
+                    { "index": 0, "dispatched": true, "outcome": "success", "classification": "read" },
+                    { "index": 1, "dispatched": false, "outcome": "failed", "classification": "admin_destructive" },
+                ]),
+            ),
+            (
+                "script_failure".to_string(),
+                serde_json::json!({ "index": 1, "message": "blocked" }),
+            ),
+        ]));
+        assert!(!execution_may_have_changed_data(
+            &Ok(read_then_fail),
+            ExecutionClassification::Destructive,
+        ));
+
+        let mut write_then_fail = ok_empty();
+        write_then_fail.metadata_extra = Some(std::collections::HashMap::from([
+            (
+                "script_operations".to_string(),
+                serde_json::json!([
+                    { "index": 0, "dispatched": true, "outcome": "success", "classification": "write" },
+                    { "index": 1, "dispatched": false, "outcome": "failed", "classification": "admin_destructive" },
+                ]),
+            ),
+            (
+                "script_failure".to_string(),
+                serde_json::json!({ "index": 1, "message": "blocked" }),
+            ),
+        ]));
+        assert!(execution_may_have_changed_data(
+            &Ok(write_then_fail),
+            ExecutionClassification::Destructive,
+        ));
     }
 }

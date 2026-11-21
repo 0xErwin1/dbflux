@@ -213,6 +213,7 @@ fn a_command_runs_through_execute_and_is_audited_and_remembered(cx: &mut TestApp
     assert!(
         events.contains(&NativeConsoleEvent::Executed {
             succeeded: true,
+            may_have_changed_data: false,
             classification: ExecutionClassification::Read,
         }),
         "{events:?}"
@@ -463,25 +464,55 @@ fn a_script_failure_in_result_metadata_is_recorded_as_a_failure(cx: &mut TestApp
     use dbflux_core::observability::EventOutcome;
 
     let mut failed_only = QueryResult::json(Vec::new(), Vec::new(), Duration::ZERO);
-    failed_only.metadata_extra = Some(std::collections::HashMap::from([(
-        "script_failure".to_string(),
-        serde_json::json!({ "index": 0, "message": "exceeds confirmed ceiling" }),
-    )]));
+    failed_only.metadata_extra = Some(std::collections::HashMap::from([
+        (
+            "script_operations".to_string(),
+            serde_json::json!([{
+                "index": 0,
+                "dispatched": false,
+                "outcome": "failed",
+                "classification": "admin_destructive",
+            }]),
+        ),
+        (
+            "script_failure".to_string(),
+            serde_json::json!({ "index": 0, "message": "exceeds confirmed ceiling" }),
+        ),
+    ]));
 
-    let mut partial = QueryResult::text("first statement ok".to_string(), Duration::ZERO);
-    partial.metadata_extra = Some(std::collections::HashMap::from([(
-        "script_failure".to_string(),
-        serde_json::json!({ "index": 1, "message": "second statement failed" }),
-    )]));
+    let mut partial_write = QueryResult::text("first statement ok".to_string(), Duration::ZERO);
+    partial_write.metadata_extra = Some(std::collections::HashMap::from([
+        (
+            "script_operations".to_string(),
+            serde_json::json!([
+                {
+                    "index": 0,
+                    "dispatched": true,
+                    "outcome": "success",
+                    "classification": "write",
+                },
+                {
+                    "index": 1,
+                    "dispatched": false,
+                    "outcome": "failed",
+                    "classification": "admin_destructive",
+                },
+            ]),
+        ),
+        (
+            "script_failure".to_string(),
+            serde_json::json!({ "index": 1, "message": "second statement failed" }),
+        ),
+    ]));
 
     let driver = FakeDriver::new(DbKind::Redis)
-        .with_query_result("GET fail_only", failed_only)
-        .with_query_result("GET fail_partial", partial);
+        .with_query_result("SET fail_only 1", failed_only)
+        .with_query_result("SET fail_partial 1", partial_write);
 
     let (harness, window) = open_with(cx, driver, Some("0"));
 
-    type_and_submit(&harness, window, "GET fail_only");
-    type_and_submit(&harness, window, "GET fail_partial");
+    type_and_submit(&harness, window, "SET fail_only 1");
+    type_and_submit(&harness, window, "SET fail_partial 1");
 
     let transcript = window.update(|_, cx| {
         harness
@@ -510,14 +541,21 @@ fn a_script_failure_in_result_metadata_is_recorded_as_a_failure(cx: &mut TestApp
     );
 
     let events = harness.events.borrow().clone();
-    assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|event| matches!(
-        event,
-        NativeConsoleEvent::Executed {
-            succeeded: false,
-            ..
-        }
-    )));
+    assert_eq!(
+        events,
+        vec![
+            NativeConsoleEvent::Executed {
+                succeeded: false,
+                may_have_changed_data: false,
+                classification: ExecutionClassification::Write,
+            },
+            NativeConsoleEvent::Executed {
+                succeeded: false,
+                may_have_changed_data: true,
+                classification: ExecutionClassification::Write,
+            },
+        ]
+    );
 
     let history_empty =
         window.update(|_, cx| harness.app_state.read(cx).history_entries().is_empty());

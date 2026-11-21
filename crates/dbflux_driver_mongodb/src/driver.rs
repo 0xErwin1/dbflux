@@ -2093,6 +2093,7 @@ fn script_ledger_to_json(ledger: &[dbflux_js::ScriptLedgerEntry]) -> Vec<serde_j
                 "target": target,
                 "method": entry.method,
                 "classification": entry.classification,
+                "dispatched": entry.dispatched,
                 "outcome": outcome,
                 "message": message,
                 "counts": {
@@ -4674,6 +4675,7 @@ mod tests {
                 target: dbflux_core::ScriptTarget::Container("users".to_string()),
                 method: "deleteMany".to_string(),
                 classification: Some(dbflux_core::ExecutionClassification::Destructive),
+                dispatched: true,
                 outcome: dbflux_js::ScriptLedgerOutcome::Success,
                 counts: dbflux_core::ScriptOperationCounts {
                     deleted: Some(3),
@@ -4685,6 +4687,7 @@ mod tests {
                 target: dbflux_core::ScriptTarget::Database,
                 method: "dropDatabase".to_string(),
                 classification: Some(dbflux_core::ExecutionClassification::Destructive),
+                dispatched: false,
                 outcome: dbflux_js::ScriptLedgerOutcome::Failed {
                     message: "boom".to_string(),
                 },
@@ -4697,9 +4700,11 @@ mod tests {
         assert_eq!(json[0]["target"]["kind"], "container");
         assert_eq!(json[0]["target"]["name"], "users");
         assert_eq!(json[0]["method"], "deleteMany");
+        assert_eq!(json[0]["dispatched"], true);
         assert_eq!(json[0]["outcome"], "success");
         assert_eq!(json[0]["counts"]["deleted"], 3);
         assert_eq!(json[1]["target"]["kind"], "database");
+        assert_eq!(json[1]["dispatched"], false);
         assert_eq!(json[1]["outcome"], "failed");
         assert_eq!(json[1]["message"], "boom");
     }
@@ -6278,6 +6283,7 @@ db.runCommand({
             for computed_script in [
                 "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
                 "const m = 'runCommand'; db[m]({ ping: 1 });",
+                "const runCommand = 'runCommand'; db[runCommand]({ ping: 1 });",
             ] {
                 let computed_ceiling = MongoLanguageService
                     .classify_execution(computed_script)

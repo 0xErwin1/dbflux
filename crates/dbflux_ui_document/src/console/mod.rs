@@ -37,7 +37,8 @@ use dbflux_core::{
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use format::{
-    ConsoleGate, ConsoleLine, ConsoleTone, console_gate, format_console_result, has_console_output,
+    ConsoleGate, ConsoleLine, ConsoleTone, console_gate, execution_audit_event,
+    execution_may_have_changed_data, format_console_result, has_console_output, now_ms,
     recall_list, script_failure_message, step_history,
 };
 use gpui::prelude::*;
@@ -75,6 +76,7 @@ pub(crate) enum NativeConsoleEvent {
     /// A command finished. Hosts refresh what it may have changed.
     Executed {
         succeeded: bool,
+        may_have_changed_data: bool,
         classification: ExecutionClassification,
     },
 }
@@ -620,6 +622,7 @@ impl NativeConsole {
 
         let script_failure = result.as_ref().ok().and_then(script_failure_message);
         let succeeded = result.is_ok() && script_failure.is_none();
+        let may_have_changed_data = execution_may_have_changed_data(&result, classification);
 
         let mut result = result;
         let output = match &mut result {
@@ -630,6 +633,13 @@ impl NativeConsole {
 
                 if let Some(message) = script_failure {
                     self.remember_unrecorded(&command);
+                    report_error(
+                        UserFacingError::from_formatted(
+                            ErrorKind::Driver,
+                            dbflux_core::FormattedError::new(message.clone()),
+                        ),
+                        cx,
+                    );
                     let mut lines = if has_console_output(result) {
                         format_console_result(result)
                     } else {
@@ -661,6 +671,7 @@ impl NativeConsole {
 
         cx.emit(NativeConsoleEvent::Executed {
             succeeded,
+            may_have_changed_data,
             classification,
         });
         cx.notify();
@@ -914,78 +925,6 @@ impl Render for NativeConsole {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_console(cx)
     }
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-/// The audit row of one console execution, shaped like the code editor's
-/// (`query_execute` / `query_execute_failed`, the query in `details_json`,
-/// driver-provided `metadata_extra` merged in).
-fn execution_audit_event(
-    template: EventRecord,
-    command: &str,
-    result: &Result<QueryResult, DbError>,
-    duration_ms: i64,
-) -> EventRecord {
-    let mut details = serde_json::Map::new();
-    details.insert(
-        "query".to_string(),
-        serde_json::Value::String(command.to_string()),
-    );
-    details.insert(
-        "source".to_string(),
-        serde_json::Value::String("console".to_string()),
-    );
-
-    let mut event = template.with_origin(EventOrigin::local());
-    event.ts_ms = now_ms();
-    event.duration_ms = Some(duration_ms);
-
-    match result {
-        Ok(result) => {
-            if let Some(extra) = &result.metadata_extra {
-                for (key, value) in extra {
-                    if key == dbflux_core::SERVER_NOTICES_METADATA_KEY {
-                        continue;
-                    }
-                    details.insert(key.clone(), value.clone());
-                }
-            }
-
-            if let Some(message) = script_failure_message(result) {
-                event.level = EventSeverity::Error;
-                event.outcome = EventOutcome::Failure;
-                event.error_message = Some(message.clone());
-                event = event
-                    .with_typed_action(audit_actions::QUERY_EXECUTE_FAILED)
-                    .with_summary(format!("Query failed: {message}"));
-            } else {
-                let (count, label) = match result.affected_rows {
-                    Some(count) => (count, "affected"),
-                    None => (result.rows.len() as u64, "returned"),
-                };
-                event = event
-                    .with_typed_action(audit_actions::QUERY_EXECUTE)
-                    .with_summary(format!("Query executed successfully: {count} rows {label}"));
-            }
-        }
-        Err(error) => {
-            event.level = EventSeverity::Error;
-            event.outcome = EventOutcome::Failure;
-            event.error_message = Some(error.to_string());
-            event = event
-                .with_typed_action(audit_actions::QUERY_EXECUTE_FAILED)
-                .with_summary(format!("Query failed: {error}"));
-        }
-    }
-
-    event.details_json = Some(serde_json::Value::Object(details).to_string());
-    event
 }
 
 #[cfg(test)]
