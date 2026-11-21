@@ -57,6 +57,33 @@ mod debug_http {
         (endpoint, handle)
     }
 
+    /// Accepts within a fixed bound, so a client that gives up before it ever
+    /// connects cannot leave the fixture blocked in `accept()` at `join()`.
+    /// The accepted socket reads under a deadline as well.
+    fn accept_within_bound(listener: &TcpListener) -> Option<std::net::TcpStream> {
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).expect("blocking stream");
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .expect("read bound");
+                    return Some(stream);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => return None,
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     fn response(status: u16, body: &[u8], extra: &str) -> Vec<u8> {
         let mut bytes = format!(
             "HTTP/1.1 {status} fixture\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n",
@@ -204,7 +231,7 @@ mod debug_http {
         )
         .expect("endpoint");
         let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept");
+            let stream = accept_within_bound(&listener);
             thread::sleep(Duration::from_millis(200));
             drop(stream);
         });
@@ -230,8 +257,10 @@ mod debug_http {
             true,
         )
         .expect("endpoint");
+        let partial_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reached_partial = partial_sent.clone();
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
+            let mut stream = accept_within_bound(&listener).expect("client connects");
             let mut headers = Vec::new();
             let mut byte = [0];
             while !headers.ends_with(b"\r\n\r\n") {
@@ -243,6 +272,7 @@ mod debug_http {
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{")
                 .expect("partial response");
+            reached_partial.store(true, std::sync::atomic::Ordering::SeqCst);
             thread::sleep(Duration::from_millis(200));
         });
         let transport =
@@ -252,6 +282,10 @@ mod debug_http {
             TransportError::Timeout
         );
         server.join().expect("server");
+        assert!(
+            partial_sent.load(std::sync::atomic::Ordering::SeqCst),
+            "the server must have reached the partial-body phase"
+        );
     }
 
     /// Each wait fits the budget on its own (headers after 400 ms, body 400 ms
@@ -268,7 +302,7 @@ mod debug_http {
         )
         .expect("endpoint");
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
+            let mut stream = accept_within_bound(&listener).expect("client connects");
             let mut request = Vec::new();
             let mut byte = [0];
             while !request.ends_with(b"\r\n\r\n") {

@@ -51,8 +51,9 @@ pub struct Build {
     pub channel: Channel,
 }
 
-/// Consent level. `Off` sends nothing, `Minimal` sends one ping per build and
-/// `Basic` adds the weekly usage report. Persisted by variant name.
+/// Consent level. `Off` sends nothing. `Minimal` sends one ping per build and
+/// a weekly `active` signal. `Basic` sends the same ping and a weekly usage
+/// report in place of the `active` signal. Persisted by variant name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Level {
     Off,
