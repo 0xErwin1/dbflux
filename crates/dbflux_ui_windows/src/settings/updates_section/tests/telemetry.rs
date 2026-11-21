@@ -67,6 +67,13 @@ fn mount(
         }
     }
 
+    // `report_error` records the badge and notification through this global.
+    cx.update(|cx| {
+        cx.set_global(dbflux_ui_base::AppStateGlobal {
+            entity: app_state.clone(),
+        });
+    });
+
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
     let slot_for_view = slot.clone();
     let app_for_view = app_state.clone();

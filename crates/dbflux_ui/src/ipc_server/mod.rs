@@ -141,6 +141,18 @@ impl CounterCommand {
             CounterReplyReceiver { receiver, request },
         )
     }
+
+    /// A release nobody waits on. It has no `CounterReplyReceiver`, whose drop
+    /// cancels a pending request, so the foreground always adopts and runs it.
+    fn release(capability: Uuid) -> Self {
+        let (reply, _unwaited) = mpsc::sync_channel(1);
+        let request = Arc::new(CounterRequestState::default());
+        Self {
+            body: CounterBody::Release { capability },
+            reply,
+            request,
+        }
+    }
 }
 #[cfg(feature = "telemetry")]
 struct CounterEntry {
@@ -586,8 +598,10 @@ fn handle_connection<S: io::Read + io::Write>(
     if sent.is_err()
         && let Some(capability) = issued
     {
-        let (release, _reply) = CounterCommand::new(CounterBody::Release { capability });
-        if counter_tx.try_send(release).is_err() {
+        if counter_tx
+            .try_send(CounterCommand::release(capability))
+            .is_err()
+        {
             log::debug!("IPC usage release could not be queued");
         }
     }
