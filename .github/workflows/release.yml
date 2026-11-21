@@ -121,6 +121,10 @@ jobs:
       contents: write
       id-token: write      # OIDC token for build-provenance attestation
       attestations: write  # write the provenance attestation
+    outputs:
+      # Set once the release is published, so a later attestation failure
+      # still leaves the published build registrable.
+      published: ${{ steps.publish.outcome == 'success' }}
 
     steps:
       - name: Checkout repository
@@ -272,6 +276,7 @@ jobs:
           fi
 
       - name: Create release
+        id: publish
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: v${{ needs.classify.outputs.version }}
@@ -405,7 +410,7 @@ jobs:
   telemetry-admission:
     name: Register the build with the telemetry collector
     needs: [classify, release]
-    if: needs.classify.outputs.draft == 'false'
+    if: ${{ !cancelled() && needs.classify.outputs.draft == 'false' && needs.release.outputs.published == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -437,8 +442,16 @@ jobs:
           test -n "$VERSION"
           test -n "$CHANNEL"
           body=$(printf '{"version":"%s","channel":"%s"}' "$VERSION" "$CHANNEL")
-          curl --fail-with-body --silent --show-error \
+          response=$(mktemp)
+          status=$(curl --fail-with-body --silent --show-error \
             --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused \
+            --output "$response" --write-out '%{http_code}' \
             -H "Authorization: Bearer $ADMIN_TOKEN" \
             -H 'Content-Type: application/json' \
-            --data "$body" "$ADMIN_URL/builds"
+            --data "$body" "$ADMIN_URL/builds") || { cat "$response"; exit 1; }
+          # Redirects are not followed, so a 3xx must not read as registered.
+          if [ "$status" != 200 ]; then
+            echo "::error::The collector answered ${status} instead of 200; the build was not registered."
+            cat "$response"
+            exit 1
+          fi

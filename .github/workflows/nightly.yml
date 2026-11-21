@@ -232,6 +232,10 @@ jobs:
       contents: write
       id-token: write      # OIDC token for build-provenance attestation
       attestations: write  # write the provenance attestation
+    outputs:
+      # Set once the nightly is published and its tag moved, so a pruning
+      # failure still leaves the build registrable.
+      published: ${{ steps.pin.outcome == 'success' }}
 
     steps:
       - name: Checkout repository
@@ -402,6 +406,7 @@ jobs:
       # so `github:0xErwin1/dbflux/nightly#dbflux-nightly` fetches them. The
       # pin commit is never pushed to main; pushing the tag carries it.
       - name: Pin nix/nightly-info.nix and move nightly tag
+        id: pin
         env:
           NIGHTLY_VERSION: ${{ needs.compute-version.outputs.version }}
           SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
@@ -530,24 +535,46 @@ jobs:
   telemetry-admission:
     name: Register the nightly build with the collector
     needs: [guard, compute-version, release]
-    if: needs.guard.outputs.proceed == 'true' && vars.DBFLUX_TELEMETRY_ADMIN_URL != ''
+    if: ${{ !cancelled() && needs.guard.outputs.proceed == 'true' && needs.release.outputs.published == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
 
     steps:
+      - name: Check for the collector endpoint
+        id: endpoint
+        env:
+          ADMIN_URL: ${{ vars.DBFLUX_TELEMETRY_ADMIN_URL }}
+          ADMIN_TOKEN: ${{ secrets.DBFLUX_TELEMETRY_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$ADMIN_URL" ] || [ -z "$ADMIN_TOKEN" ]; then
+            echo "::warning::DBFLUX_TELEMETRY_ADMIN_URL or DBFLUX_TELEMETRY_ADMIN_TOKEN is not set; the collector's published-build registry was not updated and this nightly will not be admitted."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Register the published build
+        if: steps.endpoint.outputs.present == 'true'
         env:
           ADMIN_URL: ${{ vars.DBFLUX_TELEMETRY_ADMIN_URL }}
           ADMIN_TOKEN: ${{ secrets.DBFLUX_TELEMETRY_ADMIN_TOKEN }}
           VERSION: ${{ needs.compute-version.outputs.version }}
         run: |
           set -eu
-          test -n "$ADMIN_TOKEN"
+          test -n "$VERSION"
           body=$(printf '{"version":"%s","channel":"nightly"}' "$VERSION")
-          curl --fail-with-body --silent --show-error \
+          response=$(mktemp)
+          status=$(curl --fail-with-body --silent --show-error \
             --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused \
+            --output "$response" --write-out '%{http_code}' \
             -H "Authorization: Bearer $ADMIN_TOKEN" \
             -H 'Content-Type: application/json' \
-            --data "$body" "$ADMIN_URL/builds"
+            --data "$body" "$ADMIN_URL/builds") || { cat "$response"; exit 1; }
+          # Redirects are not followed, so a 3xx must not read as registered.
+          if [ "$status" != 200 ]; then
+            echo "::error::The collector answered ${status} instead of 200; the build was not registered."
+            cat "$response"
+            exit 1
+          fi
