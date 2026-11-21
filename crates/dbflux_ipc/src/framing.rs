@@ -97,13 +97,23 @@ mod tests {
                     .unwrap(),
                 42
             );
-            for bytes in [vec![1, 16, 0, 0], vec![1, 0, 0, 0], vec![1, 0, 0, 0, 255]] {
-                assert!(
-                    recv_telemetry_msg::<_, bool>(&mut bytes.as_slice())
-                        .await
-                        .is_err()
-                );
-            }
+            // One byte over the cap, header only: the size check must refuse it
+            // before any body read, which would otherwise end in UnexpectedEof.
+            let too_large = recv_telemetry_msg::<_, bool>(&mut [1u8, 16, 0, 0].as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(too_large.kind(), io::ErrorKind::Other);
+            assert_eq!(too_large.to_string(), "telemetry frame too large");
+
+            let truncated = recv_telemetry_msg::<_, bool>(&mut [1u8, 0, 0, 0].as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(truncated.kind(), io::ErrorKind::UnexpectedEof);
+
+            let invalid = recv_telemetry_msg::<_, bool>(&mut [1u8, 0, 0, 0, 255].as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(invalid.to_string(), "invalid telemetry frame");
             let oversized = vec![0u8; TELEMETRY_FRAME_CAP];
             assert!(
                 send_telemetry_msg(&mut Vec::new(), &oversized)

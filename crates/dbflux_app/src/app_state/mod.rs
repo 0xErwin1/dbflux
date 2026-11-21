@@ -3420,38 +3420,7 @@ mod tests {
     use dbflux_driver_ipc::IpcDriver;
 
     #[cfg(feature = "telemetry")]
-    #[test]
-    fn telemetry_app_source_is_absent_uninitialized_and_degraded() {
-        let directory = std::env::temp_dir().join(format!("dbflux-bridge-app-{}", Uuid::new_v4()));
-        std::fs::create_dir(&directory).expect("private fixture");
-        let runtime =
-            dbflux_storage::bootstrap::StorageRuntime::for_path(directory.join("fixture.sqlite"))
-                .expect("storage");
-        let mut state = AppState::new_with_storage_runtime(runtime).expect("app");
-        let now = chrono::Utc::now();
-        assert!(state.telemetry_usage_source(now).is_none());
-        state.audit_degraded = true;
-        state
-            .initialize_telemetry(crate::telemetry::TelemetryConfig::default(), now)
-            .expect("initialize");
-        state
-            .set_telemetry_level(crate::telemetry::TelemetryLevel::Basic, now)
-            .expect("basic");
-        state
-            .telemetry_mut()
-            .expect("scheduler")
-            .disclosure_dismissed(now)
-            .expect("dismiss");
-        assert!(state.telemetry_usage_source(now).is_none());
-        assert!(
-            state
-                .telemetry_mut()
-                .expect("scheduler")
-                .usage_source(now)
-                .expect("degraded gate")
-                .is_none()
-        );
-    }
+    mod telemetry;
 
     #[test]
     fn profile_session_generation_absent_profile_is_none() {

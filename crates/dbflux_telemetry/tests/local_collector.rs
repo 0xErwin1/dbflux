@@ -24,7 +24,7 @@ fn local_collector_stored_duplicate_and_conflict() {
     let endpoint = Endpoint::parse(Some(&configured), true).expect("debug-only local endpoint");
     let transport = Transport::new(endpoint).expect("transport");
     let install_id = Uuid::new_v4();
-    for event in ["ping", "basic"] {
+    for event in ["ping", "active", "basic"] {
         let mut payload = serde_json::json!({
             "schema": "dbflux.telemetry-event/v1",
             "event": event,
