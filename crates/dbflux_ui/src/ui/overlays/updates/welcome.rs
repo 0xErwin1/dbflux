@@ -55,6 +55,9 @@ const BADGE_FILL_OPACITY: f32 = 0.12;
 /// Element id of the scrolling release highlights.
 const HIGHLIGHTS_ID: &str = "welcome-whats-new-list";
 
+/// Element id of the scrolling update preferences and usage statistics.
+const UPDATES_ID: &str = "welcome-updates-list";
+
 /// Telemetry levels in card order; the roving index points into this list.
 #[cfg(feature = "telemetry")]
 const TELEMETRY_LEVELS: [TelemetryLevel; 3] = [
@@ -144,6 +147,7 @@ pub struct WelcomeDialog {
     release: Option<&'static ChangelogRelease>,
     focus: ModalFocus,
     highlights_scroll: ScrollHandle,
+    updates_scroll: ScrollHandle,
 }
 
 impl WelcomeDialog {
@@ -158,6 +162,7 @@ impl WelcomeDialog {
             release: None,
             focus: ModalFocus::new(cx),
             highlights_scroll: ScrollHandle::new(),
+            updates_scroll: ScrollHandle::new(),
         }
     }
 
@@ -174,6 +179,7 @@ impl WelcomeDialog {
         self.release = updates::parse_version(version)
             .and_then(|current| changelog::release_for_version(changelog::bundled(), &current));
         self.highlights_scroll.set_offset(Point::default());
+        self.updates_scroll.set_offset(Point::default());
         self.visible = true;
         #[cfg(feature = "telemetry")]
         {
@@ -332,14 +338,10 @@ impl WelcomeDialog {
         let check_state = self.app_state.clone();
         let whats_new_state = self.app_state.clone();
 
-        div()
-            .flex_1()
-            .min_w_0()
+        let content = div()
             .flex()
             .flex_col()
             .gap(UPDATES_COLUMN_GAP)
-            .px(COLUMN_PADDING_X)
-            .py(COLUMN_PADDING_Y)
             .child(labeled_heading(
                 AppIcon::Bell,
                 ChromeColors::tint(theme),
@@ -368,7 +370,23 @@ impl WelcomeDialog {
                     )
                 },
             ))
-            .children(self.render_telemetry_block(cx))
+            .children(self.render_telemetry_block(cx));
+
+        // A short window scrolls this column instead of letting the level
+        // cards spill over the privacy box and the footer below the panel.
+        div()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .px(COLUMN_PADDING_X)
+            .py(COLUMN_PADDING_Y)
+            .child(
+                scroll_region(UPDATES_ID, &self.updates_scroll, content)
+                    .flex_grow(1.0)
+                    .min_h_0(),
+            )
     }
 
     /// Heading, the three level cards and the privacy summary. `None` without
