@@ -2,7 +2,7 @@ use std::{
     cell::{RefCell, RefMut},
     hash::Hash,
     os::{
-        fd::{AsRawFd, BorrowedFd, FromRawFd as _, RawFd},
+        fd::{AsFd as _, AsRawFd, BorrowedFd, FromRawFd as _, OwnedFd, RawFd},
         unix::net::UnixStream,
     },
     path::PathBuf,
@@ -86,12 +86,15 @@ use super::{
 
 use crate::linux::{
     DOUBLE_CLICK_INTERVAL, LinuxCommon, LinuxKeyboardLayout, PIPE_READ_TIMEOUT, SCROLL_LINES,
-    capslock_from_xkb, cursor_style_to_icon_names, get_xkb_compose_state, is_within_click_distance,
-    keystroke_from_xkb, keystroke_underlying_dead_key, modifiers_from_xkb, new_xkb_context,
-    open_uri_internal, read_fd_with_timeout, reveal_path_internal,
+    capslock_from_xkb, cursor_style_to_icon_names, file_uri_list, get_xkb_compose_state,
+    is_within_click_distance, keystroke_from_xkb, keystroke_underlying_dead_key,
+    modifiers_from_xkb, new_xkb_context, open_uri_internal, read_fd_with_timeout,
+    reveal_path_internal,
     wayland::{
         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
         cursor::Cursor,
+        drag_icon::{self, IconSpec},
+        drag_source::{self, DragSession},
         serial::{Serial, SerialKind, SerialTracker},
         to_shape,
         window::WaylandWindow,
@@ -518,18 +521,70 @@ pub(crate) struct ExternalDrag {
     source: wl_data_source::WlDataSource,
     bytes: Vec<u8>,
     window: WaylandWindowStatePtr,
+    session: DragSession,
+    /// Runs out when the target never reports `dnd_finished`.
+    timeout: Option<RegistrationToken>,
+    /// The picture that follows the pointer; the drag works without it.
+    icon: Option<DragIcon>,
 }
 
-fn file_uri_list(paths: &FileDragPaths) -> String {
-    paths
-        .entries()
-        .iter()
-        .filter_map(|(path, _)| Url::from_file_path(path).ok())
-        .fold(String::new(), |mut list, url| {
-            list.push_str(url.as_str());
-            list.push_str("\r\n");
-            list
-        })
+/// The surface the compositor draws next to the pointer during a drag, and the buffer it shows.
+struct DragIcon {
+    surface: wl_surface::WlSurface,
+    buffer: wl_buffer::WlBuffer,
+}
+
+impl DragIcon {
+    fn new(globals: &Globals, paths: &FileDragPaths, buffer_scale: u32) -> Option<Self> {
+        let spec = IconSpec::for_paths(paths)?;
+        let bitmap = drag_icon::render(spec, buffer_scale);
+        let fd = match shm_file(&bitmap.argb) {
+            Ok(fd) => fd,
+            Err(err) => {
+                log::warn!("failed to share the drag icon with the compositor: {err}");
+                return None;
+            }
+        };
+        let (width, height) = (bitmap.width as i32, bitmap.height as i32);
+        let pool = globals
+            .shm
+            .create_pool(fd.as_fd(), bitmap.argb.len() as i32, &globals.qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width,
+            height,
+            width * 4,
+            wl_shm::Format::Argb8888,
+            &globals.qh,
+            (),
+        );
+        pool.destroy();
+
+        let surface = globals.compositor.create_surface(&globals.qh, ());
+        surface.set_buffer_scale(bitmap.scale as i32);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        Some(Self { surface, buffer })
+    }
+
+    fn destroy(self) {
+        self.surface.destroy();
+        self.buffer.destroy();
+    }
+}
+
+/// An anonymous file holding `bytes`, for a `wl_shm` pool.
+fn shm_file(bytes: &[u8]) -> std::io::Result<OwnedFd> {
+    use std::io::Write as _;
+
+    let raw = unsafe { libc::memfd_create(c"gpui-drag-icon".as_ptr(), libc::MFD_CLOEXEC) };
+    if raw == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let mut file = std::fs::File::from(fd);
+    file.write_all(bytes)?;
+    Ok(file.into())
 }
 
 pub struct ClickState {
@@ -663,6 +718,7 @@ impl WaylandClientStatePtr {
         &self,
         surface: &wl_surface::WlSurface,
         payload: &ExternalDragPayload,
+        buffer_scale: u32,
     ) -> bool {
         let client = self.get_client();
         let mut state = client.borrow_mut();
@@ -689,13 +745,31 @@ impl WaylandClientStatePtr {
             data_device_manager.create_data_source(&state.globals.qh, DataSourceKind::Drag);
         source.offer(FILE_LIST_MIME_TYPE.to_string());
         source.set_actions(DndAction::Copy | DndAction::Move);
-        data_device.start_drag(Some(&source), surface, None, serial.as_raw());
+        let icon = DragIcon::new(&state.globals, paths, buffer_scale);
+        data_device.start_drag(
+            Some(&source),
+            surface,
+            icon.as_ref().map(|icon| &icon.surface),
+            serial.as_raw(),
+        );
 
-        state.external_drag = Some(ExternalDrag {
+        let previous = state.external_drag.replace(ExternalDrag {
             source,
             bytes: uri_list.into_bytes(),
             window,
+            session: DragSession::new(),
+            timeout: None,
+            icon,
         });
+        if let Some(previous) = previous {
+            if let Some(token) = previous.timeout {
+                state.loop_handle.remove(token);
+            }
+            previous.source.destroy();
+            if let Some(icon) = previous.icon {
+                icon.destroy();
+            }
+        }
         true
     }
 
@@ -3074,7 +3148,7 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
         _: &QueueHandle<Self>,
     ) {
         let client = this.get_client();
-        let mut state = client.borrow_mut();
+        let state = client.borrow_mut();
 
         match (kind, event) {
             (DataSourceKind::Clipboard, wl_data_source::Event::Send { mime_type, fd }) => {
@@ -3083,27 +3157,135 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
             (DataSourceKind::Clipboard, wl_data_source::Event::Cancelled) => {
                 data_source.destroy();
             }
-            (DataSourceKind::Drag, wl_data_source::Event::Send { fd, .. }) => {
-                let Some(external_drag) = state.external_drag.as_ref() else {
-                    return;
-                };
-                let bytes = external_drag.bytes.clone();
-                state.clipboard.send_bytes(fd, bytes);
-            }
-            (
-                DataSourceKind::Drag,
-                wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled,
-            ) => {
-                let Some(external_drag) = state.external_drag.take() else {
-                    return;
-                };
-                external_drag.source.destroy();
-
-                let input = PlatformInput::FileDrop(FileDropEvent::Ended);
+            (DataSourceKind::Drag, event) => {
                 drop(state);
-                external_drag.window.handle_input(input);
+                this.handle_drag_source_event(data_source, event);
             }
             _ => {}
+        }
+    }
+}
+
+impl WaylandClientStatePtr {
+    fn handle_drag_source_event(
+        &self,
+        data_source: &wl_data_source::WlDataSource,
+        event: wl_data_source::Event,
+    ) {
+        let Some(client) = self.0.upgrade() else {
+            return;
+        };
+        let mut state = client.borrow_mut();
+        let is_current = state
+            .external_drag
+            .as_ref()
+            .is_some_and(|drag| drag.source.id() == data_source.id());
+        if !is_current {
+            // A source replaced by a newer drag has nothing left to serve.
+            if matches!(
+                event,
+                wl_data_source::Event::Cancelled | wl_data_source::Event::DndFinished
+            ) {
+                data_source.destroy();
+            }
+            return;
+        }
+
+        let outcome = match event {
+            wl_data_source::Event::Send { fd, .. } => {
+                let bytes = state
+                    .external_drag
+                    .as_ref()
+                    .filter(|drag| drag.session.can_send())
+                    .map(|drag| drag.bytes.clone());
+                if let Some(bytes) = bytes {
+                    state.clipboard.send_bytes(fd, bytes);
+                }
+                return;
+            }
+            // The compositor reports which target takes the data and the action it will use so
+            // a source can adjust its feedback. This one offers a fixed list and leaves what
+            // happens to the files to the target, so there is nothing to track.
+            wl_data_source::Event::Target { .. } | wl_data_source::Event::Action { .. } => return,
+            wl_data_source::Event::DndDropPerformed => state
+                .external_drag
+                .as_mut()
+                .map(|drag| drag.session.drop_performed()),
+            wl_data_source::Event::DndFinished => state
+                .external_drag
+                .as_mut()
+                .map(|drag| drag.session.finished()),
+            wl_data_source::Event::Cancelled => state
+                .external_drag
+                .as_mut()
+                .map(|drag| drag.session.cancelled()),
+            _ => return,
+        };
+        drop(state);
+        if let Some(outcome) = outcome {
+            self.apply_drag_outcome(outcome);
+        }
+    }
+
+    fn drag_source_timed_out(&self) {
+        let Some(client) = self.0.upgrade() else {
+            return;
+        };
+        let outcome = {
+            let mut state = client.borrow_mut();
+            let Some(drag) = state.external_drag.as_mut() else {
+                return;
+            };
+            drag.timeout = None;
+            drag.session.timed_out()
+        };
+        self.apply_drag_outcome(outcome);
+    }
+
+    fn apply_drag_outcome(&self, outcome: drag_source::Outcome) {
+        let Some(client) = self.0.upgrade() else {
+            return;
+        };
+        let mut state = client.borrow_mut();
+        let Some(window) = state.external_drag.as_ref().map(|drag| drag.window.clone()) else {
+            return;
+        };
+
+        if outcome.arm_timeout {
+            let this = self.clone();
+            let token = state
+                .loop_handle
+                .insert_source(
+                    Timer::from_duration(drag_source::FINISH_TIMEOUT),
+                    move |_, _, _| {
+                        this.drag_source_timed_out();
+                        TimeoutAction::Drop
+                    },
+                )
+                .log_err();
+            let previous = state
+                .external_drag
+                .as_mut()
+                .and_then(|drag| std::mem::replace(&mut drag.timeout, token));
+            if let Some(previous) = previous {
+                state.loop_handle.remove(previous);
+            }
+        }
+        if outcome.release_source
+            && let Some(drag) = state.external_drag.take()
+        {
+            if let Some(token) = drag.timeout {
+                state.loop_handle.remove(token);
+            }
+            drag.source.destroy();
+            if let Some(icon) = drag.icon {
+                icon.destroy();
+            }
+        }
+        drop(state);
+
+        if outcome.notify_ended {
+            window.handle_input(PlatformInput::FileDrop(FileDropEvent::Ended));
         }
     }
 }
@@ -3223,6 +3405,17 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+
+    #[test]
+    fn the_drag_icon_pixels_are_shared_through_a_file() {
+        use std::io::{Read as _, Seek as _};
+
+        let mut file = std::fs::File::from(shm_file(b"pixels").expect("an anonymous file"));
+        file.rewind().expect("rewind");
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).expect("read");
+        assert_eq!(contents, b"pixels");
+    }
 
     #[test]
     fn a_new_keymap_keeps_the_held_modifiers() {
@@ -3435,37 +3628,6 @@ mod tests {
         fn commit_ime_state(&self) {
             self.commit_count.set(self.commit_count.get() + 1);
         }
-    }
-
-    #[test]
-    fn builds_terminated_uri_list_for_each_dragged_path() {
-        let paths = FileDragPaths::new([
-            (PathBuf::from("/tmp/first"), false),
-            (PathBuf::from("/tmp/nested directory"), true),
-        ]);
-
-        assert_eq!(
-            file_uri_list(&paths),
-            "file:///tmp/first\r\nfile:///tmp/nested%20directory\r\n"
-        );
-    }
-
-    #[test]
-    fn skips_paths_that_have_no_file_url() {
-        let paths = FileDragPaths::new([
-            (PathBuf::from("relative/path"), false),
-            (PathBuf::from("/tmp/absolute"), false),
-        ]);
-
-        assert_eq!(file_uri_list(&paths), "file:///tmp/absolute\r\n");
-    }
-
-    #[test]
-    fn builds_empty_uri_list_without_convertible_paths() {
-        assert!(file_uri_list(&FileDragPaths::default()).is_empty());
-        assert!(
-            file_uri_list(&FileDragPaths::new([(PathBuf::from("relative"), false)])).is_empty()
-        );
     }
 
     fn ime_cursor_bounds(x: f32) -> Bounds<Pixels> {

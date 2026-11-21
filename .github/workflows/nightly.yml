@@ -1,5 +1,11 @@
 name: Nightly
 
+# Rolling nightly build under the single tag `nightly`, replaced by every new
+# build. It runs once a day and skips when main has not advanced since the
+# commit the `nightly` tag points at. A manual dispatch always builds. The
+# build only runs when the Tests and Style workflows succeeded on the exact
+# commit being built (checked in the guard).
+
 on:
   schedule:
     # 03:17 UTC daily — low-traffic window, avoids the top-of-hour runner rush.
@@ -18,8 +24,14 @@ jobs:
     name: Guard — canonical repo and new commits
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # `gh run list` reads the Tests and Style runs of this commit.
+      actions: read
     outputs:
-      proceed: ${{ steps.guard.outputs.proceed }}
+      # The CI step only runs when the guard decided to build, and then has
+      # the last word; otherwise the guard's own answer stands.
+      proceed: ${{ steps.ci.outputs.proceed || steps.guard.outputs.proceed }}
 
     steps:
       - name: Checkout repository
@@ -30,16 +42,27 @@ jobs:
 
       - name: Decide whether to build
         id: guard
+        env:
+          REPOSITORY: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
         run: |
           # Only the canonical repo runs the schedule.
-          if [ "${{ github.repository }}" != "0xErwin1/dbflux" ]; then
+          if [ "$REPOSITORY" != "0xErwin1/dbflux" ]; then
             echo "Skipping nightly: not the canonical repository."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          # The single tag tracks main: a run from any other ref never moves it.
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::The nightly only builds main, not $REF."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           # A manual run always builds, even with no new commits.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT" = "workflow_dispatch" ]; then
             echo "Manual dispatch — building regardless of new commits."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -78,6 +101,83 @@ jobs:
           echo "main advanced $LAST -> $CURRENT — building."
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
+      # Never publish a binary for a commit that CI has not passed. This is a
+      # lookup rather than a `workflow_run` trigger: it keeps the schedule and
+      # manual dispatch, and works on the exact commit being built.
+      #
+      # Tests and Style run on push to main only when their path filters match
+      # (see the trigger notes in tests.yml), so a commit with no push run for
+      # a workflow was judged not to need it and counts as passing for that
+      # workflow. A run that exists must have succeeded: one still in progress
+      # skips the nightly with a warning (the next run retries), and one that
+      # finished without success fails the job. A run of either workflow on
+      # main that is still in progress also skips, so a run that GitHub has not
+      # attached to this commit yet is never mistaken for "no run". A failed
+      # lookup is a warning-skip, never a CI verdict. A manual dispatch errors
+      # unless every run that exists for the commit succeeded and nothing is
+      # in progress.
+      - name: Require successful Tests and Style runs for this commit
+        id: ci
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          WAITING=false
+          FAILED=false
+          # Not finished, not queued yet or not queryable: skip on the schedule,
+          # error on a manual dispatch.
+          wait_or_fail() {
+            if [ "$EVENT" = "workflow_dispatch" ]; then
+              echo "::error::$1; wait for CI to finish, then dispatch again."
+              FAILED=true
+            else
+              echo "::warning::$1: skipping; the next scheduled run retries."
+              WAITING=true
+            fi
+          }
+          for WORKFLOW in tests.yml style.yml; do
+            if ! ACTIVE=$(gh run list --workflow "$WORKFLOW" --branch main \
+              --json status --jq '[.[] | select(.status != "completed")] | length'); then
+              wait_or_fail "Could not query $WORKFLOW runs on main"
+              continue
+            fi
+            if [ "$ACTIVE" -gt 0 ]; then
+              wait_or_fail "$WORKFLOW still has a run in progress on main"
+              continue
+            fi
+            if ! RUNS=$(gh run list --workflow "$WORKFLOW" --commit "$SHA" --event push \
+              --json status,conclusion \
+              --jq '[length, ([.[] | select(.status != "completed")] | length), ([.[] | select(.conclusion == "success")] | length)] | @tsv'); then
+              wait_or_fail "Could not query $WORKFLOW runs for $SHA"
+              continue
+            fi
+            TOTAL=$(cut -f1 <<<"$RUNS")
+            RUNNING=$(cut -f2 <<<"$RUNS")
+            PASSED=$(cut -f3 <<<"$RUNS")
+            if [ "$RUNNING" -gt 0 ]; then
+              wait_or_fail "$WORKFLOW has not finished for $SHA"
+            elif [ "$TOTAL" -eq 0 ]; then
+              echo "$WORKFLOW has no push run for $SHA: its path filters skipped it, counting it as passing."
+            elif [ "$PASSED" -gt 0 ]; then
+              echo "$WORKFLOW passed for $SHA."
+            else
+              echo "::error::$WORKFLOW finished without success for $SHA: the nightly is skipped until a commit with passing CI lands on main."
+              FAILED=true
+            fi
+          done
+          if [ "$FAILED" = true ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "$WAITING" = true ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
   compute-version:
     name: Compute nightly version
     needs: guard
@@ -86,6 +186,8 @@ jobs:
     timeout-minutes: 10
     outputs:
       version: ${{ steps.nightly.outputs.version }}
+      short_sha: ${{ steps.nightly.outputs.short_sha }}
+      date: ${{ steps.nightly.outputs.date }}
 
     steps:
       - name: Checkout repository
@@ -101,7 +203,11 @@ jobs:
           # Produce a semver-compatible nightly identifier. The `+` separator
           # makes the build metadata portion; it does not affect semver ordering.
           NIGHTLY_VERSION="${BASE}-nightly+${SHORT_SHA}"
-          echo "version=${NIGHTLY_VERSION}" >> $GITHUB_OUTPUT
+          {
+            echo "version=${NIGHTLY_VERSION}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "date=$(date -u '+%Y-%m-%d')"
+          } >> "$GITHUB_OUTPUT"
           echo "Nightly version: ${NIGHTLY_VERSION}"
 
   build:
@@ -149,6 +255,28 @@ jobs:
         # same assets from main, so a link that a future release would break
         # fails here first instead of at release time.
         run: python3 scripts/check_release_links.py artifacts
+
+      # Each Linux tarball is published under two names: the rolling name for
+      # humans (replaced by every build) and a per-build immutable name that
+      # nix/nightly-info.nix pins, so a pinned URL and its hash never drift.
+      # The detached signature depends only on the bytes, so it is copied as
+      # is; the checksum file is regenerated for the per-build name. The build
+      # id carries the run id and attempt besides the date and commit, so a
+      # rebuild of the same commit (a manual dispatch or a re-run) publishes
+      # new names instead of replacing bytes that an existing pin hashes.
+      - name: Add per-build names for the Linux tarballs
+        env:
+          BUILD_ID: ${{ needs.compute-version.outputs.date }}-${{ needs.compute-version.outputs.short_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          for ARCH in amd64 arm64; do
+            BUILD_NAME="dbflux-linux-${ARCH}-${BUILD_ID}"
+            cd "artifacts/linux-${ARCH}"
+            cp "dbflux-linux-${ARCH}.tar.gz" "${BUILD_NAME}.tar.gz"
+            cp "dbflux-linux-${ARCH}.tar.gz.asc" "${BUILD_NAME}.tar.gz.asc"
+            sha256sum "${BUILD_NAME}.tar.gz" > "${BUILD_NAME}.tar.gz.sha256"
+            cd ../..
+          done
 
       - name: Install git-cliff
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2
@@ -212,90 +340,6 @@ jobs:
             cat cliff_notes.md >> release_body.md
           fi
 
-      - name: Pin nix/nightly-info.nix and move nightly tag
-        run: |
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          NIGHTLY_VERSION="${{ needs.compute-version.outputs.version }}"
-
-          # Compute SRI hashes from the downloaded tarballs without requiring nix.
-          # openssl and base64 are both available on ubuntu-latest.
-          HASH_AMD64="sha256-$(openssl dgst -sha256 -binary \
-            artifacts/linux-amd64/dbflux-linux-amd64.tar.gz | base64 -w0)"
-          HASH_ARM64="sha256-$(openssl dgst -sha256 -binary \
-            artifacts/linux-arm64/dbflux-linux-arm64.tar.gz | base64 -w0)"
-
-          # Regenerate nix/nightly-info.nix with the real hashes and version.
-          cat > nix/nightly-info.nix <<NIX_EOF
-          # Rolling nightly channel pointer — auto-generated by .github/workflows/nightly.yml.
-          #
-          # This file lives on the \`nightly\` git ref. The hashes and version below
-          # match the artifacts published in the current rolling nightly release.
-          # This file is NOT present on \`main\` with real hashes — always consume via
-          # the \`nightly\` ref:
-          #
-          #   nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
-          #
-          # From-source nightly (no hash needed):
-          #
-          #   nix run github:0xErwin1/dbflux/nightly#dbflux-source
-          {
-            version = "${NIGHTLY_VERSION}";
-
-            artifacts = {
-              "x86_64-linux" = {
-                url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/dbflux-linux-amd64.tar.gz";
-                hash = "${HASH_AMD64}";
-              };
-              "aarch64-linux" = {
-                url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/dbflux-linux-arm64.tar.gz";
-                hash = "${HASH_ARM64}";
-              };
-            };
-          }
-          NIX_EOF
-
-          # Commit the pinned info file on top of the current main HEAD.
-          # This commit is NOT pushed to main — it becomes the target of the
-          # nightly tag. Pushing the tag carries the dangling commit object.
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          git add nix/nightly-info.nix
-          git commit -m "chore(nightly): pin nix/nightly-info.nix ${SHORT_SHA}"
-
-          # Force-move the nightly tag to the pin commit and push.
-          # The tag push is sufficient to make the commit reachable on the remote.
-          PIN_COMMIT=$(git rev-parse HEAD)
-          git tag -f nightly "${PIN_COMMIT}"
-          git push origin nightly --force
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prune existing nightly release assets
-        run: |
-          set -euo pipefail
-
-          # The rolling `nightly` release keeps the same tag forever. Some asset
-          # filenames include package versions, so updating the release can leave
-          # old nightly binaries attached unless we explicitly clear them first.
-          RELEASE_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" 2>/dev/null || true)
-          if [ -z "$RELEASE_JSON" ]; then
-            echo "No existing nightly release found; nothing to prune."
-            exit 0
-          fi
-
-          ASSET_IDS=$(jq -r '.assets[].id' <<<"$RELEASE_JSON")
-          if [ -z "$ASSET_IDS" ]; then
-            echo "Existing nightly release has no assets to prune."
-            exit 0
-          fi
-
-          while IFS= read -r ASSET_ID; do
-            [ -n "$ASSET_ID" ] || continue
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}"
-          done <<<"$ASSET_IDS"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Publish rolling nightly release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
@@ -303,6 +347,14 @@ jobs:
           name: DBFlux Nightly
           body_path: release_body.md
           prerelease: true
+          # Upload before replacing: assets are not cleared first. Rolling
+          # names are replaced one file at a time (the action deletes that one
+          # asset, then uploads its replacement), so a failure mid-step can
+          # leave a single rolling asset missing until the next run; the
+          # per-build assets that Nix pins are new names and are never
+          # replaced. Per-build assets (tarballs and the version-named .deb and
+          # .rpm packages) accumulate and are pruned in the last step.
+          overwrite_files: true
           files: |
             artifacts/linux-*/*.tar.gz
             artifacts/linux-*/*.tar.gz.sha256
@@ -341,12 +393,143 @@ jobs:
             artifacts/windows-*/*.zip
             artifacts/windows-*/*-setup.exe
 
+      # Last, so the tag only moves once the build is published: if anything
+      # above fails, the tag still points at the previous nightly, the guard
+      # sees new commits and the next scheduled run retries.
+      #
+      # The tag points at a pin commit on top of this build's main commit
+      # that rewrites nix/nightly-info.nix with the published tarballs' hashes,
+      # so `github:0xErwin1/dbflux/nightly#dbflux-nightly` fetches them. The
+      # pin commit is never pushed to main; pushing the tag carries it.
+      - name: Pin nix/nightly-info.nix and move nightly tag
+        env:
+          NIGHTLY_VERSION: ${{ needs.compute-version.outputs.version }}
+          SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
+          BUILD_ID: ${{ needs.compute-version.outputs.date }}-${{ needs.compute-version.outputs.short_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          BUILD_AMD64="dbflux-linux-amd64-${BUILD_ID}"
+          BUILD_ARM64="dbflux-linux-arm64-${BUILD_ID}"
+
+          # SRI hashes of the per-build tarballs, without requiring nix.
+          # openssl and base64 are both available on ubuntu-latest.
+          HASH_AMD64="sha256-$(openssl dgst -sha256 -binary \
+            "artifacts/linux-amd64/${BUILD_AMD64}.tar.gz" | base64 -w0)"
+          HASH_ARM64="sha256-$(openssl dgst -sha256 -binary \
+            "artifacts/linux-arm64/${BUILD_ARM64}.tar.gz" | base64 -w0)"
+
+          # Regenerate nix/nightly-info.nix with the real hashes and version.
+          cat > nix/nightly-info.nix <<NIX_EOF
+          # Rolling nightly channel pointer — auto-generated by .github/workflows/nightly.yml.
+          #
+          # This file lives on the \`nightly\` git ref. Each URL names this build's
+          # immutable per-build asset, so the hash and version below always match
+          # it, even after later nightlies replace the rolling tarballs.
+          # This file is NOT present on \`main\` with real hashes — always consume via
+          # the \`nightly\` ref:
+          #
+          #   nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
+          #
+          # From-source nightly (no hash needed):
+          #
+          #   nix run github:0xErwin1/dbflux/nightly#dbflux-source
+          {
+            version = "${NIGHTLY_VERSION}";
+
+            artifacts = {
+              "x86_64-linux" = {
+                url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/${BUILD_AMD64}.tar.gz";
+                hash = "${HASH_AMD64}";
+              };
+              "aarch64-linux" = {
+                url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/${BUILD_ARM64}.tar.gz";
+                hash = "${HASH_ARM64}";
+              };
+            };
+          }
+          NIX_EOF
+
+          # Commit the pinned info file on top of the current main HEAD.
+          # This commit is NOT pushed to main — it becomes the target of the
+          # nightly tag. Pushing the tag carries the dangling commit object.
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add nix/nightly-info.nix
+          git commit -m "chore(nightly): pin nix/nightly-info.nix ${SHORT_SHA}"
+
+          # Force-move the nightly tag to the pin commit and push.
+          git tag -f nightly HEAD
+          git push origin refs/tags/nightly --force
+
+      # After the new pin is on the remote: keep the most recent KEEP_BUILDS
+      # builds per Linux platform (by tarball upload time) and drop the older
+      # per-build assets: the per-build tarball, its .sha256 and .asc, and the
+      # version-named .deb and .rpm packages of the same build. Retention is by
+      # count, not by the date in the name, so a nightly superseded after a long
+      # idle period on main still stays fetchable for the next KEEP_BUILDS
+      # builds. The current build is never deleted, rolling names and the
+      # macOS and Windows assets are left alone, and a failure here leaves
+      # extra assets rather than a broken nightly.
+      - name: Prune old per-build assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
+          BUILD_ID: ${{ needs.compute-version.outputs.date }}-${{ needs.compute-version.outputs.short_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          KEEP_BUILDS: '14'
+        run: |
+          set -euo pipefail
+          RELEASE_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly")
+          # A tarball belongs to one build: its name ends in the build id
+          # (<date>-<sha>-<run id>-<attempt>), so two builds of the same commit
+          # count as two builds. The .deb and .rpm packages carry only the short
+          # sha in their version (`-nightly+<sha>`, which GitHub may rewrite to
+          # `-nightly.<sha>` in the asset name) and are shared by every build of
+          # that commit, so they are kept while any kept build has that sha.
+          prune() {
+            local ARCH="$1" PACKAGE_ARCH_RE="$2"
+            local TARBALL_RE="^dbflux-linux-${ARCH}-([0-9]{4}-[0-9]{2}-[0-9]{2}-([0-9a-f]+)-[0-9]+-[0-9]+)\.tar\.gz(\.sha256|\.asc)?$"
+            local PACKAGE_RE="-nightly[.+]([0-9a-f]+)[_.-].*${PACKAGE_ARCH_RE}\.(deb|rpm)(\.asc)?$"
+            local KEEP_IDS=("$BUILD_ID") KEEP_SHAS=("$SHORT_SHA") NAME ID
+            # Newest upload first.
+            while read -r NAME; do
+              if [[ "$NAME" =~ $TARBALL_RE ]]; then
+                KEEP_IDS+=("${BASH_REMATCH[1]}")
+                KEEP_SHAS+=("${BASH_REMATCH[2]}")
+              fi
+            done < <(
+              jq -r '.assets | sort_by(.created_at) | reverse | .[].name' <<<"$RELEASE_JSON" |
+              grep -E "^dbflux-linux-${ARCH}-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]+-[0-9]+-[0-9]+\.tar\.gz$" |
+              head -n "$KEEP_BUILDS"
+            )
+            while read -r ID NAME; do
+              local KEY="" K
+              local -a KEPT_SET=()
+              if [[ "$NAME" =~ $TARBALL_RE ]]; then
+                KEY="${BASH_REMATCH[1]}"
+                KEPT_SET=("${KEEP_IDS[@]}")
+              elif [[ "$NAME" =~ $PACKAGE_RE ]]; then
+                KEY="${BASH_REMATCH[1]}"
+                KEPT_SET=("${KEEP_SHAS[@]}")
+              else
+                continue
+              fi
+              local KEPT=false
+              for K in "${KEPT_SET[@]}"; do [[ "$KEY" == "$K" ]] && KEPT=true && break; done
+              if [[ "$KEPT" == false ]]; then
+                echo "Deleting $NAME (beyond the newest ${KEEP_BUILDS} ${ARCH} builds)"
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${ID}"
+              fi
+            done < <(jq -r '.assets[] | "\(.id) \(.name)"' <<<"$RELEASE_JSON")
+          }
+          prune amd64 '(amd64|x86_64)'
+          prune arm64 '(arm64|aarch64)'
+
   # Registers this nightly build so the collector admits its events. Nightly
   # releases cannot be seeded from their tags: the rolling release carries no
   # version, only the build knows one, so each nightly registers itself.
   telemetry-admission:
     name: Register the nightly build with the collector
-    needs: [compute-version, release]
+    needs: [guard, compute-version, release]
     if: needs.guard.outputs.proceed == 'true' && vars.DBFLUX_TELEMETRY_ADMIN_URL != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10

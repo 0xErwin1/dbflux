@@ -8,7 +8,7 @@
 # Downloads the crate, keeps the parts the patches need, re-applies
 # element-transform.patch, frame-observer.patch, subscription-drop-log.patch,
 # text-input-automation.patch, read-only-accessibility.patch, letter-spacing.patch and
-# keyboard-dispatch.patch in
+# keyboard-dispatch.patch and external-drop-acceptance.patch in
 # that order and leaves
 # .rej files for hunks that no longer apply. See VENDOR.md for what to check afterwards.
 
@@ -75,6 +75,7 @@ patches=(
     read-only-accessibility.patch
     letter-spacing.patch
     keyboard-dispatch.patch
+    external-drop-acceptance.patch
 )
 
 cd "$repo_root"

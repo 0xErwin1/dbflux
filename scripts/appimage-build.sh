@@ -25,7 +25,7 @@ apt-get install -y --no-install-recommends \
 # Use the repository-pinned Rust toolchain, with a distinct Jammy artifact cache.
 export PATH="${CARGO_HOME}/bin:$PATH"
 rustup target add "$build_target"
-cargo build --release --features "$FEATURES" --target "$build_target"
+cargo build --release --locked --features "$FEATURES" --target "$build_target"
 mkdir -p AppDir/usr/bin
 cp "target/$build_target/release/dbflux" AppDir/usr/bin/dbflux
 bash scripts/appimage-libraries.sh bundle AppDir
