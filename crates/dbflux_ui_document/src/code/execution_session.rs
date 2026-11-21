@@ -306,6 +306,7 @@ mod tests {
         /// enforces `QueryRequest::limit` instead of refusing a request that
         /// carries one.
         enforces_row_limit: bool,
+        show_time_window: AtomicBool,
     }
 
     impl FakeConnection {
@@ -320,6 +321,7 @@ mod tests {
                 execute_gate: None,
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: true,
+                show_time_window: AtomicBool::new(false),
             })
         }
 
@@ -340,6 +342,7 @@ mod tests {
                 execute_gate: None,
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: false,
+                show_time_window: AtomicBool::new(false),
             })
         }
 
@@ -354,6 +357,7 @@ mod tests {
                 execute_gate,
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: true,
+                show_time_window: AtomicBool::new(false),
             })
         }
     }
@@ -385,8 +389,29 @@ mod tests {
                     dbflux_core::QueryLanguage::Sql,
                 )
                 .capabilities(capabilities)
+                // Unattended refresh runs only on a connection that enforces
+                // read-only execution.
+                .transactions(dbflux_core::TransactionCapabilities {
+                    supports_read_only: true,
+                    ..Default::default()
+                })
                 .build()
             })
+        }
+
+        fn source_context_spec(&self) -> Option<dbflux_core::SourceContextSpec> {
+            self.show_time_window
+                .load(Ordering::SeqCst)
+                .then(|| dbflux_core::SourceContextSpec {
+                    targets_label: String::new(),
+                    targets_placeholder: String::new(),
+                    default_target: None,
+                    start_label: "Start".into(),
+                    end_label: "End".into(),
+                    query_mode_label: None,
+                    query_modes: Vec::new(),
+                    default_query_mode: None,
+                })
         }
 
         fn ping(&self) -> Result<(), DbError> {
@@ -888,9 +913,41 @@ mod tests {
         assert_eq!(root.queries.load(Ordering::SeqCst), 1);
     }
 
+    #[cfg(feature = "telemetry")]
+    fn enable_usage(app: &mut AppStateEntity) {
+        app.initialize_telemetry(
+            dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
+                .expect("config without transport"),
+            chrono::Utc::now(),
+        )
+        .expect("scheduler");
+        let scheduler = app.telemetry_mut().expect("scheduler");
+        scheduler
+            .set_basic(true, chrono::Utc::now())
+            .expect("basic");
+        scheduler
+            .disclosure_dismissed(chrono::Utc::now())
+            .expect("disclosure");
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn usage_counts(app: &mut AppStateEntity) -> serde_json::Value {
+        let scheduler = app.telemetry_mut().expect("scheduler");
+        let _preparation = scheduler
+            .prepare(chrono::Utc::now(), "en")
+            .expect("prepare without I/O");
+        serde_json::to_value(scheduler.state()).expect("state")["counters"].clone()
+    }
+
     #[gpui::test]
     fn real_run_query_reuses_session_after_result_processing(cx: &mut gpui::TestAppContext) {
         let app_state = initialized_app_state(cx);
+        #[cfg(feature = "telemetry")]
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                enable_usage(app);
+            });
+        });
         let (root, factory, isolated) = factory_backed_root();
         let profile_id = add_test_profile(cx, &app_state, root);
         let document = Rc::new(RefCell::new(None));
@@ -938,6 +995,50 @@ mod tests {
         assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
         assert_eq!(isolated.queries.load(Ordering::SeqCst), 2);
         assert_eq!(factory.session.closes.load(Ordering::SeqCst), 0);
+        #[cfg(feature = "telemetry")]
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert_eq!(usage_counts(app)["query_run"], 2);
+            });
+        });
+
+        #[cfg(feature = "telemetry")]
+        {
+            let queries_before_refresh = isolated.queries.load(Ordering::SeqCst);
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| {
+                    document.pending.auto_refresh = true;
+                    document.process_pending_auto_refresh(window, cx);
+                });
+            });
+            window.run_until_parked();
+            window.run_until_parked();
+            assert_eq!(
+                isolated.queries.load(Ordering::SeqCst),
+                queries_before_refresh + 1,
+                "the automatic refresh must reach the isolated driver as a read"
+            );
+            assert!(window.update(|_, cx| document.read(cx).execution.active_query_task.is_none()));
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    assert_eq!(
+                        usage_counts(app)["query_run"],
+                        2,
+                        "automatic completion must not count"
+                    );
+                })
+            });
+            window.update(|window, cx| {
+                document.update(cx, |doc, cx| doc.run_statement(0..8, window, cx));
+            });
+            window.run_until_parked();
+            window.run_until_parked();
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    assert_eq!(usage_counts(app)["query_run"], 3, "manual gutter counts");
+                })
+            });
+        }
 
         let (replacement_root, replacement_factory, replacement_isolated) = factory_backed_root();
         window.update(|_, cx| {
@@ -971,6 +1072,8 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let app_state = initialized_app_state(cx);
+        #[cfg(feature = "telemetry")]
+        cx.update(|cx| app_state.update(cx, |app, _| enable_usage(app)));
         let execute_gate = Arc::new(ExecuteGate {
             entered: AtomicBool::new(false),
         });
@@ -1073,6 +1176,12 @@ mod tests {
         assert_eq!(isolated.queries.load(Ordering::SeqCst), 1);
         assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
         assert_eq!(session.closes.load(Ordering::SeqCst), 1);
+        #[cfg(feature = "telemetry")]
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                assert!(usage_counts(app).get("query_run").is_none());
+            })
+        });
         assert!(window.update(|_, cx| {
             let document = document.read(cx);
             let record = document

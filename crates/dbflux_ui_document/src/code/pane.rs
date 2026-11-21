@@ -614,6 +614,7 @@ mod tests {
                 document.focus(window, cx);
                 document.ask_dangerous_query_confirm(
                     PendingDangerousQuery {
+                        origin: crate::code::ExecutionOrigin::User,
                         query: "DELETE FROM orders".to_string(),
                         kind: DangerousQueryKind::DeleteNoWhere,
                         in_new_tab: false,

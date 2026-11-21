@@ -2,6 +2,7 @@ use crate::tokens::SettingsMetrics;
 use dbflux_components::components::tree_nav::FlatRow;
 use dbflux_components::composites::{Island, ListRow};
 use dbflux_components::controls::{Button, Input};
+use dbflux_components::modals::{ConfirmOutcome, ConfirmRequest, ModalVariant};
 use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
 use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, IslandMetrics, ShellMetrics};
 use dbflux_ui_base::keymap::{RunCommand, run_command};
@@ -9,7 +10,6 @@ use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use gpui_component::scroll::ScrollableElement;
 
 use super::{
@@ -244,6 +244,18 @@ impl Render for SettingsCoordinator {
             });
         }
 
+        // The discard confirmation resolved while it was open; run the
+        // transition here where a `Window` is available (the outcome
+        // subscription that recorded it has none).
+        if let Some(outcome) = self.pending_section_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_section_transition(_window, cx),
+                ConfirmOutcome::Cancelled => self.cancel_section_transition(cx),
+            }
+        }
+
+        self.open_pending_section_confirm(cx);
+
         let _ = self.app_state.read(cx);
 
         let csd_title_bar = platform::render_csd_title_bar(
@@ -296,33 +308,8 @@ impl Render for SettingsCoordinator {
             )
             // Settings status footer
             .child(self.render_settings_footer(_window, cx))
-            .when_some(self.pending_section_confirm, |element, target_section| {
-                let confirm_entity = cx.entity().clone();
-                let cancel_entity = confirm_entity.clone();
-                let section_name = Self::section_display_name(target_section);
-
-                element.child(
-                    Dialog::new(cx)
-                        .title(dbflux_i18n::t!("settings.discard.title"))
-                        .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
-                        .close_button(false)
-                        .on_ok(move |_, window, cx| {
-                            confirm_entity.update(cx, |this, cx| {
-                                this.confirm_section_transition(window, cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            cancel_entity.update(cx, |this, cx| {
-                                this.cancel_section_transition(cx);
-                            });
-                            true
-                        })
-                        .child(Text::body(crate::labels::settings_discard_body(
-                            &section_name,
-                        ))),
-                )
+            .when(self.section_confirm.read(cx).is_visible(), |root| {
+                root.child(self.section_confirm.clone())
             })
             .when(self.export_modal.read(cx).is_visible(), |root| {
                 root.child(self.export_modal.clone())
@@ -330,6 +317,34 @@ impl Render for SettingsCoordinator {
             .when(self.import_visible, |root| {
                 root.child(self.import_panel.clone())
             })
+    }
+}
+
+impl SettingsCoordinator {
+    /// Opens the shared discard confirmation for a pending section switch;
+    /// re-opening only when the request changed keeps later renders of the
+    /// same pending switch from stealing focus back.
+    fn open_pending_section_confirm(&mut self, cx: &mut Context<Self>) {
+        let Some(target_section) = self.pending_section_confirm else {
+            return;
+        };
+        let section_name = Self::section_display_name(target_section);
+        let body = crate::labels::settings_discard_body(&section_name);
+        let needs_open = !self.section_confirm.read(cx).is_visible()
+            || self.section_confirm.read(cx).current_body() != Some(body.as_str());
+        if needs_open {
+            self.section_confirm.update(cx, |confirm, cx| {
+                confirm.open(
+                    ConfirmRequest {
+                        title: dbflux_i18n::t!("settings.discard.title"),
+                        body,
+                        variant: ModalVariant::Default,
+                        confirm_label: dbflux_i18n::t!("settings.discard.confirm"),
+                    },
+                    cx,
+                );
+            });
+        }
     }
 }
 
@@ -518,3 +533,6 @@ mod section_title_i18n_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod discard_confirm_tests;

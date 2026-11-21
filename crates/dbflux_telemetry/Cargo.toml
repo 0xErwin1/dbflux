@@ -1,0 +1,30 @@
+[package]
+name = "dbflux_telemetry"
+publish = false
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Bounded telemetry protocol and pure scheduling state for DBFlux"
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+semver.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Test-only TLS server surface; production code never links rustls directly.
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+] }

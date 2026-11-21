@@ -38,6 +38,7 @@ use about_section::AboutSection;
 use audit_section::AuditSection;
 use auth_profiles_section::AuthProfilesSection;
 use dbflux_components::components::tree_nav::TreeNav;
+use dbflux_components::modals::{ConfirmOutcome, ModalConfirm};
 use dbflux_ui_base::AppStateEntity;
 use drivers_section::DriversSection;
 use general_section::GeneralSection;
@@ -479,6 +480,12 @@ pub struct SettingsCoordinator {
     active_section_entity: ActiveSettingsSection,
     active_section_view: AnyView,
     pending_section_confirm: Option<SettingsSectionId>,
+    /// Shared confirmation modal; currently hosts the section-switch discard
+    /// confirmation rendered by `render`.
+    section_confirm: Entity<ModalConfirm>,
+    /// Outcome of `section_confirm`, drained in `render` where a `Window` is
+    /// available (the subscription that records it has none).
+    pending_section_confirm_resolution: Option<ConfirmOutcome>,
     pending_focus_return: bool,
     sidebar_width: Pixels,
     /// Set once the user drags the navigation; until then its width follows

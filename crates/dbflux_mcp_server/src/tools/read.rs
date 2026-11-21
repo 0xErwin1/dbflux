@@ -918,6 +918,8 @@ impl DbFluxServer {
         result: &QueryResult,
         columns: Option<&[String]>,
     ) -> Result<serde_json::Value, String> {
+        #[cfg(feature = "telemetry")]
+        crate::helper::observe_query_result(result);
         let Some(columns) = columns else {
             return Ok(serialize_query_result(result));
         };
@@ -1140,6 +1142,66 @@ impl DbFluxServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn telemetry_projected_select_observes_hidden_result_set_failure() {
+        use crate::{
+            governance::tests::{create_test_state, with_usage_owner},
+            telemetry_usage::scope_call,
+        };
+        let (results, finishes, counts, leases) =
+            with_usage_owner(create_test_state(), |middleware| async move {
+                let mut results = Vec::new();
+                for failure in [true, false] {
+                    let mut query = QueryResult::empty();
+                    query.columns.push(dbflux_core::ColumnMeta {
+                        name: "id".into(),
+                        type_name: "integer".into(),
+                        kind: dbflux_core::ColumnKind::Integer,
+                        nullable: false,
+                        is_primary_key: false,
+                    });
+                    query.rows.push(vec![dbflux_core::Value::Int(1)]);
+                    let mut earlier = QueryResult::empty();
+                    earlier.metadata_extra = Some(std::collections::HashMap::from([(
+                        if failure {
+                            "script_failure"
+                        } else {
+                            "rows_truncated"
+                        }
+                        .into(),
+                        serde_json::json!(true),
+                    )]));
+                    query.push_additional_result(earlier);
+                    let result = scope_call(middleware.authorize_and_execute(
+                        "select_data",
+                        None,
+                        dbflux_policy::ExecutionClassification::Read,
+                        || async {
+                            let json = DbFluxServer::serialize_selected_result(
+                                &query,
+                                Some(&["id".into()]),
+                            )
+                            .map_err(|error| rmcp::ErrorData::internal_error(error, None))?;
+                            Ok(CallToolResult::success(vec![to_json_content(&json)?]))
+                        },
+                    ))
+                    .await
+                    .expect("projected operation");
+                    results.push(result);
+                }
+                results
+            })
+            .await;
+        assert_eq!(
+            serde_json::to_value(&results[0]).expect("response"),
+            serde_json::to_value(&results[1]).expect("response")
+        );
+        assert_eq!(finishes, [false, true]);
+        assert_eq!(counts, [0, 0, 0, 0, 1, 0]);
+        assert_eq!(leases, 0);
+    }
 
     use dbflux_core::{
         DbError, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadata,

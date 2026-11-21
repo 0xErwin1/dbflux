@@ -1787,11 +1787,23 @@ impl DbFluxServer {
         F: FnOnce(Arc<dyn Connection>) -> Result<T, String> + Send + 'static,
         T: Send + 'static,
     {
+        #[cfg(feature = "telemetry")]
+        let evidence = crate::telemetry_usage::OPERATION
+            .try_with(Clone::clone)
+            .ok()
+            .flatten();
         tokio::task::spawn_blocking(move || {
-            let mut scope = dbflux_core::ExecutionSessionScope::new(connection)
-                .map_err(|error| error.to_string())?;
-            let result = f(scope.connection()).map_err(dbflux_core::DbError::query_failed);
-            scope.finish(result).map_err(|error| error.to_string())
+            let execute = || {
+                let mut scope = dbflux_core::ExecutionSessionScope::new(connection)
+                    .map_err(|error| error.to_string())?;
+                let result = f(scope.connection()).map_err(dbflux_core::DbError::query_failed);
+                scope.finish(result).map_err(|error| error.to_string())
+            };
+            // Propagate only this explicitly awaited operation, not arbitrary child tasks.
+            #[cfg(feature = "telemetry")]
+            return crate::telemetry_usage::OPERATION.sync_scope(evidence, execute);
+            #[cfg(not(feature = "telemetry"))]
+            execute()
         })
         .await
         .map_err(|e| format!("Blocking task failed: {}", e))?
@@ -2222,9 +2234,11 @@ impl ServerHandler for DbFluxServer {
         let arguments = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
         let tool_call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
 
-        crate::governance::TOOL_CALL_ARGUMENTS
-            .scope(arguments, self.tool_router.call(tool_call))
-            .await
+        let call = crate::governance::TOOL_CALL_ARGUMENTS
+            .scope(arguments, self.tool_router.call(tool_call));
+        #[cfg(feature = "telemetry")]
+        let call = crate::telemetry_usage::scope_call(call);
+        call.await
     }
 
     fn get_info(&self) -> ServerInfo {

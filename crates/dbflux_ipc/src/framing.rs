@@ -39,10 +39,89 @@ pub fn recv_msg<R: Read, T: DeserializeOwned>(mut reader: R) -> io::Result<T> {
     postcard::from_bytes(&buf).map_err(io::Error::other)
 }
 
+/// Closed app-control telemetry messages need much less than the generic IPC cap.
+#[cfg(feature = "telemetry")]
+pub const TELEMETRY_FRAME_CAP: usize = 4096;
+
+#[cfg(feature = "telemetry")]
+pub async fn send_telemetry_msg<W: tokio::io::AsyncWrite + Unpin, T: Serialize>(
+    writer: &mut W,
+    message: &T,
+) -> io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    // A fixed serialization buffer also bounds outgoing allocation.
+    let mut buffer = [0; TELEMETRY_FRAME_CAP];
+    let bytes = postcard::to_slice(message, &mut buffer)
+        .map_err(|_| io::Error::other("invalid telemetry frame"))?;
+    writer
+        .write_all(&(bytes.len() as u32).to_le_bytes())
+        .await?;
+    writer.write_all(bytes).await?;
+    writer.flush().await
+}
+
+#[cfg(feature = "telemetry")]
+pub async fn recv_telemetry_msg<R: tokio::io::AsyncRead + Unpin, T: DeserializeOwned>(
+    reader: &mut R,
+) -> io::Result<T> {
+    use tokio::io::AsyncReadExt;
+    let mut header = [0; 4];
+    reader.read_exact(&mut header).await?;
+    let length = u32::from_le_bytes(header) as usize;
+    if length > TELEMETRY_FRAME_CAP {
+        return Err(io::Error::other("telemetry frame too large"));
+    }
+    let mut buffer = [0; TELEMETRY_FRAME_CAP];
+    let frame = buffer
+        .get_mut(..length)
+        .ok_or_else(|| io::Error::other("telemetry frame too large"))?;
+    reader.read_exact(frame).await?;
+    postcard::from_bytes(frame).map_err(|_| io::Error::other("invalid telemetry frame"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn bounded_async_framing_roundtrip_and_rejections() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let mut encoded = Vec::new();
+            send_telemetry_msg(&mut encoded, &42u8).await.unwrap();
+            assert_eq!(encoded, vec![1, 0, 0, 0, 42]);
+            assert_eq!(
+                recv_telemetry_msg::<_, u8>(&mut encoded.as_slice())
+                    .await
+                    .unwrap(),
+                42
+            );
+            // One byte over the cap, header only: the size check must refuse it
+            // before any body read, which would otherwise end in UnexpectedEof.
+            let too_large = recv_telemetry_msg::<_, bool>(&mut [1u8, 16, 0, 0].as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(too_large.kind(), io::ErrorKind::Other);
+            assert_eq!(too_large.to_string(), "telemetry frame too large");
+
+            let truncated = recv_telemetry_msg::<_, bool>(&mut [1u8, 0, 0, 0].as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(truncated.kind(), io::ErrorKind::UnexpectedEof);
+
+            let invalid = recv_telemetry_msg::<_, bool>(&mut [1u8, 0, 0, 0, 255].as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(invalid.to_string(), "invalid telemetry frame");
+            let oversized = vec![0u8; TELEMETRY_FRAME_CAP];
+            assert!(
+                send_telemetry_msg(&mut Vec::new(), &oversized)
+                    .await
+                    .is_err()
+            );
+        });
+    }
 
     #[test]
     fn recv_msg_short_body_returns_unexpected_eof() {

@@ -321,6 +321,17 @@ impl DataGridPanel {
             MutationPolicy::Allowed => {}
         }
 
+        #[cfg(feature = "telemetry")]
+        let usage = self.capture_builder_usage(cx).and_then(|mut usage| {
+            let owner = self.builder.builder_panel.as_ref()?.downgrade();
+            usage.mutation = Some(BuilderMutationUsage {
+                spec: spec.clone(),
+                draft: self.builder.builder_draft_spec.clone(),
+                owner,
+            });
+            Some(usage)
+        });
+
         let sql_preview = connection
             .query_generator()
             .and_then(|qgen| {
@@ -362,6 +373,8 @@ impl DataGridPanel {
         );
 
         self.pending_mutation_exec = Some(PendingMutationExec {
+            #[cfg(feature = "telemetry")]
+            usage,
             spec,
             opts,
             profile_id,
@@ -461,6 +474,10 @@ impl DataGridPanel {
             policy,
         };
 
+        #[cfg(feature = "telemetry")]
+        let usage = pending
+            .usage
+            .filter(|usage| self.builder_usage_is_current(usage, cx));
         let spec = pending.spec;
         let mut opts = pending.opts;
         let intent = pending.intent;
@@ -582,12 +599,16 @@ impl DataGridPanel {
         );
 
         let run = MutationRun {
+            #[cfg(feature = "telemetry")]
+            usage,
             task_id,
             mode,
             table_name,
             intent,
         };
 
+        #[cfg(feature = "telemetry")]
+        let usage_cancel = cancel_handle.clone();
         cx.spawn(async move |this, cx| {
             use crate::data_grid_panel::mutation_executor::MutationExecutor;
             use dbflux_ui_base::user_error::report_error_async;
@@ -595,22 +616,37 @@ impl DataGridPanel {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let executor = MutationExecutor::new(spec, opts, deps);
-                    match mode {
-                        crate::labels::VisualMutationTaskMode::Chunked => {
-                            let pk_refs: Vec<&str> =
-                                pk_columns.iter().map(String::as_str).collect();
-                            executor.run_chunked_tx(&pk_refs, &cancel_handle)
+                    let execute = move || {
+                        let executor = MutationExecutor::new(spec, opts, deps);
+                        match mode {
+                            crate::labels::VisualMutationTaskMode::Chunked => {
+                                let pk_refs: Vec<&str> =
+                                    pk_columns.iter().map(String::as_str).collect();
+                                executor.run_chunked_tx(&pk_refs, &cancel_handle)
+                            }
+                            crate::labels::VisualMutationTaskMode::Direct => {
+                                executor.run_direct(&cancel_handle)
+                            }
+                            crate::labels::VisualMutationTaskMode::SingleTransaction => {
+                                executor.run_single_tx(&cancel_handle)
+                            }
                         }
-                        crate::labels::VisualMutationTaskMode::Direct => {
-                            executor.run_direct(&cancel_handle)
-                        }
-                        crate::labels::VisualMutationTaskMode::SingleTransaction => {
-                            executor.run_single_tx(&cancel_handle)
-                        }
-                    }
+                    };
+                    #[cfg(all(test, feature = "telemetry"))]
+                    return super::tests::run_builder_fixture_worker(execute).await;
+                    #[cfg(not(all(test, feature = "telemetry")))]
+                    execute()
                 })
                 .await;
+
+            #[cfg(feature = "telemetry")]
+            let run = {
+                let mut run = run;
+                if usage_cancel.is_cancelled() {
+                    run.usage = None;
+                }
+                run
+            };
 
             // Raising the failure needs an `AsyncApp` and recording it needs the
             // entity, so the report travels back out instead of being raised here.
@@ -650,6 +686,8 @@ impl DataGridPanel {
         use dbflux_ui_base::user_error::{ErrorKind, UserFacingError};
 
         let MutationRun {
+            #[cfg(feature = "telemetry")]
+            usage,
             task_id,
             mode,
             table_name,
@@ -673,6 +711,8 @@ impl DataGridPanel {
                 (Some(failure_text(&text)), false)
             }
             Ok(MutationOutcome::Success { rows_affected }) => {
+                #[cfg(feature = "telemetry")]
+                self.record_builder_usage(usage, cx);
                 self.runner.complete_mutation(task_id, cx);
                 dbflux_ui_base::toast::Toast::success(
                     crate::labels::mutation_execution_completed_toast(rows_affected),

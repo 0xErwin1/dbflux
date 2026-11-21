@@ -53,7 +53,8 @@ workspace = true
 optional = true
 
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "redshift", "clickhouse", "turso", "duckdb", "s3", "aws_secrets", "lua", "aws", "mcp"]
+telemetry = ["dbflux_app/telemetry", "dbflux_ui/telemetry"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "redshift", "clickhouse", "turso", "duckdb", "s3", "aws_secrets", "lua", "aws", "mcp", "telemetry"]
 # dbflux_ui is driver-agnostic, so driver features only drive dbflux_app (which
 # registers the drivers and relays to the MCP server). The binary does not need
 # to declare driver/runtime crates as direct optional deps — `dbflux_app/<feat>`

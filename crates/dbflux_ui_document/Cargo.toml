@@ -44,6 +44,7 @@ dbflux_mcp = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }
 
 [features]
+telemetry = ["dbflux_app/telemetry"]
 default = []
 mcp = ["dbflux_mcp", "dbflux_policy", "dbflux_app/mcp", "dbflux_ui_base/mcp"]
 # `lua` and `aws` are passthroughs: no document code uses them directly, but they

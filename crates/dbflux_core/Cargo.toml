@@ -44,6 +44,7 @@ tracing-log = { workspace = true, optional = true }
 tracing-appender = { workspace = true, optional = true }
 
 [features]
+telemetry = []
 mcp = []
 tracing-bridge = [
     "dep:tracing",

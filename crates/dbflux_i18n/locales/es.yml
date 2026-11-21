@@ -172,6 +172,9 @@ components:
     compact: Compactar
     cancel: Cancelar
     save: Guardar
+  json_report_preview:
+    copy_raw: Copiar original
+    close: Cerrar
   value_source:
     literal: Literal
     env: Variable de entorno
@@ -4334,6 +4337,9 @@ modals:
     compact: Compactar
     cancel: Cancelar
     confirm: Importar
+  confirm:
+    cancel: Cancelar
+    confirm: Confirmar
   mutation_confirm:
     title: Confirmar mutación
     sample_unavailable: Vista previa de muestra no disponible
@@ -4580,6 +4586,7 @@ settings:
   discard:
     title: Descartar cambios sin guardar
     body: "Tienes cambios sin guardar. ¿Descartarlos y cambiar a %{section}?"
+    confirm: Descartar
   editor_panel:
     title:
       edit: "Editar %{noun}"
@@ -5624,7 +5631,7 @@ settings:
     general_group: General
     general: General
     keybindings: Atajos de teclado
-    updates: Actualizaciones
+    updates: Actualizaciones y privacidad
     audit: Auditoría
     about: Acerca de
     network: Red
@@ -6099,8 +6106,8 @@ workspace:
   default_object_type: Objeto
 updates:
   settings:
-    title: Actualizaciones
-    subtitle: Búsqueda de nuevas versiones y el registro de cambios tras actualizar.
+    title: Actualizaciones y privacidad
+    subtitle: Comprobación de nuevas versiones, el registro de cambios tras las actualizaciones y estadísticas de uso.
     group: Actualizaciones
     new_versions: Nuevas versiones
     check_on_startup: Buscar una nueva versión en GitHub al iniciar
@@ -6121,6 +6128,41 @@ updates:
     save: Guardar
     saved: Configuración de actualizaciones guardada.
     save_error: "No se pudo guardar la configuración de actualizaciones: %{error}"
+    usage_heading: Estadísticas de uso
+    usage_level: Nivel
+    level_off: "Apagado"
+    level_minimal: "Mínimo"
+    level_basic: "Básico"
+    level_hint: "Apagado no envía nada. Mínimo envía un aviso por compilación y un evento de actividad semanal. Básico, el valor predeterminado, reemplaza ese evento por un informe semanal de uso."
+    what_is_sent: Qué se envía
+    collected_build: "Compilación: versión, canal, sistema operativo, arquitectura"
+    collected_language: "Idioma del sistema y país, semanal"
+    collected_counts: "Recuentos de funciones (consultas, paneles, scripts, …)"
+    collected_header: Recopilado
+    collected_minimal: Mínimo
+    collected_basic: Básico
+    collected_yes: "✓"
+    collected_no: "—"
+    counts_not_instrumented: "Recuentos acotados de operaciones compatibles exitosas. Sin actualizaciones, fallos ni cancelaciones; cobertura MCP limitada. Ver Política de privacidad."
+    install_id: Id de instalación
+    install_id_hint: "Aleatorio y estable hasta que lo reinicies, seudónimo más que anónimo. No está ligado a ti ni a esta máquina. Reiniciarlo cancela los envíos pendientes y conserva las compilaciones confirmadas."
+    reset_install_id: Reiniciar id
+    reset_install_id_title: "¿Reiniciar el id de instalación?"
+    reset_install_id_body: "Un nuevo id aleatorio reemplaza al actual. Los envíos pendientes se cancelan y las compilaciones confirmadas siguen confirmadas."
+    reports: Informes
+    no_report_sent_yet: Todavía no se envió ningún informe
+    checking_last_report: Buscando el último informe…
+    delivery_unavailable: "El envío no está disponible: no hay un destino configurado."
+    report_load_failed: No se pudo cargar el último informe.
+    last_sent: "Último envío %{when} · %{level} · %{size}"
+    level_off_display: apagado
+    level_minimal_display: mínimo
+    level_basic_display: básico
+    view_report: Ver el último informe
+    open_in_audit: Abrir en auditoría
+    reports_audit_note: "Cada informe queda registrado en Auditoría: cuándo se envió, el nivel y el contenido completo."
+    telemetry_save_failed: No se pudo guardar la configuración de telemetría.
+    telemetry_reset_failed: No se pudo reiniciar el id de instalación.
   ago:
     just_now: ahora mismo
     minutes: "hace %{count} min"
@@ -6158,13 +6200,23 @@ updates:
   welcome:
     title: Te damos la bienvenida a DBFlux
     tagline: Un cliente pensado para el teclado para SQL, documentos, clave-valor, series temporales y almacenamiento de objetos.
+    telemetry_save_failed: No se pudo guardar la confirmación del aviso de telemetría.
+    telemetry_heading: Estadísticas de uso
+    telemetry_helper: "Ayuda al desarrollo. Básico es el nivel por defecto."
+    telemetry_off: "Apagado"
+    telemetry_off_description: "No se envía nada."
+    telemetry_minimal: "Mínimo"
+    telemetry_minimal_description: "Aviso por build y semanal: versión, SO, arq., ID aleatorio."
+    telemetry_basic: "Básico"
+    telemetry_basic_description: "Mínimo más informe semanal: idioma, país y conteos de uso."
+    telemetry_privacy: "ID seudónimo aleatorio. Nunca consultas, resultados, credenciales, rutas ni metadatos de conexión. Informes completos en Audit local. No se envía nada hasta que eliges Empezar."
     whats_new: Novedades
     updates: Actualizaciones
     notify: Avisarme cuando salga una nueva versión
     notify_hint: Al iniciar, DBFlux le pregunta a GitHub por la última versión. No se envía nada sobre ti.
     show_whats_new: Mostrar las novedades después de cada actualización
     show_whats_new_hint: Abre este registro de cambios una vez, la primera vez que inicia una versión nueva.
-    change_later: Puedes cambiar esto después en Configuración › Actualizaciones
+    change_later: "Puede cambiarse después en Ajustes › Actualizaciones y privacidad"
     get_started: Empezar
     full_changelog: Registro de cambios completo
 notifications:

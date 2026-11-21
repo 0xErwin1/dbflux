@@ -172,6 +172,9 @@ components:
     compact: Compact
     cancel: Cancel
     save: Save
+  json_report_preview:
+    copy_raw: Copy raw
+    close: Close
   value_source:
     literal: Literal
     env: Environment Variable
@@ -4334,6 +4337,9 @@ modals:
     compact: Compact
     cancel: Cancel
     confirm: Import
+  confirm:
+    cancel: Cancel
+    confirm: Confirm
   mutation_confirm:
     title: Confirm mutation
     sample_unavailable: Sample preview unavailable
@@ -4580,6 +4586,7 @@ settings:
   discard:
     title: Discard Unsaved Changes
     body: "You have unsaved changes. Discard them and switch to %{section}?"
+    confirm: Discard
   editor_panel:
     title:
       edit: "Edit %{noun}"
@@ -5624,7 +5631,7 @@ settings:
     general_group: General
     general: General
     keybindings: Keybindings
-    updates: Updates
+    updates: Updates & privacy
     audit: Audit
     about: About
     network: Network
@@ -6099,8 +6106,8 @@ workspace:
   default_object_type: Object
 updates:
   settings:
-    title: Updates
-    subtitle: New version checks and the changelog after updates.
+    title: Updates & privacy
+    subtitle: New version checks, the changelog after updates, and usage statistics.
     group: Updates
     new_versions: New versions
     check_on_startup: Check GitHub for a new release at startup
@@ -6121,6 +6128,41 @@ updates:
     save: Save
     saved: Update settings saved.
     save_error: "Could not save the update settings: %{error}"
+    usage_heading: Usage statistics
+    usage_level: Level
+    level_off: "Off"
+    level_minimal: "Minimal"
+    level_basic: "Basic"
+    level_hint: "Off sends nothing. Minimal sends one ping per build and a weekly activity event. Basic, the default, replaces that event with a weekly usage report."
+    what_is_sent: What is sent
+    collected_build: "Build: version, channel, OS, architecture"
+    collected_language: "System language and country, weekly"
+    collected_counts: "Feature counts (queries, dashboards, scripts, …)"
+    collected_header: Collected
+    collected_minimal: Minimal
+    collected_basic: Basic
+    collected_yes: "✓"
+    collected_no: "—"
+    counts_not_instrumented: "Bounded counts of supported successful operations. No refreshes, failures or cancellations; MCP coverage is limited. See Privacy policy."
+    install_id: Install id
+    install_id_hint: "Random and stable until you reset it, pseudonymous rather than anonymous. Not tied to you or this machine. Resetting cancels pending sends and keeps acknowledged builds."
+    reset_install_id: Reset id
+    reset_install_id_title: Reset the installation id?
+    reset_install_id_body: "A new random id replaces the current one. Pending sends are cancelled and acknowledged builds stay acknowledged."
+    reports: Reports
+    no_report_sent_yet: No report sent yet
+    checking_last_report: Checking for the last report…
+    delivery_unavailable: "Delivery is unavailable: no endpoint is configured."
+    report_load_failed: Could not load the last report.
+    last_sent: "Last sent %{when} · %{level} · %{size}"
+    level_off_display: "off"
+    level_minimal_display: minimal
+    level_basic_display: basic
+    view_report: View last report
+    open_in_audit: Open in Audit
+    reports_audit_note: "Every report is logged in Audit: when it was sent, the level and the full payload."
+    telemetry_save_failed: Could not save the telemetry settings.
+    telemetry_reset_failed: Could not reset the installation id.
   ago:
     just_now: just now
     minutes: "%{count} min ago"
@@ -6158,13 +6200,23 @@ updates:
   welcome:
     title: Welcome to DBFlux
     tagline: A keyboard-first client for SQL, documents, key-value, time series and object storage.
+    telemetry_save_failed: Could not save the telemetry disclosure acknowledgement.
+    telemetry_heading: Usage statistics
+    telemetry_helper: "Helps guide development. Basic is the default."
+    telemetry_off: "Off"
+    telemetry_off_description: "Nothing is sent."
+    telemetry_minimal: "Minimal"
+    telemetry_minimal_description: "Ping per build and weekly: version, OS, arch, random ID."
+    telemetry_basic: "Basic"
+    telemetry_basic_description: "Minimal plus a weekly report: language, country and feature counts."
+    telemetry_privacy: "Pseudonymous random ID. Never queries, results, credentials, paths or connection metadata. Full reports in local Audit. Nothing is sent until you choose Get started."
     whats_new: What is new
     updates: Updates
     notify: Tell me when a new version is out
     notify_hint: At startup DBFlux asks GitHub for the latest release. Nothing about you is sent.
     show_whats_new: Show what is new after each update
     show_whats_new_hint: Opens this changelog once, the first time a new version starts.
-    change_later: Change these later in Settings › Updates
+    change_later: "Change these later in Settings › Updates & privacy"
     get_started: Get started
     full_changelog: Full changelog
 notifications:

@@ -502,8 +502,7 @@ pub(super) struct LoadAllRows {
     pub(super) origin: ResultOrigin,
 }
 
-/// The connection, database, execution context and language a query result
-/// came from.
+/// The connection, database and execution context a query result came from.
 #[derive(Clone)]
 pub(super) struct ResultOrigin {
     connection_id: Uuid,
@@ -622,6 +621,8 @@ pub struct CodeDocument {
 
     /// Deferred action slots drained at the top of each render cycle.
     pending: PendingActions,
+    #[cfg(all(test, feature = "telemetry"))]
+    script_executor: Option<Arc<dyn dbflux_core::HookExecutor>>,
 
     /// Set when a save was started by the interrupted-close flow, so a write
     /// that lands also asks the workspace to close the tab.
@@ -632,6 +633,14 @@ pub struct CodeDocument {
 }
 
 struct PendingQueryResult {
+    #[cfg(feature = "telemetry")]
+    usage_ticket: Option<dbflux_core::observability::usage::UsageTicket>,
+    #[cfg(feature = "telemetry")]
+    usage_success: bool,
+    #[cfg(feature = "telemetry")]
+    usage_cancel: dbflux_core::CancelToken,
+    #[cfg(feature = "telemetry")]
+    usage_session_generation: Option<u64>,
     task_id: dbflux_core::TaskId,
     exec_id: Uuid,
     query: String,
@@ -653,8 +662,17 @@ pub(super) struct ActiveQueryTask {
     uses_isolated_session: bool,
 }
 
+// Delayed confirmations must preserve the original trigger, not turn an
+// automatic execution into a user execution merely because it was approved.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExecutionOrigin {
+    User,
+    Automatic,
+}
+
 /// Pending dangerous query confirmation.
 struct PendingDangerousQuery {
+    origin: ExecutionOrigin,
     query: String,
     kind: DangerousQueryKind,
     in_new_tab: bool,
@@ -668,6 +686,7 @@ struct PendingDangerousQuery {
 /// one statement, and the driver advertises `MULTI_STATEMENT`, or when the
 /// statement under the cursor only opens or ends a transaction.
 struct PendingScriptConfirm {
+    origin: ExecutionOrigin,
     query: String,
     in_new_tab: bool,
     statement_count: usize,
@@ -698,8 +717,16 @@ enum DriftAction {
     ContinueStale,
 }
 
+/// The consent ticket a run carries to completion. Without the `telemetry`
+/// feature nothing is ever captured, so the type carries no data.
+#[cfg(feature = "telemetry")]
+type UsageTicket = dbflux_core::observability::usage::UsageTicket;
+#[cfg(not(feature = "telemetry"))]
+type UsageTicket = std::convert::Infallible;
+
 /// A query paused by the schema-drift preflight or drift modal awaiting execution.
 struct PendingDriftQuery {
+    origin: ExecutionOrigin,
     query: String,
     in_new_tab: bool,
     action: DriftAction,
@@ -708,6 +735,8 @@ struct PendingDriftQuery {
     /// `TableKey` is `(database, schema, table)`.
     cache_updates: Vec<(dbflux_core::TableKey, dbflux_core::TableInfo)>,
     read_only: ReadOnlyEnforcement,
+    /// Captured when the user started the run, before the preflight.
+    usage_ticket: Option<UsageTicket>,
 }
 
 /// Record of a query execution.
@@ -1279,6 +1308,8 @@ impl CodeDocument {
                 shutdown_flush_written: None,
             },
             pending: PendingActions::default(),
+            #[cfg(all(test, feature = "telemetry"))]
+            script_executor: None,
             close_after_save: false,
             vim,
         };

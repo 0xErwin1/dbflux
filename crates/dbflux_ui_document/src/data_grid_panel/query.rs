@@ -167,6 +167,24 @@ impl DataGridPanel {
     /// a structured SELECT), the parameterized query takes precedence over the
     /// normal `TableBrowseRequest` path.
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(feature = "telemetry")]
+        {
+            self.builder.queued_usage = None;
+        }
+        self.refresh_with_origin(
+            window,
+            cx,
+            #[cfg(feature = "telemetry")]
+            None,
+        );
+    }
+
+    pub(super) fn refresh_with_origin(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        #[cfg(feature = "telemetry")] usage_ticket: Option<super::BuilderUsage>,
+    ) {
         // A search still running is dropped by this read; its bar must not
         // come back while the table page loads.
         self.nearest.running = None;
@@ -188,7 +206,15 @@ impl DataGridPanel {
                 let total_rows = *total_rows;
 
                 if let Some(select) = self.builder.visual_select.clone() {
-                    self.run_visual_query(profile_id, database.clone(), select, window, cx);
+                    self.run_visual_query(
+                        profile_id,
+                        database.clone(),
+                        select,
+                        window,
+                        cx,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                    );
 
                     if let Some(spec) = self.builder.builder_draft_spec.clone()
                         && spec.is_grouped()
@@ -500,6 +526,7 @@ impl DataGridPanel {
         select: SelectQuery,
         _window: &mut Window,
         cx: &mut Context<Self>,
+        #[cfg(feature = "telemetry")] usage_ticket: Option<super::BuilderUsage>,
     ) {
         // Taken before anything can fail, so a request that never lands does
         // not leave its intent for an unrelated rebuild.
@@ -549,7 +576,8 @@ impl DataGridPanel {
         self.refresh.state = GridState::Loading;
         cx.notify();
 
-        let entity = cx.entity().clone();
+        let entity = cx.entity().downgrade();
+        let task_tracker = self.app_state.clone();
         let conn_for_cleanup = conn.clone();
 
         let mut request = select.to_query_request(conn.dialect());
@@ -559,9 +587,15 @@ impl DataGridPanel {
 
         let committed_spec: Option<VisualQuerySpec> = self.builder.builder_draft_spec.clone();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.execute(&request) });
+        let task = cx.background_executor().spawn(async move {
+            #[cfg(all(test, feature = "telemetry"))]
+            return *super::tests::run_builder_fixture_worker(move || {
+                Box::new(conn.execute(&request))
+            })
+            .await;
+            #[cfg(not(all(test, feature = "telemetry")))]
+            conn.execute(&request)
+        });
 
         cx.spawn(async move |_this, cx| {
             let mut result = task.await;
@@ -575,14 +609,36 @@ impl DataGridPanel {
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Visual query was cancelled, discarding result");
+                    task_tracker.update(cx, |state, cx| {
+                        state.tasks_mut().cancel(task_id);
+                        cx.emit(dbflux_ui_base::AppStateChanged);
+                    });
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
                     return;
                 }
 
+                let Some(entity) = entity.upgrade() else {
+                    // The detached foreground waiter survives grid destruction;
+                    // task bookkeeping must not depend on result adoption.
+                    task_tracker.update(cx, |state, cx| {
+                        match &result {
+                            Ok(_) => state.complete_task(task_id),
+                            Err(error) => state.fail_task(task_id, error.to_string()),
+                        }
+                        cx.emit(dbflux_ui_base::AppStateChanged);
+                    });
+                    return;
+                };
+
                 match result {
                     Ok(mut query_result) => {
+                        #[cfg(feature = "telemetry")]
+                        let usage_success = !query_result
+                            .metadata_extra
+                            .as_ref()
+                            .is_some_and(|extra| extra.contains_key("script_failure"));
                         info!(
                             "Visual query returned {} rows in {:?}",
                             query_result.row_count(),
@@ -594,6 +650,16 @@ impl DataGridPanel {
                         }
 
                         entity.update(cx, |panel, cx| {
+                            #[cfg(feature = "telemetry")]
+                            let usage_current = panel.builder.builder_draft_spec == committed_spec
+                                && matches!(
+                                    &panel.source,
+                                    DataSource::Table {
+                                        profile_id: current_profile,
+                                        database: current_database,
+                                        ..
+                                    } if *current_profile == profile_id && *current_database == database
+                                );
                             panel.runner.complete_primary(task_id, cx);
                             panel.builder.current_visual_spec = committed_spec.clone();
                             panel.last_replayable_read = committed_spec.clone().map(|spec| {
@@ -624,6 +690,10 @@ impl DataGridPanel {
                             panel.grid_table.keep_edits_on_reload = keep_edits;
                             panel.pending.rebuild = true;
 
+                            #[cfg(feature = "telemetry")]
+                            if usage_success && usage_current {
+                                panel.record_builder_usage(usage_ticket, cx);
+                            }
                             cx.notify();
                         });
                     }
@@ -1209,6 +1279,8 @@ impl DataGridPanel {
                         select.clone(),
                         window,
                         cx,
+                        #[cfg(feature = "telemetry")]
+                        None,
                     );
 
                     if let Some(spec) = &self.builder.builder_draft_spec {

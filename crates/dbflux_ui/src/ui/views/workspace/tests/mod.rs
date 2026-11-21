@@ -20,6 +20,8 @@ mod document_focus;
 mod secret_edit;
 mod secret_open;
 mod sidebar_seam;
+#[cfg(feature = "telemetry")]
+mod telemetry_composition;
 
 fn new_workspace(
     cx: &mut TestAppContext,

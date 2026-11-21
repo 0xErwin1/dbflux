@@ -10,6 +10,7 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 | Sección                                             | Cubre                                                                        |
 | --------------------------------------------------- | ---------------------------------------------------------------------------- |
 | [General](#general)                                 | Comportamiento a nivel de app: theme, inicio, refresh, seguridad de queries. |
+| [Actualizaciones y privacidad](#actualizaciones-y-privacidad) | Comprobaciones de actualizaciones, el changelog y los niveles de telemetría opcionales. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
 | [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
@@ -101,9 +102,9 @@ determinista y con sus nombres nativos. System sigue el locale del sistema
 operativo y recurre a English cuando ningún locale incluido coincide de forma no
 ambigua. Un cambio de idioma tiene efecto después de reiniciar DBFlux, por lo que
 el control muestra una nota permanente al respecto. Los catálogos parciales
-recurren a English para el texto general aún no traducido. Este release solo
-traduce la sección General; el resto de la UI se está convirtiendo crate por crate
-y permanece en English por ahora.
+recurren a English para el texto general aún no traducido. Este release traduce,
+entre otras, las secciones General y Actualizaciones y privacidad; el resto de la
+UI se está convirtiendo crate por crate y permanece en English por ahora.
 
 ### Editor
 
@@ -184,12 +185,8 @@ filas**, que ejecuta la sentencia dentro de `SELECT COUNT(*)` sin traer sus
 filas y muestra "10,000/52,310 filas cargadas" (solo conexiones SQL), y
 **Cargar todas las filas**, que vuelve a ejecutar la sentencia sin el límite en
 la misma pestaña de resultados. Ambas están también en el menú de la tabla
-(`m`). Al desplazarse hasta la última fila cargada, o mover el cursor sobre
-ella, se traen las siguientes filas de esa sentencia, tantas como el límite, y
-se añaden al final; esto se repite hasta que la sentencia no tiene más filas.
-Mientras una columna está ordenada en el grid, no se traen más filas. En un
-script con varias sentencias, el límite es un único presupuesto compartido por
-todos sus resultados, y todas las sentencias se ejecutan igual.
+(`m`). En un script con varias sentencias, el límite es un único presupuesto
+compartido por todos sus resultados, y todas las sentencias se ejecutan igual.
 
 El límite solo llega a un driver cuyo `execute` lo aplica: PostgreSQL,
 MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
@@ -214,6 +211,96 @@ ejecuta sus comandos sin él en los demás.
 
 Ver [Data & Privacy](PRIVACY.md#ubicaciones-de-datos) para cómo se separan
 las bases de datos Nightly y stable.
+
+---
+
+## Actualizaciones y privacidad
+
+Las preferencias de comprobación de actualizaciones y changelog, más los
+niveles de telemetría opcionales. Los cambios quedan en stages hasta que
+pulsas **Save** (Ctrl+S); **Reset to defaults** deja los valores por defecto
+en stages sin guardar.
+
+### Updates
+
+| Ajuste | Efecto |
+|--------|--------|
+| Check GitHub for a new release at startup | Ejecuta la comprobación de actualizaciones al iniciar la app. |
+| Show what is new after each update | Abre el changelog una vez, la primera vez que arranca una versión nueva. |
+| Check now | Ejecuta una comprobación inmediata. |
+| Open what is new / Show welcome again | Reabre los dos diálogos. |
+
+### Estadísticas de uso
+
+DBFlux tiene un módulo de telemetría opcional con tres niveles:
+
+- **Apagado** — no se envía nada: ni aviso, ni evento de actividad, ni informe
+  de uso. No se pone nada en cola.
+- **Mínimo** — un aviso por cada compilación publicada, más un evento de
+  actividad por semana: identificador aleatorio de instalación, versión, canal,
+  sistema operativo y arquitectura. Sin idioma del sistema, país ni recuentos
+  de uso.
+- **Básico** (preseleccionado en el diálogo de bienvenida) — el aviso de Mínimo,
+  más un informe semanal en lugar del evento de actividad. El informe añade
+  idioma del sistema (no el de la interfaz), país y recuentos acotados de
+  ejecuciones exitosas compatibles de
+  consultas, visual builder, aperturas de dashboards, scripts, operaciones MCP
+  e inspecciones de schema. Son recuentos de operaciones completas, incluidos
+  resultados exitosos con cero filas, no de filas ni de tiempos.
+
+No se pone nada en cola, no se envía nada y no se cuenta ningún uso hasta que
+confirmas el aviso de bienvenida con **Empezar**. Si habías desactivado el
+diálogo de bienvenida, se abre en cada arranque tras actualizar, siempre que las
+estadísticas de uso arranquen, hasta que confirmes; cerrarlo de otra forma, por
+ejemplo con Escape, no lo confirma.
+
+La app no envía país; envía el valor de relleno `ZZ`. Solo en los informes de
+Básico, el colector guarda el país aproximado que Cloudflare resuelve en su
+borde. El colector nunca guarda la dirección IP; Cloudflare y Fly.io conservan
+sus propios registros de peticiones.
+
+Las actualizaciones en segundo plano, fallos parciales, errores y cancelaciones
+no cuentan. Las aprobaciones del builder sin ejecución no cuentan, ni la
+creación, importación o restauración implícitas de dashboards. Los scripts
+requieren código de salida canónico 0 sin timeout ni ejecución detached; la
+inspección de schema requiere una carga nueva de metadatos completos, no
+reenfocar una pestaña existente.
+
+**MCP solo cuenta operaciones principales revisadas, compatibles y exitosas con
+un propietario de primer plano de una GUI existente, autenticada y en ejecución**,
+no todas las llamadas ni un servidor independiente sin ese propietario.
+`count_records`, `insert_record` y `list_scripts` se excluyen incluso si tienen
+éxito. `update_records` y `delete_records` requieren la finalización de la
+mutación principal con `QueryResult` tipado, no un `DocumentCrudResult` opaco
+exitoso; update/upsert/delete SQL tipados comprobados pueden contar con cero filas
+afectadas. Ayuda/protocolo, herramientas desconocidas, controles de aprobación y
+aprobaciones pendientes no cuentan. El permiso se adquiere después de Allow y
+antes del trabajo; el recuento llega tras completar el trabajo principal y
+registrar con éxito Audit de ejecución. Ver los límites completos en la política
+siguiente.
+
+Los eventos van a `https://telemetry.dbflux.dev`. Nunca se envían
+consultas, resultados, credenciales, rutas de archivos ni metadatos de
+conexión. Ver [Datos y privacidad](PRIVACY.md#telemetría-opcional) para la
+lista completa de lo que contiene un informe y los límites de cobertura.
+Básico debe estar activo y el aviso visible de bienvenida debe haberse confirmado
+antes de comenzar; fuentes no disponibles o Audit desactivado o
+degradado impiden contabilizar. Guardar Básico no garantiza un envío inmediato.
+Salir de Básico borra el informe Básico pendiente y los contadores, y Apagado
+también borra un aviso pendiente; un envío ya entregado a la red aún puede
+completarse. Confirmar la entrega conserva incrementos posteriores. Los UUID de instalación y entrega son
+seudónimos; no se envían identificadores de operaciones, consultas, clientes o
+personas, nombres de herramientas ni estadísticas por motor. El ID de instalación
+nunca rota por calendario; un reinicio conserva las compilaciones
+confirmadas y no envía vínculos entre IDs viejos y nuevos ni avisos de retirada.
+Las etiquetas legibles no alteran el almacenamiento, la copia, la exportación
+ni el envío del contenido sin procesar.
+
+| Control | Efecto |
+|---------|--------|
+| Nivel (Apagado / Mínimo / Básico) | El nivel en stages; Left y Right o un clic lo cambian, Save lo aplica. |
+| Id de instalación | Vista enmascarada del identificador seudónimo. **Reiniciar id** lo reemplaza de inmediato, cancela los envíos pendientes y conserva las compilaciones confirmadas. |
+| Informes | El último informe confirmado, leído del audit log duradero. **Ver el último informe** abre un visor de solo lectura sobre el contenido almacenado; **Abrir en auditoría** abre el visor de auditoría con la correlación del informe. |
 
 ---
 

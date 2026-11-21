@@ -318,7 +318,7 @@ impl CodeDocument {
 
         let statement = statement.to_string();
         self.execution.query_origin = Some(range.start);
-        self.run_query_text(statement, false, window, cx);
+        self.run_query_text(super::ExecutionOrigin::User, statement, false, window, cx);
     }
 }
 

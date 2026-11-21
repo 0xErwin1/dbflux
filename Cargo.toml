@@ -11,6 +11,7 @@ members = [
     "crates/bolt",
     "crates/bolt_keys",
     "crates/dbflux_core",
+    "crates/dbflux_telemetry",
     "crates/dbflux_lua",
     "crates/dbflux_js",
     "crates/dbflux_ipc",
@@ -78,6 +79,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 dbflux = { path = "crates/dbflux" }
 dbflux_core = { path = "crates/dbflux_core" }
+dbflux_telemetry = { path = "crates/dbflux_telemetry" }
 dbflux_lua = { path = "crates/dbflux_lua" }
 dbflux_js = { path = "crates/dbflux_js" }
 dbflux_test_support = { path = "crates/dbflux_test_support" }

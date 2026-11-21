@@ -9,13 +9,13 @@ use crate::labels::proxies_delete_body;
 use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::{ConfirmOutcome, ConfirmRequest, ModalConfirm, ModalVariant};
 use dbflux_components::primitives::{Badge, BadgeTone, SegmentedControl, SegmentedItem};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -50,7 +50,7 @@ pub(super) enum ProxyFormField {
     DeleteButton,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PendingProxyAction {
     ClearForm,
     EditIndex(usize),
@@ -79,6 +79,17 @@ pub(super) struct ProxiesSection {
     pub(super) pending_delete_proxy_id: Option<Uuid>,
     pub(super) pending_discard_action: Option<PendingProxyAction>,
     pub(super) pending_sync_from_app_state: bool,
+    /// Confirmation of the proxy delete, opened by `render` while a delete
+    /// is pending.
+    delete_confirm: Entity<ModalConfirm>,
+    /// Confirmation of discarding unsaved proxy changes, opened by `render`
+    /// while a discard is pending.
+    discard_confirm: Entity<ModalConfirm>,
+    /// Outcomes of the two confirmations, drained in `render` where a
+    /// `Window` is available (the outcome subscriptions recorded them
+    /// without one).
+    pending_delete_confirm_resolution: Option<ConfirmOutcome>,
+    pending_discard_confirm_resolution: Option<ConfirmOutcome>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -125,6 +136,19 @@ impl ProxiesSection {
         });
         let input_proxy_no_proxy =
             cx.new(|cx| InputState::new(window, cx).placeholder("localhost, 127.0.0.1, .internal"));
+
+        let delete_confirm = cx.new(ModalConfirm::new);
+        let discard_confirm = cx.new(ModalConfirm::new);
+        let delete_confirm_subscription =
+            cx.subscribe(&delete_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_delete_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
+        let discard_confirm_subscription =
+            cx.subscribe(&discard_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_discard_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
 
         let subscription = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.pending_sync_from_app_state = true;
@@ -217,8 +241,14 @@ impl ProxiesSection {
             pending_delete_proxy_id: None,
             pending_discard_action: None,
             pending_sync_from_app_state: false,
+            delete_confirm,
+            discard_confirm,
+            pending_delete_confirm_resolution: None,
+            pending_discard_confirm_resolution: None,
             _subscriptions: vec![
                 subscription,
+                delete_confirm_subscription,
+                discard_confirm_subscription,
                 blur_name,
                 blur_host,
                 blur_port,
@@ -850,21 +880,38 @@ impl Render for ProxiesSection {
             state.set_masked(!show_proxy_password, window, cx);
         });
 
+        // A confirmation resolved while it was open; run the outcome here
+        // where a `Window` is available (the outcome subscription recorded it
+        // without one).
+        if let Some(outcome) = self.pending_delete_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_delete_proxy(cx),
+                ConfirmOutcome::Cancelled => self.cancel_delete_proxy(cx),
+            }
+        }
+        if let Some(outcome) = self.pending_discard_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_discard_changes(window, cx),
+                ConfirmOutcome::Cancelled => self.cancel_discard_changes(cx),
+            }
+        }
+
+        // Snapshot after both outcome handlers, so the list, the selection and
+        // the form show the same state in this frame.
         let (proxies, keyring_available) = {
             let state = self.app_state.read(cx);
             (state.proxies().to_vec(), state.secret_store_available())
         };
 
         let editing_id = self.editing_proxy_id;
-        let show_proxy_delete = self.pending_delete_proxy_id.is_some();
-        let show_discard_confirm = self.pending_discard_action.is_some();
 
-        let (proxy_delete_name, proxy_affected_count) = self
-            .pending_delete_proxy_id
-            .map(|proxy_id| {
-                let name = self
-                    .app_state
-                    .read(cx)
+        // Open the delete confirmation while a delete is pending; opening
+        // only when the request changed keeps later renders from stealing
+        // focus back.
+        if let Some(proxy_id) = self.pending_delete_proxy_id {
+            let (name, affected_count) = {
+                let state = self.app_state.read(cx);
+                let name = state
                     .proxies()
                     .iter()
                     .find(|proxy| proxy.id == proxy_id)
@@ -872,8 +919,45 @@ impl Render for ProxiesSection {
                     .unwrap_or_default();
                 let count = self.profiles_using_proxy(proxy_id, cx);
                 (name, count)
-            })
-            .unwrap_or_default();
+            };
+            let body = proxies_delete_body(&name, affected_count);
+            let needs_open = !self.delete_confirm.read(cx).is_visible()
+                || self.delete_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.delete_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("settings.proxies.delete_dialog_title"),
+                            body,
+                            variant: ModalVariant::Danger,
+                            confirm_label: dbflux_i18n::t!("settings.proxies.action.delete"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
+
+        // Open the discard confirmation while a discard is pending, with the
+        // same changed-request guard.
+        if self.pending_discard_action.is_some() {
+            let body = dbflux_i18n::t!("settings.proxies.discard_dialog.body");
+            let needs_open = !self.discard_confirm.read(cx).is_visible()
+                || self.discard_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.discard_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("settings.proxies.discard_dialog_title"),
+                            body,
+                            variant: ModalVariant::Default,
+                            confirm_label: dbflux_i18n::t!("settings.discard.confirm"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
 
         layout::split_section_shell(
             cx.theme().border,
@@ -885,61 +969,8 @@ impl Render for ProxiesSection {
             self.render_proxy_list(&proxies, editing_id, cx),
             self.render_proxy_form(keyring_available, cx),
         )
-        .when(show_proxy_delete, |element| {
-            let entity = cx.entity().clone();
-            let entity_cancel = entity.clone();
-            let body = proxies_delete_body(&proxy_delete_name, proxy_affected_count);
-
-            element.child(
-                Dialog::new(cx)
-                    .title(dbflux_i18n::t!("settings.proxies.delete_dialog_title"))
-                    .button_props(DialogButtonProps::default().show_cancel(true))
-                    .overlay_closable(false)
-                    .close_button(false)
-                    .on_ok(move |_, _, cx| {
-                        entity.update(cx, |section, cx| {
-                            section.confirm_delete_proxy(cx);
-                        });
-                        true
-                    })
-                    .on_cancel(move |_, _, cx| {
-                        entity_cancel.update(cx, |section, cx| {
-                            section.cancel_delete_proxy(cx);
-                        });
-                        true
-                    })
-                    .child(div().text_sm().child(body)),
-            )
-        })
-        .when(show_discard_confirm, |element| {
-            let entity = cx.entity().clone();
-            let entity_cancel = entity.clone();
-
-            element.child(
-                Dialog::new(cx)
-                    .title(dbflux_i18n::t!("settings.proxies.discard_dialog_title"))
-                    .button_props(DialogButtonProps::default().show_cancel(true))
-                    .overlay_closable(false)
-                    .close_button(false)
-                    .on_ok(move |_, window, cx| {
-                        entity.update(cx, |section, cx| {
-                            section.confirm_discard_changes(window, cx);
-                        });
-                        true
-                    })
-                    .on_cancel(move |_, _, cx| {
-                        entity_cancel.update(cx, |section, cx| {
-                            section.cancel_discard_changes(cx);
-                        });
-                        true
-                    })
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(dbflux_i18n::t!("settings.proxies.discard_dialog.body")),
-                    ),
-            )
-        })
+        .child(self.delete_confirm.clone())
+        .child(self.discard_confirm.clone())
     }
 }
 
@@ -1047,3 +1078,6 @@ mod tests {
         assert_ne!(basic_en, basic_es);
     }
 }
+
+#[cfg(test)]
+mod confirm_tests;

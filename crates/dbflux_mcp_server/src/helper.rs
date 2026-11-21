@@ -11,7 +11,15 @@ use serde::Serialize;
 /// serialization failure is surfaced as an `ErrorData` instead of a panic.
 pub(crate) fn to_json_content<T: Serialize>(value: &T) -> Result<ContentBlock, ErrorData> {
     serde_json::to_string_pretty(value)
-        .map(ContentBlock::text)
+        .map(|serialized| {
+            #[cfg(feature = "telemetry")]
+            if crate::telemetry_usage::observing()
+                && let Ok(value) = serde_json::from_str(&serialized)
+            {
+                crate::telemetry_usage::observe_json(&value);
+            }
+            ContentBlock::text(serialized)
+        })
         .map_err(|error| {
             ErrorData::internal_error(format!("Failed to serialize response: {error}"), None)
         })
@@ -77,6 +85,8 @@ pub(crate) fn json_to_db_value(value: serde_json::Value) -> Value {
 /// array containing every set in batch order.
 #[allow(dead_code)]
 pub(crate) fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
+    #[cfg(feature = "telemetry")]
+    observe_query_result(result);
     let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
     let rows = serialize_rows(result);
 
@@ -98,6 +108,11 @@ pub(crate) fn serialize_query_result(result: &QueryResult) -> serde_json::Value 
             "row_count": result.rows.len(),
         })
     }
+}
+
+#[cfg(feature = "telemetry")]
+pub(crate) fn observe_query_result(result: &QueryResult) {
+    crate::telemetry_usage::observe_typed(result);
 }
 
 /// The failure that stopped a multi-statement script run, when the result
@@ -160,6 +175,10 @@ pub(crate) fn serialize_mutation_result(
     affected_key: &str,
     include_records: bool,
 ) -> serde_json::Value {
+    #[cfg(feature = "telemetry")]
+    {
+        crate::telemetry_usage::observe_primary_mutation(result, affected_key);
+    }
     let mut response = serde_json::Map::new();
     response.insert(
         affected_key.to_string(),
@@ -222,6 +241,71 @@ mod tests {
     use super::*;
     use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
     use std::time::Duration;
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn telemetry_mutation_serialization_keeps_nested_failure_private() {
+        use crate::{
+            governance::tests::{create_test_state, with_usage_owner},
+            telemetry_usage::scope_call,
+        };
+        let state = create_test_state();
+        let mut policy = dbflux_mcp::builtin_policies()
+            .into_iter()
+            .find(|policy| policy.id == "builtin/admin")
+            .expect("policy");
+        policy.allowed_classes.append(&mut policy.approval_classes);
+        state
+            .runtime
+            .write()
+            .await
+            .upsert_policy_mut(policy)
+            .expect("allow mutation");
+        let (responses, finishes, counts, leases) =
+            with_usage_owner(state, |middleware| async move {
+                let mut responses = Vec::new();
+                for failure in [true, false] {
+                    let mut result = QueryResult::empty();
+                    result.affected_rows = Some(0);
+                    let mut nested = QueryResult::empty();
+                    nested.metadata_extra = Some(std::collections::HashMap::from([(
+                        if failure {
+                            "script_failure"
+                        } else {
+                            "rows_truncated"
+                        }
+                        .into(),
+                        serde_json::json!(true),
+                    )]));
+                    let mut extra = QueryResult::empty();
+                    extra.additional_results.push(nested);
+                    result.additional_results.push(extra);
+                    let response = scope_call(middleware.authorize_and_execute(
+                        "update_records",
+                        None,
+                        dbflux_policy::ExecutionClassification::Write,
+                        || async {
+                            let value = serialize_mutation_result(&result, "updated", true);
+                            Ok(rmcp::model::CallToolResult::success(vec![to_json_content(
+                                &value,
+                            )?]))
+                        },
+                    ))
+                    .await
+                    .expect("unchanged mutation result");
+                    responses.push(response);
+                }
+                responses
+            })
+            .await;
+        assert_eq!(
+            serde_json::to_value(&responses[0]).expect("serialize"),
+            serde_json::to_value(&responses[1]).expect("serialize")
+        );
+        assert_eq!(finishes, [false, true]);
+        assert_eq!(counts, [0, 0, 0, 0, 1, 0]);
+        assert_eq!(leases, 0);
+    }
 
     #[test]
     fn mutation_affected_rows_prefers_driver_metadata() {

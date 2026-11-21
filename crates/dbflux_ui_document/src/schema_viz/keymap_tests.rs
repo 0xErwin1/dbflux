@@ -85,6 +85,8 @@ pub(super) fn focused_diagram(
                 None,
                 SchemaVizMode::Global,
                 app_state,
+                #[cfg(feature = "telemetry")]
+                None,
                 window,
                 cx,
             )

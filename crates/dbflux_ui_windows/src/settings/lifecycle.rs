@@ -35,6 +35,7 @@ impl SettingsCoordinator {
 
         let export_modal = cx.new(|cx| ExportBundleModal::new(app_state.clone(), window, cx));
         let import_panel = cx.new(|cx| ImportConnectionsPanel::new(app_state.clone(), window, cx));
+        let section_confirm = cx.new(ModalConfirm::new);
 
         let nav_search = cx.new(|cx| {
             dbflux_components::controls::InputState::new(window, cx)
@@ -65,6 +66,15 @@ impl SettingsCoordinator {
             },
         );
 
+        // The discard confirmation resolves through the shared `ModalConfirm`
+        // outcome; `render` drains it where a `Window` is available. Kept out
+        // of `_subscriptions`, which `set_active_section` replaces.
+        let section_confirm_sub =
+            cx.subscribe(&section_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_section_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
+
         Self {
             app_state,
             sidebar_tree,
@@ -75,6 +85,8 @@ impl SettingsCoordinator {
             active_section_entity,
             active_section_view,
             pending_section_confirm: None,
+            pending_section_confirm_resolution: None,
+            section_confirm,
             pending_focus_return: false,
             sidebar_width: scaled_default_sidebar_width(cx),
             sidebar_user_resized: false,
@@ -87,7 +99,7 @@ impl SettingsCoordinator {
             pending_export_target: None,
             pending_import_open: false,
             _subscriptions: section_subscription,
-            _portability_subscriptions: vec![import_sub, nav_search_sub],
+            _portability_subscriptions: vec![import_sub, nav_search_sub, section_confirm_sub],
         }
     }
 

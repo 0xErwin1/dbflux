@@ -214,7 +214,13 @@ impl AppState {
         }
 
         let secret_provider_registry = Self::build_secret_provider_registry(services.clone());
-        let auth_provider_registry = Self::build_auth_provider_registry(services, audit_emitter);
+        // An in-memory runtime is a test runtime: it must not reflect the host's
+        // `~/.aws` profiles into the app state, or results depend on the machine.
+        let auth_provider_registry = if storage_runtime.temp_root().is_some() {
+            AuthProviderRegistry::new()
+        } else {
+            Self::build_auth_provider_registry(services, audit_emitter)
+        };
 
         let facade = Self::build_session_facade(
             drivers,
@@ -251,6 +257,8 @@ impl AppState {
             general_settings,
             update_settings,
             update_check: crate::updates::UpdateCheckState::default(),
+            #[cfg(feature = "telemetry")]
+            telemetry: None,
             driver_overrides,
             driver_settings,
             hook_definitions,

@@ -121,6 +121,10 @@ jobs:
       contents: write
       id-token: write      # OIDC token for build-provenance attestation
       attestations: write  # write the provenance attestation
+    outputs:
+      # Set once the release is published, so a later attestation failure
+      # still leaves the published build registrable.
+      published: ${{ steps.publish.outcome == 'success' }}
 
     steps:
       - name: Checkout repository
@@ -272,6 +276,7 @@ jobs:
           fi
 
       - name: Create release
+        id: publish
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: v${{ needs.classify.outputs.version }}
@@ -395,3 +400,58 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "dbflux ${VERSION}"
           git push origin HEAD
+
+  # Registers the published build with the telemetry collector so it admits
+  # events from this exact build. Without it the collector rejects every event
+  # as an unpublished build, so the job is skipped with a warning rather than
+  # failing a release that already published: an unconfigured collector must
+  # not block shipping. A configured endpoint that rejects the build does fail,
+  # because that leaves the release invisible to telemetry with no signal.
+  telemetry-admission:
+    name: Register the build with the telemetry collector
+    needs: [classify, release]
+    if: ${{ !cancelled() && needs.classify.outputs.draft == 'false' && needs.release.outputs.published == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check for the collector endpoint
+        id: endpoint
+        env:
+          ADMIN_URL: ${{ vars.DBFLUX_TELEMETRY_ADMIN_URL }}
+          ADMIN_TOKEN: ${{ secrets.DBFLUX_TELEMETRY_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$ADMIN_URL" ] || [ -z "$ADMIN_TOKEN" ]; then
+            echo "::warning::DBFLUX_TELEMETRY_ADMIN_URL or DBFLUX_TELEMETRY_ADMIN_TOKEN is not set; the collector's published-build registry was not updated and this build will not be admitted."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Register the published build
+        if: steps.endpoint.outputs.present == 'true'
+        env:
+          ADMIN_URL: ${{ vars.DBFLUX_TELEMETRY_ADMIN_URL }}
+          ADMIN_TOKEN: ${{ secrets.DBFLUX_TELEMETRY_ADMIN_TOKEN }}
+          VERSION: ${{ needs.classify.outputs.version }}
+          CHANNEL: ${{ needs.classify.outputs.channel }}
+        run: |
+          set -eu
+          test -n "$VERSION"
+          test -n "$CHANNEL"
+          body=$(printf '{"version":"%s","channel":"%s"}' "$VERSION" "$CHANNEL")
+          response=$(mktemp)
+          status=$(curl --fail-with-body --silent --show-error \
+            --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused \
+            --output "$response" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data "$body" "$ADMIN_URL/builds") || { cat "$response"; exit 1; }
+          # Redirects are not followed, so a 3xx must not read as registered.
+          if [ "$status" != 200 ]; then
+            echo "::error::The collector answered ${status} instead of 200; the build was not registered."
+            cat "$response"
+            exit 1
+          fi

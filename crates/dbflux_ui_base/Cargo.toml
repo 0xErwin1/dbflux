@@ -41,8 +41,9 @@ rusqlite.workspace = true
 serde_json.workspace = true
 
 [features]
+telemetry = ["dbflux_app/telemetry"]
 default = []
-test-support = ["gpui/test-support", "bolt/test-support"]
+test-support = ["gpui/test-support", "bolt/test-support", "dbflux_app/test-support"]
 mcp = ["dbflux_mcp", "dbflux_app/mcp"]
 lua = ["dbflux_app/lua"]
 aws = ["dbflux_aws", "dbflux_app/aws"]

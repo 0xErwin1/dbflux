@@ -756,3 +756,41 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// The shared confirmation a section opens adds its buttons and the dialog
+/// close button to the settings window, and each answers a key.
+#[gpui::test]
+fn the_settings_confirmation_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::{SETTINGS, SETTINGS_CONFIRM};
+    use dbflux_components::modals::{ConfirmRequest, ModalVariant};
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::General);
+    let capture = FrameCapture::observe(window);
+    window.update(|_, cx| {
+        settings.update(cx, |settings, cx| {
+            settings.section_confirm.update(cx, |confirm, cx| {
+                confirm.open(
+                    ConfirmRequest {
+                        title: "Discard changes".to_string(),
+                        body: "Discard the unsaved changes?".to_string(),
+                        variant: ModalVariant::Default,
+                        confirm_label: "Discard".to_string(),
+                    },
+                    cx,
+                )
+            })
+        })
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let covered = Coverage::new(SETTINGS)
+        .with_surface(SETTINGS_CONFIRM)
+        .with_surface(MODAL_CHROME)
+        .assert_covered(&capture.frame(window));
+    assert!(
+        covered.iter().any(|id| id == "confirm-confirm"),
+        "{covered:?}"
+    );
+}

@@ -30,6 +30,8 @@ use crate::repositories::state::{
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,
     ui_state::UiStateRepository,
 };
+#[cfg(feature = "telemetry")]
+use crate::repositories::telemetry::TelemetryRepository;
 use crate::repositories::update_settings::UpdateSettingsRepository;
 use crate::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use crate::repositories::viz_dashboards::DashboardsRepository;
@@ -337,6 +339,12 @@ impl StorageRuntime {
     /// Creates an update settings repository.
     pub fn update_settings(&self) -> UpdateSettingsRepository {
         UpdateSettingsRepository::new(self.dbflux_db())
+    }
+
+    /// Creates the optional database-local telemetry repository.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry(&self) -> TelemetryRepository {
+        TelemetryRepository::new(self.dbflux_db())
     }
 
     /// Creates a keybinding overrides repository.

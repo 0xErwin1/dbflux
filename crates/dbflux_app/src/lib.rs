@@ -18,6 +18,8 @@ pub mod proxy;
 pub mod remote_dashboard_cache;
 pub mod rpc_services;
 pub mod secret_provider_registry;
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 pub mod updates;
 
 pub use access_manager::AppAccessManager;

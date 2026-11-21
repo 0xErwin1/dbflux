@@ -172,6 +172,9 @@ components:
     compact: 압축
     cancel: 취소
     save: 저장
+  json_report_preview:
+    copy_raw: 원본 복사
+    close: 닫기
   value_source:
     literal: 리터럴
     env: 환경 변수
@@ -4334,6 +4337,9 @@ modals:
     compact: 압축
     cancel: 취소
     confirm: 가져오기
+  confirm:
+    cancel: 취소
+    confirm: 확인
   mutation_confirm:
     title: 변경 확인
     sample_unavailable: 샘플 미리보기를 사용할 수 없습니다
@@ -4580,6 +4586,7 @@ settings:
   discard:
     title: 저장되지 않은 변경 사항 버리기
     body: "저장되지 않은 변경 사항이 있습니다. 버리고 %{section}(으)로 전환하시겠습니까?"
+    confirm: 버리기
   editor_panel:
     title:
       edit: "%{noun} 편집"
@@ -5623,7 +5630,7 @@ settings:
     general_group: 일반
     general: 일반
     keybindings: 키 바인딩
-    updates: 업데이트
+    updates: 업데이트 및 개인정보
     audit: 감사
     about: 정보
     network: 네트워크
@@ -6098,8 +6105,8 @@ workspace:
   default_object_type: 개체
 updates:
   settings:
-    title: 업데이트
-    subtitle: 새 버전 확인과 업데이트 후 변경 사항.
+    title: 업데이트 및 개인정보
+    subtitle: 새 버전 확인, 업데이트 후 변경 사항, 사용 통계.
     group: 업데이트
     new_versions: 새 버전
     check_on_startup: 시작할 때 GitHub에서 새 릴리스 확인
@@ -6120,6 +6127,41 @@ updates:
     save: 저장
     saved: 업데이트 설정을 저장했습니다.
     save_error: "업데이트 설정을 저장할 수 없습니다: %{error}"
+    usage_heading: 사용 통계
+    usage_level: 수준
+    level_off: "끔"
+    level_minimal: "최소"
+    level_basic: "기본"
+    level_hint: "「끔」은 아무것도 보내지 않습니다. 「최소」는 빌드당 핑 한 번과 주간 활동 이벤트를 보냅니다. 「기본」이 기본값이며 그 이벤트 대신 주간 사용 보고서를 보냅니다."
+    what_is_sent: 전송 항목
+    collected_build: "빌드: 버전, 채널, OS, 아키텍처"
+    collected_language: "시스템 언어와 국가, 주간"
+    collected_counts: "기능 사용 횟수 (쿼리, 대시보드, 스크립트, …)"
+    collected_header: 수집 항목
+    collected_minimal: 최소
+    collected_basic: 기본
+    collected_yes: "✓"
+    collected_no: "—"
+    counts_not_instrumented: "지원되는 성공 작업의 상한이 있는 횟수입니다. 새로고침, 실패, 취소는 제외하며 MCP 범위는 제한됩니다. 개인정보 처리방침을 참고하세요."
+    install_id: 설치 ID
+    install_id_hint: "무작위이며 재설정하기 전까지 유지되고, 익명보다는 가명입니다. 사용자나 이 컴퓨터와 연결되지 않습니다. 재설정하면 대기 중인 전송이 취소되고 확인된 빌드는 유지됩니다."
+    reset_install_id: ID 재설정
+    reset_install_id_title: 설치 ID를 재설정할까요?
+    reset_install_id_body: "새 무작위 ID가 현재 ID를 대체합니다. 대기 중인 전송은 취소되고 확인된 빌드는 확인된 상태로 유지됩니다."
+    reports: 보고서
+    no_report_sent_yet: 아직 보낸 보고서가 없습니다
+    checking_last_report: 마지막 보고서 확인 중…
+    delivery_unavailable: "전송 불가: 구성된 엔드포인트가 없습니다."
+    report_load_failed: 마지막 보고서를 불러오지 못했습니다.
+    last_sent: "마지막 전송 %{when} · %{level} · %{size}"
+    level_off_display: 끔
+    level_minimal_display: 최소
+    level_basic_display: 기본
+    view_report: 마지막 보고서 보기
+    open_in_audit: 감사에서 열기
+    reports_audit_note: "모든 보고서는 감사 로그에 기록됩니다: 전송 시각, 수준, 전체 내용."
+    telemetry_save_failed: 원격 측정 설정을 저장하지 못했습니다.
+    telemetry_reset_failed: 설치 ID를 재설정하지 못했습니다.
   ago:
     just_now: 방금
     minutes: "%{count}분 전"
@@ -6157,13 +6199,23 @@ updates:
   welcome:
     title: DBFlux에 오신 것을 환영합니다
     tagline: SQL, 문서, 키-값, 시계열, 오브젝트 스토리지를 위한 키보드 중심 클라이언트입니다.
+    telemetry_save_failed: 원격 측정 안내 확인을 저장하지 못했습니다.
+    telemetry_heading: 사용 통계
+    telemetry_helper: "개발 방향에 도움이 됩니다. 「기본」이 기본값입니다."
+    telemetry_off: "끔"
+    telemetry_off_description: "아무것도 전송하지 않습니다."
+    telemetry_minimal: "최소"
+    telemetry_minimal_description: "빌드별 및 주간 핑: 버전, OS, 아키텍처, 무작위 ID."
+    telemetry_basic: "기본"
+    telemetry_basic_description: "최소에 주간 보고서 추가: 시스템 언어, 국가, 기능 사용 횟수."
+    telemetry_privacy: "무작위 가명 ID. 쿼리, 결과, 자격 증명, 경로, 연결 메타데이터는 전송하지 않습니다. 전체 보고서는 로컬 Audit에 기록됩니다. 시작하기를 선택하기 전에는 아무것도 전송하지 않습니다."
     whats_new: 새로운 기능
     updates: 업데이트
     notify: 새 버전이 나오면 알림
     notify_hint: 시작할 때 DBFlux가 GitHub에 최신 릴리스를 묻습니다. 사용자에 대한 정보는 보내지 않습니다.
     show_whats_new: 업데이트할 때마다 새로운 기능 표시
     show_whats_new_hint: 새 버전을 처음 시작할 때 이 변경 사항을 한 번 엽니다.
-    change_later: 나중에 설정 › 업데이트에서 변경할 수 있습니다
+    change_later: "나중에 설정 › 업데이트 및 개인정보 보호에서 변경"
     get_started: 시작하기
     full_changelog: 전체 변경 사항
 notifications:

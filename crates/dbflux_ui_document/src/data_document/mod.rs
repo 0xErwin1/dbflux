@@ -218,6 +218,11 @@ impl DataDocument {
         // sources.
         let view_handle = DataGridPanel::into_view_handle(data_grid.clone(), cx);
 
+        #[cfg(feature = "telemetry")]
+        {
+            let usage_owner = cx.entity().downgrade();
+            data_grid.update(cx, |grid, _| grid.bind_builder_usage_owner(usage_owner));
+        }
         data_grid.update(cx, |grid, _| grid.set_side_panels_hosted(true));
 
         let result_panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
@@ -318,6 +323,11 @@ impl DataDocument {
             }
             _ => {}
         }
+    }
+
+    #[cfg(all(test, feature = "telemetry"))]
+    pub(crate) fn grid_for_usage_test(&self) -> Entity<DataGridPanel> {
+        self.data_grid.clone()
     }
 
     // === Accessors ===

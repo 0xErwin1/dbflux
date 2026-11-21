@@ -317,6 +317,13 @@ pub(super) struct PendingOpenRoutine {
     pub body: String,
 }
 
+#[cfg(feature = "telemetry")]
+#[derive(Default)]
+struct TelemetryWake {
+    pending: std::cell::Cell<bool>,
+    waker: std::cell::RefCell<Option<std::task::Waker>>,
+}
+
 pub struct Workspace {
     app_state: Entity<AppStateEntity>,
     sidebar: Entity<Sidebar>,
@@ -406,6 +413,10 @@ pub struct Workspace {
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
     _background_purge_task: Option<Task<()>>,
+    #[cfg(feature = "telemetry")]
+    _telemetry_task: Option<Task<()>>,
+    #[cfg(feature = "telemetry")]
+    telemetry_wake: std::rc::Rc<TelemetryWake>,
 
     /// Pending login modal open request from a settings window auth-profile
     /// login flow. Consumed in render() to call `login_modal.open_manual`.
@@ -514,6 +525,27 @@ impl Workspace {
             cx.new(|cx| crate::ui::overlays::updates::WhatsNewDialog::new(app_state.clone(), cx));
         let welcome_dialog =
             cx.new(|cx| crate::ui::overlays::updates::WelcomeDialog::new(app_state.clone(), cx));
+
+        #[cfg(feature = "telemetry")]
+        cx.subscribe(
+            &welcome_dialog,
+            |this,
+             _,
+             _: &crate::ui::overlays::updates::welcome::TelemetryDisclosureDismissed,
+             cx| {
+                this.dismiss_telemetry_disclosure(cx);
+            },
+        )
+        .detach();
+
+        // Saved Settings preferences (or any app-state change) wake the
+        // retained telemetry worker so a due delivery is prepared at once;
+        // no new worker or emitter is created.
+        #[cfg(feature = "telemetry")]
+        cx.subscribe(&app_state, |this, _, _: &AppStateChanged, _| {
+            this.telemetry_wake.wake();
+        })
+        .detach();
 
         let modal_delete_connection =
             cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
@@ -1307,10 +1339,27 @@ impl Workspace {
                     );
                 }
                 SidebarEvent::OpenDashboard { dashboard_id } => {
-                    this.open_dashboard(*dashboard_id, window, cx);
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = this.capture_dashboard_usage_ticket(cx);
+                    this.open_dashboard(
+                        *dashboard_id,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenRemoteDashboard { profile_id, name } => {
-                    this.open_remote_dashboard(*profile_id, name.clone(), window, cx);
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = this.capture_dashboard_usage_ticket(cx);
+                    this.open_remote_dashboard(
+                        *profile_id,
+                        name.clone(),
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);
@@ -1767,6 +1816,10 @@ impl Workspace {
             pane_actions_menu: None,
             last_user_error: None,
             _background_purge_task: None,
+            #[cfg(feature = "telemetry")]
+            _telemetry_task: None,
+            #[cfg(feature = "telemetry")]
+            telemetry_wake: std::rc::Rc::new(TelemetryWake::default()),
             pending_login_modal_open: None,
         };
 

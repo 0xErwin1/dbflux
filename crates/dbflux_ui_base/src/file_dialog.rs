@@ -12,7 +12,9 @@
 
 use std::path::PathBuf;
 
-use gpui::AsyncApp;
+use std::sync::Arc;
+
+use gpui::{App, AsyncApp, Global};
 
 use crate::app_state_entity::{SaveTargetOutcome, SaveTargetProvider, SaveTargetRequest};
 use crate::user_error::{ErrorKind, UserFacingError, report_error_async};
@@ -319,14 +321,40 @@ async fn resolve_open_target_with(
     }
 }
 
+/// Answers every open-file and open-folder request in place of the native
+/// picker: `Some` is a picked path, `None` a dismissed picker.
+pub type OpenTargetProvider = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
+
+struct OpenTargetOverride(OpenTargetProvider);
+
+impl Global for OpenTargetOverride {}
+
+/// Installs an app-wide replacement for the native open pickers. Production
+/// never calls this; tests that dispatch a command reaching a picker install
+/// one so no OS dialog opens.
+pub fn install_open_target_override(cx: &mut App, provider: OpenTargetProvider) {
+    cx.set_global(OpenTargetOverride(provider));
+}
+
+fn open_target_override(cx: &AsyncApp) -> Option<OpenTargetProvider> {
+    cx.update(|cx| {
+        cx.try_global::<OpenTargetOverride>()
+            .map(|installed| installed.0.clone())
+    })
+}
+
 /// Asks the user for an existing file through `native`.
 ///
 /// Returns `None` when the user cancels. When no native picker is available
-/// the user gets an error toast and `None` is returned.
+/// the user gets an error toast and `None` is returned. An installed
+/// [`OpenTargetProvider`] answers instead and `native` is never polled.
 pub async fn pick_existing_file(
     cx: &AsyncApp,
     native: impl std::future::Future<Output = Option<PathBuf>>,
 ) -> Option<PathBuf> {
+    if let Some(provider) = open_target_override(cx) {
+        return provider();
+    }
     picked_path_or_report(
         resolve_open_target(native).await,
         cx,
@@ -337,11 +365,15 @@ pub async fn pick_existing_file(
 /// Asks the user for an existing folder through `native`.
 ///
 /// Returns `None` when the user cancels. When no native picker is available
-/// the user gets an error toast and `None` is returned.
+/// the user gets an error toast and `None` is returned. An installed
+/// [`OpenTargetProvider`] answers instead and `native` is never polled.
 pub async fn pick_existing_folder(
     cx: &AsyncApp,
     native: impl std::future::Future<Output = Option<PathBuf>>,
 ) -> Option<PathBuf> {
+    if let Some(provider) = open_target_override(cx) {
+        return provider();
+    }
     picked_path_or_report(
         resolve_open_target(native).await,
         cx,
@@ -388,6 +420,41 @@ mod tests {
         resolve_open_target_with,
     };
     use crate::user_error::ErrorKind;
+
+    #[gpui::test]
+    async fn an_installed_override_answers_both_pickers_without_polling_native(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        cx.update(|cx| {
+            let asked = asked.clone();
+            super::install_open_target_override(
+                cx,
+                std::sync::Arc::new(move || {
+                    asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Some(PathBuf::from("/tmp/fake-pick"))
+                }),
+            );
+        });
+        let async_cx = cx.to_async();
+        let polled = Cell::new(false);
+
+        let folder = super::pick_existing_folder(&async_cx, async {
+            polled.set(true);
+            None
+        })
+        .await;
+        let file = super::pick_existing_file(&async_cx, async {
+            polled.set(true);
+            None
+        })
+        .await;
+
+        assert_eq!(folder, Some(PathBuf::from("/tmp/fake-pick")));
+        assert_eq!(file, Some(PathBuf::from("/tmp/fake-pick")));
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(!polled.get(), "the native picker must not be polled");
+    }
 
     #[gpui::test]
     async fn open_target_returns_the_picked_path() {

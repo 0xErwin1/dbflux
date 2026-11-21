@@ -436,7 +436,13 @@ impl Workspace {
                 Toast::info(charts_instance_overview_created_editable_message())
                     .meta_right(now_hms())
                     .push(cx);
-                self.open_dashboard(new_id, window, cx);
+                self.open_dashboard(
+                    new_id,
+                    #[cfg(feature = "telemetry")]
+                    None,
+                    window,
+                    cx,
+                );
             }
             Err(e) => {
                 report_error(

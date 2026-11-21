@@ -120,11 +120,17 @@ pub(crate) async fn hint_permissions(state: &ServerState, connection_id: &str) -
 #[derive(Clone)]
 pub struct GovernanceMiddleware {
     pub(crate) state: ServerState,
+    #[cfg(feature = "telemetry")]
+    pub(crate) usage_client: std::sync::Arc<crate::telemetry_usage::McpToolUsageClient>,
 }
 
 impl GovernanceMiddleware {
     pub fn new(state: ServerState) -> Self {
-        Self { state }
+        Self {
+            state,
+            #[cfg(feature = "telemetry")]
+            usage_client: std::sync::Arc::new(crate::telemetry_usage::McpToolUsageClient::new()),
+        }
     }
 
     /// Authorize and execute a tool handler, capturing optional SQL for audit.
@@ -207,23 +213,84 @@ impl GovernanceMiddleware {
             return Err(authorization_error(&outcome, tool_id, classification));
         }
 
-        let handler_result = handler().await;
+        let (result, audit_result) = self
+            .execute_and_audit(tool_id, connection_id, &outcome, handler)
+            .await;
+        audit_result?;
+        result
+    }
+
+    /// Runs the authorized handler and audits it. Under the `telemetry`
+    /// feature the usage capability brackets this exactly: begin before the
+    /// handler, finish after the audit, so a completed call credits only when
+    /// the handler, the audit and the evidence all succeeded.
+    async fn execute_and_audit<F, Fut>(
+        &self,
+        tool_id: &str,
+        connection_id: Option<&str>,
+        outcome: &AuthorizationOutcome,
+        handler: F,
+    ) -> (Result<CallToolResult, McpError>, Result<(), McpError>)
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(CallToolResult, AuditDetails), McpError>>,
+    {
+        #[cfg(feature = "telemetry")]
+        let evidence = crate::telemetry_usage::capture(tool_id);
+        #[cfg(feature = "telemetry")]
+        let capability = if evidence.is_some() {
+            self.usage_client.begin().await
+        } else {
+            None
+        };
+        // Without a capability nothing can be credited, so no response is parsed
+        // for evidence. The call-wide claim stays taken, which keeps nested calls out.
+        #[cfg(feature = "telemetry")]
+        let evidence = evidence.filter(|_| capability.is_some());
+
+        let operation = handler();
+        #[cfg(feature = "telemetry")]
+        let operation = crate::telemetry_usage::OPERATION.scope(evidence.clone(), async {
+            let result = operation.await;
+            if let Ok((result, _)) = &result {
+                crate::telemetry_usage::observe_final(result);
+            }
+            result
+        });
+        let handler_result = operation.await;
 
         let (result, audit_details) = match handler_result {
             Ok((result, details)) => (Ok(result), details),
             Err(e) => (Err(e), AuditDetails::default()),
         };
 
-        self.audit_execution_with_details(
-            tool_id,
-            connection_id,
-            &result,
-            &outcome,
-            &audit_details,
-        )
-        .await?;
+        let audit_result = self
+            .audit_execution_with_details(tool_id, connection_id, &result, outcome, &audit_details)
+            .await;
 
-        result
+        #[cfg(feature = "telemetry")]
+        if let Some(capability) = capability {
+            let success = audit_result.is_ok()
+                && result
+                    .as_ref()
+                    .is_ok_and(|result| result.is_error != Some(true))
+                && evidence
+                    .as_ref()
+                    .is_some_and(|evidence| evidence.successful());
+            // No detached cancellation cleanup: dropping this future abandons the
+            // opaque capability to the foreground owner's bounded expiry policy.
+            // The tool result is already final and the handler must not rerun, so a
+            // missing acknowledgement is logged without payload data and nothing else.
+            if self
+                .usage_client
+                .finish(capability, success)
+                .await
+                .is_none()
+            {
+                log::debug!("mcp tool usage finish was not acknowledged");
+            }
+        }
+        (result, audit_result)
     }
 
     /// Authorize and execute a tool handler with governance controls.
@@ -521,453 +588,4 @@ fn extract_error_content(result: &CallToolResult) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use dbflux_mcp::{McpRuntime, builtin_policies, builtin_roles};
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-
-    /// Helper to create a test ServerState with minimal setup
-    fn create_test_state() -> ServerState {
-        // Use a temporary file for testing (in-memory doesn't work well with rusqlite's open pattern)
-        let temp_path = dbflux_audit::temp_sqlite_path("governance_test_audit.sqlite");
-        let audit_service = dbflux_audit::AuditService::new_sqlite(&temp_path)
-            .expect("failed to create test audit service");
-        let mut runtime = McpRuntime::new(
-            audit_service,
-            Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
-        );
-
-        // Register built-in roles and policies
-        for role in builtin_roles() {
-            let _ = runtime.upsert_role_mut(role);
-        }
-
-        for policy in builtin_policies() {
-            let _ = runtime.upsert_policy_mut(policy);
-        }
-
-        // Register a test trusted client
-        let _ = runtime.upsert_trusted_client_mut(dbflux_mcp::TrustedClientDto {
-            id: "test-client".to_string(),
-            name: "Test Client".to_string(),
-            issuer: None,
-            active: true,
-        });
-
-        // Create a default connection-scoped assignment for the test client
-        // This assigns the "admin" role to the test client for "test-connection"
-        let _ = runtime.save_connection_policy_assignment_mut(
-            dbflux_mcp::ConnectionPolicyAssignmentDto {
-                connection_id: "test-connection".to_string(),
-                assignments: vec![dbflux_policy::ConnectionPolicyAssignment {
-                    actor_id: "test-client".to_string(),
-                    scope: dbflux_policy::PolicyBindingScope {
-                        connection_id: "test-connection".to_string(),
-                    },
-                    role_ids: vec!["builtin/admin".to_string()],
-                    policy_ids: vec![],
-                }],
-            },
-        );
-
-        // Create an assignment for global/metadata operations (empty connection_id)
-        // This allows tools like list_connections, list_scripts, query_audit_logs
-        let _ = runtime.save_connection_policy_assignment_mut(
-            dbflux_mcp::ConnectionPolicyAssignmentDto {
-                connection_id: "".to_string(),
-                assignments: vec![dbflux_policy::ConnectionPolicyAssignment {
-                    actor_id: "test-client".to_string(),
-                    scope: dbflux_policy::PolicyBindingScope {
-                        connection_id: "".to_string(),
-                    },
-                    role_ids: vec!["builtin/admin".to_string()],
-                    policy_ids: vec![],
-                }],
-            },
-        );
-
-        runtime.drain_events();
-
-        ServerState {
-            client_id: "test-client".to_string(),
-            runtime: Arc::new(RwLock::new(runtime)),
-            profile_manager: Arc::new(RwLock::new(dbflux_core::ProfileManager::new_in_memory())),
-            auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
-            driver_registry: Arc::new(std::collections::HashMap::new()),
-            auth_provider_registry: Arc::new(std::collections::HashMap::new()),
-            secret_provider_registry: Arc::new(std::collections::HashMap::new()),
-            driver_settings: Arc::new(std::collections::HashMap::new()),
-            connection_cache: Arc::new(
-                RwLock::new(crate::connection_cache::ConnectionCache::new()),
-            ),
-            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(
-                std::collections::HashMap::new(),
-            )),
-            detached_processes: Arc::new(crate::state::DetachedProcessRegistry::new()),
-            secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(
-                dbflux_core::NoopSecretStore,
-            ))),
-            mcp_enabled_by_default: true,
-            profile_store_path: None,
-        }
-    }
-
-    #[test]
-    fn approval_required_message_tells_the_agent_exactly_what_to_do() {
-        let message = approval_required_message(
-            "delete_records",
-            ExecutionClassification::Destructive,
-            "1234",
-        );
-
-        for expected in [
-            "has NOT run",
-            "pending execution 1234",
-            "Pending Approvals",
-            "Do not call approve_execution or reject_execution",
-            "get_pending_execution",
-            "\"pending_id\": \"1234\"",
-            "repeat this exact call",
-            "identical arguments",
-            "'delete_records'",
-            "Destructive",
-        ] {
-            assert!(
-                message.contains(expected),
-                "missing {expected:?} in {message}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn test_authorize_metadata_operation_allows() {
-        let state = create_test_state();
-        let middleware = GovernanceMiddleware::new(state);
-
-        let result = middleware
-            .authorize_and_execute(
-                "list_connections",
-                None,
-                ExecutionClassification::Metadata,
-                || async { Ok(CallToolResult::success(vec![])) },
-            )
-            .await;
-
-        if let Err(ref err) = result {
-            tracing::error!(
-                code = ?err.code,
-                message = %err.message,
-                "Authorization failed"
-            );
-        }
-        assert!(
-            result.is_ok(),
-            "Metadata operations should be allowed by default"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_authorize_unknown_client_denies() {
-        let mut state = create_test_state();
-        state.client_id = "unknown-client".to_string();
-        let middleware = GovernanceMiddleware::new(state);
-
-        let result = middleware
-            .authorize_and_execute(
-                "select_data",
-                Some("test-connection"),
-                ExecutionClassification::Read,
-                || async { Ok(CallToolResult::success(vec![])) },
-            )
-            .await;
-
-        assert!(result.is_err(), "Unknown client should be denied");
-        let err = result.unwrap_err();
-        // Error message could be "client not trusted" or similar
-        assert!(!err.message.is_empty(), "Error should have a message");
-    }
-
-    #[tokio::test]
-    async fn test_handler_execution_success() {
-        let state = create_test_state();
-        let middleware = GovernanceMiddleware::new(state);
-
-        let result = middleware
-            .authorize_and_execute(
-                "list_connections", // Use a tool that's in the builtin policies
-                None,
-                ExecutionClassification::Metadata,
-                || async {
-                    Ok(CallToolResult::success(vec![
-                        rmcp::model::ContentBlock::text("test result"),
-                    ]))
-                },
-            )
-            .await;
-
-        assert!(result.is_ok());
-        let call_result = result.unwrap();
-        assert!(call_result.is_error == Some(false));
-        assert_eq!(call_result.content.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_handler_execution_failure_propagates() {
-        let state = create_test_state();
-        let middleware = GovernanceMiddleware::new(state);
-
-        let result = middleware
-            .authorize_and_execute(
-                "list_connections", // Use a tool that's in the builtin policies
-                None,
-                ExecutionClassification::Metadata,
-                || async { Err(McpError::internal_error("Test error".to_string(), None)) },
-            )
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.message, "Test error");
-    }
-
-    /// Builds a test state holding one profile with the given read-only
-    /// setting, on which the test client has the admin role.
-    async fn state_with_profile(read_only_flag: bool) -> (ServerState, String) {
-        let state = create_test_state();
-
-        let mut profile = dbflux_core::ConnectionProfile::new(
-            "read-only-test",
-            dbflux_core::DbConfig::SQLite {
-                path: ":memory:".into(),
-                connection_id: None,
-            },
-        );
-        profile.read_only_flag = read_only_flag;
-        let connection_id = profile.id.to_string();
-
-        state.profile_manager.write().await.add(profile);
-
-        state
-            .runtime
-            .write()
-            .await
-            .save_connection_policy_assignment_mut(dbflux_mcp::ConnectionPolicyAssignmentDto {
-                connection_id: connection_id.clone(),
-                assignments: vec![dbflux_policy::ConnectionPolicyAssignment {
-                    actor_id: "test-client".to_string(),
-                    scope: dbflux_policy::PolicyBindingScope {
-                        connection_id: connection_id.clone(),
-                    },
-                    role_ids: vec!["builtin/admin".to_string()],
-                    policy_ids: vec![],
-                }],
-            })
-            .expect("assignment should save");
-
-        (state, connection_id)
-    }
-
-    async fn authorize_on(
-        state: ServerState,
-        connection_id: &str,
-        tool_id: &str,
-        classification: ExecutionClassification,
-    ) -> (Result<CallToolResult, McpError>, bool) {
-        let handler_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let middleware = GovernanceMiddleware::new(state);
-
-        let result = middleware
-            .authorize_and_execute(tool_id, Some(connection_id), classification, {
-                let handler_ran = handler_ran.clone();
-                || async move {
-                    handler_ran.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok(CallToolResult::success(vec![]))
-                }
-            })
-            .await;
-
-        (
-            result,
-            handler_ran.load(std::sync::atomic::Ordering::SeqCst),
-        )
-    }
-
-    #[tokio::test]
-    async fn read_only_profile_denies_a_write_before_the_policy() {
-        let (state, connection_id) = state_with_profile(true).await;
-
-        let (result, handler_ran) = authorize_on(
-            state,
-            &connection_id,
-            "insert_record",
-            ExecutionClassification::Write,
-        )
-        .await;
-
-        let error = result.expect_err("a write on a read-only profile must be denied");
-        assert_eq!(
-            error.data,
-            Some(serde_json::json!({
-                "code": dbflux_mcp::server::authorization::READ_ONLY_CONNECTION_CODE
-            }))
-        );
-        assert!(error.message.contains("read-only"), "{}", error.message);
-        assert!(!handler_ran, "the handler must not run");
-    }
-
-    #[tokio::test]
-    async fn read_only_profile_still_allows_a_read() {
-        let (state, connection_id) = state_with_profile(true).await;
-
-        let (result, handler_ran) = authorize_on(
-            state,
-            &connection_id,
-            "select_data",
-            ExecutionClassification::Read,
-        )
-        .await;
-
-        assert!(result.is_ok(), "a read must still run: {result:?}");
-        assert!(handler_ran);
-    }
-
-    #[tokio::test]
-    async fn writable_profile_leaves_a_write_to_the_policy() {
-        let (state, connection_id) = state_with_profile(false).await;
-
-        let (result, handler_ran) = authorize_on(
-            state,
-            &connection_id,
-            "insert_record",
-            ExecutionClassification::Write,
-        )
-        .await;
-
-        let error = result.expect_err("the admin role asks for approval of a write");
-        let code = error
-            .data
-            .as_ref()
-            .and_then(|data| data.get("code"))
-            .and_then(|code| code.as_str());
-        assert_eq!(code, Some(APPROVAL_REQUIRED_CODE));
-        assert!(!handler_ran);
-    }
-
-    /// Builds a state whose profile was loaded with `loaded_flag` and is
-    /// stored with `stored_flag`, as after the user toggles the flag in the
-    /// GUI while the server runs.
-    async fn state_with_stored_profile(
-        loaded_flag: bool,
-        stored_flag: bool,
-    ) -> (ServerState, String, tempfile::TempDir) {
-        let (mut state, connection_id) = state_with_profile(loaded_flag).await;
-
-        let store_dir = tempfile::tempdir().expect("temp dir should be created");
-        let db_path = store_dir.path().join("dbflux.db");
-        let storage = dbflux_storage::StorageRuntime::for_path(db_path.clone())
-            .expect("storage should initialize");
-
-        let profile_uuid: uuid::Uuid = connection_id.parse().expect("profile id is a uuid");
-        let mut stored =
-            dbflux_storage::repositories::connection_profiles::ConnectionProfileDto::new(
-                profile_uuid,
-                "read-only-test".to_string(),
-            );
-        stored.read_only = stored_flag;
-        storage
-            .connection_profiles()
-            .insert(&stored)
-            .expect("profile should be stored");
-
-        state.profile_store_path = Some(db_path);
-
-        (state, connection_id, store_dir)
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn profile_set_to_read_only_after_startup_denies_a_write() {
-        let (state, connection_id, _store_dir) = state_with_stored_profile(false, true).await;
-
-        let (result, handler_ran) = authorize_on(
-            state,
-            &connection_id,
-            "insert_record",
-            ExecutionClassification::Write,
-        )
-        .await;
-
-        let error = result.expect_err("a write on a profile now read-only must be denied");
-        assert_eq!(
-            error.data,
-            Some(serde_json::json!({
-                "code": dbflux_mcp::server::authorization::READ_ONLY_CONNECTION_CODE
-            }))
-        );
-        assert!(!handler_ran);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn profile_made_writable_after_startup_leaves_a_write_to_the_policy() {
-        let (state, connection_id, _store_dir) = state_with_stored_profile(true, false).await;
-
-        let (result, handler_ran) = authorize_on(
-            state,
-            &connection_id,
-            "insert_record",
-            ExecutionClassification::Write,
-        )
-        .await;
-
-        let error = result.expect_err("the admin role asks for approval of a write");
-        let code = error
-            .data
-            .as_ref()
-            .and_then(|data| data.get("code"))
-            .and_then(|code| code.as_str());
-        assert_eq!(code, Some(APPROVAL_REQUIRED_CODE));
-        assert!(!handler_ran);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn unreadable_profile_store_denies_a_write_on_a_profile_writable_at_startup() {
-        let (mut state, connection_id) = state_with_profile(false).await;
-        let store_dir = tempfile::tempdir().expect("temp dir should be created");
-        state.profile_store_path = Some(store_dir.path().join("missing").join("dbflux.db"));
-
-        let (result, handler_ran) = authorize_on(
-            state,
-            &connection_id,
-            "insert_record",
-            ExecutionClassification::Write,
-        )
-        .await;
-
-        let error = result.expect_err("an unreadable store must not let a write through");
-        assert_eq!(
-            error.data,
-            Some(serde_json::json!({
-                "code": dbflux_mcp::server::authorization::READ_ONLY_CONNECTION_CODE
-            }))
-        );
-        assert!(!handler_ran);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn unreadable_profile_store_still_allows_a_read() {
-        let (mut state, connection_id) = state_with_profile(false).await;
-        let store_dir = tempfile::tempdir().expect("temp dir should be created");
-        state.profile_store_path = Some(store_dir.path().join("missing").join("dbflux.db"));
-
-        let (result, handler_ran) = authorize_on(
-            state,
-            &connection_id,
-            "select_data",
-            ExecutionClassification::Read,
-        )
-        .await;
-
-        assert!(result.is_ok(), "{result:?}");
-        assert!(handler_ran);
-    }
-}
+pub(crate) mod tests;

@@ -37,6 +37,7 @@ open = "5"
 libc = "0.2"
 
 [features]
+telemetry = ["dbflux_ipc/telemetry", "dbflux_app/telemetry", "dbflux_ui_base/telemetry", "dbflux_ui_document/telemetry", "dbflux_ui_windows/telemetry"]
 # dbflux_ui is driver-agnostic: it has no per-driver features and no driver
 # dependencies. The cross-cutting features only forward to the workspace/app and
 # the sibling UI crates so a single feature set is unified across the build.
@@ -54,6 +55,8 @@ gpui = { workspace = true, features = ["test-support"] }
 dbflux_ui_base = { workspace = true, features = ["test-support"] }
 dbflux_ui_document = { workspace = true, features = ["test-support"] }
 dbflux_test_support.workspace = true
+dbflux_audit.workspace = true
+dbflux_telemetry.workspace = true
 parquet.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true

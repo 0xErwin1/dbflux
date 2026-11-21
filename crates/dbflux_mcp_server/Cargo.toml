@@ -13,6 +13,7 @@ name = "dbflux_mcp_server"
 path = "src/lib.rs"
 
 [features]
+telemetry = ["dbflux_core/telemetry", "dbflux_ipc/telemetry", "dep:interprocess", "interprocess/tokio", "tokio/net", "tokio/time"]
 sqlite = ["dbflux_driver_sqlite"]
 postgres = ["dbflux_driver_postgres"]
 mysql = ["dbflux_driver_mysql"]
@@ -34,6 +35,7 @@ dbflux_approval = { workspace = true }
 dbflux_audit = { workspace = true }
 dbflux_storage = { workspace = true }
 dbflux_ipc = { workspace = true }
+interprocess = { workspace = true, optional = true }
 
 # Optional driver crates
 dbflux_driver_sqlite = { workspace = true, optional = true }
@@ -87,7 +89,7 @@ dbflux_driver_sqlite = { workspace = true }
 tempfile = "3.10"
 
 # Async test runtime
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
 
 [lints]
 workspace = true

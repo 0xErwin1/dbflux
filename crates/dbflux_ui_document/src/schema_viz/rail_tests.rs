@@ -70,6 +70,8 @@ fn diagram_with_open_inspector(
                 None,
                 SchemaVizMode::Global,
                 app_state,
+                #[cfg(feature = "telemetry")]
+                None,
                 window,
                 cx,
             )
@@ -165,6 +167,8 @@ fn activating_a_diagram_tab_without_an_inspector_mounts_nothing(cx: &mut TestApp
                 None,
                 SchemaVizMode::Global,
                 app_state,
+                #[cfg(feature = "telemetry")]
+                None,
                 window,
                 cx,
             )

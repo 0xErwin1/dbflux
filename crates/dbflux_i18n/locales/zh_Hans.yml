@@ -172,6 +172,9 @@ components:
     compact: 紧凑
     cancel: 取消
     save: 保存
+  json_report_preview:
+    copy_raw: 复制原始内容
+    close: 关闭
   value_source:
     literal: 字符
     env: 环境变量
@@ -4334,6 +4337,9 @@ modals:
     compact: 紧凑
     cancel: 取消
     confirm: 导入
+  confirm:
+    cancel: 取消
+    confirm: 确认
   mutation_confirm:
     title: 确认变更
     sample_unavailable: 示例预览不可用
@@ -4580,6 +4586,7 @@ settings:
   discard:
     title: 放弃未保存的更改
     body: "您有未保存的更改。要放弃它们并切换到 %{section} 吗？"
+    confirm: 放弃
   editor_panel:
     title:
       edit: "编辑 %{noun}"
@@ -5624,7 +5631,7 @@ settings:
     general_group: 常规
     general: 常规
     keybindings: 键盘快捷键
-    updates: 更新
+    updates: 更新与隐私
     audit: 审计
     about: 关于
     network: 网络
@@ -6097,8 +6104,8 @@ workspace:
   default_object_type: 对象
 updates:
   settings:
-    title: 更新
-    subtitle: 新版本检查以及更新后的更新日志。
+    title: 更新与隐私
+    subtitle: 新版本检查、更新后的更新日志以及使用统计。
     group: 更新
     new_versions: 新版本
     check_on_startup: 启动时在 GitHub 上检查新版本
@@ -6119,6 +6126,41 @@ updates:
     save: 保存
     saved: 更新设置已保存。
     save_error: "无法保存更新设置：%{error}"
+    usage_heading: 使用统计
+    usage_level: 级别
+    level_off: "关闭"
+    level_minimal: "最小"
+    level_basic: "基本"
+    level_hint: "「关闭」不发送任何内容。「最小」每个构建发送一次版本通知，并每周发送一次活动事件。「基本」是默认值，以每周使用报告代替该事件。"
+    what_is_sent: 发送内容
+    collected_build: "构建：版本、渠道、操作系统、架构"
+    collected_language: "系统语言和国家，每周"
+    collected_counts: "功能使用计数（查询、仪表板、脚本等）"
+    collected_header: 采集内容
+    collected_minimal: 最小
+    collected_basic: 基本
+    collected_yes: "✓"
+    collected_no: "—"
+    counts_not_instrumented: "受支持的成功操作的有上限计数。不含刷新、失败或取消；MCP 覆盖有限。参见隐私政策。"
+    install_id: 安装 ID
+    install_id_hint: "随机生成，重置前保持不变，是假名而非匿名。不与您或此机器绑定。重置会取消待发送内容并保留已确认的构建。"
+    reset_install_id: 重置 ID
+    reset_install_id_title: 重置安装 ID？
+    reset_install_id_body: "新的随机 ID 将替换当前 ID。待发送内容会被取消，已确认的构建保持已确认状态。"
+    reports: 报告
+    no_report_sent_yet: 尚未发送过报告
+    checking_last_report: 正在查询最近的报告…
+    delivery_unavailable: "发送不可用：未配置端点。"
+    report_load_failed: 无法加载最近的报告。
+    last_sent: "上次发送 %{when} · %{level} · %{size}"
+    level_off_display: 关闭
+    level_minimal_display: 最小
+    level_basic_display: 基本
+    view_report: 查看最近报告
+    open_in_audit: 在审计中打开
+    reports_audit_note: "每份报告都会记录在审计日志中：发送时间、级别和完整内容。"
+    telemetry_save_failed: 无法保存遥测设置。
+    telemetry_reset_failed: 无法重置安装 ID。
   ago:
     just_now: 刚刚
     minutes: "%{count} 分钟前"
@@ -6156,13 +6198,23 @@ updates:
   welcome:
     title: 欢迎使用 DBFlux
     tagline: 面向键盘操作的客户端，支持 SQL、文档、键值、时间序列和对象存储。
+    telemetry_save_failed: 无法保存遥测提示的确认状态。
+    telemetry_heading: 使用统计
+    telemetry_helper: "帮助确定开发方向。默认级别为「基本」。"
+    telemetry_off: "关闭"
+    telemetry_off_description: "不发送任何内容。"
+    telemetry_minimal: "最小"
+    telemetry_minimal_description: "每个构建及每周一次通知：版本、OS、架构和随机 ID。"
+    telemetry_basic: "基本"
+    telemetry_basic_description: "在「最小」基础上发送周报：系统语言、国家和功能计数。"
+    telemetry_privacy: "随机假名 ID。绝不发送查询、结果、凭据、路径或连接元数据。完整报告保存在本地 Audit。选择「开始使用」之前不发送任何内容。"
     whats_new: 新功能
     updates: 更新
     notify: 有新版本时通知我
     notify_hint: 启动时 DBFlux 会向 GitHub 查询最新版本，不会发送任何关于您的信息。
     show_whats_new: 每次更新后显示新功能
     show_whats_new_hint: 新版本首次启动时打开一次此更新日志。
-    change_later: 稍后可在 设置 › 更新 中更改
+    change_later: "以后可在设置 › 更新与隐私中更改"
     get_started: 开始使用
     full_changelog: 完整更新日志
 notifications:

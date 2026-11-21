@@ -561,6 +561,8 @@ fn run_gui() {
                 workspace.clone(),
                 window.window_handle(),
                 auth_token,
+                #[cfg(feature = "telemetry")]
+                app_state.downgrade(),
                 cx,
             );
             info!("IPC server started");

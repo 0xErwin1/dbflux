@@ -1,18 +1,28 @@
 # Política de privacidad
 
-DBFlux es una aplicación de escritorio local-first. No recopila, transmite ni
-almacena información sobre ti ni sobre tu uso. El sitio web del proyecto no
-usa cookies ni carga scripts de terceros. Este documento explica qué significa
-eso en la práctica y nombra a los proveedores de infraestructura que ven el
-tráfico en su camino hacia ti.
+DBFlux es una aplicación de escritorio local-first. La telemetría opcional tiene
+tres niveles: Apagado no envía nada, Mínimo envía un aviso de compilación y un
+evento de actividad semanal, y Básico (preseleccionado en el diálogo de
+bienvenida) envía un informe semanal con recuentos agregados de uso en lugar del
+evento de actividad. No se envía nada hasta que confirmas el aviso de
+bienvenida. Nunca envía identificadores de personas, consultas, resultados ni
+metadatos de conexión. El sitio web del proyecto no usa
+cookies ni carga scripts de terceros. Este documento describe esos límites y
+los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
 
 ## Ruta rápida
 
-1. La aplicación envía datos únicamente a los servidores de base de datos que
-   configuras, y solo lo necesario para ejecutar las consultas que pides.
-2. No hay telemetría, ni reporte de fallos, ni analítica de uso, ni cuenta de
-   usuario. Nada llama a casa.
-3. El sitio web y la documentación son páginas estáticas. No usan cookies, no
+1. El tráfico de base de datos va directamente a los servidores que configuras,
+   con lo necesario para ejecutar las consultas que pides; la telemetría opcional
+   es independiente.
+2. La telemetría tiene tres niveles: Apagado, Mínimo y Básico. Básico viene
+   preseleccionado en el diálogo de bienvenida, pero no se envía nada hasta que
+   confirmas el aviso, y Apagado no envía nada. Nunca envía
+   consultas, resultados, credenciales, rutas de archivos ni metadatos de
+   conexión. Los detalles están en [Telemetría](#telemetría-opcional).
+3. No hay informes de fallos, analítica de uso más allá de la telemetría descrita
+   ni cuentas.
+4. El sitio web y la documentación son páginas estáticas. No usan cookies, no
    cargan scripts de terceros y no guardan registro de visitantes
    individuales. Una medición anónima del uso de las páginas, gestionada por el
    servidor propio del proyecto, se describe en
@@ -23,12 +33,12 @@ tráfico en su camino hacia ti.
 
 | Pregunta | Respuesta |
 |----------|-----------|
-| ¿DBFlux envía datos de uso a algún sitio? | No. No hay telemetría ni reporte de fallos. |
-| ¿Comprueba si hay actualizaciones? | No. Las actualizaciones se encuentran en la página de releases de GitHub. |
-| ¿Qué conexiones de red abre? | Solo las que configuras: servidores de base de datos, túneles SSH, proxies y APIs cloud de los drivers que uses. |
+| ¿DBFlux envía datos de uso a algún sitio? | Solo después de confirmar el aviso de bienvenida. Mínimo envía un aviso de compilación y un evento de actividad semanal, sin datos de uso. Básico, preseleccionado en el diálogo de bienvenida, sustituye el evento de actividad por un informe semanal que incluye recuentos de uso. Apagado no envía nada. Ver [Telemetría](#telemetría-opcional). |
+| ¿Comprueba si hay actualizaciones? | Sí, salvo que lo desactives. Al iniciar consulta la API de GitHub (`api.github.com`) por las últimas releases; no envía ningún identificador. Se desactiva con «Buscar una nueva versión en GitHub al iniciar» en Ajustes › Actualizaciones y privacidad. |
+| ¿Qué conexiones de red abre? | Las que configuras: servidores de base de datos, túneles SSH, proxies, APIs cloud y el destino de telemetría bajo las condiciones siguientes. |
 | ¿Dónde viven mis datos? | En tu máquina, en un único archivo SQLite más el llavero del sistema operativo para los secretos. |
-| ¿Guarda un registro de lo que hago? | Solo el log de auditoría, en tu máquina. Registra conexiones, consultas y ejecuciones de hooks para que puedas revisarlas, y nunca sale del equipo en el que se escribió. |
-| ¿Se comparte algo con el proyecto? | No. Los reportes de error y los logs llegan al proyecto solo cuando tú los adjuntas a un issue. |
+| ¿Guarda un registro de lo que hago? | El historial y el log de auditoría registran el trabajo localmente. Básico también conserva contadores agregados acotados; solo los informes de telemetría pueden enviarse automáticamente bajo las condiciones siguientes. |
+| ¿Se comparte algo con el proyecto? | Los eventos de telemetría llegan por defecto al colector del proyecto en `https://telemetry.dbflux.dev` una vez confirmado el aviso de bienvenida, salvo que el nivel sea Apagado. Los reportes de error y los logs llegan al proyecto solo cuando tú los adjuntas a un issue. |
 
 Las conexiones a una base de datos, un host SSH, un proxy o un proveedor cloud
 van directamente desde tu máquina al servidor que indicaste. El proyecto no
@@ -37,6 +47,123 @@ opera ninguno de esos servidores y no tiene visibilidad de ese tráfico.
 [Tus datos en este equipo](#tus-datos-en-este-equipo) documenta los archivos que DBFlux
 escribe, qué registra el log de auditoría, cómo se guardan los secretos y cómo
 hacer copia de seguridad o reiniciar la aplicación por completo.
+
+### Telemetría (opcional)
+
+DBFlux incluye un módulo de telemetría opcional. Es una funcionalidad
+compilada que puede excluirse por completo con `--no-default-features`, como
+las demás funcionalidades por defecto. Por defecto, los eventos van a
+`https://telemetry.dbflux.dev`. No se envía nada y no se cuenta ningún uso hasta
+que confirmas con Empezar el aviso de bienvenida mostrado de forma visible.
+Ocultarlo mediante código o cerrarlo con Escape no es una confirmación.
+
+Básico viene preseleccionado en el diálogo de bienvenida, así que confirmar sin
+cambiar la selección aplica Básico; elige Mínimo o Apagado ahí para enviar
+menos. Si habías desactivado el diálogo de bienvenida, se abre en cada arranque
+tras actualizar, siempre que la telemetría arranque, hasta que confirmes el
+aviso.
+
+| Nivel | Qué envía |
+|-------|-----------|
+| Apagado | Nada: ni aviso, ni evento de actividad, ni informe de uso. No se pone nada en cola, y elegir Apagado borra todos los envíos pendientes y los contadores de uso. |
+| Mínimo | Un aviso por cada compilación publicada, más un evento de actividad por semana: identificador aleatorio de instalación, versión de la app, canal, sistema operativo y arquitectura. Sin idioma del sistema, país ni recuentos de uso. |
+| Básico (preseleccionado) | El aviso de Mínimo, más un informe semanal en lugar del evento de actividad. El informe añade idioma del sistema (no el de la interfaz), país (ver abajo) y recuentos acotados de operaciones compatibles exitosas en las seis categorías siguientes. |
+
+**País.** La app no envía país; envía el valor de relleno `ZZ`. Solo en los
+informes de Básico, el colector guarda el país aproximado que Cloudflare resuelve
+en su borde. El colector nunca guarda la dirección IP. Cloudflare y Fly.io, que
+transportan la petición, conservan sus propios registros de peticiones.
+
+**Retención.** El colector conserva los eventos en bruto, incluido el
+identificador de instalación, durante 90 días desde su recepción. Después solo
+quedan recuentos sin identificadores.
+
+**Desactivarla.** Elige Apagado en el diálogo de bienvenida o en Ajustes ›
+Actualizaciones y privacidad. Para desactivar el envío sin abrir la app, por
+ejemplo en equipos gestionados, define la variable de entorno
+`DBFLUX_TELEMETRY=off`; tiene prioridad sobre cualquier nivel y destino. Una
+compilación sin la característica `telemetry` no contiene código de telemetría.
+
+**Sustitución del destino.** `https://telemetry.dbflux.dev` es el destino por
+defecto, no el único posible. Si defines `DBFLUX_TELEMETRY_ENDPOINT` con otra URL
+HTTPS, los informes se envían allí una vez confirmado el aviso, y un valor no
+válido desactiva el envío en lugar de volver al destino por defecto. La
+retención, el país y los encargados del tratamiento descritos en esta sección
+se refieren solo al colector del proyecto; un destino sustituido lo rige quien
+lo opere.
+
+#### Qué operaciones cuentan
+
+Los recuentos miden operaciones completas, no filas ni rendimiento. Una operación
+exitosa con cero filas puede contar. Las actualizaciones en segundo plano, los
+fallos parciales, los errores y las cancelaciones no cuentan. Básico y la
+confirmación del aviso deben estar activos antes de comenzar; una fuente no
+disponible o Audit desactivado o degradado impiden contabilizar.
+
+| Categoría | Cobertura |
+|-----------|-----------|
+| `query_run` | Consultas explícitas del usuario desde la barra de herramientas, comandos o margen del editor; no actualizaciones automáticas ni ejecuciones derivadas de Explain. |
+| `visual_query_builder` | Run del usuario con ejecución completa exitosa. Poner una solicitud en cola o aprobarla no es ejecutarla y no cuenta. |
+| `dashboard_open` | Aperturas o reenfoques directos desde la barra lateral con metadatos de dashboard válidos; no creación, importación ni restauración de sesión implícitas. |
+| `script_run` | Ejecuciones explícitas de scripts del editor con código de salida canónico 0, sin timeout ni ejecución detached. |
+| `mcp_tool` | Solo operaciones principales revisadas, compatibles y exitosas a través del propietario de primer plano de una GUI en ejecución y autenticada; ver los límites siguientes. |
+| `schema_inspect` | Inspección explícita enfocada o global que carga por primera vez todos los metadatos requeridos hasta Ready; no reenfocar una pestaña existente. Un alcance deliberadamente acotado a 100 tablas puede contar; los metadatos requeridos fallidos no, pero una recuperación completa sí. |
+
+**La cobertura de MCP es limitada, no un recuento de todas las llamadas.** Un
+servidor independiente sin el propietario de la GUI en ejecución no cuenta.
+Herramientas desconocidas, ayuda/protocolo, controles de aprobación y aprobaciones
+pendientes no cuentan. `count_records`, `insert_record` y `list_scripts` se excluyen
+incluso si tienen éxito porque sus APIs actuales no conservan suficiente evidencia
+de finalización. `update_records` y `delete_records` requieren la finalización
+con un `QueryResult` tipado de la mutación principal; un `DocumentCrudResult`
+opaco exitoso no basta. Las finalizaciones tipadas comprobadas de update, upsert
+y delete SQL pueden contar, incluso con cero filas afectadas. Estas exclusiones
+no cambian si las propias herramientas tienen éxito.
+
+Para operaciones MCP compatibles, el permiso se adquiere después de que la
+autorización permite el trabajo y antes de iniciarlo. El contador se acredita
+solo tras completar la operación principal y registrar con éxito la auditoría
+de ejecución, no al autorizar. Se usa la autenticación local existente, no una
+nueva garantía de identidad de cliente de confianza. Una cancelación puede dejar
+un permiso acotado hasta una futura revisión de caducidad en primer plano (tope
+de 24 horas); la limpieza no es inmediata ni se garantiza cobertura de llamadas
+arbitrariamente largas. Los nombres de herramientas aquí son detalles locales
+de cobertura, nunca campos del contenido de telemetría.
+
+Datos que no cambian según el nivel:
+
+- El identificador de instalación es un UUID aleatorio creado en el primer
+  arranque y se conserva mientras exista la instalación: no rota por calendario.
+  Es **seudónimo, no anónimo**: identifica una instalación, no una persona ni un
+  dispositivo único. Cada informe también tiene un UUID de entrega, único por
+  informe. Restablecer el identificador en Ajustes lo reemplaza por uno nuevo
+  aleatorio y la app no envía nada que vincule a los dos. Restablecer no borra
+  los envíos anteriores del [log de auditoría](#auditoría-y-privacidad) local,
+  que puede conservar el identificador anterior, ni retira los eventos que el
+  colector ya recibió; estos caducan según la retención indicada arriba.
+- Nunca se envían: identificadores de operaciones, consultas, clientes o personas,
+  nombres de herramientas, consultas, resultados, credenciales, rutas de archivos,
+  metadatos de conexión, datos de actores entre procesos ni texto de error sin
+  restricciones. No hay informes Extended, estadísticas públicas, recuentos por
+  motor, reportes de errores ni tiempos de rendimiento.
+- Cada intento de entrega registra el contenido completo correlacionado, el nivel
+  y el resultado en el [log de auditoría](#auditoría-y-privacidad) local. Las
+  etiquetas legibles no cambian el almacenamiento, la copia, la exportación ni
+  el contenido enviado sin procesar. Los eventos solo van al colector del
+  proyecto en `https://telemetry.dbflux.dev` por defecto, para ayudar a orientar
+  el desarrollo. Consulta la sustitución del destino más arriba.
+- Reiniciar el id de instalación en Configuración › Actualizaciones y
+  privacidad reemplaza el identificador de inmediato y cancela los envíos
+  pendientes; las compilaciones ya confirmadas siguen confirmadas.
+
+El nivel y los informes están en Configuración › Actualizaciones y
+privacidad. El nivel se aplica al guardar; reiniciar a los valores por
+defecto deja Básico sin tocar el id de instalación. Elegir Básico o guardar no
+promete un informe de red inmediato. Salir de Básico borra el informe Básico
+pendiente y los contadores, y Apagado también borra un aviso pendiente; un
+envío ya entregado a la red aún puede completarse. Confirmar una instantánea
+enviada conserva los incrementos posteriores. Reiniciar invalida el trabajo de
+uso en curso anterior y conserva el historial de compilaciones confirmadas.
 
 ## Tus datos en este equipo
 

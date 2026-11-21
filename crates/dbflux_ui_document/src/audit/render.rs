@@ -61,6 +61,10 @@ const AUDIT_COMPACT_JSON_LIMIT: usize = 160;
 /// detail, since the row truncates them.
 const AUDIT_LONG_SUMMARY: usize = 100;
 
+/// Action of the telemetry producer's audit events. Their `payload` detail
+/// holds the frozen payload bytes as a JSON string to preserve them exactly.
+const TELEMETRY_DELIVERY_ACTION: &str = "telemetry.delivery";
+
 /// Column widths of the event table (P1Audit: 26, 110, 70, 130, 1fr, 140,
 /// 70, 90); an external stream uses a partition and an event id column.
 struct AuditColumns;
@@ -1068,10 +1072,10 @@ impl AuditDocument {
 
     /// A code block of a detail: 8 px cut, panel fill, line border, 12 px
     /// mono at 1.7 line height, JSON keys and values colored.
-    fn detail_json_block(json: &str, cx: &App) -> Div {
+    fn detail_json_block(action: Option<&str>, json: &str, cx: &App) -> Div {
         let theme = cx.theme();
         let colors = SyntaxColors::for_current(cx);
-        let text = Self::display_json(json);
+        let text = Self::display_event_details(action, json);
         let highlights = json_highlights(&text, &colors);
 
         div()
@@ -1094,17 +1098,58 @@ impl AuditDocument {
     /// Compact JSON when it fits on one line of the detail, pretty-printed
     /// otherwise; text that is not JSON is shown as is.
     pub(super) fn display_json(json: &str) -> String {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
-            return json.to_string();
-        };
+        match serde_json::from_str::<serde_json::Value>(json) {
+            Ok(value) => Self::display_value(&value),
+            Err(_) => json.to_string(),
+        }
+    }
 
+    /// `display_json` for a value that is already parsed.
+    fn display_value(value: &serde_json::Value) -> String {
         let compact = value.to_string();
 
         if compact.chars().count() <= AUDIT_COMPACT_JSON_LIMIT {
             return Self::spaced_json(&compact);
         }
 
-        serde_json::to_string_pretty(&value).unwrap_or(compact)
+        serde_json::to_string_pretty(value).unwrap_or(compact)
+    }
+
+    /// Display text of an event's details JSON. The stored bytes are shown
+    /// as they are, except that a `telemetry.delivery` event's `payload`
+    /// detail — stored as a JSON string to preserve the raw payload bytes —
+    /// is decoded into its object form for reading. Display-only: the
+    /// event, its storage and every copy/export path keep the original
+    /// bytes, and only the `payload` key of that one action is decoded.
+    pub(super) fn display_event_details(action: Option<&str>, json: &str) -> String {
+        if action != Some(TELEMETRY_DELIVERY_ACTION) {
+            return Self::display_json(json);
+        }
+
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+            return Self::display_json(json);
+        };
+
+        let Some(details) = value.as_object_mut() else {
+            return Self::display_json(json);
+        };
+
+        let decoded = match details.get("payload") {
+            // Already an object: leave the stored value untouched.
+            Some(serde_json::Value::Object(_)) => return Self::display_json(json),
+            Some(serde_json::Value::String(payload)) => payload
+                .parse::<serde_json::Value>()
+                .ok()
+                .filter(serde_json::Value::is_object),
+            _ => None,
+        };
+
+        let Some(decoded) = decoded else {
+            return Self::display_json(json);
+        };
+
+        details.insert("payload".to_string(), decoded);
+        Self::display_value(&value)
     }
 
     /// Adds the spaces of the board's inline JSON (`{ "a": 1, "b": 2 }`) to
@@ -1309,7 +1354,7 @@ impl AuditDocument {
                 )
             })
             .when_some(details_json, |detail, json| {
-                detail.child(Self::detail_json_block(&json, cx))
+                detail.child(Self::detail_json_block(event.action.as_deref(), &json, cx))
             })
             .child(
                 div()
@@ -1892,4 +1937,6 @@ mod tests {
 
         assert!(!label.is_empty());
     }
+
+    mod telemetry_details;
 }

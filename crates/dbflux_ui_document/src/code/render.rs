@@ -1211,7 +1211,7 @@ impl Render for CodeDocument {
         if std::mem::take(&mut self.pending.chart_reexecute)
             && !self.result_tabs.result_tabs.is_empty()
         {
-            self.run_query(window, cx);
+            self.run_query_with_origin(ExecutionOrigin::Automatic, window, cx);
         }
 
         if let Some(error) = self.pending.error.take() {

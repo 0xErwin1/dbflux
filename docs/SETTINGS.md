@@ -9,6 +9,7 @@ window is organized into sections down the left side.
 | Section | Covers |
 |---------|--------|
 | [General](#general) | App-wide behavior: theme, startup, refresh, query safety. |
+| [Updates & privacy](#updates--privacy) | Update checks, the changelog, and the optional telemetry levels. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
@@ -91,8 +92,9 @@ shown by their native names. System follows your OS locale and falls back to
 English when no shipped locale matches unambiguously. A language change takes
 effect after you restart DBFlux, so the control shows a permanent note to that
 effect. Partial catalogs fall back to English for untranslated general UI text.
-This release only translates the General section; the rest of the UI is being
-converted crate by crate and stays in English for now.
+This release translates, among others, the General and Updates & privacy
+sections; the rest of the UI is being converted crate by crate and stays in
+English for now.
 
 ### Editor
 
@@ -170,12 +172,9 @@ For a single statement that only reads, the footer then offers **Count rows**,
 which runs the statement inside `SELECT COUNT(*)` without fetching its rows and
 shows "10,000/52,310 rows loaded" (SQL connections only), and **Load all
 rows**, which runs the statement again without the limit in the same result
-tab. Both are also in the table menu (`m`). Scrolling to the last loaded row,
-or moving the cursor onto it, fetches the next rows of that statement, as many
-as the limit, and appends them; this repeats until the statement has no more
-rows. While a column is sorted in the grid, the next rows are not fetched. In a
-script with several statements the limit is one budget shared by all of its
-result sets, and every statement still runs.
+tab. Both are also in the table menu (`m`). In a script with several statements
+the limit is one budget shared by all of its result sets, and every statement
+still runs.
 
 The limit reaches only a driver whose `execute` enforces it: PostgreSQL,
 MySQL/MariaDB, SQL Server, SQLite, DuckDB, MongoDB, Redis, Turso, InfluxDB,
@@ -201,6 +200,86 @@ others.
 
 See [Data & Privacy](../PRIVACY.md#data-locations) for how the Nightly and
 stable databases are separated.
+
+---
+
+## Updates & privacy
+
+The update-check and changelog preferences, plus the optional telemetry
+levels. Changes are staged until you **Save** (Ctrl+S); **Reset to defaults**
+stages the defaults without saving.
+
+### Updates
+
+| Setting | Effect |
+|---------|--------|
+| Check GitHub for a new release at startup | Runs the update check when the app starts. |
+| Show what is new after each update | Opens the changelog once, the first time a new version starts. |
+| Check now | Runs an update check immediately. |
+| Open what is new / Show welcome again | Reopens the two dialogs. |
+
+### Usage statistics
+
+DBFlux has an optional telemetry module with three levels:
+
+- **Off** — nothing is sent: no ping, no activity event and no usage report.
+  Nothing is queued.
+- **Minimal** — a ping once per published build, plus one activity event per
+  week: random installation identifier, version, channel, OS and architecture.
+  No system language, country or usage counts.
+- **Basic** (preselected in the Welcome dialog) — Minimal's ping, plus a weekly
+  report instead of the activity event. The report adds system language (not
+  the UI language), country, and bounded counts of
+  supported successful query runs, visual builder runs, dashboard opens,
+  script runs, MCP operations and schema inspections. These are whole-operation
+  counts, including successful zero-row results, not row counts or timings.
+
+Nothing is queued, sent or counted until you confirm the Welcome disclosure
+with **Get started**. If you had disabled the Welcome dialog, it opens at every
+start after updating, whenever usage statistics start, until you confirm;
+closing it another way, such as with Escape, does not confirm.
+
+The app sends no country; it sends the placeholder `ZZ`. For Basic reports
+only, the collector stores the coarse country that Cloudflare resolves at its
+edge. The collector never stores the IP address; Cloudflare and Fly.io keep
+their own request logs.
+
+Background refreshes, partial failures, errors and cancellations do not count.
+Builder approvals without actual execution do not count; implicit dashboard
+creation, import and restore do not count. Script runs require canonical exit
+code 0 without timeout or detachment; schema inspection requires a new complete
+metadata load, not an existing-tab refocus.
+
+**MCP counts only reviewed, supported successful primary operations with an
+existing authenticated, running GUI foreground owner**, not every tool call or
+a standalone server without that owner. `count_records`, `insert_record` and
+`list_scripts` are excluded even when successful. `update_records` and
+`delete_records` require primary typed `QueryResult` mutation completion, not
+opaque successful `DocumentCrudResult`; proven typed SQL update/upsert/delete
+can count with zero affected rows. Help/protocol, unknown tools, approval
+controls and pending approvals do not count. Permission is acquired after Allow
+and before work; credit follows completed primary work and successful execution
+Audit. See the privacy policy below for the complete coverage limits.
+
+Events go to `https://telemetry.dbflux.dev`. Never sent: queries, results, credentials, file paths
+or connection metadata. See [Data & Privacy](../PRIVACY.md#telemetry-optional)
+for the full list of what a report contains and the operation coverage limits.
+Basic must be active and the visible Welcome disclosure confirmed
+before work starts; unavailable sources or disabled/degraded Audit prevent
+credit. Saving Basic does not guarantee an immediate send. Leaving Basic clears
+the pending Basic report and the counters, and Off also clears a pending ping;
+a delivery already handed to the network may still complete. Delivery
+acknowledgement preserves newer increments. Installation and delivery UUIDs are pseudonymous; operation, query,
+client and person identifiers, tool names and per-engine statistics are not sent.
+The installation id never rotates on a schedule; a reset preserves
+acknowledged-build history and sends no old/new ID link or retirement notice. Readable report
+labels do not alter raw payload storage, copy, export or transmission.
+
+| Control | Effect |
+|---------|--------|
+| Level (Off / Minimal / Basic) | The staged level; Left and Right or a click change it, Save applies it. |
+| Install id | A masked display of the pseudonymous identifier. **Reset id** replaces it at once, cancels pending sends, and keeps acknowledged builds. |
+| Reports | The last confirmed report, read from the durable audit log. **View last report** opens a read-only viewer over the stored payload; **Open in Audit** opens the audit viewer at the report's correlation id. |
 
 ---
 

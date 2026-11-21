@@ -320,7 +320,11 @@ impl DbFluxServer {
             connection
                 .execute(&request)
                 .map_err(|e| format!("Truncate error: {}", e))
-                .map(|_| ())
+                .map(|result| {
+                    #[cfg(feature = "telemetry")]
+                    crate::helper::observe_query_result(&result);
+                    drop(result);
+                })
         })
         .await?;
 
@@ -370,7 +374,11 @@ impl DbFluxServer {
             connection
                 .execute(&request)
                 .map_err(|e| format!("Drop table error: {}", e))
-                .map(|_| ())
+                .map(|result| {
+                    #[cfg(feature = "telemetry")]
+                    crate::helper::observe_query_result(&result);
+                    drop(result);
+                })
         })
         .await?;
 
@@ -403,7 +411,11 @@ impl DbFluxServer {
             connection
                 .execute(&request)
                 .map_err(|e| format!("Drop database error: {}", e))
-                .map(|_| ())
+                .map(|result| {
+                    #[cfg(feature = "telemetry")]
+                    crate::helper::observe_query_result(&result);
+                    drop(result);
+                })
         })
         .await?;
 
@@ -420,6 +432,153 @@ impl DbFluxServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn telemetry_discarded_destructive_results_reject_semantic_failure() {
+        use crate::{
+            connection_cache::CachedConnection,
+            governance::tests::{create_test_state, with_usage_owner},
+            telemetry_usage::scope_call,
+        };
+        use dbflux_core::{ConnectionProfile, DbConfig, DbKind, QueryResult};
+        use dbflux_test_support::fake_driver::FakeDriver;
+        struct DestructiveFixture(std::sync::Arc<dyn dbflux_core::Connection>);
+        impl dbflux_core::Connection for DestructiveFixture {
+            fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                self.0.metadata()
+            }
+            fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                self.0.dialect()
+            }
+            fn kind(&self) -> dbflux_core::DbKind {
+                self.0.kind()
+            }
+            fn execute(&self, request: &QueryRequest) -> Result<QueryResult, dbflux_core::DbError> {
+                self.0.execute(request)
+            }
+            fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                self.0.ping()
+            }
+            fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn cancel(
+                &self,
+                handle: &dbflux_core::QueryHandle,
+            ) -> Result<(), dbflux_core::DbError> {
+                self.0.cancel(handle)
+            }
+            fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+                self.0.schema()
+            }
+            fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+                self.0.schema_loading_strategy()
+            }
+            fn build_truncate_sql(&self, _table: &str) -> Result<String, dbflux_core::DbError> {
+                Ok("TRUNCATE private_fake_table".into())
+            }
+        }
+        let state = create_test_state();
+        let mut policy = dbflux_mcp::builtin_policies()
+            .into_iter()
+            .find(|policy| policy.id == "builtin/admin")
+            .expect("policy");
+        policy.allowed_classes.append(&mut policy.approval_classes);
+        state
+            .runtime
+            .write()
+            .await
+            .upsert_policy_mut(policy)
+            .expect("allow destructive");
+        let (responses, finishes, counts, leases) =
+            with_usage_owner(state, |middleware| async move {
+                let mut responses = Vec::new();
+                for tool in ["truncate_table", "drop_table", "drop_database"] {
+                    for failure in [true, false] {
+                        let mut query = QueryResult::empty();
+                        if failure {
+                            query.metadata_extra = Some(std::collections::HashMap::from([(
+                                "script_failure".into(),
+                                serde_json::json!(true),
+                            )]));
+                        }
+                        let driver = FakeDriver::new(DbKind::SQLite).with_default_result(query);
+                        let profile = ConnectionProfile::new(
+                            "private",
+                            DbConfig::SQLite {
+                                path: std::path::PathBuf::from("unused-private-fake"),
+                                connection_id: None,
+                            },
+                        );
+                        let connection: std::sync::Arc<dyn dbflux_core::Connection> =
+                            std::sync::Arc::new(DestructiveFixture(
+                                driver
+                                    .connect_arc(&profile)
+                                    .expect("fake connection, no I/O"),
+                            ));
+                        middleware.state.connection_cache.write().await.insert(
+                            "private-connection".into(),
+                            std::sync::Arc::new(CachedConnection::new(connection, None)),
+                        );
+                        let result = scope_call(middleware.authorize_and_execute(
+                            tool,
+                            None,
+                            dbflux_policy::ExecutionClassification::AdminDestructive,
+                            || async {
+                                let state = middleware.state.clone();
+                                let (value, _sql) = match tool {
+                                    "truncate_table" => {
+                                        DbFluxServer::truncate_table_impl(
+                                            state,
+                                            "private-connection",
+                                            "items",
+                                        )
+                                        .await
+                                    }
+                                    "drop_table" => {
+                                        DbFluxServer::drop_table_impl(
+                                            state,
+                                            "private-connection",
+                                            "items",
+                                            false,
+                                            true,
+                                        )
+                                        .await
+                                    }
+                                    "drop_database" => {
+                                        DbFluxServer::drop_database_impl(
+                                            state,
+                                            "private-connection",
+                                            "private_database",
+                                            true,
+                                        )
+                                        .await
+                                    }
+                                    _ => unreachable!(),
+                                }
+                                .map_err(|error| rmcp::ErrorData::internal_error(error, None))?;
+                                Ok(CallToolResult::success(vec![to_json_content(&value)?]))
+                            },
+                        ))
+                        .await
+                        .expect("unchanged successful response");
+                        responses.push(result);
+                    }
+                }
+                responses
+            })
+            .await;
+        for responses in responses.chunks_exact(2) {
+            assert_eq!(
+                serde_json::to_value(&responses[0]).expect("serialize"),
+                serde_json::to_value(&responses[1]).expect("serialize")
+            );
+        }
+        assert_eq!(finishes, [false, true, false, true, false, true]);
+        assert_eq!(counts, [0, 0, 0, 0, 3, 0]);
+        assert_eq!(leases, 0);
+    }
 
     #[test]
     fn test_build_relational_delete_mutation_uses_semantic_filter_and_returning() {

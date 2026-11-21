@@ -113,6 +113,11 @@ impl DataGridPanel {
     /// Called by the builder's Reset action. The next query falls back to
     /// the `TableBrowseRequest` path.
     pub fn clear_builder_draft_spec(&mut self, cx: &mut Context<Self>) {
+        #[cfg(feature = "telemetry")]
+        {
+            self.builder.usage_generation = self.builder.usage_generation.wrapping_add(1);
+            self.builder.queued_usage = None;
+        }
         self.builder.builder_draft_spec = None;
         self.builder.visual_select = None;
         self.builder.current_visual_spec = None;
@@ -913,12 +918,38 @@ impl DataGridPanel {
                         return;
                     }
 
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = self.capture_builder_usage(cx);
                     self.apply_builder_draft_spec(spec, cx);
-                    self.refresh(window, cx);
+                    #[cfg(feature = "telemetry")]
+                    {
+                        self.builder.queued_usage = usage_ticket.as_ref().and_then(|usage| {
+                            Some(QueuedBuilderUsage {
+                                usage: usage.clone(),
+                                spec: self.builder.builder_draft_spec.clone()?,
+                                select: self.builder.visual_select.clone()?,
+                                cancel: None,
+                            })
+                        });
+                    }
+                    self.refresh_with_origin(
+                        window,
+                        cx,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                    );
+                    #[cfg(feature = "telemetry")]
+                    if let Some(queued) = self.builder.queued_usage.as_mut() {
+                        queued.cancel = self.runner.primary_token().cloned();
+                    }
                 }
             }
 
             BuilderEvent::SpecChanged(spec) => {
+                #[cfg(feature = "telemetry")]
+                {
+                    self.builder.usage_generation = self.builder.usage_generation.wrapping_add(1);
+                }
                 // Live edit: cache the read for the next Run. A rejected spec is a
                 // transient editing state, so it caches `None` without a toast here;
                 // the failure is surfaced when the user actually Runs (see
@@ -1110,5 +1141,106 @@ impl DataGridPanel {
         let connected = state.connections().get(&profile_id)?;
 
         connected.connection.query_generator()
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn bind_builder_usage_owner<T: 'static>(&mut self, owner: WeakEntity<T>) {
+        // A grid can outlive its tab through workers or chart adapters.
+        self.builder.usage_generation = self.builder.usage_generation.wrapping_add(1);
+        self.builder.queued_usage = None;
+        self.builder.usage_owner_is_alive = Some(Box::new(move || owner.upgrade().is_some()));
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub(super) fn capture_builder_usage(&mut self, cx: &mut Context<Self>) -> Option<BuilderUsage> {
+        self.builder.usage_generation = self.builder.usage_generation.wrapping_add(1);
+        if !self
+            .builder
+            .usage_owner_is_alive
+            .as_ref()
+            .is_some_and(|alive| alive())
+        {
+            return None;
+        }
+        let DataSource::Table {
+            profile_id,
+            database,
+            table,
+            pagination,
+            order_by,
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+        let ticket = self.app_state.update(cx, |state, _| {
+            let source = state.telemetry_usage_source(chrono::Utc::now())?;
+            match source.ticket() {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    log::warn!("Usage ticket capture failed: {error:?}");
+                    None
+                }
+            }
+        })?;
+        Some(BuilderUsage {
+            ticket,
+            generation: self.builder.usage_generation,
+            profile_id: *profile_id,
+            database: database.clone(),
+            table: table.clone(),
+            pagination: pagination.clone(),
+            order_by: order_by.clone(),
+            mutation: None,
+        })
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub(super) fn builder_usage_is_current(&self, usage: &BuilderUsage, cx: &App) -> bool {
+        self.builder
+            .usage_owner_is_alive
+            .as_ref()
+            .is_some_and(|alive| alive())
+            && self.builder.usage_generation == usage.generation
+            && usage.mutation.as_ref().is_none_or(|mutation| {
+                self.builder.builder_draft_spec == mutation.draft
+                    && mutation.owner.upgrade().is_some_and(|owner| {
+                        self.builder.builder_panel.as_ref() == Some(&owner)
+                            && owner
+                                .read(cx)
+                                .build_mutation_spec_and_opts()
+                                .is_some_and(|(spec, _)| spec == mutation.spec)
+                    })
+            })
+            && matches!(&self.source, DataSource::Table { profile_id, database, table, pagination, order_by, .. }
+                if *profile_id == usage.profile_id && *database == usage.database && *table == usage.table
+                    && *pagination == usage.pagination && *order_by == usage.order_by)
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub(super) fn take_queued_builder_usage(&mut self, cx: &App) -> Option<BuilderUsage> {
+        let queued = self.builder.queued_usage.take()?;
+        (self.builder_usage_is_current(&queued.usage, cx)
+            && queued
+                .cancel
+                .as_ref()
+                .is_some_and(|cancel| !cancel.is_cancelled())
+            && self.builder.builder_draft_spec.as_ref() == Some(&queued.spec)
+            && self.builder.visual_select.as_ref() == Some(&queued.select))
+        .then_some(queued.usage)
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub(super) fn record_builder_usage(&self, usage: Option<BuilderUsage>, cx: &App) {
+        let Some(usage) = usage else {
+            return;
+        };
+        if self.builder_usage_is_current(&usage, cx)
+            && let Err(error) = usage
+                .ticket
+                .record(dbflux_core::observability::usage::UsageFeature::VisualQueryBuilder)
+        {
+            log::warn!("Usage completion failed: {error:?}");
+        }
     }
 }

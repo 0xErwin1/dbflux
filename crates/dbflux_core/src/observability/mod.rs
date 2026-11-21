@@ -34,6 +34,9 @@ pub mod query;
 pub mod source;
 pub mod types;
 
+#[cfg(feature = "telemetry")]
+pub mod usage;
+
 #[cfg(feature = "tracing-bridge")]
 pub mod tracing_bridge;
 

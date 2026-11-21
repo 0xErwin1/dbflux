@@ -17,7 +17,10 @@ impl ProtocolVersion {
     }
 }
 
+#[cfg(not(feature = "telemetry"))]
 pub const APP_CONTROL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+#[cfg(feature = "telemetry")]
+pub const APP_CONTROL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 1);
 pub const DRIVER_RPC_V1_0: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const DRIVER_RPC_V1_1: ProtocolVersion = ProtocolVersion::new(1, 1);
 pub const DRIVER_RPC_V1_2: ProtocolVersion = ProtocolVersion::new(1, 2);
@@ -131,6 +134,12 @@ mod tests {
         DRIVER_RPC_V1_8, DRIVER_RPC_V1_9, DRIVER_RPC_V1_10, DRIVER_RPC_VERSION, ProtocolVersion,
         RpcApiContract, RpcApiFamily, negotiate_highest_mutual_version,
     };
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn telemetry_requires_app_control_minor_one() {
+        assert_eq!(super::APP_CONTROL_VERSION, ProtocolVersion::new(1, 1));
+    }
 
     #[test]
     fn rpc_api_contract_requires_matching_family_and_major() {

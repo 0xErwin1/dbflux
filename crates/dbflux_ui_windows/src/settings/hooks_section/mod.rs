@@ -7,11 +7,11 @@ use crate::labels::{hooks_delete_message, hooks_delete_unreadable_message};
 use dbflux_app::config_loader::EditableGlobalHook;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::modals::{ConfirmOutcome, ConfirmRequest, ModalConfirm, ModalVariant};
 use dbflux_core::{HookExecutionMode, ScriptLanguage};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use gpui_component::input::EditorState;
 use std::collections::HashMap;
 
@@ -211,6 +211,17 @@ pub(super) struct HooksSection {
     pub(super) editing_hook_id: Option<String>,
     pub(super) pending_delete_hook_id: Option<String>,
     pub(super) pending_delete_protected_row_id: Option<String>,
+    /// Confirmation of the hook delete, opened by `render` while a delete
+    /// is pending.
+    delete_confirm: Entity<ModalConfirm>,
+    /// Confirmation of the unreadable-row delete, opened by `render` while
+    /// a delete is pending.
+    protected_delete_confirm: Entity<ModalConfirm>,
+    /// Outcomes of the two confirmations, drained in `render` where a
+    /// `Window` is available (the outcome subscriptions recorded them
+    /// without one).
+    pending_delete_confirm_resolution: Option<ConfirmOutcome>,
+    pending_protected_confirm_resolution: Option<ConfirmOutcome>,
     pub(super) input_hook_id: Entity<InputState>,
     pub(super) hook_kind_dropdown: Entity<Dropdown>,
     pub(super) hook_kind_selection: HookKindSelection,
@@ -427,6 +438,21 @@ impl HooksSection {
         let hook_env_denylist_sub = notify_on_input_change(&input_hook_env_denylist, window, cx);
         let hook_timeout_sub = notify_on_input_change(&input_hook_timeout, window, cx);
 
+        let delete_confirm = cx.new(ModalConfirm::new);
+        let protected_delete_confirm = cx.new(ModalConfirm::new);
+        let delete_confirm_subscription =
+            cx.subscribe(&delete_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_delete_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
+        let protected_confirm_subscription = cx.subscribe(
+            &protected_delete_confirm,
+            |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_protected_confirm_resolution = Some(*outcome);
+                cx.notify();
+            },
+        );
+
         let mut section = Self {
             app_state,
             hook_definitions,
@@ -434,6 +460,10 @@ impl HooksSection {
             editing_hook_id: None,
             pending_delete_hook_id: None,
             pending_delete_protected_row_id: None,
+            delete_confirm,
+            protected_delete_confirm,
+            pending_delete_confirm_resolution: None,
+            pending_protected_confirm_resolution: None,
             input_hook_id,
             hook_kind_dropdown,
             hook_kind_selection: HookKindSelection::Command,
@@ -469,6 +499,8 @@ impl HooksSection {
             switching_input: false,
             _subscriptions: vec![
                 app_state_subscription,
+                delete_confirm_subscription,
+                protected_confirm_subscription,
                 hook_kind_sub,
                 hook_script_language_sub,
                 hook_execution_mode_sub,
@@ -690,22 +722,73 @@ impl EventEmitter<SectionFocusEvent> for HooksSection {}
 impl EventEmitter<SettingsEvent> for HooksSection {}
 
 impl Render for HooksSection {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let show_hook_delete = self.pending_delete_hook_id.is_some();
-        let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
-        let show_protected_delete = self.pending_delete_protected_row_id.is_some();
-        let protected_delete_label = self
-            .pending_delete_protected_row_id
-            .as_ref()
-            .and_then(|row_id| {
-                self.app_state
-                    .read(cx)
-                    .protected_hook_rows()
-                    .iter()
-                    .find(|row| &row.row_id == row_id)
-                    .map(|row| row.row_name.clone().unwrap_or_else(|| row.row_id.clone()))
-            })
-            .unwrap_or_default();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Confirmations resolved while they were open; run the outcomes here
+        // where a `Window` is available (the outcome subscriptions recorded
+        // them without one).
+        if let Some(outcome) = self.pending_delete_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_delete_hook(window, cx),
+                ConfirmOutcome::Cancelled => self.cancel_delete_hook(cx),
+            }
+        }
+        if let Some(outcome) = self.pending_protected_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_delete_protected_row(cx),
+                ConfirmOutcome::Cancelled => self.cancel_delete_protected_row(cx),
+            }
+        }
+
+        // Open the hook-delete confirmation while a delete is pending;
+        // opening only when the request changed keeps later renders from
+        // stealing focus back.
+        if let Some(hook_id) = self.pending_delete_hook_id.clone() {
+            let body = hooks_delete_message(&hook_id);
+            let needs_open = !self.delete_confirm.read(cx).is_visible()
+                || self.delete_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.delete_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("hooks.delete.title"),
+                            body,
+                            variant: ModalVariant::Danger,
+                            confirm_label: dbflux_i18n::t!("hooks.action.delete"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
+
+        // Open the unreadable-row confirmation while its delete is pending,
+        // with the same changed-request guard.
+        if let Some(row_id) = self.pending_delete_protected_row_id.clone() {
+            let label = self
+                .app_state
+                .read(cx)
+                .protected_hook_rows()
+                .iter()
+                .find(|row| row.row_id == row_id)
+                .map(|row| row.row_name.clone().unwrap_or_else(|| row.row_id.clone()))
+                .unwrap_or_default();
+            let body = hooks_delete_unreadable_message(&label);
+            let needs_open = !self.protected_delete_confirm.read(cx).is_visible()
+                || self.protected_delete_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.protected_delete_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("hooks.delete_unreadable.title"),
+                            body,
+                            variant: ModalVariant::Danger,
+                            confirm_label: dbflux_i18n::t!("hooks.action.delete"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
 
         div()
             .size_full()
@@ -714,64 +797,8 @@ impl Render for HooksSection {
             .flex_col()
             .overflow_hidden()
             .child(self.render_hooks_section(cx))
-            .when(show_hook_delete, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
-
-                element.child(
-                    Dialog::new(cx)
-                        .title(dbflux_i18n::t!("hooks.delete.title"))
-                        .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
-                        .close_button(false)
-                        .on_ok(move |_, window, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_hook(window, cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_hook(cx);
-                            });
-                            true
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(hooks_delete_message(&hook_delete_name)),
-                        ),
-                )
-            })
-            .when(show_protected_delete, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
-
-                element.child(
-                    Dialog::new(cx)
-                        .title(dbflux_i18n::t!("hooks.delete_unreadable.title"))
-                        .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
-                        .close_button(false)
-                        .on_ok(move |_, _, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_protected_row(cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_protected_row(cx);
-                            });
-                            true
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(hooks_delete_unreadable_message(&protected_delete_label)),
-                        ),
-                )
-            })
+            .child(self.delete_confirm.clone())
+            .child(self.protected_delete_confirm.clone())
     }
 }
 
@@ -947,3 +974,6 @@ mod tests {
         assert_eq!(spanish, "Script");
     }
 }
+
+#[cfg(test)]
+mod confirm_tests;

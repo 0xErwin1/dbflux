@@ -5,8 +5,20 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcMessage {
     Ping,
-    OpenScript { path: PathBuf },
+    OpenScript {
+        path: PathBuf,
+    },
     Focus,
+    #[cfg(feature = "telemetry")]
+    BeginMcpToolUsage {
+        session_nonce: uuid::Uuid,
+    },
+    #[cfg(feature = "telemetry")]
+    FinishMcpToolUsage {
+        session_nonce: uuid::Uuid,
+        capability: uuid::Uuid,
+        success: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -18,6 +30,14 @@ pub enum IpcResponse {
     Ok,
     Error {
         message: String,
+    },
+    #[cfg(feature = "telemetry")]
+    McpToolUsageCapability {
+        capability: Option<uuid::Uuid>,
+    },
+    #[cfg(feature = "telemetry")]
+    McpToolUsageFinished {
+        accepted: bool,
     },
 }
 
@@ -56,6 +76,86 @@ impl AppControlResponse {
             protocol_version: APP_CONTROL_VERSION,
             request_id,
             body,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_wire_bytes_are_frozen() {
+        for (body, bytes) in [
+            (IpcMessage::Ping, vec![0]),
+            (
+                IpcMessage::OpenScript { path: "a".into() },
+                vec![1, 1, b'a'],
+            ),
+            (IpcMessage::Focus, vec![2]),
+        ] {
+            assert_eq!(postcard::to_allocvec(&body).unwrap(), bytes);
+            let request = AppControlRequest {
+                protocol_version: ProtocolVersion::new(1, 0),
+                request_id: 7,
+                auth_token: Some("t".into()),
+                body,
+            };
+            let mut expected = vec![1, 0, 7, 1, 1, b't'];
+            expected.extend(bytes);
+            assert_eq!(postcard::to_allocvec(&request).unwrap(), expected);
+        }
+        assert_eq!(postcard::to_allocvec(&IpcResponse::Ok).unwrap(), vec![1]);
+        assert_eq!(
+            postcard::to_allocvec(&IpcResponse::Pong {
+                version: "v".into()
+            })
+            .unwrap(),
+            vec![0, 1, b'v']
+        );
+        assert_eq!(
+            postcard::to_allocvec(&IpcResponse::Error {
+                message: "e".into()
+            })
+            .unwrap(),
+            vec![2, 1, b'e']
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn telemetry_variants_append_and_roundtrip() {
+        let session_nonce = uuid::Uuid::new_v4();
+        let capability = uuid::Uuid::new_v4();
+        for (body, index) in [
+            (IpcMessage::BeginMcpToolUsage { session_nonce }, 3),
+            (
+                IpcMessage::FinishMcpToolUsage {
+                    session_nonce,
+                    capability,
+                    success: true,
+                },
+                4,
+            ),
+        ] {
+            let bytes = postcard::to_allocvec(&body).unwrap();
+            assert_eq!(bytes[0], index);
+            let decoded: IpcMessage = postcard::from_bytes(&bytes).unwrap();
+            assert_eq!(postcard::to_allocvec(&decoded).unwrap(), bytes);
+        }
+        for (body, index) in [
+            (
+                IpcResponse::McpToolUsageCapability {
+                    capability: Some(capability),
+                },
+                3,
+            ),
+            (IpcResponse::McpToolUsageFinished { accepted: false }, 4),
+        ] {
+            let bytes = postcard::to_allocvec(&body).unwrap();
+            assert_eq!(bytes[0], index);
+            let decoded: IpcResponse = postcard::from_bytes(&bytes).unwrap();
+            assert_eq!(postcard::to_allocvec(&decoded).unwrap(), bytes);
         }
     }
 }

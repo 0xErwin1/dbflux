@@ -36,6 +36,7 @@ dbflux_components = { workspace = true, features = ["test-support"] }
 dbflux_ui_base = { workspace = true, features = ["test-support"] }
 
 [features]
+telemetry = ["dbflux_app/telemetry"]
 default = []
 mcp = ["dbflux_mcp", "dbflux_policy", "dbflux_app/mcp", "dbflux_ui_base/mcp"]
 # `lua` and `aws` are passthroughs: no windows code uses them directly, but they

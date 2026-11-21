@@ -1,18 +1,25 @@
 # Privacy Policy
 
-DBFlux is a local-first desktop application. It does not collect, transmit, or
-store any information about you or your usage. The project website sets no
-cookies and loads no third-party scripts. This document says what that means
-in practice and names the infrastructure providers that see traffic on the way
-to you.
+DBFlux is a local-first desktop application. Optional telemetry has three
+levels: Off sends nothing, Minimal sends a build ping and one weekly activity
+event, and Basic (preselected in the Welcome dialog) sends a weekly report with
+aggregate usage counts instead of the activity event. Nothing is sent until you
+confirm the Welcome disclosure. It never sends person identifiers, queries,
+results or connection metadata. The project website sets no cookies and loads no third-party
+scripts. This document describes those boundaries and the infrastructure
+providers that see traffic on the way to you.
 
 ## Quick path
 
-1. The application sends data only to the database servers you configure, and
-   only what is needed to run the queries you ask for.
-2. There is no telemetry, no crash reporting, no usage analytics, and no
-   account. Nothing phones home.
-3. The website and documentation are static pages. They set no cookies, load
+1. Database traffic goes directly to the servers you configure, with only what
+   is needed to run the queries you ask for; optional telemetry is separate.
+2. Telemetry has three levels: Off, Minimal and Basic. Basic is preselected in
+   the Welcome dialog, but nothing is sent until you confirm the disclosure,
+   and Off sends nothing. It sends no queries, results, credentials, file
+   paths, or connection metadata — ever. Details are in [Telemetry](#telemetry-optional).
+3. There is no crash reporting, no usage analytics beyond the telemetry above,
+   and no account.
+4. The website and documentation are static pages. They set no cookies, load
    no third-party script, and keep no record of individual visitors. An
    anonymous measurement of page usage, handled by the project's own server,
    is described under [Website usage measurement](#website-usage-measurement);
@@ -22,12 +29,12 @@ to you.
 
 | Question | Answer |
 |----------|--------|
-| Does DBFlux send usage data anywhere? | No. There is no telemetry and no crash reporter. |
-| Does it check for updates? | No. Updates are found on the GitHub releases page. |
-| What network connections does it open? | Only the ones you configure: database servers, SSH tunnels, proxies, and cloud APIs for the drivers you use. |
+| Does DBFlux send usage data anywhere? | Only after you have confirmed the Welcome disclosure. Minimal sends a build ping and a weekly activity event, with no usage data. Basic, preselected in the Welcome dialog, replaces the activity event with a weekly report that includes usage counts. Off sends nothing. See [Telemetry](#telemetry-optional). |
+| Does it check for updates? | Yes, unless you turn it off. At startup it asks the GitHub API (`api.github.com`) for the latest releases; no identifier is sent. Disable it with "Check GitHub for a new release at startup" in Settings › Updates & privacy. |
+| What network connections does it open? | The ones you configure: database servers, SSH tunnels, proxies, cloud APIs, and the telemetry endpoint under the conditions below. |
 | Where does my data live? | On your machine, in one SQLite file plus the operating system keyring for secrets. |
-| Does it keep a record of what I do? | Only the audit log, on your machine. It records connections, queries, and hook runs so you can review them, and it never leaves the computer it was written on. |
-| Is anything shared with the project? | No. Bug reports and logs reach the project only when you attach them to an issue yourself. |
+| Does it keep a record of what I do? | Local history and the audit log record work on your machine. Basic also keeps bounded aggregate counters; only telemetry reports can be delivered automatically under the conditions below. |
+| Is anything shared with the project? | By default, telemetry events reach the project's collector at `https://telemetry.dbflux.dev` once you have confirmed the Welcome disclosure and unless the level is Off. Bug reports and logs reach the project only when you attach them to an issue yourself. |
 
 Connections to a database, an SSH host, a proxy, or a cloud provider go
 directly from your machine to the server you named. The project operates none
@@ -36,6 +43,117 @@ of those servers and has no visibility into that traffic.
 [Your data on this machine](#your-data-on-this-machine) documents the files
 DBFlux writes, what the audit log records, how secrets are stored, and how to
 back up or fully reset the application.
+
+### Telemetry (optional)
+
+DBFlux ships with an optional telemetry module. It is a compiled-in feature
+that can be excluded entirely with `--no-default-features`, like the other
+default features. By default, events go to `https://telemetry.dbflux.dev`.
+Nothing is sent and no usage is counted until you confirm the visibly presented
+Welcome disclosure with Get started. Hiding it programmatically or closing it
+with Escape is not confirmation.
+
+Basic is preselected in the Welcome dialog, so confirming without changing the
+selection applies Basic; choose Minimal or Off there to send less. If you had
+disabled the Welcome dialog, it opens at every start after updating, whenever
+telemetry starts, until you confirm the disclosure.
+
+| Level | What it sends |
+|-------|---------------|
+| Off | Nothing: no ping, no activity event and no usage report. Nothing is queued, and choosing Off clears every pending delivery and the usage counters. |
+| Minimal | A ping once per published build, plus one activity event per week: random installation identifier, app version, channel, OS and architecture. No system language, country or usage counts. |
+| Basic (preselected) | Minimal's ping, plus a weekly report instead of the activity event. The report adds system language (not the UI language), country (see below) and bounded counts of supported successful operations in the six categories below. |
+
+**Country.** The app sends no country; it sends the placeholder `ZZ`. For Basic
+reports only, the collector stores the coarse country that Cloudflare resolves
+at its edge. The collector never stores the IP address. Cloudflare and Fly.io,
+which carry the request, keep their own request logs.
+
+**Retention.** The collector keeps raw events, including the installation
+identifier, for 90 days after receipt. After that only identifier-free counts
+remain.
+
+**Turning it off.** Choose Off in the Welcome dialog or in Settings › Updates &
+privacy. To disable delivery without opening the app, for example on managed
+machines, set the environment variable `DBFLUX_TELEMETRY=off`; it wins over
+every level and endpoint. A build made without the `telemetry` feature
+contains no telemetry code at all.
+
+**Endpoint override.** `https://telemetry.dbflux.dev` is the default
+destination, not the only possible one. Setting `DBFLUX_TELEMETRY_ENDPOINT` to
+another HTTPS URL sends reports there once you have confirmed the disclosure,
+and an invalid value disables delivery instead of falling back. The retention,
+country and processor terms in this section describe the project's collector
+only; an overridden endpoint is governed by whoever runs it.
+
+#### Which operations count
+
+Counts measure whole operations, not rows or performance. A successful operation
+with zero rows can count. Background refreshes, partial failures, errors and
+cancellations do not count. Basic and the disclosure confirmation must already
+be active when work starts; an unavailable source or disabled/degraded Audit
+prevents credit.
+
+| Category | Coverage |
+|----------|----------|
+| `query_run` | Explicit user query runs from the toolbar, commands or gutter; not automatic refreshes or derived Explain runs. |
+| `visual_query_builder` | Actual user Run with full execution success. Queuing or approving a request is not execution and does not count. |
+| `dashboard_open` | Direct sidebar opens or refocuses with valid dashboard metadata; not implicit creation, import or session restoration. |
+| `script_run` | Explicit editor script runs with canonical exit code 0, without timeout or detachment. |
+| `mcp_tool` | Only reviewed, supported successful primary tool operations through an authenticated, running GUI foreground owner; see the limits below. |
+| `schema_inspect` | Explicit focused or global inspection that newly loads complete required metadata to Ready; not focusing an existing tab. A deliberate bounded scope of up to 100 tables can count; failed required metadata cannot, but fully recovered metadata can. |
+
+**MCP coverage is limited, not a count of every tool call.** A standalone server
+without the running GUI owner does not count. Unknown tools, help/protocol calls,
+approval controls and pending approvals do not count. `count_records`,
+`insert_record` and `list_scripts` are excluded even when successful because their
+current APIs do not preserve sufficient completion evidence. `update_records`
+and `delete_records` require the primary mutation's typed `QueryResult` completion;
+an opaque successful `DocumentCrudResult` does not qualify. Proven typed SQL
+update, upsert and delete completions can count, including zero affected rows.
+These exclusions do not change whether the tools themselves succeed.
+
+For supported MCP operations, permission is acquired after authorization allows
+work and before it starts. The counter is credited only after the completed
+primary operation and a successful execution audit, not at authorization. This
+uses existing local authentication, not a new trusted-client identity guarantee.
+Cancellation can leave a bounded permission lease until a future foreground
+expiry pass (24-hour cap); cleanup is not immediate, and arbitrarily long calls
+are not guaranteed coverage. Tool names in this explanation are local coverage
+details, never telemetry payload fields.
+
+Facts that do not change with the level:
+
+- The installation identifier is a random UUID created on first run and kept
+  for the life of the installation: it never rotates on a schedule. It is
+  **pseudonymous, not anonymous**: it identifies an installation, not a person
+  or a unique device. Reports also have a delivery UUID, which is unique per
+  report. Resetting the identifier in Settings replaces it with a new random one
+  and the app sends nothing that links the two. Reset does not delete earlier
+  deliveries from the local [audit log](#audit-and-privacy), which can keep the
+  old identifier, and it does not withdraw events the collector already
+  received; those age out under the retention above.
+- Never sent: operation, query, client or person identifiers, tool names,
+  queries, results, credentials, file paths, connection metadata, cross-process
+  actor data or unrestricted error text. There are no Extended reports, public
+  statistics, per-engine counts, error reports or performance timings.
+- Every delivery attempt records the full correlated payload, level and outcome
+  in the local [audit log](#audit-and-privacy). Readable display labels do not
+  change raw storage, copy, export or wire contents. Events go only to the
+  project's collector at `https://telemetry.dbflux.dev` by default, to help guide
+  development. See the endpoint override above.
+- Resetting the installation id in Settings › Updates & privacy replaces the
+  identifier at once and cancels pending sends; already-acknowledged builds
+  stay acknowledged.
+
+The level and the reports live in Settings › Updates & privacy. The staged
+level applies when you save; resetting to defaults stages Basic without
+touching the installation id. Choosing Basic or saving does not promise an
+immediate network report. Leaving Basic clears the pending Basic report and
+the counters, and Off also clears a pending ping; a delivery already handed to
+the network may still complete. Acknowledging a sent snapshot preserves newer
+increments. A reset invalidates old in-flight usage work while preserving
+acknowledged-build history.
 
 ## Your data on this machine
 

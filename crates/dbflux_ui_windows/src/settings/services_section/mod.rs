@@ -4,12 +4,12 @@ use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::InputState;
+use dbflux_components::modals::{ConfirmOutcome, ConfirmRequest, ModalConfirm, ModalVariant};
 use dbflux_core::{RpcServiceKind, ServiceConfig};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ServiceFocus {
@@ -64,6 +64,14 @@ pub(super) struct ServicesSection {
     pub(super) editing_svc_idx: Option<usize>,
     pub(super) pending_delete_svc_idx: Option<usize>,
     pub(super) content_focused: bool,
+
+    /// Confirmation of the service delete, opened by `render` while a delete
+    /// is pending.
+    delete_confirm: Entity<ModalConfirm>,
+    /// Outcome of `delete_confirm`, drained in `render` where a `Window` is
+    /// available (the outcome subscription recorded it without one).
+    pending_delete_confirm_resolution: Option<ConfirmOutcome>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<SectionFocusEvent> for ServicesSection {}
@@ -79,6 +87,13 @@ impl ServicesSection {
         let input_svc_command =
             cx.new(|cx| InputState::new(window, cx).placeholder("dbflux-driver-host"));
         let input_svc_timeout = cx.new(|cx| InputState::new(window, cx).placeholder("5000"));
+
+        let delete_confirm = cx.new(ModalConfirm::new);
+        let delete_confirm_subscription =
+            cx.subscribe(&delete_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_delete_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
 
         let mut section = Self {
             app_state,
@@ -102,6 +117,9 @@ impl ServicesSection {
             editing_svc_idx: None,
             pending_delete_svc_idx: None,
             content_focused: false,
+            delete_confirm,
+            pending_delete_confirm_resolution: None,
+            _subscriptions: vec![delete_confirm_subscription],
         };
 
         let runtime = section.app_state.read(cx).storage_runtime();
@@ -377,46 +395,48 @@ impl FormSection for ServicesSection {
 }
 
 impl Render for ServicesSection {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let show_svc_delete = self.pending_delete_svc_idx.is_some();
-        let svc_delete_name = self
-            .pending_delete_svc_idx
-            .and_then(|idx| self.svc_services.get(idx))
-            .map(|service| service.socket_id.clone())
-            .unwrap_or_default();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A confirmation resolved while it was open; run the outcome here
+        // where a `Window` is available (the outcome subscription recorded it
+        // without one).
+        if let Some(outcome) = self.pending_delete_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_delete_service(window, cx),
+                ConfirmOutcome::Cancelled => self.cancel_delete_service(cx),
+            }
+        }
+
+        // Open the delete confirmation while a delete is pending; opening
+        // only when the request changed keeps later renders from stealing
+        // focus back.
+        if let Some(idx) = self.pending_delete_svc_idx {
+            let name = self
+                .svc_services
+                .get(idx)
+                .map(|service| service.socket_id.clone())
+                .unwrap_or_default();
+            let body = crate::labels::rpc_services_delete_body(&name);
+            let needs_open = !self.delete_confirm.read(cx).is_visible()
+                || self.delete_confirm.read(cx).current_body() != Some(body.as_str());
+            if needs_open {
+                self.delete_confirm.update(cx, |confirm, cx| {
+                    confirm.open(
+                        ConfirmRequest {
+                            title: dbflux_i18n::t!("settings.rpc_services.delete_dialog_title"),
+                            body,
+                            variant: ModalVariant::Danger,
+                            confirm_label: dbflux_i18n::t!("settings.rpc_services.action.delete"),
+                        },
+                        cx,
+                    );
+                });
+            }
+        }
 
         div()
             .size_full()
             .child(self.render_services_section(cx))
-            .when(show_svc_delete, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
-
-                element.child(
-                    Dialog::new(cx)
-                        .title(dbflux_i18n::t!("settings.rpc_services.delete_dialog_title"))
-                        .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
-                        .close_button(false)
-                        .on_ok(move |_, window, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_service(window, cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_service(cx);
-                            });
-                            true
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(crate::labels::rpc_services_delete_body(&svc_delete_name)),
-                        ),
-                )
-            })
+            .child(self.delete_confirm.clone())
     }
 }
 
@@ -455,3 +475,6 @@ mod tests {
         assert_ne!(english, spanish);
     }
 }
+
+#[cfg(test)]
+mod confirm_tests;
