@@ -104,6 +104,29 @@ pub(crate) fn console_gate(
     ConsoleGate::Run { ceiling: None }
 }
 
+/// Returns the failure message when a multi-statement script result carries a
+/// `script_failure` metadata entry (matching the editor's catch site).
+pub(crate) fn script_failure_message(result: &QueryResult) -> Option<String> {
+    let failure = result.metadata_extra.as_ref()?.get("script_failure")?;
+    Some(
+        failure
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("script execution failed")
+            .to_string(),
+    )
+}
+
+/// True when any result set in `result` produced visible console output.
+pub(crate) fn has_console_output(result: &QueryResult) -> bool {
+    result.iter_result_sets().any(|set| {
+        set.text_body.as_deref().is_some_and(|t| !t.is_empty())
+            || set.raw_bytes.is_some()
+            || !set.rows.is_empty()
+            || set.affected_rows.is_some()
+    })
+}
+
 /// A result as console lines, in the style of a command-line client: text
 /// as printed, documents as one JSON object per line, a single column as a
 /// numbered list, several columns as an aligned table, binary summarized.

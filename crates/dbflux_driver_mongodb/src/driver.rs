@@ -6275,21 +6275,29 @@ db.runCommand({
                 "confirmed runCommand script must pass dispatch and reach for the server: {message}"
             );
 
-            let computed_script = "const m = 'run' + 'Command'; db[m]({ ping: 1 });";
-            let computed_ceiling = MongoLanguageService
-                .classify_execution(computed_script)
-                .expect("computed-access script must classify");
-            assert_eq!(computed_ceiling, ExecutionClassification::Destructive);
+            for computed_script in [
+                "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+                "const m = 'runCommand'; db[m]({ ping: 1 });",
+            ] {
+                let computed_ceiling = MongoLanguageService
+                    .classify_execution(computed_script)
+                    .expect("computed-access script must classify");
+                assert_eq!(
+                    computed_ceiling,
+                    ExecutionClassification::Destructive,
+                    "{computed_script}"
+                );
 
-            let blocked_message = assert_script_stopped_before_the_server(
-                &connection,
-                &QueryRequest::new(computed_script).with_confirmed_ceiling(computed_ceiling),
-            );
-            assert!(
-                blocked_message.contains("AdminDestructive")
-                    && blocked_message.contains("Destructive ceiling"),
-                "computed runCommand must be blocked by the Destructive ceiling: {blocked_message}"
-            );
+                let blocked_message = assert_script_stopped_before_the_server(
+                    &connection,
+                    &QueryRequest::new(computed_script).with_confirmed_ceiling(computed_ceiling),
+                );
+                assert!(
+                    blocked_message.contains("AdminDestructive")
+                        && blocked_message.contains("Destructive ceiling"),
+                    "computed runCommand must be blocked by the Destructive ceiling ({computed_script}): {blocked_message}"
+                );
+            }
         }
     }
 }

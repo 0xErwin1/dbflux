@@ -37,8 +37,8 @@ use dbflux_core::{
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use format::{
-    ConsoleGate, ConsoleLine, ConsoleTone, console_gate, format_console_result, recall_list,
-    step_history,
+    ConsoleGate, ConsoleLine, ConsoleTone, console_gate, format_console_result, has_console_output,
+    recall_list, script_failure_message, step_history,
 };
 use gpui::prelude::*;
 use gpui::*;
@@ -618,7 +618,8 @@ impl NativeConsole {
     ) {
         self.running = false;
 
-        let succeeded = result.is_ok();
+        let script_failure = result.as_ref().ok().and_then(script_failure_message);
+        let succeeded = result.is_ok() && script_failure.is_none();
 
         let mut result = result;
         let output = match &mut result {
@@ -627,17 +628,28 @@ impl NativeConsole {
                     report_error(warning, cx)
                 });
 
-                let entry = HistoryEntry::new(
-                    command.clone(),
-                    self.target.database.clone(),
-                    self.connection_name(cx),
-                    result.execution_time,
-                    Some(result.affected_rows.unwrap_or(result.rows.len() as u64) as usize),
-                );
-                self.app_state
-                    .update(cx, |state, _| state.add_history_entry(entry));
+                if let Some(message) = script_failure {
+                    self.remember_unrecorded(&command);
+                    let mut lines = if has_console_output(result) {
+                        format_console_result(result)
+                    } else {
+                        Vec::new()
+                    };
+                    lines.push(ConsoleLine::new(message, ConsoleTone::Error));
+                    lines
+                } else {
+                    let entry = HistoryEntry::new(
+                        command.clone(),
+                        self.target.database.clone(),
+                        self.connection_name(cx),
+                        result.execution_time,
+                        Some(result.affected_rows.unwrap_or(result.rows.len() as u64) as usize),
+                    );
+                    self.app_state
+                        .update(cx, |state, _| state.add_history_entry(entry));
 
-                format_console_result(result)
+                    format_console_result(result)
+                }
             }
             Err(error) => {
                 self.remember_unrecorded(&command);
@@ -936,11 +948,6 @@ fn execution_audit_event(
 
     match result {
         Ok(result) => {
-            let (count, label) = match result.affected_rows {
-                Some(count) => (count, "affected"),
-                None => (result.rows.len() as u64, "returned"),
-            };
-
             if let Some(extra) = &result.metadata_extra {
                 for (key, value) in extra {
                     if key == dbflux_core::SERVER_NOTICES_METADATA_KEY {
@@ -950,9 +957,22 @@ fn execution_audit_event(
                 }
             }
 
-            event = event
-                .with_typed_action(audit_actions::QUERY_EXECUTE)
-                .with_summary(format!("Query executed successfully: {count} rows {label}"));
+            if let Some(message) = script_failure_message(result) {
+                event.level = EventSeverity::Error;
+                event.outcome = EventOutcome::Failure;
+                event.error_message = Some(message.clone());
+                event = event
+                    .with_typed_action(audit_actions::QUERY_EXECUTE_FAILED)
+                    .with_summary(format!("Query failed: {message}"));
+            } else {
+                let (count, label) = match result.affected_rows {
+                    Some(count) => (count, "affected"),
+                    None => (result.rows.len() as u64, "returned"),
+                };
+                event = event
+                    .with_typed_action(audit_actions::QUERY_EXECUTE)
+                    .with_summary(format!("Query executed successfully: {count} rows {label}"));
+            }
         }
         Err(error) => {
             event.level = EventSeverity::Error;

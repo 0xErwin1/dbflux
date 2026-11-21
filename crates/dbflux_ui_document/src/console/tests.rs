@@ -456,3 +456,98 @@ fn up_leaves_an_open_completion_menu_alone(cx: &mut TestAppContext) {
     let value = window.update(|_, cx| harness.console.read(cx).input.read(cx).value().to_string());
     assert_eq!(value, "GET greeting", "with the menu closed, Up recalls");
 }
+
+#[gpui::test]
+fn a_script_failure_in_result_metadata_is_recorded_as_a_failure(cx: &mut TestAppContext) {
+    use super::format::ConsoleTone;
+    use dbflux_core::observability::EventOutcome;
+
+    let mut failed_only = QueryResult::json(Vec::new(), Vec::new(), Duration::ZERO);
+    failed_only.metadata_extra = Some(std::collections::HashMap::from([(
+        "script_failure".to_string(),
+        serde_json::json!({ "index": 0, "message": "exceeds confirmed ceiling" }),
+    )]));
+
+    let mut partial = QueryResult::text("first statement ok".to_string(), Duration::ZERO);
+    partial.metadata_extra = Some(std::collections::HashMap::from([(
+        "script_failure".to_string(),
+        serde_json::json!({ "index": 1, "message": "second statement failed" }),
+    )]));
+
+    let driver = FakeDriver::new(DbKind::Redis)
+        .with_query_result("GET fail_only", failed_only)
+        .with_query_result("GET fail_partial", partial);
+
+    let (harness, window) = open_with(cx, driver, Some("0"));
+
+    type_and_submit(&harness, window, "GET fail_only");
+    type_and_submit(&harness, window, "GET fail_partial");
+
+    let transcript = window.update(|_, cx| {
+        harness
+            .console
+            .read(cx)
+            .transcript
+            .iter()
+            .map(|entry| {
+                entry
+                    .output
+                    .iter()
+                    .map(|line| (line.text.clone(), line.tone))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        transcript,
+        vec![
+            vec![("exceeds confirmed ceiling".to_string(), ConsoleTone::Error)],
+            vec![
+                ("first statement ok".to_string(), ConsoleTone::Result),
+                ("second statement failed".to_string(), ConsoleTone::Error),
+            ],
+        ]
+    );
+
+    let events = harness.events.borrow().clone();
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| matches!(
+        event,
+        NativeConsoleEvent::Executed {
+            succeeded: false,
+            ..
+        }
+    )));
+
+    let history_empty =
+        window.update(|_, cx| harness.app_state.read(cx).history_entries().is_empty());
+    assert!(
+        history_empty,
+        "failed scripts must not land in shared history"
+    );
+
+    let audit_events = window.update(|_, cx| {
+        harness
+            .app_state
+            .read(cx)
+            .audit_service()
+            .query_extended(&AuditQueryFilter::default())
+            .expect("audit query")
+    });
+    assert!(
+        !audit_events
+            .iter()
+            .any(|event| event.action.as_deref() == Some("query_execute")),
+        "failed scripts must not record a successful query_execute audit row: {audit_events:?}"
+    );
+    let failed_audits: Vec<_> = audit_events
+        .iter()
+        .filter(|event| event.action.as_deref() == Some("query_execute_failed"))
+        .collect();
+    assert_eq!(failed_audits.len(), 2);
+    assert!(
+        failed_audits
+            .iter()
+            .all(|event| { event.outcome.as_deref() == Some(EventOutcome::Failure.as_str()) })
+    );
+}

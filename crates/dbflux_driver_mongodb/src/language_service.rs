@@ -454,6 +454,8 @@ db.runCommand({
         for script in [
             "const docs = db.users.find({}); print(docs[0]);",
             "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+            "const m = 'runCommand'; db[m]({ ping: 1 });",
+            r#"const cmd = { ping: 1 }; db["runCommand"](cmd);"#,
         ] {
             assert_eq!(
                 MongoLanguageService.classify_execution(script),
