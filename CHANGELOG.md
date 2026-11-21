@@ -28,6 +28,7 @@ All notable changes to DBFlux will be documented in this file.
 
 * **Set to default writes the column default** — **Set to default** in the cell menu staged the column's default as text, so saving a column whose default is a function, such as `DEFAULT gen_random_uuid()` or `DEFAULT now()`, failed with an invalid input error. It now stages the default as an expression, so the database evaluates it (#1358).
 * **SQLite text with a NUL byte is written intact** — A text value that contains a NUL byte was written as a quoted literal holding the raw byte, which SQLite reads as the end of the statement. It is now written as its quoted segments joined with `char(0)`, so SQL export and import keep every byte and the text type in UTF-8, UTF-16LE and UTF-16BE databases. A long run of NUL bytes is grouped in parentheses so the expression stays within SQLite's depth limit; text without a NUL is written as before (#805).
+* **A deleted proxy or SSH tunnel stays deleted** — Deleting a proxy or an SSH tunnel in Settings removed it only from memory, so it came back the next time DBFlux started. The row is now deleted from `dbflux.db`, and connections that used it fall back to no proxy or tunnel as they do while the app runs.
 
 ## [0.10.2] - 2026-11-19
 
