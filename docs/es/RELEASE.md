@@ -322,7 +322,7 @@ fallar el job en lugar de publicar un 404.
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. Tag `vX.Y.0-rc.0` en el release branch.
+6. Tag `vX.Y.0-rc.0` en el release branch y push del tag: `git push origin vX.Y.0-rc.0`.
 
 7. Cuando ese tag se publique, el PR de metadatos registra el minor en la web. Revísalo e intégralo; un RC no pasa a ser la versión actual.
 
@@ -382,8 +382,8 @@ minor, siempre con un commit en `main`, porque el sitio se despliega desde
 
 | Evento | Cambio en `web/versions.json` | Commit |
 |--------|-------------------------------|--------|
-| Corte (push de `release/vX.Y`) | agregar `{ "id": "vX.Y", "ref": "release/vX.Y" }` justo después de `nightly` | `chore(web): add vX.Y to the site versions` |
-| Stable (`vX.Y.0` taggeado y pusheado) | mover `"current": true` a `vX.Y` | `chore(web): make vX.Y the current site version` |
+| Primer RC (`vX.Y.0-rc.0` publicado) | agregar `{ "id": "vX.Y", "ref": "release/vX.Y" }` justo después de `nightly` | PR de metadatos `chore: sync release metadata for vX.Y.0-rc.0`, abierto por **Sync release channels** |
+| Stable (`vX.Y.0` publicado) | mover `"current": true` a `vX.Y` | PR de metadatos `chore: sync release metadata for vX.Y.0`, abierto por **Sync release channels** |
 | EOL (antes de borrar `release/vX.Y`) | apuntar el `ref` de `vX.Y` a su último tag, p. ej. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - **El ref tiene que existir primero en origin.** `web/scripts/fetch-docs.ts`

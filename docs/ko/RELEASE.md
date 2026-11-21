@@ -217,7 +217,7 @@ fail-closed 방식으로 검증합니다. 업데이트는 AppImageUpdate 같은 
    - 커밋: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - 푸시합니다.
 
-6. 릴리스 브랜치에 `vX.Y.0-rc.0` 태그를 붙입니다.
+6. 릴리스 브랜치에 `vX.Y.0-rc.0` 태그를 붙이고 태그를 푸시합니다: `git push origin vX.Y.0-rc.0`.
 
 7. 해당 태그가 게시되면 메타데이터 PR이 사이트에 마이너 버전을 등록합니다. PR을 검토하고 병합하세요. RC는 현재 릴리스가 되지 않습니다.
 
@@ -255,8 +255,8 @@ RC가 깨끗할 때 `release/vX.Y`에서 수행합니다:
 
 | 이벤트 | `web/versions.json` 변경 | 커밋 |
 |--------|--------------------------|------|
-| 생성(`release/vX.Y` 푸시됨) | `nightly` 바로 뒤에 `{ "id": "vX.Y", "ref": "release/vX.Y" }` 추가 | `chore(web): add vX.Y to the site versions` |
-| 안정(`vX.Y.0` 태그 생성 및 푸시됨) | `"current": true`를 `vX.Y`로 이동 | `chore(web): make vX.Y the current site version` |
+| 첫 RC(`vX.Y.0-rc.0` 게시됨) | `nightly` 바로 뒤에 `{ "id": "vX.Y", "ref": "release/vX.Y" }` 추가 | **Sync release channels**가 여는 메타데이터 PR `chore: sync release metadata for vX.Y.0-rc.0` |
+| 안정(`vX.Y.0` 게시됨) | `"current": true`를 `vX.Y`로 이동 | **Sync release channels**가 여는 메타데이터 PR `chore: sync release metadata for vX.Y.0` |
 | EOL(`release/vX.Y` 삭제 전) | `vX.Y`의 `ref`를 마지막 태그(예: `vX.Y.Z`)로 변경 | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - **ref가 먼저 origin에 있어야 합니다.** `web/scripts/fetch-docs.ts`는 각 항목을 해당 git ref에서 읽고, 클론에 그 ref가 없으면 `origin`에서 가져옵니다. 읽을 수 없는 ref는 경고만 남기고 건너뛰지만, 그 뒤 빌드가 해당 버전의 페이지를 렌더링하다 실패합니다(`No materialised documentation for version "vX.Y"`). 브랜치가 푸시되기 전에 반영된 항목이나 삭제된 브랜치를 여전히 가리키는 항목은 `main`에서의 모든 사이트 배포를 깨뜨립니다.

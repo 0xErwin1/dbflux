@@ -244,7 +244,7 @@ job instead of shipping a 404.
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. Tag `vX.Y.0-rc.0` on the release branch.
+6. Tag `vX.Y.0-rc.0` on the release branch and push the tag: `git push origin vX.Y.0-rc.0`.
 
 7. Once that tag publishes, the metadata PR registers the minor on the site. Review and merge it; an RC does not become the current release.
 
@@ -282,8 +282,8 @@ The site publishes one documentation set per minor, listed in `web/versions.json
 
 | Event | Change in `web/versions.json` | Commit |
 |-------|-------------------------------|--------|
-| Cut (`release/vX.Y` pushed) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | `chore(web): add vX.Y to the site versions` |
-| Stable (`vX.Y.0` tagged and pushed) | move `"current": true` to `vX.Y` | `chore(web): make vX.Y the current site version` |
+| First RC (`vX.Y.0-rc.0` published) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | metadata PR `chore: sync release metadata for vX.Y.0-rc.0`, opened by **Sync release channels** |
+| Stable (`vX.Y.0` published) | move `"current": true` to `vX.Y` | metadata PR `chore: sync release metadata for vX.Y.0`, opened by **Sync release channels** |
 | EOL (before `release/vX.Y` is deleted) | repoint `vX.Y`'s `ref` to its last tag, e.g. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - **The ref must exist on origin first.** `web/scripts/fetch-docs.ts` reads each entry from its git ref, fetching it from `origin` when the clone lacks it. A ref it cannot read is skipped with only a warning, but the build then fails rendering that version's pages (`No materialised documentation for version "vX.Y"`). An entry that lands before its branch is pushed, or that still names a deleted branch, breaks every site deploy from `main`.

@@ -226,7 +226,7 @@ DBFlux 自身不会自更新。
    - 将每个带版本号的制品更新到 `X.(Y+1).0-dev.0`（`main` 现在指向下一个次版本）。
    - 提交信息：`chore(version): move main to X.(Y+1).0-dev.0 marker`。
    - 推送。
-6. 在发布分支上打标签 `vX.Y.0-rc.0`。
+6. 在发布分支上打标签 `vX.Y.0-rc.0` 并推送该标签：`git push origin vX.Y.0-rc.0`。
 
 7. 该标签发布后，元数据 PR 会在网站中登记该次版本。请审核并合并该 PR；RC 不会成为当前发布。
 
@@ -264,8 +264,8 @@ rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全�
 
 | 事件 | `web/versions.json` 中的变更 | 提交信息 |
 |------|------------------------------|----------|
-| 切出（`release/vX.Y` 已推送） | 在 `nightly` 之后加入 `{ "id": "vX.Y", "ref": "release/vX.Y" }` | `chore(web): add vX.Y to the site versions` |
-| 稳定版（`vX.Y.0` 已打标签并推送） | 将 `"current": true` 移到 `vX.Y` | `chore(web): make vX.Y the current site version` |
+| 首个 RC（`vX.Y.0-rc.0` 已发布） | 在 `nightly` 之后加入 `{ "id": "vX.Y", "ref": "release/vX.Y" }` | 由 **Sync release channels** 创建的元数据 PR `chore: sync release metadata for vX.Y.0-rc.0` |
+| 稳定版（`vX.Y.0` 已发布） | 将 `"current": true` 移到 `vX.Y` | 由 **Sync release channels** 创建的元数据 PR `chore: sync release metadata for vX.Y.0` |
 | EOL（删除 `release/vX.Y` 之前） | 将 `vX.Y` 的 `ref` 改为其最后一个标签，例如 `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - **ref 必须先存在于 origin 上。** `web/scripts/fetch-docs.ts` 从每个条目的 git ref 读取文档，克隆中缺少该 ref 时会从 `origin` 拉取。无法读取的 ref 只会被跳过并给出警告，但随后构建会在渲染该版本页面时失败（`No materialised documentation for version "vX.Y"`）。在其分支推送之前合入的条目，或仍指向已删除分支的条目，都会让 `main` 上的每次站点部署失败。

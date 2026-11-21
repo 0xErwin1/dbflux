@@ -197,8 +197,8 @@ Not per release: `web/versions.json` changes only at the cut, the stable promote
 
 | Event | Change | Commit |
 |-------|--------|--------|
-| Cut (`release/vX.Y` pushed) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | `chore(web): add vX.Y to the site versions` |
-| Stable (`vX.Y.0` tagged and pushed) | move `"current": true` to `vX.Y` | `chore(web): make vX.Y the current site version` |
+| First RC (`vX.Y.0-rc.0` published) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | metadata PR `chore: sync release metadata for vX.Y.0-rc.0` |
+| Stable (`vX.Y.0` published) | move `"current": true` to `vX.Y` | metadata PR `chore: sync release metadata for vX.Y.0` |
 | EOL (before `release/vX.Y` is deleted) | repoint `vX.Y`'s `ref` to its last tag, e.g. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
 
 - The ref must exist on origin. `web/scripts/fetch-docs.ts` skips an unreadable ref with a warning, then the build fails rendering that version (`No materialised documentation for version "vX.Y"`).
