@@ -34,7 +34,7 @@ providers that see traffic on the way to you.
 | What network connections does it open? | The ones you configure: database servers, SSH tunnels, proxies, cloud APIs, and the telemetry endpoint under the conditions below. |
 | Where does my data live? | On your machine, in one SQLite file plus the operating system keyring for secrets. |
 | Does it keep a record of what I do? | Local history and the audit log record work on your machine. Basic also keeps bounded aggregate counters; only telemetry reports can be delivered automatically under the conditions below. |
-| Is anything shared with the project? | Telemetry events reach the project's collector at `https://telemetry.dbflux.dev` once you have confirmed the Welcome disclosure and unless the level is Off. Bug reports and logs reach the project only when you attach them to an issue yourself. |
+| Is anything shared with the project? | By default, telemetry events reach the project's collector at `https://telemetry.dbflux.dev` once you have confirmed the Welcome disclosure and unless the level is Off. Bug reports and logs reach the project only when you attach them to an issue yourself. |
 
 Connections to a database, an SSH host, a proxy, or a cloud provider go
 directly from your machine to the server you named. The project operates none
@@ -48,14 +48,15 @@ back up or fully reset the application.
 
 DBFlux ships with an optional telemetry module. It is a compiled-in feature
 that can be excluded entirely with `--no-default-features`, like the other
-default features. Events go to `https://telemetry.dbflux.dev`. Nothing is sent
-and no usage is counted until you confirm the visibly presented Welcome
-disclosure. Hiding it programmatically is not confirmation.
+default features. By default, events go to `https://telemetry.dbflux.dev`.
+Nothing is sent and no usage is counted until you confirm the visibly presented
+Welcome disclosure with Get started. Hiding it programmatically or closing it
+with Escape is not confirmation.
 
 Basic is preselected in the Welcome dialog, so confirming without changing the
 selection applies Basic; choose Minimal or Off there to send less. If you had
-disabled the Welcome dialog, it opens once after updating so you can choose,
-and it does not open again for this reason.
+disabled the Welcome dialog, it opens at every start after updating, whenever
+telemetry starts, until you confirm the disclosure.
 
 | Level | What it sends |
 |-------|---------------|
@@ -77,6 +78,13 @@ privacy. To disable delivery without opening the app, for example on managed
 machines, set the environment variable `DBFLUX_TELEMETRY=off`; it wins over
 every level and endpoint. A build made without the `telemetry` feature
 contains no telemetry code at all.
+
+**Endpoint override.** `https://telemetry.dbflux.dev` is the default
+destination, not the only possible one. Setting `DBFLUX_TELEMETRY_ENDPOINT` to
+another HTTPS URL sends reports there once you have confirmed the disclosure,
+and an invalid value disables delivery instead of falling back. The retention,
+country and processor terms in this section describe the project's collector
+only; an overridden endpoint is governed by whoever runs it.
 
 #### Which operations count
 
@@ -120,8 +128,11 @@ Facts that do not change with the level:
   for the life of the installation: it never rotates on a schedule. It is
   **pseudonymous, not anonymous**: it identifies an installation, not a person
   or a unique device. Reports also have a delivery UUID, which is unique per
-  report. Resetting the identifier in Settings destroys the old one and mints a
-  new random one; nothing links the two.
+  report. Resetting the identifier in Settings replaces it with a new random one
+  and the app sends nothing that links the two. Reset does not delete earlier
+  deliveries from the local [audit log](#audit-and-privacy), which can keep the
+  old identifier, and it does not withdraw events the collector already
+  received; those age out under the retention above.
 - Never sent: operation, query, client or person identifiers, tool names,
   queries, results, credentials, file paths, connection metadata, cross-process
   actor data or unrestricted error text. There are no Extended reports, public
@@ -129,7 +140,8 @@ Facts that do not change with the level:
 - Every delivery attempt records the full correlated payload, level and outcome
   in the local [audit log](#audit-and-privacy). Readable display labels do not
   change raw storage, copy, export or wire contents. Events go only to the
-  project's collector at `https://telemetry.dbflux.dev` to help guide development.
+  project's collector at `https://telemetry.dbflux.dev` by default, to help guide
+  development. See the endpoint override above.
 - Resetting the installation id in Settings › Updates & privacy replaces the
   identifier at once and cancels pending sends; already-acknowledged builds
   stay acknowledged.

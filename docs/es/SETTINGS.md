@@ -102,9 +102,9 @@ determinista y con sus nombres nativos. System sigue el locale del sistema
 operativo y recurre a English cuando ningún locale incluido coincide de forma no
 ambigua. Un cambio de idioma tiene efecto después de reiniciar DBFlux, por lo que
 el control muestra una nota permanente al respecto. Los catálogos parciales
-recurren a English para el texto general aún no traducido. Este release solo
-traduce la sección General; el resto de la UI se está convirtiendo crate por crate
-y permanece en English por ahora.
+recurren a English para el texto general aún no traducido. Este release traduce,
+entre otras, las secciones General y Actualizaciones y privacidad; el resto de la
+UI se está convirtiendo crate por crate y permanece en English por ahora.
 
 ### Editor
 
@@ -248,9 +248,11 @@ DBFlux tiene un módulo de telemetría opcional con tres niveles:
   e inspecciones de schema. Son recuentos de operaciones completas, incluidos
   resultados exitosos con cero filas, no de filas ni de tiempos.
 
-No se envía nada y no se cuenta ningún uso hasta que confirmas el aviso de
-bienvenida. Si habías desactivado el diálogo de bienvenida, se abre una vez tras
-actualizar para que puedas elegir, y no vuelve a abrirse por este motivo.
+No se pone nada en cola, no se envía nada y no se cuenta ningún uso hasta que
+confirmas el aviso de bienvenida con **Empezar**. Si habías desactivado el
+diálogo de bienvenida, se abre en cada arranque tras actualizar, siempre que las
+estadísticas de uso arranquen, hasta que confirmes; cerrarlo de otra forma, por
+ejemplo con Escape, no lo confirma.
 
 La app no envía país; envía el valor de relleno `ZZ`. Solo en los informes de
 Básico, el colector guarda el país aproximado que Cloudflare resuelve en su

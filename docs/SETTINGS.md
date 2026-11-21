@@ -92,8 +92,9 @@ shown by their native names. System follows your OS locale and falls back to
 English when no shipped locale matches unambiguously. A language change takes
 effect after you restart DBFlux, so the control shows a permanent note to that
 effect. Partial catalogs fall back to English for untranslated general UI text.
-This release only translates the General section; the rest of the UI is being
-converted crate by crate and stays in English for now.
+This release translates, among others, the General and Updates & privacy
+sections; the rest of the UI is being converted crate by crate and stays in
+English for now.
 
 ### Editor
 
@@ -233,9 +234,10 @@ DBFlux has an optional telemetry module with three levels:
   script runs, MCP operations and schema inspections. These are whole-operation
   counts, including successful zero-row results, not row counts or timings.
 
-Nothing is sent and no usage is counted until you confirm the Welcome
-disclosure. If you had disabled the Welcome dialog, it opens once after
-updating so you can choose, and it does not open again for this reason.
+Nothing is queued, sent or counted until you confirm the Welcome disclosure
+with **Get started**. If you had disabled the Welcome dialog, it opens at every
+start after updating, whenever usage statistics start, until you confirm;
+closing it another way, such as with Escape, does not confirm.
 
 The app sends no country; it sends the placeholder `ZZ`. For Basic reports
 only, the collector stores the coarse country that Cloudflare resolves at its

@@ -38,7 +38,7 @@ los proveedores de infraestructura que ven el tráfico en su camino hacia ti.
 | ¿Qué conexiones de red abre? | Las que configuras: servidores de base de datos, túneles SSH, proxies, APIs cloud y el destino de telemetría bajo las condiciones siguientes. |
 | ¿Dónde viven mis datos? | En tu máquina, en un único archivo SQLite más el llavero del sistema operativo para los secretos. |
 | ¿Guarda un registro de lo que hago? | El historial y el log de auditoría registran el trabajo localmente. Básico también conserva contadores agregados acotados; solo los informes de telemetría pueden enviarse automáticamente bajo las condiciones siguientes. |
-| ¿Se comparte algo con el proyecto? | Los eventos de telemetría llegan al colector del proyecto en `https://telemetry.dbflux.dev` una vez confirmado el aviso de bienvenida, salvo que el nivel sea Apagado. Los reportes de error y los logs llegan al proyecto solo cuando tú los adjuntas a un issue. |
+| ¿Se comparte algo con el proyecto? | Los eventos de telemetría llegan por defecto al colector del proyecto en `https://telemetry.dbflux.dev` una vez confirmado el aviso de bienvenida, salvo que el nivel sea Apagado. Los reportes de error y los logs llegan al proyecto solo cuando tú los adjuntas a un issue. |
 
 Las conexiones a una base de datos, un host SSH, un proxy o un proveedor cloud
 van directamente desde tu máquina al servidor que indicaste. El proyecto no
@@ -52,15 +52,16 @@ hacer copia de seguridad o reiniciar la aplicación por completo.
 
 DBFlux incluye un módulo de telemetría opcional. Es una funcionalidad
 compilada que puede excluirse por completo con `--no-default-features`, como
-las demás funcionalidades por defecto. Los eventos van a
+las demás funcionalidades por defecto. Por defecto, los eventos van a
 `https://telemetry.dbflux.dev`. No se envía nada y no se cuenta ningún uso hasta
-que confirmas el aviso de bienvenida mostrado de forma visible. Ocultarlo
-mediante código no es una confirmación.
+que confirmas con Empezar el aviso de bienvenida mostrado de forma visible.
+Ocultarlo mediante código o cerrarlo con Escape no es una confirmación.
 
 Básico viene preseleccionado en el diálogo de bienvenida, así que confirmar sin
 cambiar la selección aplica Básico; elige Mínimo o Apagado ahí para enviar
-menos. Si habías desactivado el diálogo de bienvenida, se abre una vez tras
-actualizar para que puedas elegir, y no vuelve a abrirse por este motivo.
+menos. Si habías desactivado el diálogo de bienvenida, se abre en cada arranque
+tras actualizar, siempre que la telemetría arranque, hasta que confirmes el
+aviso.
 
 | Nivel | Qué envía |
 |-------|-----------|
@@ -82,6 +83,14 @@ Actualizaciones y privacidad. Para desactivar el envío sin abrir la app, por
 ejemplo en equipos gestionados, define la variable de entorno
 `DBFLUX_TELEMETRY=off`; tiene prioridad sobre cualquier nivel y destino. Una
 compilación sin la característica `telemetry` no contiene código de telemetría.
+
+**Sustitución del destino.** `https://telemetry.dbflux.dev` es el destino por
+defecto, no el único posible. Si defines `DBFLUX_TELEMETRY_ENDPOINT` con otra URL
+HTTPS, los informes se envían allí una vez confirmado el aviso, y un valor no
+válido desactiva el envío en lugar de volver al destino por defecto. La
+retención, el país y los encargados del tratamiento descritos en esta sección
+se refieren solo al colector del proyecto; un destino sustituido lo rige quien
+lo opere.
 
 #### Qué operaciones cuentan
 
@@ -127,8 +136,11 @@ Datos que no cambian según el nivel:
   arranque y se conserva mientras exista la instalación: no rota por calendario.
   Es **seudónimo, no anónimo**: identifica una instalación, no una persona ni un
   dispositivo único. Cada informe también tiene un UUID de entrega, único por
-  informe. Restablecer el identificador en Ajustes destruye el anterior y genera
-  uno nuevo aleatorio; nada vincula a los dos.
+  informe. Restablecer el identificador en Ajustes lo reemplaza por uno nuevo
+  aleatorio y la app no envía nada que vincule a los dos. Restablecer no borra
+  los envíos anteriores del [log de auditoría](#auditoría-y-privacidad) local,
+  que puede conservar el identificador anterior, ni retira los eventos que el
+  colector ya recibió; estos caducan según la retención indicada arriba.
 - Nunca se envían: identificadores de operaciones, consultas, clientes o personas,
   nombres de herramientas, consultas, resultados, credenciales, rutas de archivos,
   metadatos de conexión, datos de actores entre procesos ni texto de error sin
@@ -138,7 +150,8 @@ Datos que no cambian según el nivel:
   y el resultado en el [log de auditoría](#auditoría-y-privacidad) local. Las
   etiquetas legibles no cambian el almacenamiento, la copia, la exportación ni
   el contenido enviado sin procesar. Los eventos solo van al colector del
-  proyecto en `https://telemetry.dbflux.dev` para ayudar a orientar el desarrollo.
+  proyecto en `https://telemetry.dbflux.dev` por defecto, para ayudar a orientar
+  el desarrollo. Consulta la sustitución del destino más arriba.
 - Reiniciar el id de instalación en Configuración › Actualizaciones y
   privacidad reemplaza el identificador de inmediato y cancela los envíos
   pendientes; las compilaciones ya confirmadas siguen confirmadas.
