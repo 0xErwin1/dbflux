@@ -8,11 +8,6 @@ mod pane_actions;
 pub mod pipeline;
 mod render;
 mod shell;
-// Test-only composition harness for the telemetry usage counters; declared
-// here so it sits beside the other workspace test module.
-#[cfg(test)]
-#[cfg(feature = "telemetry")]
-mod telemetry_composition_tests;
 use actions::TabPlacement;
 
 pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
@@ -1345,16 +1340,7 @@ impl Workspace {
                 }
                 SidebarEvent::OpenDashboard { dashboard_id } => {
                     #[cfg(feature = "telemetry")]
-                    let usage_ticket = this.app_state.update(cx, |state, _| {
-                        let source = state.telemetry_usage_source(chrono::Utc::now())?;
-                        match source.ticket() {
-                            Ok(ticket) => ticket,
-                            Err(error) => {
-                                log::warn!("Usage ticket capture failed: {error:?}");
-                                None
-                            }
-                        }
-                    });
+                    let usage_ticket = this.capture_dashboard_usage_ticket(cx);
                     this.open_dashboard(
                         *dashboard_id,
                         #[cfg(feature = "telemetry")]
@@ -1364,7 +1350,16 @@ impl Workspace {
                     );
                 }
                 SidebarEvent::OpenRemoteDashboard { profile_id, name } => {
-                    this.open_remote_dashboard(*profile_id, name.clone(), window, cx);
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = this.capture_dashboard_usage_ticket(cx);
+                    this.open_remote_dashboard(
+                        *profile_id,
+                        name.clone(),
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);

@@ -126,15 +126,25 @@ pub(super) struct UpdatesSection {
     app_state: Entity<AppStateEntity>,
     check_on_startup: bool,
     show_whats_new: bool,
-    /// Staged telemetry level, applied only by Save.
+    /// Staged telemetry level, applied only by Save. `None` while the
+    /// telemetry module is unavailable: there is nothing to stage or write.
     #[cfg(feature = "telemetry")]
-    telemetry_level: TelemetryLevel,
+    telemetry_level: Option<TelemetryLevel>,
+    /// Whether the user changed the level here. Save writes a level only
+    /// when this is set, so a draft that went stale (Welcome stored Off
+    /// while this section stayed open) can never overwrite the stored one.
+    #[cfg(feature = "telemetry")]
+    telemetry_edited: bool,
     /// Confirmation of the install-id reset, opened by `InstallReset`.
     #[cfg(feature = "telemetry")]
     install_reset_confirm: Entity<ModalConfirm>,
     /// Cached newest confirmed report, refreshed outside render.
     #[cfg(feature = "telemetry")]
     report_state: ReportState,
+    /// Advances on every lookup, so a slower older lookup cannot replace the
+    /// result of a newer one.
+    #[cfg(feature = "telemetry")]
+    report_generation: u64,
     #[cfg(feature = "telemetry")]
     report_preview: Entity<ModalJsonReportPreview>,
     content_focused: bool,
@@ -156,6 +166,7 @@ impl UpdatesSection {
         #[cfg(feature = "telemetry")]
         let telemetry_subscription =
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+                this.sync_unedited_telemetry_level(cx);
                 this.refresh_last_report(cx);
             });
 
@@ -165,11 +176,15 @@ impl UpdatesSection {
             check_on_startup: saved.check_for_updates_on_startup,
             show_whats_new: saved.show_whats_new_after_update,
             #[cfg(feature = "telemetry")]
-            telemetry_level: DEFAULT_TELEMETRY_LEVEL,
+            telemetry_level: None,
+            #[cfg(feature = "telemetry")]
+            telemetry_edited: false,
             #[cfg(feature = "telemetry")]
             install_reset_confirm: cx.new(ModalConfirm::new),
             #[cfg(feature = "telemetry")]
             report_state: ReportState::Loading,
+            #[cfg(feature = "telemetry")]
+            report_generation: 0,
             #[cfg(feature = "telemetry")]
             report_preview: cx.new(ModalJsonReportPreview::new),
             content_focused: false,
@@ -179,11 +194,7 @@ impl UpdatesSection {
 
         #[cfg(feature = "telemetry")]
         {
-            section.telemetry_level = section
-                .app_state
-                .read(cx)
-                .telemetry_level()
-                .unwrap_or(DEFAULT_TELEMETRY_LEVEL);
+            section.telemetry_level = section.app_state.read(cx).telemetry_level();
             section.refresh_last_report(cx);
             section._subscriptions.push(telemetry_subscription);
 
@@ -205,6 +216,8 @@ impl UpdatesSection {
     /// runs while the optional telemetry module is unavailable.
     #[cfg(feature = "telemetry")]
     fn refresh_last_report(&mut self, cx: &mut Context<Self>) {
+        self.report_generation += 1;
+        let generation = self.report_generation;
         if self.app_state.read(cx).telemetry().is_none() {
             self.report_state = ReportState::Failed;
             cx.notify();
@@ -218,23 +231,7 @@ impl UpdatesSection {
         cx.spawn(async move |section, cx| {
             let result = task.await;
             let applied = section.update(cx, |section, cx| {
-                section.report_state = match result {
-                    Ok(Some(report)) => ReportState::Ready(report),
-                    Ok(None) => ReportState::None,
-                    Err(_) => {
-                        // First catch site: one finite user-facing error; the
-                        // payload or raw audit text never reaches the toast.
-                        report_error(
-                            UserFacingError::new(
-                                ErrorKind::Storage,
-                                dbflux_i18n::t!("updates.settings.report_load_failed"),
-                            ),
-                            cx,
-                        );
-                        ReportState::Failed
-                    }
-                };
-                cx.notify();
+                section.apply_report_lookup(generation, result, cx);
             });
             if applied.is_err() {
                 // The section (or its window) closed while the query ran:
@@ -245,10 +242,53 @@ impl UpdatesSection {
         .detach();
     }
 
+    /// Applies a finished lookup unless a newer one started meanwhile, so a
+    /// slow older lookup can never replace a newer result.
+    #[cfg(feature = "telemetry")]
+    fn apply_report_lookup(
+        &mut self,
+        generation: u64,
+        result: Result<
+            Option<dbflux_app::telemetry::TelemetryLastReport>,
+            dbflux_app::telemetry::TelemetryError,
+        >,
+        cx: &mut Context<Self>,
+    ) {
+        if self.report_generation != generation {
+            return;
+        }
+        self.report_state = match result {
+            Ok(Some(report)) => ReportState::Ready(report),
+            Ok(None) => ReportState::None,
+            Err(_) => {
+                // First catch site: one finite user-facing error; the
+                // payload or raw audit text never reaches the toast.
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        dbflux_i18n::t!("updates.settings.report_load_failed"),
+                    ),
+                    cx,
+                );
+                ReportState::Failed
+            }
+        };
+        cx.notify();
+    }
+
     /// Row label of the cached report state, for rendering and regressions.
     #[cfg(feature = "telemetry")]
     fn report_meta_label(&self) -> String {
         report_meta_label(&self.report_state)
+    }
+
+    /// Follows the stored level while the user has not edited it here, so an
+    /// Off chosen in Welcome is what this section shows and what Save keeps.
+    #[cfg(feature = "telemetry")]
+    fn sync_unedited_telemetry_level(&mut self, cx: &App) {
+        if !self.telemetry_edited {
+            self.telemetry_level = self.app_state.read(cx).telemetry_level();
+        }
     }
 
     fn saved_settings(&self, cx: &App) -> UpdateSettings {
@@ -266,7 +306,11 @@ impl UpdatesSection {
         }
 
         #[cfg(feature = "telemetry")]
-        if self.app_state.read(cx).telemetry_level() != Some(self.telemetry_level) {
+        if self.telemetry_edited
+            && self
+                .telemetry_level
+                .is_some_and(|draft| self.app_state.read(cx).telemetry_level() != Some(draft))
+        {
             return true;
         }
 
@@ -301,10 +345,10 @@ impl UpdatesSection {
         // the foreground. On failure the staged value stays dirty and the
         // saved state stays truthful; no success toast is shown.
         #[cfg(feature = "telemetry")]
-        {
-            let telemetry_result = self.app_state.update(cx, |state, _| {
-                state.set_telemetry_level(self.telemetry_level, Utc::now())
-            });
+        if let Some(level) = self.telemetry_level.filter(|_| self.telemetry_edited) {
+            let telemetry_result = self
+                .app_state
+                .update(cx, |state, _| state.set_telemetry_level(level, Utc::now()));
             if let Err(_error) = telemetry_result {
                 report_error(
                     UserFacingError::new(
@@ -317,6 +361,7 @@ impl UpdatesSection {
                 cx.notify();
                 return;
             }
+            self.telemetry_edited = false;
             self.refresh_last_report(cx);
         }
 
@@ -334,8 +379,9 @@ impl UpdatesSection {
         // saved level are untouched until Save, and no telemetry write
         // happens here.
         #[cfg(feature = "telemetry")]
-        {
-            self.telemetry_level = DEFAULT_TELEMETRY_LEVEL;
+        if self.telemetry_level.is_some() {
+            self.telemetry_level = Some(DEFAULT_TELEMETRY_LEVEL);
+            self.telemetry_edited = true;
         }
         cx.notify();
     }
@@ -357,9 +403,10 @@ impl UpdatesSection {
             UpdatesRow::ShowWelcome => self.request_dialog(UpdateDialogRequest::Welcome, cx),
             #[cfg(feature = "telemetry")]
             UpdatesRow::TelemetryLevel => {
-                let next =
-                    (telemetry_level_index(self.telemetry_level) + 1) % TELEMETRY_LEVELS.len();
-                self.stage_telemetry_level_at(next);
+                if let Some(current) = self.telemetry_level {
+                    let next = (telemetry_level_index(current) + 1) % TELEMETRY_LEVELS.len();
+                    self.stage_telemetry_level_at(next);
+                }
             }
             #[cfg(feature = "telemetry")]
             UpdatesRow::InstallReset => self.open_install_reset_confirm(cx),
@@ -374,11 +421,16 @@ impl UpdatesSection {
     }
 
     /// Stages the level at `index` of the segmented control. An index outside
-    /// the control leaves the staged level unchanged.
+    /// the control, or an unavailable telemetry module, leaves the staged
+    /// level unchanged.
     #[cfg(feature = "telemetry")]
     fn stage_telemetry_level_at(&mut self, index: usize) {
+        if self.telemetry_level.is_none() {
+            return;
+        }
         if let Some(level) = TELEMETRY_LEVELS.get(index).copied() {
-            self.telemetry_level = level;
+            self.telemetry_level = Some(level);
+            self.telemetry_edited = true;
         }
     }
 
@@ -611,14 +663,9 @@ impl UpdatesSection {
         body.into_any_element()
     }
 
-    /// Usage statistics: the staged Off/Minimal/Basic level, what is sent, the
-    /// install id and the last confirmed report.
+    /// The staged-level segmented control inside its focus frame.
     #[cfg(feature = "telemetry")]
-    fn render_usage_group(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let tint = ChromeColors::tint(theme);
-
+    fn render_level_selector(&self, cx: &mut Context<Self>) -> Div {
         let level = SegmentedControl::new(
             vec![
                 SegmentedItem::new("off", dbflux_i18n::t!("updates.settings.level_off"))
@@ -628,7 +675,7 @@ impl UpdatesSection {
                 SegmentedItem::new("basic", dbflux_i18n::t!("updates.settings.level_basic"))
                     .icon(AppIcon::Columns),
             ],
-            telemetry_level_segment(self.telemetry_level),
+            telemetry_level_segment(self.telemetry_level.unwrap_or(DEFAULT_TELEMETRY_LEVEL)),
             {
                 let state = cx.entity();
                 move |id, _, cx| {
@@ -650,9 +697,15 @@ impl UpdatesSection {
 
         // A flex row keeps the segmented track hugging its segments; a plain
         // child of the column would stretch it across the whole row.
-        let level_row = self.focus_frame(UpdatesRow::TelemetryLevel, cx, div().flex().child(level));
+        self.focus_frame(UpdatesRow::TelemetryLevel, cx, div().flex().child(level))
+    }
 
-        let what_is_sent = div()
+    /// The "what is sent" table: a caption over one row per collected item.
+    #[cfg(feature = "telemetry")]
+    fn render_collected_table(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        div()
             .flex()
             .flex_col()
             .gap(Spacing::SM)
@@ -692,9 +745,14 @@ impl UpdatesSection {
                         false,
                         cx,
                     )),
-            );
+            )
+    }
 
-        let install_id = div()
+    /// The masked installation id with its reset button.
+    #[cfg(feature = "telemetry")]
+    fn render_install_id_row(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        div()
             .flex()
             .items_center()
             .gap(Spacing::SM)
@@ -727,7 +785,20 @@ impl UpdatesSection {
                 dbflux_i18n::t!("updates.settings.reset_install_id"),
                 AppIcon::RotateCcw,
                 cx,
-            ));
+            ))
+    }
+
+    /// Usage statistics: the staged Off/Minimal/Basic level, what is sent, the
+    /// install id and the last confirmed report.
+    #[cfg(feature = "telemetry")]
+    fn render_usage_group(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let tint = ChromeColors::tint(theme);
+
+        let level_row = self.render_level_selector(cx);
+        let what_is_sent = self.render_collected_table(cx);
+        let install_id = self.render_install_id_row(cx);
 
         let delivery_configured = self.app_state.read(cx).telemetry_delivery_configured();
         let reports = self.render_reports_controls(cx);
@@ -956,9 +1027,9 @@ impl UpdatesSection {
                 if modifiers == Modifiers::none()
                     && ROWS.get(self.cursor).copied() == Some(UpdatesRow::TelemetryLevel) =>
             {
-                self.stage_telemetry_level_at(
-                    telemetry_level_index(self.telemetry_level).saturating_sub(1),
-                );
+                if let Some(current) = self.telemetry_level {
+                    self.stage_telemetry_level_at(telemetry_level_index(current).saturating_sub(1));
+                }
                 cx.notify();
             }
             #[cfg(feature = "telemetry")]
@@ -966,7 +1037,9 @@ impl UpdatesSection {
                 if modifiers == Modifiers::none()
                     && ROWS.get(self.cursor).copied() == Some(UpdatesRow::TelemetryLevel) =>
             {
-                self.stage_telemetry_level_at(telemetry_level_index(self.telemetry_level) + 1);
+                if let Some(current) = self.telemetry_level {
+                    self.stage_telemetry_level_at(telemetry_level_index(current) + 1);
+                }
                 cx.notify();
             }
             ("escape", modifiers) if modifiers == Modifiers::none() => {
@@ -1286,6 +1359,9 @@ mod tests {
     use dbflux_app::updates::AvailableUpdate;
     use dbflux_core::chrono::TimeDelta;
 
+    #[cfg(feature = "telemetry")]
+    mod telemetry;
+
     #[test]
     fn detail_mentions_the_check_time_only_after_a_check() {
         let now = Utc::now();
@@ -1440,607 +1516,5 @@ mod tests {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-#[cfg(feature = "telemetry")]
-mod telemetry_tests {
-    // Explicit imports: the parent's `gpui::*` glob would make `#[test]`
-    // resolve to `gpui::test`, whose expansion recurses without bound.
-    use super::{ReportState, UpdatesRow, UpdatesSection};
-    use dbflux_app::telemetry::{TelemetryConfig, TelemetryLastReport, TelemetryLevel};
-    use dbflux_storage::bootstrap::StorageRuntime;
-    use dbflux_ui_base::AppStateEntity;
-    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
-    use gpui::{AppContext as _, Entity, ParentElement as _, TestAppContext, VisualTestContext};
-
-    /// A real v1 ping payload (closed wire schema), so the UI test never
-    /// normalizes a fake report shape.
-    const REPORT_PAYLOAD_FIXTURE: &str = r#"{"schema":"dbflux.telemetry-event/v1","install_id":"0d8f8a2e-9c34-4f5a-8d1e-2b3c4d5e6f70","delivery_id":"1e9f9b3f-0d45-406b-9e2f-3c4d5e6f7081","sent_at":"2026-01-01T00:00:00Z","version":"1.2.3","channel":"stable","os":"linux","arch":"amd64","event":"ping"}"#;
-
-    struct Harness {
-        app_state: Entity<AppStateEntity>,
-        section: Entity<UpdatesSection>,
-    }
-
-    fn open(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
-        cx.update(gpui_component::init);
-        cx.update(dbflux_components::theme::init);
-        cx.update(|cx| {
-            let host = cx.new(|_| ToastHost::new());
-            cx.set_global(ToastGlobal { host });
-        });
-
-        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
-            cx.new(|_| {
-                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
-                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
-            })
-        });
-        open_on(cx, app_state)
-    }
-
-    /// Opens the section over an existing app state, so a test can change the
-    /// saved state between two section lifetimes.
-    fn open_on(
-        cx: &mut TestAppContext,
-        app_state: Entity<AppStateEntity>,
-    ) -> (Harness, &mut VisualTestContext) {
-        cx.update(|cx| {
-            app_state.update(cx, |state, _| {
-                state.initialize_telemetry(
-                    TelemetryConfig::default(),
-                    dbflux_core::chrono::Utc::now(),
-                )
-            })
-        })
-        .expect("telemetry initialized");
-
-        struct SectionView {
-            section: Entity<UpdatesSection>,
-        }
-
-        impl gpui::Render for SectionView {
-            fn render(
-                &mut self,
-                _window: &mut gpui::Window,
-                _cx: &mut gpui::Context<Self>,
-            ) -> impl gpui::IntoElement {
-                gpui::div().child(self.section.clone())
-            }
-        }
-
-        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let slot_for_view = slot.clone();
-        let app_for_view = app_state.clone();
-        let (_view, window) = cx.add_window_view(move |window, cx| {
-            let section = cx.new(|cx| UpdatesSection::new(app_for_view.clone(), window, cx));
-            slot_for_view.borrow_mut().replace(section.clone());
-            SectionView { section }
-        });
-        window.run_until_parked();
-
-        let section = slot.borrow().clone().expect("section built");
-        (Harness { app_state, section }, window)
-    }
-
-    fn saved_level(harness: &Harness, window: &mut VisualTestContext) -> Option<TelemetryLevel> {
-        window.update(|_, cx| harness.app_state.read(cx).telemetry_level())
-    }
-
-    fn staged_level(harness: &Harness, window: &mut VisualTestContext) -> TelemetryLevel {
-        window.update(|_, cx| harness.section.read(cx).telemetry_level)
-    }
-
-    fn masked_id(harness: &Harness, window: &mut VisualTestContext) -> Option<String> {
-        window.update(|_, cx| harness.app_state.read(cx).telemetry_install_id_masked())
-    }
-
-    /// The install-id reset runs through the reusable confirmation: the row
-    /// opens it with both resolutions available, cancelling leaves the
-    /// install id untouched, and confirming rotates the identity.
-    #[gpui::test]
-    fn the_install_reset_confirmation_cancels_and_confirms(cx: &mut TestAppContext) {
-        let (harness, window) = open(cx);
-        let before = masked_id(&harness, window);
-
-        let confirm_visible = |window: &mut VisualTestContext| {
-            window.update(|_, cx| {
-                harness
-                    .section
-                    .read(cx)
-                    .install_reset_confirm
-                    .read(cx)
-                    .is_visible()
-            })
-        };
-        let open_confirmation = |window: &mut VisualTestContext| {
-            window.update(|_, cx| {
-                harness.section.update(cx, |section, cx| {
-                    section.activate(UpdatesRow::InstallReset, cx)
-                });
-            });
-            window.run_until_parked();
-        };
-
-        open_confirmation(window);
-        assert!(
-            confirm_visible(window),
-            "the reset row opens the confirmation"
-        );
-        assert!(
-            window.update(|window, cx| harness
-                .section
-                .read(cx)
-                .install_reset_confirm
-                .read(cx)
-                .contains_focus(window, cx)),
-            "opening the confirmation moves focus into it"
-        );
-
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, cx| {
-                section
-                    .install_reset_confirm
-                    .update(cx, |confirm, cx| confirm.cancel(cx));
-            });
-        });
-        window.run_until_parked();
-        assert!(
-            !confirm_visible(window),
-            "cancelling closes the confirmation"
-        );
-        assert_eq!(
-            masked_id(&harness, window),
-            before,
-            "cancelling leaves the install id untouched"
-        );
-
-        open_confirmation(window);
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, cx| {
-                section
-                    .install_reset_confirm
-                    .update(cx, |confirm, cx| confirm.confirm(cx));
-            });
-        });
-        window.run_until_parked();
-        assert!(
-            !confirm_visible(window),
-            "confirming closes the confirmation"
-        );
-        assert_ne!(
-            masked_id(&harness, window),
-            before,
-            "confirming rotates the installation identity"
-        );
-    }
-
-    #[gpui::test]
-    fn the_staged_level_does_not_change_the_saved_level_until_save(cx: &mut TestAppContext) {
-        let (harness, window) = open(cx);
-        let app_state = harness.app_state.clone();
-        window
-            .update(|_, cx| {
-                app_state.update(cx, |state, _| {
-                    state
-                        .set_telemetry_level(TelemetryLevel::Basic, dbflux_core::chrono::Utc::now())
-                })
-            })
-            .expect("saved basic");
-
-        // Reopening stages the saved level.
-        let (harness, window) = open_on(cx, app_state);
-        assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Basic));
-        assert_eq!(staged_level(&harness, window), TelemetryLevel::Basic);
-
-        // Activating cycles to Off; nothing is persisted and nothing is queued.
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, cx| {
-                section.activate(UpdatesRow::TelemetryLevel, cx)
-            });
-        });
-        assert_eq!(staged_level(&harness, window), TelemetryLevel::Off);
-        assert_eq!(
-            saved_level(&harness, window),
-            Some(TelemetryLevel::Basic),
-            "staging never writes"
-        );
-
-        // Save applies the staged level.
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, cx| section.save(cx));
-        });
-        window.run_until_parked();
-        assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Off));
-    }
-
-    #[gpui::test]
-    fn a_new_install_stages_basic_and_the_keys_step_through_three_levels(cx: &mut TestAppContext) {
-        let (harness, window) = open(cx);
-        assert_eq!(saved_level(&harness, window), Some(TelemetryLevel::Basic));
-        assert_eq!(staged_level(&harness, window), TelemetryLevel::Basic);
-
-        let press = |window: &mut VisualTestContext, key: &str| {
-            let event = gpui::KeyDownEvent {
-                keystroke: gpui::Keystroke::parse(key).expect("keystroke"),
-                is_held: false,
-                prefer_character_input: false,
-            };
-            window.update(|_, cx| {
-                harness.section.update(cx, |section, cx| {
-                    section.cursor = super::ROWS
-                        .iter()
-                        .position(|row| *row == UpdatesRow::TelemetryLevel)
-                        .expect("level row");
-                    section.handle_key(&event, cx);
-                });
-            });
-        };
-
-        for (key, expected) in [
-            ("right", TelemetryLevel::Basic),
-            ("right", TelemetryLevel::Basic),
-            ("left", TelemetryLevel::Minimal),
-            ("left", TelemetryLevel::Off),
-            ("left", TelemetryLevel::Off),
-            ("enter", TelemetryLevel::Minimal),
-            ("enter", TelemetryLevel::Basic),
-            ("enter", TelemetryLevel::Off),
-        ] {
-            press(window, key);
-            assert_eq!(staged_level(&harness, window), expected, "{key}");
-        }
-
-        assert_eq!(
-            saved_level(&harness, window),
-            Some(TelemetryLevel::Basic),
-            "staging never writes"
-        );
-    }
-
-    #[test]
-    fn basic_is_the_default_level_and_the_hint_names_it_in_every_locale() {
-        const MINIMAL_DEFAULT: [&str; 4] = [
-            "Minimal, the default",
-            "Mínimo, el valor predeterminado",
-            "「최소」가 기본값",
-            "「最小」是默认值",
-        ];
-
-        assert_eq!(super::DEFAULT_TELEMETRY_LEVEL, TelemetryLevel::Basic);
-        for (index, locale) in ["en", "es", "ko", "zh_Hans"].iter().enumerate() {
-            let hint = dbflux_i18n::t!("updates.settings.level_hint", locale = locale);
-            let basic = dbflux_i18n::t!("updates.settings.level_basic", locale = locale);
-            assert!(
-                !hint.contains(MINIMAL_DEFAULT[index]),
-                "{locale}: the hint must not call Minimal the default, got: {hint}"
-            );
-            assert!(
-                hint.contains(&basic),
-                "{locale}: the hint must name Basic, got: {hint}"
-            );
-        }
-    }
-
-    #[gpui::test]
-    fn the_level_control_renders_three_segments(cx: &mut TestAppContext) {
-        let (_harness, window) = open(cx);
-        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
-        window.update(|window, _| window.refresh());
-        let frame = capture.frame(window);
-
-        for id in [
-            "segmented-telemetry-level-off",
-            "segmented-telemetry-level-minimal",
-            "segmented-telemetry-level-basic",
-        ] {
-            assert!(
-                frame.nodes().any(|(_, node)| node.id() == id),
-                "{id} must be in the painted frame"
-            );
-        }
-    }
-
-    #[gpui::test]
-    fn reset_defaults_stages_basic_without_touching_storage_or_the_install_id(
-        cx: &mut TestAppContext,
-    ) {
-        let (harness, window) = open(cx);
-        let app_state = harness.app_state.clone();
-        window
-            .update(|_, cx| {
-                app_state.update(cx, |state, _| {
-                    state.set_telemetry_level(TelemetryLevel::Off, dbflux_core::chrono::Utc::now())
-                })
-            })
-            .expect("saved off");
-
-        let (harness, window) = open_on(cx, app_state);
-        let before = masked_id(&harness, window);
-
-        window.update(|_, cx| {
-            harness
-                .section
-                .update(cx, |section, cx| section.reset_to_defaults(cx));
-        });
-
-        assert_eq!(staged_level(&harness, window), TelemetryLevel::Basic);
-        assert_eq!(
-            saved_level(&harness, window),
-            Some(TelemetryLevel::Off),
-            "reset stages, never persists"
-        );
-        assert_eq!(masked_id(&harness, window), before, "reset keeps the id");
-    }
-
-    #[gpui::test]
-    fn the_report_viewer_opens_only_over_a_cached_report(cx: &mut TestAppContext) {
-        let (harness, window) = open(cx);
-
-        // Without a cached report the action is a no-op: no fake viewer, and
-        // focus never moves into it.
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, cx| {
-                section.activate(UpdatesRow::ViewReport, cx)
-            });
-        });
-        window.run_until_parked();
-        assert!(
-            !window.update(|_, cx| {
-                harness
-                    .section
-                    .read(cx)
-                    .report_preview
-                    .read(cx)
-                    .is_visible()
-            }),
-            "no viewer without a report"
-        );
-        assert!(
-            !window.update(|window, cx| harness
-                .section
-                .read(cx)
-                .report_preview
-                .read(cx)
-                .contains_focus(window, cx)),
-            "focus stays out of the viewer without a report"
-        );
-
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, _| {
-                section.report_state = ReportState::Ready(TelemetryLastReport {
-                    payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
-                    payload_len: REPORT_PAYLOAD_FIXTURE.len(),
-                    level: Some("basic".to_owned()),
-                    ack_at_epoch_ms: 1_767_225_600_000,
-                    correlation: Some(uuid::Uuid::nil()),
-                });
-            });
-        });
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, cx| {
-                section.activate(UpdatesRow::ViewReport, cx)
-            });
-        });
-        window.run_until_parked();
-        assert!(
-            window.update(|_, cx| {
-                harness
-                    .section
-                    .read(cx)
-                    .report_preview
-                    .read(cx)
-                    .is_visible()
-            }),
-            "the viewer opens over the cached report"
-        );
-        assert!(
-            window.update(|window, cx| harness
-                .section
-                .read(cx)
-                .report_preview
-                .read(cx)
-                .contains_focus(window, cx)),
-            "opening the viewer moves focus into it"
-        );
-    }
-
-    /// Failed and Loading must never read "No report sent yet": only a
-    /// successful Ok(None) lookup may claim that. Buttons stay disabled in
-    /// every non-Ready state, so a failed lookup can neither open the viewer
-    /// nor invent metadata or a payload.
-    #[test]
-    fn report_states_have_distinct_truthful_labels() {
-        use super::report_meta_label;
-
-        let none = report_meta_label(&ReportState::None);
-        let loading = report_meta_label(&ReportState::Loading);
-        let failed = report_meta_label(&ReportState::Failed);
-
-        assert_eq!(
-            failed,
-            dbflux_i18n::t!("updates.settings.report_load_failed"),
-            "a failed lookup must say so, not pretend nothing was sent"
-        );
-        assert_eq!(
-            loading,
-            dbflux_i18n::t!("updates.settings.checking_last_report"),
-            "a running lookup must say it is checking"
-        );
-        assert_eq!(none, dbflux_i18n::t!("updates.settings.no_report_sent_yet"));
-        assert_ne!(failed, none);
-        assert_ne!(loading, none);
-        assert_ne!(failed, loading);
-
-        let ready = report_meta_label(&ReportState::Ready(TelemetryLastReport {
-            payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
-            payload_len: REPORT_PAYLOAD_FIXTURE.len(),
-            level: Some("basic".to_owned()),
-            ack_at_epoch_ms: 1_767_225_600_000,
-            correlation: Some(uuid::Uuid::nil()),
-        }));
-        assert_eq!(
-            ready,
-            dbflux_i18n::t!(
-                "updates.settings.last_sent",
-                when = super::report_time_label(1_767_225_600_000),
-                level = super::report_level_label(Some("basic")),
-                size = super::report_size_label(REPORT_PAYLOAD_FIXTURE.len())
-            ),
-            "a cached report keeps its real metadata"
-        );
-        assert_ne!(ready, none);
-    }
-
-    /// A ping delivered before the Minimal level existed is stored with the
-    /// `"off"` marker; the last-report line must not claim Off sent it.
-    #[test]
-    fn a_legacy_off_ping_row_reads_as_minimal_in_the_last_report_line() {
-        use super::report_meta_label;
-
-        let line = report_meta_label(&ReportState::Ready(TelemetryLastReport {
-            payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
-            payload_len: REPORT_PAYLOAD_FIXTURE.len(),
-            level: Some("off".to_owned()),
-            ack_at_epoch_ms: 1_767_225_600_000,
-            correlation: Some(uuid::Uuid::nil()),
-        }));
-
-        assert_eq!(
-            line,
-            dbflux_i18n::t!(
-                "updates.settings.last_sent",
-                when = super::report_time_label(1_767_225_600_000),
-                level = dbflux_i18n::t!("updates.settings.level_minimal_display"),
-                size = super::report_size_label(REPORT_PAYLOAD_FIXTURE.len())
-            )
-        );
-        assert!(!line.contains(&dbflux_i18n::t!("updates.settings.level_off_display")));
-    }
-
-    #[gpui::test]
-    fn a_missing_scheduler_invalidates_the_cached_report(cx: &mut TestAppContext) {
-        let (harness, window) = open(cx);
-        window.update(|_, cx| {
-            let unavailable = cx.new(|_| {
-                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
-                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
-            });
-            assert!(unavailable.read(cx).telemetry().is_none());
-            harness.section.update(cx, |section, cx| {
-                section.report_state = ReportState::Ready(TelemetryLastReport {
-                    payload: REPORT_PAYLOAD_FIXTURE.to_owned(),
-                    payload_len: REPORT_PAYLOAD_FIXTURE.len(),
-                    level: None,
-                    ack_at_epoch_ms: 1_767_225_600_000,
-                    correlation: Some(uuid::Uuid::nil()),
-                });
-                section.app_state = unavailable;
-                section.refresh_last_report(cx);
-                assert!(
-                    matches!(section.report_state, ReportState::Failed),
-                    "an unavailable scheduler leaves the report unknown, not absent"
-                );
-                section.activate(UpdatesRow::ViewReport, cx);
-                assert!(!section.report_preview.read(cx).is_visible());
-                assert_eq!(
-                    section.report_meta_label(),
-                    dbflux_i18n::t!("updates.settings.report_load_failed")
-                );
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn a_failed_lookup_never_opens_the_viewer(cx: &mut TestAppContext) {
-        let (harness, window) = open(cx);
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, _| {
-                section.report_state = ReportState::Failed;
-            });
-        });
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, cx| {
-                section.activate(UpdatesRow::ViewReport, cx)
-            });
-        });
-        window.run_until_parked();
-        assert!(
-            !window.update(|_, cx| {
-                harness
-                    .section
-                    .read(cx)
-                    .report_preview
-                    .read(cx)
-                    .is_visible()
-            }),
-            "a failed lookup opens no viewer"
-        );
-        assert!(
-            !window.update(|_, cx| {
-                harness
-                    .section
-                    .read(cx)
-                    .report_meta_label()
-                    .contains(REPORT_PAYLOAD_FIXTURE)
-            }),
-            "the failed row never shows payload bytes"
-        );
-    }
-
-    #[gpui::test]
-    fn only_a_successful_empty_lookup_says_no_report_sent_yet(cx: &mut TestAppContext) {
-        let (harness, window) = open(cx);
-
-        // The constructor's refresh runs against the working in-memory audit:
-        // a real Ok(None) is the only path to the None state.
-        window.run_until_parked();
-        let state = window.update(|_, cx| {
-            let state = harness.section.read(cx).report_state.clone();
-            super::report_meta_label(&state)
-        });
-        assert_eq!(
-            state,
-            dbflux_i18n::t!("updates.settings.no_report_sent_yet"),
-            "Ok(None) after a real query is the truthful no-report state"
-        );
-
-        // A later failed refresh must not keep claiming "no report sent yet".
-        window.update(|_, cx| {
-            harness.section.update(cx, |section, _| {
-                section.report_state = ReportState::Failed;
-            });
-        });
-        let label = window.update(|_, cx| harness.section.read(cx).report_meta_label());
-        assert_ne!(
-            label,
-            dbflux_i18n::t!("updates.settings.no_report_sent_yet"),
-            "a failed lookup is not a truthful no-report claim"
-        );
-    }
-
-    #[test]
-    fn report_labels_are_bounded_and_readable() {
-        use super::{report_level_label, report_size_label};
-
-        assert_eq!(
-            report_level_label(Some("basic")),
-            dbflux_i18n::t!("updates.settings.level_basic_display")
-        );
-        assert_eq!(
-            report_level_label(Some("minimal")),
-            dbflux_i18n::t!("updates.settings.level_minimal_display")
-        );
-        for legacy in [Some("off"), None] {
-            assert_eq!(
-                report_level_label(legacy),
-                dbflux_i18n::t!("updates.settings.level_minimal_display"),
-                "a delivered report never reads as off: {legacy:?}"
-            );
-        }
-        assert_eq!(report_size_label(512), "512 B");
-        assert_eq!(report_size_label(2048), "2.0 KiB");
     }
 }

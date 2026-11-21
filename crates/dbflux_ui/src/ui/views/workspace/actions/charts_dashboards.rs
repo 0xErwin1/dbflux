@@ -13,7 +13,39 @@ use crate::ui::labels::{
     charts_rename_failed_message, charts_save_dashboard_failed_message,
 };
 
+#[cfg(feature = "telemetry")]
+type DashboardUsageTicket = Option<dbflux_core::observability::usage::UsageTicket>;
+
+#[cfg(feature = "telemetry")]
+fn record_dashboard_open(usage_ticket: DashboardUsageTicket) {
+    if let Some(ticket) = usage_ticket
+        && let Err(error) =
+            ticket.record(dbflux_core::observability::usage::UsageFeature::DashboardOpen)
+    {
+        log::warn!("Usage completion failed: {error:?}");
+    }
+}
+
 impl Workspace {
+    /// Captures the `dashboard_open` ticket at the user's open action, so the
+    /// permission check applies there and not when a fetch finishes.
+    #[cfg(feature = "telemetry")]
+    pub(in crate::ui::views::workspace) fn capture_dashboard_usage_ticket(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> DashboardUsageTicket {
+        self.app_state.update(cx, |state, _| {
+            let source = state.telemetry_usage_source(chrono::Utc::now())?;
+            match source.ticket() {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    log::warn!("Usage ticket capture failed: {error:?}");
+                    None
+                }
+            }
+        })
+    }
+
     /// Opens a new `ChartDocument` seeded with the given query.
     ///
     /// Called when the user selects "Chart this query" from a data grid context menu.
@@ -741,6 +773,7 @@ impl Workspace {
         &mut self,
         profile_id: uuid::Uuid,
         name: String,
+        #[cfg(feature = "telemetry")] usage_ticket: DashboardUsageTicket,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -758,6 +791,8 @@ impl Workspace {
             self.tab_manager
                 .update(cx, |mgr, cx| mgr.activate(existing, cx));
             self.set_focus(FocusTarget::Document, window, cx);
+            #[cfg(feature = "telemetry")]
+            record_dashboard_open(usage_ticket);
             return;
         }
 
@@ -815,6 +850,8 @@ impl Workspace {
                     profile_id,
                     specs,
                     app_state,
+                    #[cfg(feature = "telemetry")]
+                    usage_ticket,
                     window,
                     cx,
                 );
@@ -834,6 +871,7 @@ impl Workspace {
         profile_id: uuid::Uuid,
         specs: Vec<dbflux_core::WidgetImportSpec>,
         app_state: Entity<dbflux_ui_base::AppStateEntity>,
+        #[cfg(feature = "telemetry")] usage_ticket: DashboardUsageTicket,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -979,6 +1017,8 @@ impl Workspace {
             mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
         self.set_focus(FocusTarget::Document, window, cx);
+        #[cfg(feature = "telemetry")]
+        record_dashboard_open(usage_ticket);
     }
 
     // --- Phase P stubs: dashboard and saved-chart workspace actions ---
