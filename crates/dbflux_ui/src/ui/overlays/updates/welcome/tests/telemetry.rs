@@ -457,7 +457,7 @@ fn the_welcome_modal_covers_the_workspace_viewport(cx: &mut TestAppContext) {
 
         for (id, bounds) in card_ids.into_iter().zip(card_bounds) {
             assert!(
-                bounds.size.height <= px(100.0),
+                bounds.size.height <= px(112.0),
                 "compact card {id}: {bounds:?}"
             );
             assert!(bounds.size.height > px(0.0));

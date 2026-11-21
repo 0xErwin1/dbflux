@@ -31,15 +31,20 @@ const MARK_SIZE: Pixels = px(56.0);
 const TITLE_SIZE: Rems = ui(24.0);
 const HEADER_GAP: Pixels = Spacing::LG;
 const HEADER_PADDING_X: Pixels = px(28.0);
-const HEADER_PADDING_TOP: Pixels = px(10.0);
-const HEADER_PADDING_BOTTOM: Pixels = px(10.0);
+const HEADER_PADDING_TOP: Pixels = px(18.0);
+const HEADER_PADDING_BOTTOM: Pixels = px(18.0);
 const COLUMN_PADDING_X: Pixels = Spacing::XL;
-const COLUMN_PADDING_Y: Pixels = px(14.0);
+const COLUMN_PADDING_Y: Pixels = px(20.0);
 const WHATS_NEW_COLUMN_GAP: Pixels = Spacing::XS;
-const UPDATES_COLUMN_GAP: Pixels = Spacing::XXS;
+const UPDATES_COLUMN_GAP: Pixels = Spacing::MD;
+/// Extra space that separates the usage-statistics section from the update
+/// preferences above it.
+const TELEMETRY_SECTION_GAP: Pixels = Spacing::SM;
+/// Space between the usage-statistics heading, its helper line and the cards.
+const TELEMETRY_BLOCK_GAP: Pixels = Spacing::SM;
 const FULL_CHANGELOG_PADDING_TOP: Pixels = px(10.0);
 const FOOTER_GAP: Pixels = px(10.0);
-const FOOTER_PADDING_Y: Pixels = px(14.0);
+const FOOTER_PADDING_Y: Pixels = px(16.0);
 const FOOTER_ICON_SIZE: Rems = ui(14.0);
 const BADGE_HEIGHT: Rems = ui(20.0);
 const BADGE_PADDING_X: Pixels = px(7.0);
@@ -64,7 +69,7 @@ const DEFAULT_TELEMETRY_LEVEL: TelemetryLevel = TelemetryLevel::Basic;
 
 /// Padding of the telemetry choice cards.
 #[cfg(feature = "telemetry")]
-const TELEMETRY_CARD_PADDING: Pixels = px(8.0);
+const TELEMETRY_CARD_PADDING: Pixels = px(10.0);
 /// Gap between the telemetry choice cards.
 #[cfg(feature = "telemetry")]
 const TELEMETRY_CARD_GAP: Pixels = Spacing::SM;
@@ -386,7 +391,8 @@ impl WelcomeDialog {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(UPDATES_COLUMN_GAP)
+                    .gap(TELEMETRY_BLOCK_GAP)
+                    .mt(TELEMETRY_SECTION_GAP)
                     .child(heading)
                     .child(
                         Text::caption(dbflux_i18n::t!("updates.welcome.telemetry_helper"))
