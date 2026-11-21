@@ -597,13 +597,11 @@ fn handle_connection<S: io::Read + io::Write>(
     #[cfg(feature = "telemetry")]
     if sent.is_err()
         && let Some(capability) = issued
-    {
-        if counter_tx
+        && counter_tx
             .try_send(CounterCommand::release(capability))
             .is_err()
-        {
-            log::debug!("IPC usage release could not be queued");
-        }
+    {
+        log::debug!("IPC usage release could not be queued");
     }
     sent?;
     Ok(())
