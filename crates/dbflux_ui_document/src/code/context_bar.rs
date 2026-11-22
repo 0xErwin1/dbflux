@@ -1577,26 +1577,15 @@ impl CodeDocument {
     }
 
     /// The right end of the context bar: "Read only" on a read-only
-    /// document, the run summary ("3 statements · last run 0.32 s"), then the
+    /// document, the run summary ("3 statements"), then the
     /// script file and its state. It takes the room the controls leave and
     /// truncates the path instead of wrapping onto a row of its own.
     fn render_context_bar_trailing(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let is_db_language = self.supports_connection_context();
 
-        let execution_time = self
-            .execution
-            .active_execution_index
-            .and_then(|index| self.execution.execution_history.get(index))
-            .and_then(|record| {
-                record
-                    .finished_at
-                    .map(|finished| finished.duration_since(record.started_at))
-            });
-        let run_summary = super::statements::run_summary_label(
-            self.statement_count().filter(|_| is_db_language),
-            execution_time.map(|duration| duration.as_secs_f64()),
-        );
+        let run_summary =
+            super::statements::run_summary_label(self.statement_count().filter(|_| is_db_language));
 
         let file_state = if is_db_language {
             self.render_script_file_state(cx)
