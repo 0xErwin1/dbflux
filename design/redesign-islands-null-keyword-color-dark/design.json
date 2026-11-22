@@ -1,0 +1,13 @@
+{
+  "title": "DBFlux redesign: NULL and modifier keywords in the keyword color (#987) \u00b7 dark",
+  "brief": "Issue #987, accepted scope: NULL takes the keyword role in the SQL editor, the data grid and the row inspector, and the @attribute keywords (DESC, NULLS LAST, DEFAULT, COLLATE) take the keyword role in the editor. Before and after, real labels and palette values.",
+  "artboards": [
+    {
+      "file": "01-isl-null-keyword-color.html",
+      "title": "Before and after: editor, data grid and row inspector",
+      "tradeoff": "Shows only the role change; the accent override and the string color proposal stay out, so the comparison isolates what this PR changes.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}
