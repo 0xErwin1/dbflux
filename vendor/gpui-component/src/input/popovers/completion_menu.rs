@@ -4,12 +4,12 @@ use fuzzy_matcher::FuzzyMatcher as _;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
     Action, AnyElement, App, AppContext, AvailableSpace, Context, DismissEvent, Empty, Entity,
-    EventEmitter, Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement,
-    Pixels, Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window,
-    deferred, div, prelude::FluentBuilder, px, relative,
+    EventEmitter, FontStyle, Half as _, HighlightStyle, InteractiveElement as _, IntoElement,
+    ParentElement, Pixels, Render, RenderOnce, SharedString, Styled, StyledText, Subscription,
+    WeakEntity, Window, deferred, div, prelude::FluentBuilder, px, relative,
 };
 use gpui_base::TestSupportExt as _;
-use lsp_types::CompletionItem;
+use lsp_types::{CompletionItem, CompletionItemKind};
 use std::ops::Range;
 
 const MAX_MENU_HEIGHT: Pixels = px(240.);
@@ -23,7 +23,8 @@ fn width_measurement_candidates(items: &[Rc<CompletionItem>]) -> Vec<usize> {
             + item
                 .detail
                 .as_deref()
-                .map_or(0, |detail| detail.chars().count());
+                .map_or(0, |detail| detail.chars().count())
+            + item_description(item).map_or(0, |description| description.chars().count());
         candidates.push(Reverse((character_count, index)));
         if candidates.len() > MAX_WIDTH_CANDIDATES {
             candidates.pop();
@@ -37,8 +38,58 @@ fn width_measurement_candidates(items: &[Rc<CompletionItem>]) -> Vec<usize> {
     indices
 }
 
+/// The right-aligned text of a row: the `description` of its label details.
+fn item_description(item: &CompletionItem) -> Option<&str> {
+    item.label_details
+        .as_ref()
+        .and_then(|details| details.description.as_deref())
+        .filter(|description| !description.is_empty())
+}
+
+/// The highlight capture whose style colors a label of `kind`, or `None` for a
+/// kind that keeps the plain style.
+pub fn kind_highlight_capture(kind: Option<CompletionItemKind>) -> Option<&'static str> {
+    let kind = kind?;
+    if kind == CompletionItemKind::KEYWORD {
+        Some("keyword")
+    } else if kind == CompletionItemKind::FUNCTION
+        || kind == CompletionItemKind::METHOD
+        || kind == CompletionItemKind::CONSTRUCTOR
+    {
+        Some("function")
+    } else if kind == CompletionItemKind::STRUCT
+        || kind == CompletionItemKind::CLASS
+        || kind == CompletionItemKind::INTERFACE
+        || kind == CompletionItemKind::ENUM
+    {
+        Some("type")
+    } else if kind == CompletionItemKind::MODULE {
+        Some("namespace")
+    } else if kind == CompletionItemKind::FIELD || kind == CompletionItemKind::PROPERTY {
+        Some("field")
+    } else if kind == CompletionItemKind::VARIABLE {
+        Some("variable.alias")
+    } else if kind == CompletionItemKind::OPERATOR {
+        Some("operator")
+    } else if kind == CompletionItemKind::CONSTANT || kind == CompletionItemKind::ENUM_MEMBER {
+        Some("constant")
+    } else {
+        None
+    }
+}
+
+/// The style the active highlight theme gives a label of `kind`; `None` keeps
+/// the plain style, for an unmapped kind or a theme without that capture.
+pub fn kind_label_style(
+    kind: Option<CompletionItemKind>,
+    colors: &SyntaxColors,
+) -> Option<HighlightStyle> {
+    colors.style(kind_highlight_capture(kind)?)
+}
+
 use crate::{
     ActiveTheme, IndexPath, Selectable, actions, h_flex,
+    highlighter::SyntaxColors,
     input::{
         self, EditorState,
         popovers::{CaretAnchoredPopup, editor_popover, render_markdown},
@@ -119,6 +170,7 @@ impl RenderOnce for CompletionMenuItem {
             color: Some(cx.theme().blue),
             ..Default::default()
         };
+        let kind_style = kind_label_style(item.kind, &cx.theme().highlight_theme.style.syntax);
         let highlights: Vec<_> = fuzzy_match_ranges(&item.label, query)
             .into_iter()
             .map(|range| (range, highlight_style))
@@ -137,13 +189,35 @@ impl RenderOnce for CompletionMenuItem {
                 this.bg(cx.theme().tokens.accent)
                     .text_color(cx.theme().accent_foreground)
             })
-            .child(div().child(StyledText::new(item.label.clone()).with_highlights(highlights)))
+            .child(
+                div()
+                    .when_some(kind_style, |this, style| {
+                        this.when(!self.selected, |this| {
+                            this.when_some(style.color, |this, color| this.text_color(color))
+                        })
+                        .when_some(style.font_weight, |this, weight| this.font_weight(weight))
+                        .when(style.font_style == Some(FontStyle::Italic), |this| {
+                            this.italic()
+                        })
+                    })
+                    .child(StyledText::new(item.label.clone()).with_highlights(highlights)),
+            )
             .when(item.detail.is_some(), |this| {
                 this.child(
                     Label::new(item.detail.as_deref().unwrap_or("").to_string())
                         .text_color(cx.theme().muted_foreground)
                         .when(deprecated, |this| this.line_through())
                         .italic(),
+                )
+            })
+            .when_some(item_description(&item), |this, description| {
+                this.child(
+                    div()
+                        .ml_auto()
+                        .when(!self.selected, |this| {
+                            this.text_color(cx.theme().muted_foreground)
+                        })
+                        .child(description.to_string()),
                 )
             })
             .children(self.children)
@@ -566,6 +640,81 @@ mod tests {
             candidates.contains(&(MAX_WIDTH_CANDIDATES + 1)),
             "details contribute to the shortlist"
         );
+    }
+
+    #[test]
+    fn width_candidates_include_the_description() {
+        let mut items = vec![
+            Rc::new(CompletionItem {
+                label: "abcdefghij".into(),
+                ..Default::default()
+            });
+            MAX_WIDTH_CANDIDATES
+        ];
+        items.push(Rc::new(CompletionItem {
+            label: "id".into(),
+            label_details: Some(lsp_types::CompletionItemLabelDetails {
+                detail: None,
+                description: Some("a very long kind word".into()),
+            }),
+            ..Default::default()
+        }));
+        assert!(
+            width_measurement_candidates(&items).contains(&MAX_WIDTH_CANDIDATES),
+            "the description contributes to the shortlist"
+        );
+    }
+
+    #[test]
+    fn every_mapped_kind_names_its_highlight_capture() {
+        use lsp_types::CompletionItemKind as Kind;
+        let expected = [
+            (Kind::KEYWORD, "keyword"),
+            (Kind::FUNCTION, "function"),
+            (Kind::METHOD, "function"),
+            (Kind::CONSTRUCTOR, "function"),
+            (Kind::STRUCT, "type"),
+            (Kind::CLASS, "type"),
+            (Kind::INTERFACE, "type"),
+            (Kind::ENUM, "type"),
+            (Kind::MODULE, "namespace"),
+            (Kind::FIELD, "field"),
+            (Kind::PROPERTY, "field"),
+            (Kind::VARIABLE, "variable.alias"),
+            (Kind::OPERATOR, "operator"),
+            (Kind::CONSTANT, "constant"),
+            (Kind::ENUM_MEMBER, "constant"),
+        ];
+        for (kind, capture) in expected {
+            assert_eq!(kind_highlight_capture(Some(kind)), Some(capture));
+        }
+    }
+
+    #[test]
+    fn unmapped_kinds_keep_the_plain_style() {
+        use lsp_types::CompletionItemKind as Kind;
+        assert_eq!(kind_highlight_capture(Some(Kind::VALUE)), None);
+        assert_eq!(kind_highlight_capture(Some(Kind::TEXT)), None);
+        assert_eq!(kind_highlight_capture(None), None);
+
+        let colors = SyntaxColors::default();
+        assert_eq!(kind_label_style(Some(Kind::VALUE), &colors), None);
+        assert_eq!(kind_label_style(Some(Kind::KEYWORD), &colors), None);
+    }
+
+    #[test]
+    fn a_mapped_kind_takes_the_theme_style_of_its_capture() {
+        use lsp_types::CompletionItemKind as Kind;
+        let colors: SyntaxColors = serde_json::from_str(
+            r##"{"keyword":{"color":"#ff0000","font_weight":700},"type":{"color":"#00ff00"}}"##,
+        )
+        .expect("syntax colors");
+        let keyword = kind_label_style(Some(Kind::KEYWORD), &colors).expect("keyword style");
+        assert_eq!(keyword.font_weight, Some(gpui::FontWeight::BOLD));
+        assert!(keyword.color.is_some());
+        let table = kind_label_style(Some(Kind::STRUCT), &colors).expect("type style");
+        assert_ne!(keyword.color, table.color);
+        assert_eq!(kind_label_style(Some(Kind::FIELD), &colors), None);
     }
 
     #[gpui::test]

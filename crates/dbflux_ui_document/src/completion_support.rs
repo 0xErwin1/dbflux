@@ -1,6 +1,8 @@
 use dbflux_components::fonts::ui_px;
-use dbflux_components::tokens::{Borders, FontSizes, Heights};
-use gpui::{AbsoluteLength, App, Entity, FontWeight, Pixels, Styled as _, px};
+use dbflux_components::tokens::{self, Borders, FontSizes, Heights};
+use gpui::{
+    AbsoluteLength, App, Context, Entity, FontWeight, Pixels, Styled as _, Subscription, px,
+};
 use gpui_component::input::EditorState;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat,
@@ -8,6 +10,35 @@ use lsp_types::{
 };
 use std::cmp::min;
 use std::collections::HashSet;
+
+/// The widest the completion menu grows at the default interface font size:
+/// room for a long table name next to its kind word.
+const COMPLETION_MENU_BASE_WIDTH: f32 = 640.;
+
+/// The completion menu's width cap at the current interface font size.
+pub(crate) fn completion_menu_max_width(cx: &App) -> Pixels {
+    ui_px(cx, tokens::ui(COMPLETION_MENU_BASE_WIDTH))
+}
+
+/// Sets the completion menu's width cap on `state` for the current interface
+/// font size. Every editor sets it through here, at creation and again when
+/// the font size changes.
+pub(crate) fn apply_completion_menu_width(state: &mut EditorState, cx: &App) {
+    state.lsp_mut().completion_menu.max_width = completion_menu_max_width(cx);
+}
+
+/// Sets `input`'s completion menu width again whenever the font settings
+/// change, so an editor that is already open follows the interface font size.
+/// Keep the returned subscription for as long as the editor lives.
+pub(crate) fn follow_ui_font_size<T: 'static>(
+    input: &Entity<EditorState>,
+    cx: &mut Context<T>,
+) -> Subscription {
+    let input = input.clone();
+    cx.observe_global::<dbflux_components::fonts::FontSettingsGlobal>(move |_, cx| {
+        input.update(cx, |state, cx| apply_completion_menu_width(state, cx));
+    })
+}
 
 pub(crate) fn byte_offset_to_lsp_position(source: &str, offset: usize) -> LspPosition {
     let before = &source[..offset];

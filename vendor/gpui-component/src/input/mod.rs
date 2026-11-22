@@ -45,6 +45,7 @@ mod group;
 mod state;
 mod textarea;
 pub use editor::Editor;
+pub use popovers::{kind_highlight_capture, kind_label_style};
 pub use gpui_base::input::{
     AutoClosingPair, BracketPair, IndentationRules, LanguageProvider, SyntaxContext,
     SyntaxContextProvider, set_language_config, set_language_provider,

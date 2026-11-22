@@ -10,6 +10,9 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 
+mod kinds;
+use kinds::KindWords;
+
 /// Rank groups for context-aware SQL completion (`sort_text` prefix): the
 /// items the context asks for come first, keywords last.
 const RANK_PRIMARY: u8 = 0;
@@ -365,8 +368,13 @@ impl QueryCompletionProvider {
             .as_ref()
             .and_then(|engine| engine.analyze(source, cursor));
 
-        let mut items =
-            sql_completion_items_with_context(&metadata, source, cursor, analysis.as_ref());
+        let mut items = sql_items_with_kind_words(
+            &metadata,
+            source,
+            cursor,
+            analysis.as_ref(),
+            &KindWords::from_catalog(),
+        );
 
         let app_state = self.app_state.read(cx);
         let mutation_target_alias = self
@@ -1153,6 +1161,23 @@ fn sql_completion_items_with_context(
     }
 }
 
+/// The SQL suggestions at `cursor`, each carrying its kind word. `words` is
+/// resolved by the caller, once per completion request.
+fn sql_items_with_kind_words(
+    metadata: &SqlCompletionMetadata,
+    source: &str,
+    cursor: usize,
+    analysis: Option<&SqlCursorAnalysis>,
+    words: &KindWords,
+) -> Vec<CompletionItem> {
+    let mut items = sql_completion_items_with_context(metadata, source, cursor, analysis);
+    let cte_names = analysis.map_or(&[][..], |analysis| analysis.scope.cte_names.as_slice());
+    kinds::describe_items(&mut items, words, cte_names, |label| {
+        metadata.is_view(label)
+    });
+    items
+}
+
 impl QueryCompletionProvider {
     fn completion_items_for_mongo(
         &self,
@@ -1686,6 +1711,11 @@ impl SqlCompletionMetadata {
 
     fn table_names_iter(&self) -> impl Iterator<Item = &str> {
         self.table_names.iter().map(|name| name.as_str())
+    }
+
+    /// Whether `label` names a view and no table.
+    fn is_view(&self, label: &str) -> bool {
+        self.view_names.contains(label) && !self.table_names.contains(label)
     }
 
     fn view_names_iter(&self) -> impl Iterator<Item = &str> {

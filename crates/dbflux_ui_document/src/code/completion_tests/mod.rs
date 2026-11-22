@@ -148,3 +148,68 @@ fn completion_menu_keeps_table_labels_visible_while_typing(cx: &mut TestAppConte
         );
     }
 }
+
+#[gpui::test]
+fn each_mapped_kind_takes_its_color_from_the_active_highlight_theme(cx: &mut TestAppContext) {
+    use gpui_component::ActiveTheme as _;
+    use gpui_component::input::{kind_highlight_capture, kind_label_style};
+    use lsp_types::CompletionItemKind as Kind;
+
+    cx.update(gpui_component::init);
+    cx.update(dbflux_components::theme::init);
+
+    let mapped = [
+        (Kind::KEYWORD, "keyword"),
+        (Kind::FUNCTION, "function"),
+        (Kind::METHOD, "function"),
+        (Kind::CONSTRUCTOR, "function"),
+        (Kind::STRUCT, "type"),
+        (Kind::CLASS, "type"),
+        (Kind::INTERFACE, "type"),
+        (Kind::ENUM, "type"),
+        (Kind::MODULE, "namespace"),
+        (Kind::FIELD, "field"),
+        (Kind::PROPERTY, "field"),
+        (Kind::VARIABLE, "variable.alias"),
+        (Kind::OPERATOR, "operator"),
+        (Kind::CONSTANT, "constant"),
+        (Kind::ENUM_MEMBER, "constant"),
+    ];
+
+    cx.update(|cx| {
+        let colors = &cx.theme().highlight_theme.style.syntax;
+        for (kind, capture) in mapped {
+            assert_eq!(kind_highlight_capture(Some(kind)), Some(capture));
+            assert_eq!(
+                kind_label_style(Some(kind), colors),
+                colors.style(capture),
+                "{kind:?} takes the {capture} style"
+            );
+        }
+        assert!(
+            kind_label_style(Some(Kind::KEYWORD), colors)
+                .is_some_and(|style| style.color.is_some())
+        );
+        assert!(
+            kind_label_style(Some(Kind::STRUCT), colors).is_some_and(|style| style.color.is_some())
+        );
+    });
+}
+
+#[gpui::test]
+fn a_value_or_unmapped_kind_keeps_the_plain_style(cx: &mut TestAppContext) {
+    use gpui_component::ActiveTheme as _;
+    use gpui_component::input::{kind_highlight_capture, kind_label_style};
+    use lsp_types::CompletionItemKind as Kind;
+
+    cx.update(gpui_component::init);
+    cx.update(dbflux_components::theme::init);
+
+    cx.update(|cx| {
+        let colors = &cx.theme().highlight_theme.style.syntax;
+        for kind in [Some(Kind::VALUE), Some(Kind::TEXT), Some(Kind::FILE), None] {
+            assert_eq!(kind_highlight_capture(kind), None);
+            assert_eq!(kind_label_style(kind, colors), None);
+        }
+    });
+}

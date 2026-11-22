@@ -94,6 +94,24 @@ se ejecuta tal cual.
   <img src="../images/editor/multi-statement-light.webp" alt="Una pestaña de query que ejecutó tres sentencias como script, con una pestaña de resultado por sentencia">
 </picture>
 
+## Autocompletado
+
+En un editor SQL cada sugerencia dice qué es: una palabra a la derecha de la
+fila indica **tabla**, **vista**, **esquema**, **columna**, **alias**,
+**palabra clave** o **cte**. Un nombre de la cláusula `WITH` de la propia query
+dice **cte**, aunque una tabla o vista tenga el mismo nombre. La etiqueta se
+dibuja con el color que tiene el mismo token en el editor: tablas, vistas y CTE
+con el color de tipo, esquemas con el de espacio de nombres, columnas con el de
+campo, y alias y palabras clave con los suyos. La fila resaltada conserva sus
+colores de acento.
+
+El menú crece hasta caber su fila más larga, palabra incluida, hasta un ancho
+que sigue el tamaño de fuente de la interfaz, también en los editores que ya
+estaban abiertos. Los editores de MongoDB, Redis y Lua colorean sus sugerencias
+igual (métodos, funciones, clases y operadores con el color del mismo token en
+su editor), sin palabra de tipo. Una sugerencia de cualquier otro tipo conserva
+el estilo plano.
+
 ## Formatear
 
 - `Ctrl+Shift+F` (`Cmd+Option+L` en macOS) — **Formatear consulta**.

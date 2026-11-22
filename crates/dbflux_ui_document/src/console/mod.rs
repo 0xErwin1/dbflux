@@ -15,6 +15,7 @@ mod format;
 
 use crate::code::{ExecutionSessionBinding, QueryCompletionProvider};
 use crate::completion_support::{
+    apply_completion_menu_width, follow_ui_font_size,
     frameless_single_line_completion_editor_sized, new_single_line_completion_state,
 };
 use dbflux_app::keymap::{Command, ContextId};
@@ -128,6 +129,7 @@ pub(crate) struct NativeConsole {
     session: Arc<ExecutionSessionBinding>,
     scroll: ScrollHandle,
     _subscription: Subscription,
+    _completion_menu_width_subscription: Subscription,
 }
 
 impl EventEmitter<NativeConsoleEvent> for NativeConsole {}
@@ -170,8 +172,10 @@ impl NativeConsole {
         let input = cx.new(|cx| {
             let mut state = new_single_line_completion_state(window, cx, placeholder);
             state.lsp_mut().completion_provider = completion_provider;
+            apply_completion_menu_width(&mut state, cx);
             state
         });
+        let completion_menu_width_sub = follow_ui_font_size(&input, cx);
 
         // Closing the host closes the session once any running command is
         // done; the binding serializes both.
@@ -217,6 +221,7 @@ impl NativeConsole {
             session: ExecutionSessionBinding::new(),
             scroll: ScrollHandle::new(),
             _subscription: subscription,
+            _completion_menu_width_subscription: completion_menu_width_sub,
         }
     }
 
