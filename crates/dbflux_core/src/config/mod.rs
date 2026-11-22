@@ -1,9 +1,11 @@
+pub(crate) mod accent_color;
 pub(crate) mod app;
 pub(crate) mod refresh_policy;
 pub(crate) mod scripts_directory;
 #[cfg(test)]
 mod tests;
 
+pub use accent_color::AccentColor;
 pub use app::{
     AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,

@@ -88,6 +88,16 @@ pub struct Brand {
     pub accent_tint: Hsla,
     /// Text drawn on top of a solid accent fill.
     pub on_accent: Hsla,
+    /// The text-accent tone on light surfaces. A product that keeps it equal
+    /// to [`Self::accent`] gets the accent doubling as the text accent; one
+    /// that lets the user pick the accent can hold the text tone darker than
+    /// the fill.
+    pub accent_text_light: Hsla,
+    /// The role a syntax keyword takes on dark surfaces. Independent of the
+    /// accent, so changing the accent never recolors the editor.
+    pub keyword_dark: Hsla,
+    /// The role a syntax keyword takes on light surfaces.
+    pub keyword_light: Hsla,
 }
 
 impl Brand {
@@ -103,6 +113,9 @@ impl Brand {
             accent_pressed: hsla(0.0, 0.0, 0.38, 1.0),
             accent_tint: hsla(0.0, 0.0, 0.62, 1.0),
             on_accent: hsla(0.0, 0.0, 1.0, 1.0),
+            accent_text_light: hsla(0.0, 0.0, 0.45, 1.0),
+            keyword_dark: hsla(0.0, 0.0, 0.62, 1.0),
+            keyword_light: hsla(0.0, 0.0, 0.45, 1.0),
         }
     }
 }
@@ -147,6 +160,9 @@ mod tests {
             accent_pressed: hsla(0.58, 0.65, 0.34, 1.0),
             accent_tint: hsla(0.55, 0.7, 0.75, 1.0),
             on_accent: hsla(0.0, 0.0, 0.0, 1.0),
+            accent_text_light: hsla(0.58, 0.65, 0.4, 1.0),
+            keyword_dark: hsla(0.55, 0.7, 0.75, 1.0),
+            keyword_light: hsla(0.58, 0.65, 0.4, 1.0),
         }
     }
 

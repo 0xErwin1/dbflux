@@ -4608,7 +4608,14 @@ settings:
       title: General
       subtitle: "Startup, refresh and the safety net for dangerous statements."
     appearance:
-      subtitle: "Theme, density, language and fonts."
+      subtitle: "Theme, accent color, density, language, fonts and scrollbars."
+      accent:
+        label: "Accent color"
+        dark: "Dark"
+        light: "Light"
+        reset: "Reset"
+        error: "Use a color as #RRGGBB."
+        help: "Primary buttons, checked boxes, the progress bar, the text cursor, the selection, the focus ring and selected rows. Syntax colors keep their own."
     startup:
       group: "Startup and session"
     refresh:

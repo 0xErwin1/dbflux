@@ -10,7 +10,7 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 | Sección                                             | Cubre                                                                        |
 | --------------------------------------------------- | ---------------------------------------------------------------------------- |
 | [General](#general)                                 | Comportamiento a nivel de app: inicio, refresh, seguridad de queries. |
-| [Apariencia](#apariencia) | Theme, densidad, idioma y fuentes. |
+| [Apariencia](#apariencia) | Theme, color de acento, densidad, idioma, fuentes y barras de desplazamiento. |
 | [Actualizaciones y privacidad](#actualizaciones-y-privacidad) | Comprobaciones de actualizaciones, el changelog y los niveles de telemetría opcionales. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
 | [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
@@ -157,11 +157,12 @@ las bases de datos Nightly y stable.
   <img src="../images/settings/appearance-light.webp" alt="La ventana de Settings en la sección Apariencia, con los ajustes de tema, densidad, idioma, fuentes y barras de desplazamiento">
 </picture>
 
-Theme, densidad, idioma y fuentes. Guardar funciona como se describe en [General](#general): aplica los cambios al instante y los escribe en segundo plano.
+Theme, color de acento, densidad, idioma, fuentes y barras de desplazamiento. Guardar funciona como se describe en [General](#general): aplica los cambios al instante y los escribe en segundo plano.
 
 | Setting      | Opciones                 | Default |
 | ------------ | ------------------------ | ------- |
 | **Theme**    | Follow system, Dark, Light | Dark  |
+| **Color de acento** | Un color `#RRGGBB` para Dark y otro para Light | El de la paleta (`#702963`) |
 | **Density**  | Default, Compact         | Default |
 | **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
 | **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
@@ -171,6 +172,27 @@ Theme, densidad, idioma y fuentes. Guardar funciona como se describe en [General
 | **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
 | **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
 | **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
+
+**Color de acento** controla los botones primarios, las casillas marcadas, la
+barra de progreso, el cursor de texto, la selección, el anillo de foco y las
+filas seleccionadas (en la barra lateral y en la cuadrícula de datos), con sus
+tonos de hover, pressed y de texto. Cada paleta tiene su propio campo, con una
+muestra del color que aplica y un botón **Restablecer** (`R` sobre el campo) que
+devuelve el acento de la paleta; está deshabilitado mientras el campo ya lo
+contiene. Escribir el acento propio de la paleta cuenta como sin override. Lo que
+no sea `#RRGGBB` muestra «Usa un color como #RRGGBB.» bajo el campo, no se
+guarda y deja aplicado el acento que ya lo estaba (el personalizado guardado, o
+el de la paleta si no hay ninguno) hasta que el valor sea válido. El
+acento se aplica a todas las ventanas abiertas al guardar.
+
+Tu color es un punto de partida: DBFlux lo mueve hasta que se lee sobre el
+panel. Los rellenos (botones, casillas marcadas, barra de progreso, anillo de
+foco, cursor de texto y selección) se aclaran en Dark y se oscurecen en Light
+hasta alcanzar 3:1 contra el panel; el tono del texto hasta 4.5:1; y el texto de
+un botón primario pasa a casi negro cuando el blanco quedaría por debajo de 4.5:1
+sobre el relleno. El acento propio de la paleta se usa tal cual. Los colores de
+sintaxis, incluidas las keywords del editor y el árbol de esquemas, nunca siguen
+al acento.
 
 **Show scrollbars** decide cuándo aparecen las barras de desplazamiento de
 todas las ventanas: solo mientras el contenido se desplaza, mientras el puntero

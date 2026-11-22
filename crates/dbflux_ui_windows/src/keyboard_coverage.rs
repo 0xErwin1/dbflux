@@ -32,6 +32,11 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ),
         // Save, new and import of every section.
         ("save-*", KeyboardPath::Command(Command::SaveQuery)),
+        // `R` on the Accent color row resets the focused palette's accent.
+        (
+            "accent-reset-*",
+            KeyboardPath::Command(Command::ResetBinding),
+        ),
         ("updates-save", KeyboardPath::Command(Command::SaveQuery)),
         ("new-*", KeyboardPath::Command(Command::AddItem)),
         ("import-*", KeyboardPath::Command(Command::ImportItems)),

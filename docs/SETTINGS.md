@@ -9,7 +9,7 @@ window is organized into sections down the left side.
 | Section | Covers |
 |---------|--------|
 | [General](#general) | App-wide behavior: startup, refresh, query safety. |
-| [Appearance](#appearance) | Theme, density, language and fonts. |
+| [Appearance](#appearance) | Theme, accent color, density, language, fonts and scrollbars. |
 | [Updates & privacy](#updates--privacy) | Update checks, the changelog, and the optional telemetry levels. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
@@ -152,11 +152,12 @@ stable databases are separated.
   <img src="images/settings/appearance-light.webp" alt="The Settings window on the Appearance section, showing the theme, density, language, font and scrollbar settings">
 </picture>
 
-Theme, density, language and fonts. Save works as described under [General](#general): it applies the changes at once and writes them in the background.
+Theme, accent color, density, language, fonts and scrollbars. Save works as described under [General](#general): it applies the changes at once and writes them in the background.
 
 | Setting | Options | Default |
 |---------|---------|---------|
 | **Theme** | Follow system, Dark, Light | Dark |
+| **Accent color** | One `#RRGGBB` color for Dark and one for Light | The palette's own (`#702963`) |
 | **Density** | Default, Compact | Default |
 | **Language** | System, then every language with a shipped translation catalog | System |
 | **Interface font** | Default (Archivo), or any installed font | Default |
@@ -166,6 +167,24 @@ Theme, density, language and fonts. Save works as described under [General](#gen
 | **Data grid font** | Same as editor, or any installed font | Same as editor |
 | **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
 | **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
+
+**Accent color** drives the primary buttons, checked boxes, the progress bar,
+the text cursor, the selection, the focus ring and selected rows (in the sidebar
+and the data grid), with their hover, pressed and text shades. Each palette has
+its own field, with a swatch of the color it applies and a **Reset** button
+(`R` on the field) that puts the palette's accent back; Reset is disabled while
+the field already holds it. Typing the palette's own accent counts as no
+override. Anything that is not `#RRGGBB` shows "Use a color as #RRGGBB." under the
+field, is never saved, and leaves the accent that is applied as it is (the saved
+custom accent, or the palette's when none is saved) until the value is valid. The accent applies to every open window when you save.
+
+Your color is a starting point: DBFlux moves it until it reads on the pane. The
+fills (buttons, checked boxes, the progress bar, the focus ring, the text cursor
+and the selection) are lightened on Dark, and darkened on Light, until they
+reach 3:1 against the pane; the text tint until it reaches 4.5:1; and the text
+on a primary button turns near-black when white would fall under 4.5:1 on the
+fill. The palette's own accent is used exactly as it is. Syntax colors,
+including editor keywords and the schema tree, never follow the accent.
 
 **Show scrollbars** decides when the scrollbars of every window appear: only
 while the content scrolls, while the pointer is over a scrollable area, or all

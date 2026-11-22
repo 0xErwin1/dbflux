@@ -4608,7 +4608,14 @@ settings:
       title: 常规
       subtitle: "启动、刷新以及危险语句的安全保护。"
     appearance:
-      subtitle: "主题、密度、语言和字体。"
+      subtitle: "主题、强调色、密度、语言、字体和滚动条。"
+      accent:
+        label: "强调色"
+        dark: "深色"
+        light: "浅色"
+        reset: "重置"
+        error: "请使用 #RRGGBB 格式的颜色。"
+        help: "用于主按钮、已选中的复选框、进度条、文本光标、选区、焦点环和选中的行。语法颜色保持不变。"
     startup:
       group: "启动与会话"
     refresh:

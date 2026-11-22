@@ -193,6 +193,7 @@ impl MigrationRegistry {
         registry.register(mod_048_general_settings_scrollbar_visibility::MigrationImpl);
         registry.register(mod_049_general_settings_inspector_width::MigrationImpl);
         registry.register(mod_050_cfg_telemetry::MigrationImpl);
+        registry.register(mod_051_general_settings_accent_color::MigrationImpl);
         registry
     }
 
@@ -433,6 +434,7 @@ mod mod_047_general_settings_grid_fk_labels;
 mod mod_048_general_settings_scrollbar_visibility;
 mod mod_049_general_settings_inspector_width;
 mod mod_050_cfg_telemetry;
+mod mod_051_general_settings_accent_color;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1188,6 +1190,7 @@ mod tests {
             "048_general_settings_scrollbar_visibility",
             "049_general_settings_inspector_width",
             "050_cfg_telemetry",
+            "051_general_settings_accent_color",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

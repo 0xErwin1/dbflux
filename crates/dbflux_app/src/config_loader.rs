@@ -140,6 +140,8 @@ fn save_general_settings_to(
         scrollbar_visibility: scrollbar_visibility_to_storage(settings.scrollbar_visibility)
             .to_string(),
         workspace_inspector_width_px: settings.workspace_inspector_width_px.map(f64::from),
+        accent_dark: settings.accent_dark.map(dbflux_core::AccentColor::to_hex),
+        accent_light: settings.accent_light.map(dbflux_core::AccentColor::to_hex),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1176,7 +1178,16 @@ fn load_general_settings(
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
         grid_fk_labels: dto.grid_fk_labels != 0,
         scrollbar_visibility: scrollbar_visibility_from_storage(&dto.scrollbar_visibility),
+        accent_dark: accent_from_storage(dto.accent_dark.as_deref()),
+        accent_light: accent_from_storage(dto.accent_light.as_deref()),
     }
+}
+
+/// Reads a stored accent. A value that is not `#RRGGBB` (written by hand or
+/// by another build) reads as no override, so the palette accent applies and
+/// the rest of the settings still load.
+fn accent_from_storage(stored: Option<&str>) -> Option<dbflux_core::AccentColor> {
+    stored.and_then(dbflux_core::AccentColor::parse)
 }
 
 /// Converts a stored inspector width to the `f32` the settings carry. A
@@ -2801,6 +2812,8 @@ mod tests {
             grid_fk_labels: 0,
             scrollbar_visibility: "while_scrolling".to_string(),
             workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
             updated_at: String::new(),
         };
 
@@ -2901,6 +2914,8 @@ mod tests {
             grid_fk_labels: 0,
             scrollbar_visibility: "while_scrolling".to_string(),
             workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
             updated_at: String::new(),
         };
         runtime
@@ -3044,6 +3059,8 @@ mod tests {
 
         let settings = GeneralSettings {
             workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
             ..Default::default()
         };
         super::save_general_settings(&runtime, &settings).expect("clear inspector width");
@@ -3063,6 +3080,44 @@ mod tests {
             super::inspector_width_from_storage(Some(420.5)),
             Some(420.5)
         );
+    }
+
+    #[test]
+    fn accent_colors_round_trip_through_save_and_load_and_null_keeps_the_palette() {
+        use dbflux_core::AccentColor;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert_eq!(loaded.general_settings.accent_dark, None);
+        assert_eq!(loaded.general_settings.accent_light, None);
+
+        let settings = GeneralSettings {
+            accent_dark: Some(AccentColor::from_rgb(0x2F7D6D)),
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save accent");
+
+        let dto = runtime
+            .general_settings()
+            .get()
+            .expect("load saved dto")
+            .expect("general settings row");
+        assert_eq!(dto.accent_dark.as_deref(), Some("#2F7D6D"));
+        assert_eq!(dto.accent_light, None);
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.accent_dark,
+            Some(AccentColor::from_rgb(0x2F7D6D))
+        );
+        assert_eq!(loaded.general_settings.accent_light, None);
+
+        super::save_general_settings(&runtime, &GeneralSettings::default()).expect("reset accent");
+        let dto = runtime.general_settings().get().expect("dto").expect("row");
+        assert_eq!(dto.accent_dark, None, "reset stores NULL");
+
+        assert_eq!(super::accent_from_storage(Some("not a color")), None);
+        assert_eq!(super::accent_from_storage(None), None);
     }
 
     #[test]
@@ -3332,6 +3387,8 @@ mod tests {
             grid_fk_labels: 0,
             scrollbar_visibility: "while_scrolling".to_string(),
             workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
             updated_at: String::new(),
         };
         runtime

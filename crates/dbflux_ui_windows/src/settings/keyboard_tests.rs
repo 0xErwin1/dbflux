@@ -799,3 +799,71 @@ fn the_settings_confirmation_controls_are_covered(cx: &mut TestAppContext) {
         "{covered:?}"
     );
 }
+
+/// `R` on an accent field of the Appearance page puts the palette accent
+/// back, through the keymap's own binding.
+#[gpui::test]
+fn r_resets_the_focused_accent_field(cx: &mut TestAppContext) {
+    let (settings, window) = open_settings(cx, SettingsSectionId::Appearance);
+    focus_content(&settings, window);
+
+    let section = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Appearance(section) => section.clone(),
+        _ => unreachable!("the appearance section is open"),
+    });
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            section
+                .input_accent_dark
+                .update(cx, |input, cx| input.set_value("#2F7D6D", window, cx));
+        })
+    });
+
+    window.simulate_keystrokes("j");
+    assert_eq!(
+        general_cursor(&settings, window),
+        1,
+        "the cursor is on the dark accent"
+    );
+
+    window.simulate_keystrokes("r");
+
+    let text = window.update(|_, cx| {
+        section
+            .read(cx)
+            .input_accent_dark
+            .read(cx)
+            .value()
+            .to_string()
+    });
+    assert_eq!(text, "#702963", "R resets the focused field");
+}
+
+/// The enabled Reset buttons of a custom accent are covered.
+#[gpui::test]
+fn the_accent_reset_buttons_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SETTINGS;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Appearance);
+    let capture = FrameCapture::observe(window);
+    let section = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Appearance(section) => section.clone(),
+        _ => unreachable!("the appearance section is open"),
+    });
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            section
+                .input_accent_dark
+                .update(cx, |input, cx| input.set_value("#2F7D6D", window, cx));
+        })
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let checked = Coverage::new(SETTINGS).assert_covered(&capture.frame(window));
+    assert!(
+        checked.iter().any(|id| id == "accent-reset-dark"),
+        "{checked:?}"
+    );
+}

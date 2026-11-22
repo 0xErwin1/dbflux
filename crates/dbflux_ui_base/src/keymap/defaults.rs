@@ -2282,6 +2282,9 @@ fn settings_layer() -> KeymapLayer {
     let section = "Settings && focus == section && !Input";
     let list_section = "Settings && focus == section && section != keybindings && !Input";
     let keybindings = "Settings && focus == section && section == keybindings && !Input";
+    // `R` resets the focused item to its default: a key binding in the editor,
+    // an accent color on the Appearance page.
+    let resettable = "Settings && focus == section && (section == keybindings || section == appearance) && !Input";
 
     layer.bind_with_predicate(
         KeyChord::new("n", Modifiers::none()),
@@ -2311,13 +2314,14 @@ fn settings_layer() -> KeymapLayer {
     layer.bind_with_predicate(
         KeyChord::new("r", Modifiers::none()),
         Command::ResetBinding,
-        keybindings,
+        resettable,
     );
     layer.bind_with_predicate(
         KeyChord::new("r", Modifiers::shift()),
         Command::ResetAllBindings,
         keybindings,
     );
+
     layer.bind_with_predicate(
         KeyChord::new("p", Modifiers::none()),
         Command::EditBindingContext,

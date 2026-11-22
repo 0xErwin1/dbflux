@@ -280,7 +280,9 @@ fn theme_module_keeps_the_brand_and_setting_mapping_but_not_the_palette_mapping(
     assert!(source.contains("pub use crate::typography::AppFonts;"));
     assert!(source.contains("load_bundled_fonts(cx);"));
     assert!(source.contains("ThemeSetting::System"));
-    assert!(source.contains("bolt::brand::install(brand(), cx);"));
+    assert!(
+        source.contains("bolt::brand::install(brand_for(resolved, &accent::overrides(cx)), cx);")
+    );
     assert!(source.contains("bolt_theme::apply_theme("));
     assert!(source.contains("ThemeSettingGlobal::set(cx, resolved);"));
     // The palette mapping lives in `bolt` now; a product adapter that writes theme

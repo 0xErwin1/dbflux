@@ -857,7 +857,7 @@ fn roots_reported_for(context: ContextId) -> Vec<KeyContext> {
         return vec![root_key_context(WORKSPACE_KEY_CONTEXT, context, &[])];
     }
 
-    ["proxies", "keybindings"]
+    ["proxies", "keybindings", "appearance"]
         .into_iter()
         .map(|section| {
             root_key_context(
@@ -909,6 +909,34 @@ fn every_root_default_resolves_to_the_same_command_natively() {
                     .collect::<Vec<_>>()
             );
         }
+    }
+}
+
+/// `R` is the reset key of the Settings window: it reaches the key bindings
+/// editor and the Appearance page, and no other section.
+#[test]
+fn r_resets_only_in_the_keybindings_and_appearance_sections() {
+    let keymap = native_keymap();
+    let typed = gpui_keystrokes(&KeySequence::from(KeyChord::new("r", Modifiers::none())));
+
+    for (section, resets) in [
+        ("keybindings", true),
+        ("appearance", true),
+        ("proxies", false),
+        ("general", false),
+    ] {
+        let root = root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Settings,
+            &[
+                ("section".into(), section.into()),
+                ("focus".into(), "section".into()),
+            ],
+        );
+        let runs_reset = top_action(&keymap, &typed, std::slice::from_ref(&root))
+            .is_some_and(|action| runs_command(action.as_ref(), Command::ResetBinding));
+
+        assert_eq!(runs_reset, resets, "section {section}");
     }
 }
 

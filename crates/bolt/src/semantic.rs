@@ -388,6 +388,9 @@ mod tests {
                 accent_pressed: from_hex(0x304050, 1.0),
                 accent_tint: from_hex(0x405060, 1.0),
                 on_accent: from_hex(0xFFFFFF, 1.0),
+                accent_text_light: from_hex(0x102030, 1.0),
+                keyword_dark: from_hex(0x405060, 1.0),
+                keyword_light: from_hex(0x102030, 1.0),
             };
             crate::brand::install(brand.clone(), cx);
 

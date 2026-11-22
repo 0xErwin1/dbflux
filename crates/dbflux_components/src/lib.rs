@@ -7,6 +7,7 @@
 // Required by the `#[gpui::test]` attribute macro expansion in test modules.
 #![recursion_limit = "512"]
 
+pub mod accent;
 pub mod actions;
 pub mod density;
 
