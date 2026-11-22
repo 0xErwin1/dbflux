@@ -512,7 +512,14 @@ impl DataGridPanel {
                     if !panel.queued_row_has_changes(row_idx, cx) {
                         return;
                     }
-                    panel.send_row_patch(profile_id, database, row_idx, patch, sent, false, cx);
+                    panel.send_row_patch(
+                        profile_id,
+                        database,
+                        row_idx,
+                        RowSave { patch, sent },
+                        false,
+                        cx,
+                    );
                 },
                 cx,
             );
@@ -589,7 +596,14 @@ impl DataGridPanel {
             .iter()
             .map(|&(col, cell)| (col, cell.clone()))
             .collect();
-        self.send_row_patch(profile_id, database, row_idx, patch, sent, batch_owned, cx);
+        self.send_row_patch(
+            profile_id,
+            database,
+            row_idx,
+            RowSave { patch, sent },
+            batch_owned,
+            cx,
+        );
     }
 
     /// The patch for `row_idx`, with the row's key and staged values read now.
@@ -707,11 +721,11 @@ impl DataGridPanel {
         profile_id: Uuid,
         database: Option<String>,
         row_idx: usize,
-        patch: RowPatch,
-        sent: Vec<(usize, SentCell)>,
+        save: RowSave,
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
+        let RowSave { patch, sent } = save;
         let Some(table_state) = self.grid_table.table_state.clone() else {
             return;
         };
@@ -2442,6 +2456,13 @@ fn same_staged_value(left: &SentCell, right: &SentCell) -> bool {
 
 /// Drops the row's staged cells that equal what a save sent and keeps the rest,
 /// which the user staged after the patch was built.
+/// A row save to send: the patch, and the staged cells it carries, so only
+/// those are cleared once it lands.
+pub(super) struct RowSave {
+    pub(super) patch: RowPatch,
+    pub(super) sent: Vec<(usize, SentCell)>,
+}
+
 fn clear_sent_cells(
     buffer: &mut dbflux_components::components::data_table::model::EditBuffer,
     row_idx: usize,
