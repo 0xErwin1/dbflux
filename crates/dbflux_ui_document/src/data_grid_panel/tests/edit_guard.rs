@@ -2,6 +2,7 @@
 //! sends anything (`data_grid_panel::edit_guard`).
 
 use super::*;
+use crate::data_grid_panel::PendingBatchRemaining;
 use crate::data_grid_panel::PendingDeleteConfirm;
 use crate::data_grid_panel::PendingMutationExec;
 use crate::data_grid_panel::mutation_executor::MutationExecOptions;
@@ -51,6 +52,14 @@ fn fixture(
     cx: &mut TestAppContext,
     fresh: FakeTableDetails,
 ) -> (Fixture, &mut gpui::VisualTestContext) {
+    fixture_for(cx, fresh, dbflux_core::DbKind::SQLite)
+}
+
+fn fixture_for(
+    cx: &mut TestAppContext,
+    fresh: FakeTableDetails,
+    kind: dbflux_core::DbKind,
+) -> (Fixture, &mut gpui::VisualTestContext) {
     init_test_runtime(cx);
 
     let app_state = isolated_test_app_state(cx);
@@ -99,7 +108,7 @@ fn fixture(
         panel
     });
 
-    let driver = FakeDriver::new(dbflux_core::DbKind::SQLite).with_table_details("orders", fresh);
+    let driver = FakeDriver::new(kind).with_table_details("orders", fresh);
     register_fake_connection(&panel, window, &driver);
 
     window.update(|_, app| {
@@ -136,6 +145,23 @@ fn stage_name(fixture: &Fixture, window: &mut VisualTestContext, row: usize) {
             .expect("a table");
         table_state.update(app, |state, _| {
             state.stage_cell_value(row, 1, CellValue::text("renamed"));
+        });
+    });
+}
+
+fn stage_insert(fixture: &Fixture, window: &mut VisualTestContext, id: i64, name: &str) {
+    window.update(|_, app| {
+        let table_state = fixture
+            .panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table");
+        table_state.update(app, |state, _| {
+            state
+                .edit_buffer_mut()
+                .add_pending_insert(vec![CellValue::int(id), CellValue::text(name)]);
         });
     });
 }
@@ -448,31 +474,98 @@ fn a_chunked_mutation_with_the_same_key_starts(cx: &mut TestAppContext) {
 
     assert!(!modal_visible(&fixture, window));
     assert!(mutation_finished(&fixture), "the run started and finished");
+    assert!(
+        !fixture.driver.stats().executed_requests.is_empty(),
+        "the chunked statement reached the driver"
+    );
 }
 
 /// A builder result names its key through the binding, which is what the
-/// check compares with.
+/// check compares with. The cache and the fresh read both key `orders` by
+/// `code`, so the write goes through only if the grid took `code` from the
+/// binding and not from the `id` it was opened with.
 #[gpui::test]
 fn a_builder_result_is_checked_against_its_binding_key(cx: &mut TestAppContext) {
-    let fresh = FakeTableDetails::Info(Box::new(orders_info(&["code"], &["id", "code", "name"])));
-    let (fixture, window) = fixture(cx, fresh);
-    stage_name(&fixture, window, 0);
+    let keyed_by_code = orders_info(&["code"], &["id", "code", "name"]);
+    let (fixture, window) = fixture(cx, FakeTableDetails::Info(Box::new(keyed_by_code.clone())));
 
-    act(&fixture, window, |panel, _, cx| {
-        panel.pk_columns = vec!["code".to_string()];
-        panel.builder.builder_editable_binding = Some(dbflux_core::EditableBinding {
-            table: TableRef::with_schema("public", "orders"),
-            pk_columns: vec!["code".to_string()],
-            column_origin: Default::default(),
-            insertable: true,
+    window.update(|_, app| {
+        let app_state = fixture.panel.read(app).app_state.clone();
+        app_state.update(app, |state, _| {
+            state.set_table_details(
+                Uuid::nil(),
+                "app".to_string(),
+                Some("public".to_string()),
+                "orders".to_string(),
+                keyed_by_code,
+            );
         });
-        panel.handle_save_row(0, false, cx);
+        fixture.panel.update(app, |panel, cx| {
+            let spec = VisualQuerySpec {
+                source: SourceTable {
+                    schema: Some("public".to_string()),
+                    table: "orders".to_string(),
+                    alias: "orders".to_string(),
+                },
+                ..make_test_spec()
+            };
+            let binding = panel.compute_builder_binding(Some(&spec), Uuid::nil(), Some("app"), cx);
+            panel.builder.current_visual_spec = Some(spec);
+            panel.pk_columns = binding
+                .as_ref()
+                .map(|binding| binding.pk_columns.clone())
+                .unwrap_or_default();
+            panel.builder.builder_editable_binding = binding;
+            panel.set_result(
+                QueryResult::table(
+                    vec![
+                        key_column("id", false),
+                        key_column("code", true),
+                        key_column("name", false),
+                    ],
+                    vec![vec![
+                        dbflux_core::Value::Int(1),
+                        dbflux_core::Value::Text("c-1".to_string()),
+                        dbflux_core::Value::Text("order 1".to_string()),
+                    ]],
+                    None,
+                    Duration::ZERO,
+                ),
+                cx,
+            );
+        });
+    });
+    assert_eq!(
+        window.update(|_, app| fixture.panel.read(app).pk_columns.clone()),
+        vec!["code".to_string()],
+        "the binding supplied the key"
+    );
+    window.update(|_, app| {
+        let table_state = fixture
+            .panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table");
+        table_state.update(app, |state, _| {
+            state.stage_cell_value(0, 2, CellValue::text("renamed"));
+        });
     });
 
-    assert!(matches!(
-        writes(&fixture.driver).as_slice(),
-        [CrudOp::Update(_)]
-    ));
+    act(&fixture, window, |panel, _, cx| {
+        panel.handle_save_row(0, false, cx)
+    });
+
+    let ops = writes(&fixture.driver);
+    let [CrudOp::Update(patch)] = ops.as_slice() else {
+        panic!("expected one UPDATE, got {ops:?}");
+    };
+    assert_eq!(patch.identity.columns(), ["code".to_string()]);
+    assert_eq!(
+        patch.identity.values(),
+        [dbflux_core::Value::Text("c-1".to_string())]
+    );
     assert!(!modal_visible(&fixture, window));
 }
 
@@ -547,6 +640,7 @@ fn reload_table_after_the_key_was_dropped_leaves_the_grid_without_a_key(cx: &mut
 #[gpui::test]
 fn a_save_all_with_no_row_updates_does_not_check_the_key(cx: &mut TestAppContext) {
     let (fixture, window) = fixture(cx, changed_key());
+    stage_insert(&fixture, window, 10, "new");
 
     act(&fixture, window, |panel, _, cx| {
         panel.handle_save_all(Vec::new(), vec![0], Vec::new(), cx)
@@ -558,7 +652,13 @@ fn a_save_all_with_no_row_updates_does_not_check_the_key(cx: &mut TestAppContext
         "an insert writes no key"
     );
     assert!(!modal_visible(&fixture, window));
+    assert!(
+        matches!(writes(&fixture.driver).as_slice(), [CrudOp::Insert(_)]),
+        "the insert was sent: {:?}",
+        writes(&fixture.driver)
+    );
 }
+
 fn same_key() -> FakeTableDetails {
     FakeTableDetails::Info(Box::new(orders_info(&["id"], &["id", "name"])))
 }
@@ -658,16 +758,12 @@ fn a_delete_confirmed_during_an_in_flight_check_is_not_dropped(cx: &mut TestAppC
         panel.confirm_delete(window, cx);
     });
 
-    let deletes = writes(&fixture.driver)
-        .into_iter()
-        .filter(|op| matches!(op, CrudOp::Delete(_)))
-        .count();
-    let in_flight = window.update(|_, app| fixture.panel.read(app).batch_op_in_flight);
-    assert!(
-        deletes == 1 || (!in_flight && last_toast_title(window).is_some()),
-        "delete dropped silently: deletes={deletes}, batch_op_in_flight={in_flight}, pending={:?}",
-        pending_counts(&fixture, window)
+    assert_eq!(
+        deleted_keys(&fixture.driver),
+        vec![vec![dbflux_core::Value::Int(3)]],
+        "the confirmed delete of id 3 was sent"
     );
+    assert!(!window.update(|_, app| fixture.panel.read(app).batch_op_in_flight));
 }
 
 /// A close waiting on its apply while a row-save check runs must finish.
@@ -682,18 +778,22 @@ fn a_close_during_an_in_flight_check_completes(cx: &mut TestAppContext) {
         assert!(panel.apply_for_close(cx));
     });
 
-    let closed = fixture.seen.borrow().iter().any(|event| {
-        matches!(
-            event,
-            DataGridEvent::RequestClose | DataGridEvent::MutationFinished { .. }
-        )
-    });
-    assert!(
-        closed,
-        "close never resolved; pending={:?}, events={:?}",
-        pending_counts(&fixture, window),
-        fixture.seen.borrow().len()
+    let closed = fixture
+        .seen
+        .borrow()
+        .iter()
+        .any(|event| matches!(event, DataGridEvent::RequestClose));
+    assert!(closed, "the close was asked for after both edits landed");
+    let mut updated = updated_keys(&fixture.driver);
+    updated.sort_by_key(|key| format!("{key:?}"));
+    assert_eq!(
+        updated,
+        vec![
+            vec![dbflux_core::Value::Int(1)],
+            vec![dbflux_core::Value::Int(2)]
+        ]
     );
+    assert_eq!(pending_counts(&fixture, window), (0, 0, 0));
 }
 
 /// Cancel then save again re-checks (no stale pass), and a changed key on the
@@ -744,7 +844,7 @@ fn a_row_save_sends_the_key_read_before_a_reload_during_the_check(cx: &mut TestA
     window.update(|_, app| {
         fixture.panel.update(app, |panel, cx| {
             panel.handle_save_row(0, false, cx);
-            panel.set_result(reversed_rows(), cx);
+            land_table_reload(panel, &[3, 2, 1], cx);
         });
     });
     window.run_until_parked();
@@ -794,6 +894,16 @@ fn land_table_reload(
     );
 }
 
+fn deleted_keys(driver: &FakeDriver) -> Vec<Vec<dbflux_core::Value>> {
+    writes(driver)
+        .into_iter()
+        .filter_map(|op| match op {
+            CrudOp::Delete(delete) => Some(delete.identity.values().to_vec()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn updated_keys(driver: &FakeDriver) -> Vec<Vec<dbflux_core::Value>> {
     writes(driver)
         .into_iter()
@@ -820,13 +930,19 @@ fn save_all_after_a_table_reload_during_the_check_loses_no_edit(cx: &mut TestApp
     });
     window.run_until_parked();
 
-    let updated = updated_keys(&fixture.driver);
+    let mut updated = updated_keys(&fixture.driver);
+    updated.sort_by_key(|key| format!("{key:?}"));
     let reported = last_toast_title(window).is_some();
     let stopped = updated.is_empty() && reported;
-    let all_saved = updated.len() == 2 && pending_counts(&fixture, window) == (0, 0, 0);
+    let all_saved = updated
+        == vec![
+            vec![dbflux_core::Value::Int(1)],
+            vec![dbflux_core::Value::Int(2)],
+        ]
+        && pending_counts(&fixture, window) == (0, 0, 0);
     assert!(
         stopped || all_saved,
-        "updated={updated:?} reported={reported} pending={:?}",
+        "exactly ids 1 and 2 must be saved: updated={updated:?} reported={reported} pending={:?}",
         pending_counts(&fixture, window)
     );
 }
@@ -853,10 +969,10 @@ fn close_apply_after_a_table_reload_during_the_check_does_not_close_over_edits(
         .iter()
         .any(|event| matches!(event, DataGridEvent::RequestClose));
     let pending = pending_counts(&fixture, window);
+    let updated = updated_keys(&fixture.driver);
     assert!(
-        !(closed && pending != (0, 0, 0)),
-        "tab asked to close with staged edits {pending:?}; updates={:?}",
-        updated_keys(&fixture.driver)
+        !closed || (pending == (0, 0, 0) && updated == vec![vec![dbflux_core::Value::Int(1)]]),
+        "tab asked to close without id 1 landing: pending={pending:?}, updates={updated:?}"
     );
 }
 
@@ -879,14 +995,14 @@ fn a_confirmed_delete_whose_row_left_the_grid_is_not_dropped_silently(cx: &mut T
     });
     window.run_until_parked();
 
-    let deletes = writes(&fixture.driver)
-        .into_iter()
-        .filter(|op| matches!(op, CrudOp::Delete(_)))
-        .count();
-    let reported = last_toast_title(window).is_some();
+    let deleted = deleted_keys(&fixture.driver);
+    let reported = last_toast_title(window)
+        == Some(dbflux_i18n::t!(
+            "document.data.mutation.error.bulk_delete_no_rows_identified"
+        ));
     assert!(
-        deletes == 1 || reported,
-        "confirmed delete dropped silently: deletes={deletes}, toast={reported}"
+        deleted == vec![vec![dbflux_core::Value::Int(1)]] || (deleted.is_empty() && reported),
+        "id 1 was marked: it is deleted, or the skip is reported; got deletes={deleted:?}"
     );
     assert!(!window.update(|_, app| fixture.panel.read(app).batch_op_in_flight));
 }
@@ -905,10 +1021,14 @@ fn a_row_save_whose_row_left_the_grid_is_not_dropped_silently(cx: &mut TestAppCo
     });
     window.run_until_parked();
 
-    let reported = last_toast_title(window).is_some();
+    let updated = updated_keys(&fixture.driver);
+    let reported = last_toast_title(window)
+        == Some(dbflux_i18n::t!(
+            "document.data.mutation.error.staged_row_left_grid"
+        ));
     assert!(
-        updated_keys(&fixture.driver).len() == 1 || reported,
-        "row save dropped silently"
+        updated == vec![vec![dbflux_core::Value::Int(1)]] || (updated.is_empty() && reported),
+        "id 1 was edited: it is saved, or the skip is reported; got updates={updated:?}"
     );
 }
 
@@ -993,4 +1113,322 @@ fn a_key_change_during_a_passing_check_is_checked_again(cx: &mut TestAppContext)
     assert_eq!(fixture.driver.table_details_calls(), 2);
     assert!(writes(&fixture.driver).is_empty());
     assert!(modal_visible(&fixture, window));
+}
+
+/// Revert while the key check runs: the row has nothing staged any more, so
+/// nothing may be sent for it.
+#[gpui::test]
+fn a_row_reverted_during_the_check_is_not_saved(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    stage_name(&fixture, window, 0);
+
+    window.update(|_, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.handle_save_row(0, false, cx);
+            let table_state = panel.grid_table.table_state.clone().expect("a table");
+            table_state.update(cx, |state, cx| state.revert_row(0, cx));
+        });
+    });
+    window.run_until_parked();
+
+    assert!(
+        writes(&fixture.driver).is_empty(),
+        "the reverted row was sent"
+    );
+}
+
+/// A fetch that the table's details being cleared made stale is not trusted:
+/// the check runs again and the write goes out after the second answer.
+#[gpui::test]
+fn a_check_made_stale_by_a_cache_clear_is_run_again(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    stage_name(&fixture, window, 0);
+
+    window.update(|_, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.handle_save_row(0, false, cx);
+            panel.app_state.update(cx, |state, _| {
+                state.clear_table_details(Uuid::nil());
+            });
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(fixture.driver.table_details_calls(), 2);
+    assert!(matches!(
+        writes(&fixture.driver).as_slice(),
+        [CrudOp::Update(_)]
+    ));
+}
+
+/// A connection replaced while the check runs is checked itself before it is
+/// written to.
+#[gpui::test]
+fn a_connection_replaced_during_the_check_is_checked_before_it_is_written(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    stage_name(&fixture, window, 0);
+    let replacement =
+        FakeDriver::new(dbflux_core::DbKind::SQLite).with_table_details("orders", changed_key());
+
+    window.update(|window, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.handle_save_row(0, false, cx);
+            let _ = window;
+        });
+    });
+    register_fake_connection(&fixture.panel, window, &replacement);
+    window.run_until_parked();
+
+    assert_eq!(
+        replacement.table_details_calls(),
+        1,
+        "the new connection was checked"
+    );
+    assert!(writes(&fixture.driver).is_empty());
+    assert!(
+        writes(&replacement).is_empty(),
+        "the replacement's changed key stops the write"
+    );
+    assert!(modal_visible(&fixture, window));
+}
+
+/// A second Save All while the first one is checked must not send the same
+/// insert again.
+#[gpui::test]
+fn a_second_save_all_during_the_check_does_not_resend_the_batch(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    stage_insert(&fixture, window, 10, "new");
+    stage_name(&fixture, window, 0);
+
+    act(&fixture, window, |panel, _, cx| {
+        panel.handle_save_all(Vec::new(), vec![0], vec![0], cx);
+        panel.handle_save_all(Vec::new(), vec![0], vec![0], cx);
+    });
+
+    let ops = writes(&fixture.driver);
+    let inserts = ops
+        .iter()
+        .filter(|op| matches!(op, CrudOp::Insert(_)))
+        .count();
+    let updates = ops
+        .iter()
+        .filter(|op| matches!(op, CrudOp::Update(_)))
+        .count();
+    assert_eq!((inserts, updates), (1, 1), "{ops:?}");
+    assert_eq!(fixture.driver.table_details_calls(), 1);
+}
+
+/// An insert that an independent save removed while Save All was checked
+/// renumbers the batch: the insert staged afterwards is not part of it.
+#[gpui::test]
+fn an_insert_removed_during_the_check_keeps_the_batch_in_step(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    stage_insert(&fixture, window, 10, "a");
+    stage_insert(&fixture, window, 11, "b");
+    stage_name(&fixture, window, 0);
+
+    window.update(|_, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.handle_save_all(Vec::new(), vec![0, 1], vec![0], cx);
+            let table_state = panel.grid_table.table_state.clone().expect("a table");
+            table_state.update(cx, |state, _| {
+                state.edit_buffer_mut().remove_pending_insert_by_idx(0);
+            });
+            panel.renumber_queued_inserts_after_removal(0, cx);
+            table_state.update(cx, |state, _| {
+                state
+                    .edit_buffer_mut()
+                    .add_pending_insert(vec![CellValue::int(12), CellValue::text("c")]);
+            });
+        });
+    });
+    window.run_until_parked();
+
+    let inserted: Vec<String> = writes(&fixture.driver)
+        .into_iter()
+        .filter_map(|op| match op {
+            CrudOp::Insert(insert) => Some(format!("{:?}", insert.assignments)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inserted.len(), 1, "{inserted:?}");
+    assert!(
+        inserted[0].contains("\"b\""),
+        "only b was in the batch: {inserted:?}"
+    );
+}
+
+/// A delete confirmed while a Save All write runs must not take that
+/// batch's parked rows down with it when its own check fails.
+#[gpui::test]
+fn a_failed_delete_check_does_not_drop_a_running_save_all_rows(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    stage_name(&fixture, window, 0);
+    stage_name(&fixture, window, 1);
+    mark_for_delete(&fixture, window, &[2]);
+
+    window.update(|window, app| {
+        fixture.panel.update(app, |panel, cx| {
+            // Save All's first write is running with a second row parked.
+            panel.batch_op_in_flight = true;
+            panel.pending_batch_remaining = Some(PendingBatchRemaining {
+                pending_inserts: Vec::new(),
+                dirty_rows: vec![1],
+                dirty_keys: Vec::new(),
+            });
+            fixture.driver.set_table_details("orders", changed_key());
+            panel.pending_delete_confirm = Some(PendingDeleteConfirm {
+                row_indices: vec![2],
+                is_table: true,
+            });
+            panel.confirm_delete(window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert!(modal_visible(&fixture, window));
+    window.update(|_, app| {
+        let panel = fixture.panel.read(app);
+        assert!(
+            panel.batch_op_in_flight,
+            "the running write is still in flight"
+        );
+        assert!(
+            panel.pending_batch_remaining.is_some(),
+            "the parked row was dropped"
+        );
+    });
+}
+
+/// A confirmed delete where only one of two rows is still on the page is
+/// reported with the rows it could not find.
+#[gpui::test]
+fn a_bulk_delete_reports_a_confirmed_row_that_left_the_grid(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    mark_for_delete(&fixture, window, &[0, 1]); // ids 1 and 2
+
+    window.update(|window, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.pending_delete_confirm = Some(PendingDeleteConfirm {
+                row_indices: vec![0, 1],
+                is_table: true,
+            });
+            panel.confirm_delete(window, cx);
+            land_table_reload(panel, &[2, 3], cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        deleted_keys(&fixture.driver),
+        vec![vec![dbflux_core::Value::Int(2)]]
+    );
+    assert_eq!(
+        last_toast_title(window),
+        Some(crate::labels::bulk_delete_unidentified_label(
+            crate::labels::MutationItemKind::Row,
+            1,
+            1
+        )),
+        "the skipped row is reported with the one that was deleted"
+    );
+}
+
+/// A chunked run writes through the connection its key check used.
+#[gpui::test]
+fn a_chunked_mutation_runs_on_the_connection_the_key_was_checked_on(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture_for(cx, same_key(), dbflux_core::DbKind::Postgres);
+    let slot =
+        FakeDriver::new(dbflux_core::DbKind::Postgres).with_table_details("orders", same_key());
+    window.update(|_, app| {
+        let app_state = fixture.panel.read(app).app_state.clone();
+        app_state.update(app, |state, _| {
+            let profile = dbflux_core::ConnectionProfile::new(
+                "slot",
+                dbflux_core::DbConfig::default_postgres(),
+            );
+            let connection = slot.connect_arc(&profile).expect("the fake connects");
+            state
+                .connections_mut()
+                .get_mut(&Uuid::nil())
+                .expect("connected")
+                .database_connections
+                .insert(
+                    "app".to_string(),
+                    dbflux_core::DatabaseConnection {
+                        connection,
+                        schema: None,
+                    },
+                );
+        });
+    });
+
+    chunked_delete(&fixture, window);
+
+    assert_eq!(
+        slot.table_details_calls(),
+        1,
+        "the key was checked on the slot"
+    );
+    assert!(
+        !slot.stats().executed_requests.is_empty(),
+        "the run used the slot's connection"
+    );
+    assert!(
+        fixture.driver.stats().executed_requests.is_empty(),
+        "the primary connection was not written to"
+    );
+}
+
+/// With no prepared connection for the grid's database, a chunked run is
+/// refused rather than started on the primary connection.
+#[gpui::test]
+fn a_chunked_mutation_without_a_connection_for_its_database_is_refused(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture_for(cx, same_key(), dbflux_core::DbKind::Postgres);
+
+    chunked_delete(&fixture, window);
+
+    assert!(fixture.driver.stats().executed_requests.is_empty());
+    assert_eq!(fixture.driver.table_details_calls(), 0);
+    assert!(!mutation_finished(&fixture), "the run never started");
+    assert!(
+        last_toast_title(window).is_some(),
+        "the refusal is reported"
+    );
+}
+
+/// The details the modal kept went stale while it was open: Reload table does
+/// not write them, it reads the table's key again.
+#[gpui::test]
+fn reload_table_with_details_gone_stale_reads_the_key_again(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, changed_key());
+    stage_name(&fixture, window, 0);
+    act(&fixture, window, |panel, _, cx| {
+        panel.handle_save_row(0, false, cx)
+    });
+    assert!(modal_visible(&fixture, window));
+
+    window.update(|_, app| {
+        let app_state = fixture.panel.read(app).app_state.clone();
+        app_state.update(app, |state, _| {
+            state.clear_table_details(Uuid::nil());
+        });
+    });
+    modal_click(&fixture, window, true);
+
+    assert_eq!(pending_counts(&fixture, window), (0, 0, 0));
+    assert_eq!(
+        fixture.driver.table_details_calls(),
+        2,
+        "the stale answer was not trusted: the key was read again"
+    );
+    assert_eq!(
+        window.update(|_, app| fixture.panel.read(app).pk_columns.clone()),
+        vec!["code".to_string()]
+    );
+    assert_eq!(
+        cached_columns(&fixture, window),
+        vec!["id".to_string(), "code".to_string(), "name".to_string()]
+    );
+    assert!(writes(&fixture.driver).is_empty());
 }

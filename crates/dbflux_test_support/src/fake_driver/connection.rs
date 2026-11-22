@@ -229,6 +229,12 @@ impl Connection for FakeConnection {
         &DEFAULT_SQL_DIALECT
     }
 
+    fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+        static GENERATOR: dbflux_core::SqlMutationGenerator =
+            dbflux_core::SqlMutationGenerator::new(&DEFAULT_SQL_DIALECT);
+        Some(&GENERATOR)
+    }
+
     fn secret_stores(&self) -> Vec<&dyn SecretStoreSource> {
         self.secret_stores
             .iter()

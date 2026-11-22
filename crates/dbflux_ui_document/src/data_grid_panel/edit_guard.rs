@@ -7,6 +7,10 @@
 //! Save All or a chunked mutation, the table's details are read again, off the
 //! UI thread, once for the whole batch, and compared with the key in use.
 //!
+//! The re-read is fenced like the object tree's: its result is written, and
+//! the write let go, only if the session, the connection and the table's cache
+//! are still the ones it was prepared for. A stale result is read again.
+//!
 //! A matching key refreshes the cache and lets the write go on. Anything else
 //! sends nothing and opens the drift modal in its edit mode, which offers
 //! "Reload table" (the staged edits are discarded) and "Cancel" (they stay
@@ -15,7 +19,8 @@
 use super::*;
 use dbflux_components::modals::{ModalSchemaDrift, SchemaDriftDismissed, SchemaDriftRefresh};
 use dbflux_core::{
-    DbError, FetchTableDetailsResult, PrimaryKeyCheck, QueryTableRef, check_primary_key,
+    ApplyFetchOutcome, DbError, FetchedTableDetails, PrimaryKeyCheck, QueryTableRef,
+    check_primary_key,
 };
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
@@ -27,6 +32,9 @@ pub(super) enum OnStop {
     /// A batch (Save All, bulk delete, a close applying edits) is parked on
     /// this write and must not wait for it.
     AbandonBatch,
+    /// Another write is running and owns the batch state; only a close waiting
+    /// on this request is told it will not land.
+    AbandonIndependent,
     /// A close is waiting on a visual mutation that will not run.
     ReleaseClose,
 }
@@ -35,8 +43,13 @@ type AfterGuard = Box<dyn FnOnce(&mut DataGridPanel, &mut Context<DataGridPanel>
 
 struct BlockedEdit {
     /// The fresh details to write on reload; `None` when the table is gone.
-    fetched: Option<Box<FetchTableDetailsResult>>,
+    fetched: Option<Box<FetchedTableDetails>>,
 }
+
+/// How many times one request is checked again after a stale answer before the
+/// guard gives up and reports it, so a table whose details keep changing cannot
+/// keep a write waiting for ever.
+const MAX_STALE_RECHECKS: u32 = 3;
 
 /// A request that arrived while another request's check was running.
 struct QueuedRequest {
@@ -50,6 +63,9 @@ pub(super) struct EditGuard {
     /// Run one at a time after the check in flight, each through its own check.
     queued: Vec<QueuedRequest>,
     blocked: Option<BlockedEdit>,
+    /// The Save All batch whose check is running. Held here, not in the check's
+    /// continuation, so an insert removed meanwhile still renumbers it.
+    pub(super) parked_batch: Option<PendingBatchRemaining>,
 }
 
 impl EditGuard {
@@ -80,6 +96,7 @@ impl EditGuard {
             check_in_flight: false,
             queued: Vec::new(),
             blocked: None,
+            parked_batch: None,
         }
     }
 }
@@ -148,6 +165,16 @@ impl DataGridPanel {
         then: impl FnOnce(&mut DataGridPanel, &mut Context<DataGridPanel>) + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.run_edit_check(on_stop, Box::new(then), 0, cx);
+    }
+
+    fn run_edit_check(
+        &mut self,
+        on_stop: OnStop,
+        then: AfterGuard,
+        stale_rechecks: u32,
+        cx: &mut Context<Self>,
+    ) {
         let DataSource::Table {
             profile_id,
             database,
@@ -161,10 +188,7 @@ impl DataGridPanel {
         let (profile_id, source_database, table) = (*profile_id, database.clone(), table.clone());
 
         if self.edit_guard.check_in_flight {
-            self.edit_guard.queued.push(QueuedRequest {
-                on_stop,
-                then: Box::new(then),
-            });
+            self.edit_guard.queued.push(QueuedRequest { on_stop, then });
             return;
         }
 
@@ -193,7 +217,6 @@ impl DataGridPanel {
         self.edit_guard.check_in_flight = true;
         let grid_key = self.key_in_use();
         let entity = cx.entity().clone();
-        let then: AfterGuard = Box::new(then);
 
         cx.spawn(async move |_this, cx| {
             let result = cx
@@ -203,7 +226,7 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
-                    panel.finish_edit_guard(result, &grid_key, on_stop, then, cx);
+                    panel.finish_edit_guard(result, &grid_key, on_stop, then, stale_rechecks, cx);
                 });
             });
         })
@@ -212,10 +235,11 @@ impl DataGridPanel {
 
     fn finish_edit_guard(
         &mut self,
-        result: Result<FetchTableDetailsResult, DbError>,
+        result: Result<FetchedTableDetails, DbError>,
         grid_key: &[String],
         on_stop: OnStop,
         then: AfterGuard,
+        stale_rechecks: u32,
         cx: &mut Context<Self>,
     ) {
         self.edit_guard.check_in_flight = false;
@@ -223,13 +247,21 @@ impl DataGridPanel {
         let proceeded = match result {
             Ok(fetched) => match check_primary_key(grid_key, &fetched.details) {
                 PrimaryKeyCheck::Same => {
-                    self.write_fresh_details(fetched, cx);
-                    if self.key_in_use() == grid_key {
+                    let applied = self.apply_fresh_details(fetched, cx);
+                    if applied == ApplyFetchOutcome::Applied && self.key_in_use() == grid_key {
                         then(self, cx);
+                    } else if stale_rechecks >= MAX_STALE_RECHECKS {
+                        self.report_guard_failure(
+                            "the table's details kept changing while they were checked",
+                            on_stop,
+                            cx,
+                        );
                     } else {
-                        // The grid took another key while the check ran, so
-                        // the key it was checked with is not the one it writes by.
-                        self.guard_edit(on_stop, then, cx);
+                        // The re-read went stale (the connection was replaced or
+                        // the table's details were cleared) or the grid took
+                        // another key while it ran, so what was checked is not
+                        // what the write would use: check again.
+                        self.run_edit_check(on_stop, then, stale_rechecks + 1, cx);
                     }
                     true
                 }
@@ -270,23 +302,14 @@ impl DataGridPanel {
         }
     }
 
-    fn write_fresh_details(&mut self, fetched: FetchTableDetailsResult, cx: &mut Context<Self>) {
-        self.app_state.update(cx, |state, _| {
-            state.set_table_details(
-                fetched.profile_id,
-                fetched.database.clone(),
-                fetched.schema.clone(),
-                fetched.table.clone(),
-                fetched.details,
-            );
-            state.set_dependents(
-                fetched.profile_id,
-                fetched.database,
-                fetched.schema,
-                fetched.table,
-                fetched.dependents,
-            );
-        });
+    /// Writes the fetched details and dependents in one fenced update.
+    fn apply_fresh_details(
+        &mut self,
+        fetched: FetchedTableDetails,
+        cx: &mut Context<Self>,
+    ) -> ApplyFetchOutcome {
+        self.app_state
+            .update(cx, |state, _| state.apply_fetched_table_details(fetched))
     }
 
     fn report_guard_failure(&mut self, error: &str, on_stop: OnStop, cx: &mut Context<Self>) {
@@ -303,7 +326,11 @@ impl DataGridPanel {
     fn release_on_stop(&mut self, on_stop: OnStop, cx: &mut Context<Self>) {
         match on_stop {
             OnStop::Nothing => {}
-            OnStop::AbandonBatch => self.abandon_close_apply(cx),
+            OnStop::AbandonBatch => {
+                self.edit_guard.parked_batch = None;
+                self.abandon_close_apply(cx);
+            }
+            OnStop::AbandonIndependent => self.abandon_close_apply_independent(cx),
             OnStop::ReleaseClose => cx.emit(DataGridEvent::MutationFinished { landed: false }),
         }
     }
@@ -311,7 +338,7 @@ impl DataGridPanel {
     fn block_edit(
         &mut self,
         check: PrimaryKeyCheck,
-        fetched: Option<Box<FetchTableDetailsResult>>,
+        fetched: Option<Box<FetchedTableDetails>>,
         on_stop: OnStop,
         cx: &mut Context<Self>,
     ) {
@@ -356,12 +383,18 @@ impl DataGridPanel {
             Some(fetched) => {
                 let columns = fetched.details.columns.clone().unwrap_or_default();
                 let pk_names = Self::primary_key_names(&columns);
-                self.write_fresh_details(*fetched, cx);
-                self.drop_sorts_on_missing_columns(&columns);
-                if pk_names.is_empty() {
-                    self.pk_columns.clear();
+                match self.apply_fresh_details(*fetched, cx) {
+                    ApplyFetchOutcome::Applied => {
+                        self.drop_sorts_on_missing_columns(&columns);
+                        if pk_names.is_empty() {
+                            self.pk_columns.clear();
+                        }
+                        self.apply_pk_details(pk_names, cx);
+                    }
+                    // The details the modal kept went stale while it was open:
+                    // they are not written, and the table's key is read again.
+                    ApplyFetchOutcome::Rejected(_) => self.relearn_table_key(cx),
                 }
-                self.apply_pk_details(pk_names, cx);
             }
             None => self.forget_table_details(cx),
         }
@@ -371,6 +404,20 @@ impl DataGridPanel {
         }
 
         self.focus_active_view(window, cx);
+    }
+
+    fn relearn_table_key(&mut self, cx: &mut Context<Self>) {
+        let DataSource::Table {
+            profile_id, table, ..
+        } = &self.source
+        else {
+            return;
+        };
+        let (profile_id, table) = (*profile_id, table.clone());
+
+        self.forget_table_details(cx);
+        self.pk_columns.clear();
+        self.fetch_table_details_for_pk(profile_id, &table, cx);
     }
 
     fn forget_table_details(&mut self, cx: &mut Context<Self>) {

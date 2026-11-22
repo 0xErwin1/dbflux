@@ -836,6 +836,7 @@ impl CodeDocument {
 
         let session_binding = self.execution_session.clone();
         let session_generation = session_binding.current_generation();
+        let invalidation_app_state = self.app_state.clone();
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
             let session_binding = session_binding.clone();
@@ -877,6 +878,20 @@ impl CodeDocument {
             let (dispatched, session_execution) = task.await;
             let session_isolated = session_execution.isolated;
             let result = session_execution.result;
+
+            // The statement ran on the database whether or not the editor
+            // still wants its result, so the cache is dropped before the
+            // result can be discarded.
+            if result.is_ok() {
+                cx.update(|cx| {
+                    Self::drop_cached_details_after_ddl(
+                        &invalidation_app_state,
+                        Some(conn_id),
+                        &query,
+                        cx,
+                    );
+                });
+            }
 
             if cancel_token.is_cancelled() && session_isolated {
                 // Local task cancellation does not cancel the remote isolated session. Wait for
@@ -1409,8 +1424,10 @@ impl CodeDocument {
     }
 
     /// Process pending query result (called from render where we have window access).
-    /// A DDL statement that ran changes tables the parser does not name, so
-    /// the connection's cached table details are dropped whole.
+    /// A statement that changes the schema changes tables the parser does not
+    /// name, so the connection's cached table details are dropped whole. SQL
+    /// classifies `ALTER` and `DROP` as destructive, not as admin DDL, so the
+    /// destructive class counts too.
     fn drop_cached_details_after_ddl(
         app_state: &Entity<AppStateEntity>,
         connection_id: Option<Uuid>,
@@ -1435,6 +1452,7 @@ impl CodeDocument {
                     dbflux_core::ExecutionClassification::AdminSafe
                         | dbflux_core::ExecutionClassification::Admin
                         | dbflux_core::ExecutionClassification::AdminDestructive
+                        | dbflux_core::ExecutionClassification::Destructive
                 )
             });
 
@@ -1494,20 +1512,6 @@ impl CodeDocument {
                 }
 
                 self.runner.complete_primary(pending.task_id, cx);
-
-                if !is_script {
-                    let connection_id = pending
-                        .origin
-                        .as_ref()
-                        .map(|origin| origin.connection_id)
-                        .or(self.connection_id);
-                    Self::drop_cached_details_after_ddl(
-                        &self.app_state,
-                        connection_id,
-                        &pending.query,
-                        cx,
-                    );
-                }
 
                 // Use affected_rows when available (INSERT/UPDATE/DELETE), otherwise rows.len() (SELECT)
                 let affected_rows = qr.affected_rows;
@@ -4606,6 +4610,72 @@ mod auto_refresh_tests {
                 "{ddl} must drop the cached details"
             );
         }
+    }
+
+    #[gpui::test]
+    fn an_alter_or_drop_run_from_the_editor_drops_the_connections_cached_table_details(
+        cx: &mut TestAppContext,
+    ) {
+        for ddl in [
+            "ALTER TABLE users ADD COLUMN nickname TEXT",
+            "DROP TABLE users",
+        ] {
+            let driver = FakeDriver::new(DbKind::SQLite);
+            let (document, _toasts, window) = open_connected(cx, &driver, ddl);
+            seed_table_details(window, &document);
+
+            run_query(window, &document);
+            if has_pending_dangerous_query(window, &document) {
+                window.update(|window, cx| {
+                    document.update(cx, |document, cx| {
+                        document.confirm_dangerous_query(false, window, cx);
+                    });
+                });
+                settle(window);
+            }
+
+            assert!(!executed(&driver).is_empty(), "{ddl} must have run");
+            assert!(
+                !has_cached_table_details(window, &document),
+                "{ddl} must drop the cached details"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn a_ddl_run_whose_result_the_editor_discards_still_drops_the_cached_table_details(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, _toasts, window) =
+            open_connected(cx, &driver, "CREATE INDEX users_name ON users (name)");
+        seed_table_details(window, &document);
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.run_query(window, cx);
+                // The editor's context changes while the statement runs.
+                document.execution_session.invalidate();
+            });
+        });
+        settle(window);
+
+        assert!(!executed(&driver).is_empty(), "the statement ran");
+        let discarded = window.update(|_, cx| {
+            document
+                .read(cx)
+                .execution
+                .execution_history
+                .iter()
+                .any(|record| {
+                    record
+                        .error
+                        .as_deref()
+                        .is_some_and(|e| e.contains("discarded"))
+                })
+        });
+        assert!(discarded, "the editor discarded the result");
+        assert!(!has_cached_table_details(window, &document));
     }
 
     #[gpui::test]

@@ -465,7 +465,7 @@ impl DataGridPanel {
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.staged_row_changes(row_idx, cx).is_none() {
+        if !self.queued_row_has_changes(row_idx, cx) {
             return;
         }
 
@@ -496,8 +496,21 @@ impl DataGridPanel {
                 OnStop::Nothing,
                 move |panel, cx| {
                     let Some(row_idx) = panel.row_index_of_key(patch.identity.values(), cx) else {
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::User,
+                                dbflux_i18n::t!(
+                                    "document.data.mutation.error.staged_row_left_grid"
+                                ),
+                            ),
+                            cx,
+                        );
                         return;
                     };
+                    // The user reverted the row while the key was checked.
+                    if !panel.queued_row_has_changes(row_idx, cx) {
+                        return;
+                    }
                     panel.send_row_patch(profile_id, database, row_idx, patch, false, cx);
                 },
                 cx,
@@ -1370,12 +1383,18 @@ impl DataGridPanel {
             } = &self.source
             {
                 let (profile_id, database, table) = (*profile_id, database.clone(), table.clone());
+                // A write already running is not this delete's to abandon.
+                let on_stop = if self.batch_op_in_flight {
+                    OnStop::AbandonIndependent
+                } else {
+                    OnStop::AbandonBatch
+                };
                 if let Some((identities, unidentified)) =
                     self.capture_delete_identities(&confirm.row_indices, cx)
                 {
                     self.batch_op_in_flight = true;
                     self.guard_edit(
-                        OnStop::AbandonBatch,
+                        on_stop,
                         move |panel, cx| {
                             panel.run_captured_deletes(
                                 profile_id,
@@ -1581,6 +1600,14 @@ impl DataGridPanel {
         dirty_rows: Vec<usize>,
         cx: &mut Context<Self>,
     ) {
+        // A second request while a batch is checked or running would capture
+        // the same inserts and rows and send them again.
+        if matches!(self.source, DataSource::Table { .. })
+            && (self.batch_op_in_flight || self.pending_batch_remaining.is_some())
+        {
+            return;
+        }
+
         let has_remaining = !pending_inserts.is_empty() || !dirty_rows.is_empty();
 
         // Handle all pending deletes as a batch
@@ -1638,11 +1665,14 @@ impl DataGridPanel {
         if needs_key_check {
             // Held so a close does not start the same rows a second time.
             self.batch_op_in_flight = true;
+            // Parked on the guard, not in the closure, so an insert removed
+            // while the key is checked still renumbers the batch.
+            self.edit_guard.parked_batch = Some(remaining);
             self.guard_edit(
                 OnStop::AbandonBatch,
                 move |panel, cx| {
                     panel.batch_op_in_flight = false;
-                    panel.pending_batch_remaining = Some(remaining);
+                    panel.pending_batch_remaining = panel.edit_guard.parked_batch.take();
                     panel.process_next_batch_op(cx);
                 },
                 cx,
@@ -1774,19 +1804,21 @@ impl DataGridPanel {
     ) {
         self.renumber_held_insert_after_removal(removed_idx, cx);
 
-        let Some(remaining) = self.pending_batch_remaining.as_mut() else {
-            return;
-        };
+        for remaining in self
+            .pending_batch_remaining
+            .iter_mut()
+            .chain(self.edit_guard.parked_batch.iter_mut())
+        {
+            // The removed insert may still be queued (the user deleted a row the
+            // batch had not started). Drop it, then shift the ones above it.
+            remaining
+                .pending_inserts
+                .retain(|queued| *queued != removed_idx);
 
-        // The removed insert may still be queued (the user deleted a row the
-        // batch had not started). Drop it, then shift the ones above it.
-        remaining
-            .pending_inserts
-            .retain(|queued| *queued != removed_idx);
-
-        for queued in &mut remaining.pending_inserts {
-            if *queued > removed_idx {
-                *queued -= 1;
+            for queued in &mut remaining.pending_inserts {
+                if *queued > removed_idx {
+                    *queued -= 1;
+                }
             }
         }
     }
@@ -1902,6 +1934,7 @@ impl DataGridPanel {
         unidentified: usize,
         cx: &mut Context<Self>,
     ) {
+        let captured = identities.len();
         let identities: Vec<(usize, RowIdentity)> = identities
             .into_iter()
             .filter_map(|(_, identity)| {
@@ -1909,9 +1942,19 @@ impl DataGridPanel {
                 Some((row_idx, identity))
             })
             .collect();
+        // A row a reload moved off the page is reported with the rows that
+        // had no readable key, not dropped.
+        let unidentified = unidentified + (captured - identities.len());
 
         if identities.is_empty() {
             self.abandon_close_apply(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    dbflux_i18n::t!("document.data.mutation.error.bulk_delete_no_rows_identified"),
+                ),
+                cx,
+            );
             return;
         }
 
@@ -2345,7 +2388,7 @@ impl DataGridPanel {
     /// told the run did not land. It must not clear the batch state, which
     /// belongs to the batch operation still in flight: doing so would let the
     /// next close start a second write beside it.
-    fn abandon_close_apply_independent(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn abandon_close_apply_independent(&mut self, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.close_after_apply) {
             cx.emit(DataGridEvent::MutationFinished { landed: false });
         }

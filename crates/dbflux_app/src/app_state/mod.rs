@@ -1096,16 +1096,18 @@ impl AppState {
             .prepare_fetch_table_details(profile_id, database, schema, table)
     }
 
-    /// Prepares a fetch of one table's details that ignores the cache, for
-    /// checking the table against the database as it is now. Execute it off
-    /// the UI thread; the cache is only written if the caller does so.
+    /// Prepares a fenced fetch of one table's details that ignores the cache,
+    /// for checking the table against the database as it is now. Execute it
+    /// off the UI thread, then write the result through
+    /// [`AppState::apply_fetched_table_details`], which rejects it when the
+    /// session or the table's cache changed in between.
     pub fn prepare_refetch_table_details(
         &self,
         profile_id: Uuid,
         database: &str,
         schema: Option<&str>,
         table: &str,
-    ) -> Result<FetchTableDetailsParams, PrepareFetchError> {
+    ) -> Result<FencedTableDetailsParams, TableDetailsPrepareError> {
         self.facade
             .connections
             .prepare_refetch_table_details(profile_id, database, schema, table)

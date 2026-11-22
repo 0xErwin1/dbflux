@@ -437,7 +437,38 @@ impl DataGridPanel {
                 }
             };
 
-            let connection = Arc::clone(&connected.connection);
+            // A chunked run is guarded by a key check against the grid's own
+            // database, so it writes through that database's connection too: a
+            // check and a run on different connections would verify one table
+            // and write another.
+            let connection = match (&self.source, pending.opts.mode) {
+                (
+                    DataSource::Table { database, .. },
+                    crate::data_grid_panel::mutation_executor::ExecutionMode::ChunkedTransaction,
+                ) => {
+                    let database = Self::table_details_database(connected, database.as_deref());
+                    match connected.resolve_connection_for_execution(Some(&database)) {
+                        Ok(connection) => connection,
+                        Err(
+                            dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
+                                database,
+                            },
+                        ) => {
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Driver,
+                                    crate::labels::edit_guard_check_failed_error(&format!(
+                                        "No prepared connection for database '{database}'"
+                                    )),
+                                ),
+                                cx,
+                            );
+                            return;
+                        }
+                    }
+                }
+                _ => Arc::clone(&connected.connection),
+            };
             let event_sink: Option<Arc<dyn dbflux_core::EventSink>> =
                 Some(Arc::new(state.audit_service().clone()) as Arc<dyn dbflux_core::EventSink>);
             let policy = connected.mutation_policy;
