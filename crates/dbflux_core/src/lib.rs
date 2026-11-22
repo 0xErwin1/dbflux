@@ -45,6 +45,7 @@ pub use config::{
     hook_script_path, is_openable_script, migrate_app_config,
 };
 
+pub use connection::manager::FencedTableDetailsFailure;
 #[allow(deprecated)]
 pub use connection::{
     ApplyFetchOutcome, AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams,
@@ -265,20 +266,19 @@ pub use schema::{
     CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
     ColumnDiff, ColumnInfo, ColumnSnapshot, ConstraintInfo, ConstraintKind, ContainerInfo,
     CreationBlocker, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo, DatabaseLayout,
-    DbSchemaInfo, DocumentSchema, DriftOutcome, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo,
-    IdentitySpec, IndexBuilder, IndexData, IndexDirection, IndexInfo, IndexSnapshot, KeyInfo,
-    KeySpaceInfo, KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
+    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, IdentitySpec,
+    IndexBuilder, IndexData, IndexDirection, IndexInfo, IndexSnapshot, KeyInfo, KeySpaceInfo,
+    KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
     NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, ObjectFolder, OrderResult,
-    ParseSchemaNodeIdError, PrimaryKeySpec, QueryTableRef, RelationKind, RelationRef,
-    RelationalSchema, RetentionPolicyInfo, RiskedChange, RoutineInfo, RoutineKind, SchemaChange,
-    SchemaColumnInfo, SchemaDiff, SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder,
+    ParseSchemaNodeIdError, PrimaryKeyCheck, PrimaryKeySpec, QueryTableRef, RelationKind,
+    RelationRef, RelationalSchema, RetentionPolicyInfo, RiskedChange, RoutineInfo, RoutineKind,
+    SchemaChange, SchemaColumnInfo, SchemaFingerprint, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
     SchemaSnapshot, SchemaSnapshotRecord, SnapshotDepth, TableAlterNormalizationError, TableChange,
-    TableCreationMetadata, TableInfo, TableKey, TableStorageHint, TimeSeriesFacet,
-    TimeSeriesFieldInfo, TimeSeriesSchema, VectorDistance, VectorFacet, ViewInfo,
-    category_collection_facets, check_drift_sync, check_schema_drift, classify_table_added,
-    classify_table_removed, diff_schema, diff_table_info, extract_referenced_tables,
-    normalize_selected_table_alter, topological_order,
+    TableCreationMetadata, TableInfo, TableStorageHint, TimeSeriesFacet, TimeSeriesFieldInfo,
+    TimeSeriesSchema, VectorDistance, VectorFacet, ViewInfo, category_collection_facets,
+    check_primary_key, classify_table_added, classify_table_removed, diff_schema, diff_table_info,
+    extract_referenced_tables, normalize_selected_table_alter, topological_order,
 };
 
 pub use sql::{

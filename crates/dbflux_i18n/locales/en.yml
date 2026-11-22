@@ -1277,7 +1277,6 @@ document:
         many: "%{count} statements"
       refresh: Refresh
       cancel: Cancel
-      checking: "Checking…"
       run: Run
       last_run: "last run %{seconds} s"
       read_only: Read-only
@@ -1834,6 +1833,7 @@ document:
         invalid_json_filter: Invalid JSON filter
         chart_save_failed: 'Failed to save chart "%{name}": %{error}'
         pk_details_fetch_failed: "Failed to fetch table details for PK: %{error}"
+        edit_guard_check_failed: "Could not check the table's primary key, so nothing was sent: %{error}"
         query_failed: "Query failed: %{error}"
         chart_save_no_profile_binding: "Cannot save chart: query has no profile binding"
       placeholder:
@@ -1912,7 +1912,6 @@ document:
         insert_document: Insert document
         insert_row: Insert row
         delete_document: Delete document
-        delete_row: Delete row
         visual_mutation_chunked: "Visual mutation (chunked)"
         visual_mutation_direct: "Visual mutation (direct)"
         visual_mutation_single_transaction: "Visual mutation (single transaction)"
@@ -1921,6 +1920,7 @@ document:
         update_document_failed: "Failed to update document: %{error}"
         save_row_unsupported_pk: "Cannot save row: primary key uses an unsupported value type"
         save_row_identity_failed: "Cannot save row: failed to build row identity from primary key columns"
+        staged_row_left_grid: "A row with staged edits is no longer in the grid, so the batch stopped there."
         save_row_unsupported_values: "Cannot save row: unsupported values are read-only"
         save_failed: "Save failed: %{error}"
         save_document_unsupported_id: "Cannot save document: it has an unsupported _id value"
@@ -4358,8 +4358,6 @@ modals:
     cancel: Cancel
     confirm: Rename
   schema_drift:
-    lead: "%{table} differs from the cached schema."
-    title: Schema changed since this tab opened
     column_header: Column
     local_header: Cached
     remote_header: Now
@@ -4378,10 +4376,13 @@ modals:
       primary_key: (primary key)
       foreign_keys: (foreign keys)
       nullable: nullable
-    continue_stale: Continue with stale schema
     cancel: Cancel
-    refreshing: Refreshing…
-    refresh: Refresh and run again
+    edit:
+      title: "The table changed since it was loaded"
+      pk_lead: "The primary key of %{table} is no longer the one this grid saves by, so nothing was sent."
+      gone_lead: "%{table} no longer exists, so nothing was sent."
+      discard_note: "Reloading the table discards your pending edits, because their row identities were taken under the old key. Cancel keeps them pending and unsaved."
+      reload: "Reload table"
   tunnel_auth:
     hide_passphrase: "Hide passphrase"
     show_passphrase: "Show passphrase"

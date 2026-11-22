@@ -1,4 +1,3 @@
-use crate::schema::query_parser::QueryTableRef;
 use crate::{
     ForeignKeyInfo, IndexData, IndexInfo, OwnedDefaultSpec, TableAlterExpectedColumn,
     TableAlterOperation, TableAlterRequest, TableInfo, TableRef,
@@ -92,25 +91,6 @@ pub enum TableChange {
 }
 
 /// All changes detected for a specific table.
-#[derive(Debug, Clone)]
-pub struct SchemaDiff {
-    pub table: QueryTableRef,
-    pub changes: Vec<SchemaChange>,
-    /// The fresh `TableInfo` fetched from the driver. On "Refresh & re-run"
-    /// the caller writes this back into `ConnectedProfile::table_details`.
-    pub fresh: crate::TableInfo,
-}
-
-/// Payload emitted when at least one referenced table has drifted.
-#[derive(Debug, Clone)]
-pub struct SchemaDriftDetected {
-    pub diffs: Vec<SchemaDiff>,
-    /// Unchanged tables whose fresh `TableInfo` should be written into the
-    /// cache transparently, keyed by `(database, schema, table)`. Provided so
-    /// that the "Refresh & re-run" handler can update all tables in one pass.
-    pub refreshes: Vec<(crate::schema::TableKey, crate::TableInfo)>,
-}
-
 /// A fail-closed rejection raised while normalizing selected table deltas.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableAlterNormalizationError {

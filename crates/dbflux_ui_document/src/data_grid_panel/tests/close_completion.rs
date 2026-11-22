@@ -517,6 +517,7 @@ fn apply_for_close_does_not_start_a_second_batch_operation(cx: &mut TestAppConte
             panel.pending_batch_remaining = Some(PendingBatchRemaining {
                 pending_inserts: Vec::new(),
                 dirty_rows: vec![0],
+                dirty_keys: Vec::new(),
             });
 
             assert!(
@@ -632,6 +633,7 @@ fn a_queued_row_that_lost_its_edits_does_not_park_the_close(cx: &mut TestAppCont
             panel.pending_batch_remaining = Some(PendingBatchRemaining {
                 pending_inserts: Vec::new(),
                 dirty_rows: vec![0],
+                dirty_keys: Vec::new(),
             });
             panel.process_next_batch_op(cx);
         });

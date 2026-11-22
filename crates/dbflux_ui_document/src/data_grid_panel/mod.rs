@@ -4,6 +4,7 @@ mod chrome;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
+mod edit_guard;
 mod export_all;
 mod expression_gate;
 mod facets;
@@ -434,6 +435,9 @@ struct PendingDeleteConfirm {
 struct PendingBatchRemaining {
     pending_inserts: Vec<usize>,
     dirty_rows: Vec<usize>,
+    /// The key of each of `dirty_rows`, read when the batch was requested, in
+    /// the same order; empty when the rows are addressed by position alone.
+    dirty_keys: Vec<Option<Vec<Value>>>,
 }
 
 struct PendingDocumentPreview {
@@ -968,6 +972,9 @@ pub struct DataGridPanel {
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     /// A save that writes SQL expressions, held until the user confirms it.
     pending_expression_confirm: Option<expression_gate::PendingExpressionConfirm>,
+    /// The drift modal a save, delete or mutation opens when the table's
+    /// primary key changed since the grid loaded it.
+    edit_guard: edit_guard::EditGuard,
     /// Set while a confirmed save re-enters the gate, so it runs once.
     expression_confirmed: bool,
     pending_batch_remaining: Option<PendingBatchRemaining>,
@@ -1578,6 +1585,7 @@ impl DataGridPanel {
             pending: PendingActions::default(),
             pending_delete_confirm: None,
             pending_expression_confirm: None,
+            edit_guard: edit_guard::EditGuard::new(window, cx),
             expression_confirmed: false,
             pending_batch_remaining: None,
             close_after_apply: false,

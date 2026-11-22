@@ -11,5 +11,5 @@ pub mod seed;
 pub use fake_auth_provider_rpc::{
     FakeAuthProviderRpcConfig, FakeAuthProviderRpcServer, FakeAuthRpcResult,
 };
-pub use fake_driver::{FakeDriver, FakeDriverStats, FakeQueryOutcome};
+pub use fake_driver::{FakeDriver, FakeDriverStats, FakeQueryOutcome, FakeTableDetails};
 pub use fake_driver_rpc::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
