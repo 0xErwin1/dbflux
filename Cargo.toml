@@ -62,7 +62,16 @@ members = [
 default-members = ["crates/dbflux"]
 # The website is not a crate. Excluding it keeps cargo from descending into it
 # when resolving paths or packaging.
-exclude = ["web"]
+exclude = [
+    "web",
+    # Patched in through [patch.crates-io] by path, not members: excluded so
+    # that `cargo metadata --manifest-path vendor/<crate>/Cargo.toml` works on
+    # its own (Nix importCargoLock and fetchCargoVendor locate git crates that
+    # way, and fail on a package that "believes it is in a workspace").
+    "vendor/gpui-component",
+    "vendor/gpui-pre",
+    "vendor/gpui-pre-linux",
+]
 resolver = "2"
 
 [workspace.package]
