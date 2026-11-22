@@ -1277,7 +1277,6 @@ document:
         many: "%{count} statements"
       refresh: Refresh
       cancel: Cancel
-      checking: "Checking…"
       run: Run
       read_only: Read-only
       saved: Saved
@@ -4359,8 +4358,6 @@ modals:
     cancel: Cancel
     confirm: Rename
   schema_drift:
-    lead: "%{table} differs from the cached schema."
-    title: Schema changed since this tab opened
     column_header: Column
     local_header: Cached
     remote_header: Now
@@ -4379,10 +4376,7 @@ modals:
       primary_key: (primary key)
       foreign_keys: (foreign keys)
       nullable: nullable
-    continue_stale: Continue with stale schema
     cancel: Cancel
-    refreshing: Refreshing…
-    refresh: Refresh and run again
     edit:
       title: "The table changed since it was loaded"
       pk_lead: "The primary key of %{table} is no longer the one this grid saves by, so nothing was sent."

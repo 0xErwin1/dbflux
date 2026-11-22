@@ -610,193 +610,9 @@ impl CodeDocument {
             }
         }
 
-        // Run the schema drift preflight check asynchronously so it does not
-        // block the UI thread. The actual execution is deferred to the render
-        // loop via `pending.drift_query`.
-        self.start_drift_preflight(origin, query, in_new_tab, read_only, cx);
-    }
-
-    /// Kick off the async drift preflight for `query`.
-    ///
-    /// Captures a snapshot of the current `table_details` cache and the
-    /// connection, then spawns a background task that calls `check_schema_drift`.
-    /// On completion the result is delivered back to the entity via
-    /// `cx.update`, which sets `pending.drift_query` and calls `cx.notify()` so
-    /// the render loop picks it up.
-    fn start_drift_preflight(
-        &mut self,
-        origin: ExecutionOrigin,
-        query: String,
-        in_new_tab: bool,
-        read_only: ReadOnlyEnforcement,
-        cx: &mut Context<Self>,
-    ) {
-        // Consent is read when the user starts the run, not after the
-        // preflight or the drift modal, so a level change in between cannot
-        // credit this query.
+        // Consent is read when the user starts the run.
         let usage_ticket = self.capture_usage_ticket(origin, cx);
-        let Some(conn_id) = self.connection_id else {
-            // No connection — nothing to preflight; execute directly via pending.
-            self.pending.drift_query = Some(PendingDriftQuery {
-                origin,
-                query,
-                in_new_tab,
-                action: DriftAction::ExecuteNow,
-                cache_updates: Vec::new(),
-                read_only,
-                usage_ticket,
-            });
-            cx.notify();
-            return;
-        };
-
-        let state = self.app_state.read(cx);
-        let connections = state.connections();
-        let Some(connected) = connections.get(&conn_id) else {
-            self.pending.drift_query = Some(PendingDriftQuery {
-                origin,
-                query,
-                in_new_tab,
-                action: DriftAction::ExecuteNow,
-                cache_updates: Vec::new(),
-                read_only,
-                usage_ticket,
-            });
-            cx.notify();
-            return;
-        };
-
-        let connection = connected.connection.clone();
-        let table_details = connected.table_details.clone();
-
-        let database = self
-            .source
-            .exec_ctx
-            .database
-            .clone()
-            .or_else(|| connected.active_database.clone())
-            .or_else(|| {
-                connected
-                    .schema
-                    .as_ref()
-                    .and_then(|s| s.current_database().map(String::from))
-            });
-
-        let database = match database {
-            Some(database) => database,
-            // Without a database there is no valid fetch key. On
-            // lazy-per-database drivers a fabricated name reaches real
-            // queries (`` `default`.`table` ``), so skip the preflight;
-            // single-catalog drivers ignore the database argument.
-            None if connected.connection.schema_loading_strategy()
-                == dbflux_core::SchemaLoadingStrategy::LazyPerDatabase =>
-            {
-                self.pending.drift_query = Some(PendingDriftQuery {
-                    origin,
-                    query,
-                    in_new_tab,
-                    action: DriftAction::ExecuteNow,
-                    cache_updates: Vec::new(),
-                    read_only,
-                    usage_ticket,
-                });
-                cx.notify();
-                return;
-            }
-            None => "default".to_string(),
-        };
-
-        let default_schema = self.source.exec_ctx.schema.clone();
-
-        self.drift.preflight_running = true;
-        cx.notify();
-
-        let query_capture = query.clone();
-
-        let task = cx.background_executor().spawn(async move {
-            check_schema_drift(
-                &connection,
-                &table_details,
-                &query,
-                &database,
-                default_schema.as_deref(),
-            )
-        });
-
-        cx.spawn(async move |this, cx| {
-            let outcome = task.await;
-
-            let _ = this.update(cx, |doc, cx| {
-                doc.drift.preflight_running = false;
-
-                match outcome {
-                    DriftOutcome::Skip => {
-                        // Driver doesn't support table parsing — execute directly.
-                        doc.pending.drift_query = Some(PendingDriftQuery {
-                            origin,
-                            query: query_capture,
-                            in_new_tab,
-                            action: DriftAction::ExecuteNow,
-                            cache_updates: Vec::new(),
-                            read_only,
-                            usage_ticket,
-                        });
-                    }
-
-                    DriftOutcome::Refresh(entries) => {
-                        // No drift — schedule transparent cache update then execute.
-                        doc.pending.drift_query = Some(PendingDriftQuery {
-                            origin,
-                            query: query_capture,
-                            in_new_tab,
-                            action: DriftAction::ExecuteNow,
-                            cache_updates: entries,
-                            read_only,
-                            usage_ticket,
-                        });
-                    }
-
-                    DriftOutcome::Drift(detected) => {
-                        // Build cache updates from unchanged tables, then add
-                        // per-diff fresh infos so "Refresh & re-run" updates them.
-                        let mut all_updates = detected.refreshes.clone();
-                        for diff in &detected.diffs {
-                            let effective_db = diff
-                                .table
-                                .database
-                                .clone()
-                                .unwrap_or_else(|| "default".to_string());
-                            let schema = diff
-                                .table
-                                .schema
-                                .clone()
-                                .or_else(|| diff.fresh.schema.clone());
-                            all_updates.push((
-                                (effective_db, schema, diff.table.table.clone()),
-                                diff.fresh.clone(),
-                            ));
-                        }
-
-                        doc.pending.drift_query = Some(PendingDriftQuery {
-                            origin,
-                            query: query_capture,
-                            in_new_tab,
-                            action: DriftAction::Pending,
-                            cache_updates: all_updates,
-                            read_only,
-                            usage_ticket,
-                        });
-
-                        doc.drift.schema_drift_modal.update(cx, |modal, cx| {
-                            modal.open(detected, cx);
-                        });
-                    }
-                }
-
-                cx.notify();
-            });
-        })
-        .detach();
+        self.execute_query_internal(usage_ticket, query, in_new_tab, read_only, window, cx);
     }
 
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -1593,6 +1409,42 @@ impl CodeDocument {
     }
 
     /// Process pending query result (called from render where we have window access).
+    /// A DDL statement that ran changes tables the parser does not name, so
+    /// the connection's cached table details are dropped whole.
+    fn drop_cached_details_after_ddl(
+        app_state: &Entity<AppStateEntity>,
+        connection_id: Option<Uuid>,
+        query: &str,
+        cx: &mut App,
+    ) {
+        let Some(connection_id) = connection_id else {
+            return;
+        };
+
+        let is_ddl = app_state
+            .read(cx)
+            .connections()
+            .get(&connection_id)
+            .is_some_and(|connected| {
+                matches!(
+                    dbflux_core::classify_query_for_language_with_service(
+                        &connected.connection.metadata().query_language,
+                        query,
+                        Some(connected.connection.language_service()),
+                    ),
+                    dbflux_core::ExecutionClassification::AdminSafe
+                        | dbflux_core::ExecutionClassification::Admin
+                        | dbflux_core::ExecutionClassification::AdminDestructive
+                )
+            });
+
+        if is_ddl {
+            app_state.update(cx, |state, _| {
+                state.clear_table_details(connection_id);
+            });
+        }
+    }
+
     pub(super) fn process_pending_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pending) = self.pending.result.take() else {
             return;
@@ -1642,6 +1494,20 @@ impl CodeDocument {
                 }
 
                 self.runner.complete_primary(pending.task_id, cx);
+
+                if !is_script {
+                    let connection_id = pending
+                        .origin
+                        .as_ref()
+                        .map(|origin| origin.connection_id)
+                        .or(self.connection_id);
+                    Self::drop_cached_details_after_ddl(
+                        &self.app_state,
+                        connection_id,
+                        &pending.query,
+                        cx,
+                    );
+                }
 
                 // Use affected_rows when available (INSERT/UPDATE/DELETE), otherwise rows.len() (SELECT)
                 let affected_rows = qr.affected_rows;
@@ -3027,119 +2893,6 @@ impl CodeDocument {
         })
         .detach();
     }
-
-    /// Handle "Refresh and re-run": apply the pre-fetched fresh table details
-    /// to the cache, close the modal, then queue execution via the render loop.
-    ///
-    /// The fresh `TableInfo` for both changed and unchanged tables was already
-    /// captured during the drift preflight and stored in `pending.drift_query`.
-    pub(super) fn on_schema_drift_refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending.drift_query.take() else {
-            return;
-        };
-
-        let Some(conn_id) = self.connection_id else {
-            return;
-        };
-
-        // Apply all fresh table details (changed + unchanged) to the cache.
-        if !pending.cache_updates.is_empty() {
-            self.app_state.update(cx, |state, _cx| {
-                if let Some(connected) = state.connections_mut().get_mut(&conn_id) {
-                    for (key, info) in &pending.cache_updates {
-                        connected.table_details.insert(key.clone(), info.clone());
-                    }
-                }
-            });
-        }
-
-        self.drift.schema_drift_modal.update(cx, |modal, cx| {
-            modal.close(cx);
-        });
-
-        self.pending.drift_query = Some(PendingDriftQuery {
-            origin: pending.origin,
-            query: pending.query,
-            in_new_tab: pending.in_new_tab,
-            action: DriftAction::ExecuteNow,
-            cache_updates: Vec::new(),
-            read_only: pending.read_only,
-            usage_ticket: pending.usage_ticket,
-        });
-
-        cx.notify();
-    }
-
-    /// Handle "Continue with stale schema": mark the pending query so the render
-    /// loop picks it up and calls `execute_query_internal` with window access.
-    pub(super) fn on_schema_drift_continue(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut pending) = self.pending.drift_query {
-            pending.action = DriftAction::ContinueStale;
-        }
-
-        self.drift.schema_drift_modal.update(cx, |modal, cx| {
-            modal.close(cx);
-        });
-
-        cx.notify();
-    }
-
-    /// Process a pending drift action (called from render where window is available).
-    ///
-    /// Must be called via the `pending_*` + `.take()` pattern in the render method to
-    /// avoid multiple borrows.
-    pub(super) fn process_pending_drift_continue(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(pending) = self.pending.drift_query.take() else {
-            return;
-        };
-
-        match pending.action {
-            DriftAction::Pending => {
-                // Modal not yet answered — put it back and wait.
-                self.pending.drift_query = Some(pending);
-            }
-
-            DriftAction::ExecuteNow => {
-                // Transparent refresh: apply cache updates then execute.
-                if !pending.cache_updates.is_empty()
-                    && let Some(conn_id) = self.connection_id
-                {
-                    self.app_state.update(cx, |state, _cx| {
-                        if let Some(connected) = state.connections_mut().get_mut(&conn_id) {
-                            for (key, info) in &pending.cache_updates {
-                                connected.table_details.insert(key.clone(), info.clone());
-                            }
-                        }
-                    });
-                }
-
-                self.execute_query_internal(
-                    pending.usage_ticket,
-                    pending.query,
-                    pending.in_new_tab,
-                    pending.read_only,
-                    window,
-                    cx,
-                );
-            }
-
-            DriftAction::ContinueStale => {
-                // User chose to proceed without updating the cache.
-                self.execute_query_internal(
-                    pending.usage_ticket,
-                    pending.query,
-                    pending.in_new_tab,
-                    pending.read_only,
-                    window,
-                    cx,
-                );
-            }
-        }
-    }
 }
 
 /// Reads the single value a `COUNT(*)` query returns as a row count.
@@ -3595,79 +3348,6 @@ mod tests {
         assert_eq!(
             request.sql, query,
             "SQL language must pass through unchanged"
-        );
-    }
-
-    /// Writing to `PendingActions::drift_query` and then reading it back
-    /// returns the stored value. This exercises the re-entrant write/read path
-    /// that the background drift-preflight task uses: the task writes via
-    /// `cx.update` and the next render cycle reads the same field.
-    #[test]
-    fn drift_query_written_is_readable_on_next_read() {
-        use super::{DriftAction, PendingActions, PendingDriftQuery};
-
-        let mut pending = PendingActions::default();
-
-        assert!(
-            pending.drift_query.is_none(),
-            "drift_query must be None after default construction"
-        );
-
-        pending.drift_query = Some(PendingDriftQuery {
-            origin: super::ExecutionOrigin::User,
-            query: "SELECT 1".to_string(),
-            in_new_tab: false,
-            action: DriftAction::Pending,
-            cache_updates: Vec::new(),
-            read_only: dbflux_core::ReadOnlyEnforcement::None,
-            usage_ticket: None,
-        });
-
-        assert!(
-            pending.drift_query.is_some(),
-            "drift_query must be Some after background-task-style write"
-        );
-
-        let stored = pending.drift_query.as_ref().unwrap();
-        assert_eq!(stored.query, "SELECT 1");
-        assert_eq!(stored.action, DriftAction::Pending);
-    }
-
-    /// When `process_pending_drift_continue` encounters a `Pending` action
-    /// it must put the value back rather than consuming it, so the next render
-    /// cycle can check it again. This verifies the put-back invariant without
-    /// requiring a full GPUI harness by inspecting `PendingActions` directly.
-    #[test]
-    fn drift_query_with_pending_action_survives_put_back() {
-        use super::{DriftAction, PendingActions, PendingDriftQuery};
-
-        let mut pending = PendingActions {
-            drift_query: Some(PendingDriftQuery {
-                origin: super::ExecutionOrigin::User,
-                query: "SELECT 2".to_string(),
-                in_new_tab: true,
-                action: DriftAction::Pending,
-                cache_updates: Vec::new(),
-                read_only: dbflux_core::ReadOnlyEnforcement::None,
-                usage_ticket: None,
-            }),
-            ..Default::default()
-        };
-
-        // Simulate the put-back logic: take the value, inspect action, re-store.
-        let taken = pending.drift_query.take().unwrap();
-        assert_eq!(taken.action, DriftAction::Pending);
-
-        pending.drift_query = Some(taken);
-
-        assert!(
-            pending.drift_query.is_some(),
-            "drift_query must be re-stored when action is Pending"
-        );
-        assert_eq!(
-            pending.drift_query.as_ref().unwrap().query,
-            "SELECT 2",
-            "stored query must be preserved across the put-back"
         );
     }
 
@@ -4860,6 +4540,84 @@ mod auto_refresh_tests {
         document: &Entity<CodeDocument>,
     ) -> bool {
         window.update(|_, cx| document.read(cx).pending.dangerous_query.is_some())
+    }
+
+    fn seed_table_details(window: &mut VisualTestContext, document: &Entity<CodeDocument>) {
+        window.update(|_, cx| {
+            let app_state = document.read(cx).app_state.clone();
+            let profile_id = document.read(cx).connection_id.expect("connected");
+            app_state.update(cx, |app, _| {
+                app.set_table_details(
+                    profile_id,
+                    "main".to_string(),
+                    None,
+                    "users".to_string(),
+                    dbflux_core::TableInfo {
+                        name: "users".to_string(),
+                        schema: None,
+                        columns: Some(Vec::new()),
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: Default::default(),
+                        child_items: None,
+                        storage_hints: None,
+                        pseudo_columns: Box::default(),
+                    },
+                );
+            });
+        });
+    }
+
+    fn has_cached_table_details(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+    ) -> bool {
+        window.update(|_, cx| {
+            let profile_id = document.read(cx).connection_id.expect("connected");
+            document
+                .read(cx)
+                .app_state
+                .read(cx)
+                .get_table_details(profile_id, "main", None, "users")
+                .is_some()
+        })
+    }
+
+    #[gpui::test]
+    fn a_ddl_run_from_the_editor_drops_the_connections_cached_table_details(
+        cx: &mut TestAppContext,
+    ) {
+        for ddl in [
+            "CREATE TABLE t (id INTEGER)",
+            "CREATE INDEX users_name ON users (name)",
+        ] {
+            let driver = FakeDriver::new(DbKind::SQLite);
+            let (document, _toasts, window) = open_connected(cx, &driver, ddl);
+            seed_table_details(window, &document);
+            assert!(has_cached_table_details(window, &document));
+
+            run_query(window, &document);
+
+            assert!(!executed(&driver).is_empty(), "{ddl} must have run");
+            assert!(
+                !has_cached_table_details(window, &document),
+                "{ddl} must drop the cached details"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn a_select_run_from_the_editor_keeps_the_cached_table_details(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, _toasts, window) = open_connected(cx, &driver, "SELECT 1");
+        seed_table_details(window, &document);
+
+        run_query(window, &document);
+
+        assert_eq!(executed(&driver).len(), 1);
+        assert!(has_cached_table_details(window, &document));
     }
 
     #[gpui::test]

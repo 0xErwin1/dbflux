@@ -1124,6 +1124,11 @@ impl AppState {
             .invalidate_table_details(profile_id, database, schema, table)
     }
 
+    /// Drops every cached table's details and dependents of one connection.
+    pub fn clear_table_details(&mut self, profile_id: Uuid) -> bool {
+        self.facade.connections.clear_table_details(profile_id)
+    }
+
     /// Prepares a session-fenced table-details fetch for the shared object
     /// tree. The consumer must validate and write details and dependents in
     /// ONE synchronous update via [`AppState::apply_fetched_table_details`].

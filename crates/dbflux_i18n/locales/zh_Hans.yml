@@ -1277,7 +1277,6 @@ document:
         many: "%{count} 条语句"
       refresh: 刷新
       cancel: 取消
-      checking: 正在检查…
       run: 执行
       read_only: 只读
       saved: 已保存
@@ -4359,8 +4358,6 @@ modals:
     cancel: 取消
     confirm: 重命名
   schema_drift:
-    lead: "%{table} 与缓存的架构不同。"
-    title: 自此标签页打开以来 Schema 已发生更改
     column_header: 列
     local_header: 缓存
     remote_header: 当前
@@ -4379,10 +4376,7 @@ modals:
       primary_key: (主键)
       foreign_keys: (外键)
       nullable: 可空
-    continue_stale: 继续使用过期 Schema
     cancel: 取消
-    refreshing: 正在刷新…
-    refresh: 刷新并重新执行
     edit:
       title: "该表在加载后已发生变化"
       pk_lead: "%{table} 的主键已不是此网格保存时使用的主键，因此未发送任何内容。"

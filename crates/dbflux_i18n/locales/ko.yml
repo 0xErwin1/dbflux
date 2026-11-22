@@ -1277,7 +1277,6 @@ document:
         many: "문 %{count}개"
       refresh: 새로고침
       cancel: 취소
-      checking: "확인 중…"
       run: 실행
       read_only: 읽기 전용
       saved: 저장됨
@@ -4359,8 +4358,6 @@ modals:
     cancel: 취소
     confirm: 이름 바꾸기
   schema_drift:
-    lead: "%{table}이(가) 캐시된 스키마와 다릅니다."
-    title: 이 탭을 연 이후 스키마가 변경되었습니다
     column_header: 컬럼
     local_header: 캐시됨
     remote_header: 현재
@@ -4379,10 +4376,7 @@ modals:
       primary_key: (기본 키)
       foreign_keys: (외래 키)
       nullable: NULL 허용
-    continue_stale: 오래된 스키마로 계속
     cancel: 취소
-    refreshing: 새로고침 중…
-    refresh: 새로고침 후 다시 실행
     edit:
       title: "테이블을 불러온 이후 변경되었습니다"
       pk_lead: "%{table}의 기본 키가 이 그리드가 저장에 사용하는 키와 달라져 아무것도 전송하지 않았습니다."

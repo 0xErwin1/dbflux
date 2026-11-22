@@ -1274,7 +1274,6 @@ document:
         many: "%{count} instruções"
       refresh: Atualizar
       cancel: Cancelar
-      checking: "Verificando…"
       run: Executar
       read_only: Somente leitura
       saved: Salvo
@@ -4353,8 +4352,6 @@ modals:
     cancel: Cancelar
     confirm: Renomear
   schema_drift:
-    lead: "%{table} difere do schema em cache."
-    title: O schema mudou desde que esta aba foi aberta
     column_header: Coluna
     local_header: Em cache
     remote_header: Agora
@@ -4373,10 +4370,7 @@ modals:
       primary_key: (chave primária)
       foreign_keys: (chaves estrangeiras)
       nullable: anulável
-    continue_stale: Continuar com o schema desatualizado
     cancel: Cancelar
-    refreshing: Atualizando…
-    refresh: Atualizar e executar novamente
     edit:
       title: "A tabela mudou desde que foi carregada"
       pk_lead: "A chave primária de %{table} não é mais a que esta grade usa para salvar, então nada foi enviado."

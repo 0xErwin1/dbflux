@@ -1277,7 +1277,6 @@ document:
         many: "%{count} sentencias"
       refresh: Actualizar
       cancel: Cancelar
-      checking: "Verificando…"
       run: Ejecutar
       read_only: Solo lectura
       saved: Guardado
@@ -4359,8 +4358,6 @@ modals:
     cancel: Cancelar
     confirm: Renombrar
   schema_drift:
-    lead: "%{table} difiere del esquema en caché."
-    title: El esquema cambió desde que se abrió esta pestaña
     column_header: Columna
     local_header: En caché
     remote_header: Ahora
@@ -4379,10 +4376,7 @@ modals:
       primary_key: (clave primaria)
       foreign_keys: (claves foráneas)
       nullable: admite NULL
-    continue_stale: Continuar con el esquema desactualizado
     cancel: Cancelar
-    refreshing: Actualizando…
-    refresh: Actualizar y volver a ejecutar
     edit:
       title: "La tabla cambió desde que se cargó"
       pk_lead: "La clave primaria de %{table} ya no es la que usa esta grilla para guardar, así que no se envió nada."

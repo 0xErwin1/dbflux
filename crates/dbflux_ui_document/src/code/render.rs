@@ -67,8 +67,7 @@ impl CodeDocument {
                     Command::RunQuery,
                     context,
                 )
-                .icon(AppIcon::Play)
-                .enabled(!self.drift.preflight_running),
+                .icon(AppIcon::Play),
             );
         }
 
@@ -294,29 +293,14 @@ impl CodeDocument {
 
         let theme = cx.theme().clone();
         let is_executing = self.state == DocumentState::Executing;
-        let is_preflight = self.drift.preflight_running;
         let is_db_language = self.supports_connection_context();
         let history_open = self.history.history_panel.read(cx).is_visible();
         let can_format = self.can_format(cx);
 
-        let (run_icon, run_label, run_enabled) = if is_executing {
-            (
-                AppIcon::X,
-                dbflux_i18n::t!("document.code.toolbar.cancel"),
-                true,
-            )
-        } else if is_preflight {
-            (
-                AppIcon::Loader,
-                dbflux_i18n::t!("document.code.toolbar.checking"),
-                false,
-            )
+        let (run_icon, run_label) = if is_executing {
+            (AppIcon::X, dbflux_i18n::t!("document.code.toolbar.cancel"))
         } else {
-            (
-                AppIcon::Play,
-                dbflux_i18n::t!("document.code.toolbar.run"),
-                true,
-            )
+            (AppIcon::Play, dbflux_i18n::t!("document.code.toolbar.run"))
         };
 
         // Keep this shortcut in sync with the RunQuery binding (Cmd+Enter on
@@ -326,7 +310,7 @@ impl CodeDocument {
         #[cfg(not(target_os = "macos"))]
         let run_shortcut = "Ctrl \u{21B5}";
 
-        let run_tooltip: SharedString = if is_executing || is_preflight {
+        let run_tooltip: SharedString = if is_executing {
             run_label.clone().into()
         } else {
             format!("{run_label} ({run_shortcut})").into()
@@ -358,7 +342,6 @@ impl CodeDocument {
                     } else {
                         ButtonVariant::Primary
                     })
-                    .disabled(!run_enabled)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if this.state == DocumentState::Executing {
                             this.cancel_query(cx);
@@ -1163,8 +1146,6 @@ impl Render for CodeDocument {
             self.focus(window, cx);
         }
 
-        self.process_pending_drift_continue(window, cx);
-
         if let Some((start_value, end_value)) = self.pending.source_input_values.take() {
             // Each `set_value` emits an `InputEvent::Change`; mark both as
             // seed-originated so the subscription handler skips them.
@@ -1270,7 +1251,6 @@ impl Render for CodeDocument {
         let bg = cx.theme().background;
         let has_collapsed_results =
             self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.result_tabs.is_empty();
-        let drift_modal_visible = self.drift.schema_drift_modal.read(cx).is_visible();
 
         div()
             .id(ElementId::Name(format!("sql-doc-{}", self.id.0).into()))
@@ -1340,9 +1320,6 @@ impl Render for CodeDocument {
             })
             .when(self.pending.script_confirm.is_some(), |el| {
                 el.child(self.render_script_confirm_modal(cx))
-            })
-            .when(drift_modal_visible, |el| {
-                el.child(self.drift.schema_drift_modal.clone())
             })
     }
 }

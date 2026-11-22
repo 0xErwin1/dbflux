@@ -383,6 +383,7 @@ impl Workspace {
                         if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
                             connected.schema = Some(schema);
                         }
+                        state.clear_table_details(profile_id);
                         cx.emit(AppStateChanged);
                     });
                 }

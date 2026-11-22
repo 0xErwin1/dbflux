@@ -2387,6 +2387,27 @@ impl ConnectionManager {
         true
     }
 
+    /// Drops every cached table's details and dependents for one connection,
+    /// fencing their older in-flight fetches. For the changes that name no
+    /// table: a schema refresh, or DDL whose target tables are unknown.
+    /// Returns `false` when the profile is not connected.
+    pub fn clear_table_details(&mut self, profile_id: Uuid) -> bool {
+        let Some(connected) = self.connections.get(&profile_id) else {
+            return false;
+        };
+        let keys: Vec<(String, Option<String>, String)> = connected
+            .table_details
+            .keys()
+            .chain(connected.dependents_cache.keys())
+            .cloned()
+            .collect();
+
+        for (database, schema, table) in keys {
+            self.invalidate_table_details(profile_id, &database, schema.as_deref(), &table);
+        }
+        true
+    }
+
     /// Prepares a fenced table-details fetch for the shared object tree.
     /// Unlike the legacy [`ConnectionManager::prepare_fetch_table_details`],
     /// the request is bound to the session and to the connection resolved
@@ -6069,6 +6090,64 @@ mod tests {
         let disconnected =
             manager.prepare_refetch_table_details(Uuid::new_v4(), "app", None, "users");
         assert!(matches!(disconnected, Err(PrepareFetchError::Failed(_))));
+    }
+
+    #[test]
+    fn clearing_table_details_drops_details_and_dependents_of_that_connection_only() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let details = |name: &str| TableInfo {
+            name: name.to_string(),
+            schema: None,
+            columns: Some(Vec::new()),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+            pseudo_columns: Box::default(),
+        };
+        for table in ["users", "orders"] {
+            manager.set_table_details(
+                profile.id,
+                "app".to_string(),
+                None,
+                table.to_string(),
+                details(table),
+            );
+            manager.set_dependents(
+                profile.id,
+                "app".to_string(),
+                None,
+                table.to_string(),
+                vec![],
+            );
+        }
+
+        assert!(manager.clear_table_details(profile.id));
+
+        for table in ["users", "orders"] {
+            assert!(
+                manager
+                    .get_table_details(profile.id, "app", None, table)
+                    .is_none(),
+                "{table} details must be gone"
+            );
+        }
+        assert!(
+            manager
+                .prepare_fetch_table_details(profile.id, "app", None, "users")
+                .is_ok(),
+            "a cleared table is fetched again"
+        );
+        assert!(!manager.clear_table_details(Uuid::new_v4()));
     }
 
     #[test]

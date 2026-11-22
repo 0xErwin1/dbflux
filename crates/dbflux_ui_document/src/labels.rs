@@ -4448,7 +4448,6 @@ mod tests {
         let keys = [
             "document.code.toolbar.refresh",
             "document.code.toolbar.cancel",
-            "document.code.toolbar.checking",
             "document.code.toolbar.run",
             "document.code.toolbar.run_in_new_tab",
             "document.code.toolbar.read_only",

@@ -6,7 +6,6 @@ use crate::primitives::{Badge, BadgeTone};
 use crate::tokens::{ChromeColors, ModalMetrics};
 use dbflux_core::{
     ColumnSnapshot, IndexSnapshot, LogErr, PrimaryKeyCheck, QueryTableRef, SchemaChange,
-    SchemaDriftDetected,
 };
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -18,34 +17,21 @@ const SCHEMA_DRIFT_WIDTH: Pixels = px(640.0);
 const DRIFT_NAME_WIDTH: Pixels = px(140.0);
 const DRIFT_NOTE_WIDTH: Pixels = px(150.0);
 
-/// Event emitted when the user clicks "Refresh and re-run", or "Reload table"
-/// in edit mode.
+/// Event emitted when the user clicks "Reload table".
 #[derive(Clone, Debug)]
 pub struct SchemaDriftRefresh;
-
-/// Event emitted when the user clicks "Continue with stale schema".
-#[derive(Clone, Debug)]
-pub struct SchemaDriftContinue;
 
 /// Event emitted when the user dismisses the modal (close button / ESC).
 #[derive(Clone, Debug)]
 pub struct SchemaDriftDismissed;
 
-/// Modal body for schema-drift notification.
+/// Modal shown when a save, delete or mutation was stopped because the
+/// table's primary key changed (or the table is gone) since the grid loaded it.
 ///
-/// Presents a per-table diff table with column-level changes highlighted
-/// in amber. Footer offers two primary actions: refresh-and-rerun or
-/// continue with the stale schema.
-///
-/// This is an `Entity<ModalSchemaDrift>` rendered inside a `Modal`
-/// by the code document's render loop via the `pending_schema_drift` pattern.
-///
-/// An edit-guard drift (see [`ModalSchemaDrift::open_for_edit`]) reuses the
-/// modal for a table whose primary key changed under staged edits. It offers
-/// "Reload table" and "Cancel" only, because nothing about the old key can be
-/// trusted to run.
+/// It offers "Reload table" and "Cancel" only: nothing about the old key can
+/// be trusted to run. Rendered as an `Entity<ModalSchemaDrift>` by the data
+/// grid.
 pub struct ModalSchemaDrift {
-    drift: Option<SchemaDriftDetected>,
     edit: Option<EditDrift>,
     visible: bool,
     loading: bool,
@@ -69,7 +55,6 @@ enum EditDriftChange {
 impl ModalSchemaDrift {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            drift: None,
             edit: None,
             visible: false,
             loading: false,
@@ -81,16 +66,7 @@ impl ModalSchemaDrift {
         self.visible
     }
 
-    /// Open the modal with the given drift payload.
-    pub fn open(&mut self, drift: SchemaDriftDetected, cx: &mut Context<Self>) {
-        self.drift = Some(drift);
-        self.visible = true;
-        self.loading = false;
-        self.focus.focus_on_next_render();
-        cx.notify();
-    }
-
-    /// Open the modal in edit mode: a save was stopped because `check` found
+    /// Open the modal: a save was stopped because `check` found
     /// the table's key changed or the table gone. Does nothing for
     /// [`PrimaryKeyCheck::Same`], which is not a drift.
     pub fn open_for_edit(
@@ -107,7 +83,6 @@ impl ModalSchemaDrift {
             PrimaryKeyCheck::TableGone => EditDriftChange::TableGone,
         };
 
-        self.drift = None;
         self.edit = Some(EditDrift { table, change });
         self.visible = true;
         self.loading = false;
@@ -117,14 +92,13 @@ impl ModalSchemaDrift {
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
-        self.drift = None;
         self.edit = None;
         self.loading = false;
         self.focus.restore(cx);
         cx.notify();
     }
 
-    /// Start the refresh, as the Refresh button does. Does nothing while a
+    /// Start the reload, as the Reload table button does. Does nothing while a
     /// refresh is already running.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.loading {
@@ -156,98 +130,11 @@ impl Render for ModalSchemaDrift {
 
         self.focus.apply_pending(window, cx);
 
-        if let Some(edit) = &self.edit {
-            return self.render_edit(edit, window, cx);
-        }
-
-        let Some(ref drift) = self.drift else {
+        let Some(edit) = &self.edit else {
             return div().into_any_element();
         };
 
-        let loading = self.loading;
-
-        let mut body = div().flex().flex_col().gap(ModalMetrics::BODY_GAP);
-
-        for diff in &drift.diffs {
-            body = body
-                .child(modal_lead(
-                    dbflux_i18n::t!(
-                        "modals.schema_drift.lead",
-                        table = format_table_ref(&diff.table)
-                    ),
-                    cx,
-                ))
-                .child(render_diff_table(&diff.changes, cx));
-        }
-
-        let on_continue = cx.listener(|this, _event: &gpui::ClickEvent, _, cx| {
-            cx.emit(SchemaDriftContinue);
-            this.close(cx);
-        });
-
-        let on_refresh = cx.listener(|this, _event: &gpui::ClickEvent, _, cx| {
-            this.refresh(cx);
-        });
-
-        let on_close = cx.listener(|this, _event: &gpui::ClickEvent, _, cx| {
-            this.dismiss(cx);
-        });
-
-        let refresh_label = if loading {
-            dbflux_i18n::t!("modals.schema_drift.refreshing")
-        } else {
-            dbflux_i18n::t!("modals.schema_drift.refresh")
-        };
-
-        let footer = div()
-            .flex()
-            .items_center()
-            .gap(ModalMetrics::FOOTER_GAP)
-            .child(
-                Button::new(
-                    "drift-continue",
-                    dbflux_i18n::t!("modals.schema_drift.continue_stale"),
-                )
-                .on_click(on_continue),
-            )
-            .child(
-                Button::new("drift-close", dbflux_i18n::t!("modals.schema_drift.cancel"))
-                    .on_click(on_close),
-            )
-            .child(
-                Button::new("drift-refresh", refresh_label)
-                    .primary()
-                    .icon(if loading {
-                        AppIcon::Loader
-                    } else {
-                        AppIcon::RefreshCcw
-                    })
-                    .disabled(loading)
-                    .on_click(on_refresh),
-            );
-
-        Modal::new(dbflux_i18n::t!("modals.schema_drift.title"))
-            .body(body)
-            .footer(footer)
-            .icon(AppIcon::CircleAlert)
-            .icon_color(cx.theme().warning)
-            .variant(ModalVariant::Default)
-            .width(SCHEMA_DRIFT_WIDTH)
-            .focus_handle(self.focus.handle())
-            .on_close({
-                let entity = cx.entity().downgrade();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| this.dismiss(cx)).log_err();
-                }
-            })
-            .on_confirm({
-                let entity = cx.entity().downgrade();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| this.refresh(cx)).log_err();
-                }
-            })
-            .confirm_enabled(!loading)
-            .into_any_element()
+        self.render_edit(edit, window, cx)
     }
 }
 
@@ -340,7 +227,6 @@ impl ModalSchemaDrift {
 }
 
 impl EventEmitter<SchemaDriftRefresh> for ModalSchemaDrift {}
-impl EventEmitter<SchemaDriftContinue> for ModalSchemaDrift {}
 impl EventEmitter<SchemaDriftDismissed> for ModalSchemaDrift {}
 
 fn format_table_ref(table_ref: &QueryTableRef) -> String {
@@ -516,8 +402,6 @@ mod tests {
     #[test]
     fn schema_drift_keys_resolve_in_both_locales() {
         let keys = [
-            "modals.schema_drift.title",
-            "modals.schema_drift.lead",
             "modals.schema_drift.column_header",
             "modals.schema_drift.local_header",
             "modals.schema_drift.remote_header",
@@ -535,10 +419,7 @@ mod tests {
             "modals.schema_drift.change.primary_key",
             "modals.schema_drift.change.foreign_keys",
             "modals.schema_drift.change.nullable",
-            "modals.schema_drift.continue_stale",
             "modals.schema_drift.cancel",
-            "modals.schema_drift.refreshing",
-            "modals.schema_drift.refresh",
             "modals.schema_drift.edit.title",
             "modals.schema_drift.edit.pk_lead",
             "modals.schema_drift.edit.gone_lead",
@@ -558,15 +439,6 @@ mod tests {
                 "es missing for {key}, got {es:?}"
             );
         }
-    }
-
-    #[test]
-    fn schema_drift_refresh_differs_between_locales() {
-        let en = dbflux_i18n::t!("modals.schema_drift.refresh", locale = "en");
-        let es = dbflux_i18n::t!("modals.schema_drift.refresh", locale = "es");
-        assert_eq!(en, "Refresh and run again");
-        assert_eq!(es, "Actualizar y volver a ejecutar");
-        assert_ne!(en, es);
     }
 
     #[test]
