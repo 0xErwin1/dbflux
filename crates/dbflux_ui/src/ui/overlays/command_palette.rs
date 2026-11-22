@@ -359,6 +359,7 @@ fn command_icon(id: &str) -> AppIcon {
         "save_query" | "save_file_as" => AppIcon::Save,
         "open_script_file" | "add_external_scripts_folder" => AppIcon::Folder,
         "toggle_comment" | "focus_editor" => AppIcon::Code,
+        "format_query" => AppIcon::Zap,
         "open_history" => AppIcon::History,
         "cancel_query" | "close_tab" => AppIcon::CircleX,
         "next_tab" => AppIcon::ChevronRight,

@@ -1283,6 +1283,7 @@ document:
       read_only: Solo lectura
       saved: Guardado
       save: Guardar
+      format: Formatear
       formatter_unavailable: Formateador no disponible
       query_history: Historial de consultas
       explain_query: Explicar consulta
@@ -4465,6 +4466,8 @@ palette:
       name: "Agregar carpeta externa de scripts…"
     toggle_comment:
       name: Alternar comentario
+    format_query:
+      name: Formatear consulta
     open_history:
       name: Abrir historial de consultas
     cancel_query:
@@ -4883,6 +4886,7 @@ settings:
       open_script_file: Abrir archivo de script…
       add_external_scripts_folder: "Agregar carpeta externa de scripts…"
       toggle_comment: Alternar comentario
+      format_query: Formatear consulta
       export_results: Exportar resultados
       clear_filter: Limpiar filtro
       next_result_tab: Siguiente pestaña de resultados

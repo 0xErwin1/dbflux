@@ -27,7 +27,10 @@ pub(crate) const CODE_EDITOR_CHROME: SurfaceRegistry = SurfaceRegistry {
         ("toolbar-history-btn", KeyboardPath::Menu("history")),
         ("toolbar-explain-btn", KeyboardPath::Menu("explain")),
         ("toolbar-chart-btn", KeyboardPath::Menu("chart")),
-        ("toolbar-format-btn", KeyboardPath::Menu("format")),
+        (
+            "toolbar-format-btn",
+            KeyboardPath::Command(Command::FormatQuery),
+        ),
         ("sql-refresh-action", KeyboardPath::Menu("refresh")),
         ("sql-auto-refresh.*", KeyboardPath::Menu("auto-refresh")),
         (

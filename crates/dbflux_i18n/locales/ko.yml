@@ -1283,6 +1283,7 @@ document:
       read_only: 읽기 전용
       saved: 저장됨
       save: 저장
+      format: 서식 지정
       formatter_unavailable: 포매터를 사용할 수 없음
       query_history: 쿼리 기록
       explain_query: 쿼리 실행 계획
@@ -4465,6 +4466,8 @@ palette:
       name: "외부 스크립트 폴더 추가…"
     toggle_comment:
       name: 주석 전환
+    format_query:
+      name: 쿼리 서식 지정
     open_history:
       name: 쿼리 기록 열기
     cancel_query:
@@ -4883,6 +4886,7 @@ settings:
       open_script_file: 스크립트 파일 열기…
       add_external_scripts_folder: "외부 스크립트 폴더 추가…"
       toggle_comment: 주석 전환
+      format_query: 쿼리 서식 지정
       export_results: 결과 내보내기
       clear_filter: 필터 지우기
       next_result_tab: 다음 결과 탭

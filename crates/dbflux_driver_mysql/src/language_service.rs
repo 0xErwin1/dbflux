@@ -1,5 +1,6 @@
 use dbflux_core::{
-    DangerousQueryKind, EditorDiagnostic, LanguageService, ValidationResult, detect_dangerous_sql,
+    DangerousQueryKind, EditorDiagnostic, LanguageService, SqlFormatDialect, ValidationResult,
+    detect_dangerous_sql, format_sql_text,
 };
 
 /// Language service for MySQL and MariaDB.
@@ -27,11 +28,29 @@ impl LanguageService for MySqlLanguageService {
     fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
         Vec::new()
     }
+
+    fn can_format(&self) -> bool {
+        true
+    }
+
+    fn format(&self, text: &str) -> Option<String> {
+        format_sql_text(text, SqlFormatDialect::MySql)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_with_the_editor_rules() {
+        let svc = MySqlLanguageService;
+        assert!(svc.can_format());
+        assert_eq!(
+            svc.format("select `id` from t").as_deref(),
+            Some("SELECT\n  `id`\nFROM\n  t")
+        );
+    }
 
     #[test]
     fn validate_always_valid() {

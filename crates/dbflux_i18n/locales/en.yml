@@ -1283,6 +1283,7 @@ document:
       read_only: Read-only
       saved: Saved
       save: Save
+      format: Format
       formatter_unavailable: Formatter unavailable
       query_history: Query history
       explain_query: Explain query
@@ -4465,6 +4466,8 @@ palette:
       name: "Add external scripts folder…"
     toggle_comment:
       name: Toggle line comment
+    format_query:
+      name: Format query
     open_history:
       name: Open query history
     cancel_query:
@@ -4883,6 +4886,7 @@ settings:
       open_script_file: Open script file…
       add_external_scripts_folder: "Add external scripts folder…"
       toggle_comment: Toggle line comment
+      format_query: Format query
       export_results: Export results
       clear_filter: Clear filter
       next_result_tab: Next result tab

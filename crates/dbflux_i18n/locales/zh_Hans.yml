@@ -1283,6 +1283,7 @@ document:
       read_only: 只读
       saved: 已保存
       save: 保存
+      format: 格式化
       formatter_unavailable: 格式化程序不可用
       query_history: 查询历史
       explain_query: 解释查询
@@ -4465,6 +4466,8 @@ palette:
       name: "添加外部脚本文件夹…"
     toggle_comment:
       name: 切换注释
+    format_query:
+      name: 格式化查询
     open_history:
       name: 打开查询历史
     cancel_query:
@@ -4883,6 +4886,7 @@ settings:
       open_script_file: 打开脚本文件…
       add_external_scripts_folder: "添加外部脚本文件夹…"
       toggle_comment: 切换注释
+      format_query: 格式化查询
       export_results: 导出结果
       clear_filter: 清除筛选
       next_result_tab: 下一个结果标签页

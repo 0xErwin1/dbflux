@@ -19,12 +19,25 @@ use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::KeyContext;
 use gpui_component::scroll::ScrollableElement;
 
+/// The Format button's label: what it does, or why it is disabled.
+fn format_label(can_format: bool) -> String {
+    if can_format {
+        dbflux_i18n::t!("document.code.toolbar.format")
+    } else {
+        dbflux_i18n::t!("document.code.toolbar.formatter_unavailable")
+    }
+}
+
 impl CodeDocument {
     /// The toolbar as pane actions (see [`crate::pane::PaneAction`]): the
     /// same buttons, under the same conditions, so the whole toolbar is
     /// reachable from the pane-actions menu. `entity` is this document, for
     /// the entries that call back into it.
-    pub(crate) fn pane_actions(&self, entity: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+    pub(crate) fn pane_actions(
+        &self,
+        entity: &Entity<Self>,
+        cx: &App,
+    ) -> Vec<crate::pane::PaneAction> {
         use crate::pane::PaneAction;
 
         if self.read_only {
@@ -81,14 +94,16 @@ impl CodeDocument {
             .icon(AppIcon::Save),
         );
 
+        let can_format = self.can_format(cx);
         actions.push(
-            PaneAction::callback(
+            PaneAction::command(
                 "format",
-                dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
-                |_window, _cx| {},
+                format_label(can_format),
+                Command::FormatQuery,
+                context,
             )
             .icon(AppIcon::Zap)
-            .enabled(false),
+            .enabled(can_format),
         );
 
         actions.push(
@@ -282,6 +297,7 @@ impl CodeDocument {
         let is_preflight = self.drift.preflight_running;
         let is_db_language = self.supports_connection_context();
         let history_open = self.history.history_panel.read(cx).is_visible();
+        let can_format = self.can_format(cx);
 
         let (run_icon, run_label, run_enabled) = if is_executing {
             (
@@ -391,15 +407,15 @@ impl CodeDocument {
                 })),
             )
             .child(
-                Button::new(
-                    "toolbar-format-btn",
-                    dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
-                )
-                .icon(AppIcon::Zap)
-                .icon_only()
-                .inline()
-                .ghost()
-                .disabled(true),
+                Button::new("toolbar-format-btn", format_label(can_format))
+                    .icon(AppIcon::Zap)
+                    .icon_only()
+                    .inline()
+                    .ghost()
+                    .disabled(!can_format)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.format_query(window, cx);
+                    })),
             )
             .child(
                 Button::new(

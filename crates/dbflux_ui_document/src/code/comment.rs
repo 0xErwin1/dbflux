@@ -172,7 +172,7 @@ fn char_boundary(line: &str, column: usize) -> usize {
 }
 
 /// Convert a byte range into the UTF-16 offsets the editor's text APIs use.
-fn utf16_range(text: &str, range: &Range<usize>) -> Range<usize> {
+pub(super) fn utf16_range(text: &str, range: &Range<usize>) -> Range<usize> {
     let start = text[..range.start].chars().map(char::len_utf16).sum();
     let end = start
         + text[range.start..range.end]
@@ -284,7 +284,7 @@ impl CodeDocument {
         // clearing it here would be too early. Closing an open menu must not be
         // skipped with it, so that half of the cursor move happens here, before
         // the edit; only the reopening stays suppressed.
-        self.editor.toggling_comment = true;
+        self.editor.programmatic_edit = true;
         self.editor.input_state.update(cx, |state, cx| {
             let scroll_offset = state.scroll_offset();
             let cursor = state.cursor_position();

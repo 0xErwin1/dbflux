@@ -11,6 +11,7 @@ pub(crate) mod safety;
 pub(crate) mod script_operation;
 pub(crate) mod semantic;
 pub(crate) mod sql_context;
+pub(crate) mod sql_format;
 pub(crate) mod table_browser;
 pub(crate) mod time_macros;
 pub(crate) mod transfer;
@@ -66,6 +67,7 @@ pub use sql_context::{
     ScopeRelation, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,
     StatementScope,
 };
+pub use sql_format::{SqlFormatDialect, format_sql, format_sql_text};
 pub use table_browser::{
     CollectionBrowseRequest, CollectionCountEstimate, CollectionCountRequest, CollectionRef,
     ColumnRef, DescribeRequest, ExplainRequest, OrderByColumn, Pagination, SortDirection,

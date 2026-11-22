@@ -72,6 +72,7 @@ mod execution_session;
 mod file_ops;
 mod file_persistence;
 mod focus;
+mod format;
 mod live_output;
 pub(crate) mod pane;
 mod render;
@@ -414,9 +415,9 @@ pub(super) struct EditorState {
     pub(super) is_dirty: bool,
     /// Buffer length at the previous `Change` event, to detect deletions.
     pub(super) last_change_length: usize,
-    /// Set while `toggle_comment` rewrites the buffer, so the Change handler
+    /// Set while a command (comment toggle, Format) rewrites the buffer, so the Change handler
     /// skips the completion-menu plumbing meant for a user's deletion.
-    pub(super) toggling_comment: bool,
+    pub(super) programmatic_edit: bool,
     /// Shared with the completion provider, which bumps it on every query.
     /// A deletion that did NOT bump it was ignored by the menu plumbing
     /// (cursor deleted back past the menu's trigger start) and would leave a
@@ -867,7 +868,7 @@ impl CodeDocument {
                     // Consumed here, not cleared by the toggle itself: GPUI
                     // delivers `emit` after the outermost update finishes, so a
                     // toggle's Change arrives long after it returned.
-                    let toggled = std::mem::take(&mut this.editor.toggling_comment);
+                    let toggled = std::mem::take(&mut this.editor.programmatic_edit);
 
                     let generation = this.editor.completion_query_generation.get();
                     let provider_queried = generation != this.editor.last_completion_generation;
@@ -1218,7 +1219,7 @@ impl CodeDocument {
                 path: None,
                 is_dirty: false,
                 last_change_length: 0,
-                toggling_comment: false,
+                programmatic_edit: false,
                 completion_query_generation,
                 last_completion_generation: 0,
                 cached_effective_language: query_language.clone(),
@@ -2009,6 +2010,7 @@ impl CodeDocument {
                 true
             }
             Command::ToggleComment => self.toggle_comment(window, cx),
+            Command::FormatQuery => self.format_query(window, cx),
             Command::Cancel | Command::CancelQuery if self.runner.is_primary_active() => {
                 self.cancel_query(cx);
                 true

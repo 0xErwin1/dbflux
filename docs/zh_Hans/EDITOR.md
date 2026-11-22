@@ -39,6 +39,20 @@
   <img src="../images/editor/multi-statement-light.webp" alt="以脚本方式执行了三条语句的查询标签页，每条语句各有一个结果标签页">
 </picture>
 
+## 格式化
+
+- `Ctrl+Shift+F`（macOS 上为 `Cmd+Option+L`）— **格式化查询**。
+
+格式化也可以通过工具栏的格式化按钮、窗格操作菜单中的条目以及命令面板中的命令
+执行。有选区时，它重新格式化所选文本。没有选区时，它按与**运行查询**相同的边界
+格式化光标所在的语句，因此只有一条语句的缓冲区会整体格式化。要格式化所有语句，
+请先全选（`Ctrl+A`）。关键字变为大写，每个子句缩进两个空格。
+
+格式化可用于语言服务支持格式化的 SQL 连接：PostgreSQL、MySQL/MariaDB、SQLite、
+SQL Server 以及其他内置 SQL 驱动。脚本文档和其他查询语言的按钮保持禁用。
+在提供该操作的连接上，**Format statement** 代码操作（`Ctrl+.` / `Cmd+.`）仍会为
+光标所在的语句进行相同的更改。
+
 ## 危险查询确认
 
 DBFlux 会跨语言检测危险操作 — SQL 的 `DELETE`/`DROP`/`TRUNCATE` 以及不带 `WHERE` 的 `DELETE`/`UPDATE`、MongoDB 的 `deleteMany`/`drop`、Redis 的 `FLUSHALL`/`FLUSHDB`/`KEYS` — 并在执行前提示确认。该行为由设置控制：可以关闭 **确认危险查询**、可以要求 `DELETE`/`UPDATE` 必须带 `WHERE` 子句（**DELETE / UPDATE 需要 WHERE**），也可以完全禁用 Redis 的 `FLUSHALL`/`FLUSHDB`（此时这些命令会被直接阻止，而不是弹出确认）。

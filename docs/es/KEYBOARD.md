@@ -105,6 +105,7 @@ Cuando el árbol recibe el foco sin ninguna fila seleccionada, se vuelve a selec
 | `Ctrl+s` / `Cmd+s`             | Guardar query                            |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Guardar archivo como                     |
 | `Ctrl+/` / `Cmd+/`             | Alternar comentario de línea             |
+| `Ctrl+Shift+f` / `Cmd+Option+l` | Formatear la selección, o el statement bajo el cursor |
 | `Shift+F10`                    | Abrir el menú de acciones del panel      |
 | `Enter`                        | Enfocar / ejecutar                       |
 
