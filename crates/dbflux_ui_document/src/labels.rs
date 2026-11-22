@@ -623,15 +623,6 @@ pub(crate) fn delete_confirm_copy(count: usize) -> (String, String) {
     }
 }
 
-/// Summary of the last run at the end of the editor toolbar
-/// ("last run 0.32 s").
-pub(crate) fn code_toolbar_last_run_label(seconds: f64) -> String {
-    dbflux_i18n::t!(
-        "document.code.toolbar.last_run",
-        seconds = format!("{seconds:.2}")
-    )
-}
-
 /// Task-panel description for a running script, with the query language's
 /// display name interpolated.
 pub(crate) fn run_script_task_label(language_name: &str) -> String {
@@ -3914,8 +3905,8 @@ mod tests {
         bucket_encryption_choice_label, buckets_table_summary_line, builder_mode_label,
         bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
         chart_rail_why_text, chart_save_failed_error, chart_save_no_profile_binding_error,
-        chart_saved_toast, chart_toolbar_points_label, code_toolbar_last_run_label,
-        comparator_label, configure_chart_kind_label, context_menu_clipboard_copied_toast,
+        chart_saved_toast, chart_toolbar_points_label, comparator_label,
+        configure_chart_kind_label, context_menu_clipboard_copied_toast,
         context_menu_clipboard_copy_failed_error, context_menu_clipboard_non_utf8_error,
         context_menu_document_insert_failed_error, context_menu_document_update_failed_error,
         context_menu_export_dialog_fallback_failed_error, context_menu_export_dialog_title,
@@ -4456,7 +4447,6 @@ mod tests {
             "document.code.toolbar.cancel",
             "document.code.toolbar.checking",
             "document.code.toolbar.run",
-            "document.code.toolbar.last_run",
             "document.code.toolbar.run_in_new_tab",
             "document.code.toolbar.read_only",
             "document.code.toolbar.saved",
@@ -4538,11 +4528,6 @@ mod tests {
 
         assert_eq!(en, "Run entire script");
         assert_ne!(en, es);
-    }
-
-    #[test]
-    fn code_toolbar_last_run_label_formats_two_decimals() {
-        assert_eq!(code_toolbar_last_run_label(0.3214), "last run 0.32 s");
     }
 
     #[test]

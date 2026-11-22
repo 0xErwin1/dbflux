@@ -1276,7 +1276,6 @@ document:
       cancel: Cancelar
       checking: "Verificando…"
       run: Executar
-      last_run: "última execução %{seconds} s"
       read_only: Somente leitura
       saved: Salvo
       save: Salvar

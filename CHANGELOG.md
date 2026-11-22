@@ -24,6 +24,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* **The query editor shows the run time once** — The editor's context bar no longer ends with "last run 0.32 s"; it keeps the statement count, and the run time stays in the status bar next to the query it belongs to (#1028).
 * **The export and import wizards follow the approved design, and every blocked state says why** — The import wizard now uses the top stepper and the shared footer (Cancel, Continue, and Back on the confirmation) of the export wizard instead of a left rail, and the export dialog is 760 px wide so the seven-format picker fits. A file that cannot be read shows a danger block with an icon and what to do next, a target-table lookup failure now says so instead of claiming the file could not be read, and an invalid batch size, chunk size or folder gets a danger frame, an alert icon and a hint. The footer names why Continue is off, SQL not being offered, JSON having no options and Truncate not being listed are explained, and a finished run lists one row per table, marks the tables a failure stopped and says what to do next. In the import wizard, `Escape` in the target table or NULL text field returns the keys to the dialog and a second `Escape` closes it. The target table field shows its `Enter` key hint, the export confirmation has Cancel, and a destructive import confirmation lists each affected table with its mode in a danger block. (#805)
 
 ### Fixed
