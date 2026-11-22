@@ -123,7 +123,8 @@ mod style_guardrails {
     }
 
     fn is_file_exempt(path: &Path, extra_exempt: &[&str]) -> bool {
-        let path_str = path.to_string_lossy();
+        // Fragments use `/`; Windows paths use `\`.
+        let path_str = path.to_string_lossy().replace('\\', "/");
         FILE_EXEMPT_FRAGMENTS
             .iter()
             .chain(extra_exempt.iter())
