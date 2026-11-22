@@ -237,6 +237,11 @@ server, drives it through `gpui-mcp` and writes one light and one dark WebP per
 shot to `docs/images/<page>/<name>-light.webp` and `<name>-dark.webp`. No window
 opens on your desktop.
 
+The headless server takes display `:90` or the next free one above it, never a
+lower number, so it cannot collide with the X server of the desktop (XWayland
+usually serves `:0`). The script reports an X socket of the desktop that went
+missing during the run.
+
 ```mermaid
 flowchart LR
     Seed["seed files"] --> Docker["demo databases (Docker)"]

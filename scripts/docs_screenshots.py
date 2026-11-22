@@ -30,7 +30,6 @@ import ctypes
 import json
 import os
 import re
-import select
 import shlex
 import shutil
 import signal
@@ -455,47 +454,76 @@ def create_sqlite_database(path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+# The first display Xvfb may take. Lower numbers belong to the desktop: a
+# Wayland compositor's XWayland usually serves :0, and an Xvfb that started
+# there once left the desktop's own X socket unreachable.
+FIRST_XVFB_DISPLAY = 90
+LAST_XVFB_DISPLAY = 199
+X11_SOCKET_DIR = Path("/tmp/.X11-unix")
+
+
+def free_display_number() -> int:
+    """The first display from FIRST_XVFB_DISPLAY with no lock and no socket."""
+
+    for number in range(FIRST_XVFB_DISPLAY, LAST_XVFB_DISPLAY + 1):
+        lock = Path(f"/tmp/.X{number}-lock")
+        sockets = (X11_SOCKET_DIR / f"X{number}", X11_SOCKET_DIR / f"X{number}_")
+        if not lock.exists() and not any(path.exists() for path in sockets):
+            return number
+
+    raise ScreenshotError(
+        f"no free X display between :{FIRST_XVFB_DISPLAY} and :{LAST_XVFB_DISPLAY}"
+    )
+
+
+def x11_sockets() -> set[str]:
+    """The X sockets present now, to check that a run leaves them as it found them."""
+
+    if not X11_SOCKET_DIR.is_dir():
+        return set()
+    return {entry.name for entry in X11_SOCKET_DIR.iterdir()}
+
+
+def check_desktop_sockets(before: set[str]) -> None:
+    """Reports any X socket that was present before the run and is gone now."""
+
+    missing = sorted(before - x11_sockets())
+    if missing:
+        log(
+            "warning: these X sockets of the desktop disappeared during the run: "
+            + ", ".join(str(X11_SOCKET_DIR / name) for name in missing)
+        )
+
+
 def start_xvfb(log_path: Path) -> tuple[subprocess.Popen, str]:
-    """Starts Xvfb on the first free display and returns it with `:<n>`."""
+    """Starts Xvfb on a free display from FIRST_XVFB_DISPLAY up and returns it with `:<n>`.
 
-    read_end, write_end = os.pipe()
+    The display is chosen explicitly instead of with `-displayfd`, which
+    starts at :0 and can collide with the desktop's X server.
+    """
 
-    # Xvfb exits when it cannot write the display number to the pipe, so the
-    # pipe stays open until the whole line is read, and -noreset keeps it from
-    # writing again when its last client disconnects between two DBFlux runs.
-    command = ["Xvfb", "-displayfd", str(write_end), "-screen", "0", XVFB_SCREEN, "-nolisten", "tcp", "-noreset"]
+    number = free_display_number()
+    display = f":{number}"
+    command = ["Xvfb", display, "-screen", "0", XVFB_SCREEN, "-nolisten", "tcp", "-noreset"]
 
     with log_path.open("w") as log_file:
         process = subprocess.Popen(
             command,
-            pass_fds=(write_end,),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
 
-    os.close(write_end)
-
-    output = b""
+    socket_path = X11_SOCKET_DIR / f"X{number}"
     deadline = time.monotonic() + 30
 
-    while not output.endswith(b"\n") and time.monotonic() < deadline:
-        ready, _, _ = select.select([read_end], [], [], max(deadline - time.monotonic(), 0))
-        chunk = os.read(read_end, 64) if ready else b""
+    while not socket_path.exists():
+        if process.poll() is not None or time.monotonic() > deadline:
+            stop_process(process)
+            raise ScreenshotError(f"Xvfb did not start on {display}; see {log_path}")
+        time.sleep(0.1)
 
-        if not chunk:
-            break
-
-        output += chunk
-
-    os.close(read_end)
-    number = output.decode().strip() if output.endswith(b"\n") else ""
-
-    if not number:
-        stop_process(process)
-        raise ScreenshotError(f"Xvfb did not report a display; see {log_path}")
-
-    return process, f":{number}"
+    return process, display
 
 
 def xdotool(display: str, *arguments: str) -> subprocess.CompletedProcess:
@@ -1381,9 +1409,13 @@ def run(arguments: argparse.Namespace) -> int:
 
         create_sqlite_database(environment.work_dir / "inventory.db")
 
+        desktop_sockets = x11_sockets()
         xvfb, environment.display = start_xvfb(environment.work_dir / "logs" / "xvfb.log")
         log(f"Xvfb is running on {environment.display}")
 
+        # ExitStack runs callbacks in reverse, so registering the check before
+        # the stop makes it run once Xvfb has exited.
+        cleanup.callback(check_desktop_sockets, desktop_sockets)
         if not arguments.keep_running:
             cleanup.callback(stop_process, xvfb)
 
