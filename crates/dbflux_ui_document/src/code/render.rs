@@ -1251,6 +1251,7 @@ impl Render for CodeDocument {
         let bg = cx.theme().background;
         let has_collapsed_results =
             self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.result_tabs.is_empty();
+        let results_split = super::results_split::current(&self.app_state, cx);
 
         div()
             .id(ElementId::Name(format!("sql-doc-{}", self.id.0).into()))
@@ -1271,19 +1272,22 @@ impl Render for CodeDocument {
                         SqlQueryLayout::Split
                             if self.results_position == ResultsPosition::Right =>
                         {
+                            let (editor_size, results_size) =
+                                results_split.panel_weights(ResultsPosition::Right);
                             h_resizable(SharedString::from(format!(
                                 "sql-split-right-{}",
                                 self.id.0
                             )))
+                            .on_resize(self.remember_split_on_resize(ResultsPosition::Right))
                             .child(
                                 resizable_panel()
-                                    .size(px(200.0))
+                                    .size(editor_size)
                                     .size_range(px(200.0)..px(10_000.0))
                                     .child(editor_view),
                             )
                             .child(
                                 resizable_panel()
-                                    .size(px(200.0))
+                                    .size(results_size)
                                     .size_range(px(200.0)..px(10_000.0))
                                     .child(results_view),
                             )
@@ -1291,16 +1295,19 @@ impl Render for CodeDocument {
                         }
 
                         SqlQueryLayout::Split => {
+                            let (editor_size, results_size) =
+                                results_split.panel_weights(ResultsPosition::Bottom);
                             v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
+                                .on_resize(self.remember_split_on_resize(ResultsPosition::Bottom))
                                 .child(
                                     resizable_panel()
-                                        .size(px(200.0))
+                                        .size(editor_size)
                                         .size_range(px(100.0)..px(1000.0))
                                         .child(editor_view),
                                 )
                                 .child(
                                     resizable_panel()
-                                        .size(px(200.0))
+                                        .size(results_size)
                                         .size_range(EditorMetrics::RESULTS_MIN_HEIGHT..px(1000.0))
                                         .child(results_view),
                                 )

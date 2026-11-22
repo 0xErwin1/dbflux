@@ -1297,6 +1297,8 @@ document:
       show_results: "결과 표시"
       results_right: "결과를 오른쪽에 표시"
       results_bottom: "결과를 아래에 표시"
+    layout:
+      split_save_failed: "편집기와 결과 분할을 저장할 수 없습니다: %{error}"
     vim:
       normal: "노멀"
       insert: "삽입"

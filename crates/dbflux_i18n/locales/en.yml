@@ -1297,6 +1297,8 @@ document:
       show_results: "Show results"
       results_right: "Show results on the right"
       results_bottom: "Show results below"
+    layout:
+      split_save_failed: "Could not save the editor and results split: %{error}"
     vim:
       normal: "NORMAL"
       insert: "INSERT"

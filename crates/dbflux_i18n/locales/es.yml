@@ -1297,6 +1297,8 @@ document:
       show_results: "Mostrar resultados"
       results_right: "Mostrar los resultados a la derecha"
       results_bottom: "Mostrar los resultados debajo"
+    layout:
+      split_save_failed: "No se pudo guardar la división entre el editor y los resultados: %{error}"
     vim:
       normal: "NORMAL"
       insert: "INSERTAR"

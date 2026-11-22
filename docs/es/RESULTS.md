@@ -29,9 +29,16 @@ En una pestaña de consulta los resultados están debajo del editor. En una
 pantalla ancha, muévelos a la derecha del editor con el botón de panel de la
 cabecera de resultados, la entrada **Mostrar los resultados a la derecha** de
 las acciones del panel o **Mover los resultados junto al editor o debajo** en la
-paleta de comandos. El mismo control los vuelve a poner debajo. Arrastra el
-divisor para cambiar el tamaño de cada lado. Las pestañas de consulta nuevas se
-abren con la última posición elegida.
+paleta de comandos. El mismo control los vuelve a poner debajo. Las pestañas de
+consulta nuevas se abren con la última posición elegida.
+
+Arrastra el divisor para cambiar el tamaño de cada lado. La división en la que
+lo dejas se recuerda para esa posición, una para los resultados debajo del
+editor y otra para los resultados a su lado: las pestañas de consulta nuevas,
+los resultados al volver a mostrarse y el siguiente arranque se abren con ella.
+Una división que deja un lado en menos de un quinceavo del otro no se restaura,
+para que un divisor arrastrado casi hasta un borde no vuelva a abrir el panel
+colapsado; esa división se abre a la mitad.
 
 En cualquiera de las dos posiciones, `Ctrl+j` lleva el teclado del editor a los
 resultados y `Ctrl+k` lo devuelve.
