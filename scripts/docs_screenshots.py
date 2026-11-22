@@ -517,13 +517,28 @@ def start_xvfb(log_path: Path) -> tuple[subprocess.Popen, str]:
     socket_path = X11_SOCKET_DIR / f"X{number}"
     deadline = time.monotonic() + 30
 
-    while not socket_path.exists():
+    # Another X server can take the display between the check and the start,
+    # so the display counts as ours only while our process is alive and owns
+    # its lock file.
+    while not (socket_path.exists() and display_owner(number) == process.pid):
         if process.poll() is not None or time.monotonic() > deadline:
             stop_process(process)
             raise ScreenshotError(f"Xvfb did not start on {display}; see {log_path}")
         time.sleep(0.1)
 
+    if process.poll() is not None:
+        raise ScreenshotError(f"Xvfb exited right after starting on {display}; see {log_path}")
+
     return process, display
+
+
+def display_owner(number: int) -> int | None:
+    """The pid recorded in the lock file of display `number`, if any."""
+
+    try:
+        return int(Path(f"/tmp/.X{number}-lock").read_text().strip())
+    except (OSError, ValueError):
+        return None
 
 
 def xdotool(display: str, *arguments: str) -> subprocess.CompletedProcess:
@@ -1410,12 +1425,12 @@ def run(arguments: argparse.Namespace) -> int:
         create_sqlite_database(environment.work_dir / "inventory.db")
 
         desktop_sockets = x11_sockets()
+        # Registered before Xvfb starts, so a failed start is checked too; and
+        # since ExitStack runs callbacks in reverse, it runs after the stop.
+        cleanup.callback(check_desktop_sockets, desktop_sockets)
         xvfb, environment.display = start_xvfb(environment.work_dir / "logs" / "xvfb.log")
         log(f"Xvfb is running on {environment.display}")
 
-        # ExitStack runs callbacks in reverse, so registering the check before
-        # the stop makes it run once Xvfb has exited.
-        cleanup.callback(check_desktop_sockets, desktop_sockets)
         if not arguments.keep_running:
             cleanup.callback(stop_process, xvfb)
 
