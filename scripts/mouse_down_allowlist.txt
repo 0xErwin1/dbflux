@@ -80,6 +80,7 @@ crates/dbflux_ui_windows/src/settings/auth_profiles_section.rs:render_profile_li
 crates/dbflux_ui_windows/src/settings/drivers.rs:render_global_overrides: cursor sync
 crates/dbflux_ui_windows/src/settings/drivers.rs:render_global_overrides: cursor sync
 crates/dbflux_ui_windows/src/settings/drivers.rs:render_global_overrides: cursor sync
+crates/dbflux_ui_windows/src/settings/appearance_section.rs:render_accent_field: cursor sync
 crates/dbflux_ui_windows/src/settings/general.rs:render_gen_checkbox: cursor sync
 crates/dbflux_ui_windows/src/settings/general.rs:render_gen_dropdown: cursor sync
 crates/dbflux_ui_windows/src/settings/general.rs:render_gen_input_field: cursor sync
