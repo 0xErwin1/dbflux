@@ -1426,6 +1426,49 @@ fn an_invalid_accent_renders_its_error_and_a_valid_one_does_not(cx: &mut TestApp
     assert!(window.debug_bounds("general-accent-dark-error").is_none());
 }
 
+/// A save rejected for `#2F7D6` records an error; correcting the text must
+/// hide it, and it stays while the text is invalid.
+#[gpui::test]
+fn a_rejected_accent_error_clears_once_the_input_is_valid(cx: &mut TestAppContext) {
+    let (section, window) = open_font_select_section(cx);
+    let redraw = |window: &mut gpui::VisualTestContext| {
+        window.run_until_parked();
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+    };
+
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            set_accent(section, AccentField::Dark, "#2F7D6", window, cx);
+            section.save_general_settings(window, cx);
+        });
+    });
+    redraw(window);
+    assert!(window.debug_bounds("general-accent-dark-error").is_some());
+
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            set_accent(section, AccentField::Dark, "#2F7D6X", window, cx)
+        });
+    });
+    redraw(window);
+    assert!(
+        window.debug_bounds("general-accent-dark-error").is_some(),
+        "the error stays while the text is invalid"
+    );
+
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            set_accent(section, AccentField::Dark, "#2F7D6D", window, cx)
+        });
+    });
+    redraw(window);
+    assert!(
+        window.debug_bounds("general-accent-dark-error").is_none(),
+        "the recorded error must not outlive the invalid text"
+    );
+}
+
 #[test]
 fn appearance_copy_resolves_in_every_locale_and_general_no_longer_says_appearance() {
     for key in [

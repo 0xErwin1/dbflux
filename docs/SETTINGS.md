@@ -175,8 +175,8 @@ its own field, with a swatch of the color it applies and a **Reset** button
 (`R` on the field) that puts the palette's accent back; Reset is disabled while
 the field already holds it. Typing the palette's own accent counts as no
 override. Anything that is not `#RRGGBB` shows "Use a color as #RRGGBB." under the
-field, is never saved, and leaves the palette's accent applied until the value
-is valid. The accent applies to every open window when you save.
+field, is never saved, and leaves the accent that is applied as it is (the saved
+custom accent, or the palette's when none is saved) until the value is valid. The accent applies to every open window when you save.
 
 Your color is a starting point: DBFlux moves it until it reads on the pane. The
 fills (buttons, checked boxes, the progress bar, the focus ring, the text cursor

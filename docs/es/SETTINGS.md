@@ -181,7 +181,8 @@ muestra del color que aplica y un botón **Restablecer** (`R` sobre el campo) qu
 devuelve el acento de la paleta; está deshabilitado mientras el campo ya lo
 contiene. Escribir el acento propio de la paleta cuenta como sin override. Lo que
 no sea `#RRGGBB` muestra «Usa un color como #RRGGBB.» bajo el campo, no se
-guarda y deja aplicado el acento de la paleta hasta que el valor sea válido. El
+guarda y deja aplicado el acento que ya lo estaba (el personalizado guardado, o
+el de la paleta si no hay ninguno) hasta que el valor sea válido. El
 acento se aplica a todas las ventanas abiertas al guardar.
 
 Tu color es un punto de partida: DBFlux lo mueve hasta que se lee sobre el

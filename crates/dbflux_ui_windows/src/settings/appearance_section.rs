@@ -403,14 +403,10 @@ impl GeneralSection {
                 .saved_accent(field, cx)
                 .unwrap_or_else(dbflux_components::theme::palette_accent),
         };
+        // Derived from the text, so it shows exactly while the text is invalid
+        // and a rejected save's recorded error cannot outlive a correction.
         let error = (entry == AccentEntry::Invalid)
-            .then(|| dbflux_i18n::t!("settings.general.appearance.accent.error"))
-            .or_else(|| {
-                self.gen_field_error
-                    .as_ref()
-                    .filter(|(error_row, _)| *error_row == row)
-                    .map(|(_, message)| message.clone())
-            });
+            .then(|| dbflux_i18n::t!("settings.general.appearance.accent.error"));
 
         let input = Input::new(self.accent_input(field))
             .id(element_id)

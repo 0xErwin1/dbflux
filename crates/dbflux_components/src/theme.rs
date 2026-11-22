@@ -60,7 +60,13 @@ pub fn palette_accent() -> dbflux_core::AccentColor {
 pub fn brand_for(setting: ThemeSetting, overrides: &AccentOverrides) -> Brand {
     let mut brand = brand();
 
-    let Some(user) = overrides.for_setting(setting) else {
+    // The palette's own accent is the absence of an override, however it got
+    // here (a stored value written outside the settings form, say): it is
+    // installed as it is, never derived.
+    let Some(user) = overrides
+        .for_setting(setting)
+        .filter(|user| *user != palette_accent())
+    else {
         return brand;
     };
 
@@ -501,6 +507,20 @@ mod tests {
 
     /// With no override the installed brand is the palette's own, byte for
     /// byte, whatever the palette.
+    #[test]
+    fn an_override_equal_to_the_palette_accent_installs_the_palette_brand() {
+        let palette = Some(palette_accent());
+        let overrides = AccentOverrides::new(palette, palette);
+
+        for setting in [
+            ThemeSetting::Dark,
+            ThemeSetting::Light,
+            ThemeSetting::System,
+        ] {
+            assert_eq!(brand_for(setting, &overrides), brand(), "{setting:?}");
+        }
+    }
+
     #[test]
     fn no_override_installs_the_palette_brand_unchanged() {
         for setting in [

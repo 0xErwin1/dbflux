@@ -974,6 +974,35 @@ mod accent_setting_tests {
         );
     }
 
+    /// A stored accent equal to the palette's own hex is no override: the
+    /// palette brand stays installed byte for byte.
+    #[gpui::test]
+    fn a_stored_palette_accent_installs_the_palette_brand(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let palette_fill = cx.update(|cx| Theme::global(cx).tokens.primary.color);
+        let palette_ring = cx.update(|cx| Theme::global(cx).ring);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let mut state = AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup");
+                let mut settings = state.general_settings().clone();
+                settings.accent_dark = Some(dbflux_components::theme::palette_accent());
+                state.update_general_settings(settings);
+                state
+            })
+        });
+
+        cx.update(|cx| publish_accent_setting(&app_state, cx));
+
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            assert_eq!(theme.tokens.primary.color, palette_fill);
+            assert_eq!(theme.ring, palette_ring);
+        });
+    }
+
     /// An accent saved before startup applies as soon as it is published.
     #[gpui::test]
     fn a_saved_accent_applies_when_published(cx: &mut TestAppContext) {
