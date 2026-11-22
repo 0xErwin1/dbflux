@@ -1,3 +1,4 @@
+use super::edit_guard::OnStop;
 use super::expression_gate::HeldSave;
 use super::utils::{extract_pk_columns, value_to_json};
 use super::*;
@@ -427,42 +428,116 @@ impl DataGridPanel {
         .detach();
     }
 
+    /// The cells staged on `row_idx`, or `None` when the grid is not editable
+    /// or the row has nothing staged.
+    fn staged_row_changes(
+        &self,
+        row_idx: usize,
+        cx: &App,
+    ) -> Option<
+        Vec<(
+            usize,
+            dbflux_components::components::data_table::model::CellValue,
+        )>,
+    > {
+        let state = self.grid_table.table_state.as_ref()?.read(cx);
+
+        if !state.is_editable() {
+            return None;
+        }
+
+        let row_changes = state.edit_buffer().row_changes(row_idx);
+        if row_changes.is_empty() {
+            return None;
+        }
+
+        Some(
+            row_changes
+                .into_iter()
+                .map(|(idx, cell)| (idx, cell.clone()))
+                .collect(),
+        )
+    }
+
     pub(super) fn handle_save_row(
         &mut self,
         row_idx: usize,
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.grid_table.table_state else {
+        if !self.queued_row_has_changes(row_idx, cx) {
             return;
-        };
+        }
 
-        let changes = {
-            let state = table_state.read(cx);
+        if self.hold_save_for_expression_confirm(HeldSave::Row(row_idx), batch_owned, cx) {
+            return;
+        }
 
-            if !state.is_editable() {
+        // A batch was checked once as a whole before its first write.
+        if !batch_owned
+            && let DataSource::Table {
+                profile_id,
+                database,
+                table,
+                ..
+            } = &self.source
+        {
+            let (profile_id, database, table) = (*profile_id, database.clone(), table.clone());
+            // The key and the staged values are read now: a reload while the
+            // check runs may move the row to another index.
+            let Some(changes) = self.staged_row_changes(row_idx, cx) else {
                 return;
-            }
-
-            let row_changes = state.edit_buffer().row_changes(row_idx);
-            if row_changes.is_empty() {
+            };
+            let changes_ref: Vec<_> = changes.iter().map(|(idx, cell)| (*idx, cell)).collect();
+            let Some(patch) = self.build_row_patch(&table, row_idx, &changes_ref, false, cx) else {
                 return;
-            }
+            };
+            let sent: Vec<(usize, SentCell)> = changes;
+            self.guard_edit(
+                OnStop::Nothing,
+                move |panel, cx| {
+                    let Some(row_idx) = panel.row_index_of_key(patch.identity.values(), cx) else {
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::User,
+                                dbflux_i18n::t!(
+                                    "document.data.mutation.error.staged_row_left_grid"
+                                ),
+                            ),
+                            cx,
+                        );
+                        return;
+                    };
+                    // The user reverted the row while the key was checked.
+                    if !panel.queued_row_has_changes(row_idx, cx) {
+                        return;
+                    }
+                    panel.send_row_patch(
+                        profile_id,
+                        database,
+                        row_idx,
+                        RowSave { patch, sent },
+                        false,
+                        cx,
+                    );
+                },
+                cx,
+            );
+            return;
+        }
 
-            row_changes
-                .into_iter()
-                .map(|(idx, cell)| (idx, cell.clone()))
-                .collect::<Vec<_>>()
+        self.send_row_save(row_idx, batch_owned, cx);
+    }
+
+    fn send_row_save(&mut self, row_idx: usize, batch_owned: bool, cx: &mut Context<Self>) {
+        let Some(changes) = self.staged_row_changes(row_idx, cx) else {
+            return;
         };
 
         let changes_ref: Vec<(
             usize,
             &dbflux_components::components::data_table::model::CellValue,
         )> = changes.iter().map(|(idx, cell)| (*idx, cell)).collect();
-
-        if self.hold_save_for_expression_confirm(HeldSave::Row(row_idx), batch_owned, cx) {
-            return;
-        }
 
         match &self.source {
             DataSource::Table {
@@ -513,9 +588,39 @@ impl DataGridPanel {
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.grid_table.table_state else {
+        let Some(patch) = self.build_row_patch(&table_ref, row_idx, changes, batch_owned, cx)
+        else {
             return;
         };
+        let sent = changes
+            .iter()
+            .map(|&(col, cell)| (col, cell.clone()))
+            .collect();
+        self.send_row_patch(
+            profile_id,
+            database,
+            row_idx,
+            RowSave { patch, sent },
+            batch_owned,
+            cx,
+        );
+    }
+
+    /// The patch for `row_idx`, with the row's key and staged values read now.
+    /// `None` when the row cannot be identified or holds a value that cannot
+    /// be written; the failure is already reported.
+    pub(super) fn build_row_patch(
+        &mut self,
+        table_ref: &TableRef,
+        row_idx: usize,
+        changes: &[(
+            usize,
+            &dbflux_components::components::data_table::model::CellValue,
+        )],
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<RowPatch> {
+        let table_state = self.grid_table.table_state.as_ref()?;
 
         let state = table_state.read(cx);
         let pk_indices = state.pk_columns();
@@ -550,7 +655,7 @@ impl DataGridPanel {
                 self.abandon_close_apply(cx);
             }
             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
-            return;
+            return None;
         }
 
         if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
@@ -564,7 +669,7 @@ impl DataGridPanel {
                 ),
                 cx,
             );
-            return;
+            return None;
         }
 
         let identity = RowIdentity::new(pk_columns, pk_values);
@@ -597,7 +702,7 @@ impl DataGridPanel {
                 self.abandon_close_apply(cx);
             }
             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
-            return;
+            return None;
         }
 
         let patch = RowPatch::with_typed_changes(
@@ -607,8 +712,25 @@ impl DataGridPanel {
             change_values,
         );
 
-        let table_state_for_update = table_state.clone();
-        table_state_for_update.update(cx, |state, cx| {
+        Some(patch)
+    }
+
+    /// Sends a patch built by [`Self::build_row_patch`] for `row_idx`.
+    pub(super) fn send_row_patch(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        row_idx: usize,
+        save: RowSave,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let RowSave { patch, sent } = save;
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
             state
                 .edit_buffer_mut()
                 .set_row_state(row_idx, RowState::Saving);
@@ -661,7 +783,7 @@ impl DataGridPanel {
                         Ok(_) => panel.runner.complete_mutation(task_id, cx),
                         Err(e) => panel.runner.fail_mutation(task_id, e.to_string(), cx),
                     }
-                    panel.handle_save_result(row_idx, result, batch_owned, cx);
+                    panel.finish_save_result(row_idx, result, Some(sent), batch_owned, cx);
                 });
             });
         })
@@ -824,6 +946,20 @@ impl DataGridPanel {
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
+        self.finish_save_result(row_idx, result, None, batch_owned, cx);
+    }
+
+    /// `sent` is the staged cells the write carried. When given, only those are
+    /// cleared after a success: a value staged after the patch was built has
+    /// not been written and stays staged.
+    fn finish_save_result(
+        &mut self,
+        row_idx: usize,
+        result: Result<dbflux_core::CrudResult, dbflux_core::DbError>,
+        sent: Option<Vec<(usize, SentCell)>>,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
         if batch_owned {
             self.batch_op_in_flight = false;
         }
@@ -878,7 +1014,10 @@ impl DataGridPanel {
                         }
                         None => {}
                     }
-                    state.edit_buffer_mut().clear_row(row_idx);
+                    match &sent {
+                        Some(sent) => clear_sent_cells(state.edit_buffer_mut(), row_idx, sent),
+                        None => state.edit_buffer_mut().clear_row(row_idx),
+                    }
                     cx.notify();
                 });
                 if reload_for_expression {
@@ -1280,14 +1419,32 @@ impl DataGridPanel {
                 ..
             } = &self.source
             {
-                self.batch_op_in_flight = true;
-                self.commit_bulk_deletes_table(
-                    *profile_id,
-                    database.clone(),
-                    table.clone(),
-                    confirm.row_indices,
-                    cx,
-                );
+                let (profile_id, database, table) = (*profile_id, database.clone(), table.clone());
+                // A write already running is not this delete's to abandon.
+                let on_stop = if self.batch_op_in_flight {
+                    OnStop::AbandonIndependent
+                } else {
+                    OnStop::AbandonBatch
+                };
+                if let Some((identities, unidentified)) =
+                    self.capture_delete_identities(&confirm.row_indices, cx)
+                {
+                    self.batch_op_in_flight = true;
+                    self.guard_edit(
+                        on_stop,
+                        move |panel, cx| {
+                            panel.run_captured_deletes(
+                                profile_id,
+                                database,
+                                table,
+                                identities,
+                                unidentified,
+                                cx,
+                            );
+                        },
+                        cx,
+                    );
+                }
             }
         } else if let DataSource::Collection {
             profile_id,
@@ -1468,151 +1625,6 @@ impl DataGridPanel {
         .detach();
     }
 
-    #[allow(dead_code)]
-    pub(super) fn commit_delete_table(
-        &mut self,
-        profile_id: Uuid,
-        database: Option<String>,
-        table_ref: TableRef,
-        row_idx: usize,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(table_state) = &self.grid_table.table_state else {
-            return;
-        };
-
-        let (pk_columns, pk_values, pk_count) = {
-            let state = table_state.read(cx);
-            let pk_indices = state.pk_columns();
-            let model = state.model();
-
-            if pk_indices.is_empty() {
-                (Vec::new(), Vec::new(), 0)
-            } else {
-                let mut pk_columns = Vec::with_capacity(pk_indices.len());
-                let mut pk_values = Vec::with_capacity(pk_indices.len());
-                let pk_count = pk_indices.len();
-
-                for &col_idx in pk_indices {
-                    if let Some(col_spec) = model.columns.get(col_idx) {
-                        pk_columns.push(col_spec.title.to_string());
-                    }
-                    if let Some(cell) = model.cell(row_idx, col_idx) {
-                        pk_values.push(cell.to_value());
-                    }
-                }
-
-                (pk_columns, pk_values, pk_count)
-            }
-        };
-
-        if pk_count == 0 {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::Driver,
-                    dbflux_i18n::t!("document.data.mutation.error.delete_no_primary_key"),
-                ),
-                cx,
-            );
-            return;
-        }
-
-        if pk_columns.len() != pk_count || pk_values.len() != pk_count {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::Driver,
-                    dbflux_i18n::t!("document.data.mutation.error.delete_identity_failed"),
-                ),
-                cx,
-            );
-            return;
-        }
-
-        let identity = RowIdentity::new(pk_columns, pk_values);
-        let delete = RowDelete::new(identity, table_ref.name.clone(), table_ref.schema.clone());
-
-        let (task_id, _cancel_token) = self.runner.start_mutation(
-            TaskKind::Query,
-            crate::labels::mutation_delete_row_task_label(),
-            cx,
-        );
-
-        let app_state = self.app_state.clone();
-        let entity = cx.entity().clone();
-        let table_state_clone = table_state.clone();
-
-        cx.spawn(async move |_this, cx| {
-            let conn = cx.update(|cx| {
-                app_state
-                    .read(cx)
-                    .connections()
-                    .get(&profile_id)
-                    .and_then(|connected| {
-                        connected
-                            .resolve_connection_for_execution(database.as_deref())
-                            .ok()
-                    })
-            });
-
-            let Some(conn) = conn else {
-                log::error!("[DELETE] No connection for profile {}", profile_id);
-                cx.update(|cx| {
-                    entity.update(cx, |panel, cx| {
-                        panel.runner.fail_mutation(task_id, "No connection", cx);
-                        panel.abandon_close_apply_independent(cx);
-                    });
-                });
-                return;
-            };
-
-            let result = cx
-                .background_executor()
-                .spawn(async move { conn.delete_row(&delete) })
-                .await;
-
-            cx.update(|cx| {
-                entity.update(cx, |panel, cx| {
-                    match result {
-                        Ok(mut crud_result) => {
-                            crate::result_warnings::handoff_crud_returning_result(
-                                &mut crud_result,
-                                |warning| report_error(warning, cx),
-                            );
-                            panel.runner.complete_mutation(task_id, cx);
-
-                            table_state_clone.update(cx, |state, cx| {
-                                state.edit_buffer_mut().unmark_delete(row_idx);
-                                cx.notify();
-                            });
-                            panel.pending.toast = Some(PendingToast {
-                                message: dbflux_i18n::t!(
-                                    "document.data.mutation.toast.row_deleted"
-                                ),
-                                is_error: false,
-                            });
-                            panel.queue_reload_after_mutation(cx);
-                        }
-                        Err(e) => {
-                            panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            report_error(
-                                UserFacingError::new(
-                                    ErrorKind::Driver,
-                                    dbflux_i18n::t!(
-                                        "document.data.mutation.error.delete_failed",
-                                        error = e
-                                    ),
-                                ),
-                                cx,
-                            );
-                        }
-                    }
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-    }
-
     /// Handle the SaveAllRequested event by dispatching all pending operations.
     ///
     /// Pipeline order: deletes -> inserts -> updates.
@@ -1625,15 +1637,25 @@ impl DataGridPanel {
         dirty_rows: Vec<usize>,
         cx: &mut Context<Self>,
     ) {
+        // A second request while a batch is checked or running would capture
+        // the same inserts and rows and send them again.
+        if matches!(self.source, DataSource::Table { .. })
+            && (self.batch_op_in_flight || self.pending_batch_remaining.is_some())
+        {
+            return;
+        }
+
         let has_remaining = !pending_inserts.is_empty() || !dirty_rows.is_empty();
 
         // Handle all pending deletes as a batch
         if !pending_deletes.is_empty() {
             // Store remaining ops for after deletes complete
             if has_remaining {
+                let dirty_keys = self.dirty_row_keys(&dirty_rows, cx);
                 self.pending_batch_remaining = Some(PendingBatchRemaining {
                     pending_inserts,
                     dirty_rows,
+                    dirty_keys,
                 });
             }
 
@@ -1664,13 +1686,39 @@ impl DataGridPanel {
         }
 
         // No deletes — start pipeline from inserts/dirty directly
-        if has_remaining {
-            self.pending_batch_remaining = Some(PendingBatchRemaining {
-                pending_inserts,
-                dirty_rows,
-            });
-            self.process_next_batch_op(cx);
+        if !has_remaining {
+            return;
         }
+
+        let needs_key_check =
+            !dirty_rows.is_empty() && matches!(self.source, DataSource::Table { .. });
+        let dirty_keys = self.dirty_row_keys(&dirty_rows, cx);
+        let remaining = PendingBatchRemaining {
+            pending_inserts,
+            dirty_rows,
+            dirty_keys,
+        };
+
+        if needs_key_check {
+            // Held so a close does not start the same rows a second time.
+            self.batch_op_in_flight = true;
+            // Parked on the guard, not in the closure, so an insert removed
+            // while the key is checked still renumbers the batch.
+            self.edit_guard.parked_batch = Some(remaining);
+            self.guard_edit(
+                OnStop::AbandonBatch,
+                move |panel, cx| {
+                    panel.batch_op_in_flight = false;
+                    panel.pending_batch_remaining = panel.edit_guard.parked_batch.take();
+                    panel.process_next_batch_op(cx);
+                },
+                cx,
+            );
+            return;
+        }
+
+        self.pending_batch_remaining = Some(remaining);
+        self.process_next_batch_op(cx);
     }
 
     /// Advance the batch save pipeline by one step.
@@ -1704,8 +1752,36 @@ impl DataGridPanel {
                 return;
             }
 
-            if let Some(row_idx) = remaining.dirty_rows.first().copied() {
+            if let Some(queued_idx) = remaining.dirty_rows.first().copied() {
                 remaining.dirty_rows.remove(0);
+                let key = if remaining.dirty_keys.is_empty() {
+                    None
+                } else {
+                    remaining.dirty_keys.remove(0)
+                };
+
+                // A reload may have moved the row since the batch was
+                // requested: the row is found again by its key.
+                let row_idx = match key {
+                    Some(key) => match self.row_index_of_key(&key, cx) {
+                        Some(row_idx) => row_idx,
+                        None => {
+                            self.abandon_close_apply(cx);
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::User,
+                                    dbflux_i18n::t!(
+                                        "document.data.mutation.error.staged_row_left_grid"
+                                    ),
+                                ),
+                                cx,
+                            );
+                            return;
+                        }
+                    },
+                    None => queued_idx,
+                };
+
                 if !self.queued_row_has_changes(row_idx, cx) {
                     // The row's edits were cleared before the pump reached it.
                     // It has nothing to write, so it must not park the batch.
@@ -1765,19 +1841,21 @@ impl DataGridPanel {
     ) {
         self.renumber_held_insert_after_removal(removed_idx, cx);
 
-        let Some(remaining) = self.pending_batch_remaining.as_mut() else {
-            return;
-        };
+        for remaining in self
+            .pending_batch_remaining
+            .iter_mut()
+            .chain(self.edit_guard.parked_batch.iter_mut())
+        {
+            // The removed insert may still be queued (the user deleted a row the
+            // batch had not started). Drop it, then shift the ones above it.
+            remaining
+                .pending_inserts
+                .retain(|queued| *queued != removed_idx);
 
-        // The removed insert may still be queued (the user deleted a row the
-        // batch had not started). Drop it, then shift the ones above it.
-        remaining
-            .pending_inserts
-            .retain(|queued| *queued != removed_idx);
-
-        for queued in &mut remaining.pending_inserts {
-            if *queued > removed_idx {
-                *queued -= 1;
+            for queued in &mut remaining.pending_inserts {
+                if *queued > removed_idx {
+                    *queued -= 1;
+                }
             }
         }
     }
@@ -1793,25 +1871,27 @@ impl DataGridPanel {
         // Only reached with the intent still armed when no operation abandoned it,
         // so nothing failed by the time the batch ran out of work.
         if std::mem::take(&mut self.close_after_apply) {
+            // A batch that ran out of work with edits still staged skipped some
+            // (a reload moved them past the positions it was given): the tab
+            // stays open over them rather than closing on unsaved edits.
+            if self.has_pending_edits(cx) {
+                cx.emit(DataGridEvent::MutationFinished { landed: false });
+                return;
+            }
             cx.emit(DataGridEvent::MutationFinished { landed: true });
             cx.emit(DataGridEvent::RequestClose);
         }
     }
 
-    /// Execute multiple row deletes for a SQL table in a single async block.
-    /// Reads all PK identities upfront, executes deletes sequentially, then
-    /// triggers a single refresh at the end.
-    pub(super) fn commit_bulk_deletes_table(
+    /// The key of every row in `row_indices`, read now. `None` when nothing
+    /// can be deleted; that is already reported and the batch released.
+    /// The count is of the rows left out for want of a readable key.
+    pub(super) fn capture_delete_identities(
         &mut self,
-        profile_id: Uuid,
-        database: Option<String>,
-        table_ref: TableRef,
-        row_indices: Vec<usize>,
+        row_indices: &[usize],
         cx: &mut Context<Self>,
-    ) {
-        let Some(table_state) = &self.grid_table.table_state else {
-            return;
-        };
+    ) -> Option<(Vec<(usize, RowIdentity)>, usize)> {
+        let table_state = self.grid_table.table_state.as_ref()?;
 
         let count = row_indices.len();
         let pk_indices = {
@@ -1828,7 +1908,7 @@ impl DataGridPanel {
                 ),
                 cx,
             );
-            return;
+            return None;
         }
 
         // Collect PK identity for every row upfront before any async work
@@ -1838,7 +1918,7 @@ impl DataGridPanel {
             let state = table_state.read(cx);
             let model = state.model();
 
-            for &row_idx in &row_indices {
+            for &row_idx in row_indices {
                 let mut pk_columns = Vec::with_capacity(pk_indices.len());
                 let mut pk_values = Vec::with_capacity(pk_indices.len());
 
@@ -1873,8 +1953,70 @@ impl DataGridPanel {
                 ),
                 cx,
             );
+            return None;
+        }
+
+        Some((identities, unidentified))
+    }
+
+    /// Resolves each captured key to the row that holds it now, so the marks
+    /// the delete clears are the right ones after a reload moved the rows.
+    /// A row that left the grid is not deleted.
+    fn run_captured_deletes(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        table_ref: TableRef,
+        identities: Vec<(usize, RowIdentity)>,
+        unidentified: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let captured = identities.len();
+        let identities: Vec<(usize, RowIdentity)> = identities
+            .into_iter()
+            .filter_map(|(_, identity)| {
+                let row_idx = self.row_index_of_key(identity.values(), cx)?;
+                Some((row_idx, identity))
+            })
+            .collect();
+        // A row a reload moved off the page is reported with the rows that
+        // had no readable key, not dropped.
+        let unidentified = unidentified + (captured - identities.len());
+
+        if identities.is_empty() {
+            self.abandon_close_apply(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    dbflux_i18n::t!("document.data.mutation.error.bulk_delete_no_rows_identified"),
+                ),
+                cx,
+            );
             return;
         }
+
+        self.start_captured_deletes(
+            profile_id,
+            database,
+            table_ref,
+            identities,
+            unidentified,
+            cx,
+        );
+    }
+
+    pub(super) fn start_captured_deletes(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        table_ref: TableRef,
+        identities: Vec<(usize, RowIdentity)>,
+        unidentified: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            return;
+        };
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::Query,
@@ -2283,7 +2425,7 @@ impl DataGridPanel {
     /// told the run did not land. It must not clear the batch state, which
     /// belongs to the batch operation still in flight: doing so would let the
     /// next close start a second write beside it.
-    fn abandon_close_apply_independent(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn abandon_close_apply_independent(&mut self, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.close_after_apply) {
             cx.emit(DataGridEvent::MutationFinished { landed: false });
         }
@@ -2306,6 +2448,43 @@ struct BulkDeleteOutcome {
 
 /// Tells the user that marked rows were left out of a delete, as a warning:
 /// the rest of the delete may have landed.
+type SentCell = dbflux_components::components::data_table::model::CellValue;
+
+fn same_staged_value(left: &SentCell, right: &SentCell) -> bool {
+    left.to_value() == right.to_value() && left.as_expression() == right.as_expression()
+}
+
+/// Drops the row's staged cells that equal what a save sent and keeps the rest,
+/// which the user staged after the patch was built.
+/// A row save to send: the patch, and the staged cells it carries, so only
+/// those are cleared once it lands.
+pub(super) struct RowSave {
+    pub(super) patch: RowPatch,
+    pub(super) sent: Vec<(usize, SentCell)>,
+}
+
+fn clear_sent_cells(
+    buffer: &mut dbflux_components::components::data_table::model::EditBuffer,
+    row_idx: usize,
+    sent: &[(usize, SentCell)],
+) {
+    let newer: Vec<(usize, SentCell)> = buffer
+        .row_changes(row_idx)
+        .into_iter()
+        .filter(|(col, staged)| {
+            !sent
+                .iter()
+                .any(|(sent_col, cell)| sent_col == col && same_staged_value(cell, staged))
+        })
+        .map(|(col, staged)| (col, staged.clone()))
+        .collect();
+
+    buffer.clear_row(row_idx);
+    for (col, cell) in newer {
+        buffer.set_cell(row_idx, col, cell);
+    }
+}
+
 fn report_unidentified_deletes(
     kind: crate::labels::MutationItemKind,
     deleted: usize,

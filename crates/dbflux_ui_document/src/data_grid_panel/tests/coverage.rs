@@ -292,3 +292,34 @@ fn the_expression_confirmation_is_covered(cx: &mut TestAppContext) {
         "{checked:?}"
     );
 }
+
+/// The drift modal a save opens when the table's key changed: Escape cancels
+/// and Enter reloads the table (`DataGridPanel::dispatch_edit_guard_command`).
+#[gpui::test]
+fn the_edit_guard_modal_is_covered(cx: &mut TestAppContext) {
+    let (panel, window) = host_table_grid_with_rail(cx);
+    let capture = FrameCapture::observe(window);
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.edit_guard.modal.update(cx, |modal, cx| {
+                modal.open_for_edit(
+                    dbflux_core::QueryTableRef {
+                        database: None,
+                        schema: None,
+                        table: "orders".to_string(),
+                    },
+                    dbflux_core::PrimaryKeyCheck::TableGone,
+                    cx,
+                );
+            });
+            cx.notify();
+        });
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let checked = assert_covered(&panel, &capture, window);
+    assert!(checked.iter().any(|id| id == "drift-reload"), "{checked:?}");
+    assert!(checked.iter().any(|id| id == "drift-close"), "{checked:?}");
+}

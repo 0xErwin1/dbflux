@@ -90,6 +90,15 @@ pub(crate) fn pk_details_fetch_failed_error(error: &str) -> String {
     )
 }
 
+/// Error text when the check of a table's primary key, run before a save or
+/// delete, fails for a reason other than the table being gone.
+pub(crate) fn edit_guard_check_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.error.edit_guard_check_failed",
+        error = error
+    )
+}
+
 /// Error/toast text for a failed query run against the data grid.
 pub(crate) fn query_failed_error(error: &str) -> String {
     dbflux_i18n::t!("document.data.grid.error.query_failed", error = error)
@@ -570,11 +579,6 @@ pub(crate) fn mutation_insert_row_task_label() -> String {
 /// Task-panel description for deleting a single document.
 pub(crate) fn mutation_delete_document_task_label() -> String {
     dbflux_i18n::t!("document.data.mutation.task.delete_document")
-}
-
-/// Task-panel description for deleting a single row.
-pub(crate) fn mutation_delete_row_task_label() -> String {
-    dbflux_i18n::t!("document.data.mutation.task.delete_row")
 }
 
 /// Label for the context menu's "Copy as ..." submenu trigger, keyed by the
@@ -3936,11 +3940,10 @@ mod tests {
         migrate_wizard_target_schema_read_failed_error, migrate_wizard_task_label,
         mutation_chunk_size_adjusted_toast, mutation_chunk_size_reduced_toast,
         mutation_chunked_execution_failed_error, mutation_delete_document_task_label,
-        mutation_delete_row_task_label, mutation_delete_task_label,
-        mutation_execution_cancelled_toast, mutation_execution_completed_toast,
-        mutation_execution_failed_error, mutation_insert_document_task_label,
-        mutation_insert_row_task_label, mutation_read_only_error,
-        mutation_save_document_task_label, mutation_save_row_task_label,
+        mutation_delete_task_label, mutation_execution_cancelled_toast,
+        mutation_execution_completed_toast, mutation_execution_failed_error,
+        mutation_insert_document_task_label, mutation_insert_row_task_label,
+        mutation_read_only_error, mutation_save_document_task_label, mutation_save_row_task_label,
         mutation_update_document_field_task_label, object_browser_copied_uri_toast,
         object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
         pending_change_count_label, pending_edits_summary, pk_details_fetch_failed_error,
@@ -4450,7 +4453,6 @@ mod tests {
         let keys = [
             "document.code.toolbar.refresh",
             "document.code.toolbar.cancel",
-            "document.code.toolbar.checking",
             "document.code.toolbar.run",
             "document.code.toolbar.run_in_new_tab",
             "document.code.toolbar.read_only",
@@ -8085,10 +8087,6 @@ mod tests {
             (
                 mutation_delete_document_task_label,
                 "document.data.mutation.task.delete_document",
-            ),
-            (
-                mutation_delete_row_task_label,
-                "document.data.mutation.task.delete_row",
             ),
             (
                 audit_export_unsupported_source_toast,

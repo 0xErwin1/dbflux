@@ -370,6 +370,10 @@ impl Workspace {
 
         let conn = active.connection.clone();
         let profile_id = active.profile.id;
+        let session_generation = self
+            .app_state
+            .read(cx)
+            .profile_session_generation(profile_id);
         let app_state = self.app_state.clone();
 
         let task = cx.background_executor().spawn(async move { conn.schema() });
@@ -380,9 +384,16 @@ impl Workspace {
             cx.update(|cx| match result {
                 Ok(schema) => {
                     app_state.update(cx, |state, cx| {
+                        // A reconnect during the refresh replaced the session:
+                        // this schema belongs to the old one, and the new
+                        // session's cache is not this refresh's to clear.
+                        if state.profile_session_generation(profile_id) != session_generation {
+                            return;
+                        }
                         if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
                             connected.schema = Some(schema);
                         }
+                        state.clear_table_details(profile_id);
                         cx.emit(AppStateChanged);
                     });
                 }

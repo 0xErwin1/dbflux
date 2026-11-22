@@ -40,9 +40,7 @@ pub use parts::{
     inline_code, modal_code, modal_field, modal_form_row, modal_frame, modal_hint, modal_lead,
     modal_value_field,
 };
-pub use schema_drift::{
-    ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
-};
+pub use schema_drift::{ModalSchemaDrift, SchemaDriftDismissed, SchemaDriftRefresh};
 pub use tunnel_auth::{
     ConnectionPasswordRequest, ModalTunnelAuth, TunnelAuthOutcome, TunnelAuthRequest,
 };

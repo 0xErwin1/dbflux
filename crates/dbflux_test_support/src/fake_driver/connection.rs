@@ -171,6 +171,25 @@ impl Connection for FakeConnection {
         }
     }
 
+    fn table_details(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<dbflux_core::TableInfo, DbError> {
+        let call = self
+            .state
+            .table_details_calls
+            .fetch_add(1, Ordering::Relaxed);
+
+        match rwlock_read(&self.state.table_details).get(table) {
+            Some(outcome) => fake_table_details_answer(outcome, call, table),
+            None => Err(DbError::NotSupported(
+                "table_details not supported".to_string(),
+            )),
+        }
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         mutex_lock(&self.state.crud_ops).push(CrudOp::Update(patch.clone()));
         Ok(CrudResult::new(1, None))
@@ -205,10 +224,36 @@ impl Connection for FakeConnection {
         &DEFAULT_SQL_DIALECT
     }
 
+    fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+        static GENERATOR: dbflux_core::SqlMutationGenerator =
+            dbflux_core::SqlMutationGenerator::new(&DEFAULT_SQL_DIALECT);
+        Some(&GENERATOR)
+    }
+
     fn secret_stores(&self) -> Vec<&dyn SecretStoreSource> {
         self.secret_stores
             .iter()
             .map(|store| store as &dyn SecretStoreSource)
             .collect()
+    }
+}
+
+fn fake_table_details_answer(
+    outcome: &FakeTableDetails,
+    call: usize,
+    table: &str,
+) -> Result<dbflux_core::TableInfo, DbError> {
+    match outcome {
+        FakeTableDetails::Info(info) => Ok((**info).clone()),
+        FakeTableDetails::NotFound => Err(DbError::object_not_found(format!(
+            "table {table} not found"
+        ))),
+        FakeTableDetails::Failure(message) => Err(DbError::connection_failed(message.clone())),
+        FakeTableDetails::Sequence(answers) => match answers.get(call).or(answers.last()) {
+            Some(answer) => fake_table_details_answer(answer, call, table),
+            None => Err(DbError::NotSupported(
+                "table_details not supported".to_string(),
+            )),
+        },
     }
 }

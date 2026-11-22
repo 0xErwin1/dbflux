@@ -122,6 +122,11 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             "expression-confirm-btn",
             KeyboardPath::Command(Command::Execute),
         ),
+        // The drift modal a save opens when the table's key changed: Escape
+        // cancels and Enter reloads the table.
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
+        ("drift-close", KeyboardPath::Command(Command::Cancel)),
+        ("drift-reload", KeyboardPath::Command(Command::Execute)),
         ("export-menu.*", KeyboardPath::Command(Command::MenuSelect)),
         (
             "export-trigger",

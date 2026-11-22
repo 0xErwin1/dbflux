@@ -1277,7 +1277,6 @@ document:
         many: "%{count} 条语句"
       refresh: 刷新
       cancel: 取消
-      checking: 正在检查…
       run: 执行
       read_only: 只读
       saved: 已保存
@@ -1836,6 +1835,7 @@ document:
         invalid_json_filter: 无效的 JSON 筛选器
         chart_save_failed: "保存图表 %{name} 失败：%{error}"
         pk_details_fetch_failed: "获取主键表详情失败：%{error}"
+        edit_guard_check_failed: "无法检查该表的主键，因此未发送任何内容：%{error}"
         query_failed: "查询失败：%{error}"
         chart_save_no_profile_binding: "无法保存图表：查询未绑定连接配置"
       placeholder:
@@ -1914,7 +1914,6 @@ document:
         insert_document: 插入文档
         insert_row: 插入行
         delete_document: 删除文档
-        delete_row: 删除行
         visual_mutation_chunked: 可视化变更（分块）
         visual_mutation_direct: 可视化变更（直接）
         visual_mutation_single_transaction: 可视化变更（单事务）
@@ -1923,6 +1922,7 @@ document:
         update_document_failed: "更新文档失败：%{error}"
         save_row_unsupported_pk: 无法保存行：主键使用了不受支持的值类型
         save_row_identity_failed: 无法保存行：无法根据主键列构建行标识
+        staged_row_left_grid: "有待处理编辑的行已不在网格中，因此批处理在此停止。"
         save_row_unsupported_values: 无法保存行：不受支持的值为只读
         save_failed: "保存失败：%{error}"
         save_document_unsupported_id: 无法保存文档：其 _id 值不受支持
@@ -4360,8 +4360,6 @@ modals:
     cancel: 取消
     confirm: 重命名
   schema_drift:
-    lead: "%{table} 与缓存的架构不同。"
-    title: 自此标签页打开以来 Schema 已发生更改
     column_header: 列
     local_header: 缓存
     remote_header: 当前
@@ -4380,10 +4378,13 @@ modals:
       primary_key: (主键)
       foreign_keys: (外键)
       nullable: 可空
-    continue_stale: 继续使用过期 Schema
     cancel: 取消
-    refreshing: 正在刷新…
-    refresh: 刷新并重新执行
+    edit:
+      title: "该表在加载后已发生变化"
+      pk_lead: "%{table} 的主键已不是此网格保存时使用的主键，因此未发送任何内容。"
+      gone_lead: "%{table} 已不存在，因此未发送任何内容。"
+      discard_note: "重新加载该表会丢弃待处理的编辑，因为它们的行标识是按旧主键获取的。取消则保留这些编辑，保持待处理且未保存。"
+      reload: "重新加载表"
   tunnel_auth:
     hide_passphrase: "隐藏密码短语"
     show_passphrase: "显示密码短语"

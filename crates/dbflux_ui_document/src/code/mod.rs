@@ -18,9 +18,6 @@ use dbflux_components::controls::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::ModalFocus;
-use dbflux_components::modals::schema_drift::{
-    ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
-};
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::observability::actions as audit_actions;
@@ -30,11 +27,10 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     Connection, DangerousAction, DangerousQueryKind, DbError,
-    DiagnosticSeverity as CoreDiagnosticSeverity, DriftOutcome, DriverCapabilities,
+    DiagnosticSeverity as CoreDiagnosticSeverity, DriverCapabilities,
     EditorDiagnostic as CoreEditorDiagnostic, EditorLanguageProfile, ExecutionContext,
     ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
-    ReadOnlyEnforcement, RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget,
-    ValidationResult, check_schema_drift,
+    ReadOnlyEnforcement, RefreshPolicy, SchemaLoadingStrategy, TaskTarget, ValidationResult,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -475,13 +471,6 @@ pub(super) struct RefreshState {
     pub(super) _refresh_subscriptions: Vec<Subscription>,
 }
 
-/// Schema-drift modal entity, its subscriptions, and the in-flight preflight flag.
-pub(super) struct DriftState {
-    pub(super) schema_drift_modal: Entity<ModalSchemaDrift>,
-    pub(super) _schema_drift_subscriptions: Vec<Subscription>,
-    pub(super) preflight_running: bool,
-}
-
 /// In-flight and historical query execution state.
 pub(super) struct Execution {
     pub(super) execution_history: Vec<ExecutionRecord>,
@@ -525,9 +514,6 @@ pub(super) struct ResultTabs {
 ///
 /// Each field is an individually-addressable typed slot. The drain order
 /// in `render` matches the declaration order here and must not be changed.
-/// `pending.drift_query` supports re-entrancy: the drift state machine may
-/// `.take()` the value and then re-store it within the same render pass when
-/// the modal has not yet been answered.
 #[derive(Default)]
 pub(super) struct PendingActions {
     result: Option<PendingQueryResult>,
@@ -536,7 +522,6 @@ pub(super) struct PendingActions {
     /// A result tab asked to load every row of its query.
     load_all_rows: Option<gpui::EntityId>,
     history_focus_restore: bool,
-    drift_query: Option<PendingDriftQuery>,
     source_input_values: Option<(String, String)>,
     chart_reexecute: bool,
     /// Window bounds emitted by the source `TimeRangePanel`. Taken by
@@ -589,10 +574,9 @@ pub struct CodeDocument {
     execution_session_context: Option<ExecutionSessionContext>,
     result_tabs: ResultTabs,
 
-    // History modal, refresh timer, and schema drift modal.
+    // History modal and refresh timer.
     history: HistoryState,
     refresh: RefreshState,
-    drift: DriftState,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -707,39 +691,12 @@ struct CursorStatement {
     offers_script: bool,
 }
 
-/// Action resolved by the schema-drift modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DriftAction {
-    /// Waiting for user response — do not execute yet.
-    Pending,
-    /// No drift (or driver doesn't support parsing) — execute immediately and
-    /// apply transparent cache refreshes first.
-    ExecuteNow,
-    /// User chose "Continue with stale schema" — proceed without touching the cache.
-    ContinueStale,
-}
-
 /// The consent ticket a run carries to completion. Without the `telemetry`
 /// feature nothing is ever captured, so the type carries no data.
 #[cfg(feature = "telemetry")]
 type UsageTicket = dbflux_core::observability::usage::UsageTicket;
 #[cfg(not(feature = "telemetry"))]
 type UsageTicket = std::convert::Infallible;
-
-/// A query paused by the schema-drift preflight or drift modal awaiting execution.
-struct PendingDriftQuery {
-    origin: ExecutionOrigin,
-    query: String,
-    in_new_tab: bool,
-    action: DriftAction,
-    /// Cache updates to apply before execution when action is `ExecuteNow` or
-    /// after "Refresh & re-run". Each entry is `(TableKey, TableInfo)`, where
-    /// `TableKey` is `(database, schema, table)`.
-    cache_updates: Vec<(dbflux_core::TableKey, dbflux_core::TableInfo)>,
-    read_only: ReadOnlyEnforcement,
-    /// Captured when the user started the run, before the preflight.
-    usage_ticket: Option<UsageTicket>,
-}
 
 /// Record of a query execution.
 #[derive(Clone)]
@@ -990,31 +947,6 @@ impl CodeDocument {
                 this.pending.history_focus_restore = true;
                 cx.notify();
             });
-
-        // Create schema drift modal and wire up action subscriptions.
-        let schema_drift_modal = cx.new(ModalSchemaDrift::new);
-
-        let drift_refresh_sub = cx.subscribe(
-            &schema_drift_modal,
-            |this, _, _event: &SchemaDriftRefresh, cx| {
-                this.on_schema_drift_refresh(cx);
-            },
-        );
-
-        let drift_continue_sub = cx.subscribe(
-            &schema_drift_modal,
-            |this, _, _event: &SchemaDriftContinue, cx| {
-                this.on_schema_drift_continue(cx);
-            },
-        );
-
-        let drift_dismissed_sub = cx.subscribe(
-            &schema_drift_modal,
-            |this, _, _event: &SchemaDriftDismissed, cx| {
-                this.pending.drift_query = None;
-                cx.notify();
-            },
-        );
 
         let runner = {
             let mut r = DocumentTaskRunner::new(app_state.clone());
@@ -1290,15 +1222,6 @@ impl CodeDocument {
                 _refresh_subscriptions: vec![refresh_policy_sub],
             },
             is_active_tab: true,
-            drift: DriftState {
-                schema_drift_modal,
-                _schema_drift_subscriptions: vec![
-                    drift_refresh_sub,
-                    drift_continue_sub,
-                    drift_dismissed_sub,
-                ],
-                preflight_running: false,
-            },
             _pending_save: None,
             physical_writes: file_persistence::PhysicalWriteQueue::new(),
             session: SessionPersistence {

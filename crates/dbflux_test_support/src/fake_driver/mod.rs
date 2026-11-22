@@ -5,7 +5,7 @@ use dbflux_core::{
     DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
     FormFieldKind, FormSection, FormTab, FormValues, Icon, MutationCapabilities, QueryCapabilities,
     QueryHandle, QueryLanguage, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo, TableInfo,
     TransactionCapabilities, TransferFamily, field, field_required,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
@@ -73,6 +73,19 @@ impl FakeQueryOutcome {
     }
 }
 
+/// What `FakeConnection::table_details` answers for one table.
+#[derive(Debug, Clone)]
+pub enum FakeTableDetails {
+    Info(Box<TableInfo>),
+    /// The table no longer exists.
+    NotFound,
+    /// The read fails the way a dropped network does.
+    Failure(String),
+    /// Answers the n-th read with the n-th entry; the last entry answers every
+    /// read after it. For a table whose details change between two checks.
+    Sequence(Vec<FakeTableDetails>),
+}
+
 /// A single recorded CRUD call made through `FakeConnection`.
 #[derive(Debug, Clone)]
 pub enum CrudOp {
@@ -97,6 +110,8 @@ struct FakeDriverState {
     default_outcome: RwLock<Option<FakeQueryOutcome>>,
     executed_requests: Mutex<Vec<QueryRequest>>,
     crud_ops: Mutex<Vec<CrudOp>>,
+    table_details: RwLock<HashMap<String, FakeTableDetails>>,
+    table_details_calls: AtomicUsize,
     cancelled_handles: Mutex<Vec<QueryHandle>>,
     cancel_active_calls: AtomicUsize,
     close_calls: AtomicUsize,
@@ -270,6 +285,24 @@ impl FakeDriver {
     /// connected.
     pub fn set_secret_versions_error(&self, name: impl Into<String>, message: impl Into<String>) {
         rwlock_write(&self.state.secret_version_errors).push((name.into(), message.into()));
+    }
+
+    /// Answers `table_details` for `table` with `outcome`. A table with no
+    /// answer keeps the trait default, which is "not supported".
+    pub fn with_table_details(self, table: impl Into<String>, outcome: FakeTableDetails) -> Self {
+        self.set_table_details(table, outcome);
+        self
+    }
+
+    /// [`Self::with_table_details`] for a driver that is already connected, to
+    /// change what the database reports between two reads.
+    pub fn set_table_details(&self, table: impl Into<String>, outcome: FakeTableDetails) {
+        rwlock_write(&self.state.table_details).insert(table.into(), outcome);
+    }
+
+    /// How many times `table_details` was asked for, answered or not.
+    pub fn table_details_calls(&self) -> usize {
+        self.state.table_details_calls.load(Ordering::Relaxed)
     }
 
     pub fn set_query_outcome(&self, sql: impl Into<String>, outcome: FakeQueryOutcome) {

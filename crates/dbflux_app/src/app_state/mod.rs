@@ -1096,6 +1096,23 @@ impl AppState {
             .prepare_fetch_table_details(profile_id, database, schema, table)
     }
 
+    /// Prepares a fenced fetch of one table's details that ignores the cache,
+    /// for checking the table against the database as it is now. Execute it
+    /// off the UI thread, then write the result through
+    /// [`AppState::apply_fetched_table_details`], which rejects it when the
+    /// session or the table's cache changed in between.
+    pub fn prepare_refetch_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FencedTableDetailsParams, TableDetailsPrepareError> {
+        self.facade
+            .connections
+            .prepare_refetch_table_details(profile_id, database, schema, table)
+    }
+
     /// Invalidates one table's cached details and dependents and fences its older requests.
     pub fn invalidate_table_details(
         &mut self,
@@ -1107,6 +1124,11 @@ impl AppState {
         self.facade
             .connections
             .invalidate_table_details(profile_id, database, schema, table)
+    }
+
+    /// Drops every cached table's details and dependents of one connection.
+    pub fn clear_table_details(&mut self, profile_id: Uuid) -> bool {
+        self.facade.connections.clear_table_details(profile_id)
     }
 
     /// Prepares a session-fenced table-details fetch for the shared object
@@ -1122,6 +1144,17 @@ impl AppState {
         self.facade
             .connections
             .prepare_fetch_table_details_fenced(profile_id, database, schema, table)
+    }
+
+    /// Whether a failed fenced table-details fetch answered for the session,
+    /// connection and cache that are current now.
+    pub fn is_table_details_failure_current(
+        &self,
+        failure: &dbflux_core::FencedTableDetailsFailure,
+    ) -> bool {
+        self.facade
+            .connections
+            .is_table_details_failure_current(failure)
     }
 
     pub fn apply_fetched_table_details(

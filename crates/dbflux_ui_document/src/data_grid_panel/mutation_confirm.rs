@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::edit_guard::OnStop;
+use super::mutation_executor::{MutationDeps, MutationExecOptions};
 use super::*;
 use dbflux_components::modals::{MutationConfirmHardRequest, MutationConfirmRequest};
 use dbflux_core::{
@@ -19,6 +21,20 @@ pub(crate) enum PendingMutationModal {
     Light(MutationConfirmRequest),
     /// Hard confirmation (E-2/E-3/E-4/E-6): danger variant with TypeToConfirm + opt-in.
     Hard(MutationConfirmHardRequest),
+}
+
+/// A confirmed visual mutation, resolved and ready to run: everything the
+/// background run needs, held together so it can wait on the key check.
+struct MutationStart {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
+    spec: VisualMutationSpec,
+    opts: MutationExecOptions,
+    deps: MutationDeps,
+    mode: crate::labels::VisualMutationTaskMode,
+    table_name: String,
+    intent: MutationIntent,
+    pk_columns: Vec<String>,
 }
 
 /// Fetches up to 5 sample rows for the mutation confirmation preview.
@@ -421,7 +437,31 @@ impl DataGridPanel {
                 }
             };
 
-            let connection = Arc::clone(&connected.connection);
+            // A chunked run is guarded by a key check against the grid's own
+            // database, so it writes through that database's connection too: a
+            // check and a run on different connections would verify one table
+            // and write another.
+            let connection = if matches!(
+                pending.opts.mode,
+                crate::data_grid_panel::mutation_executor::ExecutionMode::ChunkedTransaction
+            ) && matches!(self.source, DataSource::Table { .. })
+            {
+                match self.chunked_write_connection(connected) {
+                    Ok(connection) => connection,
+                    Err(message) => {
+                        dbflux_ui_base::user_error::report_error(
+                            dbflux_ui_base::user_error::UserFacingError::new(
+                                dbflux_ui_base::user_error::ErrorKind::Driver,
+                                crate::labels::edit_guard_check_failed_error(&message),
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
+                }
+            } else {
+                Arc::clone(&connected.connection)
+            };
             let event_sink: Option<Arc<dyn dbflux_core::EventSink>> =
                 Some(Arc::new(state.audit_service().clone()) as Arc<dyn dbflux_core::EventSink>);
             let policy = connected.mutation_policy;
@@ -591,6 +631,97 @@ impl DataGridPanel {
         } else {
             vec![]
         };
+
+        let start = MutationStart {
+            #[cfg(feature = "telemetry")]
+            usage,
+            spec,
+            opts,
+            deps,
+            mode,
+            table_name,
+            intent,
+            pk_columns,
+        };
+
+        if is_chunked {
+            let on_stop = if intent == MutationIntent::CloseAfterApply {
+                OnStop::ReleaseClose
+            } else {
+                OnStop::Nothing
+            };
+            self.guard_edit(
+                on_stop,
+                move |panel, cx| {
+                    // The check that let this run go may have been repeated
+                    // after the key or the connection changed. The run only
+                    // starts with the key and connection it was built with.
+                    if let Some(reason) = panel.chunked_run_drift(&start, cx) {
+                        panel.report_guard_failure(&reason, on_stop, cx);
+                        return;
+                    }
+                    panel.start_mutation_run(start, cx);
+                },
+                cx,
+            );
+        } else {
+            self.start_mutation_run(start, cx);
+        }
+    }
+
+    /// The connection of the grid's table-details database, which the key
+    /// check reads from. A database with no prepared connection fails instead
+    /// of falling back to the primary one.
+    fn chunked_write_connection(
+        &self,
+        connected: &dbflux_core::ConnectedProfile,
+    ) -> Result<Arc<dyn dbflux_core::Connection>, String> {
+        let DataSource::Table { database, .. } = &self.source else {
+            return Ok(Arc::clone(&connected.connection));
+        };
+        let database = Self::table_details_database(connected, database.as_deref());
+        connected
+            .resolve_connection_for_execution(Some(&database))
+            .map_err(
+                |dbflux_core::ConnectionResolutionError::PendingDatabaseConnection { database }| {
+                    format!("No prepared connection for database '{database}'")
+                },
+            )
+    }
+
+    /// Why a chunked run built before its key check must not start now, or
+    /// `None` when its key and connection are still the grid's.
+    fn chunked_run_drift(&self, start: &MutationStart, cx: &App) -> Option<String> {
+        if start.pk_columns != self.key_in_use() {
+            return Some("the primary key changed while it was checked".to_string());
+        }
+        let DataSource::Table { profile_id, .. } = &self.source else {
+            return None;
+        };
+        let state = self.app_state.read(cx);
+        let Some(connected) = state.connections().get(profile_id) else {
+            return Some("the connection was closed while the key was checked".to_string());
+        };
+        match self.chunked_write_connection(connected) {
+            Ok(current) if Arc::ptr_eq(&current, &start.deps.connection) => None,
+            Ok(_) => Some("the connection changed while the key was checked".to_string()),
+            Err(message) => Some(message),
+        }
+    }
+
+    /// Starts the task and the background run of a confirmed visual mutation.
+    fn start_mutation_run(&mut self, start: MutationStart, cx: &mut Context<Self>) {
+        let MutationStart {
+            #[cfg(feature = "telemetry")]
+            usage,
+            spec,
+            opts,
+            deps,
+            mode,
+            table_name,
+            intent,
+            pk_columns,
+        } = start;
 
         let (task_id, cancel_handle) = self.runner.start_cancellable_mutation(
             dbflux_core::TaskKind::Query,
