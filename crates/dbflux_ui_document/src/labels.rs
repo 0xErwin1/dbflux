@@ -623,6 +623,11 @@ pub(crate) fn delete_confirm_copy(count: usize) -> (String, String) {
     }
 }
 
+/// Error shown when the dragged editor/results split cannot be saved.
+pub(crate) fn results_split_save_failed_error(error: &str) -> String {
+    dbflux_i18n::t!("document.code.layout.split_save_failed", error = error)
+}
+
 /// Task-panel description for a running script, with the query language's
 /// display name interpolated.
 pub(crate) fn run_script_task_label(language_name: &str) -> String {

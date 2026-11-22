@@ -1271,6 +1271,7 @@ impl Render for CodeDocument {
         let has_collapsed_results =
             self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.result_tabs.is_empty();
         let drift_modal_visible = self.drift.schema_drift_modal.read(cx).is_visible();
+        let results_split = super::results_split::current(&self.app_state, cx);
 
         div()
             .id(ElementId::Name(format!("sql-doc-{}", self.id.0).into()))
@@ -1292,12 +1293,12 @@ impl Render for CodeDocument {
                             if self.results_position == ResultsPosition::Right =>
                         {
                             let (editor_size, results_size) =
-                                self.results_split.panel_weights(ResultsPosition::Right);
+                                results_split.panel_weights(ResultsPosition::Right);
                             h_resizable(SharedString::from(format!(
                                 "sql-split-right-{}",
                                 self.id.0
                             )))
-                            .on_resize(self.remember_split_on_resize(ResultsPosition::Right, cx))
+                            .on_resize(self.remember_split_on_resize(ResultsPosition::Right))
                             .child(
                                 resizable_panel()
                                     .size(editor_size)
@@ -1315,11 +1316,9 @@ impl Render for CodeDocument {
 
                         SqlQueryLayout::Split => {
                             let (editor_size, results_size) =
-                                self.results_split.panel_weights(ResultsPosition::Bottom);
+                                results_split.panel_weights(ResultsPosition::Bottom);
                             v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
-                                .on_resize(
-                                    self.remember_split_on_resize(ResultsPosition::Bottom, cx),
-                                )
+                                .on_resize(self.remember_split_on_resize(ResultsPosition::Bottom))
                                 .child(
                                     resizable_panel()
                                         .size(editor_size)

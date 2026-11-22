@@ -3,7 +3,8 @@
 
 use super::ResultsPosition;
 use dbflux_ui_base::AppStateEntity;
-use gpui::Pixels;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+use gpui::{App, Entity, Global, Pixels};
 
 /// A side smaller than this fraction of the other is not restored, so a
 /// divider dragged almost to an edge does not reopen the pane collapsed.
@@ -56,18 +57,19 @@ impl ResultsSplit {
         )
     }
 
-    /// Records the split a drag ended on, in this document and in the UI
-    /// state, so new tabs and the next start open with it. A split that
-    /// cannot be restored is kept for this document only while it stays
-    /// open, through the resizable state itself.
+    /// Records the split a drag ended on, and saves it in the UI state so
+    /// the next start opens with it. The in-memory split is updated even when
+    /// saving fails, and the error is returned for the caller to report. A
+    /// split that cannot be restored stays on screen through the resizable
+    /// state itself.
     pub(super) fn remember(
         &mut self,
         position: ResultsPosition,
         sizes: &[Pixels],
         app_state: &AppStateEntity,
-    ) {
+    ) -> Result<(), String> {
         let Some(share) = editor_share_of(sizes) else {
-            return;
+            return Ok(());
         };
 
         match position {
@@ -75,13 +77,51 @@ impl ResultsSplit {
             ResultsPosition::Right => self.right = restorable(share),
         }
 
-        if let Err(error) = app_state
+        app_state
             .storage_runtime()
             .ui_state()
             .set(storage_key(position), &share.to_string())
-        {
-            log::error!("Could not save the results split: {error}");
-        }
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The split every code document opens with, shared so a drag in one tab is
+/// what the next split to open in any tab uses.
+struct SharedResultsSplit(ResultsSplit);
+
+impl Global for SharedResultsSplit {}
+
+/// The shared split, read from the UI state the first time it is needed.
+pub(super) fn current(app_state: &Entity<AppStateEntity>, cx: &mut App) -> ResultsSplit {
+    if let Some(shared) = cx.try_global::<SharedResultsSplit>() {
+        return shared.0;
+    }
+
+    let split = ResultsSplit::load(app_state.read(cx));
+    cx.set_global(SharedResultsSplit(split));
+    split
+}
+
+/// Records the split a drag ended on for every tab and the next start,
+/// reporting a failed save.
+pub(super) fn remember(
+    app_state: &Entity<AppStateEntity>,
+    position: ResultsPosition,
+    sizes: &[Pixels],
+    cx: &mut App,
+) {
+    let mut split = current(app_state, cx);
+    let saved = split.remember(position, sizes, app_state.read(cx));
+    cx.set_global(SharedResultsSplit(split));
+
+    if let Err(error) = saved {
+        report_error(
+            UserFacingError::new(
+                ErrorKind::Storage,
+                crate::labels::results_split_save_failed_error(&error),
+            ),
+            cx,
+        );
     }
 }
 
@@ -153,24 +193,15 @@ impl super::CodeDocument {
     pub(super) fn remember_split_on_resize(
         &self,
         position: ResultsPosition,
-        cx: &mut gpui::Context<Self>,
     ) -> impl Fn(
         &gpui::Entity<gpui_component::resizable::ResizableState>,
         &mut gpui::Window,
         &mut gpui::App,
     ) + 'static {
-        let document = cx.entity().downgrade();
+        let app_state = self.app_state.clone();
         move |state, _window, cx| {
             let sizes = state.read(cx).sizes().clone();
-            let Some(document) = document.upgrade() else {
-                return;
-            };
-            document.update(cx, |document, cx| {
-                let app_state = document.app_state.clone();
-                document
-                    .results_split
-                    .remember(position, &sizes, app_state.read(cx));
-            });
+            remember(&app_state, position, &sizes, cx);
         }
     }
 }
