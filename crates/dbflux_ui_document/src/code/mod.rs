@@ -76,6 +76,7 @@ mod format;
 mod live_output;
 pub(crate) mod pane;
 mod render;
+mod results_split;
 mod statements;
 mod vim;
 
@@ -596,6 +597,8 @@ pub struct CodeDocument {
     // Layout/focus
     layout: SqlQueryLayout,
     results_position: ResultsPosition,
+    /// The editor's share of each split, restored when a split opens.
+    results_split: results_split::ResultsSplit,
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
     /// Keyboard focus for the multi-statement script confirmation.
@@ -1196,6 +1199,7 @@ impl CodeDocument {
 
         let vim = dbflux_components::vim::VimBinding::new(input_state.clone(), window, cx);
         let results_position = ResultsPosition::load(app_state.read(cx));
+        let results_split = results_split::ResultsSplit::load(app_state.read(cx));
 
         let mut document = Self {
             id: doc_id,
@@ -1275,6 +1279,7 @@ impl CodeDocument {
             },
             layout: SqlQueryLayout::EditorOnly,
             results_position,
+            results_split,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             script_confirm_focus: ModalFocus::new(cx),

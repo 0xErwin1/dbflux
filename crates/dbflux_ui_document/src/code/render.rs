@@ -1291,19 +1291,22 @@ impl Render for CodeDocument {
                         SqlQueryLayout::Split
                             if self.results_position == ResultsPosition::Right =>
                         {
+                            let (editor_size, results_size) =
+                                self.results_split.panel_weights(ResultsPosition::Right);
                             h_resizable(SharedString::from(format!(
                                 "sql-split-right-{}",
                                 self.id.0
                             )))
+                            .on_resize(self.remember_split_on_resize(ResultsPosition::Right, cx))
                             .child(
                                 resizable_panel()
-                                    .size(px(200.0))
+                                    .size(editor_size)
                                     .size_range(px(200.0)..px(10_000.0))
                                     .child(editor_view),
                             )
                             .child(
                                 resizable_panel()
-                                    .size(px(200.0))
+                                    .size(results_size)
                                     .size_range(px(200.0)..px(10_000.0))
                                     .child(results_view),
                             )
@@ -1311,16 +1314,21 @@ impl Render for CodeDocument {
                         }
 
                         SqlQueryLayout::Split => {
+                            let (editor_size, results_size) =
+                                self.results_split.panel_weights(ResultsPosition::Bottom);
                             v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
+                                .on_resize(
+                                    self.remember_split_on_resize(ResultsPosition::Bottom, cx),
+                                )
                                 .child(
                                     resizable_panel()
-                                        .size(px(200.0))
+                                        .size(editor_size)
                                         .size_range(px(100.0)..px(1000.0))
                                         .child(editor_view),
                                 )
                                 .child(
                                     resizable_panel()
-                                        .size(px(200.0))
+                                        .size(results_size)
                                         .size_range(EditorMetrics::RESULTS_MIN_HEIGHT..px(1000.0))
                                         .child(results_view),
                                 )
