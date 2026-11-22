@@ -96,7 +96,10 @@ fn the_named_extremes_stay_readable_on_both_palettes(cx: &mut TestAppContext) {
         };
 
         for rgb in [
-            0xF4F1EC, 0xFFFFFF, 0x0E0C10, 0x000000, pane, 0x2F7D6D, 0x702963,
+            // The palette's own #702963 is no override: it installs the palette
+            // brand unchanged, which `the_palette_accent_is_untouched_without_an_override`
+            // covers.
+            0xF4F1EC, 0xFFFFFF, 0x0E0C10, 0x000000, pane, 0x2F7D6D,
         ] {
             cx.update(|cx| apply(setting, hex(rgb), cx));
             cx.update(|cx| assert_accent_is_readable(Theme::global(cx), setting, hex(rgb)));

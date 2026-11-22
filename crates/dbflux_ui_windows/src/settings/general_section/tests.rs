@@ -1205,7 +1205,7 @@ fn accent_entries_classify_the_palette_accent_a_custom_color_and_invalid_text() 
     assert_eq!(accent_entry_of(" #702963 "), AccentEntry::Palette);
     assert_eq!(
         accent_entry_of("#2f7d6d"),
-        AccentEntry::Custom(AccentColor::from_rgb(0x2F7D6D))
+        AccentEntry::Custom(AccentColor::from_rgb(0x2F7D6D)) // guardrail-allow: test accent value
     );
 
     for invalid in ["", "#2F7D6", "2F7D6D", "#GG7D6D", "teal"] {
@@ -1240,7 +1240,7 @@ fn a_valid_accent_is_dirty_saved_for_its_theme_only_and_applied() {
             section.save_general_settings(window, cx);
 
             let saved = section.app_state.read(cx).general_settings().clone();
-            assert_eq!(saved.accent_dark, Some(AccentColor::from_rgb(0x2F7D6D)));
+            assert_eq!(saved.accent_dark, Some(AccentColor::from_rgb(0x2F7D6D))); // guardrail-allow: test accent value
             assert_eq!(saved.accent_light, None, "Light keeps the palette accent");
             assert_ne!(primary_fill(cx), palette_fill, "the accent is applied");
         }),

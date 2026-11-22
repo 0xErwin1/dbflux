@@ -75,12 +75,14 @@ mod style_guardrails {
     /// Fragments that, when found in a file's path, exempt it from ALL checks
     /// (both spacing and color). These are canonical token/semantic/theme
     /// definition files where bare literals and color constructors are
-    /// legitimately defined, plus `chart/engine.rs` for canvas paint geometry.
+    /// legitimately defined, plus `chart/engine.rs` for canvas paint geometry
+    /// and `accent.rs`, which derives the accent roles from a user color.
     /// The token tables themselves moved to `bolt` and are exempted there.
     const FILE_EXEMPT_FRAGMENTS: &[&str] = &[
         "semantic.rs",
         "density.rs",
         "theme.rs",
+        "/accent.rs",
         "style_guardrails.rs",
         "/chart/engine.rs",
     ];

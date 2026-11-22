@@ -963,7 +963,7 @@ mod accent_setting_tests {
             cx.run_until_parked();
         };
 
-        save(cx, Some(AccentColor::from_rgb(0x2F7D6D)));
+        save(cx, Some(AccentColor::from_rgb(0x2F7D6D))); // guardrail-allow: test accent value, not a UI color
         assert_ne!(primary(cx), palette_accent, "the saved accent applies");
 
         save(cx, None);
@@ -1014,7 +1014,7 @@ mod accent_setting_tests {
                 )
                 .expect("test storage setup");
                 let mut settings = state.general_settings().clone();
-                settings.accent_dark = Some(AccentColor::from_rgb(0x2F7D6D));
+                settings.accent_dark = Some(AccentColor::from_rgb(0x2F7D6D)); // guardrail-allow: test accent value, not a UI color
                 state.update_general_settings(settings);
                 state
             })

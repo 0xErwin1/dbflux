@@ -437,7 +437,7 @@ impl GeneralSection {
             .flex_shrink_0()
             .border_1()
             .border_color(cx.theme().border)
-            .bg(Hsla::from(gpui::rgb(shown.rgb())));
+            .bg(Hsla::from(gpui::rgb(shown.rgb()))); // guardrail-allow: swatch of the user-chosen accent
 
         let control = layout::cursor_ring(
             self.is_at(row) && !self.gen_editing_field,
