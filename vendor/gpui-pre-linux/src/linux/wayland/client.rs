@@ -21,7 +21,6 @@ use calloop_wayland_source::WaylandSource;
 use collections::HashMap;
 use filedescriptor::Pipe;
 use gpui_util::ResultExt as _;
-use http_client::Url;
 use smallvec::SmallVec;
 use wayland_backend::client::ObjectId;
 use wayland_backend::protocol::WEnum;
@@ -84,14 +83,15 @@ use super::{
     window::{ImeInput, WaylandWindowStatePtr},
 };
 
+use crate::linux::file_uri_list::parse_file_uri_list;
 use crate::linux::{
     DOUBLE_CLICK_INTERVAL, LinuxCommon, LinuxKeyboardLayout, PIPE_READ_TIMEOUT, SCROLL_LINES,
-    capslock_from_xkb, cursor_style_to_icon_names, file_uri_list, get_xkb_compose_state,
+    capslock_from_xkb, cursor_style_to_icon_names, drag_uri_list, get_xkb_compose_state,
     is_within_click_distance, keystroke_from_xkb, keystroke_underlying_dead_key,
     modifiers_from_xkb, new_xkb_context, open_uri_internal, read_fd_with_timeout,
     reveal_path_internal,
     wayland::{
-        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
+        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, offered_mime_types},
         cursor::Cursor,
         drag_icon::{self, IconSpec},
         drag_source::{self, DragSession},
@@ -735,7 +735,7 @@ impl WaylandClientStatePtr {
         };
 
         let ExternalDragPayload::Files(paths) = payload;
-        let uri_list = file_uri_list(paths);
+        let uri_list = drag_uri_list(paths);
         if uri_list.is_empty() {
             return false;
         }
@@ -1550,7 +1550,7 @@ impl WaylandConnection {
                 return;
             };
             let data_source = primary_selection_manager.create_source(&state.globals.qh, ());
-            for mime_type in TEXT_MIME_TYPES {
+            for mime_type in offered_mime_types(state.clipboard.primary_item()) {
                 data_source.offer(mime_type.to_string());
             }
             data_source.offer(state.clipboard.self_mime());
@@ -1576,7 +1576,7 @@ impl WaylandConnection {
             };
             let data_source = data_device_manager
                 .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
-            for mime_type in TEXT_MIME_TYPES {
+            for mime_type in offered_mime_types(state.clipboard.item()) {
                 data_source.offer(mime_type.to_string());
             }
             data_source.offer(state.clipboard.self_mime());
@@ -3033,17 +3033,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                                 }
                             };
 
-                            let paths: SmallVec<[_; 2]> = file_list
-                                .lines()
-                                .filter_map(|path| Url::parse(path).log_err())
-                                .filter_map(|url| match url.to_file_path() {
-                                    Ok(url) => Some(url),
-                                    Err(()) => {
-                                        log::error!("Failed turn {url:?} into a file path");
-                                        None
-                                    }
-                                })
-                                .collect();
+                            let paths: SmallVec<[_; 2]> = parse_file_uri_list(&file_list).into();
                             let position = Point::new(x.into(), y.into());
 
                             // Prevent dropping text from other programs.
