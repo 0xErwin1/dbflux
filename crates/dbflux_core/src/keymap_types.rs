@@ -84,6 +84,9 @@ pub enum Command {
     /// Reformats the selection, or the statement under the cursor, with
     /// the connection's language service.
     FormatQuery,
+    /// Moves the cursor to the token the server named in the last failed
+    /// run, while the editor still marks it.
+    GoToQueryError,
 
     // === Results ===
     ExportResults,
@@ -313,6 +316,7 @@ impl Command {
             "open_script_file" => Some(Command::OpenScriptFile),
             "toggle_comment" => Some(Command::ToggleComment),
             "format_query" => Some(Command::FormatQuery),
+            "go_to_query_error" => Some(Command::GoToQueryError),
             "open_history" => Some(Command::ToggleHistoryDropdown),
             "cancel_query" => Some(Command::CancelQuery),
             "close_tab" => Some(Command::CloseCurrentTab),
@@ -427,6 +431,7 @@ impl Command {
             Command::AddExternalScriptsFolder => "Add external scripts folder…",
             Command::ToggleComment => "Toggle line comment",
             Command::FormatQuery => "Format query",
+            Command::GoToQueryError => "Go to query error",
 
             Command::ExportResults => "Export results",
             Command::ClearFilter => "Clear filter",
@@ -637,6 +642,7 @@ impl Command {
             Command::AddExternalScriptsFolder => "add_external_scripts_folder",
             Command::ToggleComment => "toggle_comment",
             Command::FormatQuery => "format_query",
+            Command::GoToQueryError => "go_to_query_error",
 
             Command::ExportResults => "export_results",
             Command::ClearFilter => "clear_filter",
@@ -865,6 +871,7 @@ impl Command {
             Command::AddExternalScriptsFolder,
             Command::ToggleComment,
             Command::FormatQuery,
+            Command::GoToQueryError,
             Command::ExportResults,
             Command::ClearFilter,
             Command::NextResultTab,
@@ -1068,7 +1075,8 @@ impl Command {
             | Command::OpenScriptFile
             | Command::AddExternalScriptsFolder
             | Command::ToggleComment
-            | Command::FormatQuery => "Editor",
+            | Command::FormatQuery
+            | Command::GoToQueryError => "Editor",
 
             Command::ExportResults
             | Command::ClearFilter
@@ -1804,6 +1812,7 @@ mod tests {
             "save_query",
             "toggle_comment",
             "format_query",
+            "go_to_query_error",
             "open_history",
             "cancel_query",
             "close_tab",

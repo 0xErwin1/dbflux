@@ -19,6 +19,11 @@ pub struct FormattedError {
     /// Location information if available.
     pub location: Option<ErrorLocation>,
 
+    /// Byte offset into the SQL the driver was asked to run where the server
+    /// reports the failure. Never shown in `to_display_string`; the editor
+    /// uses it to mark the offending token.
+    pub position: Option<usize>,
+
     /// Whether the error is retriable (e.g., transient network issues).
     pub retriable: bool,
 }
@@ -48,6 +53,11 @@ impl FormattedError {
 
     pub fn with_location(mut self, location: ErrorLocation) -> Self {
         self.location = Some(location);
+        self
+    }
+
+    pub fn with_position(mut self, position: usize) -> Self {
+        self.position = Some(position);
         self
     }
 

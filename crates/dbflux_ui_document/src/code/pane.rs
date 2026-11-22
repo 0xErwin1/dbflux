@@ -514,6 +514,7 @@ mod tests {
                 "run-in-new-tab",
                 "save",
                 "format",
+                "go-to-query-error",
                 "history",
                 "explain",
                 "chart",
@@ -527,6 +528,7 @@ mod tests {
                 .and_then(command_of)
         };
         assert_eq!(command("run"), Some(Command::RunQuery));
+        assert_eq!(command("go-to-query-error"), Some(Command::GoToQueryError));
         assert_eq!(command("run-in-new-tab"), Some(Command::RunQueryInNewTab));
         assert_eq!(command("save"), Some(Command::SaveQuery));
         assert_eq!(command("history"), Some(Command::ToggleHistoryDropdown));

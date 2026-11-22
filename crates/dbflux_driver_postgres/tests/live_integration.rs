@@ -2814,3 +2814,53 @@ fn postgres_server_notices_travel_with_the_result() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Error position
+// ---------------------------------------------------------------------------
+
+fn failing_position(
+    connection: &dyn dbflux_core::Connection,
+    request: &QueryRequest,
+) -> Option<usize> {
+    let error = connection
+        .execute(request)
+        .expect_err("the request must fail");
+
+    error.formatted().and_then(|formatted| formatted.position)
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_syntax_error_reports_the_offending_token_offset() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let sql = "SELECT 'é' AS name, FROM pg_class";
+
+        let position = failing_position(connection.as_ref(), &QueryRequest::new(sql))
+            .expect("a PostgreSQL syntax error carries a position");
+
+        assert_eq!(&sql[position..position + 4], "FROM");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_script_error_position_is_relative_to_the_whole_script() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let sql = "SELECT 'é';\n  SELECT 2;\n  SELECT 1 FROM WHERE;";
+
+        let unbounded = failing_position(connection.as_ref(), &QueryRequest::new(sql))
+            .expect("the batch error carries a position");
+        assert_eq!(&sql[unbounded..unbounded + 5], "WHERE");
+
+        let bounded = failing_position(connection.as_ref(), &QueryRequest::new(sql).with_limit(10))
+            .expect("the bounded batch error carries a position");
+        assert_eq!(&sql[bounded..bounded + 5], "WHERE");
+
+        Ok(())
+    })
+}

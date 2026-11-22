@@ -36,7 +36,7 @@ impl CodeDocument {
         self.run_diagnostics(cx);
     }
 
-    fn run_diagnostics(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn run_diagnostics(&mut self, cx: &mut Context<Self>) {
         let query_text = self.editor.input_state.read(cx).value().to_string();
 
         // Live diagnostics are driven by the connected driver's `LanguageService`
@@ -58,6 +58,22 @@ impl CodeDocument {
             Vec::new()
         };
 
+        // The server's own report goes after the language service's, so the
+        // debounced refresh that rebuilds the set never wipes it.
+        let mut diagnostics: Vec<InputDiagnostic> = diagnostics
+            .into_iter()
+            .map(Self::to_input_diagnostic)
+            .collect();
+        if let Some(server_diagnostic) = self.query_error_diagnostic(&query_text) {
+            diagnostics.push(server_diagnostic);
+            diagnostics.sort_by_key(|diagnostic| {
+                (
+                    diagnostic.range.start.line,
+                    diagnostic.range.start.character,
+                )
+            });
+        }
+
         self.editor.input_state.update(cx, |state, cx| {
             let text = state.text().clone();
 
@@ -68,7 +84,7 @@ impl CodeDocument {
             diagnostic_set.reset(&text);
 
             for diagnostic in diagnostics {
-                diagnostic_set.push(Self::to_input_diagnostic(diagnostic));
+                diagnostic_set.push(diagnostic);
             }
 
             cx.notify();

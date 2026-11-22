@@ -360,6 +360,7 @@ fn command_icon(id: &str) -> AppIcon {
         "open_script_file" | "add_external_scripts_folder" => AppIcon::Folder,
         "toggle_comment" | "focus_editor" => AppIcon::Code,
         "format_query" => AppIcon::Zap,
+        "go_to_query_error" => AppIcon::CircleAlert,
         "open_history" => AppIcon::History,
         "cancel_query" | "close_tab" => AppIcon::CircleX,
         "next_tab" => AppIcon::ChevronRight,

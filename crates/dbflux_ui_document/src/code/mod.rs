@@ -71,6 +71,7 @@ mod focus;
 mod format;
 mod live_output;
 pub(crate) mod pane;
+mod query_error;
 mod render;
 mod results_split;
 mod statements;
@@ -442,6 +443,9 @@ pub(super) struct EditorState {
     pub(super) gutter_style: Option<gpui_base::input::GutterStatementStyle>,
     /// Whether the installed gutter carries statements (false while hidden).
     pub(super) gutter_shown: bool,
+    /// The token the server named in the last failed run, shown as an error
+    /// diagnostic until the next edit or run.
+    pub(super) query_error: Option<query_error::QueryErrorMarker>,
 }
 
 /// Auto-save-to-disk machinery and saved-label UI feedback.
@@ -531,6 +535,9 @@ pub(super) struct PendingActions {
     script_confirm: Option<PendingScriptConfirm>,
     routine_definition: Option<String>,
     error: Option<String>,
+    /// The error toast's "Go to error" was clicked; the next render moves
+    /// the cursor, because a toast callback has no window.
+    go_to_query_error: bool,
 }
 
 #[derive(Clone)]
@@ -631,6 +638,9 @@ struct PendingQueryResult {
     exec_id: Uuid,
     query: String,
     result: Result<QueryResult, DbError>,
+    /// Where `query` starts in the buffer when it is exactly the buffer text
+    /// it came from, so a failure position can be marked on it.
+    sent_buffer_start: Option<usize>,
     /// Whether this execution is a script (vs a database query).
     /// Determines the audit event category and whether connection context is required.
     is_script: bool,
@@ -819,6 +829,7 @@ impl CodeDocument {
             |this, input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
                     this.finish_replace_once(_window, cx);
+                    this.clear_query_error(cx);
                     this.refresh_statements(cx);
                     let current_length = input.read(cx).text().len();
                     let previous_length =
@@ -1161,6 +1172,7 @@ impl CodeDocument {
                 statement_ranges: None,
                 gutter_style: None,
                 gutter_shown: false,
+                query_error: None,
             },
             source: SourceContext {
                 exec_ctx,
@@ -1935,6 +1947,7 @@ impl CodeDocument {
             }
             Command::ToggleComment => self.toggle_comment(window, cx),
             Command::FormatQuery => self.format_query(window, cx),
+            Command::GoToQueryError => self.go_to_query_error(window, cx),
             Command::Cancel | Command::CancelQuery if self.runner.is_primary_active() => {
                 self.cancel_query(cx);
                 true

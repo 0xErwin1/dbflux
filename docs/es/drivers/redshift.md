@@ -70,6 +70,7 @@ directamente sobre el cliente de wire protocol
   que la URI de conexión ya defina su propio parámetro de query
   `application_name`.
 - Vistas de tabla (`TableViewFeatures`): la vista Columnas de una tabla lee
+- Informa dónde rechazó el servidor un statement: un error de sintaxis o un nombre desconocido lleva la posición del token ofensor (`ErrorPosition::Original`, un índice de caracteres base 1 que el driver convierte en un desplazamiento en bytes dentro del SQL enviado), y el editor marca ese token. Se ignora una posición dentro de una query generada por el servidor (`ErrorPosition::Internal`).
   `pg_attribute` para obtener la codificación de cada columna
   (`format_encoding`), su posición en la clave de ordenación (compuesta o
   intercalada) y la clave de distribución, y `svv_table_info` para el estilo de

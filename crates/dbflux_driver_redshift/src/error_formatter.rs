@@ -1,5 +1,6 @@
 use dbflux_core::{
     ConnectionErrorFormatter, DbError, ErrorLocation, FormattedError, QueryErrorFormatter,
+    char_position_to_byte_offset,
 };
 
 /// Formats `postgres::Error` values raised by the Redshift wire client into
@@ -189,8 +190,32 @@ pub(crate) fn format_redshift_connection_error(
     formatted.into_connection_error()
 }
 
+/// The byte offset of the failing token in `sql`, the statement that was
+/// prepared. The server reports a 1-based character index and only an
+/// `Original` position points into the sent text; an `Internal` one points
+/// into a query the server generated. The formatter only sees the error, so
+/// the call site that holds the sent text converts the index.
+fn redshift_error_position(e: &postgres::Error, sql: &str) -> Option<usize> {
+    sent_byte_position(sql, e.as_db_error()?.position()?)
+}
+
+fn sent_byte_position(sql: &str, position: &postgres::error::ErrorPosition) -> Option<usize> {
+    let postgres::error::ErrorPosition::Original(characters) = position else {
+        return None;
+    };
+
+    char_position_to_byte_offset(sql, usize::try_from(*characters).ok()?)
+}
+
 pub(crate) fn format_redshift_query_error(e: &postgres::Error) -> DbError {
-    let formatted = RedshiftErrorFormatter::format_redshift_error(e);
+    format_redshift_query_error_in(e, None)
+}
+
+/// Formats a failure of `sql`, adding the position of the failing token when
+/// the server reports one.
+pub(crate) fn format_redshift_query_error_in(e: &postgres::Error, sql: Option<&str>) -> DbError {
+    let mut formatted = RedshiftErrorFormatter::format_redshift_error(e);
+    formatted.position = sql.and_then(|sql| redshift_error_position(e, sql));
     log::error!("Redshift query failed: {}", formatted.to_display_string());
     formatted.into_query_error()
 }
@@ -204,8 +229,32 @@ pub(crate) fn format_redshift_uri_error(e: &postgres::Error, uri: &str) -> DbErr
 
 #[cfg(test)]
 mod tests {
-    use super::{RedshiftErrorFormatter, format_redshift_connection_error};
+    use super::{RedshiftErrorFormatter, format_redshift_connection_error, sent_byte_position};
     use dbflux_core::{DbError, QueryErrorFormatter};
+    use postgres::error::ErrorPosition;
+
+    #[test]
+    fn an_original_position_becomes_a_byte_offset_in_the_sent_text() {
+        let sql = "SELECT 'é', FROM t";
+
+        let position = sent_byte_position(sql, &ErrorPosition::Original(13));
+
+        assert_eq!(position, Some(13));
+        assert_eq!(
+            position.map(|offset| &sql[offset..offset + 4]),
+            Some("FROM")
+        );
+    }
+
+    #[test]
+    fn an_internal_position_is_ignored() {
+        let internal = ErrorPosition::Internal {
+            position: 3,
+            query: "SELECT 1 +".to_string(),
+        };
+
+        assert_eq!(sent_byte_position("SELECT f()", &internal), None);
+    }
 
     #[test]
     fn connection_refused_maps_to_a_clear_message() {

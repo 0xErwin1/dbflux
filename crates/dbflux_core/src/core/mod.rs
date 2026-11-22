@@ -1,6 +1,7 @@
 pub(crate) mod blocking;
 pub(crate) mod error;
 pub(crate) mod error_formatter;
+pub(crate) mod error_position;
 pub(crate) mod execution_session;
 pub(crate) mod log_err;
 pub(crate) mod shutdown;
@@ -12,6 +13,9 @@ pub use error::{DbError, TransactionStateNote};
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
     QueryErrorFormatter, redact_uri_credentials, sanitize_uri,
+};
+pub use error_position::{
+    StatementLocator, byte_offset_to_line_column, char_position_to_byte_offset,
 };
 pub use execution_session::ExecutionSessionScope;
 pub use log_err::LogErr;

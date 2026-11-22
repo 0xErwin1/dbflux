@@ -107,6 +107,17 @@ impl CodeDocument {
 
         actions.push(
             PaneAction::command(
+                "go-to-query-error",
+                dbflux_i18n::t!("document.code.toolbar.go_to_query_error"),
+                Command::GoToQueryError,
+                context,
+            )
+            .icon(AppIcon::CircleAlert)
+            .enabled(self.has_query_error()),
+        );
+
+        actions.push(
+            PaneAction::command(
                 "history",
                 dbflux_i18n::t!("document.code.toolbar.query_history"),
                 Command::ToggleHistoryDropdown,
@@ -1135,6 +1146,8 @@ impl Render for CodeDocument {
         self.sync_statement_gutter_style(cx);
 
         self.process_pending_result(window, cx);
+
+        self.process_pending_go_to_query_error(window, cx);
 
         self.process_pending_set_query(window, cx);
 

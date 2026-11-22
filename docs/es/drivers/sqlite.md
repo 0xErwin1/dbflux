@@ -49,6 +49,7 @@ Base de datos embebida basada en archivos.
   acotar de forma segura: un pedido con límite de filas dirigido a instance
   metrics o inspectors, y un statement timeout solicitado.
 - Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
+- Informa dónde rechazó SQLite un statement: un error de sintaxis lleva el desplazamiento en bytes del token ofensor (`rusqlite::Error::SqlInputError`), desplazado por el inicio del statement cuando es uno de varios en un script, y el editor marca ese token.
   (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
   de una tabla origen, y un toggle de integridad referencial por conexión
   (`PRAGMA foreign_keys`) para migraciones seguras con FK.

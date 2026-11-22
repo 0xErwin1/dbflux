@@ -103,6 +103,25 @@ drivers. Script documents and other query languages keep the button disabled.
 On connections that offer it, the **Format statement** code action (`Ctrl+.` /
 `Cmd+.`) still makes the same change for the statement under the cursor.
 
+## Query errors
+
+When a query fails and the database says where, the editor marks the token it
+rejected with an error underline, and the error notification offers **Go to
+error** next to **Copy error**. The same action is **Go to query error** in the
+pane actions menu and the command palette, enabled only while a mark exists. It
+has no default key binding. Nothing moves on its own: the cursor and the focus
+stay where they were until you invoke it, and then the cursor lands on the
+marked token in the editor.
+
+The mark is placed on the statement that ran, whether that was the statement
+under the cursor, the whole buffer or the selection, and in a script it is on
+the statement that failed. It disappears at your first edit and when you run
+again. There is no mark when the database gives no position, when the text sent
+differs from the text in the editor (time macros are replaced before a query is
+sent), or when you changed the editor while the query was running. PostgreSQL,
+Redshift and SQLite report positions; the other drivers show the error without
+a mark. The position is never part of the notification text.
+
 ## Dangerous-query confirmation
 
 DBFlux detects dangerous operations across languages — SQL `DELETE`/`DROP`/

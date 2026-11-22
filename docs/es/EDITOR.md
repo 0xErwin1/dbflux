@@ -112,6 +112,25 @@ incluidos. Los documentos de script y los demás lenguajes de consulta mantienen
 el botón deshabilitado. En las conexiones que la ofrecen, la code action **Format statement** (`Ctrl+.` /
 `Cmd+.`) sigue haciendo el mismo cambio para el statement bajo el cursor.
 
+## Errores de query
+
+Cuando una query falla y la base de datos indica dónde, el editor subraya como
+error el token que rechazó, y la notificación del error ofrece **Ir al error**
+junto a **Copiar error**. La misma acción es **Ir al error de la consulta** en
+el menú de acciones del panel y en la paleta de comandos, y solo está habilitada
+mientras exista una marca. No tiene atajo de teclado por defecto. Nada se mueve
+solo: el cursor y el foco se quedan donde estaban hasta que la invocas, y
+entonces el cursor aterriza en el token marcado del editor.
+
+La marca se coloca en el statement que se ejecutó, ya sea el statement bajo el
+cursor, todo el buffer o la selección, y en un script está en el statement que
+falló. Desaparece con tu primera edición y cuando vuelves a ejecutar. No hay
+marca cuando la base de datos no da una posición, cuando el texto enviado difiere
+del texto del editor (las macros de tiempo se sustituyen antes de enviar la
+query) o cuando cambiaste el editor mientras la query se ejecutaba. PostgreSQL,
+Redshift y SQLite informan posiciones; los demás drivers muestran el error sin
+marca. La posición nunca forma parte del texto de la notificación.
+
 ## Confirmación de queries peligrosas
 
 DBFlux detecta operaciones peligrosas entre lenguajes — `DELETE`/`DROP`/

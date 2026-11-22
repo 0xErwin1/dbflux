@@ -1362,3 +1362,56 @@ fn sqlite_query_safety_capped_single_statement_with_trailing_comments_executes()
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Error position
+// ---------------------------------------------------------------------------
+
+fn error_position(connection: &dyn dbflux_core::Connection, request: &QueryRequest) -> usize {
+    let error = connection
+        .execute(request)
+        .expect_err("the request must fail");
+
+    error
+        .formatted()
+        .and_then(|formatted| formatted.position)
+        .expect("a SQLite syntax error carries the byte offset of the offending token")
+}
+
+#[test]
+fn sqlite_syntax_error_reports_the_offending_token_offset() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    let sql = "SELECT 1 FROM users WHERE = 1";
+
+    let position = error_position(connection.as_ref(), &QueryRequest::new(sql));
+
+    assert_eq!(&sql[position..position + 1], "=");
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_script_error_position_is_relative_to_the_whole_script() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    let sql =
+        "CREATE TABLE t (id INTEGER);\nINSERT INTO t VALUES ('é');\nSELECT 1 FROM t WHERE = 1;";
+
+    let position = error_position(connection.as_ref(), &QueryRequest::new(sql));
+
+    assert_eq!(&sql[position..position + 1], "=");
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_bounded_script_error_position_is_relative_to_the_whole_script() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    let sql = "SELECT 'é';\n  SELECT 2;\n  SELECT 1 FROM t WHERE = 1;";
+    let request = QueryRequest::new(sql).with_limit(10);
+
+    let position = error_position(connection.as_ref(), &request);
+
+    assert_eq!(&sql[position..position + 1], "=");
+
+    Ok(())
+}

@@ -22,6 +22,7 @@ Amazon Redshift 드라이버(읽기 전용 v1)로, `dbflux_driver_postgres` 위�
 - 쿼리 실행(`SELECT`/탐색)은 표준 `Connection::execute` 경로를 통해 타입이 지정된 열과 함께 행을 반환합니다. 쿼리 취소는 와이어 클라이언트의 취소 토큰을 통해 지원됩니다.
 - `RedshiftErrorFormatter`는 일반적인 연결 및 쿼리 실패(시간 초과, 연결 거부, 인증 실패, 접근할 수 없는 클러스터, `SQLSTATE`가 포함된 쿼리 오류)를 원시 디버그 출력 대신 명확한 드라이버 형식의 메시지로 매핑합니다.
 - 연결 URI가 자체 `application_name` 쿼리 매개변수를 이미 설정하지 않는 한 모든 연결에서 `application_name`을 `dbflux/<version>`으로 보고합니다.
+- 서버가 문을 거부한 위치를 보고합니다. 구문 오류나 알 수 없는 이름에는 문제가 된 토큰의 위치가 포함되며(`ErrorPosition::Original`, 1부터 시작하는 문자 인덱스를 드라이버가 전송한 SQL 안의 바이트 오프셋으로 변환), 편집기가 그 토큰을 표시합니다. 서버가 생성한 쿼리 안의 위치(`ErrorPosition::Internal`)는 무시합니다.
 
 ## 제한 사항
 
