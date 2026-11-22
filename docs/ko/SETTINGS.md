@@ -137,6 +137,11 @@ driver RPC 1.6 이상을 사용하고 드라이버가 `REQUEST_ROW_LIMIT`를 선
 
 ## 모양
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/appearance-dark.webp">
+  <img src="../images/settings/appearance-light.webp" alt="테마, 밀도, 언어, 글꼴, 스크롤바 설정이 보이는 설정 창의 모양 섹션">
+</picture>
+
 테마, 밀도, 언어, 글꼴. 저장은 [일반](#일반)에서 설명한 대로 동작합니다. 변경 사항을 바로 적용하고 백그라운드에서 기록합니다.
 
 | 설정 | 옵션 | 기본값 |

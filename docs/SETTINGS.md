@@ -147,6 +147,11 @@ stable databases are separated.
 
 ## Appearance
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/settings/appearance-dark.webp">
+  <img src="images/settings/appearance-light.webp" alt="The Settings window on the Appearance section, showing the theme, density, language, font and scrollbar settings">
+</picture>
+
 Theme, density, language and fonts. Save works as described under [General](#general): it applies the changes at once and writes them in the background.
 
 | Setting | Options | Default |

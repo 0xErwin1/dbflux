@@ -266,14 +266,14 @@ DEMO_CONNECTION_STEPS = (
 
 
 def theme_steps(theme: str) -> tuple[Step, ...]:
-    """Selects `theme` ("light" or "dark") in Settings > General and saves it."""
+    """Selects `theme` ("light" or "dark") in Settings > Appearance and saves it."""
 
     return (
         open_window("ctrl-,"),
-        wait_visible(f"segmented-theme-{theme}"),
+        ensure(wait_visible(f"segmented-theme-{theme}"), click("settings-nav-appearance")),
         ensure(wait_checked(f"segmented-theme-{theme}", True), click(f"segmented-theme-{theme}")),
         # The footer marks unsaved changes until they are saved.
-        ensure(wait_gone(r"^settings-unsaved-changes$"), click("save-general")),
+        ensure(wait_gone(r"^settings-unsaved-changes$"), click("save-appearance")),
         close_window("ctrl-w"),
     )
 
@@ -712,6 +712,14 @@ SHOTS = (
         steps=(
             open_window("ctrl-,"),
             wait_visible("save-general"),
+        ),
+    ),
+    Shot(
+        page="settings",
+        name="appearance",
+        steps=(
+            open_window("ctrl-,"),
+            ensure(wait_visible("save-appearance"), click("settings-nav-appearance")),
         ),
     ),
     Shot(

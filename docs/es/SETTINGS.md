@@ -152,6 +152,11 @@ las bases de datos Nightly y stable.
 
 ## Apariencia
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/appearance-dark.webp">
+  <img src="../images/settings/appearance-light.webp" alt="La ventana de Settings en la sección Apariencia, con los ajustes de tema, densidad, idioma, fuentes y barras de desplazamiento">
+</picture>
+
 Theme, densidad, idioma y fuentes. Guardar funciona como se describe en [General](#general): aplica los cambios al instante y los escribe en segundo plano.
 
 | Setting      | Opciones                 | Default |

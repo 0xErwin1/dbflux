@@ -105,6 +105,11 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 
 ## 外观
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/appearance-dark.webp">
+  <img src="../images/settings/appearance-light.webp" alt="设置窗口的外观部分，显示主题、密度、语言、字体与滚动条设置">
+</picture>
+
 主题、密度、语言和字体。保存的方式与[常规](#常规)中所述相同：立即应用更改，并在后台写入。
 
 | 设置项 | 选项 | 默认值 |

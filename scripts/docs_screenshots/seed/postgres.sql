@@ -6,7 +6,7 @@
 -- metrics database (postgres_metrics.sql), so the extension's schemas stay out
 -- of this one.
 
-CREATE EXTENSION vector;
+CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE customers (
     id          integer PRIMARY KEY,
