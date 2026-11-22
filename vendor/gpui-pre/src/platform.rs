@@ -3036,9 +3036,6 @@ pub enum ClipboardEntry {
     Image(Image),
     /// A file entry
     ExternalPaths(crate::ExternalPaths),
-    /// Whether the files in this item were copied or cut. Only meaningful next to an
-    /// [`ClipboardEntry::ExternalPaths`] entry.
-    FileOperation(FileOperation),
 }
 
 /// What the application that put files on the clipboard wants a paste to do with them.
@@ -3050,6 +3047,12 @@ pub enum FileOperation {
     /// The files are moved to the destination.
     Cut,
 }
+
+/// Metadata of the string entry that carries a file item's [`FileOperation`]. Only
+/// [`ClipboardItem::new_files`] writes it and only [`ClipboardItem::file_operation`] reads it, so
+/// `ClipboardEntry` stays free of file-operation variants.
+const FILE_OPERATION_COPY_MARKER: &str = "gpui:file-operation=copy";
+const FILE_OPERATION_CUT_MARKER: &str = "gpui:file-operation=cut";
 
 impl ClipboardItem {
     /// Create a new ClipboardItem::String with no associated metadata
@@ -3087,10 +3090,23 @@ impl ClipboardItem {
 
     /// Create a ClipboardItem holding files, which file managers paste according to `operation`.
     pub fn new_files(paths: impl IntoIterator<Item = PathBuf>, operation: FileOperation) -> Self {
+        let paths: smallvec::SmallVec<[PathBuf; 2]> = paths.into_iter().collect();
+        let text = paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let marker = match operation {
+            FileOperation::Copy => FILE_OPERATION_COPY_MARKER,
+            FileOperation::Cut => FILE_OPERATION_CUT_MARKER,
+        };
         Self {
             entries: vec![
-                ClipboardEntry::ExternalPaths(crate::ExternalPaths(paths.into_iter().collect())),
-                ClipboardEntry::FileOperation(operation),
+                ClipboardEntry::ExternalPaths(crate::ExternalPaths(paths)),
+                ClipboardEntry::String(ClipboardString {
+                    text,
+                    metadata: Some(marker.to_owned()),
+                }),
             ],
         }
     }
@@ -3112,15 +3128,18 @@ impl ClipboardItem {
     /// Files without an explicit operation count as copied.
     pub fn file_operation(&self) -> Option<FileOperation> {
         self.file_paths()?;
-        Some(
-            self.entries
-                .iter()
-                .find_map(|entry| match entry {
-                    ClipboardEntry::FileOperation(operation) => Some(*operation),
-                    _ => None,
-                })
-                .unwrap_or_default(),
-        )
+        let is_cut = self.entries.iter().any(|entry| {
+            matches!(
+                entry,
+                ClipboardEntry::String(ClipboardString { metadata: Some(metadata), .. })
+                    if metadata == FILE_OPERATION_CUT_MARKER
+            )
+        });
+        Some(if is_cut {
+            FileOperation::Cut
+        } else {
+            FileOperation::Copy
+        })
     }
 
     /// Concatenates together all the ClipboardString entries in the item.

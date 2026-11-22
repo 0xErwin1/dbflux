@@ -425,4 +425,36 @@ mod tests {
         );
         assert_eq!(item.text(), Some("/tmp/a\n/tmp/b".into()));
     }
+
+    #[test]
+    fn file_items_use_only_the_public_entry_kinds() {
+        let cut = gpui::ClipboardItem::new_files(
+            [PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")],
+            gpui::FileOperation::Cut,
+        );
+        let entries = cut.entries();
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(entries[0], gpui::ClipboardEntry::ExternalPaths(_)));
+        let gpui::ClipboardEntry::String(text) = &entries[1] else {
+            panic!("expected the operation to ride on a string entry");
+        };
+        assert_eq!(text.text, "/tmp/a\n/tmp/b");
+        assert!(text.metadata.is_some());
+        assert_eq!(cut.text(), Some("/tmp/a\n/tmp/b".into()));
+    }
+
+    #[test]
+    fn a_text_item_cannot_pose_as_a_file_item() {
+        let text = gpui::ClipboardItem::new_string_with_metadata("x".into(), "other".into());
+        assert_eq!(text.file_operation(), None);
+        let cut =
+            gpui::ClipboardItem::new_files([PathBuf::from("/tmp/a")], gpui::FileOperation::Cut);
+        let marker = match &cut.entries()[1] {
+            gpui::ClipboardEntry::String(text) => text.metadata.clone().unwrap(),
+            _ => unreachable!(),
+        };
+        let forged = gpui::ClipboardItem::new_string_with_metadata("x".into(), marker);
+        assert_eq!(forged.file_operation(), None);
+        assert_eq!(forged.file_paths(), None);
+    }
 }
