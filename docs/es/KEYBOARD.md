@@ -141,8 +141,8 @@ del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
 controles de conexión, así que su barra de contexto solo contiene un botón
 **Acciones**, que `Ctrl+k` enfoca y que se pulsa con `Enter`, `m` o un clic. El
 menú lista Ejecutar (Cancelar mientras corre una query), Ejecutar en
-una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar y
-Gráfico, cada una con su atajo cuando lo tiene. Muévete con `j` / `k` y elige con
+una pestaña nueva, Guardar, Formatear, Ir al error de la consulta (habilitado
+mientras hay un error marcado), Historial de consultas, Explicar y Gráfico, cada una con su atajo cuando lo tiene. Muévete con `j` / `k` y elige con
 `Enter`, como en cualquier [menú contextual](#menú-contextual); `Escape` lo
 cierra. Mientras la consulta tiene resultados, el menú sigue con la cabecera de
 resultados: Actualizar y el intervalo de actualización automática, Pestaña de

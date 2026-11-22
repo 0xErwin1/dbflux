@@ -54,6 +54,11 @@ pub enum FakeQueryOutcome {
     // Box to keep all variants at a similar size; QueryResult grew with metadata_extra.
     Success(Box<QueryResult>),
     Error(String),
+    /// A failure the server pinned to a byte offset of the SQL it received.
+    ErrorAt {
+        message: String,
+        position: usize,
+    },
     Timeout,
     Cancelled,
 }
@@ -67,6 +72,9 @@ impl FakeQueryOutcome {
         match self {
             Self::Success(result) => Ok(*result.clone()),
             Self::Error(message) => Err(Box::new(DbError::query_failed(message.clone()))),
+            Self::ErrorAt { message, position } => Err(Box::new(DbError::QueryFailed(
+                dbflux_core::FormattedError::new(message.clone()).with_position(*position),
+            ))),
             Self::Timeout => Err(Box::new(DbError::Timeout)),
             Self::Cancelled => Err(Box::new(DbError::Cancelled)),
         }
@@ -227,8 +235,32 @@ impl FakeDriver {
         self
     }
 
+    pub fn with_query_error_at(
+        self,
+        sql: impl Into<String>,
+        message: impl Into<String>,
+        position: usize,
+    ) -> Self {
+        rwlock_write(&self.state.query_outcomes).insert(
+            sql.into(),
+            FakeQueryOutcome::ErrorAt {
+                message: message.into(),
+                position,
+            },
+        );
+        self
+    }
+
     pub fn with_default_result(self, result: QueryResult) -> Self {
         *rwlock_write(&self.state.default_outcome) = Some(FakeQueryOutcome::success(result));
+        self
+    }
+
+    pub fn with_default_error_at(self, message: impl Into<String>, position: usize) -> Self {
+        *rwlock_write(&self.state.default_outcome) = Some(FakeQueryOutcome::ErrorAt {
+            message: message.into(),
+            position,
+        });
         self
     }
 

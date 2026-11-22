@@ -956,9 +956,14 @@ impl Connection for SqliteConnection {
             }
 
             match req.limit {
-                Some(limit) if bounded_statements.len() > 1 => {
-                    execute_bounded_batch(&conn, &bounded_statements, limit, start, &self.cancelled)
-                }
+                Some(limit) if bounded_statements.len() > 1 => execute_bounded_batch(
+                    &conn,
+                    &req.sql,
+                    &bounded_statements,
+                    limit,
+                    start,
+                    &self.cancelled,
+                ),
                 _ => execute_sql(&conn, &req.sql, req.limit, start, &self.cancelled),
             }
         };
@@ -1873,10 +1878,13 @@ fn execute_sql(
     }
 
     let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
+    let mut locator = dbflux_core::StatementLocator::new(sql);
     for statement in &statements {
-        result_sets.push(execute_one_statement(
-            conn, statement, None, start, cancelled,
-        )?);
+        let statement_start = locator.locate(statement);
+        result_sets.push(
+            execute_one_statement(conn, statement, None, start, cancelled)
+                .map_err(|error| dbflux_core::StatementLocator::place(error, statement_start))?,
+        );
     }
 
     let mut primary = result_sets.remove(0);
@@ -1965,6 +1973,7 @@ fn execute_query_only_statements(
 
     let mut remaining_rows = limit;
     let mut primary: Option<QueryResult> = None;
+    let mut locator = dbflux_core::StatementLocator::new(sql);
 
     for statement in &statements {
         if !read_query_only(conn)? {
@@ -1973,7 +1982,9 @@ fn execute_query_only_statements(
             ));
         }
 
-        let result = execute_one_statement(conn, statement, remaining_rows, start, cancelled)?;
+        let statement_start = locator.locate(statement);
+        let result = execute_one_statement(conn, statement, remaining_rows, start, cancelled)
+            .map_err(|error| dbflux_core::StatementLocator::place(error, statement_start))?;
 
         if let Some(rows) = remaining_rows.as_mut() {
             let retained_rows = u32::try_from(result.rows.len()).unwrap_or(u32::MAX);
@@ -2041,6 +2052,7 @@ fn settle_failed_transaction(
 /// stops at the first failure and the first result set is the primary one.
 fn execute_bounded_batch(
     conn: &RusqliteConnection,
+    request: &str,
     statements: &[&str],
     limit: u32,
     start: Instant,
@@ -2048,10 +2060,12 @@ fn execute_bounded_batch(
 ) -> Result<QueryResult, DbError> {
     let mut remaining_rows = limit;
     let mut primary: Option<QueryResult> = None;
+    let mut locator = dbflux_core::StatementLocator::new(request);
 
     for statement in statements {
-        let result =
-            execute_one_statement(conn, statement, Some(remaining_rows), start, cancelled)?;
+        let statement_start = locator.locate(statement);
+        let result = execute_one_statement(conn, statement, Some(remaining_rows), start, cancelled)
+            .map_err(|error| dbflux_core::StatementLocator::place(error, statement_start))?;
 
         let retained_rows = u32::try_from(result.rows.len()).unwrap_or(u32::MAX);
         remaining_rows = remaining_rows.saturating_sub(retained_rows);
@@ -2327,6 +2341,19 @@ impl SqliteErrorFormatter {
 
                 FormattedError::new(message)
                     .with_code(format!("{:?} ({})", err.code, err.extended_code))
+            }
+            rusqlite::Error::SqlInputError { error, offset, .. } => {
+                let mut formatted = FormattedError::new(e.to_string())
+                    .with_code(format!("{:?} ({})", error.code, error.extended_code));
+
+                // The offset is a byte offset into the statement that was
+                // prepared; the caller shifts it to the start of that
+                // statement in the request.
+                if let Ok(offset) = usize::try_from(*offset) {
+                    formatted = formatted.with_position(offset);
+                }
+
+                formatted
             }
             _ => FormattedError::new(e.to_string()),
         }
@@ -4090,5 +4117,42 @@ mod read_only_tests {
 
         assert!(state.lock().expect("state mutex").is_autocommit());
         assert!(!query_only_enabled(&state));
+    }
+
+    #[test]
+    fn a_syntax_error_maps_to_a_position_inside_the_prepared_statement() {
+        let connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
+        let sql = "SELECT 1 FROM items WHERE = 1";
+        let error = connection
+            .prepare(sql)
+            .expect_err("the statement is invalid");
+
+        let formatted = super::SqliteErrorFormatter::format_sqlite_error(&error);
+
+        assert_eq!(formatted.position, Some(sql.find('=').expect("token")));
+    }
+
+    #[test]
+    fn an_error_without_an_input_token_has_no_position() {
+        let formatted =
+            super::SqliteErrorFormatter::format_sqlite_error(&rusqlite::Error::QueryReturnedNoRows);
+
+        assert_eq!(formatted.position, None);
+    }
+
+    #[test]
+    fn a_read_only_script_error_position_is_relative_to_the_whole_script() {
+        let (_state, connection) = connection_with_one_row();
+        let sql = "SELECT 'é';\n  SELECT id FROM items WHERE = 1";
+
+        let error = connection
+            .execute(&read_only(sql))
+            .expect_err("the second statement is invalid");
+
+        let position = error
+            .formatted()
+            .and_then(|formatted| formatted.position)
+            .expect("the syntax error carries a position");
+        assert_eq!(&sql[position..=position], "=");
     }
 }

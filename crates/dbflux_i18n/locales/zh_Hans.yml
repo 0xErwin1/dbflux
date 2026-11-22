@@ -1283,6 +1283,7 @@ document:
       save: 保存
       format: 格式化
       formatter_unavailable: 格式化程序不可用
+      go_to_query_error: 转到查询错误
       query_history: 查询历史
       explain_query: 解释查询
       open_in_chart: 在图表文档中打开当前查询
@@ -1437,6 +1438,7 @@ document:
       task:
         run_script: "执行 %{name} 脚本"
       copy_error: 复制错误
+      go_to_error: 转到错误
       result_tab_title: "结果 %{index}"
       count_rows_failed: 无法统计查询的行数
       next_rows_failed: "无法加载查询的更多行"
@@ -4470,6 +4472,8 @@ palette:
       name: 切换注释
     format_query:
       name: 格式化查询
+    go_to_query_error:
+      name: 转到查询错误
     open_history:
       name: 打开查询历史
     cancel_query:
@@ -4896,6 +4900,7 @@ settings:
       add_external_scripts_folder: "添加外部脚本文件夹…"
       toggle_comment: 切换注释
       format_query: 格式化查询
+      go_to_query_error: 转到查询错误
       export_results: 导出结果
       clear_filter: 清除筛选
       next_result_tab: 下一个结果标签页

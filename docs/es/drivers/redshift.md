@@ -77,6 +77,7 @@ directamente sobre el cliente de wire protocol
   proporción sin ordenar de la tabla. La vista Datos incorpora un selector de
   columnas que nombra en la query solo las columnas elegidas. Ver [Columnas y
   particiones](../TABLE_VIEWS.md).
+- Informa dónde rechazó el servidor un statement: un error de sintaxis o un nombre desconocido lleva la posición del token ofensor (`ErrorPosition::Original`, un índice de caracteres base 1 que el driver convierte en un desplazamiento en bytes dentro del SQL enviado), y el editor marca ese token. Se ignora una posición dentro de una query generada por el servidor (`ErrorPosition::Internal`). El editor marca el token solo mientras el texto enviado siga coincidiendo con el del editor: una edición antes de que vuelva el error, o un cambio del texto antes de enviarlo, no deja marca.
 
 ## Limitaciones
 

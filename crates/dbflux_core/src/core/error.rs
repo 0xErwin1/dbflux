@@ -151,15 +151,8 @@ impl DbError {
     /// happened to the transaction the failure touched. Variants without a
     /// [`FormattedError`] carry no hint and are returned unchanged.
     pub fn with_transaction_note(mut self, note: TransactionStateNote) -> Self {
-        let formatted = match &mut self {
-            Self::ConnectionFailed(f)
-            | Self::QueryFailed(f)
-            | Self::AuthFailed(f)
-            | Self::ConstraintViolation(f)
-            | Self::SyntaxError(f)
-            | Self::PermissionDenied(f)
-            | Self::ObjectNotFound(f) => f,
-            _ => return self,
+        let Some(formatted) = self.formatted_mut() else {
+            return self;
         };
 
         formatted.hint = Some(match formatted.hint.take() {
@@ -168,6 +161,44 @@ impl DbError {
         });
 
         self
+    }
+
+    /// Moves the error position forward by `start` bytes.
+    ///
+    /// A driver that runs one statement of a script reports the position
+    /// inside that statement; the caller knows where the statement starts in
+    /// the request and shifts the position to be relative to the request.
+    pub fn with_position_shifted(mut self, start: usize) -> Self {
+        if let Some(formatted) = self.formatted_mut()
+            && let Some(position) = formatted.position.as_mut()
+        {
+            *position += start;
+        }
+
+        self
+    }
+
+    /// Drops the error position, for a failure whose statement cannot be
+    /// located in the request, so no marker points at the wrong token.
+    pub fn without_position(mut self) -> Self {
+        if let Some(formatted) = self.formatted_mut() {
+            formatted.position = None;
+        }
+
+        self
+    }
+
+    fn formatted_mut(&mut self) -> Option<&mut FormattedError> {
+        match self {
+            Self::ConnectionFailed(f)
+            | Self::QueryFailed(f)
+            | Self::AuthFailed(f)
+            | Self::ConstraintViolation(f)
+            | Self::SyntaxError(f)
+            | Self::PermissionDenied(f)
+            | Self::ObjectNotFound(f) => Some(f),
+            _ => None,
+        }
     }
 }
 
@@ -234,5 +265,41 @@ mod tests {
     fn transaction_note_leaves_variants_without_formatted_error_unchanged() {
         let error = DbError::Timeout.with_transaction_note(TransactionStateNote::Aborted);
         assert!(matches!(error, DbError::Timeout));
+    }
+
+    #[test]
+    fn position_is_not_part_of_the_display_string() {
+        let with_position = FormattedError::new("syntax error").with_position(7);
+        let without = FormattedError::new("syntax error");
+
+        assert_eq!(
+            with_position.to_display_string(),
+            without.to_display_string()
+        );
+    }
+
+    #[test]
+    fn shifting_moves_the_position_by_the_statement_start() {
+        let error = DbError::SyntaxError(FormattedError::new("boom").with_position(4))
+            .with_position_shifted(10);
+
+        assert_eq!(error.formatted().and_then(|f| f.position), Some(14));
+    }
+
+    #[test]
+    fn without_position_drops_the_position() {
+        let error =
+            DbError::SyntaxError(FormattedError::new("boom").with_position(4)).without_position();
+
+        assert_eq!(error.formatted().and_then(|f| f.position), None);
+    }
+
+    #[test]
+    fn shifting_leaves_an_error_without_position_unchanged() {
+        let error = DbError::query_failed("boom").with_position_shifted(10);
+        assert_eq!(error.formatted().and_then(|f| f.position), None);
+
+        let timeout = DbError::Timeout.with_position_shifted(10);
+        assert!(matches!(timeout, DbError::Timeout));
     }
 }

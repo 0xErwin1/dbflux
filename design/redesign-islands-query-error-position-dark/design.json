@@ -1,0 +1,13 @@
+{
+  "title": "DBFlux redesign: Query error position (#1030) \u00b7 dark",
+  "brief": "Issue #1030 as reshaped by the maintainer: mark the error where the server reports it with an editor diagnostic, and let the user jump there on request with Go to error; nothing moves on its own.",
+  "artboards": [
+    {
+      "file": "01-isl-query-error-position.html",
+      "title": "Failed run marker, Go to error, menu and palette entries, no-position state",
+      "tradeoff": "The jump lives on the toast and as a command without a default key, so it never competes with typing; users who dismiss the toast find it in the pane actions menu or palette.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

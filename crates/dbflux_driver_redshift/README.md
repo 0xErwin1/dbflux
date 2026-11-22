@@ -24,6 +24,7 @@ Amazon Redshift driver for DBFlux (read-only v1), built directly on the [`postgr
 - `RedshiftErrorFormatter` maps common connection and query failures (timeouts, refused connections, authentication failures, unreachable clusters, `SQLSTATE`-bearing query errors) to clear, driver-formatted messages instead of raw debug output.
 - Reports `application_name` as `dbflux/<version>` on every connection, unless the connection URI already sets its own `application_name` query parameter.
 - Table views (`TableViewFeatures`): a table's Columns view reads `pg_attribute` for each column's encoding (`format_encoding`), sort key position (compound or interleaved) and distribution key, and `svv_table_info` for the table's distribution style, rows, size (counted in 1 MB blocks) and unsorted share. The Data view gets a column picker that names only the chosen columns in the query. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
+- Reports where the server rejected a statement: a syntax error or an unknown name carries the position of the offending token (`ErrorPosition::Original`, a 1-based character index that the driver converts to a byte offset into the SQL it sent), and the editor marks that token. A position inside a query the server generated (`ErrorPosition::Internal`) is ignored. The editor marks the token only while the text that was sent still matches the editor: an edit before the error returns, or a text change before sending, leaves no mark.
 
 ## Limitations
 

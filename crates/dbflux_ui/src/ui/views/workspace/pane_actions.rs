@@ -551,6 +551,7 @@ mod tests {
                 "run-in-new-tab",
                 "save",
                 "format",
+                "go-to-query-error",
                 "history",
                 "explain",
                 "chart",

@@ -2004,6 +2004,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.editor"),
             ),
             PaletteCommand::new(
+                "go_to_query_error",
+                dbflux_i18n::t!("palette.command.go_to_query_error.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
                 "open_history",
                 dbflux_i18n::t!("palette.command.open_history.name"),
                 dbflux_i18n::t!("palette.category.editor"),

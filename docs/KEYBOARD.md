@@ -135,8 +135,9 @@ from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
 the execution context bar, where `m` (or `Shift+F10`) opens it too. A script
 editor (Lua, Python, Bash) has no connection controls, so its context bar holds
 only an **Actions** button, which `Ctrl+k` focuses and `Enter`, `m` or a click
-presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Query
-history, Explain and Chart, each with its shortcut when it has one. Move with
+presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Go to
+query error (enabled while a failed query's error is marked), Query history,
+Explain and Chart, each with its shortcut when it has one. Move with
 `j` / `k` and choose with `Enter`, as in any [context menu](#context-menu);
 `Escape` closes it. While the query has results, the menu goes on with the
 results header: Refresh and the auto-refresh interval, Next and Previous result

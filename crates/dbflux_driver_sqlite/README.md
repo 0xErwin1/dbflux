@@ -21,6 +21,7 @@ Embedded file-based database.
 - Rejects, before any preparation or execution, requests it cannot bound safely: a row-limited request aimed at instance metrics or inspectors, and a requested statement timeout.
 - Batched primary-key row lookup (`fetch_rows_by_pks`): one `WHERE pk IN (...)` statement per chunk of at most 100 values, with an optional column projection; used to resolve foreign-key labels in the data grid.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, and a per-connection referential-integrity toggle (`PRAGMA foreign_keys`) for FK-safe migrations.
+- Reports where SQLite rejected a statement, when SQLite gives a position: a syntax error with an offending token carries its byte offset (`rusqlite::Error::SqlInputError`), shifted by the start of the statement when it is one of several in a script, and the editor marks that token. The editor marks the token only while the text that was sent still matches the editor: an edit before the error returns, or a text change before sending, leaves no mark. An error without a token, such as an incomplete `SELECT * FROM`, has no position and no mark.
 
 ## Limitations
 

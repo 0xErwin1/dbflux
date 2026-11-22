@@ -35,7 +35,10 @@ use dbflux_core::{
     strip_leading_comments, validate_ddl_fragment, when_checked, when_unchecked, with_default,
     with_help,
 };
-use dbflux_core::{decode_uri_component, split_uri_host_port, uri_host};
+use dbflux_core::{
+    StatementLocator, char_position_to_byte_offset, decode_uri_component, split_uri_host_port,
+    uri_host,
+};
 use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use half::f16;
 use postgres::types::{Date as PgDate, FromSql, Kind, Timestamp as PgTimestamp, Type};
@@ -2031,7 +2034,7 @@ impl Connection for PostgresConnection {
                     log::info!("[QUERY] Query {} was cancelled during prepare", query_id);
                     DbError::Cancelled
                 } else {
-                    format_pg_statement_error(&e)
+                    format_pg_statement_error(&e, SentStatement::whole(&req.sql))
                 }
             })?;
 
@@ -2054,7 +2057,7 @@ impl Connection for PostgresConnection {
                     log::info!("[QUERY] Query {} was cancelled", query_id);
                     DbError::Cancelled
                 } else {
-                    format_pg_statement_error(&e)
+                    format_pg_statement_error(&e, SentStatement::whole(&req.sql))
                 }
             })?;
 
@@ -5234,8 +5237,61 @@ fn format_pg_error(e: &postgres::Error, host: &str, port: u16) -> DbError {
     formatted.into_connection_error()
 }
 
+/// A statement the driver sent and where it starts in the request.
+///
+/// The server reports an error position as a 1-based character index into the
+/// statement it parsed, and `FormattedError::position` is a byte offset into
+/// the request. The formatter only sees the error, so the call site that knows
+/// the sent text converts the character index (`char_position_to_byte_offset`)
+/// and adds the statement start.
+#[derive(Clone, Copy)]
+struct SentStatement<'a> {
+    text: &'a str,
+    start: usize,
+}
+
+impl<'a> SentStatement<'a> {
+    /// The whole request, parsed as one text.
+    fn whole(text: &'a str) -> Option<Self> {
+        Some(Self { text, start: 0 })
+    }
+
+    /// One statement of `request`, `None` when it cannot be located there.
+    fn within(locator: &mut StatementLocator<'_>, text: &'a str) -> Option<Self> {
+        Some(Self {
+            text,
+            start: locator.locate(text)?,
+        })
+    }
+}
+
+/// The byte offset of the failing token in the request. Only
+/// `ErrorPosition::Original` points into the sent text; an `Internal`
+/// position points into a query the server generated, such as a PL/pgSQL
+/// body, and is ignored.
+fn pg_error_position(e: &postgres::Error, sent: Option<SentStatement<'_>>) -> Option<usize> {
+    sent_byte_position(sent?, e.as_db_error()?.position()?)
+}
+
+fn sent_byte_position(
+    sent: SentStatement<'_>,
+    position: &postgres::error::ErrorPosition,
+) -> Option<usize> {
+    let postgres::error::ErrorPosition::Original(characters) = position else {
+        return None;
+    };
+    let offset = char_position_to_byte_offset(sent.text, usize::try_from(*characters).ok()?)?;
+
+    Some(sent.start + offset)
+}
+
 pub(crate) fn format_pg_query_error(e: &postgres::Error) -> DbError {
-    let formatted = PostgresErrorFormatter::format_postgres_error(e);
+    format_pg_query_error_at(e, None)
+}
+
+fn format_pg_query_error_at(e: &postgres::Error, sent: Option<SentStatement<'_>>) -> DbError {
+    let mut formatted = PostgresErrorFormatter::format_postgres_error(e);
+    formatted.position = pg_error_position(e, sent);
     let message = formatted.to_display_string();
     log::error!("PostgreSQL query failed: {}", message);
     formatted.into_query_error()
@@ -5247,8 +5303,8 @@ pub(crate) fn format_pg_query_error(e: &postgres::Error) -> DbError {
 /// earlier execution opened and the server already aborted, so the error tells
 /// the user the session needs a ROLLBACK. The driver does not roll it back: the
 /// user may still want `ROLLBACK TO SAVEPOINT`.
-fn format_pg_statement_error(e: &postgres::Error) -> DbError {
-    let error = format_pg_query_error(e);
+fn format_pg_statement_error(e: &postgres::Error, sent: Option<SentStatement<'_>>) -> DbError {
+    let error = format_pg_query_error_at(e, sent);
 
     if is_in_failed_transaction(e) {
         error.with_transaction_note(TransactionStateNote::Aborted)
@@ -5273,8 +5329,13 @@ fn is_in_failed_transaction(e: &postgres::Error) -> bool {
 /// Only a transaction the script opened is rolled back. A batch whose own
 /// error is 25P02 ran inside a transaction that was already aborted, so that
 /// transaction predates the script and is left for the user to end.
-fn recover_from_failed_batch(client: &mut Client, sql: &str, e: &postgres::Error) -> DbError {
-    let error = format_pg_query_error(e);
+fn recover_from_failed_batch(
+    client: &mut Client,
+    sql: &str,
+    failed: Option<SentStatement<'_>>,
+    e: &postgres::Error,
+) -> DbError {
+    let error = format_pg_query_error_at(e, failed);
 
     if !session_in_aborted_transaction(client) {
         return error;
@@ -5525,7 +5586,14 @@ fn execute_statement_batch(
             log::info!("[QUERY] Batch query {} was cancelled", query_id);
             return Err(DbError::Cancelled);
         }
-        Err(e) => return Err(recover_from_failed_batch(client, sql, &e)),
+        Err(e) => {
+            return Err(recover_from_failed_batch(
+                client,
+                sql,
+                SentStatement::whole(sql),
+                &e,
+            ));
+        }
     };
 
     let total_time = start.elapsed();
@@ -5615,7 +5683,7 @@ fn execute_bounded_request(
 
     let (initial_block, prepared) = if statements.len() > 1 {
         prepare_batch_candidate(client, sql)
-            .map_err(|error| bounded_statement_error(&error, query_id))?
+            .map_err(|error| bounded_statement_error(&error, query_id, None))?
     } else {
         (BatchBlock::None, client.prepare(sql))
     };
@@ -5637,7 +5705,13 @@ fn execute_bounded_request(
                 cancelled,
             );
         }
-        Err(error) => return Err(bounded_statement_error(&error, query_id)),
+        Err(error) => {
+            return Err(bounded_statement_error(
+                &error,
+                query_id,
+                SentStatement::whole(sql),
+            ));
+        }
     };
 
     // A procedure that commits or rolls back fails inside the transaction
@@ -5646,14 +5720,14 @@ fn execute_bounded_request(
         && !statement.columns().is_empty()
         && !split_leading_keyword(sql).0.eq_ignore_ascii_case("CALL")
         && let Some(result) = fetch_first_page(client, &statement, limit, start)
-            .map_err(|error| bounded_statement_error(&error, query_id))?
+            .map_err(|error| bounded_statement_error(&error, query_id, SentStatement::whole(sql)))?
     {
         return Ok(result);
     }
 
     let mut remaining_rows = limit as usize;
     stream_bounded_statement(client, &statement, &mut remaining_rows, start)
-        .map_err(|error| bounded_statement_error(&error, query_id))
+        .map_err(|error| bounded_statement_error(&error, query_id, SentStatement::whole(sql)))
 }
 
 /// Fetches at most `limit` rows of a row-returning statement through a
@@ -5768,12 +5842,16 @@ fn prepare_batch_candidate(
     Ok((BatchBlock::Explicit, prepared))
 }
 
-fn bounded_statement_error(error: &postgres::Error, query_id: Uuid) -> DbError {
+fn bounded_statement_error(
+    error: &postgres::Error,
+    query_id: Uuid,
+    sent: Option<SentStatement<'_>>,
+) -> DbError {
     if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
         log::info!("[QUERY] Query {} was cancelled", query_id);
         DbError::Cancelled
     } else {
-        format_pg_statement_error(error)
+        format_pg_statement_error(error, sent)
     }
 }
 
@@ -5976,6 +6054,7 @@ fn execute_bounded_batch(
     let mut block = initial_block;
     let mut remaining_rows = limit as usize;
     let mut results = Vec::with_capacity(statements.len());
+    let mut locator = StatementLocator::new(sql);
 
     for ((statement, control), opens) in statements.iter().zip(&controls).zip(opens_implicit_block)
     {
@@ -6008,10 +6087,11 @@ fn execute_bounded_batch(
         if opens {
             client
                 .batch_execute("BEGIN")
-                .map_err(|error| recover_from_failed_batch(client, sql, &error))?;
+                .map_err(|error| recover_from_failed_batch(client, sql, None, &error))?;
             block = BatchBlock::Implicit;
         }
 
+        let sent = SentStatement::within(&mut locator, statement);
         let outcome = client.prepare(statement).and_then(|prepared| {
             stream_bounded_statement(client, &prepared, &mut remaining_rows, start)
         });
@@ -6026,7 +6106,7 @@ fn execute_bounded_batch(
                     log::info!("[QUERY] Batch query {} was cancelled", query_id);
                     return Err(DbError::Cancelled);
                 }
-                return Err(recover_from_failed_batch(client, sql, &error));
+                return Err(recover_from_failed_batch(client, sql, sent, &error));
             }
         }
 
@@ -6036,7 +6116,7 @@ fn execute_bounded_batch(
     if block == BatchBlock::Implicit {
         client
             .batch_execute("COMMIT")
-            .map_err(|error| recover_from_failed_batch(client, sql, &error))?;
+            .map_err(|error| recover_from_failed_batch(client, sql, None, &error))?;
     }
 
     let mut result_sets = results.into_iter();
@@ -6645,6 +6725,56 @@ fn get_schema_routines(
 
 #[cfg(test)]
 mod tests {
+    use super::{SentStatement, sent_byte_position};
+    use postgres::error::ErrorPosition;
+
+    #[test]
+    fn an_original_position_becomes_a_byte_offset_in_the_sent_text() {
+        // `é` takes two bytes, so character 13 (1-based) starts at byte 13.
+        let sql = "SELECT 'é', FROM t";
+        let sent = SentStatement::whole(sql).expect("whole request");
+
+        let position = sent_byte_position(sent, &ErrorPosition::Original(13));
+
+        assert_eq!(position, Some(13));
+        assert_eq!(sql.chars().nth(12), Some('F'));
+        assert_eq!(
+            position.map(|offset| &sql[offset..offset + 4]),
+            Some("FROM")
+        );
+    }
+
+    #[test]
+    fn a_statement_position_is_shifted_by_the_statement_start() {
+        let sent = SentStatement {
+            text: "SELECT FROM",
+            start: 20,
+        };
+
+        assert_eq!(
+            sent_byte_position(sent, &ErrorPosition::Original(8)),
+            Some(27)
+        );
+    }
+
+    #[test]
+    fn an_internal_position_is_ignored() {
+        let sent = SentStatement::whole("SELECT f()").expect("whole request");
+        let internal = ErrorPosition::Internal {
+            position: 3,
+            query: "SELECT 1 +".to_string(),
+        };
+
+        assert_eq!(sent_byte_position(sent, &internal), None);
+    }
+
+    #[test]
+    fn a_position_past_the_sent_text_is_dropped() {
+        let sent = SentStatement::whole("SELECT").expect("whole request");
+
+        assert_eq!(sent_byte_position(sent, &ErrorPosition::Original(40)), None);
+    }
+
     #[test]
     fn postgres_type_value_expressions() {
         use dbflux_core::SqlDialect as _;

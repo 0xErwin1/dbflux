@@ -1283,6 +1283,7 @@ document:
       save: Guardar
       format: Formatear
       formatter_unavailable: Formateador no disponible
+      go_to_query_error: Ir al error de la consulta
       query_history: Historial de consultas
       explain_query: Explicar consulta
       open_in_chart: Abrir la consulta actual en un documento de gráfico
@@ -1437,6 +1438,7 @@ document:
       task:
         run_script: "Ejecutar script %{name}"
       copy_error: Copiar error
+      go_to_error: Ir al error
       result_tab_title: "Resultado %{index}"
       count_rows_failed: No se pudieron contar las filas de la consulta
       next_rows_failed: "No se pudieron cargar más filas de la consulta"
@@ -4470,6 +4472,8 @@ palette:
       name: Alternar comentario
     format_query:
       name: Formatear consulta
+    go_to_query_error:
+      name: Ir al error de la consulta
     open_history:
       name: Abrir historial de consultas
     cancel_query:
@@ -4896,6 +4900,7 @@ settings:
       add_external_scripts_folder: "Agregar carpeta externa de scripts…"
       toggle_comment: Alternar comentario
       format_query: Formatear consulta
+      go_to_query_error: Ir al error de la consulta
       export_results: Exportar resultados
       clear_filter: Limpiar filtro
       next_result_tab: Siguiente pestaña de resultados

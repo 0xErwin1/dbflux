@@ -625,6 +625,8 @@ impl CodeDocument {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.clear_query_error(cx);
+
         // A Load all rows run goes back to where its result came from, which
         // may no longer be the document's connection or database.
         let load_all = self
@@ -787,6 +789,13 @@ impl CodeDocument {
             language,
             row_limit,
         );
+
+        // A failure position is relative to the text the driver received, so
+        // it can be marked only when that text is exactly what the buffer
+        // holds where the run started (time macros, for one, change it).
+        let sent_buffer_start = (result_grid.is_none() && request.sql == query)
+            .then(|| self.sent_text_start(&query, cx))
+            .flatten();
 
         // Governance ceiling for a driver-dispatched multi-statement script
         // (see `QueryRequest::confirmed_ceiling`). Reusing `detect_dangerous`
@@ -1027,6 +1036,7 @@ impl CodeDocument {
                     exec_id,
                     query,
                     result,
+                    sent_buffer_start,
                     is_script: false,
                     read_only,
                     result_grid,
@@ -1680,6 +1690,8 @@ impl CodeDocument {
                 let error_msg = e.to_string();
                 record.error = Some(error_msg.clone());
                 self.state = DocumentState::Error;
+                let has_marker =
+                    self.mark_failed_query(&pending.query, pending.sent_buffer_start, &e, cx);
 
                 // A read-only refusal on an unattended run is expected: the
                 // fallback to Manual below tells the user, so it is not shown
@@ -1731,6 +1743,9 @@ impl CodeDocument {
                             ));
                         }),
                     );
+                    if has_marker {
+                        toast = toast.action(self.go_to_error_action(cx));
+                    }
                     toast.push(cx);
                 }
                 let _ = window;
@@ -2853,6 +2868,7 @@ impl CodeDocument {
                     exec_id,
                     query: content,
                     result,
+                    sent_buffer_start: None,
                     is_script: true,
                     read_only: ReadOnlyEnforcement::None,
                     result_grid: None,

@@ -59,6 +59,7 @@ Exposes tabular snapshots of running server state:
 - A row-limited multi-statement batch runs statement by statement through the same typed streaming path, under one row budget shared by the whole request. Statements after the budget is exhausted still run, result sets keep the unbounded order (the first is the primary result), and the batch stops at the first failure.
 - A row-limited batch keeps the transaction boundaries the same script has when it runs unbounded as one simple query. Statements outside a user transaction run inside a transaction the driver opens and commits, or rolls back on failure, so a failure leaves none of them behind. A `BEGIN` in the script adopts the statements before it and a `COMMIT` or `ROLLBACK` ends it, as PostgreSQL's implicit transaction block does. Inside an open session transaction the statements join it, and a failure leaves it aborted.
 - Requested statement timeouts are rejected before execution.
+- Reports where the server rejected a statement: a syntax error or an unknown name carries the position of the offending token (`ErrorPosition::Original`, a 1-based character index that the driver converts to a byte offset into the SQL it sent, also inside a script and a row-limited batch), and the editor marks that token. A position inside a query the server generated, such as a PL/pgSQL body (`ErrorPosition::Internal`), is ignored. The editor marks the token only while the text that was sent still matches the editor: an edit before the error returns, or a text change before sending, leaves no mark.
 
 ## Limitations
 
