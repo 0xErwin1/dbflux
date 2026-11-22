@@ -129,7 +129,7 @@ marca cuando la base de datos no da una posición, cuando el texto enviado difie
 del texto del editor (las macros de tiempo se sustituyen antes de enviar la
 query) o cuando cambiaste el editor mientras la query se ejecutaba. PostgreSQL,
 Redshift y SQLite informan posiciones; los demás drivers muestran el error sin
-marca. La posición nunca forma parte del texto de la notificación.
+marca. La marca aparece solo mientras el texto enviado siga coincidiendo con el del editor, así que una edición antes de que vuelva el error, o un cambio del texto antes de enviarlo, no deja marca. La posición nunca forma parte del texto de la notificación.
 
 ## Confirmación de queries peligrosas
 

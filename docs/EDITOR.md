@@ -120,7 +120,7 @@ again. There is no mark when the database gives no position, when the text sent
 differs from the text in the editor (time macros are replaced before a query is
 sent), or when you changed the editor while the query was running. PostgreSQL,
 Redshift and SQLite report positions; the other drivers show the error without
-a mark. The position is never part of the notification text.
+a mark. The mark appears only while the text that was sent still matches the editor, so an edit before the error returns, or a text change before sending, leaves no mark. The position is never part of the notification text.
 
 ## Dangerous-query confirmation
 

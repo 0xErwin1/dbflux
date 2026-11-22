@@ -9,7 +9,10 @@ use dbflux_test_support::FakeDriver;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::modals::test_host::host_modal;
 use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
-use gpui::{AppContext as _, Entity, EntityInputHandler as _, TestAppContext, VisualTestContext};
+use gpui::{
+    AppContext as _, Entity, EntityInputHandler as _, Focusable as _, TestAppContext,
+    VisualTestContext,
+};
 use std::ops::Range;
 
 #[test]
@@ -477,4 +480,85 @@ fn input_positions_are_zero_based_lines_and_character_columns() {
     let position = dbflux_core::byte_offset_to_line_column("select 'é'\nfrom", 12);
     assert_eq!(position, Some((1, 0)));
     assert_eq!(InputPosition::new(1, 0).line, 1);
+}
+
+#[gpui::test]
+fn a_selection_marker_never_extends_into_text_that_did_not_run(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::SQLite).with_query_error_at("select foo", "boom", 7);
+    let (document, _toasts, window) = open_document(cx, &driver, "select foobar;");
+    select(window, &document, 0.."select foo".len());
+
+    run(window, &document);
+
+    assert_eq!(marked(window, &document), Some(7..10));
+}
+
+fn editor_focused(window: &mut VisualTestContext, document: &Entity<CodeDocument>) -> bool {
+    window.update(|window, cx| {
+        document
+            .read(cx)
+            .editor
+            .input_state
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    })
+}
+
+#[gpui::test]
+fn go_to_error_from_results_focus_focuses_the_editor(cx: &mut TestAppContext) {
+    let buffer = "select 1;\nselect from t;";
+    let driver = FakeDriver::new(DbKind::SQLite).with_query_error_at("select from t", "e", 7);
+    let (document, _toasts, window) = open_document(cx, &driver, buffer);
+    set_cursor(
+        window,
+        &document,
+        buffer.find("select from").expect("cursor"),
+    );
+    run(window, &document);
+    window.update(|_, cx| {
+        document.update(cx, |document, _| {
+            document.focus_mode = crate::code::SqlQueryFocus::Results;
+        });
+    });
+
+    assert!(go_to_error(window, &document));
+
+    assert!(editor_focused(window, &document));
+    assert_eq!(
+        cursor(window, &document),
+        buffer.find("from t").expect("token")
+    );
+}
+
+#[gpui::test]
+fn go_to_error_reveals_an_editor_hidden_by_maximized_results(cx: &mut TestAppContext) {
+    let buffer = "select 1;\nselect from t;";
+    let driver = FakeDriver::new(DbKind::SQLite).with_query_error_at("select from t", "e", 7);
+    let (document, _toasts, window) = open_document(cx, &driver, buffer);
+    set_cursor(
+        window,
+        &document,
+        buffer.find("select from").expect("cursor"),
+    );
+    run(window, &document);
+    window.update(|window, cx| {
+        document.update(cx, |document, cx| {
+            document.dispatch_command(Command::ToggleResults, window, cx);
+        });
+    });
+    settle(window);
+    let hidden =
+        window.update(|_, cx| document.read(cx).layout == crate::code::SqlQueryLayout::ResultsOnly);
+    assert!(hidden, "the editor starts hidden");
+
+    assert!(go_to_error(window, &document));
+
+    let layout = window.update(|_, cx| document.read(cx).layout);
+    assert!(layout != crate::code::SqlQueryLayout::ResultsOnly);
+    assert!(editor_focused(window, &document));
+    assert_eq!(
+        cursor(window, &document),
+        buffer.find("from t").expect("token")
+    );
 }

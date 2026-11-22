@@ -24,7 +24,7 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 - `RedshiftErrorFormatter` 把常见的连接与查询失败（超时、连接被拒、认证失败、集群不可达、带 `SQLSTATE` 的查询错误）映射为清晰的、由驱动程序格式化的消息，而不是原始的调试输出。
 - 每次连接都上报 `application_name` 为 `dbflux/<version>`，除非连接 URI 自己设置了 `application_name` 查询参数。
 - 表视图（`TableViewFeatures`）：表的“列”视图从 `pg_attribute` 读取每列的编码（`format_encoding`）、在排序键中的位置（复合或交错）以及分布键，并从 `svv_table_info` 读取表的分布方式、行数、大小（按 1 MB 块计）和未排序比例。“数据”视图增加列选择器，查询中只列出所选的列。参见[列与分区](../TABLE_VIEWS.md)。
-- 报告服务器拒绝语句的位置：语法错误或未知名称会带有出错标记的位置（`ErrorPosition::Original`，从 1 开始的字符索引，驱动程序会将其转换为所发送 SQL 中的字节偏移量），编辑器会标出该标记。服务器生成的查询内部的位置（`ErrorPosition::Internal`）会被忽略。
+- 报告服务器拒绝语句的位置：语法错误或未知名称会带有出错标记的位置（`ErrorPosition::Original`，从 1 开始的字符索引，驱动程序会将其转换为所发送 SQL 中的字节偏移量），编辑器会标出该标记。服务器生成的查询内部的位置（`ErrorPosition::Internal`）会被忽略。 只有发送的文本仍与编辑器中的文本一致时，编辑器才会标出该标记：错误返回前有编辑，或发送前文本发生变化，则不会有标记。
 
 ## 限制
 

@@ -69,10 +69,11 @@ pub(super) fn marker_for(
         return None;
     }
 
-    let token = token_range(buffer, start + position);
+    // Measured in the sent text, so the token stops where the run's text did.
+    let token = token_range(sent, position);
 
     Some(QueryErrorMarker {
-        range: token,
+        range: start + token.start..start + token.end,
         message: message.to_string(),
     })
 }
@@ -184,6 +185,8 @@ impl CodeDocument {
             return false;
         };
 
+        self.reveal_editor(cx);
+        self.enter_editor_mode(cx);
         self.editor.input_state.update(cx, |state, cx| {
             state.set_cursor_position(InputPosition::new(line as u32, column as u32), window, cx);
         });
