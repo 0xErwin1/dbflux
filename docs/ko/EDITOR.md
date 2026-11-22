@@ -40,6 +40,23 @@ SQL 연결에서는 [시각적 쿼리 빌더](QUERY_BUILDER.md)로 SQL을 작성
   <img src="../images/editor/multi-statement-light.webp" alt="세 개의 문을 스크립트로 실행해 문마다 결과 탭이 하나씩 있는 쿼리 탭">
 </picture>
 
+## 서식 지정
+
+- `Ctrl+Shift+F` (macOS에서는 `Cmd+Option+L`) — **쿼리 서식 지정**.
+
+서식 지정은 도구 모음의 서식 지정 버튼, 창 작업 메뉴의 항목, 명령 팔레트의
+명령으로도 실행할 수 있습니다. 선택 영역이 있으면 선택한 텍스트의 서식을
+다시 지정합니다. 선택 영역이 없으면 **쿼리 실행**과 같은 경계로 커서 아래의
+문의 서식을 지정하므로, 문이 하나뿐인 버퍼는 전체 서식이 지정됩니다. 모든 문의
+서식을 지정하려면 먼저 전체를 선택(`Ctrl+A`, macOS에서는 `Cmd+A`)하세요. 키워드는 대문자가 되고 각
+절은 공백 두 칸으로 들여쓰기됩니다.
+
+서식 지정은 언어 서비스가 서식을 지정할 수 있는 SQL 연결에서 사용할 수
+있습니다: PostgreSQL, MySQL/MariaDB, SQLite, SQL Server 및 기타 기본 제공 SQL
+드라이버. 스크립트 문서와 다른 쿼리 언어에서는 버튼이 비활성화된 상태로
+남습니다. 이를 제공하는 연결에서는 **Format statement** 코드 작업(`Ctrl+.` / `Cmd+.`)이
+커서 아래의 문에 대해 계속 같은 변경을 수행합니다.
+
 ## 위험 쿼리 확인
 
 DBFlux는 여러 언어에 걸친 위험한 작업을 감지합니다. SQL의 `DELETE`/`DROP`/`TRUNCATE`와 `WHERE` 없는 `DELETE`/`UPDATE`, MongoDB의 `deleteMany`/`drop`, Redis의 `FLUSHALL`/`FLUSHDB`/`KEYS`가 대상이며, 실행 전에 확인을 요청합니다. 이 동작은 설정의 영향을 받습니다. 위험 쿼리 확인은 끌 수 있고, `DELETE`/`UPDATE`에 `WHERE` 절을 요구하도록 할 수 있으며, Redis `FLUSHALL`/`FLUSHDB`는 완전히 비활성화할 수 있습니다(이 경우 해당 명령은 확인 대신 차단됩니다).

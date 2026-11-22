@@ -1,5 +1,6 @@
 use dbflux_core::{
-    DangerousQueryKind, EditorDiagnostic, LanguageService, ValidationResult, detect_dangerous_sql,
+    DangerousQueryKind, EditorDiagnostic, LanguageService, SqlFormatDialect, ValidationResult,
+    detect_dangerous_sql, format_sql_text,
 };
 
 /// Language service for T-SQL (Microsoft SQL Server).
@@ -26,11 +27,29 @@ impl LanguageService for TSqlLanguageService {
     fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
         Vec::new()
     }
+
+    fn can_format(&self) -> bool {
+        true
+    }
+
+    fn format(&self, text: &str) -> Option<String> {
+        format_sql_text(text, SqlFormatDialect::SqlServer)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_with_the_editor_rules() {
+        let svc = TSqlLanguageService;
+        assert!(svc.can_format());
+        assert_eq!(
+            svc.format("select [id] from t where x=@id").as_deref(),
+            Some("SELECT\n  [id]\nFROM\n  t\nWHERE\n  x = @id")
+        );
+    }
 
     #[test]
     fn validate_returns_valid_for_any_input() {

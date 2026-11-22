@@ -1998,6 +1998,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.editor"),
             ),
             PaletteCommand::new(
+                "format_query",
+                dbflux_i18n::t!("palette.command.format_query.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
                 "open_history",
                 dbflux_i18n::t!("palette.command.open_history.name"),
                 dbflux_i18n::t!("palette.category.editor"),

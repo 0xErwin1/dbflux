@@ -94,6 +94,24 @@ se ejecuta tal cual.
   <img src="../images/editor/multi-statement-light.webp" alt="Una pestaña de query que ejecutó tres sentencias como script, con una pestaña de resultado por sentencia">
 </picture>
 
+## Formatear
+
+- `Ctrl+Shift+F` (`Cmd+Option+L` en macOS) — **Formatear consulta**.
+
+Formatear también es el botón Formatear de la barra de herramientas, una entrada
+del menú de acciones del panel y un comando de la paleta de comandos. Con una
+selección, reformatea el texto seleccionado. Sin selección, reformatea el
+statement bajo el cursor, con los mismos límites que **Ejecutar query**, así que
+un buffer con un solo statement se formatea entero. Para formatear todos los
+statements, selecciona todo (`Ctrl+A`, o `Cmd+A` en macOS) primero. Las palabras clave pasan a
+mayúsculas y cada cláusula se sangra con dos espacios.
+
+Formatear está disponible en conexiones SQL cuyo servicio de lenguaje puede
+formatear: PostgreSQL, MySQL/MariaDB, SQLite, SQL Server y los demás drivers SQL
+incluidos. Los documentos de script y los demás lenguajes de consulta mantienen
+el botón deshabilitado. En las conexiones que la ofrecen, la code action **Format statement** (`Ctrl+.` /
+`Cmd+.`) sigue haciendo el mismo cambio para el statement bajo el cursor.
+
 ## Confirmación de queries peligrosas
 
 DBFlux detecta operaciones peligrosas entre lenguajes — `DELETE`/`DROP`/

@@ -86,6 +86,23 @@ runs as-is.
   <img src="images/editor/multi-statement-light.webp" alt="A query tab that ran three statements as a script, with one result tab per statement">
 </picture>
 
+## Formatting
+
+- `Ctrl+Shift+F` (`Cmd+Option+L` on macOS) — **Format query**.
+
+Format is also the toolbar's Format button, an entry in the pane actions menu,
+and a command in the command palette. With a selection, it reformats the
+selected text. Without one, it reformats the statement under the cursor, with
+the same boundaries as **Run query**, so a buffer with a single statement is
+formatted whole. To format every statement, select all (`Ctrl+A`, or `Cmd+A` on macOS) first.
+Keywords become uppercase and each clause is indented by two spaces.
+
+Format is available on SQL connections whose language service can format:
+PostgreSQL, MySQL/MariaDB, SQLite, SQL Server and the other built-in SQL
+drivers. Script documents and other query languages keep the button disabled.
+On connections that offer it, the **Format statement** code action (`Ctrl+.` /
+`Cmd+.`) still makes the same change for the statement under the cursor.
+
 ## Dangerous-query confirmation
 
 DBFlux detects dangerous operations across languages — SQL `DELETE`/`DROP`/

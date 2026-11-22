@@ -195,6 +195,46 @@ fn test_editor_toggle_comment_binding() {
 }
 
 #[test]
+fn format_query_is_bound_in_the_editor_without_taking_replace() {
+    let keymap = default_keymap();
+
+    #[cfg(target_os = "macos")]
+    let format_chord = KeyChord::new(
+        "l",
+        Modifiers {
+            platform: true,
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+    #[cfg(not(target_os = "macos"))]
+    let format_chord = KeyChord::new("f", Modifiers::ctrl_shift());
+
+    assert_eq!(
+        keymap.resolve(ContextId::Editor, &format_chord),
+        Some(Command::FormatQuery)
+    );
+    // Outside the editor the chord keeps whatever it had: Format is an
+    // editor command.
+    assert_ne!(
+        keymap.resolve(ContextId::Sidebar, &format_chord),
+        Some(Command::FormatQuery)
+    );
+    // Cmd+Shift+F stays the editor's Replace on macOS.
+    assert_eq!(
+        keymap.resolve(
+            ContextId::Editor,
+            &KeyChord::new("f", Modifiers::primary_shift())
+        ),
+        if cfg!(target_os = "macos") {
+            None
+        } else {
+            Some(Command::FormatQuery)
+        }
+    );
+}
+
+#[test]
 fn test_global_fallback_from_sidebar() {
     let keymap = default_keymap();
 

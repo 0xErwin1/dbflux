@@ -481,6 +481,22 @@ fn editor_layer() -> KeymapLayer {
         Command::ToggleComment,
     );
 
+    // Format: Ctrl+Shift+F as in most SQL clients. On macOS Cmd+Shift+F is
+    // the editor's Replace, so Format takes Cmd+Option+L (JetBrains' Reformat
+    // Code) instead.
+    #[cfg(target_os = "macos")]
+    let format_query = KeyChord::new(
+        "l",
+        Modifiers {
+            platform: true,
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+    #[cfg(not(target_os = "macos"))]
+    let format_query = KeyChord::new("f", Modifiers::ctrl_shift());
+    layer.bind(format_query, Command::FormatQuery);
+
     // The toolbar menu from the text itself: Shift+F10 types nothing, so it
     // is free in every Vim mode and without Vim.
     layer.bind(
