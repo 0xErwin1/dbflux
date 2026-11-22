@@ -103,7 +103,7 @@ del menú de acciones del panel y un comando de la paleta de comandos. Con una
 selección, reformatea el texto seleccionado. Sin selección, reformatea el
 statement bajo el cursor, con los mismos límites que **Ejecutar query**, así que
 un buffer con un solo statement se formatea entero. Para formatear todos los
-statements, selecciona todo (`Ctrl+A`) primero. Las palabras clave pasan a
+statements, selecciona todo (`Ctrl+A`, o `Cmd+A` en macOS) primero. Las palabras clave pasan a
 mayúsculas y cada cláusula se sangra con dos espacios.
 
 Formatear está disponible en conexiones SQL cuyo servicio de lenguaje puede

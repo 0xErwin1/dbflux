@@ -23,8 +23,9 @@ fn a_selection_is_the_target() {
         format_target(&QueryLanguage::Sql, TWO_STATEMENTS, 7..13, 13),
         7..13
     );
+    let backwards = Range { start: 13, end: 7 };
     assert_eq!(
-        format_target(&QueryLanguage::Sql, TWO_STATEMENTS, 13..7, 7),
+        format_target(&QueryLanguage::Sql, TWO_STATEMENTS, backwards, 7),
         7..13
     );
 }

@@ -35,7 +35,11 @@ pub fn format_sql(text: &str, dialect: SqlFormatDialect) -> String {
         ..sqlformat::FormatOptions::default()
     };
 
-    let prepared = prepare(text, dialect);
+    // Text the guards cannot read safely is not formatted at all: sqlformat
+    // would split its variables and parameters.
+    let Some(prepared) = prepare(text, dialect) else {
+        return text.to_string();
+    };
     let formatted = sqlformat::format(&prepared.text, &sqlformat::QueryParams::None, &options);
     prepared.restore(formatted)
 }
@@ -56,7 +60,7 @@ const OPERATOR_CHARS: &[char] = &[
 ];
 
 /// Prefix of the identifiers that stand in for variables while `sqlformat`
-/// runs. Text that already contains it gets no stand-ins.
+/// runs. MySQL or T-SQL text that already contains it is not formatted.
 const VARIABLE_STAND_IN: &str = "__dbflux_var_";
 
 /// Text ready for `sqlformat`, with the variables it replaced.
@@ -93,15 +97,17 @@ fn stand_in(index: usize) -> String {
 /// Only code is touched: quoted strings and identifiers, dollar-quoted
 /// bodies and comments are copied as they are. In the generic dialect, which
 /// PostgreSQL uses, `<@` and the `@` of `@-@` stay joined because they are
-/// operators, and `::` is a cast, not a sigil. Text with a backslash inside a
-/// quoted string is returned unchanged, because where that string ends
-/// depends on the server's escape settings.
-pub(crate) fn prepare(text: &str, dialect: SqlFormatDialect) -> Prepared<'_> {
-    let unchanged = || Prepared {
-        text: Cow::Borrowed(text),
-        variables: Vec::new(),
-    };
-    let use_stand_ins = dialect.has_variables() && !text.contains(VARIABLE_STAND_IN);
+/// operators, and `::` is a cast, not a sigil.
+///
+/// Returns `None` when the text cannot be prepared safely, and the caller
+/// must leave it unformatted: a backslash inside a quoted string (where that
+/// string ends depends on the server's escape settings), or MySQL or T-SQL
+/// text that already holds the stand-in prefix.
+pub(crate) fn prepare(text: &str, dialect: SqlFormatDialect) -> Option<Prepared<'_>> {
+    let use_stand_ins = dialect.has_variables();
+    if use_stand_ins && text.contains(VARIABLE_STAND_IN) {
+        return None;
+    }
 
     let mut output = String::with_capacity(text.len() + 8);
     let mut variables = Vec::new();
@@ -113,9 +119,7 @@ pub(crate) fn prepare(text: &str, dialect: SqlFormatDialect) -> Prepared<'_> {
         let rest = &text[index..];
 
         if let Some(skipped) = skipped_span(rest, dialect) {
-            let Some(span) = skipped else {
-                return unchanged();
-            };
+            let span = skipped?;
             output.push_str(&rest[..span]);
             index += span;
             previous = rest[..span].chars().next_back();
@@ -154,13 +158,16 @@ pub(crate) fn prepare(text: &str, dialect: SqlFormatDialect) -> Prepared<'_> {
     }
 
     if !changed {
-        return unchanged();
+        return Some(Prepared {
+            text: Cow::Borrowed(text),
+            variables: Vec::new(),
+        });
     }
 
-    Prepared {
+    Some(Prepared {
         text: Cow::Owned(output),
         variables,
-    }
+    })
 }
 
 /// Byte length of the `@name` or `@@name` variable that starts `rest`, with
@@ -195,7 +202,11 @@ fn skipped_span(rest: &str, dialect: SqlFormatDialect) -> Option<Option<usize>> 
     let first = rest.chars().next()?;
     match first {
         '\'' | '"' | '`' => Some(quoted_span(rest, first)),
-        '[' => Some(Some(rest.find(']').map_or(rest.len(), |end| end + 1))),
+        // `[name]` is a T-SQL identifier; elsewhere `[` opens an array
+        // subscript or constructor, which is code.
+        '[' if dialect == SqlFormatDialect::SqlServer => {
+            Some(Some(rest.find(']').map_or(rest.len(), |end| end + 1)))
+        }
         '$' => dollar_quoted_span(rest).map(Some),
         _ => None,
     }

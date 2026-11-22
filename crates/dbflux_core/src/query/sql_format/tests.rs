@@ -8,7 +8,10 @@ fn inline(text: &str, dialect: SqlFormatDialect) -> String {
 }
 
 fn generic(text: &str) -> String {
-    prepare(text, SqlFormatDialect::Generic).text.into_owned()
+    prepare(text, SqlFormatDialect::Generic)
+        .expect("text can be prepared")
+        .text
+        .into_owned()
 }
 
 #[test]
@@ -57,11 +60,14 @@ fn postgres_operators_that_contain_a_sigil_stay_joined() {
 
 #[test]
 fn quoted_text_and_comments_are_left_alone() {
-    let text = "select '=@x', \"a=@b\", `c=@d`, [e=@f] -- g=@h\n/* i=@j */ where k=@l";
+    let text = "select '=@x', \"a=@b\", `c=@d` -- g=@h\n/* i=@j */ where k=@l";
     assert_eq!(
         generic(text),
-        "select '=@x', \"a=@b\", `c=@d`, [e=@f] -- g=@h\n/* i=@j */ where k= @l"
+        "select '=@x', \"a=@b\", `c=@d` -- g=@h\n/* i=@j */ where k= @l"
     );
+    let bracketed = prepare("select [e=@f] where k=@l", SqlFormatDialect::SqlServer)
+        .expect("text can be prepared");
+    assert_eq!(bracketed.text, "select [e=@f] where k= __dbflux_var_0__");
     assert_eq!(
         generic("select 'it''s =@x' where a=@b"),
         "select 'it''s =@x' where a= @b"
@@ -84,20 +90,38 @@ fn dollar_quoted_bodies_are_left_alone_and_positional_parameters_are_code() {
 }
 
 #[test]
-fn a_backslash_in_a_string_leaves_the_text_unchanged() {
+fn a_backslash_in_a_string_leaves_the_statement_unformatted() {
     for text in [
         "select 'a\\' , '=@x' where y=@z",
         "select \"mysql \\\"str=@x\\\"\" from t where y=@z",
+        "select 'C:\\temp' from t where x=:id",
     ] {
-        assert_eq!(generic(text), text);
-        assert_eq!(prepare(text, SqlFormatDialect::MySql).text, text);
+        for dialect in [
+            SqlFormatDialect::Generic,
+            SqlFormatDialect::MySql,
+            SqlFormatDialect::SqlServer,
+        ] {
+            assert!(prepare(text, dialect).is_none());
+            assert_eq!(format_sql(text, dialect), text);
+        }
     }
+}
+
+#[test]
+fn a_postgres_array_subscript_is_code() {
+    assert_eq!(generic("select ARRAY[1=:id]"), "select ARRAY[1= :id]");
+    assert_eq!(
+        inline("select ARRAY[1=:id]", SqlFormatDialect::Generic),
+        "SELECT ARRAY [ 1 = :id ]"
+    );
 }
 
 #[test]
 fn text_without_a_glued_sigil_is_borrowed() {
     assert!(matches!(
-        prepare("select a = @b", SqlFormatDialect::Generic).text,
+        prepare("select a = @b", SqlFormatDialect::Generic)
+            .expect("text can be prepared")
+            .text,
         std::borrow::Cow::Borrowed(_)
     ));
 }
@@ -140,10 +164,10 @@ fn mysql_keeps_user_and_system_variables() {
 }
 
 #[test]
-fn text_that_already_holds_a_stand_in_gets_none() {
-    let text = "select __dbflux_var_0__, @a";
-    let prepared = prepare(text, SqlFormatDialect::MySql);
-    assert_eq!(prepared.text, text);
+fn text_that_already_holds_the_stand_in_prefix_is_not_formatted() {
+    let text = "select '__dbflux_var_', @@rowcount";
+    assert!(prepare(text, SqlFormatDialect::SqlServer).is_none());
+    assert_eq!(format_sql(text, SqlFormatDialect::SqlServer), text);
 }
 
 #[test]
