@@ -239,24 +239,32 @@ fn modal_click(fixture: &Fixture, window: &mut VisualTestContext, reload: bool) 
 }
 
 fn chunked_delete(fixture: &Fixture, window: &mut VisualTestContext) {
-    act(fixture, window, |panel, window, cx| {
-        panel.pending_mutation_exec = Some(PendingMutationExec {
-            #[cfg(feature = "telemetry")]
-            usage: None,
-            spec: dbflux_core::VisualMutationSpec {
-                from: TableRef::with_schema("public", "orders"),
-                filter: None,
-                kind: dbflux_core::MutationKind::Delete,
-            },
-            opts: MutationExecOptions::chunked(1_000),
-            profile_id: Uuid::nil(),
-            intent: crate::data_grid_panel::MutationIntent::Direct,
+    start_chunked_delete(fixture, window);
+    window.run_until_parked();
+}
+
+/// Confirms a chunked delete and leaves its key check in flight.
+fn start_chunked_delete(fixture: &Fixture, window: &mut VisualTestContext) {
+    window.update(|window, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.pending_mutation_exec = Some(PendingMutationExec {
+                #[cfg(feature = "telemetry")]
+                usage: None,
+                spec: dbflux_core::VisualMutationSpec {
+                    from: TableRef::with_schema("public", "orders"),
+                    filter: None,
+                    kind: dbflux_core::MutationKind::Delete,
+                },
+                opts: MutationExecOptions::chunked(1_000),
+                profile_id: Uuid::nil(),
+                intent: crate::data_grid_panel::MutationIntent::Direct,
+            });
+            panel.handle_mutation_confirm_outcome(
+                dbflux_components::modals::MutationConfirmOutcome::Confirmed,
+                window,
+                cx,
+            );
         });
-        panel.handle_mutation_confirm_outcome(
-            dbflux_components::modals::MutationConfirmOutcome::Confirmed,
-            window,
-            cx,
-        );
     });
 }
 
@@ -1431,4 +1439,141 @@ fn reload_table_with_details_gone_stale_reads_the_key_again(cx: &mut TestAppCont
         vec!["id".to_string(), "code".to_string(), "name".to_string()]
     );
     assert!(writes(&fixture.driver).is_empty());
+}
+
+/// A chunked run is bound to the connection it was built with: replacing the
+/// connection during its key check stops it, even when the replacement reports
+/// the same key.
+#[gpui::test]
+fn a_chunked_mutation_does_not_run_on_a_connection_replaced_during_its_check(
+    cx: &mut TestAppContext,
+) {
+    let (fixture, window) = fixture(cx, same_key());
+    let replacement =
+        FakeDriver::new(dbflux_core::DbKind::SQLite).with_table_details("orders", same_key());
+
+    start_chunked_delete(&fixture, window);
+    register_fake_connection(&fixture.panel, window, &replacement);
+    window.run_until_parked();
+
+    assert!(
+        fixture.driver.stats().executed_requests.is_empty(),
+        "the superseded connection received a statement"
+    );
+    assert!(
+        replacement.stats().executed_requests.is_empty(),
+        "the run was built for another connection and must not start"
+    );
+    assert!(last_toast_title(window).is_some(), "the stop is reported");
+}
+
+/// A chunked run is bound to the key it was built with: a key the grid took
+/// during the check, and which the repeated check accepted, does not let the
+/// old key's run go.
+#[gpui::test]
+fn a_chunked_mutation_does_not_run_with_a_key_changed_during_its_check(cx: &mut TestAppContext) {
+    let by_id = FakeTableDetails::Info(Box::new(orders_info(&["id"], &["id", "name"])));
+    let by_name = FakeTableDetails::Info(Box::new(orders_info(&["name"], &["id", "name"])));
+    let (fixture, window) = fixture(cx, FakeTableDetails::Sequence(vec![by_id, by_name]));
+
+    start_chunked_delete(&fixture, window);
+    window.update(|_, app| {
+        fixture
+            .panel
+            .update(app, |panel, _| panel.pk_columns = vec!["name".to_string()]);
+    });
+    window.run_until_parked();
+
+    assert_eq!(fixture.driver.table_details_calls(), 2, "checked again");
+    assert!(
+        fixture.driver.stats().executed_requests.is_empty(),
+        "a statement was sent with the key the check no longer validated"
+    );
+    assert!(!mutation_finished(&fixture), "the run never started");
+}
+
+/// An "unsupported" answer from a connection that was replaced says nothing
+/// about the replacement: it is checked itself before the write.
+#[gpui::test]
+fn a_stale_unsupported_answer_does_not_release_a_write(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    let unsupported = FakeDriver::new(dbflux_core::DbKind::SQLite);
+    register_fake_connection(&fixture.panel, window, &unsupported);
+    stage_name(&fixture, window, 0);
+    let replacement =
+        FakeDriver::new(dbflux_core::DbKind::SQLite).with_table_details("orders", changed_key());
+
+    window.update(|_, app| {
+        fixture
+            .panel
+            .update(app, |panel, cx| panel.handle_save_row(0, false, cx));
+    });
+    register_fake_connection(&fixture.panel, window, &replacement);
+    window.run_until_parked();
+
+    assert_eq!(
+        replacement.table_details_calls(),
+        1,
+        "the replacement was checked"
+    );
+    assert!(writes(&unsupported).is_empty());
+    assert!(
+        writes(&replacement).is_empty(),
+        "a write reached the replacement"
+    );
+    assert!(modal_visible(&fixture, window));
+}
+
+/// A value staged while the key check runs was not part of the patch: it stays
+/// staged after the save and is not reported as written.
+#[gpui::test]
+fn an_edit_staged_during_the_check_survives_the_save(cx: &mut TestAppContext) {
+    let (fixture, window) = fixture(cx, same_key());
+    stage_name(&fixture, window, 0);
+
+    window.update(|_, app| {
+        fixture.panel.update(app, |panel, cx| {
+            panel.handle_save_row(0, false, cx);
+            let table_state = panel.grid_table.table_state.clone().expect("a table");
+            table_state.update(cx, |state, _| {
+                state.stage_cell_value(0, 1, CellValue::text("newer"));
+            });
+        });
+    });
+    window.run_until_parked();
+
+    let sent: Vec<String> = writes(&fixture.driver)
+        .into_iter()
+        .filter_map(|op| match op {
+            CrudOp::Update(patch) => Some(format!("{:?}", patch.changes)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].contains("renamed"),
+        "the patch carried the first value"
+    );
+
+    let staged: Vec<dbflux_core::Value> = window.update(|_, app| {
+        let table_state = fixture
+            .panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table");
+        table_state
+            .read(app)
+            .edit_buffer()
+            .row_changes(0)
+            .into_iter()
+            .map(|(_, cell)| cell.to_value())
+            .collect()
+    });
+    assert_eq!(
+        staged,
+        vec![dbflux_core::Value::Text("newer".to_string())],
+        "the newer edit stays staged for a later save"
+    );
 }

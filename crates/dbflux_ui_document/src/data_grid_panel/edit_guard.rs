@@ -19,8 +19,8 @@
 use super::*;
 use dbflux_components::modals::{ModalSchemaDrift, SchemaDriftDismissed, SchemaDriftRefresh};
 use dbflux_core::{
-    ApplyFetchOutcome, DbError, FetchedTableDetails, PrimaryKeyCheck, QueryTableRef,
-    check_primary_key,
+    ApplyFetchOutcome, DbError, FencedTableDetailsFailure, FetchedTableDetails, PrimaryKeyCheck,
+    QueryTableRef, check_primary_key,
 };
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
@@ -105,7 +105,7 @@ impl DataGridPanel {
     /// The primary key the grid writes by. A builder result's binding names
     /// the same real source columns: `compute_editable_binding` refuses an
     /// aliased key and `apply_pk_details` copies the binding's key here.
-    fn key_in_use(&self) -> Vec<String> {
+    pub(super) fn key_in_use(&self) -> Vec<String> {
         self.pk_columns.clone()
     }
 
@@ -221,7 +221,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { params.execute() })
+                .spawn(async move { params.execute_fenced() })
                 .await;
 
             cx.update(|cx| {
@@ -235,7 +235,7 @@ impl DataGridPanel {
 
     fn finish_edit_guard(
         &mut self,
-        result: Result<FetchedTableDetails, DbError>,
+        result: Result<FetchedTableDetails, FencedTableDetailsFailure>,
         grid_key: &[String],
         on_stop: OnStop,
         then: AfterGuard,
@@ -244,24 +244,31 @@ impl DataGridPanel {
     ) {
         self.edit_guard.check_in_flight = false;
 
+        // An error answer is fenced like a result: one from a replaced
+        // connection or a cleared cache says nothing about the current one.
+        if let Err(failure) = &result
+            && !self
+                .app_state
+                .read(cx)
+                .is_table_details_failure_current(failure)
+        {
+            self.recheck_stale(on_stop, then, stale_rechecks, cx);
+            self.drain_queued_requests(true, cx);
+            return;
+        }
+
         let proceeded = match result {
             Ok(fetched) => match check_primary_key(grid_key, &fetched.details) {
                 PrimaryKeyCheck::Same => {
                     let applied = self.apply_fresh_details(fetched, cx);
                     if applied == ApplyFetchOutcome::Applied && self.key_in_use() == grid_key {
                         then(self, cx);
-                    } else if stale_rechecks >= MAX_STALE_RECHECKS {
-                        self.report_guard_failure(
-                            "the table's details kept changing while they were checked",
-                            on_stop,
-                            cx,
-                        );
                     } else {
                         // The re-read went stale (the connection was replaced or
                         // the table's details were cleared) or the grid took
                         // another key while it ran, so what was checked is not
                         // what the write would use: check again.
-                        self.run_edit_check(on_stop, then, stale_rechecks + 1, cx);
+                        self.recheck_stale(on_stop, then, stale_rechecks, cx);
                     }
                     true
                 }
@@ -270,22 +277,43 @@ impl DataGridPanel {
                     false
                 }
             },
-            Err(DbError::ObjectNotFound(_)) => {
-                self.block_edit(PrimaryKeyCheck::TableGone, None, on_stop, cx);
-                false
-            }
-            // A driver that cannot read table details has no key to compare.
-            Err(DbError::NotSupported(_)) => {
-                then(self, cx);
-                true
-            }
-            Err(error) => {
-                self.report_guard_failure(&error.to_string(), on_stop, cx);
-                false
-            }
+            Err(failure) => match failure.error {
+                DbError::ObjectNotFound(_) => {
+                    self.block_edit(PrimaryKeyCheck::TableGone, None, on_stop, cx);
+                    false
+                }
+                // A driver that cannot read table details has no key to compare.
+                DbError::NotSupported(_) => {
+                    then(self, cx);
+                    true
+                }
+                error => {
+                    self.report_guard_failure(&error.to_string(), on_stop, cx);
+                    false
+                }
+            },
         };
 
         self.drain_queued_requests(proceeded, cx);
+    }
+
+    /// Checks again after a stale answer, up to [`MAX_STALE_RECHECKS`] times.
+    fn recheck_stale(
+        &mut self,
+        on_stop: OnStop,
+        then: AfterGuard,
+        stale_rechecks: u32,
+        cx: &mut Context<Self>,
+    ) {
+        if stale_rechecks >= MAX_STALE_RECHECKS {
+            self.report_guard_failure(
+                "the table's details kept changing while they were checked",
+                on_stop,
+                cx,
+            );
+        } else {
+            self.run_edit_check(on_stop, then, stale_rechecks + 1, cx);
+        }
     }
 
     /// Requests that arrived during the check each get their own check when
@@ -312,7 +340,12 @@ impl DataGridPanel {
             .update(cx, |state, _| state.apply_fetched_table_details(fetched))
     }
 
-    fn report_guard_failure(&mut self, error: &str, on_stop: OnStop, cx: &mut Context<Self>) {
+    pub(super) fn report_guard_failure(
+        &mut self,
+        error: &str,
+        on_stop: OnStop,
+        cx: &mut Context<Self>,
+    ) {
         self.release_on_stop(on_stop, cx);
         report_error(
             UserFacingError::new(

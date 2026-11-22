@@ -879,10 +879,11 @@ impl CodeDocument {
             let session_isolated = session_execution.isolated;
             let result = session_execution.result;
 
-            // The statement ran on the database whether or not the editor
-            // still wants its result, so the cache is dropped before the
-            // result can be discarded.
-            if result.is_ok() {
+            // The statement reached the database whether or not it succeeded
+            // (a SQL Server batch commits a DDL statement before a later error)
+            // and whether or not the editor still wants its result, so the
+            // cache is dropped before the result can be discarded.
+            if dispatched {
                 cx.update(|cx| {
                     Self::drop_cached_details_after_ddl(
                         &invalidation_app_state,
@@ -4675,6 +4676,22 @@ mod auto_refresh_tests {
                 })
         });
         assert!(discarded, "the editor discarded the result");
+        assert!(!has_cached_table_details(window, &document));
+    }
+
+    #[gpui::test]
+    fn a_failing_ddl_run_from_the_editor_still_drops_the_cached_table_details(
+        cx: &mut TestAppContext,
+    ) {
+        let ddl = "CREATE INDEX users_name ON users (name)";
+        let driver =
+            FakeDriver::new(DbKind::SQLite).with_query_error(ddl, "later statement failed");
+        let (document, _toasts, window) = open_connected(cx, &driver, ddl);
+        seed_table_details(window, &document);
+
+        run_query(window, &document);
+
+        assert!(!executed(&driver).is_empty(), "the statement ran");
         assert!(!has_cached_table_details(window, &document));
     }
 

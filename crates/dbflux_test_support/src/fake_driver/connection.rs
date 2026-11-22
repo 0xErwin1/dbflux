@@ -177,18 +177,13 @@ impl Connection for FakeConnection {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<dbflux_core::TableInfo, DbError> {
-        self.state
+        let call = self
+            .state
             .table_details_calls
             .fetch_add(1, Ordering::Relaxed);
 
         match rwlock_read(&self.state.table_details).get(table) {
-            Some(FakeTableDetails::Info(info)) => Ok((**info).clone()),
-            Some(FakeTableDetails::NotFound) => Err(DbError::object_not_found(format!(
-                "table {table} not found"
-            ))),
-            Some(FakeTableDetails::Failure(message)) => {
-                Err(DbError::connection_failed(message.clone()))
-            }
+            Some(outcome) => fake_table_details_answer(outcome, call, table),
             None => Err(DbError::NotSupported(
                 "table_details not supported".to_string(),
             )),
@@ -240,5 +235,25 @@ impl Connection for FakeConnection {
             .iter()
             .map(|store| store as &dyn SecretStoreSource)
             .collect()
+    }
+}
+
+fn fake_table_details_answer(
+    outcome: &FakeTableDetails,
+    call: usize,
+    table: &str,
+) -> Result<dbflux_core::TableInfo, DbError> {
+    match outcome {
+        FakeTableDetails::Info(info) => Ok((**info).clone()),
+        FakeTableDetails::NotFound => Err(DbError::object_not_found(format!(
+            "table {table} not found"
+        ))),
+        FakeTableDetails::Failure(message) => Err(DbError::connection_failed(message.clone())),
+        FakeTableDetails::Sequence(answers) => match answers.get(call).or(answers.last()) {
+            Some(answer) => fake_table_details_answer(answer, call, table),
+            None => Err(DbError::NotSupported(
+                "table_details not supported".to_string(),
+            )),
+        },
     }
 }

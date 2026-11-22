@@ -45,6 +45,7 @@ pub use config::{
     hook_script_path, is_openable_script, migrate_app_config,
 };
 
+pub use connection::manager::FencedTableDetailsFailure;
 #[allow(deprecated)]
 pub use connection::{
     ApplyFetchOutcome, AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams,

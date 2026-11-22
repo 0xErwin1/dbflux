@@ -81,6 +81,9 @@ pub enum FakeTableDetails {
     NotFound,
     /// The read fails the way a dropped network does.
     Failure(String),
+    /// Answers the n-th read with the n-th entry; the last entry answers every
+    /// read after it. For a table whose details change between two checks.
+    Sequence(Vec<FakeTableDetails>),
 }
 
 /// A single recorded CRUD call made through `FakeConnection`.

@@ -1146,6 +1146,17 @@ impl AppState {
             .prepare_fetch_table_details_fenced(profile_id, database, schema, table)
     }
 
+    /// Whether a failed fenced table-details fetch answered for the session,
+    /// connection and cache that are current now.
+    pub fn is_table_details_failure_current(
+        &self,
+        failure: &dbflux_core::FencedTableDetailsFailure,
+    ) -> bool {
+        self.facade
+            .connections
+            .is_table_details_failure_current(failure)
+    }
+
     pub fn apply_fetched_table_details(
         &mut self,
         fetched: FetchedTableDetails,

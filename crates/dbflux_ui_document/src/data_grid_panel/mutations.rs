@@ -492,6 +492,7 @@ impl DataGridPanel {
             let Some(patch) = self.build_row_patch(&table, row_idx, &changes_ref, false, cx) else {
                 return;
             };
+            let sent: Vec<(usize, SentCell)> = changes;
             self.guard_edit(
                 OnStop::Nothing,
                 move |panel, cx| {
@@ -511,7 +512,7 @@ impl DataGridPanel {
                     if !panel.queued_row_has_changes(row_idx, cx) {
                         return;
                     }
-                    panel.send_row_patch(profile_id, database, row_idx, patch, false, cx);
+                    panel.send_row_patch(profile_id, database, row_idx, patch, sent, false, cx);
                 },
                 cx,
             );
@@ -584,7 +585,11 @@ impl DataGridPanel {
         else {
             return;
         };
-        self.send_row_patch(profile_id, database, row_idx, patch, batch_owned, cx);
+        let sent = changes
+            .iter()
+            .map(|&(col, cell)| (col, cell.clone()))
+            .collect();
+        self.send_row_patch(profile_id, database, row_idx, patch, sent, batch_owned, cx);
     }
 
     /// The patch for `row_idx`, with the row's key and staged values read now.
@@ -703,6 +708,7 @@ impl DataGridPanel {
         database: Option<String>,
         row_idx: usize,
         patch: RowPatch,
+        sent: Vec<(usize, SentCell)>,
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
@@ -763,7 +769,7 @@ impl DataGridPanel {
                         Ok(_) => panel.runner.complete_mutation(task_id, cx),
                         Err(e) => panel.runner.fail_mutation(task_id, e.to_string(), cx),
                     }
-                    panel.handle_save_result(row_idx, result, batch_owned, cx);
+                    panel.finish_save_result(row_idx, result, Some(sent), batch_owned, cx);
                 });
             });
         })
@@ -926,6 +932,20 @@ impl DataGridPanel {
         batch_owned: bool,
         cx: &mut Context<Self>,
     ) {
+        self.finish_save_result(row_idx, result, None, batch_owned, cx);
+    }
+
+    /// `sent` is the staged cells the write carried. When given, only those are
+    /// cleared after a success: a value staged after the patch was built has
+    /// not been written and stays staged.
+    fn finish_save_result(
+        &mut self,
+        row_idx: usize,
+        result: Result<dbflux_core::CrudResult, dbflux_core::DbError>,
+        sent: Option<Vec<(usize, SentCell)>>,
+        batch_owned: bool,
+        cx: &mut Context<Self>,
+    ) {
         if batch_owned {
             self.batch_op_in_flight = false;
         }
@@ -980,7 +1000,10 @@ impl DataGridPanel {
                         }
                         None => {}
                     }
-                    state.edit_buffer_mut().clear_row(row_idx);
+                    match &sent {
+                        Some(sent) => clear_sent_cells(state.edit_buffer_mut(), row_idx, sent),
+                        None => state.edit_buffer_mut().clear_row(row_idx),
+                    }
                     cx.notify();
                 });
                 if reload_for_expression {
@@ -2411,6 +2434,36 @@ struct BulkDeleteOutcome {
 
 /// Tells the user that marked rows were left out of a delete, as a warning:
 /// the rest of the delete may have landed.
+type SentCell = dbflux_components::components::data_table::model::CellValue;
+
+fn same_staged_value(left: &SentCell, right: &SentCell) -> bool {
+    left.to_value() == right.to_value() && left.as_expression() == right.as_expression()
+}
+
+/// Drops the row's staged cells that equal what a save sent and keeps the rest,
+/// which the user staged after the patch was built.
+fn clear_sent_cells(
+    buffer: &mut dbflux_components::components::data_table::model::EditBuffer,
+    row_idx: usize,
+    sent: &[(usize, SentCell)],
+) {
+    let newer: Vec<(usize, SentCell)> = buffer
+        .row_changes(row_idx)
+        .into_iter()
+        .filter(|(col, staged)| {
+            !sent
+                .iter()
+                .any(|(sent_col, cell)| sent_col == col && same_staged_value(cell, staged))
+        })
+        .map(|(col, staged)| (col, staged.clone()))
+        .collect();
+
+    buffer.clear_row(row_idx);
+    for (col, cell) in newer {
+        buffer.set_cell(row_idx, col, cell);
+    }
+}
+
 fn report_unidentified_deletes(
     kind: crate::labels::MutationItemKind,
     deleted: usize,

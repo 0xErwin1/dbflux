@@ -2509,6 +2509,57 @@ impl ConnectionManager {
         )
     }
 
+    /// Why a table-details fetch prepared with `session` can no longer be
+    /// trusted, or `None` while it is current. Prepare and apply resolve the
+    /// target the same way, so a result and an error answer are fenced alike.
+    fn table_details_fetch_staleness(
+        &self,
+        session: &FetchSession,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Option<StaleFetchReason> {
+        let profile_id = session.profile_id;
+        let Some(connected) = self.connections.get(&profile_id) else {
+            return Some(StaleFetchReason::ProfileDisconnected);
+        };
+        // After a slot removal or replacement the result must not fall back
+        // unsafely; the slot revision also fences same-connection
+        // remove/reinstall cycles for this target (per-database ABA).
+        let target_matches = match connected.resolve_connection_for_execution(Some(database)) {
+            Ok(current) => Arc::ptr_eq(&session.connection, &current),
+            Err(ConnectionResolutionError::PendingDatabaseConnection { .. }) => false,
+        };
+        if self.current_session_generation(profile_id) != session.generation
+            || !target_matches
+            || self.current_slot_revision(profile_id, database) != session.slot_revision
+        {
+            return Some(StaleFetchReason::ConnectionReplaced);
+        }
+        if self.current_invalidation_revision(profile_id) != session.invalidation_revision {
+            return Some(StaleFetchReason::RequestInvalidated);
+        }
+        if self.current_table_details_revision(profile_id, database, schema, table)
+            != session.table_details_revision.unwrap_or(0)
+        {
+            return Some(StaleFetchReason::RequestInvalidated);
+        }
+        None
+    }
+
+    /// Whether a failed fenced fetch answered for the session, connection and
+    /// table cache that are current now. A stale failure says nothing about
+    /// them and must not release a write.
+    pub fn is_table_details_failure_current(&self, failure: &FencedTableDetailsFailure) -> bool {
+        self.table_details_fetch_staleness(
+            &failure.session,
+            &failure.database,
+            failure.schema.as_deref(),
+            &failure.table,
+        )
+        .is_none()
+    }
+
     /// Applies fetched table details and their dependents in a single
     /// synchronous update, rejecting results whose session was replaced or
     /// invalidated while the fetch was in flight. A rejected result never
@@ -2517,59 +2568,17 @@ impl ConnectionManager {
         &mut self,
         fetched: FetchedTableDetails,
     ) -> ApplyFetchOutcome {
-        let profile_id = fetched.session.profile_id;
-        let Some(connected) = self.connections.get_mut(&profile_id) else {
-            return ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected);
-        };
-        // Apply must resolve the target exactly like prepare: after a slot
-        // removal or replacement the result must not fall back unsafely. The
-        // slot revision additionally fences same-connection remove/reinstall
-        // cycles for this target (per-database ABA).
-        let target_matches =
-            match connected.resolve_connection_for_execution(Some(&fetched.database)) {
-                Ok(current) => Arc::ptr_eq(&fetched.session.connection, &current),
-                Err(ConnectionResolutionError::PendingDatabaseConnection { .. }) => false,
-            };
-        // Direct field reads: the shared helpers borrow all of `self`, which
-        // would conflict with the `connections` entry borrow above.
-        let slot_revision = self
-            .slot_revisions
-            .get(&(profile_id, fetched.database.clone()))
-            .copied()
-            .unwrap_or(0);
-        // Read like `current_session_generation`, which prepare captured from.
-        let generation = self
-            .session_generations
-            .get(&profile_id)
-            .copied()
-            .unwrap_or(0);
-        if generation != fetched.session.generation
-            || !target_matches
-            || slot_revision != fetched.session.slot_revision
-        {
-            return ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced);
-        }
-        if self
-            .invalidation_revisions
-            .get(&profile_id)
-            .copied()
-            .unwrap_or(0)
-            != fetched.session.invalidation_revision
-        {
-            return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
-        }
-
-        if table_details_revision_of(
-            &self.table_details_revisions,
-            &self.table_details_clear_epochs,
-            profile_id,
+        if let Some(reason) = self.table_details_fetch_staleness(
+            &fetched.session,
             &fetched.database,
             fetched.schema.as_deref(),
             &fetched.table,
-        ) != fetched.session.table_details_revision.unwrap_or(0)
-        {
-            return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
+        ) {
+            return ApplyFetchOutcome::Rejected(reason);
         }
+        let Some(connected) = self.connections.get_mut(&fetched.session.profile_id) else {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected);
+        };
 
         let FetchedTableDetails {
             session: _,
@@ -2585,7 +2594,10 @@ impl ConnectionManager {
             table: table.clone(),
             details,
         });
-        connected.populate_dependents(database, schema, table, dependents);
+        // A failed dependents read is not an empty list: the cached ones stay.
+        if let Some(dependents) = dependents {
+            connected.populate_dependents(database, schema, table, dependents);
+        }
         ApplyFetchOutcome::Applied
     }
 
@@ -3674,16 +3686,34 @@ impl FencedTableDetailsParams {
     }
 
     pub fn execute(self) -> Result<FetchedTableDetails, DbError> {
-        let details = self.session.connection.table_details(
+        self.execute_fenced().map_err(|failure| failure.error)
+    }
+
+    /// Like [`Self::execute`], but a failure keeps the fence it was prepared
+    /// with, so the caller can tell a current answer from a stale one through
+    /// [`ConnectionManager::is_table_details_failure_current`].
+    pub fn execute_fenced(self) -> Result<FetchedTableDetails, FencedTableDetailsFailure> {
+        let details = match self.session.connection.table_details(
             &self.database,
             self.schema.as_deref(),
             &self.table,
-        )?;
+        ) {
+            Ok(details) => details,
+            Err(error) => {
+                return Err(FencedTableDetailsFailure {
+                    session: self.session,
+                    database: self.database,
+                    schema: self.schema,
+                    table: self.table,
+                    error,
+                });
+            }
+        };
         let dependents = self
             .session
             .connection
             .fetch_dependents(&self.database, self.schema.as_deref(), &self.table)
-            .unwrap_or_default();
+            .ok();
 
         Ok(FetchedTableDetails {
             session: self.session,
@@ -3696,6 +3726,15 @@ impl FencedTableDetailsParams {
     }
 }
 
+/// A failed fenced table-details fetch with the fence it was prepared under.
+pub struct FencedTableDetailsFailure {
+    session: FetchSession,
+    database: String,
+    schema: Option<String>,
+    table: String,
+    pub error: DbError,
+}
+
 /// Table details and dependents fetched for a captured session, awaiting
 /// fenced application through `ConnectionManager::apply_fetched_table_details`.
 pub struct FetchedTableDetails {
@@ -3704,7 +3743,9 @@ pub struct FetchedTableDetails {
     schema: Option<String>,
     table: String,
     pub details: TableInfo,
-    pub dependents: Vec<RelationRef>,
+    /// `None` when the dependents read failed: they are not applied, so the
+    /// cached ones are not replaced by an empty list.
+    pub dependents: Option<Vec<RelationRef>>,
 }
 
 impl FetchedTableDetails {
@@ -6162,6 +6203,74 @@ mod tests {
     }
 
     #[test]
+    fn a_refetch_whose_dependents_read_failed_keeps_the_cached_dependents() {
+        let primary = TableDetailsBoundConnection::new(
+            SchemaLoadingStrategy::SingleDatabase,
+            "dependents-fail",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+        let cached = vec![RelationRef {
+            kind: RelationKind::View,
+            qualified_name: "main.users_view".to_string(),
+        }];
+        manager.set_dependents(
+            profile.id,
+            "main".to_string(),
+            None,
+            "users".to_string(),
+            cached,
+        );
+
+        let fetched = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "users")
+            .expect("prepares")
+            .execute()
+            .expect("the details read succeeds");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Applied
+        );
+
+        assert!(
+            manager
+                .get_table_details(profile.id, "main", None, "users")
+                .is_some(),
+            "the details were refreshed"
+        );
+        let dependents = manager
+            .connections
+            .get(&profile.id)
+            .expect("connected")
+            .dependents("main", None, "users");
+        assert_eq!(dependents.len(), 1, "the cached dependents were kept");
+        assert_eq!(dependents[0].qualified_name, "main.users_view");
+    }
+
+    #[test]
+    fn a_failed_refetch_is_current_only_for_the_session_it_was_prepared_in() {
+        let first = TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main");
+        let (mut manager, profile) = new_manager_with_connection(first);
+        let params = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "users")
+            .expect("prepares");
+        let failure = FencedTableDetailsFailure {
+            session: params.session.clone(),
+            database: "main".to_string(),
+            schema: None,
+            table: "users".to_string(),
+            error: DbError::NotSupported("x".to_string()),
+        };
+        assert!(manager.is_table_details_failure_current(&failure));
+
+        connect_profile(
+            &mut manager,
+            &profile,
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main"),
+        );
+        assert!(!manager.is_table_details_failure_current(&failure));
+    }
+
+    #[test]
     fn a_refetch_in_flight_is_rejected_after_the_profiles_details_are_cleared() {
         let primary =
             TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main");
@@ -6777,6 +6886,9 @@ mod tests {
             _schema: Option<&str>,
             table: &str,
         ) -> Result<Vec<RelationRef>, DbError> {
+            if self.bound_database == "dependents-fail" {
+                return Err(DbError::connection_failed("dependents read failed"));
+            }
             Ok(vec![RelationRef {
                 kind: RelationKind::View,
                 qualified_name: format!("{}.{}", self.bound_database, table),
