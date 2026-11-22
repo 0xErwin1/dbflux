@@ -4606,9 +4606,9 @@ settings:
       milliseconds: "毫秒"
     header:
       title: 常规
-      subtitle: "外观、启动、刷新以及危险语句的安全保护。"
+      subtitle: "启动、刷新以及危险语句的安全保护。"
     appearance:
-      group: 外观
+      subtitle: "主题、密度、语言和字体。"
     startup:
       group: "启动与会话"
     refresh:
@@ -5636,6 +5636,7 @@ settings:
     search_placeholder: "搜索设置"
     general_group: 常规
     general: 常规
+    appearance: 外观
     keybindings: 键盘快捷键
     updates: 更新与隐私
     audit: 审计

@@ -295,7 +295,8 @@ crates/
         form_nav.rs         # FormGridNav<F> 通用二维网格导航
         form_section.rs     # 用于键盘导航的 FormSection trait
         section_trait.rs    # SettingsSection trait
-        general.rs          # 常规设置（主题、安全开关）
+        general.rs          # 常规设置（安全开关、启动、刷新）
+        appearance_section.rs # 外观页面（主题、密度、语言、字体）
         keybindings.rs      # 键盘快捷键设置节
         auth_profiles_section.rs # 依据提供程序表单定义动态增删改查认证配置文件
         proxies.rs          # 带 FormGridNav 的代理增删改查表单
@@ -764,7 +765,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 ### 设置窗口
 
-- 设置划分为以下各节：常规、键盘快捷键、认证配置文件、代理、SSH 隧道、服务、Hooks、驱动程序、审计与关于。MCP 各节（受信客户端、角色、策略）在 `mcp` feature 下按 feature 门控。
+- 设置划分为以下各节：常规、外观、键盘快捷键、认证配置文件、代理、SSH 隧道、服务、Hooks、驱动程序、审计与关于。MCP 各节（受信客户端、角色、策略）在 `mcp` feature 下按 feature 门控。
 - 侧边栏使用 `TreeNav` 组件，带有可折叠的网络/连接类别。
 - `UiStateStore` 把侧边栏折叠状态持久化到 `~/.local/share/dbflux/dbflux.db` 中的 `st_ui_state` 表。
 - 认证配置文件一节由提供程序驱动（`DynAuthProvider::form_def`），并支持导入提供程序发现的配置（对 AWS 而言来自 `~/.aws/config`）。

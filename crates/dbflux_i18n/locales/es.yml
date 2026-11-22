@@ -4606,9 +4606,9 @@ settings:
       milliseconds: "ms"
     header:
       title: General
-      subtitle: "Apariencia, inicio, actualización y la red de seguridad para sentencias peligrosas."
+      subtitle: "Inicio, actualización y la red de seguridad para sentencias peligrosas."
     appearance:
-      group: Apariencia
+      subtitle: "Tema, densidad, idioma y fuentes."
     startup:
       group: "Inicio y sesión"
     refresh:
@@ -5636,6 +5636,7 @@ settings:
     search_placeholder: "Buscar en ajustes"
     general_group: General
     general: General
+    appearance: Apariencia
     keybindings: Atajos de teclado
     updates: Actualizaciones y privacidad
     audit: Auditoría

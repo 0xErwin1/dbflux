@@ -4606,9 +4606,9 @@ settings:
       milliseconds: "ms"
     header:
       title: 일반
-      subtitle: "모양, 시작, 새로 고침, 그리고 위험한 문에 대한 안전장치."
+      subtitle: "시작, 새로 고침, 그리고 위험한 문에 대한 안전장치."
     appearance:
-      group: 모양
+      subtitle: "테마, 밀도, 언어 및 글꼴."
     startup:
       group: "시작 및 세션"
     refresh:
@@ -5635,6 +5635,7 @@ settings:
     search_placeholder: "설정 검색"
     general_group: 일반
     general: 일반
+    appearance: 모양
     keybindings: 키 바인딩
     updates: 업데이트 및 개인정보
     audit: 감사

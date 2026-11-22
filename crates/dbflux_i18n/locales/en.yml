@@ -4606,9 +4606,9 @@ settings:
       milliseconds: "ms"
     header:
       title: General
-      subtitle: "Appearance, startup, refresh and the safety net for dangerous statements."
+      subtitle: "Startup, refresh and the safety net for dangerous statements."
     appearance:
-      group: Appearance
+      subtitle: "Theme, density, language and fonts."
     startup:
       group: "Startup and session"
     refresh:
@@ -5636,6 +5636,7 @@ settings:
     search_placeholder: "Search settings"
     general_group: General
     general: General
+    appearance: Appearance
     keybindings: Keybindings
     updates: Updates & privacy
     audit: Audit

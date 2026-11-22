@@ -66,14 +66,18 @@ fn general_theme(
     window: &mut VisualTestContext,
 ) -> ThemeSetting {
     window.update(|_, cx| match &settings.read(cx).active_section_entity {
-        ActiveSettingsSection::General(section) => section.read(cx).gen_settings.theme,
+        ActiveSettingsSection::General(section) | ActiveSettingsSection::Appearance(section) => {
+            section.read(cx).gen_settings.theme
+        }
         _ => unreachable!("the general section is open"),
     })
 }
 
 fn general_cursor(settings: &Entity<SettingsCoordinator>, window: &mut VisualTestContext) -> usize {
     window.update(|_, cx| match &settings.read(cx).active_section_entity {
-        ActiveSettingsSection::General(section) => section.read(cx).gen_form_cursor,
+        ActiveSettingsSection::General(section) | ActiveSettingsSection::Appearance(section) => {
+            section.read(cx).gen_form_cursor
+        }
         _ => unreachable!("the general section is open"),
     })
 }
@@ -99,8 +103,8 @@ fn ctrl_h_and_ctrl_l_move_between_navigation_and_section(cx: &mut TestAppContext
 /// The theme row is a segmented field: Left and Right pick the choice next
 /// to the current one and stop at either end.
 #[gpui::test]
-fn arrows_move_the_choice_of_a_segmented_general_row(cx: &mut TestAppContext) {
-    let (settings, window) = open_settings(cx, SettingsSectionId::General);
+fn arrows_move_the_choice_of_a_segmented_appearance_row(cx: &mut TestAppContext) {
+    let (settings, window) = open_settings(cx, SettingsSectionId::Appearance);
     focus_content(&settings, window);
     assert_eq!(
         general_cursor(&settings, window),
@@ -110,8 +114,8 @@ fn arrows_move_the_choice_of_a_segmented_general_row(cx: &mut TestAppContext) {
 
     window.update(|_, cx| {
         let section = match &settings.read(cx).active_section_entity {
-            ActiveSettingsSection::General(section) => section.clone(),
-            _ => unreachable!("the general section is open"),
+            ActiveSettingsSection::Appearance(section) => section.clone(),
+            _ => unreachable!("the appearance section is open"),
         };
         section.update(cx, |section, _| {
             section.gen_settings.theme = ThemeSetting::Dark
@@ -723,6 +727,7 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
 
     let sections = [
         SettingsSectionId::General,
+        SettingsSectionId::Appearance,
         SettingsSectionId::Audit,
         SettingsSectionId::Keybindings,
         SettingsSectionId::Updates,

@@ -295,7 +295,8 @@ crates/
         form_nav.rs         # FormGridNav<F> 범용 2D 그리드 내비게이션
         form_section.rs     # 키보드 내비게이션을 위한 FormSection 트레이트
         section_trait.rs    # SettingsSection 트레이트
-        general.rs          # 일반 설정 (테마, 안전 토글)
+        general.rs          # 일반 설정 (안전 토글, 시작, 새로 고침)
+        appearance_section.rs # 모양 페이지 (테마, 밀도, 언어, 글꼴)
         keybindings.rs      # 키 바인딩 설정 섹션
         auth_profiles_section.rs # 공급자 폼 정의별 동적 인증 프로필 CRUD
         proxies.rs          # FormGridNav를 사용한 프록시 CRUD 폼

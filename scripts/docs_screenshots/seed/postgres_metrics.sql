@@ -2,7 +2,7 @@
 -- the metrics database. The server must preload timescaledb. Every value is
 -- derived from the row number, so two runs produce the same rows.
 
-CREATE EXTENSION timescaledb;
+CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 CREATE TABLE server_metrics (
     time            timestamptz NOT NULL,

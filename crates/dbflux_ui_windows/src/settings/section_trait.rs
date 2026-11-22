@@ -4,6 +4,7 @@ use gpui::{AnyElement, App, Context, KeyDownEvent, Window, div};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettingsSectionId {
     General,
+    Appearance,
     Audit,
     #[cfg(feature = "mcp")]
     McpClients,

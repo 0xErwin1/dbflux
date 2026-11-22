@@ -33,7 +33,7 @@ fn open_settings(cx: &mut TestAppContext) -> (Entity<SettingsCoordinator>, &mut 
             let settings = cx.new(|cx| {
                 SettingsCoordinator::new_with_section(
                     app_state,
-                    SettingsSectionId::General,
+                    SettingsSectionId::Appearance,
                     window,
                     cx,
                 )
@@ -55,8 +55,8 @@ fn stage_unsaved_theme_change(
 ) {
     window.update(|_, cx| {
         let section = match &settings.read(cx).active_section_entity {
-            ActiveSettingsSection::General(section) => section.clone(),
-            _ => unreachable!("the general section is open"),
+            ActiveSettingsSection::Appearance(section) => section.clone(),
+            _ => unreachable!("the appearance section is open"),
         };
         section.update(cx, |section, _| {
             section.gen_settings.theme = ThemeSetting::Light;
@@ -87,7 +87,7 @@ fn a_dirty_section_switch_confirms_through_the_shared_modal(cx: &mut TestAppCont
 
     assert_eq!(
         active_section(window, &settings),
-        SettingsSectionId::General,
+        SettingsSectionId::Appearance,
         "a dirty section does not switch before the confirmation"
     );
     assert!(
@@ -118,7 +118,7 @@ fn a_dirty_section_switch_confirms_through_the_shared_modal(cx: &mut TestAppCont
     );
     assert_eq!(
         active_section(window, &settings),
-        SettingsSectionId::General,
+        SettingsSectionId::Appearance,
         "cancelling keeps the current section"
     );
     assert!(
