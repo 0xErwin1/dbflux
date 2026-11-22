@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::edit_guard::OnStop;
+use super::mutation_executor::{MutationDeps, MutationExecOptions};
 use super::*;
 use dbflux_components::modals::{MutationConfirmHardRequest, MutationConfirmRequest};
 use dbflux_core::{
@@ -19,6 +21,20 @@ pub(crate) enum PendingMutationModal {
     Light(MutationConfirmRequest),
     /// Hard confirmation (E-2/E-3/E-4/E-6): danger variant with TypeToConfirm + opt-in.
     Hard(MutationConfirmHardRequest),
+}
+
+/// A confirmed visual mutation, resolved and ready to run: everything the
+/// background run needs, held together so it can wait on the key check.
+struct MutationStart {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
+    spec: VisualMutationSpec,
+    opts: MutationExecOptions,
+    deps: MutationDeps,
+    mode: crate::labels::VisualMutationTaskMode,
+    table_name: String,
+    intent: MutationIntent,
+    pk_columns: Vec<String>,
 }
 
 /// Fetches up to 5 sample rows for the mutation confirmation preview.
@@ -591,6 +607,48 @@ impl DataGridPanel {
         } else {
             vec![]
         };
+
+        let start = MutationStart {
+            #[cfg(feature = "telemetry")]
+            usage,
+            spec,
+            opts,
+            deps,
+            mode,
+            table_name,
+            intent,
+            pk_columns,
+        };
+
+        if is_chunked {
+            let on_stop = if intent == MutationIntent::CloseAfterApply {
+                OnStop::ReleaseClose
+            } else {
+                OnStop::Nothing
+            };
+            self.guard_edit(
+                on_stop,
+                move |panel, cx| panel.start_mutation_run(start, cx),
+                cx,
+            );
+        } else {
+            self.start_mutation_run(start, cx);
+        }
+    }
+
+    /// Starts the task and the background run of a confirmed visual mutation.
+    fn start_mutation_run(&mut self, start: MutationStart, cx: &mut Context<Self>) {
+        let MutationStart {
+            #[cfg(feature = "telemetry")]
+            usage,
+            spec,
+            opts,
+            deps,
+            mode,
+            table_name,
+            intent,
+            pk_columns,
+        } = start;
 
         let (task_id, cancel_handle) = self.runner.start_cancellable_mutation(
             dbflux_core::TaskKind::Query,

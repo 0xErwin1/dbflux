@@ -1915,6 +1915,33 @@ impl ConnectionManager {
         })
     }
 
+    /// Prepares a fetch of one table's details that ignores the cache.
+    ///
+    /// [`Self::prepare_fetch_table_details`] refuses a populated key, which is
+    /// right for a first load and wrong for a check against the database as it
+    /// is now. This one never reads the cache and never touches it: the caller
+    /// decides whether the fresh details replace the cached ones.
+    pub fn prepare_refetch_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FetchTableDetailsParams, PrepareFetchError> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| PrepareFetchError::Failed("Profile not connected".to_string()))?;
+
+        Ok(FetchTableDetailsParams {
+            profile_id,
+            database: database.to_string(),
+            schema: schema.map(String::from),
+            table: table.to_string(),
+            connection: connected.connection_for_database(database),
+        })
+    }
+
     pub fn prepare_fetch_collection_children(
         &self,
         profile_id: Uuid,
@@ -5989,6 +6016,59 @@ mod tests {
             ),
             PrepareFetchError::AlreadyCached
         );
+    }
+
+    #[test]
+    fn table_refetch_prepare_ignores_a_populated_cache() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let details = TableInfo {
+            name: "users".to_string(),
+            schema: None,
+            columns: Some(Vec::new()),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+            pseudo_columns: Box::default(),
+        };
+        manager.set_table_details(
+            profile.id,
+            "app".to_string(),
+            None,
+            "users".to_string(),
+            details,
+        );
+
+        assert!(
+            manager
+                .prepare_fetch_table_details(profile.id, "app", None, "users")
+                .is_err(),
+            "the cached key is refused by the ordinary prepare"
+        );
+
+        let params = manager
+            .prepare_refetch_table_details(profile.id, "app", None, "users")
+            .expect("a refetch prepares for a cached key");
+        assert_eq!(params.table, "users");
+        assert!(
+            manager
+                .get_table_details(profile.id, "app", None, "users")
+                .is_some(),
+            "preparing a refetch leaves the cache alone"
+        );
+
+        let disconnected =
+            manager.prepare_refetch_table_details(Uuid::new_v4(), "app", None, "users");
+        assert!(matches!(disconnected, Err(PrepareFetchError::Failed(_))));
     }
 
     #[test]

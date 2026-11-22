@@ -14,7 +14,10 @@ pub(crate) mod types;
 pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder};
 pub use dependency_order::{OrderResult, topological_order};
 pub use dependents::{RelationKind, RelationRef};
-pub use drift_check::{DriftOutcome, TableKey, check_drift_sync, check_schema_drift};
+pub use drift_check::{
+    DriftOutcome, PrimaryKeyCheck, TableKey, check_drift_sync, check_primary_key,
+    check_schema_drift,
+};
 pub use facet::{
     NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, TimeSeriesFacet, VectorDistance,
     VectorFacet, category_collection_facets,

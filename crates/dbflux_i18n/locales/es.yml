@@ -1834,6 +1834,7 @@ document:
         invalid_json_filter: Filtro JSON no válido
         chart_save_failed: 'No se pudo guardar el gráfico "%{name}": %{error}'
         pk_details_fetch_failed: "Error al obtener los detalles de la tabla para la PK: %{error}"
+        edit_guard_check_failed: "No se pudo comprobar la clave primaria de la tabla, así que no se envió nada: %{error}"
         query_failed: "Consulta fallida: %{error}"
         chart_save_no_profile_binding: "No se puede guardar el gráfico: la consulta no tiene un perfil vinculado"
       placeholder:
@@ -1912,7 +1913,6 @@ document:
         insert_document: Insertar documento
         insert_row: Insertar fila
         delete_document: Eliminar documento
-        delete_row: Eliminar fila
         visual_mutation_chunked: "Mutación visual (por segmentos)"
         visual_mutation_direct: "Mutación visual (directa)"
         visual_mutation_single_transaction: "Mutación visual (transacción única)"
@@ -1921,6 +1921,7 @@ document:
         update_document_failed: "No se pudo actualizar el documento: %{error}"
         save_row_unsupported_pk: "No se puede guardar la fila: la clave primaria usa un tipo de valor no admitido"
         save_row_identity_failed: "No se puede guardar la fila: no se pudo construir la identidad de la fila a partir de las columnas de clave primaria"
+        staged_row_left_grid: "Una fila con cambios pendientes ya no está en la grilla, así que el lote se detuvo ahí."
         save_row_unsupported_values: "No se puede guardar la fila: los valores no admitidos son de solo lectura"
         save_failed: "Error al guardar: %{error}"
         save_document_unsupported_id: "No se puede guardar el documento: tiene un valor de _id no admitido"
@@ -4382,6 +4383,12 @@ modals:
     cancel: Cancelar
     refreshing: Actualizando…
     refresh: Actualizar y volver a ejecutar
+    edit:
+      title: "La tabla cambió desde que se cargó"
+      pk_lead: "La clave primaria de %{table} ya no es la que usa esta grilla para guardar, así que no se envió nada."
+      gone_lead: "%{table} ya no existe, así que no se envió nada."
+      discard_note: "Recargar la tabla descarta tus cambios pendientes, porque sus identidades de fila se tomaron con la clave anterior. Cancelar los deja pendientes y sin guardar."
+      reload: "Recargar tabla"
   tunnel_auth:
     hide_passphrase: "Ocultar frase de contraseña"
     show_passphrase: "Mostrar frase de contraseña"

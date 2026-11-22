@@ -1096,6 +1096,21 @@ impl AppState {
             .prepare_fetch_table_details(profile_id, database, schema, table)
     }
 
+    /// Prepares a fetch of one table's details that ignores the cache, for
+    /// checking the table against the database as it is now. Execute it off
+    /// the UI thread; the cache is only written if the caller does so.
+    pub fn prepare_refetch_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FetchTableDetailsParams, PrepareFetchError> {
+        self.facade
+            .connections
+            .prepare_refetch_table_details(profile_id, database, schema, table)
+    }
+
     /// Invalidates one table's cached details and dependents and fences its older requests.
     pub fn invalidate_table_details(
         &mut self,

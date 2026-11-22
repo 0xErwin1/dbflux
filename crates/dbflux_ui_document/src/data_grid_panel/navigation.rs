@@ -707,6 +707,10 @@ impl DataGridPanel {
             }
         }
 
+        if self.dispatch_edit_guard_command(cmd, cx) {
+            return true;
+        }
+
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);

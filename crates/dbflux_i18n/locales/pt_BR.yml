@@ -1831,6 +1831,7 @@ document:
         invalid_json_filter: Filtro JSON inválido
         chart_save_failed: 'Falha ao salvar o gráfico "%{name}": %{error}'
         pk_details_fetch_failed: "Falha ao buscar os detalhes da tabela para a PK: %{error}"
+        edit_guard_check_failed: "Não foi possível verificar a chave primária da tabela, então nada foi enviado: %{error}"
         query_failed: "Falha na consulta: %{error}"
         chart_save_no_profile_binding: "Não é possível salvar o gráfico: a consulta não tem vínculo com um perfil"
       placeholder:
@@ -1909,7 +1910,6 @@ document:
         insert_document: Inserir documento
         insert_row: Inserir linha
         delete_document: Excluir documento
-        delete_row: Excluir linha
         visual_mutation_chunked: "Alteração visual (em blocos)"
         visual_mutation_direct: "Alteração visual (direta)"
         visual_mutation_single_transaction: "Alteração visual (transação única)"
@@ -1918,6 +1918,7 @@ document:
         update_document_failed: "Falha ao atualizar o documento: %{error}"
         save_row_unsupported_pk: "Não é possível salvar a linha: a chave primária usa um tipo de valor não compatível"
         save_row_identity_failed: "Não é possível salvar a linha: falha ao montar a identidade da linha a partir das colunas da chave primária"
+        staged_row_left_grid: "Uma linha com edições pendentes não está mais na grade, então o lote parou aí."
         save_row_unsupported_values: "Não é possível salvar a linha: valores não compatíveis são somente leitura"
         save_failed: "Falha ao salvar: %{error}"
         save_document_unsupported_id: "Não é possível salvar o documento: ele tem um valor de _id não compatível"
@@ -4376,6 +4377,12 @@ modals:
     cancel: Cancelar
     refreshing: Atualizando…
     refresh: Atualizar e executar novamente
+    edit:
+      title: "A tabela mudou desde que foi carregada"
+      pk_lead: "A chave primária de %{table} não é mais a que esta grade usa para salvar, então nada foi enviado."
+      gone_lead: "%{table} não existe mais, então nada foi enviado."
+      discard_note: "Recarregar a tabela descarta suas edições pendentes, porque as identidades das linhas foram tomadas com a chave antiga. Cancelar as mantém pendentes e não salvas."
+      reload: "Recarregar tabela"
   tunnel_auth:
     hide_passphrase: "Ocultar senha"
     show_passphrase: "Mostrar senha"

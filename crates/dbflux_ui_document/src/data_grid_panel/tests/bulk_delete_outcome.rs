@@ -87,11 +87,16 @@ fn commit_deletes(
 ) {
     window.update(|_, app| {
         panel.update(app, |panel, cx| {
-            panel.commit_bulk_deletes_table(
+            let Some((identities, unidentified)) = panel.capture_delete_identities(&rows, cx)
+            else {
+                return;
+            };
+            panel.start_captured_deletes(
                 Uuid::nil(),
                 Some("app".to_string()),
                 TableRef::with_schema("public", "orders"),
-                rows,
+                identities,
+                unidentified,
                 cx,
             );
         });

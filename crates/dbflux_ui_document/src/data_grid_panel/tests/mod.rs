@@ -691,6 +691,7 @@ mod bulk_delete_outcome;
 mod close_completion;
 mod collection_views;
 mod column_header_menu;
+mod edit_guard;
 mod export_all;
 mod expressions;
 mod facets;

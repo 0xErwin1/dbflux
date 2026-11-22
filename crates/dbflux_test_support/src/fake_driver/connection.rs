@@ -171,6 +171,30 @@ impl Connection for FakeConnection {
         }
     }
 
+    fn table_details(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<dbflux_core::TableInfo, DbError> {
+        self.state
+            .table_details_calls
+            .fetch_add(1, Ordering::Relaxed);
+
+        match rwlock_read(&self.state.table_details).get(table) {
+            Some(FakeTableDetails::Info(info)) => Ok((**info).clone()),
+            Some(FakeTableDetails::NotFound) => Err(DbError::object_not_found(format!(
+                "table {table} not found"
+            ))),
+            Some(FakeTableDetails::Failure(message)) => {
+                Err(DbError::connection_failed(message.clone()))
+            }
+            None => Err(DbError::NotSupported(
+                "table_details not supported".to_string(),
+            )),
+        }
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         mutex_lock(&self.state.crud_ops).push(CrudOp::Update(patch.clone()));
         Ok(CrudResult::new(1, None))
