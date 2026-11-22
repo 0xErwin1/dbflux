@@ -664,7 +664,7 @@ impl ValueTypeColors {
 pub struct SyntaxColors {
     pub keyword: Hsla,
     pub string: Hsla,
-    /// Numbers and NULL literals.
+    /// Numbers.
     pub number: Hsla,
     pub comment: Hsla,
     /// Types and built-in identifiers.
@@ -760,6 +760,12 @@ impl SyntaxColors {
     /// Schema-tree column icon.
     pub fn column(&self) -> Hsla {
         self.operator
+    }
+
+    /// A NULL value in the data grid and the row inspector. NULL is a
+    /// keyword, so it takes the keyword role, as in the SQL editor.
+    pub fn null_value(&self) -> Hsla {
+        self.keyword
     }
 
     /// Schema-tree custom type icon.
@@ -2557,9 +2563,17 @@ impl Widths {
 mod tests {
     use super::{
         BASE_REM, Borders, ChartGeometry, ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole,
-        DocumentTreeMetrics, FontSizes, Radii, Shadows, Spacing, ValueTypeColors, ui,
+        DocumentTreeMetrics, FontSizes, Radii, Shadows, Spacing, SyntaxColors, ValueTypeColors, ui,
     };
     use gpui::{hsla, px, rems};
+
+    #[test]
+    fn a_null_value_takes_the_keyword_role_in_both_palettes() {
+        for colors in [SyntaxColors::dark(), SyntaxColors::light()] {
+            assert_eq!(colors.null_value(), colors.keyword);
+            assert_ne!(colors.null_value(), colors.number);
+        }
+    }
 
     #[test]
     fn ui_expresses_design_pixels_in_rems_of_the_base_size() {

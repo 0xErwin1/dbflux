@@ -66,6 +66,11 @@ const SQL_HIGHLIGHT_FIXES: &str = r#"
 ; form the grammar's `_integer` and `_decimal_number` accept.
 ((literal) @number
   (#match? @number "^[-+]?(0[xX][0-9A-Fa-f_]+|0[oO][0-7_]+|0[bB][01_]+|([0-9][0-9_]*[.]?[0-9_]*|[.][0-9][0-9_]*)([eE][-+]?[0-9][0-9_]*)?)$"))
+; `NULL` is a keyword. The grammar's catch-all `(literal) @string` matched a
+; `NULL` literal, and the bare keyword was captured as a built-in type.
+((literal) @keyword
+  (#match? @keyword "^[Nn][Uu][Ll][Ll]$"))
+(keyword_null) @keyword
 ; `conditional` has no style, so these had no color.
 [
   (keyword_case)
@@ -99,6 +104,35 @@ const SQL_HIGHLIGHT_FIXES: &str = r#"
  (keyword_statistics)
  (keyword_maxvalue)
  (keyword_minvalue)
+] @keyword.modifier
+; The grammar captures these as `attribute`, which has no role here, so they
+; kept the editor's default attribute color.
+[
+ (keyword_asc)
+ (keyword_desc)
+ (keyword_terminated)
+ (keyword_escaped)
+ (keyword_unsigned)
+ (keyword_nulls)
+ (keyword_last)
+ (keyword_delimited)
+ (keyword_replication)
+ (keyword_auto_increment)
+ (keyword_default)
+ (keyword_collate)
+ (keyword_concurrently)
+ (keyword_engine)
+ (keyword_always)
+ (keyword_generated)
+ (keyword_preceding)
+ (keyword_following)
+ (keyword_first)
+ (keyword_current_timestamp)
+ (keyword_immutable)
+ (keyword_atomic)
+ (keyword_parallel)
+ (keyword_leakproof)
+ (keyword_safe)
 ] @keyword.modifier
 "#;
 
@@ -313,7 +347,11 @@ mod tests {
     fn sql_numbers_and_keywords_take_their_roles() {
         let roles = sql_roles(
             "SELECT 1, 1.5, 1e3, 1_000, 0xFF, 0o77, 0b1010, '7' FROM t WHERE CASE WHEN x THEN 1 ELSE 0 END = 1;\n\
-             CREATE TABLE u (id integer UNIQUE REFERENCES t ON DELETE CASCADE);",
+             CREATE TABLE u (id integer UNIQUE REFERENCES t ON DELETE CASCADE);\n\
+             SELECT a FROM t WHERE b IS NULL ORDER BY a DESC NULLS LAST;\n\
+             UPDATE t SET b = NULL WHERE d = 'x';\n\
+             CREATE TABLE v (c integer DEFAULT 0, d text);\n\
+             CREATE INDEX vd ON v (d COLLATE \"C\");",
         );
         let role_of = |text: &str| {
             roles
@@ -326,7 +364,10 @@ mod tests {
             assert_eq!(role_of(number), Some("number"), "{number}");
         }
         assert_eq!(role_of("'7'"), Some("string"));
-        for keyword in ["CASE", "WHEN", "THEN", "ELSE", "UNIQUE", "CASCADE"] {
+        for keyword in [
+            "CASE", "WHEN", "THEN", "ELSE", "UNIQUE", "CASCADE", "NULL", "DESC", "NULLS", "LAST",
+            "DEFAULT", "COLLATE",
+        ] {
             assert_eq!(role_of(keyword), Some("keyword"), "{keyword}");
         }
     }
