@@ -1,4 +1,6 @@
+use super::super::appearance_section::{AccentEntry, AccentField, accent_entry_of};
 use super::{FontFamilyField, FontFamilyOption, GeneralFormRow, GeneralPage, GeneralSection};
+use dbflux_core::AccentColor;
 use dbflux_core::{AppStyle, ScrollbarVisibility, ThemeSetting};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::AppStateEntity;
@@ -1051,8 +1053,10 @@ fn an_invalid_size_shows_its_error_under_the_field(cx: &mut TestAppContext) {
     );
 }
 
-const APPEARANCE_ROWS: [GeneralFormRow; 10] = [
+const APPEARANCE_ROWS: [GeneralFormRow; 12] = [
     GeneralFormRow::Theme,
+    GeneralFormRow::AccentDark,
+    GeneralFormRow::AccentLight,
     GeneralFormRow::Style,
     GeneralFormRow::Language,
     GeneralFormRow::UiFontFamily,
@@ -1161,11 +1165,278 @@ fn saving_the_appearance_page_keeps_the_general_settings_untouched() {
     });
 }
 
+fn set_accent(
+    section: &mut GeneralSection,
+    field: AccentField,
+    text: &str,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<GeneralSection>,
+) {
+    let input = match field {
+        AccentField::Dark => section.input_accent_dark.clone(),
+        AccentField::Light => section.input_accent_light.clone(),
+    };
+    input.update(cx, |input, cx| input.set_value(text, window, cx));
+}
+
+fn stored_accents(section: &GeneralSection, cx: &gpui::App) -> (Option<String>, Option<String>) {
+    let stored = section
+        .app_state
+        .read(cx)
+        .storage_runtime()
+        .general_settings()
+        .get()
+        .expect("stored general settings readable")
+        .expect("settings were stored");
+
+    (stored.accent_dark, stored.accent_light)
+}
+
+fn primary_fill(cx: &gpui::App) -> gpui::Hsla {
+    gpui_component::theme::Theme::global(cx)
+        .tokens
+        .primary
+        .color
+}
+
+#[test]
+fn accent_entries_classify_the_palette_accent_a_custom_color_and_invalid_text() {
+    assert_eq!(accent_entry_of("#702963"), AccentEntry::Palette);
+    assert_eq!(accent_entry_of(" #702963 "), AccentEntry::Palette);
+    assert_eq!(
+        accent_entry_of("#2f7d6d"),
+        AccentEntry::Custom(AccentColor::from_rgb(0x2F7D6D))
+    );
+
+    for invalid in ["", "#2F7D6", "2F7D6D", "#GG7D6D", "teal"] {
+        assert_eq!(
+            accent_entry_of(invalid),
+            AccentEntry::Invalid,
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn both_accent_fields_show_the_palette_accent_until_a_color_is_saved() {
+    with_appearance_section(|section, _, _, cx| {
+        for input in [&section.input_accent_dark, &section.input_accent_light] {
+            assert_eq!(input.read(cx).value().as_ref(), "#702963");
+        }
+        assert_eq!(section.general_change_count(cx), 0);
+    });
+}
+
+#[test]
+fn a_valid_accent_is_dirty_saved_for_its_theme_only_and_applied() {
+    with_appearance_section_phases(vec![
+        Box::new(|section, window, cx| {
+            let palette_fill = primary_fill(cx);
+
+            set_accent(section, AccentField::Dark, "#2f7d6d", window, cx);
+            assert_eq!(section.general_change_count(cx), 1);
+            assert!(section.has_unsaved_general_changes(cx));
+
+            section.save_general_settings(window, cx);
+
+            let saved = section.app_state.read(cx).general_settings().clone();
+            assert_eq!(saved.accent_dark, Some(AccentColor::from_rgb(0x2F7D6D)));
+            assert_eq!(saved.accent_light, None, "Light keeps the palette accent");
+            assert_ne!(primary_fill(cx), palette_fill, "the accent is applied");
+        }),
+        Box::new(|section, _window, cx| {
+            assert_eq!(
+                stored_accents(section, cx),
+                (Some("#2F7D6D".to_string()), None)
+            );
+            assert!(!section.has_unsaved_general_changes(cx));
+        }),
+    ]);
+}
+
+#[test]
+fn the_light_accent_is_saved_independently() {
+    with_appearance_section_phases(vec![
+        Box::new(|section, window, cx| {
+            set_accent(section, AccentField::Light, "#2F7D6D", window, cx);
+            section.save_general_settings(window, cx);
+        }),
+        Box::new(|section, _window, cx| {
+            assert_eq!(
+                stored_accents(section, cx),
+                (None, Some("#2F7D6D".to_string()))
+            );
+        }),
+    ]);
+}
+
+#[test]
+fn an_invalid_accent_shows_the_error_saves_nothing_and_keeps_the_palette_accent() {
+    with_appearance_section(|section, toast_host, window, cx| {
+        let palette_fill = primary_fill(cx);
+        let stored_before = stored_accents(section, cx);
+
+        set_accent(section, AccentField::Dark, "#2F7D6", window, cx);
+        assert_eq!(
+            section.accent_entry(AccentField::Dark, cx),
+            AccentEntry::Invalid
+        );
+        assert_eq!(section.general_change_count(cx), 1);
+
+        section.save_general_settings(window, cx);
+
+        assert_eq!(
+            section
+                .gen_field_error
+                .as_ref()
+                .map(|(row, message)| (*row, message.clone())),
+            Some((
+                GeneralFormRow::AccentDark,
+                "Use a color as #RRGGBB.".to_string()
+            ))
+        );
+        assert_eq!(
+            section.gen_form_rows()[section.gen_form_cursor],
+            GeneralFormRow::AccentDark
+        );
+        assert!(section.gen_editing_field, "the invalid field takes focus");
+        assert_eq!(
+            section.app_state.read(cx).general_settings().accent_dark,
+            None
+        );
+        assert_eq!(stored_accents(section, cx), stored_before);
+        assert_eq!(
+            primary_fill(cx),
+            palette_fill,
+            "the palette accent stays applied"
+        );
+        assert_eq!(toast_host.read(cx).last_toast_title(), None);
+        assert_eq!(
+            section.input_accent_dark.read(cx).value().as_ref(),
+            "#2F7D6",
+            "the field keeps the text"
+        );
+    });
+}
+
+#[test]
+fn reset_returns_a_field_to_the_palette_accent_and_saving_stores_null() {
+    with_appearance_section_phases(vec![
+        Box::new(|section, window, cx| {
+            set_accent(section, AccentField::Dark, "#2F7D6D", window, cx);
+            section.save_general_settings(window, cx);
+        }),
+        Box::new(|section, window, cx| {
+            assert_eq!(stored_accents(section, cx).0.as_deref(), Some("#2F7D6D"));
+
+            section.select_row(GeneralFormRow::AccentDark);
+            assert!(section.reset_current_accent(window, cx));
+            assert_eq!(
+                section.input_accent_dark.read(cx).value().as_ref(),
+                "#702963"
+            );
+            assert_eq!(
+                section.general_change_count(cx),
+                1,
+                "Reset is an unsaved change"
+            );
+            assert!(
+                !section.reset_current_accent(window, cx),
+                "a field already at the palette accent has nothing to reset"
+            );
+
+            section.save_general_settings(window, cx);
+            assert_eq!(
+                section.app_state.read(cx).general_settings().accent_dark,
+                None
+            );
+        }),
+        Box::new(|section, _window, cx| {
+            assert_eq!(stored_accents(section, cx), (None, None));
+        }),
+    ]);
+}
+
+#[test]
+fn reset_only_acts_on_an_accent_row_and_only_that_field() {
+    with_appearance_section(|section, _, window, cx| {
+        set_accent(section, AccentField::Dark, "#2F7D6D", window, cx);
+        set_accent(section, AccentField::Light, "#112233", window, cx);
+
+        section.select_row(GeneralFormRow::Theme);
+        assert!(!section.reset_current_accent(window, cx));
+
+        section.select_row(GeneralFormRow::AccentLight);
+        assert!(section.reset_current_accent(window, cx));
+        assert_eq!(
+            section.input_accent_light.read(cx).value().as_ref(),
+            "#702963"
+        );
+        assert_eq!(
+            section.input_accent_dark.read(cx).value().as_ref(),
+            "#2F7D6D"
+        );
+    });
+}
+
+#[test]
+fn typing_the_palette_accent_is_no_change_and_stores_no_override() {
+    with_appearance_section(|section, _, window, cx| {
+        set_accent(section, AccentField::Dark, "#702963", window, cx);
+
+        assert_eq!(section.general_change_count(cx), 0);
+        section.save_general_settings(window, cx);
+        assert_eq!(
+            section.app_state.read(cx).general_settings().accent_dark,
+            None
+        );
+    });
+}
+
+#[gpui::test]
+fn an_invalid_accent_renders_its_error_and_a_valid_one_does_not(cx: &mut TestAppContext) {
+    let (section, window) = open_font_select_section(cx);
+
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            set_accent(section, AccentField::Dark, "#2F7D6", window, cx)
+        });
+    });
+    window.run_until_parked();
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let input = window
+        .debug_bounds("general-accent-dark-control")
+        .expect("the dark accent field renders");
+    let error = window
+        .debug_bounds("general-accent-dark-error")
+        .expect("the error renders under the invalid field");
+    assert!(error.origin.y >= input.origin.y + input.size.height);
+    assert!(window.debug_bounds("general-accent-light-error").is_none());
+
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            set_accent(section, AccentField::Dark, "#2F7D6D", window, cx)
+        });
+    });
+    window.run_until_parked();
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+    assert!(window.debug_bounds("general-accent-dark-error").is_none());
+}
+
 #[test]
 fn appearance_copy_resolves_in_every_locale_and_general_no_longer_says_appearance() {
     for key in [
         "settings.nav.appearance",
         "settings.general.appearance.subtitle",
+        "settings.general.appearance.accent.label",
+        "settings.general.appearance.accent.dark",
+        "settings.general.appearance.accent.light",
+        "settings.general.appearance.accent.reset",
+        "settings.general.appearance.accent.error",
+        "settings.general.appearance.accent.help",
     ] {
         let english = dbflux_i18n::t!(key, locale = "en");
         assert!(!english.is_empty(), "{key} resolved empty for en");
@@ -1183,7 +1454,7 @@ fn appearance_copy_resolves_in_every_locale_and_general_no_longer_says_appearanc
 
     assert_eq!(
         dbflux_i18n::t!("settings.general.appearance.subtitle", locale = "en"),
-        "Theme, density, language and fonts."
+        "Theme, accent color, density, language, fonts and scrollbars."
     );
     assert!(
         !dbflux_i18n::t!("settings.general.header.subtitle", locale = "en").contains("Appearance")

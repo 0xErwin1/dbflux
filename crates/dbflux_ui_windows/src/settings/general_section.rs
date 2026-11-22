@@ -31,6 +31,8 @@ const TOAST_TIMEOUT_CHOICES: [u32; 4] = [4, 8, 15, 0];
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum GeneralFormRow {
     Theme,
+    AccentDark,
+    AccentLight,
     Style,
     Scrollbars,
     Language,
@@ -123,6 +125,8 @@ pub(super) struct GeneralSection {
     pub(super) select_ui_font_family: FontFamilySelect,
     pub(super) select_editor_font_family: FontFamilySelect,
     pub(super) select_grid_font_family: FontFamilySelect,
+    pub(super) input_accent_dark: Entity<InputState>,
+    pub(super) input_accent_light: Entity<InputState>,
     pub(super) input_ui_font_size: Entity<InputState>,
     pub(super) input_editor_font_size: Entity<InputState>,
     pub(super) input_grid_font_size: Entity<InputState>,
@@ -245,6 +249,9 @@ impl GeneralSection {
             cx,
         );
 
+        let input_accent_dark = Self::new_accent_input(settings.accent_dark, window, cx);
+        let input_accent_light = Self::new_accent_input(settings.accent_light, window, cx);
+
         let mut font_subscriptions = Vec::new();
 
         for (field, select) in [
@@ -262,7 +269,17 @@ impl GeneralSection {
             ));
         }
 
+        for input in [&input_accent_dark, &input_accent_light] {
+            font_subscriptions.push(cx.subscribe(input, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }));
+        }
+
         for input in [
+            &input_accent_dark,
+            &input_accent_light,
             &input_ui_font_size,
             &input_editor_font_size,
             &input_grid_font_size,
@@ -444,6 +461,8 @@ impl GeneralSection {
             select_ui_font_family,
             select_editor_font_family,
             select_grid_font_family,
+            input_accent_dark,
+            input_accent_light,
             input_ui_font_size,
             input_editor_font_size,
             input_grid_font_size,

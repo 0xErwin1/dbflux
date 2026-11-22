@@ -71,6 +71,31 @@ pub fn publish_scrollbar_setting(app_state: &Entity<AppStateEntity>, cx: &mut gp
     .detach();
 }
 
+/// Publishes the accent colors now and after every app-state change. When
+/// they change, the theme is applied again so every open window takes the new
+/// accent. The settings window applies the saved theme itself first, which
+/// leaves nothing to redo here.
+pub fn publish_accent_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    apply_accent_setting(app_state, cx);
+
+    cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
+        apply_accent_setting(&app_state, cx);
+    })
+    .detach();
+}
+
+fn apply_accent_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let settings = app_state.read(cx).general_settings();
+    let (theme, style) = (settings.theme, settings.style);
+    let overrides =
+        dbflux_components::theme::AccentOverrides::new(settings.accent_dark, settings.accent_light);
+
+    if dbflux_components::theme::set_accent_overrides(cx, overrides) {
+        dbflux_components::theme::apply_theme(theme, style, None, cx);
+        cx.refresh_windows();
+    }
+}
+
 fn apply_scrollbar_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
     let mode = scrollbar_mode_for(app_state.read(cx).general_settings().scrollbar_visibility);
 
@@ -894,6 +919,84 @@ mod scrollbar_setting_tests {
         assert_eq!(
             cx.update(|cx| Theme::global(cx).scrollbar_mode),
             ScrollbarMode::Always
+        );
+    }
+}
+
+#[cfg(test)]
+mod accent_setting_tests {
+    use super::{AppStateChanged, AppStateEntity, publish_accent_setting};
+    use dbflux_core::AccentColor;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext as _, TestAppContext};
+    use gpui_component::theme::Theme;
+
+    /// The saved accent applies at startup, follows each save and returns to
+    /// the palette accent when the override is cleared.
+    #[gpui::test]
+    fn the_accent_is_published_and_cleared_with_the_settings(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+        let primary =
+            |cx: &mut TestAppContext| cx.update(|cx| Theme::global(cx).tokens.primary.color);
+        let palette_accent = primary(cx);
+
+        cx.update(|cx| publish_accent_setting(&app_state, cx));
+        assert_eq!(primary(cx), palette_accent, "no override keeps the palette");
+
+        let save = |cx: &mut TestAppContext, accent: Option<AccentColor>| {
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    let mut settings = state.general_settings().clone();
+                    settings.accent_dark = accent;
+                    state.update_general_settings(settings);
+                    cx.emit(AppStateChanged);
+                });
+            });
+            cx.run_until_parked();
+        };
+
+        save(cx, Some(AccentColor::from_rgb(0x2F7D6D)));
+        assert_ne!(primary(cx), palette_accent, "the saved accent applies");
+
+        save(cx, None);
+        assert_eq!(
+            primary(cx),
+            palette_accent,
+            "Reset returns the palette accent"
+        );
+    }
+
+    /// An accent saved before startup applies as soon as it is published.
+    #[gpui::test]
+    fn a_saved_accent_applies_when_published(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let mut state = AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup");
+                let mut settings = state.general_settings().clone();
+                settings.accent_dark = Some(AccentColor::from_rgb(0x2F7D6D));
+                state.update_general_settings(settings);
+                state
+            })
+        });
+        let palette_accent = cx.update(|cx| Theme::global(cx).tokens.primary.color);
+
+        cx.update(|cx| publish_accent_setting(&app_state, cx));
+
+        assert_ne!(
+            cx.update(|cx| Theme::global(cx).tokens.primary.color),
+            palette_accent
         );
     }
 }

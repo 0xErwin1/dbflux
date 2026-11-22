@@ -4608,7 +4608,14 @@ settings:
       title: General
       subtitle: "Inicio, actualización y la red de seguridad para sentencias peligrosas."
     appearance:
-      subtitle: "Tema, densidad, idioma y fuentes."
+      subtitle: "Tema, color de acento, densidad, idioma, fuentes y barras de desplazamiento."
+      accent:
+        label: "Color de acento"
+        dark: "Oscuro"
+        light: "Claro"
+        reset: "Restablecer"
+        error: "Usa un color como #RRGGBB."
+        help: "Botones primarios, casillas marcadas, la barra de progreso, el cursor de texto, la selección, el anillo de foco y las filas seleccionadas. Los colores de sintaxis mantienen los suyos."
     startup:
       group: "Inicio y sesión"
     refresh:

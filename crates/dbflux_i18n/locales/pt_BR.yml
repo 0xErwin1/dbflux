@@ -4601,7 +4601,14 @@ settings:
       title: Geral
       subtitle: "Inicialização, atualização e a rede de segurança para instruções perigosas."
     appearance:
-      subtitle: "Tema, densidade, idioma e fontes."
+      subtitle: "Tema, cor de destaque, densidade, idioma, fontes e barras de rolagem."
+      accent:
+        label: "Cor de destaque"
+        dark: "Escuro"
+        light: "Claro"
+        reset: "Redefinir"
+        error: "Use uma cor como #RRGGBB."
+        help: "Botões primários, caixas marcadas, a barra de progresso, o cursor de texto, a seleção, o anel de foco e as linhas selecionadas. As cores de sintaxe mantêm as suas."
     startup:
       group: "Inicialização e sessão"
     refresh:

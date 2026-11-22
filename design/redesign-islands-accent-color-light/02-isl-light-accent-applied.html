@@ -1,0 +1,121 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Accent color applied (light)</title>
+<style>body{margin:0;background:#EEEAF0;color:#3B3740;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.c4{clip-path:polygon(4px 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%,0 4px)}
+.c8{clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+code,kbd{font-family:'JetBrains Mono',ui-monospace,monospace}
+:focus-visible{outline:2px solid #702963;outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}</style></head>
+<body><main style="width:1920px;min-height:1040px;box-sizing:border-box;padding:28px 32px;display:flex;flex-direction:column;gap:16px">
+<header><h1 style="margin:0;font-size:18px;color:#141118">Accent color per theme (#987): where it applies, and readability at the extremes</h1>
+<p style="margin:6px 0 0;font-size:13px;color:#6B6572;max-width:1300px;line-height:1.5">One accent per theme drives primary buttons, checked boxes, the progress bar, the text cursor, the selection, the focus ring and selected rows. Hover and pressed are a little lighter and darker. The text tint is lightened on Dark (darkened on Light) until it reaches 4.5:1 on the pane, primary button text turns near-black when white would fall under 4.5:1, and the fills (buttons, checked boxes, the progress bar, the focus ring, the cursor and the selection) are lightened on Dark (darkened on Light) until they reach 3:1 against the pane, so an accent close to the background never makes them vanish. The palette's own accent is left exactly as it is today. Syntax colors, including keywords and the schema tree, do not move.</p></header>
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px"><section class="c8" aria-label="Default (Byzantine)" style="background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><h3 style="margin:0;font-size:13px;color:#141118">Default (Byzantine)</h3><code style="font-size:11.5px;color:#6B6572">#702963</code></div>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#702963;color:#FFFFFF;font:600 12px system-ui">Run</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#863177;color:#FFFFFF;font:600 12px system-ui">Run · hover</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#5A214F;color:#FFFFFF;font:600 12px system-ui">Run · pressed</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#EEEAF0;color:#3B3740;outline:2px solid #702963;outline-offset:2px;font:12px system-ui">Cancel · focused</button>
+</div>
+<div style="display:flex;gap:16px;align-items:center;font-size:12px;color:#3B3740">
+ <span style="display:inline-flex;gap:6px;align-items:center"><span aria-hidden="true" class="c4" style="width:14px;height:14px;background:#702963;color:#FFFFFF;display:inline-flex;align-items:center;justify-content:center;font-size:10px">✓</span>Confirm destructive queries</span>
+ <span style="flex:1;height:4px;background:#EEEAF0;position:relative"><span style="position:absolute;inset:0 40% 0 0;background:#702963"></span></span>
+</div>
+<div style="display:grid;grid-template-columns:160px 1fr;gap:10px;font:12px 'JetBrains Mono',ui-monospace,monospace">
+ <div style="display:flex;flex-direction:column;gap:2px;color:#3B3740"><span style="padding:3px 6px">public</span><span style="padding:3px 6px;background:color-mix(in srgb,#702963 18%,#FFFFFF);color:#702963">customers</span><span style="padding:3px 6px">orders</span></div>
+ <div style="display:flex;flex-direction:column;gap:2px;color:#141118"><span style="padding:3px 6px"><span style="color:#702963">SELECT</span> <span style="background:color-mix(in srgb,#702963 28%,#FFFFFF)">email</span> <span style="color:#702963">FROM</span> <span style="color:#9A5418">public</span>.<span style="color:#1F5FD1">customers</span><span style="border-left:2px solid #702963;margin-left:1px"></span></span><span style="padding:3px 6px;background:color-mix(in srgb,#702963 18%,#FFFFFF)">1044 · maria@example.com · <span style="color:#702963;font-style:italic">NULL</span></span></div>
+</div>
+<p style="margin:0;font-size:11.5px;color:#6B6572">Fill <code>#702963</code> at 9.6:1 on the pane. Text tint <code style="color:#702963">#702963</code> at 9.6:1 on the pane. Button text <code>#FFFFFF</code> at 9.6:1 on the accent. Keywords stay <code style="color:#702963">#702963</code>.</p>
+</section><section class="c8" aria-label="Custom accent" style="background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><h3 style="margin:0;font-size:13px;color:#141118">Custom accent</h3><code style="font-size:11.5px;color:#6B6572">#2F7D6D</code></div>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#2F7D6D;color:#FFFFFF;font:600 12px system-ui">Run</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#379380;color:#FFFFFF;font:600 12px system-ui">Run · hover</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#27675A;color:#FFFFFF;font:600 12px system-ui">Run · pressed</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#EEEAF0;color:#3B3740;outline:2px solid #2F7D6D;outline-offset:2px;font:12px system-ui">Cancel · focused</button>
+</div>
+<div style="display:flex;gap:16px;align-items:center;font-size:12px;color:#3B3740">
+ <span style="display:inline-flex;gap:6px;align-items:center"><span aria-hidden="true" class="c4" style="width:14px;height:14px;background:#2F7D6D;color:#FFFFFF;display:inline-flex;align-items:center;justify-content:center;font-size:10px">✓</span>Confirm destructive queries</span>
+ <span style="flex:1;height:4px;background:#EEEAF0;position:relative"><span style="position:absolute;inset:0 40% 0 0;background:#2F7D6D"></span></span>
+</div>
+<div style="display:grid;grid-template-columns:160px 1fr;gap:10px;font:12px 'JetBrains Mono',ui-monospace,monospace">
+ <div style="display:flex;flex-direction:column;gap:2px;color:#3B3740"><span style="padding:3px 6px">public</span><span style="padding:3px 6px;background:color-mix(in srgb,#2F7D6D 18%,#FFFFFF);color:#2F7D6D">customers</span><span style="padding:3px 6px">orders</span></div>
+ <div style="display:flex;flex-direction:column;gap:2px;color:#141118"><span style="padding:3px 6px"><span style="color:#702963">SELECT</span> <span style="background:color-mix(in srgb,#2F7D6D 28%,#FFFFFF)">email</span> <span style="color:#702963">FROM</span> <span style="color:#9A5418">public</span>.<span style="color:#1F5FD1">customers</span><span style="border-left:2px solid #2F7D6D;margin-left:1px"></span></span><span style="padding:3px 6px;background:color-mix(in srgb,#2F7D6D 18%,#FFFFFF)">1044 · maria@example.com · <span style="color:#702963;font-style:italic">NULL</span></span></div>
+</div>
+<p style="margin:0;font-size:11.5px;color:#6B6572">Fill <code>#2F7D6D</code> at 4.9:1 on the pane. Text tint <code style="color:#2F7D6D">#2F7D6D</code> at 4.9:1 on the pane. Button text <code>#FFFFFF</code> at 4.9:1 on the accent. Keywords stay <code style="color:#702963">#702963</code>.</p>
+</section><section class="c8" aria-label="Extreme: near white" style="background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><h3 style="margin:0;font-size:13px;color:#141118">Extreme: near white</h3><code style="font-size:11.5px;color:#6B6572">#F7F5F2 → fill #A39374</code></div>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#A39374;color:#141118;font:600 12px system-ui">Run</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#AFA186;color:#141118;font:600 12px system-ui">Run · hover</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#958463;color:#141118;font:600 12px system-ui">Run · pressed</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#EEEAF0;color:#3B3740;outline:2px solid #A39374;outline-offset:2px;font:12px system-ui">Cancel · focused</button>
+</div>
+<div style="display:flex;gap:16px;align-items:center;font-size:12px;color:#3B3740">
+ <span style="display:inline-flex;gap:6px;align-items:center"><span aria-hidden="true" class="c4" style="width:14px;height:14px;background:#A39374;color:#141118;display:inline-flex;align-items:center;justify-content:center;font-size:10px">✓</span>Confirm destructive queries</span>
+ <span style="flex:1;height:4px;background:#EEEAF0;position:relative"><span style="position:absolute;inset:0 40% 0 0;background:#A39374"></span></span>
+</div>
+<div style="display:grid;grid-template-columns:160px 1fr;gap:10px;font:12px 'JetBrains Mono',ui-monospace,monospace">
+ <div style="display:flex;flex-direction:column;gap:2px;color:#3B3740"><span style="padding:3px 6px">public</span><span style="padding:3px 6px;background:color-mix(in srgb,#A39374 18%,#FFFFFF);color:#847457">customers</span><span style="padding:3px 6px">orders</span></div>
+ <div style="display:flex;flex-direction:column;gap:2px;color:#141118"><span style="padding:3px 6px"><span style="color:#702963">SELECT</span> <span style="background:color-mix(in srgb,#A39374 28%,#FFFFFF)">email</span> <span style="color:#702963">FROM</span> <span style="color:#9A5418">public</span>.<span style="color:#1F5FD1">customers</span><span style="border-left:2px solid #A39374;margin-left:1px"></span></span><span style="padding:3px 6px;background:color-mix(in srgb,#A39374 18%,#FFFFFF)">1044 · maria@example.com · <span style="color:#702963;font-style:italic">NULL</span></span></div>
+</div>
+<p style="margin:0;font-size:11.5px;color:#6B6572">Fill <code>#A39374</code> at 3.0:1 on the pane. Text tint <code style="color:#847457">#847457</code> at 4.5:1 on the pane. Button text <code>#141118</code> at 6.2:1 on the accent. Keywords stay <code style="color:#702963">#702963</code>.</p>
+</section><section class="c8" aria-label="Extreme: near black" style="background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><h3 style="margin:0;font-size:13px;color:#141118">Extreme: near black</h3><code style="font-size:11.5px;color:#6B6572">#0E0C10</code></div>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#0E0C10;color:#FFFFFF;font:600 12px system-ui">Run</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#1D1921;color:#FFFFFF;font:600 12px system-ui">Run · hover</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#000000;color:#FFFFFF;font:600 12px system-ui">Run · pressed</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#EEEAF0;color:#3B3740;outline:2px solid #0E0C10;outline-offset:2px;font:12px system-ui">Cancel · focused</button>
+</div>
+<div style="display:flex;gap:16px;align-items:center;font-size:12px;color:#3B3740">
+ <span style="display:inline-flex;gap:6px;align-items:center"><span aria-hidden="true" class="c4" style="width:14px;height:14px;background:#0E0C10;color:#FFFFFF;display:inline-flex;align-items:center;justify-content:center;font-size:10px">✓</span>Confirm destructive queries</span>
+ <span style="flex:1;height:4px;background:#EEEAF0;position:relative"><span style="position:absolute;inset:0 40% 0 0;background:#0E0C10"></span></span>
+</div>
+<div style="display:grid;grid-template-columns:160px 1fr;gap:10px;font:12px 'JetBrains Mono',ui-monospace,monospace">
+ <div style="display:flex;flex-direction:column;gap:2px;color:#3B3740"><span style="padding:3px 6px">public</span><span style="padding:3px 6px;background:color-mix(in srgb,#0E0C10 18%,#FFFFFF);color:#0E0C10">customers</span><span style="padding:3px 6px">orders</span></div>
+ <div style="display:flex;flex-direction:column;gap:2px;color:#141118"><span style="padding:3px 6px"><span style="color:#702963">SELECT</span> <span style="background:color-mix(in srgb,#0E0C10 28%,#FFFFFF)">email</span> <span style="color:#702963">FROM</span> <span style="color:#9A5418">public</span>.<span style="color:#1F5FD1">customers</span><span style="border-left:2px solid #0E0C10;margin-left:1px"></span></span><span style="padding:3px 6px;background:color-mix(in srgb,#0E0C10 18%,#FFFFFF)">1044 · maria@example.com · <span style="color:#702963;font-style:italic">NULL</span></span></div>
+</div>
+<p style="margin:0;font-size:11.5px;color:#6B6572">Fill <code>#0E0C10</code> at 19.5:1 on the pane. Text tint <code style="color:#0E0C10">#0E0C10</code> at 19.5:1 on the pane. Button text <code>#FFFFFF</code> at 19.5:1 on the accent. Keywords stay <code style="color:#702963">#702963</code>.</p>
+</section><section class="c8" aria-label="Extreme: the pane color itself" style="background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0">
+<div style="display:flex;justify-content:space-between;align-items:baseline"><h3 style="margin:0;font-size:13px;color:#141118">Extreme: the pane color itself</h3><code style="font-size:11.5px;color:#6B6572">#FFFFFF → fill #8F8F8F</code></div>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#8F8F8F;color:#141118;font:600 12px system-ui">Run</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#9E9E9E;color:#141118;font:600 12px system-ui">Run · hover</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#808080;color:#141118;font:600 12px system-ui">Run · pressed</button>
+ <button class="c4" style="height:28px;padding:0 12px;border:0;background:#EEEAF0;color:#3B3740;outline:2px solid #8F8F8F;outline-offset:2px;font:12px system-ui">Cancel · focused</button>
+</div>
+<div style="display:flex;gap:16px;align-items:center;font-size:12px;color:#3B3740">
+ <span style="display:inline-flex;gap:6px;align-items:center"><span aria-hidden="true" class="c4" style="width:14px;height:14px;background:#8F8F8F;color:#141118;display:inline-flex;align-items:center;justify-content:center;font-size:10px">✓</span>Confirm destructive queries</span>
+ <span style="flex:1;height:4px;background:#EEEAF0;position:relative"><span style="position:absolute;inset:0 40% 0 0;background:#8F8F8F"></span></span>
+</div>
+<div style="display:grid;grid-template-columns:160px 1fr;gap:10px;font:12px 'JetBrains Mono',ui-monospace,monospace">
+ <div style="display:flex;flex-direction:column;gap:2px;color:#3B3740"><span style="padding:3px 6px">public</span><span style="padding:3px 6px;background:color-mix(in srgb,#8F8F8F 18%,#FFFFFF);color:#6F6F6F">customers</span><span style="padding:3px 6px">orders</span></div>
+ <div style="display:flex;flex-direction:column;gap:2px;color:#141118"><span style="padding:3px 6px"><span style="color:#702963">SELECT</span> <span style="background:color-mix(in srgb,#8F8F8F 28%,#FFFFFF)">email</span> <span style="color:#702963">FROM</span> <span style="color:#9A5418">public</span>.<span style="color:#1F5FD1">customers</span><span style="border-left:2px solid #8F8F8F;margin-left:1px"></span></span><span style="padding:3px 6px;background:color-mix(in srgb,#8F8F8F 18%,#FFFFFF)">1044 · maria@example.com · <span style="color:#702963;font-style:italic">NULL</span></span></div>
+</div>
+<p style="margin:0;font-size:11.5px;color:#6B6572">Fill <code>#8F8F8F</code> at 3.2:1 on the pane. Text tint <code style="color:#6F6F6F">#6F6F6F</code> at 5.0:1 on the pane. Button text <code>#141118</code> at 5.8:1 on the accent. Keywords stay <code style="color:#702963">#702963</code>.</p>
+</section></div>
+<section class="c8" aria-label="Row states" style="background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;padding:14px 18px;display:flex;flex-direction:column;gap:6px">
+<h3 style="margin:0 0 4px;font-size:13px;color:#141118">The row in Settings: states</h3>
+<div style="font-size:12px;color:#6B6572">Default: both swatches show the palette's accent and Reset is disabled.</div><div style="display: grid; grid-template-columns: 200px 1fr; align-items: start; gap: 16px; padding: 7px 0px;"><span style="padding-top: 7px; font-size: 13px; color: #3B3740;">Accent color</span><div style="display:flex;flex-direction:column;gap:8px"><div style="display:flex;gap:24px"><div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#6B6572">Dark</span><div style="display:flex;align-items:center;gap:8px">
+<span aria-hidden="true" class="c4" style="width:26px;height:26px;background:#702963;box-shadow:#E3DEE6 0 0 0 1px inset"></span>
+<span class="c4" style="display:flex;align-items:center;height:28px;width:112px;padding:0 8px;box-sizing:border-box;background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;font:12.5px 'JetBrains Mono',ui-monospace,monospace;color:#141118" role="textbox" aria-label="Dark accent, hex">#702963</span>
+<button class="c4" style="height:28px;padding:0 10px;border:0;background:#EEEAF0;color:#6B6572;opacity:.45;font:12px system-ui,sans-serif" disabled>Reset <kbd style="font:11px 'JetBrains Mono',monospace;color:#6B6572">R</kbd></button></div></div><div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#6B6572">Light</span><div style="display:flex;align-items:center;gap:8px">
+<span aria-hidden="true" class="c4" style="width:26px;height:26px;background:#702963;box-shadow:#E3DEE6 0 0 0 1px inset"></span>
+<span class="c4" style="display:flex;align-items:center;height:28px;width:112px;padding:0 8px;box-sizing:border-box;background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;font:12.5px 'JetBrains Mono',ui-monospace,monospace;color:#141118" role="textbox" aria-label="Light accent, hex">#702963</span>
+<button class="c4" style="height:28px;padding:0 10px;border:0;background:#EEEAF0;color:#6B6572;opacity:.45;font:12px system-ui,sans-serif" disabled>Reset <kbd style="font:11px 'JetBrains Mono',monospace;color:#6B6572">R</kbd></button></div></div></div><span style="font-size: 12px; color: #6B6572;">Primary buttons, checked boxes, the progress bar, the text cursor, the selection, the focus ring and selected rows. Syntax colors keep their own.</span></div></div>
+<div style="font-size:12px;color:#6B6572">Custom on Dark: Reset (<kbd>R</kbd> on the row) returns it to the palette's accent; Light keeps its own.</div><div style="display: grid; grid-template-columns: 200px 1fr; align-items: start; gap: 16px; padding: 7px 0px;"><span style="padding-top: 7px; font-size: 13px; color: #3B3740;">Accent color</span><div style="display:flex;flex-direction:column;gap:8px"><div style="display:flex;gap:24px"><div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#6B6572">Dark</span><div style="display:flex;align-items:center;gap:8px">
+<span aria-hidden="true" class="c4" style="width:26px;height:26px;background:#2F7D6D;box-shadow:#E3DEE6 0 0 0 1px inset"></span>
+<span class="c4" style="display:flex;align-items:center;height:28px;width:112px;padding:0 8px;box-sizing:border-box;background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;font:12.5px 'JetBrains Mono',ui-monospace,monospace;color:#141118" role="textbox" aria-label="Dark accent, hex">#2F7D6D</span>
+<button class="c4" style="height:28px;padding:0 10px;border:0;background:#EEEAF0;color:#3B3740;opacity:1;font:12px system-ui,sans-serif" >Reset <kbd style="font:11px 'JetBrains Mono',monospace;color:#6B6572">R</kbd></button></div></div><div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#6B6572">Light</span><div style="display:flex;align-items:center;gap:8px">
+<span aria-hidden="true" class="c4" style="width:26px;height:26px;background:#702963;box-shadow:#E3DEE6 0 0 0 1px inset"></span>
+<span class="c4" style="display:flex;align-items:center;height:28px;width:112px;padding:0 8px;box-sizing:border-box;background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;font:12.5px 'JetBrains Mono',ui-monospace,monospace;color:#141118" role="textbox" aria-label="Light accent, hex">#702963</span>
+<button class="c4" style="height:28px;padding:0 10px;border:0;background:#EEEAF0;color:#6B6572;opacity:.45;font:12px system-ui,sans-serif" disabled>Reset <kbd style="font:11px 'JetBrains Mono',monospace;color:#6B6572">R</kbd></button></div></div></div><span style="font-size: 12px; color: #6B6572;">Primary buttons, checked boxes, the progress bar, the text cursor, the selection, the focus ring and selected rows. Syntax colors keep their own.</span></div></div>
+<div style="font-size:12px;color:#6B6572">Invalid input: the field keeps the text, shows the error and the palette's accent stays applied until the value is valid.</div><div style="display: grid; grid-template-columns: 200px 1fr; align-items: start; gap: 16px; padding: 7px 0px;"><span style="padding-top: 7px; font-size: 13px; color: #3B3740;">Accent color</span><div style="display:flex;flex-direction:column;gap:8px"><div style="display:flex;gap:24px"><div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#6B6572">Dark</span><div style="display:flex;align-items:center;gap:8px">
+<span aria-hidden="true" class="c4" style="width:26px;height:26px;background:#702963;box-shadow:#E3DEE6 0 0 0 1px inset"></span>
+<span class="c4" style="display:flex;align-items:center;height:28px;width:112px;padding:0 8px;box-sizing:border-box;background:#FFFFFF;box-shadow:#C7362B 0 0 0 1px inset;font:12.5px 'JetBrains Mono',ui-monospace,monospace;color:#141118" role="textbox" aria-label="Dark accent, hex">#2F7D6</span>
+<button class="c4" style="height:28px;padding:0 10px;border:0;background:#EEEAF0;color:#3B3740;opacity:1;font:12px system-ui,sans-serif" >Reset <kbd style="font:11px 'JetBrains Mono',monospace;color:#6B6572">R</kbd></button></div><span role="alert" style="font-size:12px;color:#C7362B">Use a color as #RRGGBB.</span></div><div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#6B6572">Light</span><div style="display:flex;align-items:center;gap:8px">
+<span aria-hidden="true" class="c4" style="width:26px;height:26px;background:#702963;box-shadow:#E3DEE6 0 0 0 1px inset"></span>
+<span class="c4" style="display:flex;align-items:center;height:28px;width:112px;padding:0 8px;box-sizing:border-box;background:#FFFFFF;box-shadow:#E3DEE6 0 0 0 1px inset;font:12.5px 'JetBrains Mono',ui-monospace,monospace;color:#141118" role="textbox" aria-label="Light accent, hex">#702963</span>
+<button class="c4" style="height:28px;padding:0 10px;border:0;background:#EEEAF0;color:#6B6572;opacity:.45;font:12px system-ui,sans-serif" disabled>Reset <kbd style="font:11px 'JetBrains Mono',monospace;color:#6B6572">R</kbd></button></div></div></div><span style="font-size: 12px; color: #6B6572;">Primary buttons, checked boxes, the progress bar, the text cursor, the selection, the focus ring and selected rows. Syntax colors keep their own.</span></div></div>
+</section>
+</main></body></html>

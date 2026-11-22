@@ -29,6 +29,12 @@ use crate::{
     tokens::{BASE_REM, ChromeColors, SyntaxColors},
 };
 
+/// The pane color of the dark palette: the ground every accent is measured
+/// against.
+pub const BACKGROUND_DARK: u32 = 0x09090B;
+/// The pane color of the light palette.
+pub const BACKGROUND_LIGHT: u32 = 0xF6F4F7;
+
 /// Structural separator between major UI regions; resolves to the palette line.
 pub fn ghost_border_color(theme: &Theme) -> Hsla {
     ChromeColors::ghost_border(theme)
@@ -431,7 +437,7 @@ impl Palette {
         Self {
             mode: ThemeMode::Dark,
 
-            background: rgb_to_hsla(0x09090B),
+            background: rgb_to_hsla(BACKGROUND_DARK),
             panel: rgb_to_hsla(0x100F13),
             raised: rgb_to_hsla(0x1A181E),
             line: rgb_to_hsla(0x232128),
@@ -464,7 +470,7 @@ impl Palette {
             overlay: rgb_to_hsla_alpha(0x050507, 0.62),
             progress: brand.accent_tint,
 
-            syntax: SyntaxColors::dark().with_keyword(brand.accent_tint),
+            syntax: SyntaxColors::dark().with_keyword(brand.keyword_dark),
         }
     }
 
@@ -474,7 +480,7 @@ impl Palette {
         Self {
             mode: ThemeMode::Light,
 
-            background: rgb_to_hsla(0xF6F4F7),
+            background: rgb_to_hsla(BACKGROUND_LIGHT),
             panel: rgb_to_hsla(0xFFFFFF),
             raised: rgb_to_hsla(0xEEEAF0),
             line: rgb_to_hsla(0xE3DEE6),
@@ -488,8 +494,9 @@ impl Palette {
             accent: brand.accent,
             accent_hover: brand.accent_hover,
             accent_pressed: brand.accent_pressed,
-            // The accent doubles as the text accent on light surfaces.
-            tint: brand.accent,
+            // The accent doubles as the text accent on light surfaces unless
+            // the product holds a darker text tone for it.
+            tint: brand.accent_text_light,
             on_accent: brand.on_accent,
 
             success: rgb_to_hsla(0x1C7F45),
@@ -508,7 +515,7 @@ impl Palette {
             overlay: rgb_to_hsla_alpha(0x1E1423, 0.28),
             progress: brand.accent,
 
-            syntax: SyntaxColors::light().with_keyword(brand.accent),
+            syntax: SyntaxColors::light().with_keyword(brand.keyword_light),
         }
     }
 }
@@ -703,6 +710,9 @@ mod tests {
             accent_pressed: rgb_to_hsla(0x114499),
             accent_tint: rgb_to_hsla(0x99CCFF),
             on_accent: rgb_to_hsla(0x000000),
+            accent_text_light: rgb_to_hsla(0x2255AA),
+            keyword_dark: rgb_to_hsla(0x99CCFF),
+            keyword_light: rgb_to_hsla(0x2255AA),
         }
     }
 

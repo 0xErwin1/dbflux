@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: Accent color per theme (#987) \u00b7 light",
+  "brief": "Issue #987, accent override scope: an Accent color row under Theme on a new Settings > Appearance page (the move accepted in #986), one value per theme with Reset on the row; the accent drives primary buttons, checked boxes, the progress bar, the text cursor, the selection, the focus ring and selected rows, with derived hover, pressed and text shades; syntax colors stay fixed.",
+  "artboards": [
+    {
+      "file": "01-isl-light-accent-setting.html",
+      "title": "Settings: new Appearance page, with the Accent color row under Theme",
+      "tradeoff": "Appearance gets its own page right after General (theme, accent, density, language and the six font settings), so General stops mixing looks with startup and safety; one more page to scan in the sidebar.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-accent-applied.html",
+      "title": "Accent applied: surfaces, extremes and row states",
+      "tradeoff": "Shows every surface the accent touches and the readability fallbacks at the extremes; dense, meant for review rather than as a screen.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

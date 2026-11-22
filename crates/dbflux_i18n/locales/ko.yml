@@ -4608,7 +4608,14 @@ settings:
       title: 일반
       subtitle: "시작, 새로 고침, 그리고 위험한 문에 대한 안전장치."
     appearance:
-      subtitle: "테마, 밀도, 언어 및 글꼴."
+      subtitle: "테마, 강조 색상, 밀도, 언어, 글꼴, 스크롤바."
+      accent:
+        label: "강조 색상"
+        dark: "어두운 테마"
+        light: "밝은 테마"
+        reset: "초기화"
+        error: "#RRGGBB 형식의 색상을 입력하세요."
+        help: "기본 버튼, 선택된 체크박스, 진행 표시줄, 텍스트 커서, 선택 영역, 포커스 링, 선택된 행에 적용됩니다. 구문 색상은 그대로 유지됩니다."
     startup:
       group: "시작 및 세션"
     refresh:

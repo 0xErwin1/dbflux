@@ -118,11 +118,18 @@ impl GeneralSection {
             .filter(|(input, saved_value)| input.read(cx).value().trim() != saved_value.as_str())
             .count();
 
+        let accent_changes = if appearance {
+            self.accent_change_count(cx)
+        } else {
+            0
+        };
+
         setting_changes
             .into_iter()
             .filter(|changed| *changed)
             .count()
             + input_changes
+            + accent_changes
     }
 
     /// Parses the editor row limit input. Accepts a whole number of at least 1
@@ -197,7 +204,7 @@ impl GeneralSection {
         }
     }
 
-    fn gen_current_row(&self) -> Option<GeneralFormRow> {
+    pub(super) fn gen_current_row(&self) -> Option<GeneralFormRow> {
         self.gen_form_rows().get(self.gen_form_cursor).copied()
     }
 
@@ -372,6 +379,8 @@ impl GeneralSection {
             Some(GeneralFormRow::UiFontFamily)
             | Some(GeneralFormRow::EditorFontFamily)
             | Some(GeneralFormRow::GridFontFamily)
+            | Some(GeneralFormRow::AccentDark)
+            | Some(GeneralFormRow::AccentLight)
             | Some(GeneralFormRow::UiFontSize)
             | Some(GeneralFormRow::EditorFontSize)
             | Some(GeneralFormRow::GridFontSize)
@@ -391,7 +400,7 @@ impl GeneralSection {
         }
     }
 
-    fn gen_focus_current_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn gen_focus_current_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.gen_editing_field = true;
 
         match self.gen_current_row() {
@@ -405,6 +414,14 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::GridFontFamily) => {
                 self.select_grid_font_family
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::AccentDark) => {
+                self.input_accent_dark
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::AccentLight) => {
+                self.input_accent_light
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             Some(GeneralFormRow::UiFontSize) => {
@@ -616,6 +633,11 @@ impl GeneralSection {
             ("tab", modifiers) if modifiers == Modifiers::shift() => {
                 self.gen_move_up();
                 cx.notify();
+            }
+            ("r", modifiers) if modifiers == Modifiers::none() => {
+                if self.reset_current_accent(window, cx) {
+                    cx.notify();
+                }
             }
             ("g", modifiers) if modifiers == Modifiers::none() => {
                 self.gen_move_first();
@@ -877,6 +899,15 @@ impl GeneralSection {
             state.update_general_settings(self.gen_settings.clone());
             cx.emit(AppStateChanged);
         });
+
+        // The theme applied below reads the accents from this global.
+        dbflux_components::theme::set_accent_overrides(
+            cx,
+            dbflux_components::theme::AccentOverrides::new(
+                self.gen_settings.accent_dark,
+                self.gen_settings.accent_light,
+            ),
+        );
 
         // Update the density global so cx-based accessors reflect the new style immediately.
         dbflux_components::density::set_style(cx, self.gen_settings.style);
@@ -1434,8 +1465,10 @@ impl GeneralSection {
     }
 
     /// Stable element id for inputs that UI automation addresses by name.
-    fn input_element_id(row: GeneralFormRow) -> &'static str {
+    pub(super) fn input_element_id(row: GeneralFormRow) -> &'static str {
         match row {
+            GeneralFormRow::AccentDark => "general-accent-dark",
+            GeneralFormRow::AccentLight => "general-accent-light",
             GeneralFormRow::UiFontSize => "general-ui-font-size",
             GeneralFormRow::EditorFontSize => "general-editor-font-size",
             GeneralFormRow::GridFontSize => "general-grid-font-size",

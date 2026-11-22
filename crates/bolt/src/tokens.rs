@@ -729,14 +729,16 @@ impl SyntaxColors {
         colors.with_keyword(Self::keyword_for_current(cx))
     }
 
-    /// The accent role a keyword takes: the accent tint on dark, the accent on light.
+    /// The keyword role of the installed brand for the active palette. It is
+    /// the brand's own keyword color, not its accent, so a user accent never
+    /// recolors the editor.
     pub fn keyword_for_current(cx: &gpui::App) -> Hsla {
         let brand = crate::brand::brand(cx);
 
         match crate::palette::resolved_mode(cx) {
-            crate::palette::PaletteMode::Light => brand.accent,
+            crate::palette::PaletteMode::Light => brand.keyword_light,
             crate::palette::PaletteMode::Dark | crate::palette::PaletteMode::System => {
-                brand.accent_tint
+                brand.keyword_dark
             }
         }
     }

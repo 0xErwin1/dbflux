@@ -5,6 +5,8 @@
 //! and `AppStyle` settings onto bolt's `PaletteMode` and `Density`, and keeps
 //! the public API the rest of the workspace compiles against.
 
+use crate::accent;
+pub use crate::accent::AccentOverrides;
 use crate::fonts::FontSettings;
 use crate::semantic::ThemeSettingGlobal;
 pub use crate::typography::AppFonts;
@@ -29,6 +31,9 @@ const ACCENT_TINT: u32 = 0xD48CC8;
 const ON_ACCENT: u32 = 0xFFFFFF;
 
 /// The DBFlux brand: the byzantine accent of the Bolt Byzantium palette.
+///
+/// Syntax keywords keep their own colors (the tint on Dark, the accent on
+/// Light) whatever accent the user picks.
 pub fn brand() -> Brand {
     Brand {
         name: "DBFlux".into(),
@@ -37,7 +42,46 @@ pub fn brand() -> Brand {
         accent_pressed: rgb_to_hsla(ACCENT_PRESSED),
         accent_tint: rgb_to_hsla(ACCENT_TINT),
         on_accent: rgb_to_hsla(ON_ACCENT),
+        accent_text_light: rgb_to_hsla(ACCENT),
+        keyword_dark: rgb_to_hsla(ACCENT_TINT),
+        keyword_light: rgb_to_hsla(ACCENT),
     }
+}
+
+/// The accent of the palette itself, the color every palette shows until the
+/// user picks one.
+pub fn palette_accent() -> dbflux_core::AccentColor {
+    dbflux_core::AccentColor::from_rgb(ACCENT)
+}
+
+/// The brand applied on the resolved palette `setting`: the palette's own
+/// brand, with the accent roles of that palette replaced by the ones derived
+/// from the user's accent when `overrides` holds one for it.
+pub fn brand_for(setting: ThemeSetting, overrides: &AccentOverrides) -> Brand {
+    let mut brand = brand();
+
+    let Some(user) = overrides.for_setting(setting) else {
+        return brand;
+    };
+
+    let derived = accent::derive(user, setting);
+    brand.accent = derived.fill;
+    brand.accent_hover = derived.hover;
+    brand.accent_pressed = derived.pressed;
+    brand.on_accent = derived.on_fill;
+
+    match setting {
+        ThemeSetting::Light => brand.accent_text_light = derived.text,
+        ThemeSetting::Dark | ThemeSetting::System => brand.accent_tint = derived.text,
+    }
+
+    brand
+}
+
+/// Publishes the accents the user picked, applied by the next
+/// [`apply_theme`]. Returns whether they differ from the published ones.
+pub fn set_accent_overrides(cx: &mut App, overrides: AccentOverrides) -> bool {
+    accent::set_overrides(cx, overrides)
 }
 
 /// Structural separator between major UI regions; resolves to the palette line.
@@ -125,7 +169,7 @@ pub fn apply_theme(
         ThemeSetting::Dark | ThemeSetting::Light => setting,
     };
 
-    bolt::brand::install(brand(), cx);
+    bolt::brand::install(brand_for(resolved, &accent::overrides(cx)), cx);
     bolt_theme::apply_theme(
         palette_mode(resolved),
         crate::density::bolt_density(style),
@@ -350,12 +394,12 @@ mod tests {
         for (setting, expected, keyword_hex) in [
             (
                 ThemeSetting::Dark,
-                bolt::tokens::SyntaxColors::dark().with_keyword(brand().accent_tint),
+                bolt::tokens::SyntaxColors::dark().with_keyword(brand().keyword_dark),
                 ACCENT_TINT,
             ),
             (
                 ThemeSetting::Light,
-                bolt::tokens::SyntaxColors::light().with_keyword(brand().accent),
+                bolt::tokens::SyntaxColors::light().with_keyword(brand().keyword_light),
                 ACCENT,
             ),
         ] {
@@ -396,5 +440,92 @@ mod tests {
 
             cx.update(|cx| assert_eq!(bolt::tokens::SyntaxColors::for_current(cx), expected));
         }
+    }
+
+    /// A user accent moves the fills and the text tint but never the syntax
+    /// roles: the keyword keeps the palette's `#D48CC8` on dark and `#702963`
+    /// on light, and every highlight capture is the same as without an accent.
+    #[gpui::test]
+    fn a_user_accent_never_recolors_the_syntax(cx: &mut TestAppContext) {
+        use dbflux_core::AccentColor;
+
+        cx.update(gpui_component::init);
+
+        for setting in [ThemeSetting::Dark, ThemeSetting::Light] {
+            cx.update(|cx| {
+                set_accent_overrides(cx, AccentOverrides::default());
+                apply_theme(setting, AppStyle::Default, None, cx);
+            });
+            let (expected_roles, expected_captures, default_fill) = cx.update(|cx| {
+                let theme = Theme::global(cx);
+                let captures: Vec<_> = ["keyword", "string", "type", "function", "variable"]
+                    .into_iter()
+                    .map(|capture| syntax_hex(theme, capture))
+                    .collect();
+
+                (
+                    bolt::tokens::SyntaxColors::for_current(cx),
+                    captures,
+                    theme.tokens.primary.color,
+                )
+            });
+
+            let accent = AccentColor::from_rgb(0x2F7D6D);
+            cx.update(|cx| {
+                set_accent_overrides(cx, AccentOverrides::new(Some(accent), Some(accent)));
+                apply_theme(setting, AppStyle::Default, None, cx);
+            });
+            cx.update(|cx| {
+                let theme = Theme::global(cx);
+                let captures: Vec<_> = ["keyword", "string", "type", "function", "variable"]
+                    .into_iter()
+                    .map(|capture| syntax_hex(theme, capture))
+                    .collect();
+
+                assert_ne!(
+                    theme.tokens.primary.color, default_fill,
+                    "{setting:?}: the accent applied"
+                );
+                assert_eq!(
+                    captures, expected_captures,
+                    "{setting:?}: highlight captures"
+                );
+                assert_eq!(
+                    bolt::tokens::SyntaxColors::for_current(cx),
+                    expected_roles,
+                    "{setting:?}: syntax roles"
+                );
+            });
+        }
+    }
+
+    /// With no override the installed brand is the palette's own, byte for
+    /// byte, whatever the palette.
+    #[test]
+    fn no_override_installs_the_palette_brand_unchanged() {
+        for setting in [
+            ThemeSetting::Dark,
+            ThemeSetting::Light,
+            ThemeSetting::System,
+        ] {
+            assert_eq!(brand_for(setting, &AccentOverrides::default()), brand());
+        }
+    }
+
+    /// An override replaces only the accent roles of its own palette; the
+    /// other palette's roles and the keywords stay the palette's.
+    #[test]
+    fn an_override_replaces_only_the_accent_roles_of_its_palette() {
+        use dbflux_core::AccentColor;
+
+        let overrides = AccentOverrides::new(Some(AccentColor::from_rgb(0x2F7D6D)), None);
+        let dark = brand_for(ThemeSetting::Dark, &overrides);
+
+        assert_ne!(dark.accent, brand().accent);
+        assert_ne!(dark.accent_tint, brand().accent_tint);
+        assert_eq!(dark.accent_text_light, brand().accent_text_light);
+        assert_eq!(dark.keyword_dark, brand().keyword_dark);
+        assert_eq!(dark.keyword_light, brand().keyword_light);
+        assert_eq!(brand_for(ThemeSetting::Light, &overrides), brand());
     }
 }
