@@ -634,10 +634,10 @@ impl GeneralSection {
                 self.gen_move_up();
                 cx.notify();
             }
-            ("r", modifiers) if modifiers == Modifiers::none() => {
-                if self.reset_current_accent(window, cx) {
-                    cx.notify();
-                }
+            ("r", modifiers)
+                if modifiers == Modifiers::none() && self.reset_current_accent(window, cx) =>
+            {
+                cx.notify();
             }
             ("g", modifiers) if modifiers == Modifiers::none() => {
                 self.gen_move_first();
