@@ -137,3 +137,48 @@ fn the_kind_words_are_resolved_once_per_request_whatever_the_item_count() {
         "describing items never translates again"
     );
 }
+
+fn qualified_metadata() -> SqlCompletionMetadata {
+    let mut metadata = SqlCompletionMetadata::default();
+    let mut public_table = table("access_log");
+    public_table.schema = Some("public".to_string());
+    metadata.add_table(&public_table);
+    metadata.add_view(&ViewInfo {
+        name: "access_log".to_string(),
+        schema: Some("analytics".to_string()),
+    });
+    metadata
+}
+
+fn qualified_items(source: &str) -> Vec<CompletionItem> {
+    let engine = dbflux_core::SqlContextEngine::new().expect("grammar loads");
+    let analysis = engine.analyze(source, source.len()).expect("analysis");
+    sql_items_with_kind_words(
+        &qualified_metadata(),
+        source,
+        source.len(),
+        Some(&analysis),
+        &words(),
+    )
+}
+
+#[test]
+fn a_view_is_told_from_a_table_of_the_same_name_in_another_schema() {
+    let items = qualified_items("SELECT * FROM analytics.a");
+    assert_eq!(description_of(&items, "access_log"), Some(word("view")));
+
+    let items = qualified_items("SELECT * FROM public.a");
+    assert_eq!(description_of(&items, "access_log"), Some(word("table")));
+}
+
+#[test]
+fn a_schema_qualified_relation_is_not_a_cte_of_the_same_name() {
+    let items = qualified_items("WITH access_log AS (SELECT 1) SELECT * FROM analytics.a");
+    assert_eq!(description_of(&items, "access_log"), Some(word("view")));
+}
+
+#[test]
+fn an_unqualified_cte_still_shadows_a_catalog_relation() {
+    let items = qualified_items("WITH access_log AS (SELECT 1) SELECT * FROM a");
+    assert_eq!(description_of(&items, "access_log"), Some(word("cte")));
+}

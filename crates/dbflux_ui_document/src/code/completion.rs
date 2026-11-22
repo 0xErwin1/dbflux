@@ -1171,9 +1171,26 @@ fn sql_items_with_kind_words(
     words: &KindWords,
 ) -> Vec<CompletionItem> {
     let mut items = sql_completion_items_with_context(metadata, source, cursor, analysis);
-    let cte_names = analysis.map_or(&[][..], |analysis| analysis.scope.cte_names.as_slice());
+    let (prefix_start, _) = extract_identifier_prefix(source, cursor);
+    let qualifier_schema = prefix_start
+        .checked_sub(1)
+        .filter(|dot| source.as_bytes().get(*dot) == Some(&b'.'))
+        .map(|dot| normalize_identifier(&source[scan_identifier_start(source, dot)..dot]));
+
+    // After `schema.` the relations come from the catalog, which a CTE of the
+    // same name does not shadow.
+    let cte_names = match (&qualifier_schema, analysis) {
+        (None, Some(analysis)) => analysis.scope.cte_names.as_slice(),
+        _ => &[],
+    };
+    let effective_schema = qualifier_schema.or_else(|| {
+        metadata
+            .schema_first
+            .as_ref()
+            .and_then(|schema_first| schema_first.selected_schema.clone())
+    });
     kinds::describe_items(&mut items, words, cte_names, |label| {
-        metadata.is_view(label)
+        metadata.is_view(label, effective_schema.as_deref())
     });
     items
 }
@@ -1548,6 +1565,10 @@ struct SqlCompletionMetadata {
     /// Bare table and view names keyed by normalized schema name, so a
     /// `schema.` qualifier can list the relations of that schema.
     relations_by_schema: HashMap<String, BTreeSet<String>>,
+    /// The views and the tables of `relations_by_schema`, so a relation is
+    /// told apart within its own schema.
+    view_relations_by_schema: HashMap<String, BTreeSet<String>>,
+    table_relations_by_schema: HashMap<String, BTreeSet<String>>,
     /// Schema names as the driver spells them.
     schema_names: BTreeSet<String>,
     /// Tables and views that belong to no schema.
@@ -1577,10 +1598,10 @@ impl SqlCompletionMetadata {
             (Some(schema), _) => {
                 self.table_names
                     .insert(format!("{}.{}", schema, table.name));
-                self.add_schema_relation(schema, &table.name);
+                self.add_schema_relation(schema, &table.name, false);
             }
             (None, Some(enclosing_schema)) => {
-                self.add_schema_relation(enclosing_schema, &table.name);
+                self.add_schema_relation(enclosing_schema, &table.name, false);
             }
             (None, None) => {
                 self.unqualified_relations.insert(table.name.clone());
@@ -1625,10 +1646,10 @@ impl SqlCompletionMetadata {
         match (&view.schema, enclosing_schema) {
             (Some(schema), _) => {
                 self.view_names.insert(format!("{}.{}", schema, view.name));
-                self.add_schema_relation(schema, &view.name);
+                self.add_schema_relation(schema, &view.name, true);
             }
             (None, Some(enclosing_schema)) => {
-                self.add_schema_relation(enclosing_schema, &view.name);
+                self.add_schema_relation(enclosing_schema, &view.name, true);
             }
             (None, None) => {
                 self.unqualified_relations.insert(view.name.clone());
@@ -1636,10 +1657,20 @@ impl SqlCompletionMetadata {
         }
     }
 
-    fn add_schema_relation(&mut self, schema: &str, name: &str) {
+    fn add_schema_relation(&mut self, schema: &str, name: &str, is_view: bool) {
         self.schema_names.insert(schema.to_string());
+        let schema_key = normalize_identifier(schema);
         self.relations_by_schema
-            .entry(normalize_identifier(schema))
+            .entry(schema_key.clone())
+            .or_default()
+            .insert(name.to_string());
+        let kind_sets = if is_view {
+            &mut self.view_relations_by_schema
+        } else {
+            &mut self.table_relations_by_schema
+        };
+        kind_sets
+            .entry(schema_key)
             .or_default()
             .insert(name.to_string());
     }
@@ -1713,8 +1744,22 @@ impl SqlCompletionMetadata {
         self.table_names.iter().map(|name| name.as_str())
     }
 
-    /// Whether `label` names a view and no table.
-    fn is_view(&self, label: &str) -> bool {
+    /// Whether `label` names a view. Within `schema` (a schema-qualified
+    /// completion, or the document's selected schema) only that schema's
+    /// relations count; without one, a name that is also a table reads as a
+    /// table.
+    fn is_view(&self, label: &str, schema: Option<&str>) -> bool {
+        if let Some(schema) = schema {
+            let in_schema = |sets: &HashMap<String, BTreeSet<String>>| {
+                sets.get(schema).is_some_and(|names| names.contains(label))
+            };
+            if in_schema(&self.view_relations_by_schema)
+                || in_schema(&self.table_relations_by_schema)
+            {
+                return in_schema(&self.view_relations_by_schema)
+                    && !in_schema(&self.table_relations_by_schema);
+            }
+        }
         self.view_names.contains(label) && !self.table_names.contains(label)
     }
 
