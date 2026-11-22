@@ -416,15 +416,17 @@ fn toast_timeout_copy_resolves_in_every_locale() {
         "settings.general.toast_timeout.option.15s",
         "settings.general.toast_timeout.option.never",
     ] {
-        for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+        let english = dbflux_i18n::t!(key, locale = "en");
+        assert!(!english.is_empty(), "{key} resolved empty for en");
+        assert_ne!(english, format!("en.{key}"), "{key} missing in en");
+
+        // A missing key falls back to English, so a translated catalog must
+        // give a different value.
+        for locale in ["es", "ko", "pt_BR", "zh_Hans"] {
             let value = dbflux_i18n::t!(key, locale = locale);
 
             assert!(!value.is_empty(), "{key} resolved empty for {locale}");
-            assert_ne!(
-                value,
-                format!("{locale}.{key}"),
-                "{key} missing in {locale}"
-            );
+            assert_ne!(value, english, "{key} missing in {locale}");
         }
     }
 }
@@ -787,15 +789,17 @@ fn font_setting_copy_resolves_in_every_locale() {
     ];
 
     for key in keys {
-        for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+        let english = dbflux_i18n::t!(key, locale = "en");
+        assert!(!english.is_empty(), "{key} resolved empty for en");
+        assert_ne!(english, format!("en.{key}"), "{key} missing in en");
+
+        // A missing key falls back to English, so a translated catalog must
+        // give a different value.
+        for locale in ["es", "ko", "pt_BR", "zh_Hans"] {
             let value = dbflux_i18n::t!(key, locale = locale);
 
             assert!(!value.is_empty(), "{key} resolved empty for {locale}");
-            assert_ne!(
-                value,
-                format!("{locale}.{key}"),
-                "{key} missing in {locale}"
-            );
+            assert_ne!(value, english, "{key} missing in {locale}");
         }
     }
 }
@@ -1095,10 +1099,13 @@ fn each_page_counts_only_its_own_unsaved_changes() {
         assert_eq!(section.general_change_count(cx), 3);
     });
 
-    with_general_section(|section, _, _, cx| {
+    with_general_section(|section, _, window, cx| {
         section.gen_settings.style = AppStyle::Compact;
         section.gen_settings.scrollbar_visibility = ScrollbarVisibility::Always;
-        section.input_ui_font_size.update(cx, |_, _| {});
+        // A changed font size on the hidden Appearance input is not General's.
+        section
+            .input_ui_font_size
+            .update(cx, |input, cx| input.set_value("16", window, cx));
         assert_eq!(section.general_change_count(cx), 0);
     });
 }
@@ -1160,15 +1167,17 @@ fn appearance_copy_resolves_in_every_locale_and_general_no_longer_says_appearanc
         "settings.nav.appearance",
         "settings.general.appearance.subtitle",
     ] {
-        for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+        let english = dbflux_i18n::t!(key, locale = "en");
+        assert!(!english.is_empty(), "{key} resolved empty for en");
+        assert_ne!(english, format!("en.{key}"), "{key} missing in en");
+
+        // A missing key falls back to English, so a translated catalog must
+        // give a different value.
+        for locale in ["es", "ko", "pt_BR", "zh_Hans"] {
             let value = dbflux_i18n::t!(key, locale = locale);
 
             assert!(!value.is_empty(), "{key} resolved empty for {locale}");
-            assert_ne!(
-                value,
-                format!("{locale}.{key}"),
-                "{key} missing in {locale}"
-            );
+            assert_ne!(value, english, "{key} missing in {locale}");
         }
     }
 
