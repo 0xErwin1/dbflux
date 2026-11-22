@@ -149,6 +149,12 @@ driver RPC 1.6 이상을 사용하고 드라이버가 `REQUEST_ROW_LIMIT`를 선
 | **Theme** | Follow system, Dark, Light | Dark |
 | **Density** | Default, Compact | Default |
 | **Language** | System, 그 뒤에 번역 카탈로그가 함께 제공되는 모든 언어 | System |
+| **Interface font** | Default (Archivo), 또는 설치된 아무 글꼴 | Default |
+| **Interface font size** | 8~32 px, 소수 허용 | 13 |
+| **Editor font** | Default (JetBrains Mono), 또는 설치된 아무 글꼴 | Default |
+| **Editor font size** | 8~32 px, 소수 허용 | 13 |
+| **Data grid font** | Same as editor, 또는 설치된 아무 글꼴 | Same as editor |
+| **Data grid font size** | 8~32 px, 소수 허용 | 12.5 |
 | **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 
 **Show scrollbars**는 모든 창의 스크롤바가 언제 표시될지 정합니다. 내용이
@@ -158,6 +164,17 @@ driver RPC 1.6 이상을 사용하고 드라이버가 `REQUEST_ROW_LIMIT`를 선
 데이터 그리드의 가로 스크롤바는 예외로 항상 표시됩니다. 마우스 휠 이벤트를
 받지 않는 별도의 스크롤러가 이 스크롤바를 움직이므로, 그렇지 않으면 숨겨진
 채로 남기 때문입니다.
+
+글꼴 변경은 저장하는 즉시 열려 있는 모든 창에 적용되며 재시작할 필요가 없습니다.
+편집기 글꼴은 인터페이스의 고정폭 텍스트(메타데이터, 키 힌트, 콘솔)에도 쓰이며,
+사용자 지정 인터페이스 글꼴은 섹션 레이블의 확장 표시 글꼴도 대체합니다. 각
+크기가 정하는 항목은 다음과 같습니다.
+
+- **Interface font size**는 모든 인터페이스 텍스트, 행, 컨트롤, 아이콘의 크기를
+  조정합니다.
+- **Editor font size**는 코드 편집기의 텍스트와 줄 높이, 콘솔 텍스트를 정합니다.
+- **Data grid font size**는 셀 텍스트, 행과 헤더 높이, 자동 열 너비를 정합니다.
+  직접 크기를 조정한 열은 그 너비를 유지합니다.
 
 언어 목록은 DBFlux가 함께 제공하는 번역 카탈로그에서 도출됩니다. 영어가 먼저
 표시되고, 나머지 언어는 결정적인 순서로 이어지며 고유 언어명으로 표시됩니다.
@@ -175,6 +192,11 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 지정할 수 있습니다. 이미 8 px 또는 32 px에 도달한 크기는 그대로 두고 나머지
 크기만 계속 바뀝니다. 새 크기는 다른 설정처럼 저장되므로 재시작 후에도
 유지됩니다.
+
+시스템에 글꼴이 수백 개 있을 수 있으므로 글꼴 목록에는 검색 필드가 있습니다.
+저장된 글꼴이 더 이상 설치되어 있지 않으면 "(not installed)" 표시와 함께 선택된
+상태로 남고, 다시 설치될 때까지 DBFlux는 기본 글꼴로 그립니다. 데이터 그리드는
+편집기 글꼴로 대체됩니다.
 
 ---
 
