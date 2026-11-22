@@ -1298,6 +1298,14 @@ document:
       show_results: "显示结果"
       results_right: "在右侧显示结果"
       results_bottom: "在下方显示结果"
+    completion_kind:
+      table: "表"
+      view: "视图"
+      schema: "模式"
+      column: "列"
+      alias: "别名"
+      keyword: "关键字"
+      cte: "cte"
     layout:
       split_save_failed: "无法保存编辑器与结果的分割比例：%{error}"
     vim:

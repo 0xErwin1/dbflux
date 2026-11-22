@@ -456,3 +456,35 @@ fn up_leaves_an_open_completion_menu_alone(cx: &mut TestAppContext) {
     let value = window.update(|_, cx| harness.console.read(cx).input.read(cx).value().to_string());
     assert_eq!(value, "GET greeting", "with the menu closed, Up recalls");
 }
+
+#[gpui::test]
+fn the_console_completion_menu_cap_follows_the_ui_font_size(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+    let cap = |cx: &gpui::App| {
+        harness
+            .console
+            .read(cx)
+            .input
+            .read(cx)
+            .lsp()
+            .completion_menu
+            .max_width
+    };
+
+    let default_cap = window.update(|_, cx| cap(cx));
+    assert_eq!(default_cap, gpui::px(640.));
+
+    window.update(|_, cx| {
+        let mut fonts = dbflux_components::fonts::current(cx);
+        fonts.ui_size = 16.;
+        dbflux_components::fonts::set(cx, fonts);
+    });
+    window.run_until_parked();
+
+    let scaled_cap = window.update(|_, cx| cap(cx));
+    let expected = default_cap * (16. / 13.);
+    assert!(
+        (scaled_cap - expected).abs() < gpui::px(0.5),
+        "the cap scales with the UI font size: {scaled_cap:?} vs {expected:?}"
+    );
+}

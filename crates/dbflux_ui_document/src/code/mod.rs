@@ -2,6 +2,7 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
+use crate::completion_support::{apply_completion_menu_width, follow_ui_font_size};
 use crate::history_panel::{
     HistoryPanel, HistoryPanelCallbacks, HistoryPanelClosed, HistoryQuerySelected,
 };
@@ -816,9 +817,10 @@ impl CodeDocument {
                 .placeholder(placeholder);
             // The menu sizes itself to its longest item; allow database identifiers
             // more room than the component's 320 px default, while keeping a cap.
-            state.lsp_mut().completion_menu.max_width = px(640.);
+            apply_completion_menu_width(&mut state, cx);
             state
         });
+        let completion_menu_width_sub = follow_ui_font_size(&input_state, cx);
 
         let completion_query_generation = Rc::new(std::cell::Cell::new(0u64));
         let supports_connection_context = editor_profile.supports_connection_context;
@@ -1152,7 +1154,7 @@ impl CodeDocument {
             app_state,
             editor: EditorState {
                 input_state,
-                _input_subscriptions: vec![input_change_sub],
+                _input_subscriptions: vec![input_change_sub, completion_menu_width_sub],
                 original_content: String::new(),
                 saved_query_id: None,
                 current_editor_mode: editor_profile.editor_mode.clone(),

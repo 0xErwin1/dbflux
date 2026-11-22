@@ -7,6 +7,7 @@ mod hover_popover;
 pub(crate) use caret_anchored::*;
 pub(crate) use code_action_menu::*;
 pub(crate) use completion_menu::*;
+pub use completion_menu::{kind_highlight_capture, kind_label_style};
 pub(crate) use diagnostic_popover::*;
 pub(crate) use hover_popover::*;
 

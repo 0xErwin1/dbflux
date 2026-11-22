@@ -1,0 +1,13 @@
+{
+  "title": "DBFlux redesign: Completion menu kinds and colors (#1013) \u00b7 dark",
+  "brief": "Issue #1013, the five approved points: kind word per SQL suggestion including cte, syntax color per completion kind across editors with a plain fallback, menu width counting the kind word and following the interface font size; match highlight unchanged.",
+  "artboards": [
+    {
+      "file": "01-isl-completion-kinds.html",
+      "title": "SQL kinds and colors, CTE, other editors, larger font",
+      "tradeoff": "A right-aligned word costs width but needs no learning, unlike TBL/SCH badges; colors repeat the editor's own token colors, so a table and its match highlight can still look alike until the editor styling lands.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}
