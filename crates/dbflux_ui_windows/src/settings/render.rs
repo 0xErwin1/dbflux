@@ -21,6 +21,7 @@ impl SettingsCoordinator {
     fn section_display_name(section: super::SettingsSectionId) -> String {
         match section {
             super::SettingsSectionId::General => dbflux_i18n::t!("settings.nav.general"),
+            super::SettingsSectionId::Appearance => dbflux_i18n::t!("settings.nav.appearance"),
             super::SettingsSectionId::Audit => dbflux_i18n::t!("settings.nav.audit"),
             #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpClients => dbflux_i18n::t!("settings.nav.mcp_clients"),
@@ -471,6 +472,7 @@ mod section_title_i18n_tests {
     fn section_display_name_covers_every_section_with_non_empty_titles() {
         let sections: &[SettingsSectionId] = &[
             SettingsSectionId::General,
+            SettingsSectionId::Appearance,
             SettingsSectionId::Audit,
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpClients,

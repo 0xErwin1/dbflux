@@ -8,7 +8,8 @@ window is organized into sections down the left side.
 
 | Section | Covers |
 |---------|--------|
-| [General](#general) | App-wide behavior: theme, startup, refresh, query safety. |
+| [General](#general) | App-wide behavior: startup, refresh, query safety. |
+| [Appearance](#appearance) | Theme, density, language and fonts. |
 | [Updates & privacy](#updates--privacy) | Update checks, the changelog, and the optional telemetry levels. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
@@ -30,7 +31,7 @@ Integration](MCP_AI_INTEGRATION.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/settings/general-dark.webp">
-  <img src="images/settings/general-light.webp" alt="The Settings window on the General section, showing the appearance, editor and startup settings">
+  <img src="images/settings/general-light.webp" alt="The Settings window on the General section, showing the editor and startup settings">
 </picture>
 
 Save applies the changes at once and writes them to the DBFlux database
@@ -38,63 +39,6 @@ Save applies the changes at once and writes them to the DBFlux database
 **Use the stable database**) in the background, so a slow or busy database never freezes the window. The success
 message appears once they are on disk. If the write fails, an error says so and
 the changes stay applied until DBFlux quits; save again to keep them.
-
-### Appearance
-
-| Setting | Options | Default |
-|---------|---------|---------|
-| **Theme** | Follow system, Dark, Light | Dark |
-| **Density** | Default, Compact | Default |
-| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
-| **Language** | System, then every language with a shipped translation catalog | System |
-| **Interface font** | Default (Archivo), or any installed font | Default |
-| **Interface font size** | 8 to 32 px, decimals allowed | 13 |
-| **Editor font** | Default (JetBrains Mono), or any installed font | Default |
-| **Editor font size** | 8 to 32 px, decimals allowed | 13 |
-| **Data grid font** | Same as editor, or any installed font | Same as editor |
-| **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
-
-**Show scrollbars** decides when the scrollbars of every window appear: only
-while the content scrolls, while the pointer is over a scrollable area, or all
-the time. It applies to every open window as soon as you save.
-
-The horizontal scrollbar of the data grid is the exception: it is always
-shown, because it is driven by a separate scroller that never receives wheel
-events and would otherwise stay hidden.
-
-Font changes apply to every open window as soon as you save; no restart is
-needed. The editor font also sets the monospace text in the interface
-(metadata, key hints, console), and a custom interface font also replaces the
-expanded display face of section labels. What each size controls:
-
-- **Interface font size** scales all interface text, rows, controls and icons.
-- **Editor font size** sets the code editor text and line height, and the
-  console text.
-- **Data grid font size** sets cell text, row and header height, and the
-  automatic column widths. Columns you resized by hand keep their width.
-
-`Ctrl+=` / `Cmd+=` and `Ctrl+-` / `Cmd+-` change all three sizes at once by
-1 px each, keeping their relative sizes, and `Ctrl+0` / `Cmd+0` restores the
-defaults. They work in the workspace window, are also in the command palette,
-and can be rebound in [Keybindings](#keybindings). A size
-already at 8 or 32 px stays there while the others keep moving. The new sizes
-are saved like any other setting, so these fields show them and they survive a
-restart.
-
-The font lists have a search field, since a system can have hundreds of fonts.
-A saved font that is no longer installed stays selected, marked
-"(not installed)", and DBFlux draws with the default until it is installed
-again; the data grid falls back to the editor font.
-
-The language list is derived from DBFlux's shipped translation catalogs: English
-appears first, followed by the remaining languages in deterministic order and
-shown by their native names. System follows your OS locale and falls back to
-English when no shipped locale matches unambiguously. A language change takes
-effect after you restart DBFlux, so the control shows a permanent note to that
-effect. Partial catalogs fall back to English for untranslated general UI text.
-This release translates, among others, the General and Updates & privacy
-sections; the rest of the UI is being converted crate by crate and stays in
-English for now.
 
 ### Editor
 
@@ -200,6 +144,65 @@ others.
 
 See [Data & Privacy](../PRIVACY.md#data-locations) for how the Nightly and
 stable databases are separated.
+
+## Appearance
+
+Theme, density, language and fonts. Save works as described under [General](#general): it applies the changes at once and writes them in the background.
+
+| Setting | Options | Default |
+|---------|---------|---------|
+| **Theme** | Follow system, Dark, Light | Dark |
+| **Density** | Default, Compact | Default |
+| **Language** | System, then every language with a shipped translation catalog | System |
+| **Interface font** | Default (Archivo), or any installed font | Default |
+| **Interface font size** | 8 to 32 px, decimals allowed | 13 |
+| **Editor font** | Default (JetBrains Mono), or any installed font | Default |
+| **Editor font size** | 8 to 32 px, decimals allowed | 13 |
+| **Data grid font** | Same as editor, or any installed font | Same as editor |
+| **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
+
+**Show scrollbars** decides when the scrollbars of every window appear: only
+while the content scrolls, while the pointer is over a scrollable area, or all
+the time. It applies to every open window as soon as you save.
+
+The horizontal scrollbar of the data grid is the exception: it is always
+shown, because it is driven by a separate scroller that never receives wheel
+events and would otherwise stay hidden.
+
+Font changes apply to every open window as soon as you save; no restart is
+needed. The editor font also sets the monospace text in the interface
+(metadata, key hints, console), and a custom interface font also replaces the
+expanded display face of section labels. What each size controls:
+
+- **Interface font size** scales all interface text, rows, controls and icons.
+- **Editor font size** sets the code editor text and line height, and the
+  console text.
+- **Data grid font size** sets cell text, row and header height, and the
+  automatic column widths. Columns you resized by hand keep their width.
+
+`Ctrl+=` / `Cmd+=` and `Ctrl+-` / `Cmd+-` change all three sizes at once by
+1 px each, keeping their relative sizes, and `Ctrl+0` / `Cmd+0` restores the
+defaults. They work in the workspace window, are also in the command palette,
+and can be rebound in [Keybindings](#keybindings). A size
+already at 8 or 32 px stays there while the others keep moving. The new sizes
+are saved like any other setting, so these fields show them and they survive a
+restart.
+
+The font lists have a search field, since a system can have hundreds of fonts.
+A saved font that is no longer installed stays selected, marked
+"(not installed)", and DBFlux draws with the default until it is installed
+again; the data grid falls back to the editor font.
+
+The language list is derived from DBFlux's shipped translation catalogs: English
+appears first, followed by the remaining languages in deterministic order and
+shown by their native names. System follows your OS locale and falls back to
+English when no shipped locale matches unambiguously. A language change takes
+effect after you restart DBFlux, so the control shows a permanent note to that
+effect. Partial catalogs fall back to English for untranslated general UI text.
+This release translates, among others, the General and Updates & privacy
+sections; the rest of the UI is being converted crate by crate and stays in
+English for now.
 
 ---
 

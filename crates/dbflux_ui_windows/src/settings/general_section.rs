@@ -98,8 +98,18 @@ impl SelectItem for FontFamilyOption {
 
 pub(super) type FontFamilySelect = Entity<SelectState<SearchableVec<FontFamilyOption>>>;
 
+/// Which of the pages that edit the stored general settings a
+/// [`GeneralSection`] shows. Both read and write the same
+/// `GeneralSettings`; each lists, validates and counts only its own fields.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum GeneralPage {
+    General,
+    Appearance,
+}
+
 pub(super) struct GeneralSection {
     pub(super) app_state: Entity<AppStateEntity>,
+    pub(super) page: GeneralPage,
     pub(super) gen_settings: GeneralSettings,
     pub(super) gen_form_cursor: usize,
     pub(super) gen_editing_field: bool,
@@ -148,6 +158,7 @@ impl EventEmitter<SectionFocusEvent> for GeneralSection {}
 impl GeneralSection {
     pub(super) fn new(
         app_state: Entity<AppStateEntity>,
+        page: GeneralPage,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -421,6 +432,7 @@ impl GeneralSection {
 
         Self {
             app_state,
+            page,
             gen_settings: settings,
             gen_form_cursor: 0,
             gen_editing_field: false,
@@ -919,7 +931,10 @@ impl GeneralSection {
 
 impl SettingsSection for GeneralSection {
     fn section_id(&self) -> SettingsSectionId {
-        SettingsSectionId::General
+        match self.page {
+            GeneralPage::General => SettingsSectionId::General,
+            GeneralPage::Appearance => SettingsSectionId::Appearance,
+        }
     }
 
     fn handle_key_event(
@@ -967,13 +982,17 @@ impl SettingsSection for GeneralSection {
 impl Render for GeneralSection {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.reveal_pending_field(window, cx);
-        self.render_general_section(cx)
+
+        match self.page {
+            GeneralPage::General => self.render_general_section(cx).into_any_element(),
+            GeneralPage::Appearance => self.render_appearance_section(cx).into_any_element(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FontFamilyField, FontFamilyOption, GeneralFormRow, GeneralSection};
+    use super::{FontFamilyField, FontFamilyOption, GeneralFormRow, GeneralPage, GeneralSection};
     use dbflux_core::{AppStyle, ScrollbarVisibility, ThemeSetting};
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
@@ -984,6 +1003,7 @@ mod tests {
 
     fn open_section_window(
         cx: &mut TestAppContext,
+        page: GeneralPage,
     ) -> (gpui::WindowHandle<GeneralSection>, Entity<ToastHost>) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
@@ -1003,7 +1023,7 @@ mod tests {
         let window = cx
             .update(|cx| {
                 cx.open_window(WindowOptions::default(), |window, cx| {
-                    cx.new(|cx| GeneralSection::new(app_state, window, cx))
+                    cx.new(|cx| GeneralSection::new(app_state, page, window, cx))
                 })
             })
             .expect("general settings window opens");
@@ -1019,8 +1039,31 @@ mod tests {
             &mut gpui::Context<GeneralSection>,
         ),
     ) {
+        with_page_section(GeneralPage::General, test);
+    }
+
+    fn with_appearance_section(
+        test: impl FnOnce(
+            &mut GeneralSection,
+            &Entity<ToastHost>,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ),
+    ) {
+        with_page_section(GeneralPage::Appearance, test);
+    }
+
+    fn with_page_section(
+        page: GeneralPage,
+        test: impl FnOnce(
+            &mut GeneralSection,
+            &Entity<ToastHost>,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ),
+    ) {
         let mut cx = TestAppContext::single();
-        let (window, toast_host) = open_section_window(&mut cx);
+        let (window, toast_host) = open_section_window(&mut cx, page);
 
         window
             .update(&mut cx, |section, window, cx| {
@@ -1041,8 +1084,16 @@ mod tests {
     /// finish after every one, so a phase can check what an earlier save
     /// wrote to the database.
     fn with_general_section_phases(phases: Vec<SectionPhase>) {
+        with_page_section_phases(GeneralPage::General, phases);
+    }
+
+    fn with_appearance_section_phases(phases: Vec<SectionPhase>) {
+        with_page_section_phases(GeneralPage::Appearance, phases);
+    }
+
+    fn with_page_section_phases(page: GeneralPage, phases: Vec<SectionPhase>) {
         let mut cx = TestAppContext::single();
-        let (window, _) = open_section_window(&mut cx);
+        let (window, _) = open_section_window(&mut cx, page);
 
         for phase in phases {
             window
@@ -1105,7 +1156,9 @@ mod tests {
         let window = cx
             .update(|cx| {
                 cx.open_window(WindowOptions::default(), |window, cx| {
-                    cx.new(|cx| GeneralSection::new(app_state.clone(), window, cx))
+                    cx.new(|cx| {
+                        GeneralSection::new(app_state.clone(), GeneralPage::Appearance, window, cx)
+                    })
                 })
             })
             .expect("general settings window opens");
@@ -1384,9 +1437,7 @@ mod tests {
             assert_eq!(section.general_change_count(cx), 0);
 
             section.gen_settings.vim_mode = !section.gen_settings.vim_mode;
-            section.gen_settings.theme = GeneralSection::theme_for_index(
-                (GeneralSection::theme_index(section.gen_settings.theme) + 1) % 3,
-            );
+            section.gen_settings.toast_auto_dismiss_secs = 0;
             section
                 .input_max_history
                 .update(cx, |input, cx| input.set_value("42", window, cx));
@@ -1572,7 +1623,7 @@ mod tests {
 
     #[test]
     fn font_rows_follow_the_language_row_and_focus_their_controls() {
-        with_general_section(|section, _, window, cx| {
+        with_appearance_section(|section, _, window, cx| {
             let rows = section.gen_form_rows();
             let language = rows
                 .iter()
@@ -1604,7 +1655,7 @@ mod tests {
 
     #[test]
     fn font_settings_mark_dirty_and_save() {
-        with_general_section_phases(vec![
+        with_appearance_section_phases(vec![
             Box::new(|section, window, cx| {
                 assert_eq!(
                     section.input_grid_font_size.read(cx).value().as_ref(),
@@ -1668,7 +1719,7 @@ mod tests {
 
     #[test]
     fn invalid_font_size_shows_an_error_and_saves_nothing() {
-        with_general_section(|section, toast_host, window, cx| {
+        with_appearance_section(|section, toast_host, window, cx| {
             let stored_before = stored_general_settings(section, cx);
 
             for (input, key) in [
@@ -1784,7 +1835,8 @@ mod tests {
         let (_, window) = cx.add_window_view({
             let slot = slot.clone();
             move |window, cx| {
-                let section = cx.new(|cx| GeneralSection::new(app_state, window, cx));
+                let section = cx
+                    .new(|cx| GeneralSection::new(app_state, GeneralPage::Appearance, window, cx));
                 slot.replace(Some(section.clone()));
                 gpui_component::Root::new(section, window, cx)
             }
@@ -1955,14 +2007,10 @@ mod tests {
 
     #[test]
     fn a_rejected_font_size_moves_the_cursor_to_its_field() {
-        with_general_section(|section, _, window, cx| {
+        with_appearance_section(|section, _, window, cx| {
             section
                 .input_editor_font_size
                 .update(cx, |input, cx| input.set_value("40", window, cx));
-            section
-                .input_key_value_size_limit
-                .update(cx, |input, cx| input.set_value("0", window, cx));
-
             section.save_general_settings(window, cx);
 
             let editor_size_row = section
@@ -2004,6 +2052,141 @@ mod tests {
         assert!(
             error.origin.y >= field.origin.y + field.size.height,
             "the error sits under the field: field {field:?}, error {error:?}"
+        );
+    }
+
+    const APPEARANCE_ROWS: [GeneralFormRow; 10] = [
+        GeneralFormRow::Theme,
+        GeneralFormRow::Style,
+        GeneralFormRow::Language,
+        GeneralFormRow::UiFontFamily,
+        GeneralFormRow::UiFontSize,
+        GeneralFormRow::EditorFontFamily,
+        GeneralFormRow::EditorFontSize,
+        GeneralFormRow::GridFontFamily,
+        GeneralFormRow::GridFontSize,
+        GeneralFormRow::Scrollbars,
+    ];
+
+    #[test]
+    fn appearance_page_lists_the_moved_rows_in_the_artboard_order_and_general_none_of_them() {
+        with_appearance_section(|section, _, _, _| {
+            let mut expected = APPEARANCE_ROWS.to_vec();
+            expected.push(GeneralFormRow::SaveButton);
+
+            assert_eq!(section.gen_form_rows(), expected);
+        });
+
+        with_general_section(|section, _, _, _| {
+            let rows = section.gen_form_rows();
+
+            for moved in APPEARANCE_ROWS {
+                assert!(!rows.contains(&moved), "{moved:?} must not be on General");
+            }
+            assert!(rows.contains(&GeneralFormRow::VimMode));
+        });
+    }
+
+    #[test]
+    fn each_page_counts_only_its_own_unsaved_changes() {
+        with_appearance_section(|section, _, window, cx| {
+            section.gen_settings.vim_mode = !section.gen_settings.vim_mode;
+            section
+                .input_max_history
+                .update(cx, |input, cx| input.set_value("42", window, cx));
+            assert_eq!(section.general_change_count(cx), 0);
+            assert!(!section.has_unsaved_general_changes(cx));
+
+            section.gen_settings.style = AppStyle::Compact;
+            section.gen_settings.language = "en".to_string();
+            section.gen_settings.scrollbar_visibility = ScrollbarVisibility::Always;
+            assert_eq!(section.general_change_count(cx), 3);
+        });
+
+        with_general_section(|section, _, _, cx| {
+            section.gen_settings.style = AppStyle::Compact;
+            section.gen_settings.scrollbar_visibility = ScrollbarVisibility::Always;
+            section.input_ui_font_size.update(cx, |_, _| {});
+            assert_eq!(section.general_change_count(cx), 0);
+        });
+    }
+
+    #[test]
+    fn saving_the_appearance_page_persists_theme_density_language_and_scrollbars() {
+        with_appearance_section_phases(vec![
+            Box::new(|section, window, cx| {
+                section.gen_settings.theme = ThemeSetting::Light;
+                section.gen_settings.style = AppStyle::Compact;
+                section.gen_settings.language = "es".to_string();
+                section.gen_settings.scrollbar_visibility = ScrollbarVisibility::Always;
+                assert_eq!(section.general_change_count(cx), 4);
+
+                section.save_general_settings(window, cx);
+
+                let saved = section.app_state.read(cx).general_settings().clone();
+                assert_eq!(saved.theme, ThemeSetting::Light);
+                assert_eq!(saved.style, AppStyle::Compact);
+                assert_eq!(saved.language, "es");
+                assert_eq!(saved.scrollbar_visibility, ScrollbarVisibility::Always);
+            }),
+            Box::new(|section, _window, cx| {
+                let stored = section
+                    .app_state
+                    .read(cx)
+                    .storage_runtime()
+                    .general_settings()
+                    .get()
+                    .expect("stored general settings readable")
+                    .expect("settings were stored");
+
+                assert_eq!(stored.style, "compact");
+                assert_eq!(stored.language, "es");
+                assert_eq!(stored.scrollbar_visibility, "always");
+                assert!(!section.has_unsaved_general_changes(cx));
+            }),
+        ]);
+    }
+
+    #[test]
+    fn saving_the_appearance_page_keeps_the_general_settings_untouched() {
+        with_appearance_section(|section, _, window, cx| {
+            let before = section.app_state.read(cx).general_settings().clone();
+            section.gen_settings.style = AppStyle::Compact;
+
+            section.save_general_settings(window, cx);
+
+            let saved = section.app_state.read(cx).general_settings().clone();
+            assert_eq!(saved.vim_mode, before.vim_mode);
+            assert_eq!(saved.max_history_entries, before.max_history_entries);
+            assert_eq!(saved.scrollbar_visibility, before.scrollbar_visibility);
+        });
+    }
+
+    #[test]
+    fn appearance_copy_resolves_in_every_locale_and_general_no_longer_says_appearance() {
+        for key in [
+            "settings.nav.appearance",
+            "settings.general.appearance.subtitle",
+        ] {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty for {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.appearance.subtitle", locale = "en"),
+            "Theme, density, language and fonts."
+        );
+        assert!(
+            !dbflux_i18n::t!("settings.general.header.subtitle", locale = "en")
+                .contains("Appearance")
         );
     }
 
@@ -2241,7 +2424,7 @@ mod tests {
             .update(|cx| {
                 cx.open_window(WindowOptions::default(), |window, cx| {
                     window.observe_frames(&capture);
-                    cx.new(|cx| GeneralSection::new(app_state, window, cx))
+                    cx.new(|cx| GeneralSection::new(app_state, GeneralPage::General, window, cx))
                 })
             })
             .expect("general settings window opens");
@@ -2395,7 +2578,8 @@ mod tests {
         let (_, window) = cx.add_window_view({
             let slot = slot.clone();
             move |window, cx| {
-                let section = cx.new(|cx| GeneralSection::new(app_state, window, cx));
+                let section =
+                    cx.new(|cx| GeneralSection::new(app_state, GeneralPage::General, window, cx));
                 slot.replace(Some(section.clone()));
                 gpui_component::Root::new(section, window, cx)
             }

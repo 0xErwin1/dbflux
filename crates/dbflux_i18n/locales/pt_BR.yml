@@ -4599,9 +4599,9 @@ settings:
       milliseconds: "ms"
     header:
       title: Geral
-      subtitle: "Aparência, inicialização, atualização e a rede de segurança para instruções perigosas."
+      subtitle: "Inicialização, atualização e a rede de segurança para instruções perigosas."
     appearance:
-      group: Aparência
+      subtitle: "Tema, densidade, idioma e fontes."
     startup:
       group: "Inicialização e sessão"
     refresh:
@@ -5629,6 +5629,7 @@ settings:
     search_placeholder: "Buscar configurações"
     general_group: Geral
     general: Geral
+    appearance: Aparência
     keybindings: Atalhos de teclado
     updates: Atualizações
     audit: Auditoria

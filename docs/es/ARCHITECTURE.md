@@ -322,7 +322,8 @@ crates/
         form_nav.rs         # FormGridNav<F> generic 2D grid navigation
         form_section.rs     # FormSection trait for keyboard navigation
         section_trait.rs    # SettingsSection trait
-        general.rs          # General settings (theme, safety toggles)
+        general.rs          # General settings (safety toggles, startup, refresh)
+        appearance_section.rs # Appearance page (theme, density, language, fonts)
         keybindings.rs      # Keybindings settings section
         auth_profiles_section.rs # Dynamic auth profile CRUD by provider form definition
         proxies.rs          # Proxy CRUD form with FormGridNav
@@ -1310,7 +1311,7 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 
 ### Ventana de Settings
 
-- Settings se organiza en las siguientes secciones: General, Keybindings, Auth
+- Settings se organiza en las siguientes secciones: General, Appearance, Keybindings, Auth
   Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers, Audit y About. Las
   secciones de MCP (trusted clients, roles, policies) están gated bajo la
   feature `mcp`.

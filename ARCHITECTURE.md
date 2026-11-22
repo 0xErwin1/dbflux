@@ -295,7 +295,8 @@ crates/
         form_nav.rs         # FormGridNav<F> generic 2D grid navigation
         form_section.rs     # FormSection trait for keyboard navigation
         section_trait.rs    # SettingsSection trait
-        general.rs          # General settings (theme, safety toggles)
+        general.rs          # General settings (safety toggles, startup, refresh)
+        appearance_section.rs # Appearance page (theme, density, language, fonts)
         keybindings.rs      # Keybindings settings section
         auth_profiles_section.rs # Dynamic auth profile CRUD by provider form definition
         proxies.rs          # Proxy CRUD form with FormGridNav
@@ -773,7 +774,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 
 ### Settings Window
 
-- Settings is organized into the following sections: General, Keybindings, Auth Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers, Audit, and About. MCP sections (trusted clients, roles, policies) are feature-gated under the `mcp` feature.
+- Settings is organized into the following sections: General, Appearance, Keybindings, Auth Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers, Audit, and About. MCP sections (trusted clients, roles, policies) are feature-gated under the `mcp` feature.
 - Sidebar uses `TreeNav` component with collapsible Network/Connection categories.
 - `UiStateStore` persists sidebar collapse state to `st_ui_state` table in `~/.local/share/dbflux/dbflux.db`.
 - Auth Profiles section is provider-driven (`DynAuthProvider::form_def`) and supports importing provider-discovered profiles (for AWS, from `~/.aws/config`).
