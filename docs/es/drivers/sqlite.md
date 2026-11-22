@@ -52,7 +52,7 @@ Base de datos embebida basada en archivos.
   (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
   de una tabla origen, y un toggle de integridad referencial por conexión
   (`PRAGMA foreign_keys`) para migraciones seguras con FK.
-- Informa dónde rechazó SQLite un statement: un error de sintaxis lleva el desplazamiento en bytes del token ofensor (`rusqlite::Error::SqlInputError`), desplazado por el inicio del statement cuando es uno de varios en un script, y el editor marca ese token. El editor marca el token solo mientras el texto enviado siga coincidiendo con el del editor: una edición antes de que vuelva el error, o un cambio del texto antes de enviarlo, no deja marca.
+- Informa dónde rechazó SQLite un statement, cuando SQLite da una posición: un error de sintaxis con un token ofensor lleva su desplazamiento en bytes (`rusqlite::Error::SqlInputError`), desplazado por el inicio del statement cuando es uno de varios en un script, y el editor marca ese token. El editor marca el token solo mientras el texto enviado siga coincidiendo con el del editor: una edición antes de que vuelva el error, o un cambio del texto antes de enviarlo, no deja marca. Un error sin token, como un `SELECT * FROM` incompleto, no tiene posición ni marca.
 
 ## Limitaciones
 
