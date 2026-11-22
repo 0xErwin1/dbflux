@@ -27,8 +27,14 @@ In a query tab the results sit below the editor. On a wide screen, move them to
 the right of the editor with the panel button in the results header, the
 **Show results on the right** entry of the pane actions, or **Move results
 beside or below the editor** in the command palette. The same control moves
-them back below. Drag the divider to resize the two sides. New query tabs open
-with the position you chose last.
+them back below. New query tabs open with the position you chose last.
+
+Drag the divider to resize the two sides. The split you leave is remembered for
+that position, one for results below the editor and one for results beside it:
+new query tabs, showing the results again and the next start open with it. A
+split that leaves one side under a fifteenth of the other is not restored, so a
+divider dragged almost to an edge does not reopen the pane collapsed; that
+split opens at half instead.
 
 In either position, `Ctrl+j` moves the keyboard from the editor to the results
 and `Ctrl+k` moves it back.

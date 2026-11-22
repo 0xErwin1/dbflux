@@ -76,6 +76,7 @@ mod format;
 mod live_output;
 pub(crate) mod pane;
 mod render;
+mod results_split;
 mod statements;
 mod vim;
 
