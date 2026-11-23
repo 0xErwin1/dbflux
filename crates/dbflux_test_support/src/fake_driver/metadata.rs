@@ -3,6 +3,7 @@ use super::*;
 pub(super) static DEFAULT_SQL_DIALECT: DefaultSqlDialect = DefaultSqlDialect;
 pub(super) static SQL_LANGUAGE_SERVICE: SqlLanguageService = SqlLanguageService;
 pub(super) static REDIS_LANGUAGE_SERVICE: RedisLanguageService = RedisLanguageService;
+pub(super) static MONGO_LANGUAGE_SERVICE: MongoLanguageService = MongoLanguageService;
 
 pub(super) static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> =
     LazyLock::new(|| DriverMetadata {

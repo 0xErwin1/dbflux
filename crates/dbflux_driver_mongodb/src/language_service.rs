@@ -29,6 +29,9 @@ impl LanguageService for MongoLanguageService {
 
         match crate::query_parser::validate_query(query) {
             Ok(_) => ValidationResult::Valid,
+            Err(error) if error.to_string() == crate::query_parser::SCRIPT_UNSUPPORTED_MESSAGE => {
+                ValidationResult::Valid
+            }
             Err(error) => ValidationResult::SyntaxError(
                 dbflux_core::Diagnostic::error(format!("Invalid MongoDB query: {}", error))
                     .with_hint("Use db.collection.method() or db.method() syntax"),
@@ -42,6 +45,11 @@ impl LanguageService for MongoLanguageService {
                 // The scan proves the script cannot reach anything worse
                 // than a read: no up-front confirmation needed.
                 StaticScanOutcome::Read => None,
+                StaticScanOutcome::RequiresConfirmation
+                    if dbflux_js::contains_run_command(query) =>
+                {
+                    Some(DangerousQueryKind::AdminScript)
+                }
                 // Either the scan cannot prove safety, or the script uses a
                 // construct the engine rejects outright — both cases get one
                 // up-front confirmation. A rejected construct still aborts
@@ -63,10 +71,9 @@ impl LanguageService for MongoLanguageService {
     /// Non-script input defers to the core text heuristic by returning
     /// `None` — stage-1 single-statement classification is unchanged. A
     /// JS-looking script's ceiling comes from the same conservative static
-    /// scan `detect_dangerous` uses: proven read-only classifies as `Read`;
-    /// anything the scan cannot prove safe (including a rejected construct,
-    /// which never dispatches) classifies as `Destructive`, the worst case a
-    /// dispatch-boundary classification could produce.
+    /// scan `detect_dangerous` uses: proven read-only classifies as `Read`,
+    /// unproven scripts containing `runCommand` classify as `AdminDestructive`,
+    /// and everything else classifies as `Destructive`.
     fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
         if !crate::query_parser::is_script_input(query) {
             return None;
@@ -74,6 +81,9 @@ impl LanguageService for MongoLanguageService {
 
         Some(match dbflux_js::static_scan(query) {
             StaticScanOutcome::Read => ExecutionClassification::Read,
+            StaticScanOutcome::RequiresConfirmation if dbflux_js::contains_run_command(query) => {
+                ExecutionClassification::AdminDestructive
+            }
             StaticScanOutcome::RequiresConfirmation | StaticScanOutcome::Rejected { .. } => {
                 ExecutionClassification::Destructive
             }
@@ -372,6 +382,41 @@ mod tests {
             MongoLanguageService.classify_execution(script),
             Some(ExecutionClassification::Destructive)
         );
+    }
+
+    #[test]
+    fn run_command_script_classifies_as_admin_destructive() {
+        let admin_script = "const c = 'users'; db.runCommand({ ping: 1 });";
+        assert!(matches!(
+            MongoLanguageService.validate(admin_script),
+            ValidationResult::Valid
+        ));
+        assert_eq!(
+            MongoLanguageService.classify_execution(admin_script),
+            Some(ExecutionClassification::AdminDestructive)
+        );
+        assert_eq!(
+            MongoLanguageService.detect_dangerous(admin_script),
+            Some(DangerousQueryKind::AdminScript)
+        );
+
+        for destructive_script in [
+            "const c = 'users'; db.users.insertOne({a: 1}); db.users.deleteMany({});",
+            "const docs = db.users.find({}); print(docs[0]);",
+            "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+            "const res = await db.runCommand({ ping: 1 });",
+        ] {
+            assert_eq!(
+                MongoLanguageService.classify_execution(destructive_script),
+                Some(ExecutionClassification::Destructive),
+                "{destructive_script}"
+            );
+            assert_eq!(
+                MongoLanguageService.detect_dangerous(destructive_script),
+                Some(DangerousQueryKind::Script),
+                "{destructive_script}"
+            );
+        }
     }
 
     #[test]

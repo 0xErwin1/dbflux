@@ -166,6 +166,8 @@ pub enum DangerousQueryKind {
     Alter,
     /// Multi-statement script containing at least one dangerous query.
     Script,
+    /// Multi-statement script that requires admin-level confirmation (e.g. `runCommand`).
+    AdminScript,
 
     // MongoDB patterns
     /// deleteMany with empty or missing filter ({} or no arguments)
@@ -205,6 +207,9 @@ impl DangerousQueryKind {
             Self::Drop => "DROP will permanently remove the object",
             Self::Alter => "ALTER will modify the structure",
             Self::Script => "This script contains potentially destructive statements",
+            Self::AdminScript => {
+                "This script contains admin commands and requires admin-level confirmation"
+            }
             Self::MongoDeleteMany => "deleteMany with empty filter will delete all documents",
             Self::MongoUpdateMany => "updateMany with empty filter will update all documents",
             Self::MongoDropCollection => "drop() will permanently remove the collection",
@@ -1955,6 +1960,7 @@ mod tests {
         assert!(!DangerousQueryKind::Drop.message().is_empty());
         assert!(!DangerousQueryKind::Alter.message().is_empty());
         assert!(!DangerousQueryKind::Script.message().is_empty());
+        assert!(!DangerousQueryKind::AdminScript.message().is_empty());
         assert!(!DangerousQueryKind::MongoDeleteMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoUpdateMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropCollection.message().is_empty());
