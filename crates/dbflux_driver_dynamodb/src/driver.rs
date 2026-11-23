@@ -3781,12 +3781,17 @@ fn endpoint_looks_local(endpoint: &str) -> bool {
 
     let host_with_port = without_scheme.split('/').next().unwrap_or_default();
     // An IPv6 host is bracketed (`[::1]:4566`), so the first ':' is inside it.
-    let host = match host_with_port.strip_prefix('[') {
-        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
-        None => host_with_port.split(':').next().unwrap_or_default(),
-    };
-
-    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+    match host_with_port.strip_prefix('[') {
+        Some(bracketed) => bracketed
+            .split(']')
+            .next()
+            .and_then(|host| host.parse::<std::net::Ipv6Addr>().ok())
+            .is_some_and(|address| address.is_loopback()),
+        None => {
+            let host = host_with_port.split(':').next().unwrap_or_default();
+            host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1"
+        }
+    }
 }
 
 fn probe_connection(client: &Client, config: &DynamoProfileConfig) -> Result<(), DbError> {
@@ -4548,6 +4553,7 @@ mod tests {
             "http://[::1]:4566",
             "https://[::1]/path",
             "[::1]:4566",
+            "http://[0:0:0:0:0:0:0:1]:4566",
         ] {
             assert!(super::endpoint_looks_local(endpoint), "{endpoint}");
         }
