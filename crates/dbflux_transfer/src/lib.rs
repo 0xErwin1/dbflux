@@ -15,13 +15,17 @@ pub mod export;
 mod file_sink;
 mod file_source;
 pub mod import;
+pub mod import_file;
 pub mod manifest;
 pub mod migration;
 mod pipeline;
+mod spreadsheet_source;
 mod sql_insert;
+pub mod sql_script;
 mod table_sink;
 mod table_source;
 mod value_codec;
+mod xml_source;
 
 pub use browse_source::{
     AlignByName, BrowseSource, PageShape, ReplayableRead, select_for_visual_spec,

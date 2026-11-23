@@ -34,6 +34,7 @@ use dbflux_core::{
     strip_leading_comments, validate_ddl_fragment, when_checked, when_unchecked, with_default,
     with_help,
 };
+use dbflux_core::{decode_uri_component, split_uri_host_port, uri_host};
 use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use half::f16;
 use postgres::types::{Date as PgDate, FromSql, Kind, Timestamp as PgTimestamp, Type};
@@ -885,7 +886,10 @@ impl DbDriver for PostgresDriver {
 
         Some(format!(
             "postgresql://{}{}:{}/{}",
-            credentials, host, port, database
+            credentials,
+            uri_host(host),
+            port,
+            urlencoding::encode(database)
         ))
     }
 
@@ -940,6 +944,10 @@ impl DbDriver for PostgresDriver {
                     .unwrap_or_default()
                     .into_owned();
                 values.insert("user".to_string(), user);
+                let password = decode_uri_component(&credentials[colon + 1..]);
+                if !password.is_empty() {
+                    values.insert("password".to_string(), password);
+                }
             } else {
                 let user = urlencoding::decode(credentials)
                     .unwrap_or_default()
@@ -955,15 +963,11 @@ impl DbDriver for PostgresDriver {
         };
 
         let database = database.split('?').next().unwrap_or(database);
-        values.insert("database".to_string(), database.to_string());
+        values.insert("database".to_string(), decode_uri_component(database));
 
-        if let Some(colon) = host_port.rfind(':') {
-            values.insert("host".to_string(), host_port[..colon].to_string());
-            values.insert("port".to_string(), host_port[colon + 1..].to_string());
-        } else {
-            values.insert("host".to_string(), host_port.to_string());
-            values.insert("port".to_string(), "5432".to_string());
-        }
+        let (host, port) = split_uri_host_port(host_port);
+        values.insert("host".to_string(), host.to_string());
+        values.insert("port".to_string(), port.unwrap_or("5432").to_string());
 
         Some(values)
     }
@@ -7414,6 +7418,34 @@ mod tests {
             uri,
             "postgresql://test%20user:p%40ss%3Aword@localhost:5432/dbflux"
         );
+    }
+
+    #[test]
+    fn parse_uri_handles_ipv6_hosts_encoded_databases_and_passwords() {
+        let driver = PostgresDriver::new();
+
+        let parsed = driver
+            .parse_uri("postgresql://alice:p%40ss@[::1]:5432/my%20db")
+            .expect("IPv6 URI should parse");
+        assert_eq!(parsed.get("host").map(String::as_str), Some("::1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("5432"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("my db"));
+        assert_eq!(parsed.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(parsed.get("password").map(String::as_str), Some("p@ss"));
+
+        let without_port = driver
+            .parse_uri("postgresql://[2001:db8::7]/app")
+            .expect("IPv6 URI without port should parse");
+        assert_eq!(
+            without_port.get("host").map(String::as_str),
+            Some("2001:db8::7")
+        );
+        assert_eq!(without_port.get("port").map(String::as_str), Some("5432"));
+
+        let mut values = parsed.clone();
+        values.remove("password");
+        let built = driver.build_uri(&values, "p@ss").expect("URI should build");
+        assert_eq!(built, "postgresql://alice:p%40ss@[::1]:5432/my%20db");
     }
 
     #[test]

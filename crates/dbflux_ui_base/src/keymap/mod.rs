@@ -937,7 +937,8 @@ pub fn known_context_names() -> Vec<&'static str> {
 
 /// Element contexts whose bindings dispatch [`RunCommand`] to the element,
 /// which handles its own commands and propagates the others.
-pub const RUN_COMMAND_ELEMENT_CONTEXTS: &[ContextId] = &[ContextId::KeyValue];
+pub const RUN_COMMAND_ELEMENT_CONTEXTS: &[ContextId] =
+    &[ContextId::KeyValue, ContextId::ImportWizard];
 
 /// Key context of the code editor pane (see
 /// [`dbflux_components::key_contexts`] for every container identifier).
