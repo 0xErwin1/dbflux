@@ -1394,6 +1394,20 @@ impl AppState {
         }
     }
 
+    /// Clears a removed proxy or SSH tunnel from every connection profile
+    /// that uses it, then saves the profiles. Without this, the next profile
+    /// save writes the removed id back and its foreign key rejects the row.
+    /// `clear` returns whether it changed the profile.
+    fn clear_access_references(&mut self, mut clear: impl FnMut(&mut ConnectionProfile) -> bool) {
+        let mut changed = false;
+        for profile in self.profiles_mut() {
+            changed |= clear(profile);
+        }
+        if changed {
+            self.save_profiles();
+        }
+    }
+
     #[allow(dead_code)]
     pub fn remove_ssh_tunnel(&mut self, idx: usize) -> Option<SshTunnelProfile> {
         let removed = self.facade.remove_ssh_tunnel(idx)?;
@@ -1421,6 +1435,19 @@ impl AppState {
         if let Err(e) = save_result {
             log::error!("Failed to delete SSH tunnel profile: {}", e);
         }
+
+        let removed_id = removed.id;
+        self.clear_access_references(|profile| {
+            let references = matches!(
+                profile.access_kind,
+                Some(dbflux_core::access::AccessKind::Ssh { ssh_tunnel_profile_id })
+                    if ssh_tunnel_profile_id == removed_id
+            );
+            if references {
+                profile.access_kind = None;
+            }
+            references
+        });
         Some(removed)
     }
 
@@ -1517,6 +1544,24 @@ impl AppState {
         if let Err(e) = save_result {
             log::error!("Failed to delete proxy profile: {}", e);
         }
+
+        let removed_id = removed.id;
+        self.clear_access_references(|profile| {
+            let mut references = false;
+            if profile.proxy_profile_id == Some(removed_id) {
+                profile.proxy_profile_id = None;
+                references = true;
+            }
+            if matches!(
+                profile.access_kind,
+                Some(dbflux_core::access::AccessKind::Proxy { proxy_profile_id })
+                    if proxy_profile_id == removed_id
+            ) {
+                profile.access_kind = None;
+                references = true;
+            }
+            references
+        });
         Some(removed)
     }
 
@@ -4619,6 +4664,20 @@ mod tests {
         state.add_proxy(proxy.clone());
         state.add_ssh_tunnel(tunnel.clone());
 
+        let mut through_tunnel =
+            ConnectionProfile::new("through tunnel", dbflux_core::DbConfig::default_postgres());
+        through_tunnel.access_kind = Some(AccessKind::Ssh {
+            ssh_tunnel_profile_id: tunnel.id,
+        });
+        let mut through_proxy =
+            ConnectionProfile::new("through proxy", dbflux_core::DbConfig::default_postgres());
+        through_proxy.proxy_profile_id = Some(proxy.id);
+        through_proxy.access_kind = Some(AccessKind::Proxy {
+            proxy_profile_id: proxy.id,
+        });
+        state.add_profile_in_folder(through_tunnel.clone(), None);
+        state.add_profile_in_folder(through_proxy.clone(), None);
+
         let loaded =
             crate::config_loader::load_config(state.storage_runtime()).expect("load configuration");
         assert_eq!(loaded.proxy_profiles.len(), 1, "proxy must be persisted");
@@ -4636,6 +4695,27 @@ mod tests {
         assert!(
             loaded.ssh_tunnels.is_empty(),
             "removed SSH tunnel must not come back from storage"
+        );
+
+        for profile in state.profiles_mut() {
+            assert!(profile.access_kind.is_none(), "{}", profile.name);
+            assert!(profile.proxy_profile_id.is_none(), "{}", profile.name);
+            profile.name.push_str(" (renamed)");
+        }
+        state.save_profiles();
+
+        let loaded =
+            crate::config_loader::load_config(state.storage_runtime()).expect("load configuration");
+        let mut names: Vec<_> = loaded
+            .profiles
+            .iter()
+            .map(|profile| profile.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["through proxy (renamed)", "through tunnel (renamed)"],
+            "profiles that used the removed proxy or tunnel must still save"
         );
     }
 

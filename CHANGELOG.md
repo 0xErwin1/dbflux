@@ -14,7 +14,7 @@ All notable changes to DBFlux will be documented in this file.
 ### Fixed
 
 * **SQLite text with a NUL byte is written intact** — A text value that contains a NUL byte was written as a quoted literal holding the raw byte, which SQLite reads as the end of the statement. It is now written as its quoted segments joined with `char(0)`, so SQL export and import keep every byte and the text type in UTF-8, UTF-16LE and UTF-16BE databases. A long run of NUL bytes is grouped in parentheses so the expression stays within SQLite's depth limit; text without a NUL is written as before (#805).
-* **A deleted proxy or SSH tunnel stays deleted** — Deleting a proxy or an SSH tunnel in Settings removed it only from memory, so it came back the next time DBFlux started. The row is now deleted from `dbflux.db`, and connections that used it fall back to no proxy or tunnel as they do while the app runs.
+* **A deleted proxy or SSH tunnel stays deleted** — Deleting a proxy or an SSH tunnel in Settings removed it only from memory, so it came back the next time DBFlux started. The row is now deleted from `dbflux.db`, and every connection that used it is switched to a direct connection at once, so it no longer fails with a "was not found" error and its next save is not rejected.
 
 ## [0.10.1] - 2026-11-14
 
