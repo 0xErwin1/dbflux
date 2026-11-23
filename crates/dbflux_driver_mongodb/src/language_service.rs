@@ -404,6 +404,7 @@ mod tests {
             "const c = 'users'; db.users.insertOne({a: 1}); db.users.deleteMany({});",
             "const docs = db.users.find({}); print(docs[0]);",
             "const m = 'run' + 'Command'; db[m]({ ping: 1 });",
+            "const m = 'runCommand'; db[m]({ ping: 1 });",
             "const res = await db.runCommand({ ping: 1 });",
         ] {
             assert_eq!(
