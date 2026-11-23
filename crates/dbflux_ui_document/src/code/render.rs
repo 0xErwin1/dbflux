@@ -1041,7 +1041,9 @@ impl CodeDocument {
         let entity_confirm = cx.entity().clone();
 
         let pending = self.pending.dangerous_query.as_ref();
-        let suppress = pending.is_some_and(|pending| pending.suppress);
+        let suppressible = pending
+            .is_some_and(|pending| pending.kind != dbflux_core::DangerousQueryKind::AdminScript);
+        let suppress = suppressible && pending.is_some_and(|pending| pending.suppress);
         let query = pending.map(|pending| pending.query.clone());
 
         let (title, message) = pending
@@ -1066,22 +1068,24 @@ impl CodeDocument {
             .when_some(query, |body, query| {
                 body.child(modal_code(query.trim().to_string(), cx))
             })
-            .child(
-                Checkbox::new("dangerous-dont-ask-again")
-                    .checked(suppress)
-                    .label(dbflux_i18n::t!(
-                        "document.code.dangerous_query.dont_ask_again"
-                    ))
-                    .on_click(move |checked: &bool, _, cx| {
-                        let checked = *checked;
-                        entity_toggle.update(cx, |doc, cx| {
-                            if let Some(pending) = doc.pending.dangerous_query.as_mut() {
-                                pending.suppress = checked;
-                                cx.notify();
-                            }
-                        });
-                    }),
-            );
+            .when(suppressible, |body| {
+                body.child(
+                    Checkbox::new("dangerous-dont-ask-again")
+                        .checked(suppress)
+                        .label(dbflux_i18n::t!(
+                            "document.code.dangerous_query.dont_ask_again"
+                        ))
+                        .on_click(move |checked: &bool, _, cx| {
+                            let checked = *checked;
+                            entity_toggle.update(cx, |doc, cx| {
+                                if let Some(pending) = doc.pending.dangerous_query.as_mut() {
+                                    pending.suppress = checked;
+                                    cx.notify();
+                                }
+                            });
+                        }),
+                )
+            });
 
         let cancel_btn = Button::new(
             "dangerous-cancel-btn",

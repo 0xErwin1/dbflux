@@ -78,6 +78,11 @@ pub fn static_scan(source: &str) -> StaticScanOutcome {
     }
 }
 
+/// True if `source` contains `runCommand` as a whole identifier.
+pub fn contains_run_command(source: &str) -> bool {
+    contains_word(source, "runCommand")
+}
+
 fn reachable_write_or_worse(source: &str) -> bool {
     WRITE_OR_WORSE_METHOD_NAMES
         .iter()
@@ -281,5 +286,14 @@ mod tests {
             static_scan("const nums = [1, 2, 3]; db.users.find({id: {$in: nums}});"),
             StaticScanOutcome::Read
         );
+    }
+
+    #[test]
+    fn contains_run_command_matches_whole_word_only() {
+        assert!(contains_run_command("db.runCommand({ ping: 1 });"));
+        assert!(!contains_run_command("const runCommandHelper = 1;"));
+        assert!(!contains_run_command(
+            "const m = 'run' + 'Command'; db[m]({ ping: 1 });"
+        ));
     }
 }

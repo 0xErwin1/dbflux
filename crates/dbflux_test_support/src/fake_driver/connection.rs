@@ -216,6 +216,7 @@ impl Connection for FakeConnection {
     fn language_service(&self) -> &dyn dbflux_core::LanguageService {
         match self.kind {
             DbKind::Redis => &REDIS_LANGUAGE_SERVICE,
+            DbKind::MongoDB => &MONGO_LANGUAGE_SERVICE,
             _ => &SQL_LANGUAGE_SERVICE,
         }
     }

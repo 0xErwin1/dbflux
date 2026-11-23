@@ -1374,6 +1374,9 @@ document:
         script:
           title: 危险脚本
           body: 此脚本包含潜在破坏性语句
+        admin_script:
+          title: 管理员脚本
+          body: 此脚本包含管理命令，需要管理员级别的确认
         mongo_delete_many:
           title: deleteMany 使用空筛选器
           body: 使用空筛选器的 deleteMany 将删除所有文档

@@ -776,6 +776,9 @@ pub(crate) fn dangerous_query_title(kind: dbflux_core::DangerousQueryKind) -> St
         DangerousQueryKind::Script => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.script.title")
         }
+        DangerousQueryKind::AdminScript => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.admin_script.title")
+        }
         DangerousQueryKind::MongoDeleteMany => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_delete_many.title")
         }
@@ -836,6 +839,9 @@ pub(crate) fn dangerous_query_body(kind: dbflux_core::DangerousQueryKind) -> Str
         }
         DangerousQueryKind::Script => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.script.body")
+        }
+        DangerousQueryKind::AdminScript => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.admin_script.body")
         }
         DangerousQueryKind::MongoDeleteMany => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_delete_many.body")
@@ -3976,6 +3982,7 @@ mod tests {
         DangerousQueryKind::Drop,
         DangerousQueryKind::Alter,
         DangerousQueryKind::Script,
+        DangerousQueryKind::AdminScript,
         DangerousQueryKind::MongoDeleteMany,
         DangerousQueryKind::MongoUpdateMany,
         DangerousQueryKind::MongoDropCollection,
@@ -4719,6 +4726,9 @@ mod tests {
             DangerousQueryKind::Drop => "document.code.dangerous_query.kind.drop.title",
             DangerousQueryKind::Alter => "document.code.dangerous_query.kind.alter.title",
             DangerousQueryKind::Script => "document.code.dangerous_query.kind.script.title",
+            DangerousQueryKind::AdminScript => {
+                "document.code.dangerous_query.kind.admin_script.title"
+            }
             DangerousQueryKind::MongoDeleteMany => {
                 "document.code.dangerous_query.kind.mongo_delete_many.title"
             }
@@ -4764,6 +4774,9 @@ mod tests {
             DangerousQueryKind::Drop => "document.code.dangerous_query.kind.drop.body",
             DangerousQueryKind::Alter => "document.code.dangerous_query.kind.alter.body",
             DangerousQueryKind::Script => "document.code.dangerous_query.kind.script.body",
+            DangerousQueryKind::AdminScript => {
+                "document.code.dangerous_query.kind.admin_script.body"
+            }
             DangerousQueryKind::MongoDeleteMany => {
                 "document.code.dangerous_query.kind.mongo_delete_many.body"
             }

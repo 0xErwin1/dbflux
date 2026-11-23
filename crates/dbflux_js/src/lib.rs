@@ -14,7 +14,7 @@ pub use engine::{
     ScriptEngineError, ScriptFailure, ScriptLedgerEntry, ScriptLedgerOutcome, ScriptRunConfig,
     ScriptRunOutcome, ScriptStatementResult, run,
 };
-pub use scan::{StaticScanOutcome, static_scan};
+pub use scan::{StaticScanOutcome, contains_run_command, static_scan};
 
 #[cfg(test)]
 mod tests {
