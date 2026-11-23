@@ -3894,10 +3894,15 @@ name = "dbflux_transfer"
 version = "0.11.0-dev.0"
 dependencies = [
  "csv",
+ "dbflux_byte_source",
  "dbflux_core",
  "dbflux_driver_postgres",
+ "dbflux_driver_sqlite",
  "dbflux_export",
+ "dbflux_spreadsheet",
  "dbflux_test_support",
+ "quick-xml 0.39.4",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

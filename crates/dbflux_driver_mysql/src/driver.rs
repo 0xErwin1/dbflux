@@ -29,6 +29,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
+use dbflux_core::{decode_uri_component, split_uri_host_port, uri_host};
 use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use mysql::prelude::*;
 use mysql::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
@@ -370,6 +371,11 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
 pub struct MysqlDialect;
 
 impl SqlDialect for MysqlDialect {
+    /// `TEXT` holds at most 65,535 bytes, which a long CSV field can exceed.
+    fn text_column_type(&self) -> &'static str {
+        "LONGTEXT"
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         mysql_quote_ident(name)
     }
@@ -937,14 +943,17 @@ impl DbDriver for MysqlDriver {
         };
 
         let db_part = if !database.is_empty() {
-            format!("/{}", database)
+            format!("/{}", urlencoding::encode(database))
         } else {
             String::new()
         };
 
         Some(format!(
             "mysql://{}{}:{}{}",
-            credentials, host, port, db_part
+            credentials,
+            uri_host(host),
+            port,
+            db_part
         ))
     }
 
@@ -964,6 +973,10 @@ impl DbDriver for MysqlDriver {
                     .unwrap_or_default()
                     .into_owned();
                 values.insert("user".to_string(), user);
+                let password = decode_uri_component(&credentials[colon + 1..]);
+                if !password.is_empty() {
+                    values.insert("password".to_string(), password);
+                }
             } else {
                 let user = urlencoding::decode(credentials)
                     .unwrap_or_default()
@@ -979,15 +992,11 @@ impl DbDriver for MysqlDriver {
         };
 
         let database = database.split('?').next().unwrap_or(database);
-        values.insert("database".to_string(), database.to_string());
+        values.insert("database".to_string(), decode_uri_component(database));
 
-        if let Some(colon) = host_port.rfind(':') {
-            values.insert("host".to_string(), host_port[..colon].to_string());
-            values.insert("port".to_string(), host_port[colon + 1..].to_string());
-        } else {
-            values.insert("host".to_string(), host_port.to_string());
-            values.insert("port".to_string(), "3306".to_string());
-        }
+        let (host, port) = split_uri_host_port(host_port);
+        values.insert("host".to_string(), host.to_string());
+        values.insert("port".to_string(), port.unwrap_or("3306").to_string());
 
         Some(values)
     }
@@ -2987,6 +2996,13 @@ const VERSION_QUERY: &str = "SELECT VERSION()";
 #[cfg(test)]
 mod sql_statement_tests {
     use super::*;
+
+    /// `TEXT` holds at most 65,535 bytes in MySQL, so a column created for an
+    /// untyped source uses `LONGTEXT`, which a long CSV field still fits.
+    #[test]
+    fn untyped_columns_are_created_as_longtext() {
+        assert_eq!(MYSQL_DIALECT.text_column_type(), "LONGTEXT");
+    }
 
     #[test]
     fn truncate_table_statement_matches_the_driver_contract() {
@@ -5216,6 +5232,34 @@ mod tests {
             values.get("uri").map(String::as_str),
             Some("mysql://root:root@localhost:3306/app")
         );
+    }
+
+    #[test]
+    fn parse_uri_handles_ipv6_hosts_encoded_databases_and_passwords() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+
+        let parsed = driver
+            .parse_uri("mysql://alice:p%40ss@[::1]:3306/my%20db")
+            .expect("IPv6 URI should parse");
+        assert_eq!(parsed.get("host").map(String::as_str), Some("::1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("3306"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("my db"));
+        assert_eq!(parsed.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(parsed.get("password").map(String::as_str), Some("p@ss"));
+
+        let without_port = driver
+            .parse_uri("mysql://[2001:db8::7]/app")
+            .expect("IPv6 URI without port should parse");
+        assert_eq!(
+            without_port.get("host").map(String::as_str),
+            Some("2001:db8::7")
+        );
+        assert_eq!(without_port.get("port").map(String::as_str), Some("3306"));
+
+        let mut values = parsed.clone();
+        values.remove("password");
+        let built = driver.build_uri(&values, "p@ss").expect("URI should build");
+        assert_eq!(built, "mysql://alice:p%40ss@[::1]:3306/my%20db");
     }
 
     #[test]

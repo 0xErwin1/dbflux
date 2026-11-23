@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: Spreadsheet
           text: Text
           binary: Binary
           hex: Hex
@@ -2166,6 +2167,7 @@ document:
       run: Run
     tables:
       selected_count: "%{count} table(s) selected for export"
+      required: "Select at least one table to export."
     format_options:
       format_label: Format
       output_folder_label: "Folder"
@@ -2203,6 +2205,8 @@ document:
         epoch: "Epoch (seconds)"
       error:
         no_dialog_fallback_failed: "No folder picker available and the fallback export directory could not be created: %{error}"
+      sql_unavailable: "SQL isn't available for this connection: its driver can't generate INSERT statements. Export as CSV or JSON instead."
+      folder_required: "Choose the folder the files are written to."
     confirm:
       title: Review export plan
       summary: "%{count} table(s) as %{format} to %{folder}"
@@ -2234,10 +2238,18 @@ document:
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
       cancelled: "%{table}: cancelled after %{rows} row(s)"
+      not_attempted_after_failure: "%{table}: not attempted: the export stopped at the failed table"
     footer:
       back: Back
       continue: Continue
       close: Close
+      reason:
+        tables: "Continue is off until a table is selected."
+        folder: "Continue is off until you choose a folder."
+        batch_size: "Continue is off until Rows per INSERT is valid."
+        segment_size: "Continue is off until Chunk size is valid."
+    done:
+      closing_failed: "Close this dialog, fix the cause above and export again. Files already written stay in the folder. Without a manifest.json the folder can't be imported as a whole, but each completed CSV or JSON file can still be imported with Choose File; for a CSV file, first set the delimiter, encoding and NULL text to match this export, because a loose CSV does not carry them."
   file:
     error:
       source_changed: "The file was changed elsewhere since it was opened, so nothing was saved and your edits are kept. To see its new content, discard your edits and choose Reload from file, then make them again."
@@ -2437,7 +2449,7 @@ document:
       one: "Import %{count} table"
       many: "Import %{count} tables"
     rail:
-      pick_folder: Pick Folder
+      pick_folder: Pick Source
       configure: Configure
       confirm: Confirm
       run: Run
@@ -2450,6 +2462,10 @@ document:
         no_connection: No active connection for this profile
         no_dialog: No folder picker available on this platform
         invalid_bundle: "Invalid import bundle: %{error}"
+        no_connection_next: "Connect to the profile, then open the import again."
+        no_dialog_next: "Start DBFlux in a desktop session that offers a file dialog, then try again."
+        invalid_bundle_next: "Choose the folder Export wrote: it holds manifest.json. To import a single file, use Choose File… instead."
+      reading_hint: "Reading the manifest. Both buttons are off until it finishes."
     configure:
       mode_placeholder: Mode
       target_placeholder: Target column
@@ -2458,6 +2474,58 @@ document:
       apply_mapping: Apply Mapping
       continue: Continue
       unmatched_source: "Unmatched source column(s), will be skipped unless remapped: %{names}"
+      truncate_unavailable: "This connection can't truncate tables, so Truncate isn't listed. Choose Recreate to replace the table instead."
+    pick_file:
+      description: "Or import a single file into one table: CSV, JSON, JSON Lines, XML or a spreadsheet."
+      choose_file: "Choose File…"
+      reading_file: "Reading file…"
+      dialog_title: "Choose File to Import"
+      filter_label: "CSV, JSON, JSON Lines, XML and spreadsheets"
+      error:
+        unsupported: "Only .csv, .json, .jsonl, .xml, .xlsx, .xlsm, .xls and .ods files can be imported."
+        invalid_file: "Cannot read the file: %{error}"
+        unsupported_next: "Choose a file with one of those extensions."
+        lookup_failed: "Could not look up the target table: %{error}"
+        next_csv: "Choose another encoding or delimiter above: the file is read again as soon as you pick one."
+        next_json: "Fix the JSON in the file and choose it again, or choose another file."
+        next_xml: "Fix the XML in the file and choose it again, or choose another file."
+        next_spreadsheet: "Check that the file is a valid workbook without a password and choose it again, or choose another file."
+        next_lookup: "Check the table name and your access to the connection, then press Use Table again."
+      reading_hint: "Reading the file. Both buttons are off until it finishes."
+    file:
+      source: "File: %{file} (%{format})"
+      target_table_label: "Target table"
+      target_table_placeholder: "Table name (defaults to the file name)"
+      use_table: "Use Table"
+      null_text_hint: "Text in the file that stands for NULL. With empty text, an empty field is NULL."
+      json_no_options: "JSON and JSON Lines have no import options: the file itself defines the columns and the NULLs."
+      xml_no_options: "XML has no import options: the file itself defines the columns and the NULLs."
+      spreadsheet_header: "Row 1 is the header. A spreadsheet has no delimiter or encoding options: the sheet defines the columns, and an empty cell is NULL."
+      sheet_label: "Sheet"
+      sheet_hint: "Each import reads one sheet. Only visible worksheets are listed. Choosing another sheet reads the file again at once."
+      sheet_single: "This workbook has one sheet, so there is nothing to choose."
+    sheet:
+      empty:
+        message: "Sheet “%{sheet}” is empty: it has no rows."
+        next: "Pick another sheet above, or add a header row and data to this sheet in the spreadsheet app, save, and choose the file again."
+        next_single: "Add a header row and data to this sheet in the spreadsheet app, save, and choose the file again."
+      header:
+        message: "Row 1 of sheet “%{sheet}” is not a valid header: %{problems}."
+        next: "Give every column of row 1 a unique name in the spreadsheet app, save, and choose the file again, or pick another sheet above."
+        next_single: "Give every column of row 1 a unique name in the spreadsheet app, save, and choose the file again."
+        blank_one: "column %{columns} is blank"
+        blank_many: "columns %{columns} are blank"
+        duplicate_two: "columns %{columns} are both named “%{name}”"
+        duplicate_many: "columns %{columns} are all named “%{name}”"
+      cell:
+        message: "Sheet “%{sheet}”, row %{row}, column %{column} (“%{name}”) holds the error %{code}."
+        next: "Fix or clear that cell in the spreadsheet app, save, and choose the file again. Formulas are read as the result last saved in the file."
+      large:
+        message: "Sheet “%{sheet}” has %{cells} cells, over the limit of %{limit}. The whole sheet is read into memory, so it cannot be imported."
+        next: "Export it as CSV from the spreadsheet app (Save as → CSV) and import the CSV instead, or pick a smaller sheet above."
+        next_single: "Export it as CSV from the spreadsheet app (Save as → CSV) and import the CSV instead."
+      list_and: "%{head} and %{last}"
+      list_more: "%{list} and %{count} more"
     mapping_mode:
       create: Create
       existing: Existing (insert only)
@@ -2465,7 +2533,8 @@ document:
       skip: Skip
       truncate: Truncate (empty + insert)
     confirm:
-      body: "This will drop-and-recreate or truncate the following table(s) before loading data: %{tables}"
+      body: "This will drop-and-recreate or truncate the following table(s) before loading data:"
+      table_line: "%{table} — %{mode}"
       warning: This cannot be undone. Confirm to proceed.
       back: Back
       proceed: "Yes, proceed"
@@ -2478,6 +2547,7 @@ document:
     done:
       cancelled_rows: "%{rows} row(s) were imported before the import stopped."
       close: Close
+      closing_failed: "Close this dialog and fix the cause above. Tables listed as completed stay in the target; choose Skip for them if you import again. On a target without transaction support, rows of the failed table written before the error also stay."
     error:
       no_connection: No active connection for this import
     toast:
@@ -2494,6 +2564,15 @@ document:
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
       cancelled: "%{table}: cancelled after %{rows} row(s)"
+      not_attempted_after_failure: "%{table}: not attempted: the import stopped at the failed table"
+    footer:
+      reason:
+        file_read: "Continue is off until the file has been read."
+        sheet_empty: "Continue is off: sheet “%{sheet}” has no rows."
+        sheet_header: "Continue is off: row 1 needs a unique name in every column."
+        sheet_cell: "Continue is off: a cell holds an error value."
+        sheet_large: "Continue is off: the sheet is over %{limit} cells."
+      cancel: "Cancel"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"
     connection_not_found: Connection not found
@@ -4782,6 +4861,7 @@ settings:
       add_panel_picker: "Add Panel Picker"
       mcp_approvals: "MCP Approvals"
       migrate_wizard: "Migrate Wizard"
+      import_wizard: "Import Wizard"
       vim_normal: "Vim Normal"
     category:
       global: Global

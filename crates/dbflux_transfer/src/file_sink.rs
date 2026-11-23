@@ -34,6 +34,10 @@ pub enum FileFormat {
     /// Re-runnable batched `INSERT` statements in the source connection's
     /// dialect. Needs the connection ([`FileSink::with_connection`]).
     Sql,
+    /// A spreadsheet workbook (xlsx, xlsm, xls or ods) read by Import. It is
+    /// never written: it is in neither [`Self::ALL`] nor [`Self::WITH_SQL`],
+    /// and [`FileSink`] refuses it.
+    Spreadsheet,
 }
 
 impl FileFormat {
@@ -69,6 +73,7 @@ impl FileFormat {
             Self::Markdown => "md",
             Self::Xml => "xml",
             Self::Sql => "sql",
+            Self::Spreadsheet => "xlsx",
         }
     }
 
@@ -82,6 +87,7 @@ impl FileFormat {
             Self::Markdown => "Markdown",
             Self::Xml => "XML",
             Self::Sql => "SQL",
+            Self::Spreadsheet => "Spreadsheet",
         }
     }
 
@@ -96,6 +102,7 @@ impl FileFormat {
             "md" => Some(Self::Markdown),
             "xml" => Some(Self::Xml),
             "sql" => Some(Self::Sql),
+            "xlsx" | "xlsm" | "xls" | "ods" => Some(Self::Spreadsheet),
             _ => None,
         }
     }
@@ -108,7 +115,7 @@ impl FileFormat {
     /// Whether the date format option applies. SQL literals come from the
     /// dialect generator, so every other format honours it and SQL does not.
     pub fn uses_date_format(self) -> bool {
-        !matches!(self, Self::Sql)
+        !matches!(self, Self::Sql | Self::Spreadsheet)
     }
 
     /// Whether the rows-per-`INSERT` option applies.
@@ -145,10 +152,14 @@ impl FileFormat {
     }
 
     /// Whether Import can read this format back. HTML and Markdown are for
-    /// people to read, XML import is not implemented yet, and SQL scripts are
-    /// not read through the folder manifest.
+    /// people to read, and SQL scripts are not read through the folder
+    /// manifest. XML is read in the shape [`FileSink`] writes it, and a
+    /// spreadsheet is read one sheet at a time.
     pub fn is_importable(self) -> bool {
-        matches!(self, Self::Csv | Self::Json | Self::JsonLines)
+        matches!(
+            self,
+            Self::Csv | Self::Json | Self::JsonLines | Self::Xml | Self::Spreadsheet
+        )
     }
 }
 
@@ -340,6 +351,12 @@ impl RowSink for FileSink {
     ) -> Result<(), TransferError> {
         self.columns = columns.iter().map(to_column_meta).collect();
 
+        if self.format == FileFormat::Spreadsheet {
+            return Err(TransferError::Sink(
+                "spreadsheet files cannot be exported".to_string(),
+            ));
+        }
+
         let path = self.path();
         let file = File::create(&path)
             .map_err(|e| TransferError::Sink(format!("{}: {e}", path.display())))?;
@@ -368,6 +385,11 @@ impl RowSink for FileSink {
             FileFormat::Sql => {
                 self.writer = Some(self.sql_writer(writer, columns)?);
                 return Ok(());
+            }
+            FileFormat::Spreadsheet => {
+                return Err(TransferError::Sink(
+                    "spreadsheet files cannot be exported".to_string(),
+                ));
             }
         };
 
@@ -672,6 +694,43 @@ mod tests {
         assert_eq!(FileFormat::Csv.label(), "CSV");
         assert_eq!(FileFormat::Json.label(), "JSON");
         assert_eq!(FileFormat::JsonLines.label(), "JSON Lines");
+    }
+
+    #[test]
+    fn spreadsheet_is_importable_but_never_an_export_format() {
+        assert_eq!(FileFormat::Spreadsheet.extension(), "xlsx");
+        assert_eq!(FileFormat::Spreadsheet.label(), "Spreadsheet");
+        assert!(FileFormat::Spreadsheet.is_importable());
+        assert!(FileFormat::Xml.is_importable());
+        assert!(!FileFormat::Html.is_importable());
+        assert!(!FileFormat::Markdown.is_importable());
+        assert!(!FileFormat::Sql.is_importable());
+        assert!(!FileFormat::ALL.contains(&FileFormat::Spreadsheet));
+        assert!(!FileFormat::WITH_SQL.contains(&FileFormat::Spreadsheet));
+        for extension in ["xlsx", "xlsm", "xls", "ods"] {
+            assert_eq!(
+                FileFormat::from_extension(extension),
+                Some(FileFormat::Spreadsheet),
+                "{extension}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_writer_rejects_the_spreadsheet_format_with_a_clear_error() {
+        let dir = temp_dir("spreadsheet_rejected");
+        let mut sink = FileSink::new(&dir, None, "book", FileFormat::Spreadsheet);
+
+        let error = sink
+            .begin(&[column("id")], TableMappingMode::Existing)
+            .expect_err("a spreadsheet cannot be written");
+
+        assert!(
+            matches!(&error, TransferError::Sink(message) if message == "spreadsheet files cannot be exported"),
+            "{error:?}"
+        );
+        assert!(!dir.join("book.xlsx").exists(), "no file is created");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

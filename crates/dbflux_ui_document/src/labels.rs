@@ -1776,7 +1776,7 @@ pub(crate) fn import_mapping_mode_label(mode: dbflux_transfer::TableMappingMode)
     }
 }
 
-/// The import wizard's four rail entries (Pick Folder / Configure / Confirm
+/// The import wizard's four rail entries (Pick Source / Configure / Confirm
 /// / Run), in `WizardStep` render order, resolved once through the
 /// translation catalog rather than a `&'static str` array.
 pub(crate) fn import_rail_labels() -> [String; 4] {
@@ -1861,6 +1861,15 @@ pub(crate) fn import_table_status_line(table: &dbflux_transfer::import::Imported
             table = table.source_table
         ),
     }
+}
+
+/// The result row of a table the import never reached because an earlier one
+/// failed, saying why it was skipped.
+pub(crate) fn import_not_attempted_after_failure_line(table: &str) -> String {
+    dbflux_i18n::t!(
+        "document.import_wizard.status_line.not_attempted_after_failure",
+        table = table
+    )
 }
 
 /// Task-panel description for a running export, with the table count and
@@ -1962,6 +1971,15 @@ pub(crate) fn export_table_status_line(
             table = label
         ),
     }
+}
+
+/// The result row of a table the export never reached because an earlier one
+/// failed, saying why it was skipped.
+pub(crate) fn export_not_attempted_after_failure_line(label: &str) -> String {
+    dbflux_i18n::t!(
+        "document.export_wizard.status_line.not_attempted_after_failure",
+        table = label
+    )
 }
 
 /// The export wizard's running phase "Table N of M" position line, or the
@@ -2478,6 +2496,9 @@ pub(crate) fn export_all_format_label(format: dbflux_transfer::FileFormat) -> St
         }
         dbflux_transfer::FileFormat::Xml => dbflux_i18n::t!("document.data.grid.export.format.xml"),
         dbflux_transfer::FileFormat::Sql => dbflux_i18n::t!("document.data.grid.export.format.sql"),
+        dbflux_transfer::FileFormat::Spreadsheet => {
+            dbflux_i18n::t!("document.data.grid.export.format.spreadsheet")
+        }
     }
 }
 
@@ -6576,6 +6597,22 @@ mod tests {
         "document.import_wizard.status_line.skipped",
         "document.import_wizard.status_line.failed",
         "document.import_wizard.status_line.not_attempted",
+        "document.import_wizard.pick_folder.error.no_connection_next",
+        "document.import_wizard.pick_folder.error.no_dialog_next",
+        "document.import_wizard.pick_folder.error.invalid_bundle_next",
+        "document.import_wizard.pick_folder.reading_hint",
+        "document.import_wizard.pick_file.reading_hint",
+        "document.import_wizard.pick_file.error.unsupported_next",
+        "document.import_wizard.pick_file.error.lookup_failed",
+        "document.import_wizard.pick_file.error.next_csv",
+        "document.import_wizard.pick_file.error.next_json",
+        "document.import_wizard.pick_file.error.next_lookup",
+        "document.import_wizard.file.json_no_options",
+        "document.import_wizard.configure.truncate_unavailable",
+        "document.import_wizard.footer.cancel",
+        "document.import_wizard.footer.reason.file_read",
+        "document.import_wizard.status_line.not_attempted_after_failure",
+        "document.import_wizard.done.closing_failed",
     ];
 
     /// PR 26a: every `document.import_wizard.*` key resolves to a
@@ -6760,6 +6797,15 @@ mod tests {
         "document.export_wizard.footer.back",
         "document.export_wizard.footer.continue",
         "document.export_wizard.footer.close",
+        "document.export_wizard.format_options.sql_unavailable",
+        "document.export_wizard.format_options.folder_required",
+        "document.export_wizard.tables.required",
+        "document.export_wizard.footer.reason.tables",
+        "document.export_wizard.footer.reason.folder",
+        "document.export_wizard.footer.reason.batch_size",
+        "document.export_wizard.footer.reason.segment_size",
+        "document.export_wizard.status_line.not_attempted_after_failure",
+        "document.export_wizard.done.closing_failed",
     ];
 
     /// PR 26b: every `document.export_wizard.*` key resolves to a
@@ -8674,5 +8720,9 @@ mod tests {
             "Markdown"
         );
         assert_eq!(super::export_all_format_label(FileFormat::Xml), "XML");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Spreadsheet),
+            "Spreadsheet"
+        );
     }
 }

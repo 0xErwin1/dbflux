@@ -2022,11 +2022,17 @@ impl CodeDocument {
                             .disabled(!can_apply)
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
-                                    panel.update(cx, |p, cx| {
-                                        // Ignore the returned bounds — the panel emits
-                                        // TimeRangeChanged which is the authoritative signal.
-                                        let _ = p.apply_custom_range(cx);
-                                    });
+                                    // The returned bounds are not needed: the panel emits
+                                    // TimeRangeChanged, which is the authoritative signal.
+                                    let applied =
+                                        panel.update(cx, |p, cx| p.apply_custom_range(cx));
+                                    if let Err(error) = applied {
+                                        report_error(
+                                            UserFacingError::new(ErrorKind::User, error),
+                                            cx,
+                                        );
+                                        return;
+                                    }
                                     this.sync_source_exec_context(cx);
                                     cx.emit(DocumentEvent::MetaChanged);
                                     cx.notify();

@@ -1795,6 +1795,7 @@ document:
           markdown: Markdown
           xml: XML
           sql: SQL
+          spreadsheet: Hoja de cálculo
           text: Texto
           binary: Binario
           hex: Hex
@@ -2166,6 +2167,7 @@ document:
       run: Ejecutar
     tables:
       selected_count: "%{count} tabla(s) seleccionada(s) para exportar"
+      required: "Selecciona al menos una tabla para exportar."
     format_options:
       format_label: Formato
       output_folder_label: "Carpeta"
@@ -2203,6 +2205,8 @@ document:
         epoch: "Epoch (segundos)"
       error:
         no_dialog_fallback_failed: "No hay selector de carpetas disponible y no se pudo crear la carpeta de exportación de respaldo: %{error}"
+      sql_unavailable: "SQL no está disponible para esta conexión: su driver no puede generar sentencias INSERT. Exporta como CSV o JSON."
+      folder_required: "Elige la carpeta donde se escriben los archivos."
     confirm:
       title: Revisar plan de exportación
       summary: "%{count} tabla(s) como %{format} hacia %{folder}"
@@ -2234,10 +2238,18 @@ document:
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
       cancelled: "%{table}: cancelada tras %{rows} fila(s)"
+      not_attempted_after_failure: "%{table}: no intentada: la exportación se detuvo en la tabla que falló"
     footer:
       back: Atrás
       continue: Continuar
       close: Cerrar
+      reason:
+        tables: "Continuar está desactivado hasta que selecciones una tabla."
+        folder: "Continuar está desactivado hasta que elijas una carpeta."
+        batch_size: "Continuar está desactivado hasta que Filas por INSERT sea válido."
+        segment_size: "Continuar está desactivado hasta que Tamaño de bloque sea válido."
+    done:
+      closing_failed: "Cierra este diálogo, corrige la causa indicada arriba y exporta de nuevo. Los archivos ya escritos permanecen en la carpeta. Sin un manifest.json la carpeta no se puede importar completa, pero cada archivo CSV o JSON terminado todavía se puede importar con Elegir archivo; para un CSV, antes configura el delimitador, la codificación y el texto NULL igual que en esta exportación, porque un CSV suelto no los incluye."
   file:
     error:
       source_changed: "El archivo cambió en otro lugar desde que se abrió, así que no se guardó nada y tus cambios se conservan. Para ver su contenido nuevo, descarta tus cambios y elige Recargar desde el archivo, y luego repítelos."
@@ -2437,7 +2449,7 @@ document:
       one: "Importar %{count} tabla"
       many: "Importar %{count} tablas"
     rail:
-      pick_folder: Elegir carpeta
+      pick_folder: Elegir origen
       configure: Configurar
       confirm: Confirmar
       run: Ejecutar
@@ -2450,6 +2462,10 @@ document:
         no_connection: No hay una conexión activa para este perfil
         no_dialog: No hay selector de carpetas disponible en esta plataforma
         invalid_bundle: "Paquete de importación inválido: %{error}"
+        no_connection_next: "Conéctate al perfil y vuelve a abrir la importación."
+        no_dialog_next: "Inicia DBFlux en una sesión de escritorio que ofrezca un diálogo de archivos y vuelve a intentarlo."
+        invalid_bundle_next: "Elige la carpeta que escribió Exportar: contiene manifest.json. Para importar un solo archivo, usa Elegir archivo… en su lugar."
+      reading_hint: "Leyendo el manifiesto. Ambos botones están desactivados hasta que termine."
     configure:
       mode_placeholder: Modo
       target_placeholder: Columna destino
@@ -2458,6 +2474,58 @@ document:
       apply_mapping: Aplicar mapeo
       continue: Continuar
       unmatched_source: "Columna(s) de origen sin coincidencia, se omitirán salvo que se remapeen: %{names}"
+      truncate_unavailable: "Esta conexión no puede truncar tablas, así que Truncate no aparece. Elige Recreate para reemplazar la tabla."
+    pick_file:
+      description: "O importa un único archivo en una tabla: CSV, JSON, JSON Lines, XML o una hoja de cálculo."
+      choose_file: "Elegir archivo…"
+      reading_file: "Leyendo archivo…"
+      dialog_title: "Elegir archivo para importar"
+      filter_label: "CSV, JSON, JSON Lines, XML y hojas de cálculo"
+      error:
+        unsupported: "Solo se pueden importar archivos .csv, .json, .jsonl, .xml, .xlsx, .xlsm, .xls y .ods."
+        invalid_file: "No se puede leer el archivo: %{error}"
+        unsupported_next: "Elige un archivo con una de esas extensiones."
+        lookup_failed: "No se pudo consultar la tabla de destino: %{error}"
+        next_csv: "Elige otra codificación o delimitador arriba: el archivo se lee de nuevo en cuanto elijas uno."
+        next_json: "Corrige el JSON del archivo y vuelve a elegirlo, o elige otro archivo."
+        next_xml: "Corrige el XML del archivo y vuelve a elegirlo, o elige otro archivo."
+        next_spreadsheet: "Comprueba que el archivo sea un libro válido y sin contraseña y vuelve a elegirlo, o elige otro archivo."
+        next_lookup: "Revisa el nombre de la tabla y tu acceso a la conexión, y pulsa Usar tabla otra vez."
+      reading_hint: "Leyendo el archivo. Ambos botones están desactivados hasta que termine."
+    file:
+      source: "Archivo: %{file} (%{format})"
+      target_table_label: "Tabla de destino"
+      target_table_placeholder: "Nombre de la tabla (por defecto, el del archivo)"
+      use_table: "Usar tabla"
+      null_text_hint: "Texto del archivo que representa NULL. Con texto vacío, un campo vacío es NULL."
+      json_no_options: "JSON y JSON Lines no tienen opciones de importación: el propio archivo define las columnas y los NULL."
+      xml_no_options: "XML no tiene opciones de importación: el propio archivo define las columnas y los NULL."
+      spreadsheet_header: "La fila 1 es el encabezado. Una hoja de cálculo no tiene opciones de delimitador ni de codificación: la hoja define las columnas y una celda vacía es NULL."
+      sheet_label: "Hoja"
+      sheet_hint: "Cada importación lee una hoja. Solo se listan las hojas visibles. Al elegir otra hoja, el archivo se lee de nuevo al instante."
+      sheet_single: "Este libro tiene una sola hoja, así que no hay nada que elegir."
+    sheet:
+      empty:
+        message: "La hoja “%{sheet}” está vacía: no tiene filas."
+        next: "Elige otra hoja arriba, o añade una fila de encabezado y datos a esta hoja en la aplicación de hojas de cálculo, guarda y vuelve a elegir el archivo."
+        next_single: "Añade una fila de encabezado y datos a esta hoja en la aplicación de hojas de cálculo, guarda y vuelve a elegir el archivo."
+      header:
+        message: "La fila 1 de la hoja “%{sheet}” no es un encabezado válido: %{problems}."
+        next: "Da a cada columna de la fila 1 un nombre único en la aplicación de hojas de cálculo, guarda y vuelve a elegir el archivo, o elige otra hoja arriba."
+        next_single: "Da a cada columna de la fila 1 un nombre único en la aplicación de hojas de cálculo, guarda y vuelve a elegir el archivo."
+        blank_one: "la columna %{columns} está en blanco"
+        blank_many: "las columnas %{columns} están en blanco"
+        duplicate_two: "las columnas %{columns} se llaman ambas “%{name}”"
+        duplicate_many: "las columnas %{columns} se llaman todas “%{name}”"
+      cell:
+        message: "La hoja “%{sheet}”, fila %{row}, columna %{column} (“%{name}”) contiene el error %{code}."
+        next: "Corrige o borra esa celda en la aplicación de hojas de cálculo, guarda y vuelve a elegir el archivo. Las fórmulas se leen como el último resultado guardado en el archivo."
+      large:
+        message: "La hoja “%{sheet}” tiene %{cells} celdas, por encima del límite de %{limit}. La hoja entera se lee en memoria, así que no se puede importar."
+        next: "Expórtala como CSV desde la aplicación de hojas de cálculo (Guardar como → CSV) e importa el CSV, o elige una hoja más pequeña arriba."
+        next_single: "Expórtala como CSV desde la aplicación de hojas de cálculo (Guardar como → CSV) e importa el CSV."
+      list_and: "%{head} y %{last}"
+      list_more: "%{list} y %{count} más"
     mapping_mode:
       create: Crear
       existing: "Existente (solo insertar)"
@@ -2465,7 +2533,8 @@ document:
       skip: Omitir
       truncate: "Truncar (vaciar + insertar)"
     confirm:
-      body: "Esto eliminará y recreará o truncará la(s) siguiente(s) tabla(s) antes de cargar los datos: %{tables}"
+      body: "Esto eliminará y recreará o truncará la(s) siguiente(s) tabla(s) antes de cargar los datos:"
+      table_line: "%{table} — %{mode}"
       warning: Esta acción no se puede deshacer. Confirma para continuar.
       back: Atrás
       proceed: "Sí, continuar"
@@ -2478,6 +2547,7 @@ document:
     done:
       cancelled_rows: "Se importaron %{rows} filas antes de que se detuviera la importación."
       close: Cerrar
+      closing_failed: "Cierra este diálogo y corrige la causa indicada arriba. Las tablas completadas permanecen en el destino; elige Omitir para ellas si vuelves a importar. En un destino sin soporte de transacciones, las filas de la tabla fallida escritas antes del error también permanecen."
     error:
       no_connection: No hay una conexión activa para esta importación
     toast:
@@ -2494,6 +2564,15 @@ document:
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
       cancelled: "%{table}: cancelada tras %{rows} fila(s)"
+      not_attempted_after_failure: "%{table}: no intentada: la importación se detuvo en la tabla que falló"
+    footer:
+      reason:
+        file_read: "Continuar está desactivado hasta que se haya leído el archivo."
+        sheet_empty: "Continuar está desactivado: la hoja “%{sheet}” no tiene filas."
+        sheet_header: "Continuar está desactivado: la fila 1 necesita un nombre único en cada columna."
+        sheet_cell: "Continuar está desactivado: una celda contiene un valor de error."
+        sheet_large: "Continuar está desactivado: la hoja supera las %{limit} celdas."
+      cancel: "Cancelar"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"
     connection_not_found: Conexión no encontrada
@@ -4782,6 +4861,7 @@ settings:
       add_panel_picker: "Selector de panel"
       mcp_approvals: "Aprobaciones MCP"
       migrate_wizard: "Asistente de migración"
+      import_wizard: "Asistente de importación"
       vim_normal: "Vim Normal"
     category:
       global: Global

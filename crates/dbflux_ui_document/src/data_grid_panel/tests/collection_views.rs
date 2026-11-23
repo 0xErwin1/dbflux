@@ -519,6 +519,40 @@ fn empty_project_and_sort_slots_show_their_placeholders(cx: &mut TestAppContext)
     });
 }
 
+/// "Filter by value" ANDs onto a filter typed in relaxed JSON instead of
+/// replacing it, and leaves a filter that does not parse as typed.
+#[gpui::test]
+fn filter_by_value_keeps_a_relaxed_json_filter(cx: &mut TestAppContext) {
+    let (app_state, profile_id) = register_builder_stub_connection(
+        cx,
+        dbflux_core::DatabaseCategory::Document,
+        dbflux_core::QueryLanguage::MongoQuery,
+        None,
+    );
+    let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+    let filter_after = |typed: &'static str, window: &mut VisualTestContext| {
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel
+                    .filter_bar
+                    .filter_input
+                    .update(cx, |input, cx| input.set_value(typed, window, cx));
+                panel.apply_mongo_filter(&serde_json::json!({ "total": 3 }), window, cx);
+                panel.filter_bar.filter_input.read(cx).value().to_string()
+            })
+        })
+    };
+
+    let composed = filter_after("{status: 'open'}", window);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&composed).expect("composed filter is JSON"),
+        serde_json::json!({ "$and": [{ "status": "open" }, { "total": 3 }] })
+    );
+
+    assert_eq!(filter_after("{status: }", window), "{status: }");
+}
+
 /// A focused query bar field takes the typed letters, whichever way the
 /// focus got there; the grid keys come back once it lets go.
 #[gpui::test]

@@ -43,6 +43,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(add_panel_picker_layer());
     stack.add_layer(mcp_approvals_layer());
     stack.add_layer(migrate_wizard_layer());
+    stack.add_layer(import_wizard_layer());
     stack.add_layer(vim_normal_layer());
 
     stack
@@ -2139,6 +2140,29 @@ fn migrate_wizard_layer() -> KeymapLayer {
         Command::Cancel,
         from_field,
     );
+
+    layer
+}
+
+/// Keys of the import wizard's configure step. J and K move the cursor over
+/// its choices (the CSV delimiter and encoding, then each table's mapping
+/// mode, target column and source column); H and L (or the arrows) pick the
+/// previous or next delimiter and encoding. Enter, which the dialog hands to
+/// its owner, picks the next delimiter or encoding, or opens the dropdown
+/// under the cursor. The keys stay with a text field and an open dropdown.
+fn import_wizard_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::ImportWizard);
+
+    for (key, command) in [
+        ("j", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+    ] {
+        layer.bind(KeyChord::new(key, Modifiers::none()), command);
+    }
 
     layer
 }
