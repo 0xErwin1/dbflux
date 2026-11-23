@@ -3164,6 +3164,7 @@ dependencies = [
  "embed-resource",
  "gpui-component",
  "gpui-pre",
+ "gpui-pre-linux",
  "gpui-pre-platform",
  "interprocess",
  "libc",

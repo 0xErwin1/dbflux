@@ -123,6 +123,31 @@ The first commit that added this directory carries the published source unchange
   `drag_icon::tests`, `xdnd_source::tests::a_drop_is_accepted_only_after_the_target_says_so`
   and `client::tests::the_drag_icon_pixels_are_shared_through_a_file`.
 
+- `src/linux/vulkan_driver.rs`, `src/gpui_linux.rs`, `src/linux/wayland/window.rs`,
+  `src/linux/x11/window.rs`: the Vulkan loader is told which driver to use instead of probing
+  every installed ICD. The loader reads its driver variables once, when the process starts,
+  and they cannot be set safely afterwards, so `select_vulkan_driver` decides before any
+  thread exists and re-executes the process with `exec`, the same `argv` and
+  `VK_LOADER_DRIVERS_SELECT` set to the patterns of the firmware-booted GPU's vendor (read
+  from `/sys/class/drm/card*/device/boot_vga`; Intel, AMD and NVIDIA each map to their ICD
+  manifest names). It does nothing when the user already chose a driver through any of the
+  five `VK_*` variables, when `GPUI_VULKAN_DRIVER_SELECT=0` opts out, when the marker is
+  already present (no exec loop), or when the vendor has no installed manifest. A failed exec
+  is logged and the app continues without a selection. Because a selected driver can turn out
+  to be unusable — with no adapter at all and no OpenGL fallback — both window backends call
+  `retry_after_renderer_failure` when the renderer cannot be created, which re-executes once
+  with the selection removed and the marker set to `fallback`, so the next start probes every
+  driver as before and never selects again. The rules are `decide`, a pure function over an
+  injected environment and filesystem state. Covered by `vulkan_driver::tests` in this crate.
+  Children do not inherit the selection: `restore_child_environment` prepares a
+  `std::process::Command` so a child starts with the environment the user gave the app. It
+  removes `VK_LOADER_DRIVERS_SELECT` and `GPUI_VULKAN_DRIVER_SELECT` when the marker holds the
+  patterns this code chose, removes the marker alone when it is `fallback`, and changes nothing
+  when the marker is absent or `0`, so a user's own driver variables are kept and an application
+  launched from a GPUI app keeps its own GPU (a game started with PRIME offload does not run on
+  the boot GPU). Apps must call it on every `Command` they prepare. The rule is the pure
+  `child_environment`; covered by `vulkan_driver::tests`, one test per case.
+
 ## Refreshing
 
 Replace this directory with the new published crate, re-apply the patches above, and bump
