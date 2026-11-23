@@ -16,7 +16,8 @@ pub(super) fn extract_pk_columns(result: &QueryResult) -> Vec<(usize, String)> {
 
 /// Filter that keys a document by its `_id` column, read through `value_at`.
 /// `None` when the result has no `_id` column or the value cannot key a
-/// document (null, nested, binary).
+/// document (null, nested, binary, or a non-finite float, which JSON would
+/// turn into `null` and so match the wrong document).
 pub(super) fn document_id_filter(
     columns: &[ColumnMeta],
     value_at: impl FnOnce(usize) -> Option<Value>,
@@ -27,7 +28,7 @@ pub(super) fn document_id_filter(
         Value::ObjectId(oid) => serde_json::json!({ "$oid": oid }),
         Value::Text(text) => serde_json::json!(text),
         Value::Int(number) => serde_json::json!(number),
-        Value::Float(number) => serde_json::json!(number),
+        Value::Float(number) if number.is_finite() => serde_json::json!(number),
         Value::Bool(flag) => serde_json::json!(flag),
         _ => return None,
     };
@@ -206,6 +207,16 @@ mod tests {
             filter.map(|filter| filter.filter),
             Some(serde_json::json!({ "_id": 7 }))
         );
+    }
+
+    #[test]
+    fn document_id_filter_rejects_a_non_finite_float_id() {
+        let columns = [column("_id")];
+
+        for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let row = [Value::Float(number)];
+            assert!(document_id_filter(&columns, |index| row.get(index).cloned()).is_none());
+        }
     }
 
     #[test]
