@@ -20,7 +20,7 @@ use dbflux_core::{
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
 use dbflux_driver_dynamodb::DYNAMODB_FORM;
 use dbflux_driver_influxdb::INFLUXDB_FORM;
-use dbflux_driver_mongodb::MONGODB_FORM;
+use dbflux_driver_mongodb::{MONGODB_FORM, MongoLanguageService};
 use dbflux_driver_mssql::SQLSERVER_FORM;
 use dbflux_driver_mysql::MYSQL_FORM;
 use dbflux_driver_postgres::POSTGRES_FORM;

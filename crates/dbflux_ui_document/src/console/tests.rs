@@ -456,3 +456,55 @@ fn up_leaves_an_open_completion_menu_alone(cx: &mut TestAppContext) {
     let value = window.update(|_, cx| harness.console.read(cx).input.read(cx).value().to_string());
     assert_eq!(value, "GET greeting", "with the menu closed, Up recalls");
 }
+
+#[gpui::test]
+fn mongodb_run_command_script_always_prompts_for_admin_confirmation(cx: &mut TestAppContext) {
+    use dbflux_core::DangerousQueryKind;
+
+    let driver = FakeDriver::new(DbKind::MongoDB)
+        .with_default_result(QueryResult::text("ok".to_string(), Duration::ZERO));
+    let (harness, window) = open_with(cx, driver, Some("app"));
+    let script = r#"const coll = "users"; db.runCommand({ ping: 1 });"#;
+
+    type_and_submit(&harness, window, script);
+
+    let pending = window
+        .update(|_, cx| harness.console.read(cx).pending.clone())
+        .expect("runCommand script asks for admin confirmation");
+    assert_eq!(pending.kind, Some(DangerousQueryKind::AdminScript));
+    assert_eq!(pending.ceiling, ExecutionClassification::AdminDestructive);
+    assert!(harness.driver.stats().executed_requests.is_empty());
+
+    window.update(|_, cx| {
+        harness
+            .console
+            .update(cx, |console, cx| console.confirm_pending(cx))
+    });
+    window.run_until_parked();
+
+    let requests = harness.driver.stats().executed_requests;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].confirmed_ceiling,
+        Some(ExecutionClassification::AdminDestructive)
+    );
+
+    window.update(|_, cx| {
+        harness.app_state.update(cx, |state, _| {
+            state
+                .dangerous_query_suppressions_mut()
+                .set_suppressed(DangerousQueryKind::AdminScript);
+            let mut settings = state.general_settings().clone();
+            settings.confirm_dangerous_queries = false;
+            state.update_general_settings(settings);
+        });
+    });
+
+    type_and_submit(&harness, window, script);
+
+    let pending = window
+        .update(|_, cx| harness.console.read(cx).pending.clone())
+        .expect("AdminScript still prompts after suppression and disabling confirmations");
+    assert_eq!(pending.kind, Some(DangerousQueryKind::AdminScript));
+    assert_eq!(harness.driver.stats().executed_requests.len(), 1);
+}

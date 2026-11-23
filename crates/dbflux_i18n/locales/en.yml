@@ -1363,6 +1363,9 @@ document:
         script:
           title: Dangerous Script
           body: This script contains potentially destructive statements
+        admin_script:
+          title: Admin Script
+          body: This script contains admin commands and requires admin-level confirmation
         mongo_delete_many:
           title: deleteMany with empty filter
           body: deleteMany with empty filter will delete all documents

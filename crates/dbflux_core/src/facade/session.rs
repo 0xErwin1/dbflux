@@ -53,8 +53,9 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::RedisFlushDb => self.redis_flush_db,
             DangerousQueryKind::RedisMultiDelete => self.redis_multi_delete,
             DangerousQueryKind::RedisKeysPattern => self.redis_keys_pattern,
-            // Raw expression in SET is never suppressible — always requires confirmation.
-            DangerousQueryKind::RawExpressionInSet => false,
+            // Admin scripts and raw expressions in SET are never suppressible —
+            // always require confirmation.
+            DangerousQueryKind::AdminScript | DangerousQueryKind::RawExpressionInSet => false,
         }
     }
 
@@ -75,8 +76,8 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::RedisFlushDb => self.redis_flush_db = true,
             DangerousQueryKind::RedisMultiDelete => self.redis_multi_delete = true,
             DangerousQueryKind::RedisKeysPattern => self.redis_keys_pattern = true,
-            // Raw expression in SET cannot be suppressed per-session.
-            DangerousQueryKind::RawExpressionInSet => {}
+            // Admin scripts and raw expressions in SET cannot be suppressed per-session.
+            DangerousQueryKind::AdminScript | DangerousQueryKind::RawExpressionInSet => {}
         }
     }
 }
@@ -282,5 +283,22 @@ impl SessionFacade {
     #[allow(dead_code)]
     pub fn fail_shutdown(&self) {
         self.shutdown.fail();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admin_script_cannot_be_suppressed() {
+        let mut suppressions = DangerousQuerySuppressions::default();
+
+        suppressions.set_suppressed(DangerousQueryKind::Script);
+        assert!(suppressions.is_suppressed(DangerousQueryKind::Script));
+        assert!(!suppressions.is_suppressed(DangerousQueryKind::AdminScript));
+
+        suppressions.set_suppressed(DangerousQueryKind::AdminScript);
+        assert!(!suppressions.is_suppressed(DangerousQueryKind::AdminScript));
     }
 }

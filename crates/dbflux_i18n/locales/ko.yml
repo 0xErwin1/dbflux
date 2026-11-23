@@ -1363,6 +1363,9 @@ document:
         script:
           title: 위험한 스크립트
           body: 이 스크립트에는 파괴적일 수 있는 문이 있습니다
+        admin_script:
+          title: 관리자 스크립트
+          body: 이 스크립트에는 관리자 명령이 포함되어 있으며 관리자 수준의 확인이 필요합니다
         mongo_delete_many:
           title: 빈 필터가 있는 deleteMany
           body: 빈 필터가 있는 deleteMany는 모든 도큐먼트를 삭제합니다

@@ -46,6 +46,10 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
         ));
     }
 
+    if matches!(kind, AdminScript) {
+        return dbflux_core::DangerousAction::Confirm(kind);
+    }
+
     if !effective.confirm_dangerous {
         return dbflux_core::DangerousAction::Allow;
     }
@@ -63,6 +67,17 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
     }
 
     dbflux_core::DangerousAction::Confirm(kind)
+}
+
+pub(crate) fn confirmed_ceiling_for_dangerous(
+    kind: dbflux_core::DangerousQueryKind,
+) -> dbflux_core::ExecutionClassification {
+    match kind {
+        dbflux_core::DangerousQueryKind::AdminScript => {
+            dbflux_core::ExecutionClassification::AdminDestructive
+        }
+        _ => dbflux_core::ExecutionClassification::Destructive,
+    }
 }
 
 /// Returns `true` when the connection's profile is set to read-only and
@@ -809,10 +824,10 @@ impl CodeDocument {
                     .connection
                     .language_service()
                     .detect_dangerous(&query)
+                    .map(confirmed_ceiling_for_dangerous)
             });
-        if confirmed_ceiling.is_some() {
-            request =
-                request.with_confirmed_ceiling(dbflux_core::ExecutionClassification::Destructive);
+        if let Some(ceiling) = confirmed_ceiling {
+            request = request.with_confirmed_ceiling(ceiling);
         }
         request = request.with_read_only(read_only);
 
@@ -3423,6 +3438,40 @@ mod tests {
         );
 
         assert_ne!(en, es);
+    }
+
+    #[test]
+    fn admin_script_ceiling_and_always_prompt() {
+        use super::{confirmed_ceiling_for_dangerous, evaluate_dangerous_with_effective_settings};
+        use dbflux_core::{
+            DangerousAction, DangerousQueryKind, EffectiveSettings, ExecutionClassification,
+            GeneralSettings,
+        };
+        use std::collections::HashMap;
+
+        assert_eq!(
+            confirmed_ceiling_for_dangerous(DangerousQueryKind::AdminScript),
+            ExecutionClassification::AdminDestructive
+        );
+        assert_eq!(
+            confirmed_ceiling_for_dangerous(DangerousQueryKind::Script),
+            ExecutionClassification::Destructive
+        );
+
+        let global = GeneralSettings {
+            confirm_dangerous_queries: false,
+            ..Default::default()
+        };
+        let effective = EffectiveSettings::resolve(&global, None, &HashMap::new(), None, None);
+        assert!(matches!(
+            evaluate_dangerous_with_effective_settings(
+                DangerousQueryKind::AdminScript,
+                true,
+                &effective,
+                true,
+            ),
+            DangerousAction::Confirm(DangerousQueryKind::AdminScript)
+        ));
     }
 }
 

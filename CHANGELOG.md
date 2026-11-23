@@ -28,6 +28,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **MongoDB scripts with `runCommand` ask for admin confirmation** — MongoDB scripts calling `runCommand` failed after confirming the prompt because the confirmed ceiling stopped at `Destructive`. Scripts containing `runCommand` now always prompt for admin confirmation and run with an `AdminDestructive` ceiling (and require `AdminDestructive` over MCP), while other scripts stay at `Destructive` (#1356).
 * **NULL and modifier keywords take the keyword color** — In the SQL editor, `NULL` was colored as a string after `=` and as a type after `IS`, and the data grid and row inspector painted NULL values in the number color. NULL now takes the keyword color everywhere, and the editor colors `ASC`, `DESC`, `NULLS FIRST/LAST`, `DEFAULT`, `COLLATE` and similar modifier keywords like `SELECT` instead of the editor's default attribute blue (#987).
 * **The Welcome dialog fits short windows** — In a window about 500 px tall, the usage-statistics cards of the Welcome dialog ran over the privacy note and the footer. The update preferences and usage statistics now scroll inside their column when the window is too short to show them whole.
 * **Set to default writes the column default** — **Set to default** in the cell menu staged the column's default as text, so saving a column whose default is a function, such as `DEFAULT gen_random_uuid()` or `DEFAULT now()`, failed with an invalid input error. It now stages the default as an expression, so the database evaluates it (#1358).
