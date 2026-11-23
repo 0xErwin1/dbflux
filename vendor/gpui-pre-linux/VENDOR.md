@@ -123,6 +123,33 @@ The first commit that added this directory carries the published source unchange
   `drag_icon::tests`, `xdnd_source::tests::a_drop_is_accepted_only_after_the_target_says_so`
   and `client::tests::the_drag_icon_pixels_are_shared_through_a_file`.
 
+- `src/linux/system_fonts.rs`, `src/linux/platform.rs`, `Cargo.toml`: the system fonts no
+  longer block the first window. `CosmicTextSystem::new` filled its font database
+  synchronously inside `LinuxCommon::new`, which parses every face fontconfig reports: 594
+  faces on the reference machine, about half a second with a cold page cache, all of it
+  before a window could be created. The text system is now built with
+  `CosmicTextSystem::new_without_system_fonts` and `system_fonts` loads the database on a
+  thread of its own, started the first time the app asks for the fonts through
+  `Platform::take_system_font_receiver` (the `gpui-pre` patch `background-system-fonts.patch`,
+  which installs them, rebuilds every line layout and draws again). Every distinct file behind
+  the database's faces is memory-mapped and handed over as `Cow::Borrowed`, not read into
+  owned memory: several desktops ship CJK families whose files add up to hundreds of
+  megabytes, and copying them into anonymous memory would grow the resident set by the whole
+  font set. The mappings are leaked, since a `'static` borrow of them outlives every owner and
+  they are never unmapped; `fontdb` mapped these same files before this change and keeps its
+  mappings alive the same way. A file that cannot be opened or mapped is logged and skipped,
+  so one unreadable font does not cost the rest. The face list is deduplicated and ordered by
+  path, so a file holding several faces is loaded once and the result is deterministic.
+  Glyph fallback for faces only the system provides (CJK, emoji) therefore arrives shortly
+  after the first frame, and a family the app itself added, such as DBFlux's bundled Archivo,
+  resolves from the first frame. Covered by `system_fonts::tests`
+  (`cargo test -p gpui-pre-linux --lib`): one test maps a directory of real TrueType files and
+  checks that each file appears once with its own bytes, the other points `FONTCONFIG_FILE` at
+  a scratch config and checks that the faces reached through it are mapped too. Both use the
+  fonts in `crates/bolt/assets/fonts` as their fixture and fail if that directory is missing.
+  The manifest gains `fontdb` (the version and features `cosmic-text` already uses) and
+  `memmap2`.
+
 - `src/linux/vulkan_driver.rs`, `src/gpui_linux.rs`, `src/linux/wayland/window.rs`,
   `src/linux/x11/window.rs`: the Vulkan loader is told which driver to use instead of probing
   every installed ICD. The loader reads its driver variables once, when the process starts,

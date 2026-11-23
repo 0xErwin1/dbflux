@@ -387,6 +387,18 @@ impl TextSystem {
         );
     }
 
+    /// Resolves the specified font like [`Self::resolve_font`], but reports a font stack that
+    /// no installed family covers instead of panicking.
+    ///
+    /// A platform may install fonts after the first window, so a caller that probes a font
+    /// before drawing it can ask again once they arrive rather than treat the empty answer as
+    /// fatal.
+    pub fn try_resolve_font(&self, font: &Font) -> Option<FontId> {
+        std::iter::once(font)
+            .chain(&self.fallback_font_stack)
+            .find_map(|candidate| self.font_id(candidate).ok())
+    }
+
     /// Prewarm any system font caches needed to shape text.
     ///
     /// This may be expensive, so callers should generally invoke it on a

@@ -5,8 +5,13 @@
 //! [`FontSettings`]. It is stored in the `FontSettingsGlobal` cx-global, and the
 //! accessors below read it with a fallback to `FontSettings::default()`, which is the
 //! bundled typography at the default sizes.
+//!
+//! A platform that installs its system fonts after the first frame resolves too
+//! early: the families it does not have yet look missing, so a family the user chose
+//! falls back to the bundled face. [`apply_choices`] keeps the choices it was given,
+//! and the pass [`init`] subscribes to resolves them again once the fonts arrive.
 
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use gpui::{AbsoluteLength, App, Global, Pixels, Rems, SharedString, px};
 
@@ -129,21 +134,104 @@ impl FontSettings {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FontSettingsGlobal {
     pub settings: FontSettings,
+    /// The choices `settings` were resolved from, when the publisher kept
+    /// them. A resolution that fell back to a bundled family no longer names
+    /// the family that was asked for, so the choices are what a later pass
+    /// resolves again.
+    choices: Option<FontChoices>,
 }
 
 impl Global for FontSettingsGlobal {}
 
+impl FontSettingsGlobal {
+    /// The choices the active settings were resolved from, when the publisher
+    /// kept them: [`apply_choices`] does, [`init`] and [`set`] do not.
+    pub fn choices(&self) -> Option<&FontChoices> {
+        self.choices.as_ref()
+    }
+}
+
 /// Registers the font global. Call once during startup, before the theme is
 /// applied and before the first window opens.
 pub fn init(cx: &mut App, settings: FontSettings) {
-    cx.set_global(FontSettingsGlobal { settings });
+    publish(cx, settings, None);
 }
 
-/// Replaces the active font settings. Returns `true` when they changed.
+/// Replaces the active font settings with settings the caller resolved itself.
+/// Returns `true` when they changed.
+///
+/// The settings are the answer the caller gave, so the choices a previous
+/// [`apply_choices`] kept are dropped: a later pass must not resolve them again
+/// over the caller's own resolution.
 pub fn set(cx: &mut App, settings: FontSettings) -> bool {
+    publish(cx, settings, None)
+}
+
+/// Resolves `choices` against the installed families and replaces the active
+/// font settings with the result. Returns `true` when they changed.
+///
+/// This is the call to make when the product owns the choices its user made:
+/// [`FontSettings::resolve`] alone drops a family the text system does not
+/// have yet, and the resolved settings do not say which family was asked for,
+/// so the resolution cannot run again once the platform installs the system
+/// fonts it loads after the first frame.
+pub fn apply_choices(cx: &mut App, choices: FontChoices) -> bool {
+    let settings = FontSettings::resolve(&choices, &installed_font_names(cx));
+    publish(cx, settings, Some(choices))
+}
+
+/// Resolves the choices the active settings were published from again, against
+/// the families listed now. Returns `true` when the settings changed.
+///
+/// This is the pass bolt subscribes to `App::on_fonts_changed` for. Nothing
+/// happens when the settings were published without choices ([`init`], [`set`]):
+/// those settings are the answer their publisher gave. A product that installs
+/// fonts of its own calls [`forget_installed_font_names`] first, so the new
+/// families are listed; the fonts-changed pass does that before it resolves.
+pub fn refresh(cx: &mut App) -> bool {
+    let Some(choices) = active_choices(cx) else {
+        return false;
+    };
+    let settings = FontSettings::resolve(&choices, &installed_font_names(cx));
+
+    publish(cx, settings, Some(choices))
+}
+
+fn active_choices(cx: &App) -> Option<FontChoices> {
+    cx.try_global::<FontSettingsGlobal>()
+        .and_then(|global| global.choices.clone())
+}
+
+fn publish(cx: &mut App, settings: FontSettings, choices: Option<FontChoices>) -> bool {
+    watch_fonts(cx);
     let changed = *active(cx) != settings;
-    cx.set_global(FontSettingsGlobal { settings });
+    cx.set_global(FontSettingsGlobal { settings, choices });
     changed
+}
+
+/// Marks the app whose fonts-changed pass is installed.
+struct SystemFontsWatch;
+
+impl Global for SystemFontsWatch {}
+
+/// Resolves the kept choices again when the platform installs the system fonts
+/// it loaded after the first frame, and draws again with the families that
+/// arrive.
+fn watch_fonts(cx: &mut App) {
+    if cx.has_global::<SystemFontsWatch>() {
+        return;
+    }
+    cx.set_global(SystemFontsWatch);
+    // Subscribed for the life of the app: no entity owns it, and dropping the
+    // subscription would leave the settings on the answer the first pass gave.
+    cx.on_fonts_changed(|cx| {
+        forget_installed_font_names();
+        if refresh(cx) {
+            crate::theme::apply_fonts(cx);
+            cx.refresh_windows();
+        }
+    })
+    .detach();
 }
 
 /// The active font settings, or the defaults when the global is absent.
@@ -151,23 +239,41 @@ pub fn current(cx: &App) -> FontSettings {
     active(cx).clone()
 }
 
-/// Every font family the platform reports, listed once per process.
+/// Every font family the platform reports, listed once per process until
+/// [`forget_installed_font_names`] drops the list.
 ///
-/// Enumerating fonts is slow (around 100 ms on some platforms) and the
-/// system font set does not change while the process runs, so the first
-/// call's answer is reused.
+/// Enumerating fonts is slow (around 100 ms on some platforms), so the answer
+/// is reused. It does change while the process runs on a platform that
+/// installs its system fonts after the first frame: the first listing runs
+/// before those fonts exist, so the fonts-changed pass drops it with
+/// [`forget_installed_font_names`] before [`refresh`] resolves again.
 pub fn installed_font_names(cx: &App) -> Arc<[SharedString]> {
-    static INSTALLED: OnceLock<Arc<[SharedString]>> = OnceLock::new();
+    if let Some(names) = cached_font_names().clone() {
+        return names;
+    }
+    let listed: Arc<[SharedString]> = cx
+        .text_system()
+        .all_font_names()
+        .into_iter()
+        .map(SharedString::from)
+        .collect();
+    *cached_font_names() = Some(listed.clone());
+    listed
+}
 
-    INSTALLED
-        .get_or_init(|| {
-            cx.text_system()
-                .all_font_names()
-                .into_iter()
-                .map(SharedString::from)
-                .collect()
-        })
-        .clone()
+/// Discards the listed families, so the next resolution asks the text system
+/// again.
+pub fn forget_installed_font_names() {
+    *cached_font_names() = None;
+}
+
+/// The listed families, or `None` while they have not been asked for.
+static INSTALLED_FONT_NAMES: Mutex<Option<Arc<[SharedString]>>> = Mutex::new(None);
+
+fn cached_font_names() -> MutexGuard<'static, Option<Arc<[SharedString]>>> {
+    INSTALLED_FONT_NAMES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Interface scale factor: the chosen interface size over the 13 px default.
@@ -574,11 +680,104 @@ mod tests {
 
     #[gpui::test]
     fn installed_font_names_are_listed(cx: &mut TestAppContext) {
+        let _turn = take_turn();
+
         cx.update(|cx| {
             let first = installed_font_names(cx);
             let second = installed_font_names(cx);
 
             assert!(Arc::ptr_eq(&first, &second));
+        });
+    }
+
+    /// One process, one family list: the tests that seed it take turns.
+    static FONT_LIST_TURN: Mutex<()> = Mutex::new(());
+
+    fn take_turn() -> MutexGuard<'static, ()> {
+        FONT_LIST_TURN
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Stands in for the platform installing `names` after the first
+    /// resolution: the answer the text system gives once they exist.
+    fn seed_installed_font_names(names: &[&str]) {
+        let listed: Arc<[SharedString]> =
+            names.iter().map(|name| SharedString::from(*name)).collect();
+        *cached_font_names() = Some(listed);
+    }
+
+    /// A family only the system provides is missing when the settings are first
+    /// resolved and applied once the fonts arrive, and the roles the user did
+    /// not choose keep their bundled faces.
+    #[gpui::test]
+    fn a_family_that_arrives_after_the_first_resolution_is_applied(cx: &mut TestAppContext) {
+        let _turn = take_turn();
+
+        cx.update(|cx| {
+            let mut choices = default_choices();
+            choices.ui_family = Some("Noto Sans".to_string());
+
+            apply_choices(cx, choices);
+            assert_eq!(ui_family(cx), SharedString::from(AppFonts::INTERFACE));
+
+            seed_installed_font_names(&["DejaVu Sans", "Noto Sans"]);
+
+            assert!(refresh(cx), "the arriving family changes the settings");
+            assert_eq!(ui_family(cx), SharedString::from("Noto Sans"));
+            assert_eq!(
+                editor_family(cx),
+                SharedString::from(AppFonts::MONO),
+                "a role the user did not choose keeps its bundled face"
+            );
+            assert!(!refresh(cx), "a second pass changes nothing");
+
+            forget_installed_font_names();
+        });
+    }
+
+    /// When the chosen family never appears, the bundled fallback stays and no
+    /// pass reports a change.
+    #[gpui::test]
+    fn the_fallback_stays_while_the_chosen_family_never_arrives(cx: &mut TestAppContext) {
+        let _turn = take_turn();
+
+        cx.update(|cx| {
+            let mut choices = default_choices();
+            choices.ui_family = Some("Noto Sans".to_string());
+            choices.editor_family = Some("Noto Sans Mono".to_string());
+
+            apply_choices(cx, choices);
+
+            seed_installed_font_names(&["DejaVu Sans", "Liberation Serif"]);
+
+            assert!(!refresh(cx));
+            assert_eq!(ui_family(cx), SharedString::from(AppFonts::INTERFACE));
+            assert_eq!(editor_family(cx), SharedString::from(AppFonts::MONO));
+
+            forget_installed_font_names();
+        });
+    }
+
+    /// The listed families are discarded on request, so the resolution that
+    /// runs once the system fonts arrive sees them.
+    #[gpui::test]
+    fn forgetting_the_listed_families_lists_them_again(cx: &mut TestAppContext) {
+        let _turn = take_turn();
+
+        cx.update(|cx| {
+            let first = installed_font_names(cx);
+            assert!(Arc::ptr_eq(&first, &installed_font_names(cx)));
+
+            forget_installed_font_names();
+
+            let again = installed_font_names(cx);
+            assert!(
+                !Arc::ptr_eq(&first, &again),
+                "the discarded list is asked for again"
+            );
+
+            forget_installed_font_names();
         });
     }
 }

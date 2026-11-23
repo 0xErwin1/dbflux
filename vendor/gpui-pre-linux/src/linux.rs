@@ -7,6 +7,8 @@ mod file_uri_list;
 mod headless;
 mod keyboard;
 mod platform;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod system_fonts;
 mod system_notifications;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod text_system;

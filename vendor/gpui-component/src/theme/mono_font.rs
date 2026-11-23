@@ -14,7 +14,7 @@
 
 use gpui::{App, SharedString};
 use gpui_base::TypographyTokens;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// Monospace families tried, in order, when the platform default is missing.
 const MONO_FONT_ALTERNATES: &[&str] = if cfg!(target_os = "macos") {
@@ -36,39 +36,69 @@ pub(super) fn default_mono_font_family() -> SharedString {
 
 /// Replaces the platform-default monospace family on the global theme with one
 /// that is installed. A family chosen explicitly is left alone.
+///
+/// A platform may install its system fonts after the first window, so this runs
+/// again when they arrive. The family it named itself is not treated as a choice
+/// someone else made: a later pass revises it, and the theme keeps whatever the
+/// last pass resolved.
 pub(super) fn resolve_default_mono_font(cx: &mut App) {
-    if cx.global::<super::Theme>().mono_font_family != default_mono_font_family() {
+    if !is_probe_choice(&cx.global::<super::Theme>().mono_font_family) {
         return;
     }
     let family = installed_default_mono_font_family(cx);
-    cx.global_mut::<super::Theme>().mono_font_family = family;
+    cx.global_mut::<super::Theme>().mono_font_family = family.clone();
+    *chosen() = Some(family);
 }
 
-/// The installed stand-in for the platform default, resolved once per process.
+/// The family this probe named on the theme, so a later pass can revise it.
+static CHOSEN: Mutex<Option<SharedString>> = Mutex::new(None);
+
+fn chosen() -> MutexGuard<'static, Option<SharedString>> {
+    CHOSEN.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether `family` is one this probe chose, rather than one someone else set.
+fn is_probe_choice(family: &SharedString) -> bool {
+    family == &default_mono_font_family() || chosen().as_ref() == Some(family)
+}
+
+/// The installed stand-in for the platform default.
 fn installed_default_mono_font_family(cx: &App) -> SharedString {
-    static RESOLVED: OnceLock<SharedString> = OnceLock::new();
-    RESOLVED
-        .get_or_init(|| {
-            let default = default_mono_font_family();
-            let family = first_installed(&default, MONO_FONT_ALTERNATES, installed_font_names(cx));
-            if family != default {
-                tracing::warn!(
-                    "Monospace font {default:?} is not installed, using {family:?} instead."
-                );
-            }
-            family
-        })
-        .clone()
+    let default = default_mono_font_family();
+    let family = first_installed(&default, MONO_FONT_ALTERNATES, &installed_font_names(cx));
+    if family != default {
+        tracing::warn!("Monospace font {default:?} is not installed, using {family:?} instead.");
+    }
+    family
 }
 
 /// The families installed on the machine, listed once per process.
 ///
 /// Enumerating fonts costs around a hundred milliseconds on macOS, and the
-/// answer only depends on the system fonts, which do not change while the
-/// process runs.
-pub(super) fn installed_font_names(cx: &App) -> &'static [String] {
-    static NAMES: OnceLock<Vec<String>> = OnceLock::new();
-    NAMES.get_or_init(|| cx.text_system().all_font_names())
+/// answer only changes while the process runs when the platform installs its
+/// system fonts after the first window, which
+/// [`forget_installed_font_names`] handles.
+pub(super) fn installed_font_names(cx: &App) -> Arc<[String]> {
+    if let Some(names) = names().clone() {
+        return names;
+    }
+    let listed: Arc<[String]> = cx.text_system().all_font_names().into();
+    *names() = Some(listed.clone());
+    listed
+}
+
+/// Discards the listed families, so the next probe asks the text system again.
+pub(super) fn forget_installed_font_names() {
+    *names() = None;
+}
+
+/// The listed families, or `None` while they have not been asked for.
+static INSTALLED_FONT_NAMES: Mutex<Option<Arc<[String]>>> = Mutex::new(None);
+
+fn names() -> MutexGuard<'static, Option<Arc<[String]>>> {
+    INSTALLED_FONT_NAMES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 /// `default` when it is installed, else the first installed alternate, else

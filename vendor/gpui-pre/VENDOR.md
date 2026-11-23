@@ -1,13 +1,14 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus eight patches. It exists so the
+This directory is the published `gpui-pre` crate source plus nine patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
 DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
 delivery visible in the log. The fourth lets the automation bridge fill a text input by its
 element id. The fifth lets a wrapper report a text input it does not render as read-only.
 The sixth adds letter spacing to text styles. The seventh adjusts key dispatch and focus
 visibility for the app keymap. The eighth reports to the platform whether a dragged file would
-be taken where the pointer is.
+be taken where the pointer is. The ninth lets a platform install its system fonts after the
+first window, without that window waiting for them.
 
 ## Why
 
@@ -215,6 +216,40 @@ The behaviour is covered by `linux::external_drop_tests` in `gpui-pre-linux`
 (`cargo test -p gpui-pre-linux --lib`), because this crate's own test suite does not build
 outside Zed's tree.
 
+### Background system fonts
+
+On Linux the text system was created from a font database that `CosmicTextSystem::new` filled
+synchronously, which parses every face fontconfig reports: 594 faces on the reference machine
+and about half a second with a cold page cache, before the first window could be created. The
+platform now starts its text system without them and installs them later, so `Platform` gains
+`take_system_font_receiver`: it returns a receiver of `Vec<Cow<'static, [u8]>>` that the
+platform fills once its font load finishes, or `None` (the default) when it has nothing to
+send.
+
+`App` takes that receiver while it is constructed and spends it on a foreground task: each
+message is passed to `TextSystem::add_fonts`, which clears the cached font ids and bumps the
+font generation so every cached line layout is rebuilt, then `App::refresh_windows` schedules a
+frame so text that fell back to a missing glyph is drawn again with the faces that arrived.
+`App::on_fonts_changed` reports the change to the app, which is where a theme re-derives the
+family it named from the installed set (gpui-component does this). A platform that loads its
+fonts up front has no receiver and none of this runs.
+
+`TextSystem::try_resolve_font` is the non-panicking form of `resolve_font`: it reports a font
+stack that no installed family covers instead of panicking. A theme probe needs that while the
+system fonts are still on their way, because in that state nothing outside the app's own fonts
+is installed and `resolve_font` would abort the process.
+
+Out of scope, as a follow-up: the SVG renderer keeps its own `SYSTEM_FONT_DB`
+(`src/svg_renderer.rs`), built on first use, and the `usvg` text it shapes still resolves
+through that database alone. Text inside an SVG therefore ignores the fonts installed after
+startup; the same receiver would have to feed it.
+
+The Linux side is `vendor/gpui-pre-linux` (`src/linux/system_fonts.rs`,
+`cargo test -p gpui-pre-linux --lib`). The app side has no automated test here for the same
+reason as the patch above: this crate's own test suite needs assets that are not vendored, and
+`gpui-pre-linux` cannot take a dev-dependency on `gpui-pre` with `test-support` because cargo
+refuses to test a non-member package that has dev-dependencies.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -253,12 +288,15 @@ delta to this directory.
   patches 1 to 6 applied — three files, 171 diff lines. It has no upstream counterpart.
 - Patch 8: `external-drop-acceptance.patch`, written for DBFlux against this directory with
   patches 1 to 7 applied — two files, 145 diff lines. It has no upstream counterpart.
+- Patch 9: `background-system-fonts.patch`, written for DBFlux against this directory with
+  patches 1 to 8 applied — three files, 83 added and 2 removed lines. It has no upstream
+  counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
 The patches are applied in that order, and each one is written against the tree the
 previous ones produce. They were regenerated against 0.3.9 when the base moved from 0.3.5, so
-`refresh.sh 0.3.9` applies all eight without a reject and reproduces `src/` exactly. All use the same path layout (`a/crates/gpui/src/...`, applied with
+`refresh.sh 0.3.9` applies all nine without a reject and reproduces `src/` exactly. All use the same path layout (`a/crates/gpui/src/...`, applied with
 `-p3`).
 
 ### Manual merges
@@ -331,8 +369,9 @@ vendor/gpui-pre/refresh.sh 0.3.6   # new upstream version
 
 The script downloads the published crate, rebuilds this directory from it and re-applies
 `element-transform.patch`, `frame-observer.patch`, `subscription-drop-log.patch`,
-`text-input-automation.patch`, `read-only-accessibility.patch` and then `letter-spacing.patch`.
-It leaves a
+`text-input-automation.patch`, `read-only-accessibility.patch`, `letter-spacing.patch`,
+`keyboard-dispatch.patch`, `external-drop-acceptance.patch` and
+`background-system-fonts.patch`. It leaves a
 `<file>.<patch>.rej` file behind for any hunk that no longer applies, for example
 `src/window.rs.frame-observer.rej`; resolve them by reading the rejected hunk and porting
 it (see [Manual merges](#manual-merges)), then delete the `.rej`.
