@@ -78,9 +78,29 @@ pub fn static_scan(source: &str) -> StaticScanOutcome {
     }
 }
 
-/// True if `source` contains `runCommand` as a whole identifier.
+/// True if `source` calls `runCommand` through dot member access
+/// (`db.runCommand`, `db?.runCommand`), the only shape that earns a script
+/// the `AdminDestructive` ceiling.
+///
+/// A name that only appears elsewhere, such as the quoted key of a computed
+/// access (`db['runCommand']`, `const m = 'runCommand'; db[m]()`), does not
+/// match. Such a script keeps the `Destructive` ceiling, so the engine
+/// rejects the computed call at dispatch.
 pub fn contains_run_command(source: &str) -> bool {
-    contains_word(source, "runCommand")
+    const NAME: &str = "runCommand";
+
+    source.match_indices(NAME).any(|(index, _)| {
+        let after_index = index + NAME.len();
+        let after_is_boundary = source
+            .as_bytes()
+            .get(after_index)
+            .is_none_or(|&byte| !is_identifier_char(byte));
+        let preceded_by_dot = source
+            .get(..index)
+            .is_some_and(|before| before.trim_end().ends_with('.'));
+
+        after_is_boundary && preceded_by_dot
+    })
 }
 
 fn reachable_write_or_worse(source: &str) -> bool {
@@ -289,11 +309,18 @@ mod tests {
     }
 
     #[test]
-    fn contains_run_command_matches_whole_word_only() {
+    fn contains_run_command_matches_dot_member_access_only() {
         assert!(contains_run_command("db.runCommand({ ping: 1 });"));
+        assert!(contains_run_command("db . runCommand({ ping: 1 });"));
+        assert!(contains_run_command("db?.runCommand({ ping: 1 });"));
         assert!(!contains_run_command("const runCommandHelper = 1;"));
+        assert!(!contains_run_command("db.runCommandHelper({});"));
         assert!(!contains_run_command(
             "const m = 'run' + 'Command'; db[m]({ ping: 1 });"
         ));
+        assert!(!contains_run_command(
+            "const m = 'runCommand'; db[m]({ ping: 1 });"
+        ));
+        assert!(!contains_run_command("db['runCommand']({ ping: 1 });"));
     }
 }
