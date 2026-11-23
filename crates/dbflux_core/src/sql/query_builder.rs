@@ -182,6 +182,9 @@ impl<'a> SqlQueryBuilder<'a> {
 
     /// Build a `CREATE TABLE` statement from a same-engine [`CreateTableSpec`].
     ///
+    /// A column without a type name is written bare; the loose-file import
+    /// gives its columns [`SqlDialect::text_column_type`] before they get here.
+    ///
     /// Column type, nullability, and primary-key membership map 1:1 from
     /// `spec.columns` since the source and target share the same SQL dialect
     /// family; no cross-dialect type coercion is attempted.
@@ -827,6 +830,29 @@ mod tests {
         assert_eq!(
             sql,
             "CREATE TABLE \"public\".\"users\" (\n    \"id\" integer NOT NULL,\n    \"name\" text,\n    PRIMARY KEY (\"id\")\n);"
+        );
+    }
+
+    #[test]
+    fn test_build_create_table_leaves_a_column_without_a_type_bare() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let spec = CreateTableSpec {
+            schema: None,
+            table: "events".to_string(),
+            columns: vec![crate::TransferColumn {
+                name: "label".to_string(),
+                type_name: None,
+                nullable: true,
+                is_primary_key: false,
+            }],
+            if_not_exists: false,
+        };
+
+        assert_eq!(
+            builder.build_create_table(&spec).unwrap(),
+            "CREATE TABLE \"events\" (\n    \"label\"\n);"
         );
     }
 

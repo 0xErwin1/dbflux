@@ -20,15 +20,16 @@
 //! plan) still fail fast with a top-level `Err`, since those reject the
 //! whole run before any table is touched.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dbflux_core::{CancelToken, Connection, TransferColumn};
+use dbflux_export::FormatOptions;
 
-use crate::column_map::{AutoColumnMap, ColumnMappingOverride};
+use crate::column_map::{AutoColumnMap, ColumnMappingOverride, DecodingColumnMap};
 use crate::file_sink::FileFormat;
-use crate::file_source::FileSource;
-use crate::manifest::{ManifestTable, read_manifest};
+use crate::file_source::{FileSource, check_file_readable};
+use crate::manifest::read_manifest;
 use crate::pipeline::{
     ColumnMap, TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
 };
@@ -74,6 +75,21 @@ pub struct ImportOutcome {
     pub cancelled: bool,
 }
 
+/// One file ready to be read into one planned table.
+pub(crate) struct TableFile {
+    pub(crate) path: PathBuf,
+    pub(crate) format: FileFormat,
+    pub(crate) columns: Vec<TransferColumn>,
+    pub(crate) estimated_total: Option<u64>,
+    pub(crate) options: FormatOptions,
+    /// A loose CSV or JSON file rather than a manifest table: it carries no
+    /// source type names, so each column that maps onto a target column is
+    /// decoded by that target column's type, and nested JSON stays JSON text.
+    pub(crate) loose: bool,
+    /// The spreadsheet sheet to read; `None` is the first worksheet.
+    pub(crate) sheet: Option<String>,
+}
+
 /// Reads `manifest_dir/manifest.json` and imports every table with a
 /// matching [`ImportTablePlan`] into `connection`.
 ///
@@ -85,10 +101,54 @@ pub fn run_import(
     plans: &[ImportTablePlan],
     options: &ImportOptions,
     cancel: &CancelToken,
-    mut on_progress: impl FnMut(usize, u64, Option<u64>),
+    on_progress: impl FnMut(usize, u64, Option<u64>),
 ) -> Result<ImportOutcome, TransferError> {
     let manifest = read_manifest(&manifest_dir.join("manifest.json"))?;
 
+    run_plans(
+        connection,
+        plans,
+        options,
+        cancel,
+        on_progress,
+        |plan| {
+            let manifest_table = manifest
+                .tables
+                .iter()
+                .find(|t| t.name == plan.source_table)?;
+            let format = FileFormat::from_extension(&manifest_table.format).ok_or_else(|| {
+                TransferError::Source(format!(
+                    "manifest table '{}' has unknown format '{}'",
+                    manifest_table.name, manifest_table.format
+                ))
+            });
+
+            Some(format.map(|format| TableFile {
+                path: manifest_dir.join(&manifest_table.file),
+                format,
+                columns: manifest_table.columns.clone(),
+                estimated_total: Some(manifest_table.row_count),
+                options: manifest_table.options.clone(),
+                loose: false,
+                sheet: None,
+            }))
+        },
+        |plan| format!("manifest has no table named '{}'", plan.source_table),
+    )
+}
+
+/// Runs every plan in order. `locate` finds the file a plan reads, or `None`
+/// when the plan names a table the source does not have, which `missing`
+/// words as that table's failure.
+pub(crate) fn run_plans(
+    connection: &Arc<dyn Connection>,
+    plans: &[ImportTablePlan],
+    options: &ImportOptions,
+    cancel: &CancelToken,
+    mut on_progress: impl FnMut(usize, u64, Option<u64>),
+    mut locate: impl FnMut(&ImportTablePlan) -> Option<Result<TableFile, TransferError>>,
+    missing: impl Fn(&ImportTablePlan) -> String,
+) -> Result<ImportOutcome, TransferError> {
     let has_destructive_plan = plans.iter().any(|plan| {
         matches!(
             plan.mapping_mode,
@@ -116,29 +176,29 @@ pub fn run_import(
             break;
         }
 
-        let Some(manifest_table) = manifest.tables.iter().find(|t| t.name == plan.source_table)
-        else {
+        let Some(located) = locate(plan) else {
             #[expect(
                 clippy::indexing_slicing,
                 reason = "tables is built one-to-one from `plans`, which this loop enumerates; its length never changes"
             )]
             {
                 tables[index].status = TableTransferStatus::Failed {
-                    error: format!("manifest has no table named '{}'", plan.source_table),
+                    error: missing(plan),
                 };
             }
             break;
         };
 
-        let result = import_one_table(
-            connection,
-            manifest_dir,
-            manifest_table,
-            plan,
-            options,
-            cancel,
-            |rows_done, estimated_total| on_progress(index, rows_done, estimated_total),
-        );
+        let result = located.and_then(|file| {
+            import_one_table(
+                connection,
+                &file,
+                plan,
+                options,
+                cancel,
+                |rows_done, estimated_total| on_progress(index, rows_done, estimated_total),
+            )
+        });
 
         let report = match result {
             Ok(report) => report,
@@ -188,46 +248,68 @@ pub fn run_import(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn import_one_table(
     connection: &Arc<dyn Connection>,
-    manifest_dir: &Path,
-    manifest_table: &ManifestTable,
+    file: &TableFile,
     plan: &ImportTablePlan,
     options: &ImportOptions,
     cancel: &CancelToken,
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<crate::pipeline::TransferReport, TransferError> {
-    let format = FileFormat::from_extension(&manifest_table.format).ok_or_else(|| {
-        TransferError::Source(format!(
-            "manifest table '{}' has unknown format '{}'",
-            manifest_table.name, manifest_table.format
-        ))
-    })?;
+    // A folder file is opened before the target is resolved, so a missing
+    // file is reported ahead of a missing target table, as before loose-file
+    // import shared this function. A loose file is read untyped and opened
+    // below; its values are decoded per target by `DecodingColumnMap`.
+    let folder_source = if file.loose {
+        None
+    } else {
+        Some(open_table_file(file, file.columns.clone(), options)?)
+    };
 
-    let mut source = FileSource::open_with(
-        &manifest_dir.join(&manifest_table.file),
-        format,
-        manifest_table.columns.clone(),
-        options.segment_size,
-        Some(manifest_table.row_count),
-        manifest_table.options.clone(),
-    )?;
+    // A folder file is read through before the target is touched, as a loose
+    // file is: a Truncate or Recreate runs DDL that some engines autocommit,
+    // so a malformed file found halfway through would leave the table empty.
+    if !file.loose && plan.mapping_mode != TableMappingMode::Skip {
+        check_file_readable(
+            &file.path,
+            file.format,
+            &file.columns,
+            &file.options,
+            file.sheet.as_deref(),
+            options.segment_size,
+            cancel,
+        )?;
+    }
 
-    let target_columns = resolve_target_columns(
-        connection,
-        plan,
-        &manifest_table.columns,
-        &options.target_database,
-    )?;
+    let mut target_columns =
+        resolve_target_columns(connection, plan, &file.columns, &options.target_database)?;
+    if file.loose
+        && matches!(
+            plan.mapping_mode,
+            TableMappingMode::Create | TableMappingMode::Recreate
+        )
+    {
+        // A table created from a loose file has no source types to copy, so
+        // each column is text in the target engine's own spelling.
+        let text_type = connection.dialect().text_column_type();
+        for column in target_columns.iter_mut().filter(|c| c.type_name.is_none()) {
+            column.type_name = Some(text_type.to_string());
+        }
+    }
 
-    let column_map: Box<dyn ColumnMap> = match &plan.column_overrides {
-        Some(overrides) => Box::new(AutoColumnMap::with_overrides(
-            &manifest_table.columns,
-            &target_columns,
-            overrides,
-        )),
-        None => Box::new(AutoColumnMap::new(&manifest_table.columns, &target_columns)),
+    let auto_map = match &plan.column_overrides {
+        Some(overrides) => AutoColumnMap::with_overrides(&file.columns, &target_columns, overrides),
+        None => AutoColumnMap::new(&file.columns, &target_columns),
+    };
+
+    // A folder file keeps the manifest's source types. A loose file has none:
+    // its values are read raw and each one is decoded by its target's type.
+    let (mut source, column_map): (FileSource, Box<dyn ColumnMap>) = match folder_source {
+        Some(source) => (source, Box::new(auto_map)),
+        None => (
+            open_table_file(file, file.columns.clone(), options)?.nested_json_as_text(true),
+            Box::new(DecodingColumnMap::new(auto_map, file.options.date_format)),
+        ),
     };
 
     let mut sink = TableSink::new(
@@ -244,6 +326,22 @@ fn import_one_table(
         plan.mapping_mode,
         cancel,
         &mut on_progress,
+    )
+}
+
+fn open_table_file(
+    file: &TableFile,
+    columns: Vec<TransferColumn>,
+    options: &ImportOptions,
+) -> Result<FileSource, TransferError> {
+    FileSource::open_sheet(
+        &file.path,
+        file.format,
+        columns,
+        options.segment_size,
+        file.estimated_total,
+        file.options.clone(),
+        file.sheet.as_deref(),
     )
 }
 
@@ -301,7 +399,7 @@ fn query_target_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{ManifestSource, TransferManifest};
+    use crate::manifest::{ManifestSource, ManifestTable, TransferManifest};
     use dbflux_core::{
         ColumnInfo, CreateTableSpec, DbError, DbKind, DefaultSqlDialect, DriverCapabilities,
         DriverMetadata, DriverMetadataBuilder, GeneratedQuery, GeneratorError, MutationCategory,

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DBFlux islands - Wizards: Confirm step (dark)</title>
+<style>:root{--desk:#050507;--bg:#09090B;--panel:#100F13;--raised:#1A181E;--line:#232128;--line2:#37333D;--strong:#F7F4F7;--text:#C6C3CC;--muted:#8E8996;--tint:#D48CC8;--fill:#702963;--ink:#FFFFFF;--success:#7BE0A0;--danger:#FF6B5E;--warning:#FFC23D;--wash:rgba(212,140,200,.12);--dwash:rgba(255,107,94,.14);--shadow:rgba(0,0,0,.55)}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--desk)}
+.x{font-family:Archivo,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-stretch:125%}
+.board{position:relative;width:1580px;min-height:815px;display:flex;flex-direction:column;background:var(--desk);color:var(--text);font-family:Archivo,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:13px;padding:0 40px 48px}
+.bh{display:flex;flex-direction:column;gap:12px;padding:44px 16px 0}
+.eyebrow{font-weight:800;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text)}
+h1{margin:0;font-weight:900;font-size:30px;text-transform:uppercase;color:var(--strong)}
+.lead{margin:0;color:var(--text);max-width:960px;line-height:1.6}
+.sec-label{font-family:Archivo,system-ui,sans-serif;font-stretch:125%;font-weight:800;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text);margin:0 0 12px}
+.area{display:flex;flex-wrap:wrap;align-items:flex-start;gap:36px;padding:28px 16px 0}
+.col{display:flex;flex-direction:column;gap:14px;flex-shrink:0}
+.c4{clip-path:polygon(4px 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%,0 4px)}
+.c6{clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px)}
+.c8{clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+.c14{clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px)}
+.ico{display:inline-block;flex-shrink:0;vertical-align:middle;overflow:visible}
+.dwrap{filter:drop-shadow(0 24px 32px var(--shadow));flex-shrink:0}
+.dlg{background:var(--panel);box-shadow:inset 0 0 0 1px var(--line2)}
+.dh{display:flex;align-items:center;gap:10px;height:46px;padding:0 18px;border-bottom:1px solid var(--line)}
+.dt{font-size:14px;font-weight:700;color:var(--strong)}
+.grow{flex-grow:1}
+.db{display:flex;flex-direction:column;gap:14px;padding:18px}
+.df{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+.key{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:10.5px;font-weight:500;padding:2px 6px;background:var(--raised);color:var(--muted);box-shadow:inset 0 -1px 0 var(--line2);clip-path:polygon(4px 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%,0 4px)}
+.pri .key{background:rgba(255,255,255,.14);color:var(--ink);box-shadow:none}
+.btn{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;border:0;font:inherit;font-size:12.5px;white-space:nowrap}
+.pri{background:var(--fill);color:var(--ink);font-weight:700}
+.sec{background:var(--raised);color:var(--strong);font-weight:500}
+.ghost{background:transparent;color:var(--strong);font-weight:500;box-shadow:inset 0 0 0 1px var(--line2)}
+.dng{background:var(--dwash);color:var(--danger);font-weight:600}
+.btn:disabled{opacity:.45}
+.stepper{display:flex;align-items:center;gap:8px}
+.st{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.st.done,.st.cur{color:var(--strong)}
+.bd{display:flex;align-items:center;justify-content:center;width:22px;height:22px;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line2);color:var(--muted);font-weight:700}
+.bd.ok{background:var(--raised);color:var(--success);box-shadow:none}
+.bd.now{background:var(--fill);color:var(--ink);box-shadow:none}
+.conn{width:20px;height:1px;background:var(--line2)}
+.frow{display:grid;grid-template-columns:140px 1fr;align-items:start;gap:16px;padding:7px 0}
+.fl{padding-top:7px;font-size:13px;color:var(--text);white-space:nowrap}
+.fc{display:flex;flex-direction:column;gap:6px;min-width:0}
+.hint{font-size:12px;color:var(--muted);line-height:1.5}
+.hint.bad{display:flex;gap:6px;align-items:flex-start;color:var(--danger)}
+.hint.bad .ico{margin-top:2px}
+.hint.why{display:flex;gap:6px;align-items:flex-start;color:var(--text)}
+.hint.why .ico{margin-top:2px;color:var(--tint)}
+.fwhy{display:flex;align-items:flex-start;gap:6px;margin-right:auto;min-width:0;font-size:12px;line-height:1.45;color:var(--muted)}
+.fwhy .ico{margin-top:1px}
+.errbox .fix{display:block;margin-top:4px;color:var(--text)}
+.seg{display:flex;align-self:flex-start;flex-shrink:0;padding:2px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line);font-size:12px}
+.si{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px;color:var(--muted);white-space:nowrap}
+.si.on{background:var(--raised);color:var(--strong);font-weight:600}
+.fld{display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line);font-size:12.5px;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;min-width:0}
+.fld.bad{box-shadow:inset 0 0 0 1px var(--danger)}
+.fld .v{color:var(--strong);flex-grow:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld .ph{color:var(--muted);flex-grow:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld .tr{display:flex}
+.fld.dd{box-shadow:inset 0 0 0 1px var(--line2);background:var(--raised)}
+.sans{font-family:Archivo,system-ui,sans-serif}
+.cap{font-size:12px;color:var(--muted)}
+.lead2{font-size:13.5px;line-height:1.6;color:var(--text)}
+.lead2 b{color:var(--strong);font-weight:600}
+.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+.note{display:flex;flex-direction:column;gap:4px;padding:10px 12px;background:var(--panel);box-shadow:inset 2px 0 0 var(--tint),inset 0 0 0 1px var(--line);font-size:12px;line-height:1.55;color:var(--text);max-width:100%}
+.note b{font-family:Archivo,system-ui,sans-serif;font-stretch:125%;font-weight:800;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--strong)}
+.note.diff{box-shadow:inset 2px 0 0 var(--warning),inset 0 0 0 1px var(--line)}
+.note code{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;color:var(--strong)}
+.errbox{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;background:var(--dwash);box-shadow:inset 2px 0 0 var(--danger);font-size:12.5px;line-height:1.55;color:var(--strong)}
+.errbox .ico{margin-top:2px;color:var(--danger)}
+.errbox .m{word-break:break-word}
+.okline{display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--strong)}
+.list{background:var(--bg);box-shadow:inset 0 0 0 1px var(--line);display:flex;flex-direction:column}
+.li{display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:12.5px;line-height:1.5;color:var(--text)}
+.li:last-child{border-bottom:0}
+.li .ico{margin-top:2px}
+.li.bad{background:var(--dwash)}
+.card{background:var(--panel);box-shadow:inset 0 0 0 1px var(--line2);padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.card h3{margin:0;font-size:13px;font-weight:700;color:var(--strong);display:flex;align-items:center;gap:8px}
+.badge{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;padding:1px 6px;background:var(--raised);color:var(--muted);box-shadow:inset 0 0 0 1px var(--line2)}
+.mt{width:100%;border-collapse:collapse;font-size:12px}
+.mt th{font-weight:700;color:var(--strong);text-align:left;padding:7px 8px;border-bottom:1px solid var(--line2);font-size:11.5px}
+.mt td{padding:7px 8px;border-bottom:1px solid var(--line);color:var(--text)}
+.mt td.y{color:var(--success);font-weight:700}
+.mt td.n{color:var(--muted)}
+.mapcard{display:flex;flex-direction:column;gap:8px;padding:12px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line)}
+.mapcard .t{font-size:13px;color:var(--strong);display:flex;gap:8px;align-items:center}
+.mapcard .t .mono{font-size:12.5px}
+.mrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.toast{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--raised);box-shadow:inset 0 0 0 1px var(--line2),inset 3px 0 0 var(--danger);color:var(--strong);font-size:12.5px;max-width:560px;line-height:1.5}
+.toast .ta{color:var(--tint);font-weight:700;white-space:nowrap;margin-left:6px}
+.grid3{display:grid;grid-template-columns:repeat(3,396px);gap:30px;padding:0 16px}
+:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+</style></head>
+<body><main class="board">
+<header class="bh"><span class="eyebrow x">Export and import · Confirm step</span><h1 class="x">Wizards: the Confirm step</h1><p class="lead">Step 3 of both wizards. Export confirms its plan before writing files; import confirms only a plan that drops or empties a table, because nothing can be recovered afterwards.</p></header>
+<div class="area"><div class="col" style="width:760px"><p class="sec-label">1 · Export: review the plan</p><div class="dwrap" style="width:760px"><div class="dlg c14" role="dialog" aria-label="Export 3 tables"><div class="dh"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:16px;height:16px;color:var(--tint);"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></svg><span class="dt">Export 3 tables</span><span class="grow"></span><kbd class="key">Esc</kbd><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:13px;height:13px;color:var(--muted);"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg></div><div class="db"><nav class="stepper" aria-label="Wizard steps"><div class="st done"><span class="bd c4 ok"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:12px;height:12px;"><path d="M20 6 9 17l-5-5"/></svg></span>Tables</div><span class="conn"></span><div class="st done"><span class="bd c4 ok"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:12px;height:12px;"><path d="M20 6 9 17l-5-5"/></svg></span>Format</div><span class="conn"></span><div class="st cur" aria-current="step"><span class="bd c4 now">3</span>Confirm</div><span class="conn"></span><div class="st"><span class="bd c4">4</span>Run</div></nav><div class="lead2">3 table(s) as CSV to ~/exports/shop-2026-09-23</div><div class="hint">Segment / chunk size: 500</div></div><div class="df"><button type="button" class="btn c6 sec"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:15px;height:15px;"><path d="m15 18-6-6 6-6"/></svg>Back</button><button type="button" class="btn c6 sec">Cancel</button><button type="button" class="btn c6 pri"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:14px;height:14px;"><polygon points="6 3 20 12 6 21 6 3"/></svg>Start Export</button></div></div></div><aside class="note info"><b>Note</b><span>The export plan is a summary line and the chunk size. Nothing is changed in the database, so there is no destructive wording; Back returns to Format, Cancel closes the wizard and Start Export is the only forward action. The folder shown is the one chosen on the Format step.</span></aside></div><div class="col" style="width:620px"><p class="sec-label">2 · Import: confirm a destructive plan (Recreate or Truncate)</p><div class="dwrap" style="width:620px"><div class="dlg c14" role="dialog" aria-label="Import Data"><div class="dh"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:16px;height:16px;color:var(--tint);"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/></svg><span class="dt">Import Data</span><span class="grow"></span><kbd class="key">Esc</kbd><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:13px;height:13px;color:var(--muted);"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg></div><div class="db"><nav class="stepper" aria-label="Wizard steps"><div class="st done"><span class="bd c4 ok"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:12px;height:12px;"><path d="M20 6 9 17l-5-5"/></svg></span>Pick Source</div><span class="conn"></span><div class="st done"><span class="bd c4 ok"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:12px;height:12px;"><path d="M20 6 9 17l-5-5"/></svg></span>Configure</div><span class="conn"></span><div class="st cur" aria-current="step"><span class="bd c4 now">3</span>Confirm</div><span class="conn"></span><div class="st"><span class="bd c4">4</span>Run</div></nav><div class="lead2">This will drop-and-recreate or truncate the following table(s) before loading data:</div><div class="errbox" role="alert"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:14px;height:14px;"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span class="m">This cannot be undone. Confirm to proceed.<span class="fix">customers — Recreate (drop + create)</span><span class="fix" style="margin-top:0">orders — Truncate (empty + insert)</span></span></div></div><div class="df"><button type="button" class="btn c6 sec"><svg class="ico " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:15px;height:15px;"><path d="m15 18-6-6 6-6"/></svg>Back</button><button type="button" class="btn c6 sec">Cancel</button><button type="button" class="btn c6 pri">Yes, proceed</button></div></div></div><aside class="note info"><b>Note</b><span>Import reaches this step only when a table is set to Recreate (drop + create) or Truncate (empty + insert); a plan with no destructive mapping goes straight to Run. A lead sentence introduces the danger block, the same one the wizards use for errors. Its title is “This cannot be undone. Confirm to proceed.” and its body has one line per affected table with the full mode label, so Recreate and Truncate read louder than an export summary. “Yes, proceed” is the only action that confirms; Back returns to Configure and clears the confirmation, so the next run must be confirmed again; Cancel closes the wizard without touching the target.</span></aside><aside class="note kb"><b>Keyboard</b><span><code>Tab</code> moves between the buttons. <code>Enter</code> activates the focused button. <code>Esc</code> closes the wizard.</span></aside></div></div>
+</main></body></html>

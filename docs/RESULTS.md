@@ -291,6 +291,18 @@ and date options do not apply and are hidden. SQL files are not importable yet:
 importing a folder that holds one fails that table with the message that the
 format cannot be imported. **Export all rows to file** does not offer SQL.
 
+When the source connection cannot write SQL, the Format step does not list it
+and says why under the format picker: its driver can't generate `INSERT`
+statements, so export as CSV or JSON instead. Every state that switches
+**Continue** off says why. The footer names what to fix (**Rows per INSERT**,
+**Chunk size**, the folder, or an empty table selection), and an invalid field
+shows a danger frame, an alert icon and a hint. When the run ends, the dialog
+lists one row per table with its outcome. A table the run never reached after a
+failure says so, and a failed run says what to do next: files already written
+stay in the folder, a failed run writes no `manifest.json`, so the folder cannot
+be imported as a whole, and each completed CSV or JSON file can still be
+imported with **Choose File…**.
+
 The defaults write exactly what earlier versions wrote. The manifest records
 the options that shaped a file, so importing the folder reads it back the same
 way; a manifest without them means the defaults. **Export all rows to file**
@@ -306,3 +318,72 @@ the export then names those fields in a warning.
 A query result offers only the loaded rows, because exporting all of them would
 mean running the query again. So does a nearest-neighbor search: it returns a
 fixed number of the closest rows, and the grid already holds all of them.
+
+## Importing a file
+
+The import wizard also reads one loose file. Choose **Choose File…** on its
+first step, next to the folder picker, and pick a `.csv`, `.json`, `.jsonl`,
+`.xml` or spreadsheet (`.xlsx`, `.xlsm`, `.xls` or `.ods`) file; HTML, Markdown
+and SQL files are not offered. The wizard reads the
+columns from the CSV header row, from the keys of the first 100 JSON records,
+from the `name` of the `<field>` elements in the first 100 XML rows (all the
+keys seen, in the order they first appear), or from row 1 of a spreadsheet sheet. A key that first appears after those
+rows stops the import with an error naming it and its row. A nested object or array
+is imported as JSON text.
+
+The target table defaults to the file name without its extension; type another
+name and choose **Use Table** (or press Enter) to point the import at an
+existing table. The column mapping and the table modes (create, existing,
+recreate, truncate, skip) are the same as for a folder. A file carries no column
+types, so values going into an existing table are read as that table's column
+types, and a new table is created with a text column for every field (`TEXT`, or the
+engine's own wide text type such as `NVARCHAR(MAX)` on SQL Server or `LONGTEXT` on MySQL), so values
+are stored as their text.
+
+A CSV file offers the delimiter, the encoding and the text that stands for NULL,
+the same choices as the export wizard; JSON, JSON Lines and XML have no options.
+An XML file must have the shape the export writes: a `<rows>` root holding
+`<row>` elements, each with a `<field name="...">text</field>` per column. A
+field written as `<field name="..." null="true"/>` is NULL, an empty
+`<field>` is an empty string, and character references such as `&#10;` are
+decoded. Any other XML shape is rejected with a message that states the one
+expected.
+Changing the delimiter or encoding reads the file again. The whole file is read
+once before anything is written, so a malformed row or record stops the import
+with the target unchanged.
+
+A spreadsheet is imported one sheet at a time. The Configure step adds a
+**Sheet** dropdown that lists the visible worksheets of the workbook and starts
+on the first; hidden sheets and chart sheets are not listed, and choosing another
+sheet reads the file again at once and rebuilds the column mapping. A workbook
+with one visible sheet shows it with the dropdown off and says there is nothing
+to choose. Row 1 of the sheet is the header, so every column needs a unique,
+non-blank name; a spreadsheet has no delimiter, encoding or NULL options. Numbers,
+booleans, dates, date-times and text are read as values of those types, an
+empty cell is NULL, and a formula is read as the result last saved in the file.
+Workbooks on the 1904 date system read their dates correctly, but a time of day
+in one arrives as a timestamp on 1904-01-01 instead of a time. The whole sheet
+is read into memory, so a sheet of more than 10,000,000 cells (rows × columns,
+counted from cell A1) is rejected. A sheet that cannot be imported keeps the file
+picked on Configure and shows a danger block with what to do next: the sheet is
+empty, row 1 has a blank or repeated name (the block lists the columns), a cell
+holds an error value such as `#DIV/0!` (the block names the sheet, row and
+column; a cell in row 1 counts, so an error value is never taken for a column
+name), or the sheet is over the limit (export it as CSV and import that, or
+choose a smaller sheet). Choosing another sheet is a way out of each of them, and when the workbook has
+no other visible sheet the block says to fix the sheet in the spreadsheet app,
+save, and choose the file again instead. The footer says why **Continue** is off.
+
+The import dialog uses the same top stepper and footer as the export wizard:
+**Cancel** on the first two steps, **Back** and **Cancel** on the confirmation,
+and **Continue** as the primary button. A file or folder that cannot be read
+shows one danger block with the error and what to do next. A CSV whose header
+does not decode stays on Configure, where another delimiter or encoding reads it
+again; broken JSON stays on the first step until another file is chosen; and a
+failed look-up of the target table says so and is retried with **Use Table**.
+The footer says why **Continue** is off (a file is being read, or could not be
+read). JSON and JSON Lines show a line saying they have no options, and on a
+connection that cannot truncate tables a line explains why Truncate is not
+listed. In the text fields, `Escape` leaves the field and returns the keys to
+the dialog; a second `Escape` closes the wizard. When the run ends, one row per
+table lists its outcome, and a failed run says what to do next.

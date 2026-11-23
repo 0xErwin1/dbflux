@@ -3690,22 +3690,21 @@ impl DataGridPanel {
         self.apply_mongo_filter(&filter_obj, window, cx);
     }
 
-    fn apply_mongo_filter(
+    /// ANDs `new_filter` onto the filter slot and reloads. The slot is read
+    /// as relaxed JSON, like the filter bar; a slot that does not parse is
+    /// reported and left as typed.
+    pub(super) fn apply_mongo_filter(
         &mut self,
         new_filter: &serde_json::Value,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let current = self.filter_bar.filter_input.read(cx).value().to_string();
-        let current_trimmed = current.trim();
 
-        let composed = if current_trimmed.is_empty() {
-            new_filter.clone()
-        } else {
-            match serde_json::from_str::<serde_json::Value>(current_trimmed) {
-                Ok(existing) => Self::compose_mongo_and(&existing, new_filter),
-                Err(_) => new_filter.clone(),
-            }
+        let composed = match Self::parse_query_slot(&current, "filter", cx) {
+            Ok(None) => new_filter.clone(),
+            Ok(Some(existing)) => Self::compose_mongo_and(&existing, new_filter),
+            Err(()) => return,
         };
 
         let serialized = serde_json::to_string(&composed).unwrap_or_default();
