@@ -230,6 +230,14 @@ pub(crate) fn load_root_certificates(path: &str) -> Result<Vec<native_tls::Certi
         )
     })?;
 
+    // SChannel's `stack_from_pem` (Windows) unwraps `from_utf8` on the whole
+    // buffer, so non-UTF-8 input would panic instead of returning an error.
+    if std::str::from_utf8(&pem).is_err() {
+        return Err(DbError::ConnectionFailed(
+            format!("Invalid TLS root certificate '{path}': the file is not UTF-8 PEM text").into(),
+        ));
+    }
+
     let certificates = native_tls::Certificate::stack_from_pem(&pem).map_err(|e| {
         DbError::ConnectionFailed(format!("Invalid TLS root certificate '{path}': {e}").into())
     })?;
@@ -1434,6 +1442,17 @@ mod tests {
     #[test]
     fn load_root_certificates_errors_on_an_empty_file() {
         let path = write_temp_file("empty_ca", b"");
+
+        let result = load_root_certificates(&path.to_string_lossy());
+
+        let removed = std::fs::remove_file(&path);
+        assert!(matches!(result, Err(DbError::ConnectionFailed(_))));
+        assert!(removed.is_ok());
+    }
+
+    #[test]
+    fn load_root_certificates_errors_on_a_non_utf8_file() {
+        let path = write_temp_file("non_utf8_ca", &[0xff, 0xfe, 0x00, 0x80]);
 
         let result = load_root_certificates(&path.to_string_lossy());
 
