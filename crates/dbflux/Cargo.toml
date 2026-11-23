@@ -24,6 +24,8 @@ dbflux_ui_base.workspace = true
 dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
 dbflux_audit.workspace = true
+dbflux_storage.workspace = true
+rfd.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 log.workspace = true
 interprocess.workspace = true

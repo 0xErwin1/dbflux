@@ -20,6 +20,7 @@
 //! - `system_startup` — application started
 //! - `system_shutdown` — application shutting down
 //! - `system_panic` — panic captured by global handler
+//! - `system_startup_failed` — startup stopped on a configuration load error
 
 use serde::{Deserialize, Serialize};
 
@@ -149,6 +150,8 @@ pub const SYSTEM_STARTUP: AuditAction = AuditAction::new("system_startup");
 pub const SYSTEM_SHUTDOWN: AuditAction = AuditAction::new("system_shutdown");
 /// Panic or unrecoverable failure captured by the global handler.
 pub const SYSTEM_PANIC: AuditAction = AuditAction::new("system_panic");
+/// Startup stopped because the stored configuration could not be loaded.
+pub const SYSTEM_STARTUP_FAILED: AuditAction = AuditAction::new("system_startup_failed");
 
 #[cfg(test)]
 mod tests {

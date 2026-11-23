@@ -1079,15 +1079,19 @@ pub fn load_config(
         &runtime.driver_setting_values(),
     );
     let (hook_definitions, hook_load_diagnostics, protected_hook_rows) =
-        load_hook_definitions(&hooks_repo)?;
+        load_hook_definitions(&hooks_repo).map_err(|error| error.reading("hook definitions"))?;
     let services = dbflux_storage::load_service_configs(runtime);
     // Read errors propagate instead of loading as empty lists: the save paths
     // rewrite or delete rows from the in-memory state, so a partial load followed
     // by any edit would destroy the rows that failed to read.
-    let profiles = load_profiles(&profiles_repo)?;
-    let auth_profiles = load_auth_profiles(&auth_repo)?;
-    let proxy_profiles = load_proxy_profiles(&proxy_repo, &proxy_repo.auth_repo())?;
-    let ssh_tunnels = load_ssh_tunnels(&ssh_repo)?;
+    let profiles =
+        load_profiles(&profiles_repo).map_err(|error| error.reading("connection profiles"))?;
+    let auth_profiles =
+        load_auth_profiles(&auth_repo).map_err(|error| error.reading("auth profiles"))?;
+    let proxy_profiles = load_proxy_profiles(&proxy_repo, &proxy_repo.auth_repo())
+        .map_err(|error| error.reading("proxy profiles"))?;
+    let ssh_tunnels =
+        load_ssh_tunnels(&ssh_repo).map_err(|error| error.reading("SSH tunnel profiles"))?;
 
     Ok(LoadedConfig {
         general_settings,
@@ -1704,104 +1708,14 @@ fn load_profile(
     let settings = settings_repo.get_for_profile(profile_id)?;
     let (settings_overrides, connection_settings) = load_profile_settings(&settings);
 
-    // Load value refs from connection_profile_value_refs
-    let value_refs_repo = repo.value_refs();
-    let value_refs = value_refs_repo.get_for_profile(profile_id)?;
-    let value_refs_map = value_refs
+    let value_refs_map = repo
+        .value_refs()
+        .get_for_profile(profile_id)?
         .into_iter()
-        .filter_map(|vr| {
-            let kind =
-                dbflux_storage::repositories::connection_profile_value_refs::RefKind::try_parse(
-                    &vr.ref_kind,
-                )?;
-            let value_ref = match kind {
-                dbflux_storage::repositories::connection_profile_value_refs::RefKind::Literal => {
-                    ValueRef::Literal {
-                        value: vr.literal_value.unwrap_or(vr.ref_value),
-                    }
-                }
-                dbflux_storage::repositories::connection_profile_value_refs::RefKind::Env => {
-                    ValueRef::Env {
-                        key: vr.env_key.unwrap_or(vr.ref_value),
-                    }
-                }
-                dbflux_storage::repositories::connection_profile_value_refs::RefKind::Dotenv => {
-                    let Some(key) = vr.env_key else {
-                        warn_dropped_value_ref(profile_id, &vr.ref_key, "dotenv", "key");
-                        return None;
-                    };
-                    ValueRef::Dotenv {
-                        path: vr.ref_value,
-                        key,
-                    }
-                }
-                dbflux_storage::repositories::connection_profile_value_refs::RefKind::File => {
-                    ValueRef::File {
-                        path: vr.ref_value,
-                        json_key: vr.ref_json_key,
-                    }
-                }
-                dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
-                    let Some(provider) = vr.ref_provider else {
-                        warn_dropped_value_ref(profile_id, &vr.ref_key, "secret", "provider");
-                        return None;
-                    };
-                    ValueRef::Secret {
-                        locator: vr.secret_locator.unwrap_or(vr.ref_value),
-                        provider,
-                        json_key: vr.ref_json_key,
-                    }
-                }
-                dbflux_storage::repositories::connection_profile_value_refs::RefKind::Param => {
-                    let Some(provider) = vr.ref_provider else {
-                        warn_dropped_value_ref(profile_id, &vr.ref_key, "parameter", "provider");
-                        return None;
-                    };
-                    ValueRef::Parameter {
-                        name: vr.param_name.unwrap_or(vr.ref_value),
-                        provider,
-                        json_key: vr.ref_json_key,
-                    }
-                }
-                dbflux_storage::repositories::connection_profile_value_refs::RefKind::Auth => {
-                    ValueRef::Auth {
-                        field: vr.auth_field.unwrap_or(vr.ref_value),
-                    }
-                }
-            };
-            Some((vr.ref_key, value_ref))
-        })
+        .filter_map(|value_ref| value_ref_from_dto(profile_id, value_ref))
         .collect();
 
-    // Load access_kind from connection_profile_access_params
-    let access_params_repo = repo.access_params();
-    let access_params = access_params_repo.get_for_profile(profile_id)?;
-    let access_kind = if dto.access_kind.as_deref() == Some("direct") {
-        Some(AccessKind::Direct)
-    } else if dto.access_kind.as_deref() == Some("ssh") {
-        dto.ssh_tunnel_profile_id.as_ref().and_then(|s| {
-            uuid::Uuid::parse_str(s).ok().map(|id| AccessKind::Ssh {
-                ssh_tunnel_profile_id: id,
-            })
-        })
-    } else if dto.access_kind.as_deref() == Some("proxy") {
-        dto.proxy_profile_id.as_ref().and_then(|s| {
-            uuid::Uuid::parse_str(s).ok().map(|id| AccessKind::Proxy {
-                proxy_profile_id: id,
-            })
-        })
-    } else if dto.access_kind.as_deref() == Some("managed") {
-        let params = access_params
-            .into_iter()
-            .map(|p| (p.param_key, p.param_value))
-            .collect();
-        Some(AccessKind::Managed {
-            provider: dto.access_provider.unwrap_or_default(),
-            params,
-        })
-    } else {
-        None
-    };
+    let access_kind = load_access_kind(repo, &dto)?;
 
     // Load hooks from connection_profile_hooks
     let hooks_repo = repo.hooks();
@@ -1825,7 +1739,145 @@ fn load_profile(
         Some(load_hook_bindings_from_dtos(&bindings))
     };
 
-    // Load mcp_governance from connection_profile_governance
+    let mcp_governance = load_mcp_governance(repo, profile_id)?;
+
+    Ok(Some(ConnectionProfile {
+        id,
+        name: dto.name,
+        kind: dto.kind.as_ref().and_then(|k| str_to_db_kind(k)),
+        driver_id: dto.driver_id,
+        config,
+        save_password: dto.save_password,
+        settings_overrides,
+        connection_settings,
+        hooks,
+        hook_bindings,
+        proxy_profile_id: dto
+            .proxy_profile_id
+            .as_ref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+        auth_profile_id: dto
+            .auth_profile_id
+            .as_ref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+        value_refs: value_refs_map,
+        access_kind,
+        mcp_governance,
+        read_only_flag: dto.read_only,
+        environment: dto
+            .environment
+            .as_deref()
+            .and_then(dbflux_core::ConnectionEnvironment::from_id),
+        navigator_view: dbflux_core::NavigatorView::from_storage_str(&dto.navigator_view),
+        show_all_databases: dto.show_all_databases,
+    }))
+}
+
+fn value_ref_from_dto(
+    profile_id: &str,
+    vr: dbflux_storage::repositories::connection_profile_value_refs::ConnectionProfileValueRefDto,
+) -> Option<(String, ValueRef)> {
+    let kind = dbflux_storage::repositories::connection_profile_value_refs::RefKind::try_parse(
+        &vr.ref_kind,
+    )?;
+    let value_ref = match kind {
+        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Literal => {
+            ValueRef::Literal {
+                value: vr.literal_value.unwrap_or(vr.ref_value),
+            }
+        }
+        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Env => {
+            ValueRef::Env {
+                key: vr.env_key.unwrap_or(vr.ref_value),
+            }
+        }
+        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Dotenv => {
+            let Some(key) = vr.env_key else {
+                warn_dropped_value_ref(profile_id, &vr.ref_key, "dotenv", "key");
+                return None;
+            };
+            ValueRef::Dotenv {
+                path: vr.ref_value,
+                key,
+            }
+        }
+        dbflux_storage::repositories::connection_profile_value_refs::RefKind::File => {
+            ValueRef::File {
+                path: vr.ref_value,
+                json_key: vr.ref_json_key,
+            }
+        }
+        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
+            let Some(provider) = vr.ref_provider else {
+                warn_dropped_value_ref(profile_id, &vr.ref_key, "secret", "provider");
+                return None;
+            };
+            ValueRef::Secret {
+                locator: vr.secret_locator.unwrap_or(vr.ref_value),
+                provider,
+                json_key: vr.ref_json_key,
+            }
+        }
+        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Param => {
+            let Some(provider) = vr.ref_provider else {
+                warn_dropped_value_ref(profile_id, &vr.ref_key, "parameter", "provider");
+                return None;
+            };
+            ValueRef::Parameter {
+                name: vr.param_name.unwrap_or(vr.ref_value),
+                provider,
+                json_key: vr.ref_json_key,
+            }
+        }
+        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Auth => {
+            ValueRef::Auth {
+                field: vr.auth_field.unwrap_or(vr.ref_value),
+            }
+        }
+    };
+    Some((vr.ref_key, value_ref))
+}
+
+fn load_access_kind(
+    repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
+    dto: &dbflux_storage::repositories::connection_profiles::ConnectionProfileDto,
+) -> Result<Option<AccessKind>, dbflux_storage::error::StorageError> {
+    let access_params_repo = repo.access_params();
+    let access_params = access_params_repo.get_for_profile(&dto.id)?;
+    let access_kind = if dto.access_kind.as_deref() == Some("direct") {
+        Some(AccessKind::Direct)
+    } else if dto.access_kind.as_deref() == Some("ssh") {
+        dto.ssh_tunnel_profile_id.as_ref().and_then(|s| {
+            uuid::Uuid::parse_str(s).ok().map(|id| AccessKind::Ssh {
+                ssh_tunnel_profile_id: id,
+            })
+        })
+    } else if dto.access_kind.as_deref() == Some("proxy") {
+        dto.proxy_profile_id.as_ref().and_then(|s| {
+            uuid::Uuid::parse_str(s).ok().map(|id| AccessKind::Proxy {
+                proxy_profile_id: id,
+            })
+        })
+    } else if dto.access_kind.as_deref() == Some("managed") {
+        let params = access_params
+            .into_iter()
+            .map(|p| (p.param_key, p.param_value))
+            .collect();
+        Some(AccessKind::Managed {
+            provider: dto.access_provider.clone().unwrap_or_default(),
+            params,
+        })
+    } else {
+        None
+    };
+
+    Ok(access_kind)
+}
+
+fn load_mcp_governance(
+    repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
+    profile_id: &str,
+) -> Result<Option<ConnectionMcpGovernance>, dbflux_storage::error::StorageError> {
     let gov_repo = repo.governance();
     let gov_enabled = gov_repo
         .get_for_profile(profile_id)?
@@ -1863,36 +1915,7 @@ fn load_profile(
         None
     };
 
-    Ok(Some(ConnectionProfile {
-        id,
-        name: dto.name,
-        kind: dto.kind.as_ref().and_then(|k| str_to_db_kind(k)),
-        driver_id: dto.driver_id,
-        config,
-        save_password: dto.save_password,
-        settings_overrides,
-        connection_settings,
-        hooks,
-        hook_bindings,
-        proxy_profile_id: dto
-            .proxy_profile_id
-            .as_ref()
-            .and_then(|s| uuid::Uuid::parse_str(s).ok()),
-        auth_profile_id: dto
-            .auth_profile_id
-            .as_ref()
-            .and_then(|s| uuid::Uuid::parse_str(s).ok()),
-        value_refs: value_refs_map,
-        access_kind,
-        mcp_governance,
-        read_only_flag: dto.read_only,
-        environment: dto
-            .environment
-            .as_deref()
-            .and_then(dbflux_core::ConnectionEnvironment::from_id),
-        navigator_view: dbflux_core::NavigatorView::from_storage_str(&dto.navigator_view),
-        show_all_databases: dto.show_all_databases,
-    }))
+    Ok(mcp_governance)
 }
 
 // ---------------------------------------------------------------------------
@@ -1905,6 +1928,9 @@ fn load_auth_profiles(
     let mut profiles = Vec::new();
 
     for dto in repo.all()? {
+        // Unlike the other lists, a row whose fields fail to read cannot be
+        // skipped: `save_auth_profiles` deletes every stored row that is not
+        // in memory, so the next auth profile edit would delete it.
         let fields = repo.get_fields(&dto.id)?;
         let Ok(id) = uuid::Uuid::parse_str(&dto.id) else {
             continue;
@@ -1942,15 +1968,18 @@ fn load_proxy_profiles(
             continue;
         };
         let auth = match dto.auth_kind.as_str() {
-            "basic" => {
-                if let Some(auth_dto) = auth_repo.get(&dto.id)? {
-                    dbflux_core::ProxyAuth::Basic {
-                        username: auth_dto.username.unwrap_or_default(),
-                    }
-                } else {
-                    dbflux_core::ProxyAuth::None
+            // `save_proxy_profiles` only upserts, so a row left out here keeps
+            // its stored data.
+            "basic" => match auth_repo.get(&dto.id) {
+                Ok(Some(auth_dto)) => dbflux_core::ProxyAuth::Basic {
+                    username: auth_dto.username.unwrap_or_default(),
+                },
+                Ok(None) => dbflux_core::ProxyAuth::None,
+                Err(error) => {
+                    log::warn!("Skipping proxy profile {}: failed to load: {error}", dto.id);
+                    continue;
                 }
-            }
+            },
             _ => dbflux_core::ProxyAuth::None,
         };
         let kind = match dto.kind.to_lowercase().as_str() {
@@ -1989,15 +2018,21 @@ fn load_ssh_tunnels(
             continue;
         };
         let auth_method = match dto.auth_method.as_str() {
-            "key" => {
-                if let Some(auth_dto) = repo.get_auth(&dto.id)? {
-                    dbflux_core::SshAuthMethod::PrivateKey {
-                        key_path: auth_dto.key_path.map(std::path::PathBuf::from),
-                    }
-                } else {
-                    dbflux_core::SshAuthMethod::PrivateKey { key_path: None }
+            // `save_ssh_tunnels` only upserts, so a row left out here keeps
+            // its stored data.
+            "key" => match repo.get_auth(&dto.id) {
+                Ok(Some(auth_dto)) => dbflux_core::SshAuthMethod::PrivateKey {
+                    key_path: auth_dto.key_path.map(std::path::PathBuf::from),
+                },
+                Ok(None) => dbflux_core::SshAuthMethod::PrivateKey { key_path: None },
+                Err(error) => {
+                    log::warn!(
+                        "Skipping SSH tunnel profile {}: failed to load: {error}",
+                        dto.id
+                    );
+                    continue;
                 }
-            }
+            },
             _ => dbflux_core::SshAuthMethod::Password,
         };
         let config = dbflux_core::SshTunnelConfig {
@@ -3388,11 +3423,55 @@ mod tests {
         conn.execute_batch("ALTER TABLE cfg_auth_profile_fields RENAME TO broken_fields")
             .expect("break the fields table");
 
+        let error = match load_config(&runtime) {
+            Ok(_) => panic!(
+                "an unreadable auth profile must fail the load, not load as an empty list \
+                 that the next save_auth_profiles would turn into a delete"
+            ),
+            Err(error) => error,
+        };
         assert!(
-            load_config(&runtime).is_err(),
-            "an unreadable auth profile must fail the load, not load as an empty list \
-             that the next save_auth_profiles would turn into a delete"
+            error.to_string().contains("auth profiles"),
+            "the error must name the list that failed: {error}"
         );
+    }
+
+    #[test]
+    fn unreadable_proxy_row_is_skipped_and_the_rest_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let proxy = |name: &str, auth| dbflux_core::ProxyProfile {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            kind: dbflux_core::ProxyKind::Http,
+            host: "proxy.example.com".to_string(),
+            port: 8080,
+            auth,
+            no_proxy: None,
+            enabled: true,
+            save_secret: false,
+        };
+        let with_auth = proxy(
+            "with auth",
+            dbflux_core::ProxyAuth::Basic {
+                username: "user".to_string(),
+            },
+        );
+        let without_auth = proxy("without auth", dbflux_core::ProxyAuth::None);
+        super::save_proxy_profiles(&runtime, &[with_auth, without_auth])
+            .expect("save proxy profiles");
+
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+        conn.execute_batch("ALTER TABLE cfg_proxy_auth RENAME TO broken_proxy_auth")
+            .expect("break the proxy auth table");
+
+        let loaded = load_config(&runtime).expect("one bad row must not stop the load");
+        let names: Vec<_> = loaded
+            .proxy_profiles
+            .iter()
+            .map(|proxy| proxy.name.as_str())
+            .collect();
+        assert_eq!(names, ["without auth"]);
     }
 
     #[test]

@@ -24,6 +24,14 @@ pub enum StorageError {
 
     #[error("migration {kind} verification failed: {details}")]
     Migration { kind: String, details: String },
+
+    /// A configuration list could not be read at startup. `list` names it
+    /// (for example "connection profiles") so the report says what failed.
+    #[error("could not read the {list} from storage: {source}")]
+    ConfigRead {
+        list: &'static str,
+        source: Box<StorageError>,
+    },
 }
 
 /// Error type for repository operations.
@@ -55,6 +63,14 @@ impl From<serde_json::Error> for RepositoryError {
 }
 
 impl StorageError {
+    /// Wraps this error with the name of the configuration list being read.
+    pub fn reading(self, list: &'static str) -> Self {
+        StorageError::ConfigRead {
+            list,
+            source: Box::new(self),
+        }
+    }
+
     /// Returns the inner `rusqlite::Error` if this is a `Sqlite` variant, otherwise `None`.
     pub fn into_sqlite_error(self) -> Option<rusqlite::Error> {
         match self {
@@ -87,6 +103,9 @@ impl From<StorageError> for dbflux_core::DbError {
             StorageError::Migration { kind, details } => dbflux_core::DbError::InvalidProfile(
                 format!("migration {} failed: {}", kind, details),
             ),
+            config_read @ StorageError::ConfigRead { .. } => {
+                dbflux_core::DbError::InvalidProfile(config_read.to_string())
+            }
         }
     }
 }
