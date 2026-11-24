@@ -262,8 +262,27 @@ impl Workspace {
             return true;
         }
 
-        // Always focus workspace to blur any input and enable keyboard navigation
-        self.focus_handle.focus(window, cx);
+        // Nothing consumed Escape. Inside a document the keyboard returns to
+        // the document when a text field holds it, or when it sits nowhere or
+        // on the workspace root, which has none of the document's key
+        // handlers. Otherwise it stays where the document left it: the
+        // document's own `focus()` would re-enter a text view the first
+        // Escape just stepped out of. Elsewhere the workspace root takes it,
+        // as the sidebar's keys live there.
+        if self.focus_target == FocusTarget::Document
+            && self.tab_manager.read(cx).active_id().is_some()
+        {
+            let keyboard_needs_document = match window.focused(cx) {
+                None => true,
+                Some(focused) => focused == self.focus_handle,
+            } || (self.overlay_context(cx).is_none()
+                && self.active_context(cx) == ContextId::TextInput);
+            if keyboard_needs_document {
+                self.set_focus(FocusTarget::Document, window, cx);
+            }
+        } else {
+            self.focus_handle.focus(window, cx);
+        }
         true
     }
 }
