@@ -1995,6 +1995,16 @@ impl VimBinding {
         self.pending_keys.clear();
     }
 
+    fn has_pending_command(&self) -> bool {
+        self.count.is_some()
+            || self.pending_g
+            || self.pending_operator.is_some()
+            || self.pending_mark.is_some()
+            || self.pending_find.is_some()
+            || self.pending_text_object.is_some()
+            || !self.pending_keys.is_empty()
+    }
+
     fn clear_vim_count_and_notify<H: VimHost>(&mut self, cx: &mut Context<H>) {
         if !self.pending_keys.is_empty() {
             self.clear_vim_count();
@@ -2029,6 +2039,7 @@ impl VimBinding {
         window: &mut Window,
         cx: &mut Context<H>,
     ) -> bool {
+        let had_pending_command = self.has_pending_command();
         self.clear_vim_count_and_notify(cx);
         if self.replace_once.is_some() {
             self.cancel_replace_once(cx);
@@ -2036,6 +2047,11 @@ impl VimBinding {
         }
         if !self.vim_owns_keys(window, cx) {
             return false;
+        }
+        // Esc that drops a half-typed command is Vim's own cancel and stops
+        // here; with nothing pending it keeps its host meaning.
+        if had_pending_command && self.mode == VimMode::Normal {
+            return true;
         }
         if matches!(
             self.mode,

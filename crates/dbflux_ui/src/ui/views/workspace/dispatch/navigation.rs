@@ -757,4 +757,120 @@ mod side_island_tests {
         }
         assert_eq!(context(&workspace, window), ContextId::Results);
     }
+
+    /// An Escape nothing consumes leaves the keyboard in the focused pane.
+    /// Moving it to the workspace root would leave the pane's key handlers
+    /// without focus until a click.
+    #[gpui::test]
+    fn unconsumed_escape_keeps_the_keyboard_in_the_document(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+
+        window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                let app_state = workspace.app_state.clone();
+                let result = QueryResult::table(
+                    vec![ColumnMeta {
+                        name: "name".to_string(),
+                        type_name: "text".to_string(),
+                        kind: ColumnKind::Text,
+                        nullable: true,
+                        is_primary_key: false,
+                    }],
+                    vec![vec![Value::Text("first".to_string())]],
+                    None,
+                    Duration::ZERO,
+                );
+                let document = cx.new(|cx| {
+                    DataDocument::new_for_result(
+                        Arc::new(result),
+                        "SELECT name FROM users".to_string(),
+                        "users".to_string(),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                });
+                let pane = DataDocument::into_pane(document, cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        keys(window, "escape escape");
+        assert_keyboard_in_document(&workspace, window);
+
+        // The command palette and the workspace prompts park the keyboard on
+        // the root while the document stays the focus target.
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.focus_handle.focus(window, cx));
+        });
+        keys(window, "escape");
+        assert_keyboard_in_document(&workspace, window);
+    }
+
+    fn assert_keyboard_in_document(workspace: &Entity<Workspace>, window: &mut VisualTestContext) {
+        let (root_focused, focus_target) = window.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            (
+                workspace.focus_handle.is_focused(window),
+                workspace.focus_target,
+            )
+        });
+        assert_eq!(focus_target, FocusTarget::Document);
+        assert!(
+            !root_focused,
+            "Esc must not park the keyboard on the workspace root"
+        );
+        assert!(
+            window.update(|window, cx| window.focused(cx).is_some()),
+            "Esc must leave an element with keyboard focus"
+        );
+    }
+
+    /// Esc in the text view hands the keyboard to the table; a second Esc
+    /// must not put it back in the text.
+    #[gpui::test]
+    fn second_escape_does_not_reenter_the_text_view(cx: &mut TestAppContext) {
+        use crate::ui::document::delimited::DelimitedDocument;
+
+        let (workspace, window) = open_workspace(cx);
+        let directory = std::env::temp_dir().join(format!("dbflux-escape-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create temporary directory");
+        let path = directory.join("cities.csv");
+        std::fs::write(&path, "name,city\nAna,Lima\nBo,Quito\n").expect("write csv");
+
+        window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                let document = cx.new(|cx| DelimitedDocument::open_local(path.clone(), cx));
+                let pane = DelimitedDocument::into_pane(document, cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        keys(window, "t");
+        assert_eq!(context(&workspace, window), ContextId::TextInput);
+        keys(window, "escape");
+        assert_ne!(
+            context(&workspace, window),
+            ContextId::TextInput,
+            "the first Esc steps out of the text"
+        );
+        keys(window, "escape");
+        assert_ne!(
+            context(&workspace, window),
+            ContextId::TextInput,
+            "a second Esc must not re-enter the text"
+        );
+
+        std::fs::remove_dir_all(&directory).expect("remove temporary directory");
+    }
 }
