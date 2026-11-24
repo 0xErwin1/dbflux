@@ -235,6 +235,9 @@ pub struct TextSystem {
     wrapper_pool: Mutex<FxHashMap<FontIdWithSize, Vec<LineWrapper>>>,
     font_runs_pool: Mutex<Vec<Vec<FontRun>>>,
     fallback_font_stack: SmallVec<[Font; 2]>,
+    /// Families reported as unresolved at the current font generation, so a layout that
+    /// runs on every frame reports each one once instead of on every shaped run.
+    unresolved_fonts_reported: Mutex<FxHashSet<SharedString>>,
     font_generation: Arc<AtomicUsize>,
     missing_glyph_reporter: Arc<MissingGlyphReporter>,
     missing_glyph_receiver: Mutex<Option<MissingGlyphReceiver>>,
@@ -252,6 +255,7 @@ impl TextSystem {
             font_ids_by_font: RwLock::default(),
             wrapper_pool: Mutex::default(),
             font_runs_pool: Mutex::default(),
+            unresolved_fonts_reported: Mutex::default(),
             fallback_font_stack: smallvec![
                 // TODO: Remove this when Linux have implemented setting fallbacks.
                 font(".ZedMono"),
@@ -292,9 +296,15 @@ impl TextSystem {
     ///
     /// Cached font resolution and line layouts are invalidated after installation.
     /// Layouts already in progress may complete against the previous font set.
+    ///
+    /// A family that was missing before resolves to itself afterwards: the cached ids,
+    /// including the remembered failures, are dropped here and the bumped font generation
+    /// discards every line layout, so the next line wrapper for that family is built from the
+    /// family itself instead of from the face that stood in for it.
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         self.platform_text_system.add_fonts(fonts)?;
         self.font_ids_by_font.write().clear();
+        self.unresolved_fonts_reported.lock().clear();
         self.missing_glyph_reporter.reset();
         self.font_generation.fetch_add(1, Ordering::Release);
         Ok(())
@@ -362,11 +372,18 @@ impl TextSystem {
     }
 
     /// Resolves the specified font, falling back to the default font stack if
-    /// the font fails to load.
+    /// the font fails to load, and to any installed family if that fails too.
+    ///
+    /// A platform may install its fonts after the first window, so a family it has not
+    /// installed yet resolves to a face that is installed, reported once at debug level per
+    /// family, instead of aborting the process. Nothing about that answer outlives
+    /// [`Self::add_fonts`], which clears the cached ids and bumps the font generation, so the
+    /// next resolution after the fonts arrive is the family the caller asked for.
     ///
     /// # Panics
     ///
-    /// Panics if the font and none of the fallbacks can be resolved.
+    /// Panics if the font, none of the fallbacks and no installed family can be resolved.
+    /// That leaves nothing to draw text with.
     pub fn resolve_font(&self, font: &Font) -> FontId {
         if let Ok(font_id) = self.font_id(font) {
             return font_id;
@@ -377,8 +394,13 @@ impl TextSystem {
             }
         }
 
+        if let Some(font_id) = self.first_installed_font(font) {
+            self.report_unresolved_font(font);
+            return font_id;
+        }
+
         panic!(
-            "failed to resolve font '{}' or any of the fallbacks: {}",
+            "failed to resolve font '{}' or any of the fallbacks: {}, and no font is installed",
             font.family,
             self.fallback_font_stack
                 .iter()
@@ -387,12 +409,56 @@ impl TextSystem {
         );
     }
 
-    /// Resolves the specified font like [`Self::resolve_font`], but reports a font stack that
-    /// no installed family covers instead of panicking.
+    /// Resolves the first installed family, in the platform's own sorted name order.
+    ///
+    /// This is the answer for a font stack the installed families do not cover, which is
+    /// the state of a platform that installs its system fonts after the first window. The
+    /// order makes the choice deterministic: the same installed set always answers with the
+    /// same family, whatever the caller asked for. The requested weight and style are tried
+    /// first and the font's own defaults after, so a family that only ships regular faces
+    /// still resolves.
+    fn first_installed_font(&self, requested: &Font) -> Option<FontId> {
+        let names = self.all_font_names();
+        let in_requested_style = names.iter().find_map(|family| {
+            self.font_id(&Font {
+                family: SharedString::from(family.clone()),
+                weight: requested.weight,
+                style: requested.style,
+                ..Font::default()
+            })
+            .ok()
+        });
+
+        in_requested_style.or_else(|| {
+            names
+                .iter()
+                .find_map(|family| self.font_id(&font(family.clone())).ok())
+        })
+    }
+
+    /// Reports a font stack the installed families do not cover, once per family and font
+    /// generation.
+    fn report_unresolved_font(&self, font: &Font) {
+        if self
+            .unresolved_fonts_reported
+            .lock()
+            .insert(font.family.clone())
+        {
+            log::debug!(
+                "font '{}' and its fallbacks are not installed; drawing with an installed family until they arrive",
+                font.family
+            );
+        }
+    }
+
+    /// Resolves the specified font like [`Self::resolve_font`] for a stack the installed
+    /// families do cover, and reports `None` for one they do not.
     ///
     /// A platform may install fonts after the first window, so a caller that probes a font
     /// before drawing it can ask again once they arrive rather than treat the empty answer as
-    /// fatal.
+    /// fatal. Unlike [`Self::resolve_font`], this never falls back to an arbitrary installed
+    /// family: the caller is asking whether the stack it named can be honoured, and the
+    /// answer has to stay no until those fonts arrive.
     pub fn try_resolve_font(&self, font: &Font) -> Option<FontId> {
         std::iter::once(font)
             .chain(&self.fallback_font_stack)
@@ -554,6 +620,11 @@ impl TextSystem {
     }
 
     /// Returns a handle to a line wrapper, for the given font and font size.
+    ///
+    /// The pool is keyed by the id [`Self::resolve_font`] answers with, not by the requested
+    /// font, so the wrapper a family gets after [`Self::add_fonts`] is a different entry: the
+    /// cached ids are gone, the resolution yields the family that was asked for, and its
+    /// wrapper carries its own font id and measured character widths.
     pub fn line_wrapper(self: &Arc<Self>, font: Font, font_size: Pixels) -> LineWrapperHandle {
         let lock = &mut self.wrapper_pool.lock();
         let font_id = self.resolve_font(&font);
