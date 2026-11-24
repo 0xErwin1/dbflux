@@ -39,6 +39,9 @@ pub fn open_external(path: &Path) -> bool {
 fn handler_command(path: &Path) -> Command {
     let mut command = Command::new("xdg-open");
     command.arg(path);
+    // The handler runs with the environment the user gave DBFlux: the Vulkan driver selection
+    // this process may carry is not the handler's.
+    crate::child_environment::restore_child_environment(&mut command);
     command
 }
 

@@ -2,6 +2,7 @@
 
 pub mod access;
 pub mod auth;
+pub mod child_environment;
 mod config;
 mod connection;
 mod core;

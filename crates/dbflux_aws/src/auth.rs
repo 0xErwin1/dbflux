@@ -93,7 +93,8 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
     // code autofilled (`...#/device?user_code=XXXX-YYYY`) — far cleaner to show
     // and copy than the long `/authorize?...&redirect_uri=127.0.0.1...` URL, and
     // it needs no local loopback listener (works on headless/remote setups).
-    let mut child = Command::new("aws")
+    let mut command = Command::new("aws");
+    command
         .args([
             "sso",
             "login",
@@ -104,14 +105,18 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| {
-            DbError::ValueResolutionFailed(format!(
-                "Failed to spawn 'aws sso login': {}. Is the AWS CLI installed?",
-                err
-            ))
-        })?;
+        .stderr(Stdio::piped());
+
+    // The AWS CLI is an external program DBFlux starts for the user, so it runs with the
+    // environment the user gave DBFlux, without this process's Vulkan driver selection.
+    dbflux_core::child_environment::restore_child_environment(&mut command);
+
+    let mut child = command.spawn().map_err(|err| {
+        DbError::ValueResolutionFailed(format!(
+            "Failed to spawn 'aws sso login': {}. Is the AWS CLI installed?",
+            err
+        ))
+    })?;
 
     #[expect(
         clippy::expect_used,

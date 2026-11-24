@@ -156,6 +156,10 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
         command.env_remove(var);
     }
 
+    // The script runs a program of the user's choosing: it starts with the environment the user
+    // gave DBFlux, without the Vulkan driver selection GPUI's startup may have made here.
+    dbflux_core::child_environment::restore_child_environment(&mut command);
+
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }

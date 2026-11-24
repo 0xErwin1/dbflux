@@ -3988,6 +3988,7 @@ dependencies = [
  "gpui-component",
  "gpui-mcp",
  "gpui-pre",
+ "gpui-pre-linux",
  "log",
  "rusqlite",
  "serde",
