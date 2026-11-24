@@ -21,6 +21,7 @@ use std::io;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The loader variable that narrows the probe to the given ICD manifest patterns.
 const LOADER_SELECTION_VARIABLE: &str = "VK_LOADER_DRIVERS_SELECT";
@@ -123,13 +124,40 @@ pub fn select_vulkan_driver() {
     }
 }
 
-/// Retries this start without the driver [`select_vulkan_driver`] chose, once.
+/// Whether any window of this process created its GPU renderer.
 ///
-/// Call this when creating the window's renderer fails: a driver this module selected can turn
-/// out to be unusable, and the process is then replaced with itself, running with every driver
-/// probed as before and carrying [`FALLBACK_VALUE`], so a driver that fails again does not loop.
+/// A failure after that point must not replace the process: the app is already on screen with the
+/// user's pending work in it.
+static RENDERER_CREATED: AtomicBool = AtomicBool::new(false);
+
+/// Records that a window created its GPU renderer.
+///
+/// Call this on the success path of renderer creation in every window backend.
+pub(crate) fn renderer_created() {
+    RENDERER_CREATED.store(true, Ordering::Relaxed);
+}
+
+/// Whether a window of this process already created its GPU renderer.
+fn renderer_exists() -> bool {
+    RENDERER_CREATED.load(Ordering::Relaxed)
+}
+
+/// Retries this start without the driver [`select_vulkan_driver`] chose, once, and only while no
+/// window has a working renderer yet.
+///
+/// Call this when creating the first window's renderer fails: a driver this module selected can
+/// turn out to be unusable, and the process is then replaced with itself, running with every
+/// driver probed as before and carrying [`FALLBACK_VALUE`], so a driver that fails again does not
+/// loop. A renderer failure after any window drew is reported and logged instead of replacing the
+/// process, which would lose pending edits and tasks.
 pub fn retry_after_renderer_failure() {
-    if !should_retry_without_selection(&ProcessEnvironment) {
+    let renderer_exists = renderer_exists();
+    if !should_retry_without_selection(&ProcessEnvironment, renderer_exists) {
+        if renderer_exists {
+            log::error!(
+                "the window could not create its GPU renderer; an earlier window already drew, so this process keeps running"
+            );
+        }
         return;
     }
 
@@ -218,7 +246,17 @@ pub(crate) fn child_environment(environment: &dyn Environment) -> ChildEnvironme
 }
 
 /// Whether a failed renderer should retry without the driver this module chose.
-pub(crate) fn should_retry_without_selection(environment: &dyn Environment) -> bool {
+///
+/// `renderer_exists` says whether a window of this process already created its renderer; once one
+/// did, no failure may replace the process.
+pub(crate) fn should_retry_without_selection(
+    environment: &dyn Environment,
+    renderer_exists: bool,
+) -> bool {
+    if renderer_exists {
+        return false;
+    }
+
     match variable(environment, SELECTION_VARIABLE) {
         Some(marker) => marker != OPT_OUT_VALUE && marker != FALLBACK_VALUE,
         None => false,
@@ -801,11 +839,26 @@ mod tests {
             }
 
             assert_eq!(
-                should_retry_without_selection(&environment),
+                should_retry_without_selection(&environment, false),
                 expected,
                 "marker {marker:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_failure_after_a_renderer_exists_keeps_the_process() {
+        let scenario =
+            Scenario::new().with_variable(SELECTION_VARIABLE, "*intel_icd*,*intel_hasvk_icd*");
+
+        assert!(
+            should_retry_without_selection(&scenario.environment, false),
+            "the first window still retries with every driver"
+        );
+        assert!(
+            !should_retry_without_selection(&scenario.environment, true),
+            "a window opened after another one drew must not be replaced: its edits and tasks would be lost"
+        );
     }
 
     /// A command as [`restore_child_environment`] leaves it, for a process with `environment`.

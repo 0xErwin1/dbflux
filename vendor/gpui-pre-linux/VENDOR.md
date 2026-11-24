@@ -170,8 +170,13 @@ The first commit that added this directory carries the published source unchange
   to be unusable — with no adapter at all and no OpenGL fallback — both window backends call
   `retry_after_renderer_failure` when the renderer cannot be created, which re-executes once
   with the selection removed and the marker set to `fallback`, so the next start probes every
-  driver as before and never selects again. The rules are `decide`, a pure function over an
-  injected environment and filesystem state. Covered by `vulkan_driver::tests` in this crate.
+  driver as before and never selects again. That retry applies only while no window has a
+  working renderer: each backend records its first successful `WgpuRenderer::new` through
+  `renderer_created`, and a failure after that point is logged and returned as the window's
+  error instead of replacing the process, so pending edits and tasks are not lost. The rules
+  are `decide`, a pure function over an injected environment and filesystem state, and
+  `should_retry_without_selection`, which takes the renderer state as an input. Covered by
+  `vulkan_driver::tests` in this crate.
   Children do not inherit the selection: `restore_child_environment` prepares a
   `std::process::Command` so a child starts with the environment the user gave the app. It
   removes `VK_LOADER_DRIVERS_SELECT` and `GPUI_VULKAN_DRIVER_SELECT` when the marker holds the

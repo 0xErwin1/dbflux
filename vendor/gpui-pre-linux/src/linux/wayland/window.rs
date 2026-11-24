@@ -590,6 +590,7 @@ impl WaylandWindowState {
                 preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
             };
             WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)
+                .inspect(|_| crate::linux::vulkan_driver::renderer_created())
                 .inspect_err(|_| crate::linux::vulkan_driver::retry_after_renderer_failure())?
         };
 
