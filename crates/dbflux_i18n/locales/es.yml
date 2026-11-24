@@ -5762,6 +5762,9 @@ sidebar:
     copy_path: Copiar ruta
     copy_column_name: Copiar nombre de columna
     copy_field_name: Copiar nombre del campo
+    copy_table_name: Copiar nombre de tabla
+    copy_view_name: Copiar nombre de vista
+    copy_collection_name: Copiar nombre de colección
     schema_diff_unsupported: La comparación de esquemas solo está disponible para conexiones relacionales.
     new_dashboard: Nuevo dashboard…
     import_dashboard: Importar dashboard desde JSON…

@@ -5760,6 +5760,9 @@ sidebar:
     copy_path: 复制路径
     copy_column_name: 复制列名
     copy_field_name: 复制字段名
+    copy_table_name: 复制表名
+    copy_view_name: 复制视图名
+    copy_collection_name: 复制集合名
     schema_diff_unsupported: Schema 差异仅适用于关系型连接。
     new_dashboard: 新建仪表盘…
     import_dashboard: 从 JSON 导入仪表盘…
