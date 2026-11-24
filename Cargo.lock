@@ -3782,6 +3782,7 @@ dependencies = [
  "cbc",
  "chrono",
  "dbflux_core",
+ "quick-xml 0.39.4",
  "rusqlite",
  "secrecy",
  "serde",
