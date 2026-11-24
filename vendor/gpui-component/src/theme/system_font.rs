@@ -21,6 +21,7 @@
 //! to name anyway.
 
 use gpui::{App, SharedString, font};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use super::mono_font::installed_font_names;
 
@@ -29,8 +30,14 @@ const SYSTEM_UI_FONT: &str = ".SystemUIFont";
 
 /// Replaces `.SystemUIFont` on the global theme with the installed family GPUI
 /// resolves it to, when that differs. Any other family is left alone.
+///
+/// A platform may install its system fonts after the first window, so this runs
+/// again when they arrive; the family it named itself is revised rather than
+/// mistaken for a choice someone else made. While nothing is installed it names
+/// nothing and leaves the theme as it is: the pass that runs once the fonts
+/// arrive asks again.
 pub(super) fn resolve_default_font(cx: &mut App) {
-    if cx.global::<super::Theme>().font_family != SYSTEM_UI_FONT {
+    if !is_probe_choice(&cx.global::<super::Theme>().font_family) {
         return;
     }
     let installed = installed_font_names(cx);
@@ -38,14 +45,32 @@ pub(super) fn resolve_default_font(cx: &mut App) {
         return;
     }
     let text_system = cx.text_system();
+    // Not `resolve_font`: it panics when no installed family is in GPUI's fallback stack, which
+    // is exactly the state a platform that loads its system fonts in the background starts in.
+    let Some(font_id) = text_system.try_resolve_font(&font(SYSTEM_UI_FONT)) else {
+        return;
+    };
     let resolved = text_system
-        .get_font_for_id(text_system.resolve_font(&font(SYSTEM_UI_FONT)))
+        .get_font_for_id(font_id)
         .map(|font| font.family);
-    let Some(family) = substitute(SYSTEM_UI_FONT, resolved.as_deref(), installed) else {
+    let Some(family) = substitute(SYSTEM_UI_FONT, resolved.as_deref(), &installed) else {
         return;
     };
     tracing::info!("UI font {SYSTEM_UI_FONT:?} resolves to {family:?}, naming it on the theme.");
-    cx.global_mut::<super::Theme>().font_family = family;
+    cx.global_mut::<super::Theme>().font_family = family.clone();
+    *chosen() = Some(family);
+}
+
+/// The family this probe named on the theme, so a later pass can revise it.
+static CHOSEN: Mutex<Option<SharedString>> = Mutex::new(None);
+
+fn chosen() -> MutexGuard<'static, Option<SharedString>> {
+    CHOSEN.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether `family` is one this probe chose, rather than one someone else set.
+fn is_probe_choice(family: &SharedString) -> bool {
+    family == SYSTEM_UI_FONT || chosen().as_ref() == Some(family)
 }
 
 /// The family to name instead of `requested`: the one GPUI resolved it to,

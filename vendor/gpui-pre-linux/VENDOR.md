@@ -123,6 +123,69 @@ The first commit that added this directory carries the published source unchange
   `drag_icon::tests`, `xdnd_source::tests::a_drop_is_accepted_only_after_the_target_says_so`
   and `client::tests::the_drag_icon_pixels_are_shared_through_a_file`.
 
+- `src/linux/system_fonts.rs`, `src/linux/platform.rs`, `Cargo.toml`: the system fonts no
+  longer block the first window. `CosmicTextSystem::new` filled its font database
+  synchronously inside `LinuxCommon::new`, which parses every face fontconfig reports: 594
+  faces on the reference machine, about half a second with a cold page cache, all of it
+  before a window could be created. The text system is now built with
+  `CosmicTextSystem::new_without_system_fonts` and `system_fonts` loads the database on a
+  thread of its own, started the first time the app asks for the fonts through
+  `Platform::take_system_font_receiver` (the `gpui-pre` patch `background-system-fonts.patch`,
+  which installs them, rebuilds every line layout and draws again). Every distinct file behind
+  the database's faces is memory-mapped and handed over as `Cow::Borrowed`, not read into
+  owned memory: several desktops ship CJK families whose files add up to hundreds of
+  megabytes, and copying them into anonymous memory would grow the resident set by the whole
+  font set. The mappings are leaked, since a `'static` borrow of them outlives every owner and
+  they are never unmapped; `fontdb` mapped these same files before this change and keeps its
+  mappings alive the same way. A file that cannot be opened or mapped is logged and skipped,
+  so one unreadable font does not cost the rest. The face list is deduplicated and ordered by
+  path, so a file holding several faces is loaded once and the result is deterministic.
+  Glyph fallback for faces only the system provides (CJK, emoji) therefore arrives shortly
+  after the first frame, and a family the app itself added, such as DBFlux's bundled Archivo,
+  resolves from the first frame. A batch that arrives after its only consumer is gone is
+  logged as a warning, not at debug: the load succeeded and its result was discarded, which
+  leaves the process on the fonts the app added for the whole session. Covered by
+  `system_fonts::tests` (`cargo test -p gpui-pre-linux --lib`): one test maps a directory of
+  real TrueType files and checks that each file appears once with its own bytes, another
+  points `FONTCONFIG_FILE` at a scratch config and checks that the faces reached through it
+  are mapped too, a third wraps the real text system, adds a bundled family after it started,
+  and checks that the next resolution names that family instead of the stand-in the first pass
+  drew with, and a fourth checks that the loader hands its fonts to one consumer only. All use
+  the fonts in `crates/bolt/assets/fonts` as their fixture and fail if that directory is
+  missing.
+  The manifest gains `fontdb` (the version and features `cosmic-text` already uses) and
+  `memmap2`.
+
+- `src/linux/vulkan_driver.rs`, `src/gpui_linux.rs`, `src/linux/wayland/window.rs`,
+  `src/linux/x11/window.rs`: the Vulkan loader is told which driver to use instead of probing
+  every installed ICD. The loader reads its driver variables once, when the process starts,
+  and they cannot be set safely afterwards, so `select_vulkan_driver` decides before any
+  thread exists and re-executes the process with `exec`, the same `argv` and
+  `VK_LOADER_DRIVERS_SELECT` set to the patterns of the firmware-booted GPU's vendor (read
+  from `/sys/class/drm/card*/device/boot_vga`; Intel, AMD and NVIDIA each map to their ICD
+  manifest names). It does nothing when the user already chose a driver through any of the
+  five `VK_*` variables, when `GPUI_VULKAN_DRIVER_SELECT=0` opts out, when the marker is
+  already present (no exec loop), or when the vendor has no installed manifest. A failed exec
+  is logged and the app continues without a selection. Because a selected driver can turn out
+  to be unusable — with no adapter at all and no OpenGL fallback — both window backends call
+  `retry_after_renderer_failure` when the renderer cannot be created, which re-executes once
+  with the selection removed and the marker set to `fallback`, so the next start probes every
+  driver as before and never selects again. That retry applies only while no window has a
+  working renderer: each backend records its first successful `WgpuRenderer::new` through
+  `renderer_created`, and a failure after that point is logged and returned as the window's
+  error instead of replacing the process, so pending edits and tasks are not lost. The rules
+  are `decide`, a pure function over an injected environment and filesystem state, and
+  `should_retry_without_selection`, which takes the renderer state as an input. Covered by
+  `vulkan_driver::tests` in this crate.
+  Children do not inherit the selection: `restore_child_environment` prepares a
+  `std::process::Command` so a child starts with the environment the user gave the app. It
+  removes `VK_LOADER_DRIVERS_SELECT` and `GPUI_VULKAN_DRIVER_SELECT` when the marker holds the
+  patterns this code chose, removes the marker alone when it is `fallback`, and changes nothing
+  when the marker is absent or `0`, so a user's own driver variables are kept and an application
+  launched from a GPUI app keeps its own GPU (a game started with PRIME offload does not run on
+  the boot GPU). Apps must call it on every `Command` they prepare. The rule is the pure
+  `child_environment`; covered by `vulkan_driver::tests`, one test per case.
+
 ## Refreshing
 
 Replace this directory with the new published crate, re-apply the patches above, and bump

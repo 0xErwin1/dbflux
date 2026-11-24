@@ -21,6 +21,31 @@ What a vendor bump must re-check: the accessibility arm — suppressing the `ari
 - `src/input/popovers/completion_menu.rs`: each completion response shortlists at most 32 rows with the most characters in their labels plus details, measures those rows at their natural width including popover padding, and uses the widest measured row for the menu's explicit content width. A bounded heap keeps candidate storage constant, and expensive layout calls are bounded even when prefix matches contain thousands of tables; all suggestions remain available. The shortlist is a heuristic for proportional fonts, rather than a guarantee of finding the widest row in an arbitrary list. The width is capped by `Lsp::completion_menu.max_width` and the space to the right of the caret. The virtual list measures against its previous viewport width, so relying on intrinsic sizing kept later long suggestions as narrow as an earlier short response. Measurement happens when items change, rather than on every render. DBFlux sets the cap to 640 px. The candidate-bound and Unicode/detail tests in this file run locally only: this patched crate is not a workspace member, so `cargo test --workspace` does not run its tests. CI coverage includes `completion_menu_fits_long_labels_and_caps_its_width` in `crates/dbflux_ui_document/src/code/vim/tests.rs`.
 - `src/input/input.rs`: synchronize overlays under the input's text-style refinement. Completion rows are measured during synchronization, before the input container is laid out; without this scope they used the surrounding UI font rather than the editor's font and spacing, underestimating filtered table labels. Covered by `completion_menu_keeps_table_labels_visible_while_typing` in `crates/dbflux_ui_document/src/code/completion_tests/mod.rs`, which runs in the workspace CI, using typed prefixes and explicit editor letter spacing to make the measurement mismatch observable in headless tests.
 - `src/select.rs`: the trigger shows the committed selection's title rather than the item under the list cursor, so moving the cursor through a filtered search does not change the shown value until Enter. While the list is open and has rows but no highlighted row, the first match is highlighted (`highlight_first_match_if_unset`), so Enter picks a match right after a query that went from no matches to some; the list decides the highlight from the rows it last drew, which are none after an empty result. 0.7.3 itself now clears the query and resolves the committed value in the full list on every close, which the 0.6.1 copy patched locally.
+- `src/theme/system_font.rs`, `src/theme/mono_font.rs` and `src/theme/mod.rs`: the two theme
+  font probes can run again, so a platform that installs its system fonts after the first
+  window still ends up with the same families it would have named had the fonts been there
+  from the start. `theme::init` subscribes to `App::on_fonts_changed` (the `gpui-pre` patch
+  `background-system-fonts.patch`) and re-runs `resolve_default_font` and
+  `resolve_default_mono_font` with a freshly listed font set; each probe records the family it
+  chose, so a later pass revises its own earlier answer and still leaves a family the
+  application or a theme file named alone. The font list and the resolved monospace family
+  were process-wide `OnceLock`s: a probe that ran before the system fonts arrived poisoned
+  both for the rest of the run, and the monospace one also cached its answer while the family
+  list was still empty. Both are now a `Mutex<Option<_>>` that the fonts-changed pass clears.
+  `resolve_default_font` asks GPUI for the family with `TextSystem::try_resolve_font` instead
+  of `resolve_font`: in the window before the system fonts arrive, nothing outside the
+  application's own fonts is installed, and `resolve_font` panics when no installed family is
+  in GPUI's fallback stack. Naming nothing leaves the theme as it is, and the pass that runs
+  when the fonts arrive asks again. With the fonts already installed the probes give exactly
+  the answer they gave before, so a run that has its system fonts up front is unaffected.
+  The fonts-changed pass logs the pair it settled on at debug level: each probe says nothing
+  when it has nothing to correct, so a cold-start log otherwise cannot tell a re-probe that
+  kept the families the first pass named from one that never ran.
+  This crate's tests cannot run from the DBFlux workspace (`cargo` refuses to test a
+  non-member package that has dev-dependencies), so the behaviour is verified by
+  `cargo check -p gpui-component` and by hand: on a machine whose `.SystemUIFont` resolves to
+  a system family, the theme names that family once the loader finishes.
+
 
 ## Refresh
 

@@ -1120,12 +1120,21 @@ mod tests {
     // mode uses NoopTextSystem rather than native shaping.
     #[cfg(target_os = "linux")]
     fn shaping_test_context() -> TestAppContext {
+        use futures::StreamExt as _;
+
         let platform = gpui_platform::current_platform(true);
-        TestAppContext::build_with_text_system(
-            gpui::TestDispatcher::new(0),
-            None,
-            platform.text_system(),
-        )
+        let text_system = platform.text_system();
+        // The Linux text system starts without the system fonts and loads them on a thread;
+        // an app installs them when they arrive. These tests shape with the system fonts and
+        // run no app loop, so they wait for the batch and install it themselves.
+        if let Some(mut receiver) = platform.take_system_font_receiver()
+            && let Some(fonts) = futures::executor::block_on(receiver.next())
+        {
+            text_system
+                .add_fonts(fonts)
+                .expect("the system fonts should install");
+        }
+        TestAppContext::build_with_text_system(gpui::TestDispatcher::new(0), None, text_system)
     }
 
     #[cfg(target_os = "linux")]

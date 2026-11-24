@@ -778,7 +778,9 @@ impl X11WindowState {
                     transparent: false,
                     preferred_present_mode: None,
                 };
-                WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
+                WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)
+                    .inspect(|_| crate::linux::vulkan_driver::renderer_created())
+                    .inspect_err(|_| crate::linux::vulkan_driver::retry_after_renderer_failure())?
             };
 
             renderer.set_subpixel_layout(is_bgr);

@@ -99,10 +99,14 @@ pub fn resolve_font_settings(
     dbflux_components::font_settings::resolve(settings, cx)
 }
 
+/// Resolves the saved choices and publishes them. Bolt keeps the choices, so
+/// the resolution runs again once the platform installs the system fonts it
+/// loaded after the first frame; until then a family chosen from those fonts is
+/// missing and the bundled face stands in for it.
 fn apply_font_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
-    let fonts = resolve_font_settings(app_state.read(cx).general_settings(), cx);
+    let choices = dbflux_components::font_settings::choices(app_state.read(cx).general_settings());
 
-    if dbflux_components::fonts::set(cx, fonts) {
+    if dbflux_components::fonts::apply_choices(cx, choices) {
         dbflux_components::theme::apply_fonts(cx);
         cx.refresh_windows();
     }
@@ -825,6 +829,48 @@ mod font_setting_tests {
             assert_eq!(theme.mono_font_size, px(18.0));
             assert_eq!(theme.dark_theme.font_size, Some(16.0 * 15.6 / 13.0));
             assert_eq!(theme.light_theme.mono_font_size, Some(18.0));
+        });
+    }
+
+    /// The saved choices are kept, so the pass that runs once the platform
+    /// installs its system fonts resolves them again. Without them the
+    /// resolution could not tell a chosen family that was missing apart from
+    /// the bundled face it fell back to, and a system family the user picked
+    /// would stay dropped for the session.
+    #[gpui::test]
+    fn the_saved_font_choices_are_kept_for_the_late_resolution(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_font_settings(&app_state, cx));
+        let saved = cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let mut settings = state.general_settings().clone();
+                settings.ui_font_family = Some("Missing Sans".to_string());
+                state.update_general_settings(settings.clone());
+                cx.emit(AppStateChanged);
+                settings
+            })
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            assert_eq!(
+                fonts::current(cx).ui_family,
+                SharedString::from(AppFonts::INTERFACE),
+                "a family the text system does not have falls back for now"
+            );
+            assert_eq!(
+                cx.global::<fonts::FontSettingsGlobal>().choices(),
+                Some(&dbflux_components::font_settings::choices(&saved))
+            );
         });
     }
 }

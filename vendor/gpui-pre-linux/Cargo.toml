@@ -124,6 +124,16 @@ package = "gpui-pre-collections"
 version = "0.8.2"
 optional = true
 
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.fontdb]
+version = "0.23"
+features = [
+    "fontconfig",
+    "fs",
+    "memmap",
+    "std",
+]
+default-features = false
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.futures]
 version = "0.3.34"
 
@@ -153,6 +163,9 @@ version = "0.2"
 version = "0.4"
 features = ["std"]
 default-features = false
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.memmap2]
+version = "0.9"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.notify-rust]
 version = "4"

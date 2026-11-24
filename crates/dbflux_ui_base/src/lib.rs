@@ -8,6 +8,7 @@
 
 pub mod app_state_entity;
 pub mod async_ext;
+pub mod child_environment;
 pub mod dashboard_manager;
 pub mod file_dialog;
 pub mod hook_phase_runner;

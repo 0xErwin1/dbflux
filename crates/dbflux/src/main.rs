@@ -261,6 +261,12 @@ fn install_default_crypto_provider() {
 }
 
 fn main() {
+    // Before any thread exists: the Vulkan loader reads its driver variables while it
+    // initialises, so the boot GPU's driver is selected by replacing this process with the same
+    // `argv` and one extra variable (see `odd/tasks/gpui-cold-start.md`, S4).
+    #[cfg(target_os = "linux")]
+    gpui_linux::select_vulkan_driver();
+
     install_panic_hook();
     install_default_crypto_provider();
 

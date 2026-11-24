@@ -109,6 +109,12 @@ pub(crate) struct LinuxCommon {
     /// X11 uses this to handle events that a runnable's requests read into xcb's queue, where
     /// they would not wake the event loop.
     pub(crate) after_runnable: Option<Rc<dyn Fn()>>,
+    /// The system fonts, loaded on their own thread once the app asks for them.
+    ///
+    /// They used to be loaded by `CosmicTextSystem::new` here, which cost half a second before
+    /// the first window; see `odd/tasks/gpui-cold-start.md`, S3.
+    #[cfg(any(feature = "wayland", feature = "x11"))]
+    pub(crate) system_fonts: crate::linux::system_fonts::SystemFonts,
 }
 
 impl LinuxCommon {
@@ -123,7 +129,9 @@ impl LinuxCommon {
         let (power_sender, power_receiver) = calloop::channel::channel();
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
-        let text_system = Arc::new(crate::linux::CosmicTextSystem::new("IBM Plex Sans"));
+        let text_system = Arc::new(crate::linux::CosmicTextSystem::new_without_system_fonts(
+            "IBM Plex Sans",
+        ));
         #[cfg(not(any(feature = "wayland", feature = "x11")))]
         let text_system = Arc::new(gpui::NoopTextSystem::new());
 
@@ -149,6 +157,8 @@ impl LinuxCommon {
             power_sender,
             power_listener_started: false,
             after_runnable: None,
+            #[cfg(any(feature = "wayland", feature = "x11"))]
+            system_fonts: crate::linux::system_fonts::SystemFonts::default(),
         };
 
         (common, main_receiver, power_receiver)
@@ -558,6 +568,11 @@ impl Platform for LinuxPlatform {
 
     fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
         self.with_common(|common| common.text_system.clone())
+    }
+
+    #[cfg(any(feature = "wayland", feature = "x11"))]
+    fn take_system_font_receiver(&self) -> Option<crate::linux::system_fonts::FontReceiver> {
+        self.with_common(|common| common.system_fonts.take())
     }
 
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {

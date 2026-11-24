@@ -179,15 +179,22 @@ fn run_shell_into(shell: &Path, timeout: Duration, output_file: &File) -> Result
 
     // The login shell hands off to `/bin/sh` so the expansion is the same
     // under zsh, bash and fish, whose `$PATH` is a list rather than a string.
-    let command = format!(
+    let script = format!(
         "exec /bin/sh -c 'printf \"%s\" \"{PATH_START_MARKER}${{PATH}}{PATH_END_MARKER}\"'"
     );
 
-    let mut child = Command::new(shell)
-        .args(["-l", "-i", "-c", &command])
+    let mut command = Command::new(shell);
+    command
+        .args(["-l", "-i", "-c", &script])
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+
+    // The user's own shell: it runs their configuration, so it starts with the environment they
+    // gave DBFlux, without this process's Vulkan driver selection.
+    dbflux_core::child_environment::restore_child_environment(&mut command);
+
+    let mut child = command
         .spawn()
         .map_err(|error| format!("could not start it: {error}"))?;
 

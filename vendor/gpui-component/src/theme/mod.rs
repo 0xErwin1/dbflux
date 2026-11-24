@@ -39,6 +39,35 @@ pub fn init(cx: &mut App) {
     // Ensure theme is loaded directly on startup for WASM compatibility
     Theme::change(ThemeMode::Light, None, cx);
     Theme::sync_scrollbar_appearance(cx);
+    watch_system_fonts(cx);
+}
+
+/// Names the default families again when the platform installs the system fonts it loaded after
+/// the first window.
+///
+/// On Linux the text system starts without system fonts, so the first probe sees only the
+/// families the application added: it either names one of those or names nothing at all. Once
+/// the system fonts arrive, both probes run again and settle on the family they would have
+/// named had the fonts been there from the start.
+fn watch_system_fonts(cx: &mut App) {
+    // Subscribed for the life of the app: the handlers outlive every entity, and dropping the
+    // subscription would leave the theme on the answer the first pass gave.
+    cx.on_fonts_changed(|cx| {
+        mono_font::forget_installed_font_names();
+        system_font::resolve_default_font(cx);
+        mono_font::resolve_default_mono_font(cx);
+        Theme::sync_base(cx);
+        // What the pass settled on. Both probes are silent when they have nothing to say, so
+        // without this line a cold-start log cannot tell a re-probe that kept the families the
+        // first pass named from one that was never asked.
+        tracing::debug!(
+            "system fonts changed: UI family {:?}, monospace family {:?}",
+            Theme::global(cx).font_family,
+            Theme::global(cx).mono_font_family
+        );
+        cx.refresh_windows();
+    })
+    .detach();
 }
 
 pub trait ActiveTheme {

@@ -1,0 +1,294 @@
+diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
+index 793514dd3..e56295b53 100644
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -1,6 +1,7 @@
+ use scheduler::Instant;
+ use std::{
+     any::{TypeId, type_name},
++    borrow::Cow,
+     cell::{BorrowMutError, Cell, Ref, RefCell, RefMut},
+     ffi::OsString,
+     marker::PhantomData,
+@@ -14,7 +15,7 @@ use std::{
+ 
+ use anyhow::{Context as _, Result, anyhow};
+ use derive_more::{Deref, DerefMut};
+-use futures::{Future, FutureExt, channel::oneshot, future::LocalBoxFuture};
++use futures::{Future, FutureExt, StreamExt as _, channel::oneshot, future::LocalBoxFuture};
+ use itertools::Itertools;
+ use parking_lot::RwLock;
+ use slotmap::SlotMap;
+@@ -845,6 +846,7 @@ pub struct App {
+     pub(crate) keystroke_interceptors: SubscriberSet<(), KeystrokeObserver>,
+     pub(crate) keyboard_layout_observers: SubscriberSet<(), Handler>,
+     missing_glyph_callback: Rc<MissingGlyphCallbackSlot>,
++    pub(crate) fonts_changed_observers: SubscriberSet<(), Handler>,
+     pub(crate) thermal_state_observers: SubscriberSet<(), Handler>,
+     pub(crate) display_observers: SubscriberSet<(), DisplayHandler>,
+     /// The connected displays, as of the platform's last display change
+@@ -985,6 +987,7 @@ impl App {
+                 keystroke_interceptors: SubscriberSet::new(),
+                 keyboard_layout_observers: SubscriberSet::new(),
+                 missing_glyph_callback: Rc::default(),
++                fonts_changed_observers: SubscriberSet::new(),
+                 thermal_state_observers: SubscriberSet::new(),
+                 display_observers: SubscriberSet::new(),
+                 displays: read_displays(platform.as_ref()),
+@@ -1104,6 +1107,8 @@ impl App {
+             }
+         }));
+ 
++        app.borrow_mut().start_system_font_loader();
++
+         app
+     }
+ 
+@@ -2397,6 +2402,64 @@ impl App {
+         })
+     }
+ 
++    /// Invokes a handler after the platform installs system fonts it loaded after the first
++    /// window.
++    ///
++    /// Adding fonts invalidates the cached font ids and line layouts, and every window is
++    /// refreshed, so a handler only has to re-derive what it computed from the installed
++    /// families.
++    pub fn on_fonts_changed<F>(&self, mut callback: F) -> Subscription
++    where
++        F: 'static + FnMut(&mut App),
++    {
++        let (subscription, activate) = self.fonts_changed_observers.insert(
++            (),
++            Box::new(move |cx| {
++                callback(cx);
++                true
++            }),
++        );
++        activate();
++        subscription
++    }
++
++    /// Adds the system fonts a platform loads in the background, then lays out and draws again.
++    ///
++    /// See [`Platform::take_system_font_receiver`]. A platform that loads them before it hands
++    /// out its text system has no receiver and this does nothing.
++    fn start_system_font_loader(&mut self) {
++        let Some(mut receiver) = self.platform.take_system_font_receiver() else {
++            return;
++        };
++        self.spawn(async move |cx| {
++            while let Some(fonts) = receiver.next().await {
++                cx.update(|cx| cx.install_system_fonts(fonts));
++            }
++        })
++        .detach();
++    }
++
++    /// Installs fonts that arrived after the text system was created.
++    fn install_system_fonts(&mut self, fonts: Vec<Cow<'static, [u8]>>) {
++        let installed = fonts.len();
++        if let Err(error) = self.text_system.add_fonts(fonts) {
++            log::error!("failed to install the system fonts: {error}");
++            return;
++        }
++        // The one line that tells a cold-start log the background load finished: the batch the
++        // platform handed over, and the size of the set the text system now shapes with. Without
++        // it a successful install is indistinguishable from one that never happened.
++        log::info!(
++            "installed {installed} system font files; {} families are available",
++            self.text_system.all_font_names().len()
++        );
++        self.refresh_windows();
++        let app = &mut *self;
++        app.fonts_changed_observers
++            .clone()
++            .retain(&(), move |callback| (callback)(app));
++    }
++
+     /// Check whether a global of the given type has been assigned.
+     pub fn has_global<G: Global>(&self) -> bool {
+         self.globals_by_type.contains_key(&TypeId::of::<G>())
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 970d3e707..7e06a21d6 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -49,7 +49,7 @@ use anyhow::bail;
+ use anyhow::{Context as _, Result};
+ use async_task::Runnable;
+ use collections::FxHashMap;
+-use futures::channel::oneshot;
++use futures::channel::{mpsc, oneshot};
+ #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+ use image::RgbaImage;
+ use image::codecs::gif::GifDecoder;
+@@ -364,6 +364,20 @@ pub trait Platform: 'static {
+     fn background_executor(&self) -> BackgroundExecutor;
+     fn foreground_executor(&self) -> ForegroundExecutor;
+     fn text_system(&self) -> Arc<dyn PlatformTextSystem>;
++    /// Takes the receiver for system fonts the platform loads after it hands out its text
++    /// system, or `None` when it loads them before.
++    ///
++    /// A platform whose system fonts cost more to load than the first window may take starts
++    /// its text system without them and sends the bytes here once they are ready. [`App`]
++    /// adds them to the text system and redraws, so text that fell back to a missing glyph
++    /// is laid out again with the faces that arrive. The bytes are borrowed from mappings of
++    /// the font files and must stay valid for the life of the process. Only the first call
++    /// returns a receiver.
++    fn take_system_font_receiver(
++        &self,
++    ) -> Option<mpsc::UnboundedReceiver<Vec<Cow<'static, [u8]>>>> {
++        None
++    }
+ 
+     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>);
+     fn quit(&self);
+diff --git a/crates/gpui/src/text_system.rs b/crates/gpui/src/text_system.rs
+index d79908b..3bef07f 100644
+--- a/crates/gpui/src/text_system.rs
++++ b/crates/gpui/src/text_system.rs
+@@ -235,6 +235,9 @@ pub struct TextSystem {
+     wrapper_pool: Mutex<FxHashMap<FontIdWithSize, Vec<LineWrapper>>>,
+     font_runs_pool: Mutex<Vec<Vec<FontRun>>>,
+     fallback_font_stack: SmallVec<[Font; 2]>,
++    /// Families reported as unresolved at the current font generation, so a layout that
++    /// runs on every frame reports each one once instead of on every shaped run.
++    unresolved_fonts_reported: Mutex<FxHashSet<SharedString>>,
+     font_generation: Arc<AtomicUsize>,
+     missing_glyph_reporter: Arc<MissingGlyphReporter>,
+     missing_glyph_receiver: Mutex<Option<MissingGlyphReceiver>>,
+@@ -252,6 +255,7 @@ impl TextSystem {
+             font_ids_by_font: RwLock::default(),
+             wrapper_pool: Mutex::default(),
+             font_runs_pool: Mutex::default(),
++            unresolved_fonts_reported: Mutex::default(),
+             fallback_font_stack: smallvec![
+                 // TODO: Remove this when Linux have implemented setting fallbacks.
+                 font(".ZedMono"),
+@@ -292,9 +296,15 @@ impl TextSystem {
+     ///
+     /// Cached font resolution and line layouts are invalidated after installation.
+     /// Layouts already in progress may complete against the previous font set.
++    ///
++    /// A family that was missing before resolves to itself afterwards: the cached ids,
++    /// including the remembered failures, are dropped here and the bumped font generation
++    /// discards every line layout, so the next line wrapper for that family is built from the
++    /// family itself instead of from the face that stood in for it.
+     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+         self.platform_text_system.add_fonts(fonts)?;
+         self.font_ids_by_font.write().clear();
++        self.unresolved_fonts_reported.lock().clear();
+         self.missing_glyph_reporter.reset();
+         self.font_generation.fetch_add(1, Ordering::Release);
+         Ok(())
+@@ -362,11 +372,18 @@ impl TextSystem {
+     }
+ 
+     /// Resolves the specified font, falling back to the default font stack if
+-    /// the font fails to load.
++    /// the font fails to load, and to any installed family if that fails too.
++    ///
++    /// A platform may install its fonts after the first window, so a family it has not
++    /// installed yet resolves to a face that is installed, reported once at debug level per
++    /// family, instead of aborting the process. Nothing about that answer outlives
++    /// [`Self::add_fonts`], which clears the cached ids and bumps the font generation, so the
++    /// next resolution after the fonts arrive is the family the caller asked for.
+     ///
+     /// # Panics
+     ///
+-    /// Panics if the font and none of the fallbacks can be resolved.
++    /// Panics if the font, none of the fallbacks and no installed family can be resolved.
++    /// That leaves nothing to draw text with.
+     pub fn resolve_font(&self, font: &Font) -> FontId {
+         if let Ok(font_id) = self.font_id(font) {
+             return font_id;
+@@ -377,8 +394,13 @@ impl TextSystem {
+             }
+         }
+ 
++        if let Some(font_id) = self.first_installed_font(font) {
++            self.report_unresolved_font(font);
++            return font_id;
++        }
++
+         panic!(
+-            "failed to resolve font '{}' or any of the fallbacks: {}",
++            "failed to resolve font '{}' or any of the fallbacks: {}, and no font is installed",
+             font.family,
+             self.fallback_font_stack
+                 .iter()
+@@ -387,6 +409,62 @@ impl TextSystem {
+         );
+     }
+ 
++    /// Resolves the first installed family, in the platform's own sorted name order.
++    ///
++    /// This is the answer for a font stack the installed families do not cover, which is
++    /// the state of a platform that installs its system fonts after the first window. The
++    /// order makes the choice deterministic: the same installed set always answers with the
++    /// same family, whatever the caller asked for. The requested weight and style are tried
++    /// first and the font's own defaults after, so a family that only ships regular faces
++    /// still resolves.
++    fn first_installed_font(&self, requested: &Font) -> Option<FontId> {
++        let names = self.all_font_names();
++        let in_requested_style = names.iter().find_map(|family| {
++            self.font_id(&Font {
++                family: SharedString::from(family.clone()),
++                weight: requested.weight,
++                style: requested.style,
++                ..Font::default()
++            })
++            .ok()
++        });
++
++        in_requested_style.or_else(|| {
++            names
++                .iter()
++                .find_map(|family| self.font_id(&font(family.clone())).ok())
++        })
++    }
++
++    /// Reports a font stack the installed families do not cover, once per family and font
++    /// generation.
++    fn report_unresolved_font(&self, font: &Font) {
++        if self
++            .unresolved_fonts_reported
++            .lock()
++            .insert(font.family.clone())
++        {
++            log::debug!(
++                "font '{}' and its fallbacks are not installed; drawing with an installed family until they arrive",
++                font.family
++            );
++        }
++    }
++
++    /// Resolves the specified font like [`Self::resolve_font`] for a stack the installed
++    /// families do cover, and reports `None` for one they do not.
++    ///
++    /// A platform may install fonts after the first window, so a caller that probes a font
++    /// before drawing it can ask again once they arrive rather than treat the empty answer as
++    /// fatal. Unlike [`Self::resolve_font`], this never falls back to an arbitrary installed
++    /// family: the caller is asking whether the stack it named can be honoured, and the
++    /// answer has to stay no until those fonts arrive.
++    pub fn try_resolve_font(&self, font: &Font) -> Option<FontId> {
++        std::iter::once(font)
++            .chain(&self.fallback_font_stack)
++            .find_map(|candidate| self.font_id(candidate).ok())
++    }
++
+     /// Prewarm any system font caches needed to shape text.
+     ///
+     /// This may be expensive, so callers should generally invoke it on a
+@@ -542,6 +620,11 @@ impl TextSystem {
+     }
+ 
+     /// Returns a handle to a line wrapper, for the given font and font size.
++    ///
++    /// The pool is keyed by the id [`Self::resolve_font`] answers with, not by the requested
++    /// font, so the wrapper a family gets after [`Self::add_fonts`] is a different entry: the
++    /// cached ids are gone, the resolution yields the family that was asked for, and its
++    /// wrapper carries its own font id and measured character widths.
+     pub fn line_wrapper(self: &Arc<Self>, font: Font, font_size: Pixels) -> LineWrapperHandle {
+         let lock = &mut self.wrapper_pool.lock();
+         let font_id = self.resolve_font(&font);

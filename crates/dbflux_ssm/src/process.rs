@@ -82,6 +82,10 @@ impl SsmTunnel {
             cmd.env("AWS_PROFILE", profile);
         }
 
+        // The AWS CLI is an external program DBFlux starts for the user, so it runs with the
+        // environment the user gave DBFlux, without this process's Vulkan driver selection.
+        dbflux_core::child_environment::restore_child_environment(&mut cmd);
+
         let mut child = cmd.spawn().map_err(|err| {
             DbError::connection_failed(spawn_failure_message(
                 &err,
