@@ -3367,6 +3367,41 @@ fn escape_leaves_insert_mode_and_keeps_focus(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui::test]
+fn escape_cancels_a_pending_normal_mode_key_and_keeps_focus(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc def", true);
+
+    for pending in ["d", "2", "g", "d i", "f", "m", "2 d"] {
+        editor.keys(pending);
+        editor.keys("escape");
+
+        assert_eq!(editor.mode(), Some(VimMode::Normal));
+        assert!(
+            editor.editor_focused(),
+            "Esc after `{pending}` must keep focus on the editor"
+        );
+        assert!(
+            !editor.commands().contains(&Command::Cancel),
+            "Esc that drops `{pending}` must not reach the workspace keymap"
+        );
+
+        editor.keys("l");
+        assert_eq!(
+            editor.text(),
+            "abc def",
+            "`{pending}` was dropped, not applied"
+        );
+        editor.keys("0");
+    }
+
+    editor.keys("escape");
+    assert_eq!(
+        editor.commands(),
+        vec![Command::Cancel],
+        "Esc with nothing pending keeps its existing meaning"
+    );
+}
+
 #[derive(Default)]
 struct MenuWidths(std::sync::Mutex<Option<gpui::Pixels>>);
 
