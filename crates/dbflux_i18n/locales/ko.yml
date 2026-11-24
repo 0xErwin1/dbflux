@@ -5761,6 +5761,9 @@ sidebar:
     copy_path: 경로 복사
     copy_column_name: 열 이름 복사
     copy_field_name: 필드 이름 복사
+    copy_table_name: 테이블 이름 복사
+    copy_view_name: 뷰 이름 복사
+    copy_collection_name: 컬렉션 이름 복사
     schema_diff_unsupported: 스키마 비교는 관계형 연결에서만 사용할 수 있습니다.
     new_dashboard: 새 대시보드…
     import_dashboard: JSON에서 대시보드 가져오기…

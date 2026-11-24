@@ -5762,6 +5762,9 @@ sidebar:
     copy_path: Copy path
     copy_column_name: Copy column name
     copy_field_name: Copy field name
+    copy_table_name: Copy table name
+    copy_view_name: Copy view name
+    copy_collection_name: Copy collection name
     schema_diff_unsupported: Schema diff is only available for relational connections.
     new_dashboard: New dashboard…
     import_dashboard: Import dashboard from JSON…

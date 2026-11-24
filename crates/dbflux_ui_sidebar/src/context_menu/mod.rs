@@ -508,6 +508,15 @@ impl Sidebar {
                     ));
                 }
 
+                let copy_name_label = match node_kind {
+                    SchemaNodeKind::View => dbflux_i18n::t!("sidebar.menu.copy_view_name"),
+                    _ => dbflux_i18n::t!("sidebar.menu.copy_table_name"),
+                };
+                open_section.push(ContextMenuItem::item(
+                    copy_name_label,
+                    ContextMenuAction::CopyName,
+                ));
+
                 Self::append_menu_section(&mut items, open_section);
 
                 let mut transfer_section = Vec::new();
@@ -600,10 +609,16 @@ impl Sidebar {
 
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item(
-                        dbflux_i18n::t!("sidebar.menu.refresh"),
-                        ContextMenuAction::RefreshObject,
-                    )],
+                    [
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.refresh"),
+                            ContextMenuAction::RefreshObject,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.copy_collection_name"),
+                            ContextMenuAction::CopyName,
+                        ),
+                    ],
                 );
 
                 // "Query Measurement" is available for any time-series collection that
@@ -1425,7 +1440,7 @@ impl Sidebar {
             SchemaNodeKind::Column => vec![
                 ContextMenuItem::item(
                     dbflux_i18n::t!("sidebar.menu.copy_column_name"),
-                    ContextMenuAction::CopyColumnName,
+                    ContextMenuAction::CopyName,
                 )
                 .with_icon(AppIcon::Copy),
             ],
@@ -1433,7 +1448,7 @@ impl Sidebar {
             SchemaNodeKind::CollectionField => vec![
                 ContextMenuItem::item(
                     dbflux_i18n::t!("sidebar.menu.copy_field_name"),
-                    ContextMenuAction::CopyColumnName,
+                    ContextMenuAction::CopyName,
                 )
                 .with_icon(AppIcon::Copy),
             ],
@@ -2182,9 +2197,13 @@ impl Sidebar {
                     cx.write_to_clipboard(ClipboardItem::new_string(id_str));
                 }
             }
-            ContextMenuAction::CopyColumnName => {
+            ContextMenuAction::CopyName => {
                 if let Some(
-                    SchemaNodeId::Column { name, .. } | SchemaNodeId::CollectionField { name, .. },
+                    SchemaNodeId::Column { name, .. }
+                    | SchemaNodeId::CollectionField { name, .. }
+                    | SchemaNodeId::Table { name, .. }
+                    | SchemaNodeId::View { name, .. }
+                    | SchemaNodeId::Collection { name, .. },
                 ) = parse_node_id(&item_id)
                 {
                     cx.write_to_clipboard(ClipboardItem::new_string(name));
@@ -2590,7 +2609,7 @@ mod menu_i18n_tests {
         assert_ne!(english, spanish);
     }
 
-    const B3_KEYS: [&str; 8] = [
+    const B3_KEYS: [&str; 11] = [
         "sidebar.menu.new_dashboard",
         "sidebar.menu.import_dashboard",
         "sidebar.menu.rename_ellipsis",
@@ -2599,6 +2618,9 @@ mod menu_i18n_tests {
         "sidebar.menu.copy_inspector_id",
         "sidebar.menu.copy_column_name",
         "sidebar.menu.copy_field_name",
+        "sidebar.menu.copy_table_name",
+        "sidebar.menu.copy_view_name",
+        "sidebar.menu.copy_collection_name",
     ];
 
     #[test]
@@ -3163,10 +3185,10 @@ mod menu_availability_tests {
             .expect("sidebar alive");
     }
 
-    /// The column and collection field menus copy the bare name, not the
-    /// qualified one or the node id.
+    /// The column, collection field, table, view and collection menus copy
+    /// the bare name, not the qualified one or the node id.
     #[gpui::test]
-    async fn column_and_field_menus_copy_the_bare_name(cx: &mut TestAppContext) {
+    async fn object_menus_copy_the_bare_name(cx: &mut TestAppContext) {
         let (state, profile_id) = connected_profile(cx);
         let window = cx.add_window(|window, cx| Sidebar::new(state.clone(), window, cx));
 
@@ -3177,6 +3199,7 @@ mod menu_availability_tests {
                     table: "users".into(),
                     name: "email".into(),
                 },
+                "Copy column name",
                 "email",
             ),
             (
@@ -3185,11 +3208,41 @@ mod menu_availability_tests {
                     collection: "events".into(),
                     name: "payload".into(),
                 },
+                "Copy field name",
                 "payload",
+            ),
+            (
+                SchemaNodeId::Table {
+                    profile_id,
+                    database: Some("app".into()),
+                    schema: "public".into(),
+                    name: "users".into(),
+                },
+                "Copy table name",
+                "users",
+            ),
+            (
+                SchemaNodeId::View {
+                    profile_id,
+                    database: None,
+                    schema: "reporting".into(),
+                    name: "active_users".into(),
+                },
+                "Copy view name",
+                "active_users",
+            ),
+            (
+                SchemaNodeId::Collection {
+                    profile_id,
+                    database: "app".into(),
+                    name: "events".into(),
+                },
+                "Copy collection name",
+                "events",
             ),
         ];
 
-        for (node_id, expected) in cases {
+        for (node_id, label, expected) in cases {
             window
                 .update(cx, |sidebar, _, cx| {
                     sidebar.open_menu_for_item(&node_id.to_string(), point(px(0.), px(0.)), cx);
@@ -3197,8 +3250,9 @@ mod menu_availability_tests {
                     let index = menu
                         .items
                         .iter()
-                        .position(|item| matches!(item.action, ContextMenuAction::CopyColumnName))
+                        .position(|item| matches!(item.action, ContextMenuAction::CopyName))
                         .expect("menu offers the copy entry");
+                    assert_eq!(menu.items[index].label.as_str(), label);
                     sidebar.context_menu_activated(&[index], cx);
                     assert!(!sidebar.has_context_menu_open());
                 })

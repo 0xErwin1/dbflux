@@ -24,8 +24,9 @@ from the rail collapses the sidebar.
 - `/` focuses the sidebar search/filter.
 - `Enter` opens the selected item (for example, a table opens a data grid).
 - `r` refreshes the schema; `d` disconnects the active connection.
-- `m` opens the context menu for the selected item. On a column or a
-  collection field, the menu copies its name.
+- `m` opens the context menu for the selected item. On a table, view,
+  collection, column or collection field, the menu copies its bare name,
+  without the schema or database.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/schema-browser/tree-dark.webp">

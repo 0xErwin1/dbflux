@@ -90,8 +90,17 @@ user sees.
 3. Implement from the approved artboard, and name it in the pull request so
    reviewers can compare the result with it.
 
-A change that only fixes a defect without altering what the user sees needs no
-artboard. When in doubt, design it first.
+Two kinds of change skip the artboard and the approval:
+
+- A defect fix that does not alter what the user sees.
+- A small addition that follows a pattern the design already has, such as one
+  more entry in an existing context menu or submenu, or one more option in an
+  existing dropdown. Implement it directly. When an existing artboard shows that
+  surface, update it in the same change so the design stays current; that
+  update needs no approval.
+
+Anything beyond that, such as a new section, control or layout, is designed
+first. When in doubt, design it first.
 
 ## Verifying UI Changes with UI Automation
 

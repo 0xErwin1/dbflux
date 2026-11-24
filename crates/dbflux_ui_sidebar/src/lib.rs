@@ -610,9 +610,9 @@ pub enum ContextMenuAction {
     RefreshInstanceCatalog,
     /// Copy the string ID of the selected node to the clipboard.
     CopyItemId,
-    /// Copy the bare name of the selected column or collection field to the
-    /// clipboard.
-    CopyColumnName,
+    /// Copy the bare name of the selected column, collection field, table,
+    /// view or collection to the clipboard, without its schema or database.
+    CopyName,
     /// Open the Export wizard for the selected table(s) (or the right-
     /// clicked table, when it is not part of a larger selection). Distinct
     /// from `Export` (connection-profile export) — gated on
@@ -769,7 +769,7 @@ impl ContextMenuAction {
             // Instance catalog actions
             Self::RefreshInstanceCatalog => Some(AppIcon::RefreshCcw),
             Self::CopyItemId => Some(AppIcon::Copy),
-            Self::CopyColumnName => Some(AppIcon::Copy),
+            Self::CopyName => Some(AppIcon::Copy),
             Self::ExportTables => Some(AppIcon::ArrowUp),
             Self::ImportTables => Some(AppIcon::Download),
             Self::MigrateTables => Some(AppIcon::ArrowUpDown),
