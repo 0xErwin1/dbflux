@@ -31,6 +31,9 @@ use gpui_util::{ResultExt as _, new_std_command};
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use xkbcommon::xkb::{self, Keycode, Keysym, State};
 
+use crate::linux::vulkan_driver::{
+    Environment, ProcessEnvironment, restore_child_environment_from,
+};
 use crate::linux::{
     Backend, DisplayConnection, HeadlessConnection, LinuxDispatcher, PriorityQueueCalloopReceiver,
     select_backend,
@@ -916,9 +919,7 @@ impl Platform for LinuxPlatform {
             .spawn(async move {
                 let mut command = new_std_command("xdg-open");
                 command.arg(path);
-                if let Some(environment) = environment {
-                    environment.apply_to(&mut command);
-                }
+                prepare_launcher(&mut command, environment.as_ref());
                 #[allow(
                     clippy::disallowed_methods,
                     reason = "running on a background thread, so blocking is fine"
@@ -1137,6 +1138,29 @@ impl Platform for LinuxPlatform {
     fn add_recent_document(&self, _path: &Path) {}
 }
 
+/// Prepares a desktop launcher (`xdg-open` and the other openers) to start a program for the
+/// user: it gets the session's graphical environment, and loses the Vulkan driver selection
+/// [`crate::select_vulkan_driver`] may have pinned this process to, so the program it starts runs
+/// on the GPU the user's own environment picks.
+fn prepare_launcher(
+    command: &mut std::process::Command,
+    environment: Option<&GraphicalEnvironment>,
+) {
+    prepare_launcher_from(&ProcessEnvironment, command, environment);
+}
+
+/// [`prepare_launcher`] for a given process environment.
+fn prepare_launcher_from(
+    process: &dyn Environment,
+    command: &mut std::process::Command,
+    environment: Option<&GraphicalEnvironment>,
+) {
+    if let Some(environment) = environment {
+        environment.apply_to(command);
+    }
+    restore_child_environment_from(process, command);
+}
+
 /// Opens `target` with the first of the desktop's launchers that succeeds. Returns whether one
 /// did.
 #[cfg(any(feature = "wayland", feature = "x11"))]
@@ -1146,7 +1170,7 @@ async fn run_open_commands(
     environment: &GraphicalEnvironment,
 ) -> bool {
     for mut command in open::commands(target) {
-        environment.apply_to(&mut command);
+        prepare_launcher(&mut command, Some(environment));
         if let Some(token) = activation_token {
             command.env("XDG_ACTIVATION_TOKEN", token);
         }
@@ -1717,6 +1741,48 @@ async fn await_idle_sleep_prevention(
 mod tests {
     use super::*;
     use gpui::{Point, px};
+
+    /// A process environment holding only the Vulkan selection marker.
+    struct MarkerEnvironment(Option<&'static str>);
+
+    impl Environment for MarkerEnvironment {
+        fn get(&self, name: &str) -> Option<String> {
+            (name == crate::SELECTION_VARIABLE)
+                .then_some(self.0)
+                .flatten()
+                .map(str::to_owned)
+        }
+    }
+
+    /// The variables a prepared launcher removes, sorted.
+    fn removed_by_launcher(marker: Option<&'static str>) -> Vec<String> {
+        let mut command = std::process::Command::new("xdg-open");
+        prepare_launcher_from(&MarkerEnvironment(marker), &mut command, None);
+        let mut removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        removed.sort();
+        removed
+    }
+
+    #[test]
+    fn a_launcher_drops_the_vulkan_driver_selection() {
+        assert_eq!(
+            removed_by_launcher(Some("*intel_icd*")),
+            vec![
+                crate::SELECTION_VARIABLE.to_owned(),
+                "VK_LOADER_DRIVERS_SELECT".to_owned()
+            ],
+            "open_with_system and the reveal fallback would otherwise pin the opened program to the boot GPU"
+        );
+    }
+
+    #[test]
+    fn a_launcher_keeps_the_environment_when_nothing_was_selected() {
+        assert!(removed_by_launcher(None).is_empty());
+    }
 
     #[cfg(any(feature = "wayland", feature = "x11"))]
     #[test]
