@@ -68,8 +68,13 @@ jobs:
           cp aur/PKGBUILD package/PKGBUILD
           chmod 755 package
           chmod 644 package/PKGBUILD
+          # makepkg refuses to run, even for --printsrcinfo, unless every destination
+          # directory is writable; point them at the tmpfs so the recipe stays read-only.
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
-            --read-only --tmpfs /tmp -v "$PWD/package:/package:ro" aur-srcinfo > package/.SRCINFO
+            --read-only --tmpfs /tmp \
+            -e BUILDDIR=/tmp/build -e PKGDEST=/tmp/pkg -e SRCDEST=/tmp/src \
+            -e SRCPKGDEST=/tmp/srcpkg -e LOGDEST=/tmp/log \
+            -v "$PWD/package:/package:ro" aur-srcinfo > package/.SRCINFO
       - uses: actions/upload-artifact@v4
         if: steps.render.outputs.changed == 'updated'
         with:
