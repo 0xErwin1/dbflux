@@ -2,6 +2,20 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.11.1] - 2026-11-24
+
+### Changed
+
+* **Faster cold start on Linux** — The window no longer waits for the system fonts or for every installed Vulkan driver. System fonts load in the background and the interface switches to them as soon as they arrive (a font named in settings is applied then, and text drawn before they arrive uses a bundled font instead of failing). The app restarts itself once at launch with only the boot GPU's Vulkan driver selected (`VK_LOADER_DRIVERS_SELECT`), retries with every driver if that one cannot open the window, and does nothing when a `VK_*` driver variable is already set or `GPUI_VULKAN_DRIVER_SELECT=0`. On a hybrid Intel/NVIDIA laptop the first frame of a cold start went from about one second to about 200 ms.
+* **Editor runs no longer wait on a schema check, and grid writes check the primary key instead** — A query now starts as soon as you run it, without the "Checking…" state and the "Schema changed" dialog that offered to refresh or continue. In its place, saving a row, deleting rows, **Save All** or a chunked builder mutation in the data grid first reads the table's primary key and compares it with the one the grid uses. If it changed or the table is gone, nothing is sent and a **Reload table** / **Cancel** dialog opens: Reload table takes the new key and reloads the rows, discarding the pending edits (their row identities were taken under the old key), and Cancel leaves them pending and unsaved. A failed check also sends nothing and reports the error. **Refresh Schema** and a DDL statement run from DBFlux now drop the connection's cached table details, so the next use reads them again (#1007).
+
+### Fixed
+
+* **Escape keeps the keyboard where you were working** — With Vim mode on, pressing Escape to drop a half-typed command such as `d`, a count, `g`, `f`, `m` or a text object moved the keyboard out of the editor; it now only cancels the command and the editor keeps focus. An Escape nothing else handled parked the keyboard on the window itself, so the open document stopped answering keys until you clicked it; inside a document the keyboard now stays where it was, or returns to the document when it was nowhere, on the window or in a text field the document does not close itself (a collection's query fields, the docked console). A second Escape no longer puts you back in the text of a CSV, spreadsheet or object editor.
+* **MongoDB scripts with `runCommand` ask for admin confirmation** — MongoDB scripts calling `runCommand` failed after confirming the prompt because the confirmed ceiling stopped at `Destructive`. Scripts containing `runCommand` now always prompt for admin confirmation and run with an `AdminDestructive` ceiling (and require `AdminDestructive` over MCP), while other scripts stay at `Destructive` (#1356).
+* **NULL and modifier keywords take the keyword color** — In the SQL editor, `NULL` was colored as a string after `=` and as a type after `IS`, and the data grid and row inspector painted NULL values in the number color. NULL now takes the keyword color everywhere, and the editor colors `ASC`, `DESC`, `NULLS FIRST/LAST`, `DEFAULT`, `COLLATE` and similar modifier keywords like `SELECT` instead of the editor's default attribute blue (#987).
+* **The Welcome dialog fits short windows** — In a window about 500 px tall, the usage-statistics cards of the Welcome dialog ran over the privacy note and the footer. The update preferences and usage statistics now scroll inside their column when the window is too short to show them whole.
+
 ## [0.11.0] - 2026-11-21
 
 ### Added
