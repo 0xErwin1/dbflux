@@ -2,14 +2,19 @@
 ///
 /// TablePlus keeps its saved connections as an XML property list: a top-level
 /// array with one dictionary per connection. On Windows the file lives at
-/// `%LocalAppData%\com.tinyapp.TablePlus\Data\Connections.plist`.
+/// `%LocalAppData%\com.tinyapp.TablePlus\Data\Connections.plist`; on macOS at
+/// `~/Library/Application Support/com.tinyapp.TablePlus/Data/Connections.plist`,
+/// or under `com.tinyapp.TablePlus-setapp` for the Setapp build.
 ///
 /// Ports are stored as strings and flags as integers. A SQLite connection
 /// stores the full file path in `DatabaseHost`, while `DatabaseName` holds
-/// only the file name.
+/// only the file name. A socket connection is flagged `UseSock` on Windows and
+/// `isUseSocket` on macOS; the DBFlux configs this importer builds have no
+/// socket mode, so those entries are skipped.
 ///
 /// Passwords are not in the plist. TablePlus keeps them in its own encrypted
-/// store, whose format is undocumented, so this importer cannot recover them.
+/// store on Windows and in the Keychain on macOS, so this importer cannot
+/// recover them.
 /// Every connection that authenticates still imports; only the secret is
 /// skipped, with a reason telling the user to re-enter it.
 mod plist;
@@ -29,7 +34,7 @@ use super::{
 };
 
 const PASSWORD_SKIP_REASON: &str =
-    "TablePlus keeps saved passwords in its own encrypted store; re-enter it after import";
+    "TablePlus does not store passwords in its connection file; re-enter it after import";
 
 pub struct TablePlusImporter;
 
@@ -122,6 +127,10 @@ fn map_connection(entry: &Entry<'_>) -> Result<ExternalImportCandidate, String> 
     let driver = entry
         .text("Driver")
         .ok_or_else(|| "connection has no driver".to_string())?;
+
+    if entry.flag("UseSock") || entry.flag("isUseSocket") {
+        return Err("socket connections are not supported".to_string());
+    }
 
     let user = entry.text("DatabaseUser");
     let database = entry.text("DatabaseName");

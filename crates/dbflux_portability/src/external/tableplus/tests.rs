@@ -283,6 +283,38 @@ fn bad_entries_are_skipped_without_aborting_the_batch() {
 }
 
 #[test]
+fn socket_connections_are_skipped_under_either_platform_key() {
+    let outcome = parse(&document(&[
+        connection(&[
+            ("ConnectionName", string("Windows socket")),
+            ("UseSock", integer(1)),
+        ]),
+        connection(&[
+            ("ConnectionName", string("macOS socket")),
+            ("Driver", string("MySQL")),
+            ("DatabaseHost", "<string />".to_string()),
+            ("isUseSocket", integer(1)),
+        ]),
+        connection(&[("UseSock", integer(0)), ("isUseSocket", integer(0))]),
+    ]))
+    .expect("parse");
+
+    assert_eq!(outcome.candidates.len(), 1);
+    let reasons: Vec<(&str, &str)> = outcome
+        .skips
+        .iter()
+        .map(|skip| (skip.name.as_str(), skip.reason.as_str()))
+        .collect();
+    assert_eq!(
+        reasons,
+        vec![
+            ("Windows socket", "socket connections are not supported"),
+            ("macOS socket", "socket connections are not supported"),
+        ]
+    );
+}
+
+#[test]
 fn malformed_xml_is_a_plist_error() {
     let result = parse("<plist><array><dict><key>ID</key></array></plist>");
 
