@@ -169,6 +169,19 @@ jobs:
           # Pull requests and releases still restore from main.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # A pull request whose Cargo.lock differs from main restores main's cache
+      # by prefix, which can carry an unfinished DuckDB source tree; see the
+      # same step in the cross-platform job for why it is dropped.
+      - name: Drop unfinished DuckDB source trees
+        shell: bash
+        run: |
+          for tree in target/duckdb-sources/*/; do
+            if [ -d "$tree" ] && [ ! -f "$tree.complete" ]; then
+              echo "removing unfinished $tree"
+              rm -rf "$tree"
+            fi
+          done
+
       - name: Install cargo-nextest
         if: matrix.shard != 'doctests'
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2
