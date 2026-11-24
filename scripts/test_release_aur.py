@@ -109,6 +109,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('--force', publish)
         self.assertIn('cancel-in-progress: false', workflow)
 
+    def test_makepkg_writes_only_to_tmpfs_while_the_recipe_stays_read_only(self):
+        # makepkg aborts unless every destination directory is writable, even for
+        # --printsrcinfo, and the recipe directory is mounted read-only.
+        workflow = (SCRIPT.parents[1] / '.github/workflows/sync-release-aur.yml').read_text()
+        prepare = workflow.split('\n  publish:\n')[0]
+        self.assertIn('/package:ro', prepare)
+        self.assertIn('--tmpfs /tmp', prepare)
+        for variable in ('BUILDDIR', 'PKGDEST', 'SRCDEST', 'SRCPKGDEST', 'LOGDEST'):
+            self.assertRegex(prepare, rf'-e {variable}=/tmp/')
+
 
 if __name__ == '__main__':
     unittest.main()
