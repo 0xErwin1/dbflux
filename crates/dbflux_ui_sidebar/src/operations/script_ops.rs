@@ -636,11 +636,18 @@ impl Sidebar {
                 path
             };
 
-            if let Err(_e) = std::process::Command::new("xdg-open").arg(&target).spawn()
-                && let Err(e) = std::process::Command::new("gio")
-                    .arg("open")
-                    .arg(&target)
-                    .spawn()
+            // The opener runs with the environment the user gave DBFlux: the Vulkan driver
+            // selection this process may carry is not the file manager's.
+            let mut opener = std::process::Command::new("xdg-open");
+            opener.arg(&target);
+            dbflux_ui_base::child_environment::restore_child_environment(&mut opener);
+
+            let mut fallback_opener = std::process::Command::new("gio");
+            fallback_opener.arg("open").arg(&target);
+            dbflux_ui_base::child_environment::restore_child_environment(&mut fallback_opener);
+
+            if let Err(_e) = opener.spawn()
+                && let Err(e) = fallback_opener.spawn()
             {
                 report_reveal_failure(e, cx);
             }

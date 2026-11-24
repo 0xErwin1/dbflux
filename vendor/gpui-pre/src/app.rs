@@ -1,6 +1,7 @@
 use scheduler::Instant;
 use std::{
     any::{TypeId, type_name},
+    borrow::Cow,
     cell::{BorrowMutError, Cell, Ref, RefCell, RefMut},
     ffi::OsString,
     marker::PhantomData,
@@ -14,7 +15,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use derive_more::{Deref, DerefMut};
-use futures::{Future, FutureExt, channel::oneshot, future::LocalBoxFuture};
+use futures::{Future, FutureExt, StreamExt as _, channel::oneshot, future::LocalBoxFuture};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use slotmap::SlotMap;
@@ -845,6 +846,7 @@ pub struct App {
     pub(crate) keystroke_interceptors: SubscriberSet<(), KeystrokeObserver>,
     pub(crate) keyboard_layout_observers: SubscriberSet<(), Handler>,
     missing_glyph_callback: Rc<MissingGlyphCallbackSlot>,
+    pub(crate) fonts_changed_observers: SubscriberSet<(), Handler>,
     pub(crate) thermal_state_observers: SubscriberSet<(), Handler>,
     pub(crate) display_observers: SubscriberSet<(), DisplayHandler>,
     /// The connected displays, as of the platform's last display change
@@ -985,6 +987,7 @@ impl App {
                 keystroke_interceptors: SubscriberSet::new(),
                 keyboard_layout_observers: SubscriberSet::new(),
                 missing_glyph_callback: Rc::default(),
+                fonts_changed_observers: SubscriberSet::new(),
                 thermal_state_observers: SubscriberSet::new(),
                 display_observers: SubscriberSet::new(),
                 displays: read_displays(platform.as_ref()),
@@ -1103,6 +1106,8 @@ impl App {
                 }
             }
         }));
+
+        app.borrow_mut().start_system_font_loader();
 
         app
     }
@@ -2395,6 +2400,64 @@ impl App {
                 text_system.disable_missing_glyph_reporting();
             }
         })
+    }
+
+    /// Invokes a handler after the platform installs system fonts it loaded after the first
+    /// window.
+    ///
+    /// Adding fonts invalidates the cached font ids and line layouts, and every window is
+    /// refreshed, so a handler only has to re-derive what it computed from the installed
+    /// families.
+    pub fn on_fonts_changed<F>(&self, mut callback: F) -> Subscription
+    where
+        F: 'static + FnMut(&mut App),
+    {
+        let (subscription, activate) = self.fonts_changed_observers.insert(
+            (),
+            Box::new(move |cx| {
+                callback(cx);
+                true
+            }),
+        );
+        activate();
+        subscription
+    }
+
+    /// Adds the system fonts a platform loads in the background, then lays out and draws again.
+    ///
+    /// See [`Platform::take_system_font_receiver`]. A platform that loads them before it hands
+    /// out its text system has no receiver and this does nothing.
+    fn start_system_font_loader(&mut self) {
+        let Some(mut receiver) = self.platform.take_system_font_receiver() else {
+            return;
+        };
+        self.spawn(async move |cx| {
+            while let Some(fonts) = receiver.next().await {
+                cx.update(|cx| cx.install_system_fonts(fonts));
+            }
+        })
+        .detach();
+    }
+
+    /// Installs fonts that arrived after the text system was created.
+    fn install_system_fonts(&mut self, fonts: Vec<Cow<'static, [u8]>>) {
+        let installed = fonts.len();
+        if let Err(error) = self.text_system.add_fonts(fonts) {
+            log::error!("failed to install the system fonts: {error}");
+            return;
+        }
+        // The one line that tells a cold-start log the background load finished: the batch the
+        // platform handed over, and the size of the set the text system now shapes with. Without
+        // it a successful install is indistinguishable from one that never happened.
+        log::info!(
+            "installed {installed} system font files; {} families are available",
+            self.text_system.all_font_names().len()
+        );
+        self.refresh_windows();
+        let app = &mut *self;
+        app.fonts_changed_observers
+            .clone()
+            .retain(&(), move |callback| (callback)(app));
     }
 
     /// Check whether a global of the given type has been assigned.

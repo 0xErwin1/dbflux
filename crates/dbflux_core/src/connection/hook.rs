@@ -1345,6 +1345,10 @@ impl ConnectionHook {
         command.envs(self.context_env(context));
         command.envs(self.env.iter());
 
+        // The hook is the user's program: it starts with the environment the user gave DBFlux,
+        // without the Vulkan driver selection GPUI's startup may have made for this process.
+        crate::child_environment::restore_child_environment(&mut command);
+
         let child = command.spawn().map_err(|error| {
             format!("Failed to execute '{}': {}", self.display_command(), error)
         })?;

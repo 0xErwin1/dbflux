@@ -49,7 +49,7 @@ use anyhow::bail;
 use anyhow::{Context as _, Result};
 use async_task::Runnable;
 use collections::FxHashMap;
-use futures::channel::oneshot;
+use futures::channel::{mpsc, oneshot};
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 use image::RgbaImage;
 use image::codecs::gif::GifDecoder;
@@ -364,6 +364,20 @@ pub trait Platform: 'static {
     fn background_executor(&self) -> BackgroundExecutor;
     fn foreground_executor(&self) -> ForegroundExecutor;
     fn text_system(&self) -> Arc<dyn PlatformTextSystem>;
+    /// Takes the receiver for system fonts the platform loads after it hands out its text
+    /// system, or `None` when it loads them before.
+    ///
+    /// A platform whose system fonts cost more to load than the first window may take starts
+    /// its text system without them and sends the bytes here once they are ready. [`App`]
+    /// adds them to the text system and redraws, so text that fell back to a missing glyph
+    /// is laid out again with the faces that arrive. The bytes are borrowed from mappings of
+    /// the font files and must stay valid for the life of the process. Only the first call
+    /// returns a receiver.
+    fn take_system_font_receiver(
+        &self,
+    ) -> Option<mpsc::UnboundedReceiver<Vec<Cow<'static, [u8]>>>> {
+        None
+    }
 
     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>);
     fn quit(&self);
