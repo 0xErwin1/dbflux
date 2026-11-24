@@ -323,8 +323,11 @@ delta to this directory.
 - Patch 8: `external-drop-acceptance.patch`, written for DBFlux against this directory with
   patches 1 to 7 applied — two files, 145 diff lines. It has no upstream counterpart.
 - Patch 9: `background-system-fonts.patch`, written for DBFlux against this directory with
-  patches 1 to 8 applied — three files, 157 added and 5 removed lines. It has no upstream
-  counterpart.
+  patches 1 to 8 applied — three files, 171 added and 5 removed lines. It has no upstream
+  counterpart. `App::install_system_fonts` logs the batch it installed and the size of the
+  family set the text system now shapes with: both probes that ride `App::on_fonts_changed`
+  stay silent when they have nothing to correct, so without it a cold-start log cannot tell a
+  finished install from one that never ran.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 

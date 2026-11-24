@@ -39,6 +39,9 @@ What a vendor bump must re-check: the accessibility arm — suppressing the `ari
   in GPUI's fallback stack. Naming nothing leaves the theme as it is, and the pass that runs
   when the fonts arrive asks again. With the fonts already installed the probes give exactly
   the answer they gave before, so a run that has its system fonts up front is unaffected.
+  The fonts-changed pass logs the pair it settled on at debug level: each probe says nothing
+  when it has nothing to correct, so a cold-start log otherwise cannot tell a re-probe that
+  kept the families the first pass named from one that never ran.
   This crate's tests cannot run from the DBFlux workspace (`cargo` refuses to test a
   non-member package that has dev-dependencies), so the behaviour is verified by
   `cargo check -p gpui-component` and by hand: on a machine whose `.SystemUIFont` resolves to

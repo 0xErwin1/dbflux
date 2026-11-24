@@ -142,11 +142,17 @@ The first commit that added this directory carries the published source unchange
   path, so a file holding several faces is loaded once and the result is deterministic.
   Glyph fallback for faces only the system provides (CJK, emoji) therefore arrives shortly
   after the first frame, and a family the app itself added, such as DBFlux's bundled Archivo,
-  resolves from the first frame. Covered by `system_fonts::tests`
-  (`cargo test -p gpui-pre-linux --lib`): one test maps a directory of real TrueType files and
-  checks that each file appears once with its own bytes, the other points `FONTCONFIG_FILE` at
-  a scratch config and checks that the faces reached through it are mapped too. Both use the
-  fonts in `crates/bolt/assets/fonts` as their fixture and fail if that directory is missing.
+  resolves from the first frame. A batch that arrives after its only consumer is gone is
+  logged as a warning, not at debug: the load succeeded and its result was discarded, which
+  leaves the process on the fonts the app added for the whole session. Covered by
+  `system_fonts::tests` (`cargo test -p gpui-pre-linux --lib`): one test maps a directory of
+  real TrueType files and checks that each file appears once with its own bytes, another
+  points `FONTCONFIG_FILE` at a scratch config and checks that the faces reached through it
+  are mapped too, a third wraps the real text system, adds a bundled family after it started,
+  and checks that the next resolution names that family instead of the stand-in the first pass
+  drew with, and a fourth checks that the loader hands its fonts to one consumer only. All use
+  the fonts in `crates/bolt/assets/fonts` as their fixture and fail if that directory is
+  missing.
   The manifest gains `fontdb` (the version and features `cosmic-text` already uses) and
   `memmap2`.
 

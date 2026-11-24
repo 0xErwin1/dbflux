@@ -2441,10 +2441,18 @@ impl App {
 
     /// Installs fonts that arrived after the text system was created.
     fn install_system_fonts(&mut self, fonts: Vec<Cow<'static, [u8]>>) {
+        let installed = fonts.len();
         if let Err(error) = self.text_system.add_fonts(fonts) {
             log::error!("failed to install the system fonts: {error}");
             return;
         }
+        // The one line that tells a cold-start log the background load finished: the batch the
+        // platform handed over, and the size of the set the text system now shapes with. Without
+        // it a successful install is indistinguishable from one that never happened.
+        log::info!(
+            "installed {installed} system font files; {} families are available",
+            self.text_system.all_font_names().len()
+        );
         self.refresh_windows();
         let app = &mut *self;
         app.fonts_changed_observers

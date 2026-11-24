@@ -53,7 +53,12 @@ fn load_in_background() -> FontReceiver {
                 return;
             }
             if sender.unbounded_send(fonts).is_err() {
-                log::debug!("the system fonts were loaded after their receiver went away");
+                // No consumer is left, so the process draws the whole session with the fonts it
+                // added itself. A warning, not a debug line: the load succeeded and its result was
+                // thrown away, which a cold-start log has to show.
+                log::warn!(
+                    "the system fonts were loaded after their receiver went away; text keeps the fonts the app adds"
+                );
             }
         });
     if let Err(error) = spawned {
@@ -119,7 +124,71 @@ fn map_font_file(path: &Path) -> Option<Cow<'static, [u8]>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io::Write as _, path::PathBuf};
+    use gpui::{Font, SharedString, TextSystem};
+    use std::{io::Write as _, path::PathBuf, sync::Arc};
+
+    /// The text system the platform starts with has no system fonts; the fonts a platform loads
+    /// later have to reach it, and the next layout has to be the family that was asked for.
+    ///
+    /// This is the S3 chain under the app: `add_fonts` hands over the bytes the loader mapped,
+    /// the platform text system parses them into its database, the cached font ids are dropped,
+    /// and a line resolved afterwards names the requested family instead of the stand-in the
+    /// first pass had to draw with.
+    #[test]
+    fn a_font_added_after_startup_is_the_family_the_next_layout_shapes_with() {
+        let directory = fixture_font_dir();
+        let text_system = Arc::new(TextSystem::new(Arc::new(
+            crate::linux::CosmicTextSystem::new_without_system_fonts("Archivo"),
+        )));
+
+        // The family the application adds itself: the state the first frame draws in.
+        text_system
+            .add_fonts(vec![map_font_file(&directory.join("Archivo-Regular.ttf"))
+                .expect("the bundled interface font should map")])
+            .expect("the bundled interface font should install");
+        let requested: Font = gpui::font("JetBrains Mono");
+        assert!(
+            text_system.try_resolve_font(&requested).is_none(),
+            "a family only the system provides is not resolvable yet"
+        );
+        assert_eq!(
+            resolved_family(&text_system, &requested).as_deref(),
+            Some("Archivo"),
+            "the layout before the fonts arrive draws the installed stand-in"
+        );
+
+        text_system
+            .add_fonts(vec![map_font_file(&directory.join("JetBrainsMono-Regular.ttf"))
+                .expect("the bundled monospace font should map")])
+            .expect("the bundled monospace font should install");
+
+        assert!(
+            text_system.try_resolve_font(&requested).is_some(),
+            "the installed family is resolvable after the fonts arrive"
+        );
+        assert_eq!(
+            resolved_family(&text_system, &requested).as_deref(),
+            Some("JetBrains Mono"),
+            "the layout after the fonts arrive is the family that was asked for"
+        );
+    }
+
+    /// The loader hands its fonts to the app once.
+    ///
+    /// A second `take` must not start a second load or answer with an empty channel: the app that
+    /// asks second would receive nothing and draw the whole session with the fonts it added
+    /// itself, which is the state `odd/tasks/gpui-cold-start.md` S3 rules out.
+    #[test]
+    fn hands_the_fonts_to_one_consumer_only() {
+        let mut system_fonts = SystemFonts::default();
+
+        let first = system_fonts.take();
+        assert!(first.is_some(), "the first take starts the loader");
+        assert!(
+            system_fonts.take().is_none(),
+            "a later take answers nothing instead of an empty channel"
+        );
+    }
 
     /// The font files this repository ships, standing in for an installed system font set.
     ///
@@ -152,6 +221,12 @@ mod tests {
     fn fontconfig_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The family a layout is drawn with, going through the same resolution the renderer uses.
+    fn resolved_family(text_system: &Arc<TextSystem>, requested: &Font) -> Option<SharedString> {
+        let font_id = text_system.resolve_font(requested);
+        text_system.get_font_for_id(font_id).map(|font| font.family)
     }
 
     fn database_from_dir(directory: &Path) -> fontdb::Database {

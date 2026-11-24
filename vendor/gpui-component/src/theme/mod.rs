@@ -57,6 +57,14 @@ fn watch_system_fonts(cx: &mut App) {
         system_font::resolve_default_font(cx);
         mono_font::resolve_default_mono_font(cx);
         Theme::sync_base(cx);
+        // What the pass settled on. Both probes are silent when they have nothing to say, so
+        // without this line a cold-start log cannot tell a re-probe that kept the families the
+        // first pass named from one that was never asked.
+        tracing::debug!(
+            "system fonts changed: UI family {:?}, monospace family {:?}",
+            Theme::global(cx).font_family,
+            Theme::global(cx).mono_font_family
+        );
         cx.refresh_windows();
     })
     .detach();
