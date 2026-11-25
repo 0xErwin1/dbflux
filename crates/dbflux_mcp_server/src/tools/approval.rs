@@ -521,8 +521,9 @@ fn wait_response(
 
     if state == ApprovalState::Rejected
         && let Some(reason) = execution.and_then(|execution| execution.rejection_reason.as_deref())
+        && let Some(object) = response.as_object_mut()
     {
-        response["reason"] = serde_json::json!(reason);
+        object.insert("reason".to_string(), serde_json::json!(reason));
     }
 
     response
@@ -545,8 +546,13 @@ fn pending_execution_status_response(
             "message": message,
         });
 
-        if status == "rejected" {
-            payload["reason"] = serde_json::json!(execution.rejection_reason);
+        if status == "rejected"
+            && let Some(object) = payload.as_object_mut()
+        {
+            object.insert(
+                "reason".to_string(),
+                serde_json::json!(execution.rejection_reason),
+            );
         }
 
         payload

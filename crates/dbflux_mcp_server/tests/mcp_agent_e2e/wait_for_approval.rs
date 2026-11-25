@@ -7,6 +7,10 @@ use std::time::Duration;
 
 /// Queues a delete for `actor_id` straight in the shared store, as another
 /// process would, and returns its id.
+#[expect(
+    clippy::expect_used,
+    reason = "test harness: a failed store call must abort the calling test with its own error"
+)]
 async fn queue_for(agent: &Agent, actor_id: &str) -> String {
     agent
         .runtime
@@ -25,6 +29,10 @@ async fn queue_for(agent: &Agent, actor_id: &str) -> String {
         .to_string()
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "test harness: a failed store call must abort the calling test with its own error"
+)]
 async fn reject_as_person(agent: &Agent, pending_id: &str, reason: &str) {
     agent
         .runtime

@@ -483,8 +483,10 @@ fn approval_queued_result(
         "status_tool": "get_pending_execution",
     });
 
-    if let Some(command) = watch_command {
-        content["watch_command"] = serde_json::json!(command);
+    if let Some(command) = watch_command
+        && let Some(object) = content.as_object_mut()
+    {
+        object.insert("watch_command".to_string(), serde_json::json!(command));
     }
 
     CallToolResult::structured(content)

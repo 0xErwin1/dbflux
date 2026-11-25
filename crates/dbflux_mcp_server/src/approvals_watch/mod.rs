@@ -71,15 +71,20 @@ impl WatchEvent {
             "pending_id": self.pending_id,
         });
 
-        if let Some(execution) = &self.execution {
-            line["tool_id"] = json!(execution.plan.tool_id);
-            line["actor_id"] = json!(execution.plan.actor_id);
-            line["connection_id"] = json!(execution.plan.connection_id);
+        if let Some(execution) = &self.execution
+            && let Some(object) = line.as_object_mut()
+        {
+            object.insert("tool_id".to_string(), json!(execution.plan.tool_id));
+            object.insert("actor_id".to_string(), json!(execution.plan.actor_id));
+            object.insert(
+                "connection_id".to_string(),
+                json!(execution.plan.connection_id),
+            );
 
             if self.kind == WatchEventKind::Rejected
                 && let Some(reason) = &execution.rejection_reason
             {
-                line["reason"] = json!(reason);
+                object.insert("reason".to_string(), json!(reason));
             }
         }
 
