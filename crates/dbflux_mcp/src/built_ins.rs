@@ -121,6 +121,7 @@ pub fn builtin_policies() -> Vec<ToolPolicyDto> {
                 "request_execution".to_string(),
                 "list_pending_executions".to_string(),
                 "get_pending_execution".to_string(),
+                "wait_for_approval".to_string(),
                 "query_audit_logs".to_string(),
                 "get_audit_entry".to_string(),
                 "export_audit_logs".to_string(),
@@ -209,5 +210,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_builtin_policy_allowing_get_pending_execution_allows_wait_for_approval() {
+        let mut listing = 0;
+
+        for policy in builtin_policies() {
+            let has = |tool: &str| policy.allowed_tools.iter().any(|allowed| allowed == tool);
+
+            assert_eq!(
+                has("get_pending_execution"),
+                has("wait_for_approval"),
+                "{} must treat both approval status tools alike",
+                policy.id
+            );
+            listing += usize::from(has("wait_for_approval"));
+        }
+
+        assert!(listing > 0, "at least one built-in must allow the tool");
     }
 }

@@ -5295,6 +5295,9 @@ settings:
       get_pending_execution:
         name: Obter pendente
         description: Recupera os detalhes de uma execução pendente específica
+      wait_for_approval:
+        name: Aguardar aprovação
+        description: Aguarda até que uma execução pendente seja aprovada, rejeitada ou expire
       query_audit_logs:
         name: Consultar logs de auditoria
         description: Pesquisa e filtra a trilha de auditoria

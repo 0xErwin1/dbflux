@@ -5302,6 +5302,9 @@ settings:
       get_pending_execution:
         name: Get Pending
         description: Retrieve details of a specific pending execution
+      wait_for_approval:
+        name: Wait for Approval
+        description: Wait until a pending execution is approved, rejected or expires
       query_audit_logs:
         name: Query Audit Logs
         description: Search and filter the audit trail

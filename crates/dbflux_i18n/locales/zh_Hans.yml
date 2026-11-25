@@ -5302,6 +5302,9 @@ settings:
       get_pending_execution:
         name: 获取待处理项
         description: 检索特定待处理执行的详情
+      wait_for_approval:
+        name: 等待审批
+        description: 等待待处理执行被批准、拒绝或过期
       query_audit_logs:
         name: 查询审计日志
         description: 搜索和筛选审计记录

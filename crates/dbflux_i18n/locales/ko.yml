@@ -5301,6 +5301,9 @@ settings:
       get_pending_execution:
         name: 대기 항목 조회
         description: 특정 대기 중인 실행의 세부 정보를 조회합니다
+      wait_for_approval:
+        name: 승인 대기
+        description: 대기 중인 실행이 승인, 거부 또는 만료될 때까지 기다립니다
       query_audit_logs:
         name: 감사 로그 조회
         description: 감사 로그를 검색하고 필터링합니다

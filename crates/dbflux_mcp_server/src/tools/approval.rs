@@ -4,6 +4,7 @@
 //! - `request_execution`: Request approval for a pending operation
 //! - `list_pending_executions`: List the calling client's pending executions
 //! - `get_pending_execution`: Get details of a specific pending execution
+//! - `wait_for_approval`: Wait, bounded, until a pending execution is decided
 //! - `approve_execution` / `reject_execution`: always denied over MCP by
 //!   authorization; a person resolves pending executions in DBFlux
 
@@ -14,11 +15,21 @@ use rmcp::{
     tool, tool_router,
 };
 use serde::Deserialize;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{helper::to_json_content, server::DbFluxServer};
 
 const DEFAULT_REJECTION_REASON: &str = "rejected by approver";
+
+/// How long `wait_for_approval` waits when the caller gives no timeout.
+const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 60;
+const MIN_WAIT_TIMEOUT_SECS: u64 = 1;
+const MAX_WAIT_TIMEOUT_SECS: u64 = 120;
+
+/// How often `wait_for_approval` re-reads the shared approval store. The
+/// person decides in the DBFlux process, so the store is the only signal.
+const WAIT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RequestExecutionParams {
@@ -47,6 +58,17 @@ pub struct GetPendingExecutionParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct WaitForApprovalParams {
+    #[schemars(description = "Pending execution ID returned when the call was queued")]
+    pub pending_id: String,
+
+    #[schemars(
+        description = "Seconds to wait for a decision (default 60, clamped to 1..=120). Call again when the result is 'still_pending'"
+    )]
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ApproveExecutionParams {
     #[schemars(description = "Pending execution ID")]
     pub pending_id: String,
@@ -64,7 +86,7 @@ pub struct RejectExecutionParams {
 #[tool_router(router = approval_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(
-        description = "Queue an operation for approval by a person in DBFlux and return its pending_id. Tell the user to approve it in DBFlux (Workspace > Pending Approvals), wait (MCP clients cannot approve), check it with get_pending_execution, and once approved call the target tool itself with exactly the same params to run it once"
+        description = "Queue an operation for approval by a person in DBFlux and return its pending_id. Tell the user to approve it in DBFlux (Workspace > Pending Approvals), wait (MCP clients cannot approve), call wait_for_approval with the pending_id (it waits a bounded time and says when a decision was made), and once approved call the target tool itself with exactly the same params to run it once"
     )]
     async fn request_execution(
         &self,
@@ -166,7 +188,7 @@ impl DbFluxServer {
     }
 
     #[tool(
-        description = "Check a pending execution by pending_id. While it is returned with status 'pending', it is still waiting for a person to approve it in DBFlux. Status 'rejected' means a person rejected it; 'reason' carries what they wrote, if anything: do not repeat the call unchanged. Once it is no longer found it was approved or expired: repeat the identical original call (same tool, same arguments); an approved call then runs once, otherwise a new request is queued"
+        description = "Check a pending execution by pending_id. While it is returned with status 'pending', it is still waiting for a person to approve it in DBFlux. Status 'approved' means a person approved it: repeat the identical original call (same tool, same arguments) to run it once. Status 'rejected' means a person rejected it; 'reason' carries what they wrote, if anything: do not repeat the call unchanged. Status 'expired' means nobody decided in time: repeating the call queues a new request. Prefer wait_for_approval over polling this tool"
     )]
     async fn get_pending_execution(
         &self,
@@ -205,6 +227,58 @@ impl DbFluxServer {
                             None,
                         )),
                     }
+                },
+            )
+            .await
+    }
+
+    #[tool(
+        description = "Wait, without polling, until a pending execution is decided by a person in DBFlux or timeout_secs (default 60, max 120) elapse. Returns status 'approved' (repeat the identical original call to run it once), 'rejected' (with 'reason'; do not retry), 'expired' (do not retry; repeating the original call queues a new request), 'still_pending' (call wait_for_approval again) or 'not_found'. Use the pending_id from the approval_required result"
+    )]
+    async fn wait_for_approval(
+        &self,
+        Parameters(params): Parameters<WaitForApprovalParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let state = self.state.clone();
+        let pending_id = params
+            .pending_id
+            .parse::<Uuid>()
+            .map_err(|_| ErrorData::invalid_params("Invalid pending_id format", None))?;
+        let timeout = clamp_wait_timeout(params.timeout_secs);
+
+        self.governance
+            .authorize_and_execute(
+                "wait_for_approval",
+                None,
+                ExecutionClassification::Read,
+                move || async move {
+                    let deadline = tokio::time::Instant::now() + timeout;
+
+                    let response = loop {
+                        // The lock is released before every sleep: a waiting
+                        // call must never block the runtime for other calls.
+                        let execution = {
+                            let runtime = state.runtime.read().await;
+                            runtime
+                                .approval_service()
+                                .get_execution(pending_id)
+                                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+                        };
+
+                        let decision =
+                            approval_state(execution.as_ref(), &state.client_id, now_epoch_ms());
+
+                        let remaining =
+                            deadline.saturating_duration_since(tokio::time::Instant::now());
+
+                        if decision != ApprovalState::Pending || remaining.is_zero() {
+                            break wait_response(pending_id, decision, execution.as_ref());
+                        }
+
+                        tokio::time::sleep(WAIT_POLL_INTERVAL.min(remaining)).await;
+                    };
+
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
@@ -384,27 +458,121 @@ fn now_epoch_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// Where a pending execution stands for the client that asks about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovalState {
+    Pending,
+    Approved,
+    Rejected,
+    Expired,
+    /// Unknown, owned by another client, or already used by the call it
+    /// authorized.
+    NotFound,
+}
+
+/// Classifies `execution` for `actor_id`. Another client's execution is
+/// indistinguishable from a missing one.
+fn approval_state(
+    execution: Option<&PendingExecution>,
+    actor_id: &str,
+    now_ms: i64,
+) -> ApprovalState {
+    let Some(execution) = execution.filter(|execution| execution.plan.actor_id == actor_id) else {
+        return ApprovalState::NotFound;
+    };
+
+    let expired = execution
+        .expires_at
+        .is_some_and(|expires| expires <= now_ms);
+
+    match execution.status {
+        PendingStatus::Rejected => ApprovalState::Rejected,
+        PendingStatus::Consumed => ApprovalState::NotFound,
+        PendingStatus::Pending | PendingStatus::Approved if expired => ApprovalState::Expired,
+        PendingStatus::Pending => ApprovalState::Pending,
+        PendingStatus::Approved => ApprovalState::Approved,
+    }
+}
+
+fn clamp_wait_timeout(timeout_secs: Option<u64>) -> Duration {
+    Duration::from_secs(
+        timeout_secs
+            .unwrap_or(DEFAULT_WAIT_TIMEOUT_SECS)
+            .clamp(MIN_WAIT_TIMEOUT_SECS, MAX_WAIT_TIMEOUT_SECS),
+    )
+}
+
+/// What `wait_for_approval` returns once it stops waiting.
+fn wait_response(
+    pending_id: Uuid,
+    state: ApprovalState,
+    execution: Option<&PendingExecution>,
+) -> serde_json::Value {
+    let (status, next_action) = match state {
+        ApprovalState::Approved => ("approved", "repeat_identical_call"),
+        ApprovalState::Rejected => ("rejected", "do_not_retry"),
+        ApprovalState::Expired => ("expired", "do_not_retry"),
+        ApprovalState::Pending => ("still_pending", "call_wait_for_approval_again"),
+        ApprovalState::NotFound => ("not_found", "do_not_retry"),
+    };
+
+    let mut response = serde_json::json!({
+        "pending_id": pending_id.to_string(),
+        "status": status,
+        "next_action": next_action,
+    });
+
+    if state == ApprovalState::Rejected
+        && let Some(reason) = execution.and_then(|execution| execution.rejection_reason.as_deref())
+    {
+        response["reason"] = serde_json::json!(reason);
+    }
+
+    response
+}
+
 /// What `get_pending_execution` returns for `execution`: the entry itself
-/// while it waits for a decision, a rejection payload carrying the person's
-/// reason once rejected, and `None` when it was approved, used or expired.
+/// while it waits for a decision, and a payload naming the real outcome once
+/// it was approved, rejected (with the person's reason) or expired. `None`
+/// when it is unknown, belongs to another client or was already used.
 fn pending_execution_status_response(
     execution: &PendingExecution,
     now_ms: i64,
 ) -> Option<serde_json::Value> {
-    match execution.status {
-        PendingStatus::Pending if execution.expires_at.is_none_or(|expires| expires > now_ms) => {
-            serde_json::to_value(execution).ok()
-        }
-        PendingStatus::Rejected => Some(serde_json::json!({
+    let outcome = |status: &str, message: &str| {
+        let mut payload = serde_json::json!({
             "pending_id": execution.id.to_string(),
-            "status": "rejected",
+            "status": status,
             "tool_id": execution.plan.tool_id,
             "connection_id": execution.plan.connection_id,
-            "reason": execution.rejection_reason,
-            "message": "A person rejected this execution in DBFlux. It will not run. \
-                        Repeating the identical call queues a new request.",
-        })),
-        _ => None,
+            "message": message,
+        });
+
+        if status == "rejected" {
+            payload["reason"] = serde_json::json!(execution.rejection_reason);
+        }
+
+        payload
+    };
+
+    match approval_state(Some(execution), &execution.plan.actor_id, now_ms) {
+        ApprovalState::Pending => serde_json::to_value(execution).ok(),
+        ApprovalState::Approved => Some(outcome(
+            "approved",
+            "A person approved this execution in DBFlux. Repeat the identical original call \
+             (same tool, same arguments) to run it once.",
+        )),
+        ApprovalState::Rejected => Some(outcome(
+            "rejected",
+            "A person rejected this execution in DBFlux. It will not run. \
+             Repeating the identical call queues a new request.",
+        )),
+        ApprovalState::Expired => Some(outcome(
+            "expired",
+            "Nobody decided this execution before it expired. It will not run. \
+             Repeating the identical call queues a new request.",
+        )),
+        ApprovalState::NotFound => None,
     }
 }
 
@@ -415,11 +583,12 @@ fn effective_rejection_reason(reason: Option<&str>) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_REJECTION_REASON, DbFluxServer, effective_rejection_reason,
+        DEFAULT_REJECTION_REASON, DbFluxServer, clamp_wait_timeout, effective_rejection_reason,
         pending_execution_status_response,
     };
     use dbflux_approval::store::{ExecutionPlan, PendingExecution, PendingStatus};
     use dbflux_policy::ExecutionClassification;
+    use std::time::Duration;
 
     #[test]
     fn classify_tool_keeps_stricter_requested_execution_levels() {
@@ -466,6 +635,14 @@ mod tests {
     }
 
     #[test]
+    fn wait_timeout_defaults_to_60_seconds_and_is_clamped_to_1_through_120() {
+        assert_eq!(clamp_wait_timeout(None), Duration::from_secs(60));
+        assert_eq!(clamp_wait_timeout(Some(0)), Duration::from_secs(1));
+        assert_eq!(clamp_wait_timeout(Some(30)), Duration::from_secs(30));
+        assert_eq!(clamp_wait_timeout(Some(9_999)), Duration::from_secs(120));
+    }
+
+    #[test]
     fn reject_execution_uses_runtime_default_reason_when_missing() {
         assert_eq!(effective_rejection_reason(None), DEFAULT_REJECTION_REASON);
     }
@@ -503,17 +680,21 @@ mod tests {
     }
 
     #[test]
-    fn status_response_keeps_pending_and_hides_resolved_or_expired_entries() {
+    fn status_response_keeps_pending_names_the_outcome_and_hides_used_entries() {
         let pending = execution(PendingStatus::Pending, None);
         let response = pending_execution_status_response(&pending, 2_000)
             .expect("a pending execution is reported");
         assert_eq!(response["status"], serde_json::json!("pending"));
 
-        assert!(pending_execution_status_response(&pending, 20_000).is_none());
-        assert!(
+        let expired = pending_execution_status_response(&pending, 20_000)
+            .expect("an expired execution is reported");
+        assert_eq!(expired["status"], serde_json::json!("expired"));
+
+        let approved =
             pending_execution_status_response(&execution(PendingStatus::Approved, None), 2_000)
-                .is_none()
-        );
+                .expect("an approved execution is reported");
+        assert_eq!(approved["status"], serde_json::json!("approved"));
+
         assert!(
             pending_execution_status_response(&execution(PendingStatus::Consumed, None), 2_000)
                 .is_none()

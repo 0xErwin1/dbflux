@@ -53,6 +53,7 @@ const TOOL_IDS: &[&str] = &[
     "request_execution",
     "list_pending_executions",
     "get_pending_execution",
+    "wait_for_approval",
     "query_audit_logs",
     "get_audit_entry",
     "export_audit_logs",
@@ -269,6 +270,7 @@ const TOOL_GROUPS: &[(&str, &[&str])] = &[
             "request_execution",
             "list_pending_executions",
             "get_pending_execution",
+            "wait_for_approval",
         ],
     ),
     (
@@ -2533,7 +2535,8 @@ mod form_row_tests {
         );
 
         let tools = mcp_policy_tool_ids();
-        assert_eq!(tools.len(), 23);
+        assert_eq!(tools.len(), 24);
+        assert!(tools.contains(&"wait_for_approval"));
         assert!(!tools.contains(&"approve_execution"));
         assert!(!tools.contains(&"reject_execution"));
         assert_eq!(tools[0], "list_connections");
@@ -2803,6 +2806,7 @@ mod tests {
         "request_execution",
         "list_pending_executions",
         "get_pending_execution",
+        "wait_for_approval",
         "query_audit_logs",
         "get_audit_entry",
         "export_audit_logs",

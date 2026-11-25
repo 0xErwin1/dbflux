@@ -23,6 +23,7 @@ pub fn route_tool(tool_id: &str) -> Result<RouteTarget, ToolCatalogError> {
         "request_execution"
         | "list_pending_executions"
         | "get_pending_execution"
+        | "wait_for_approval"
         | "approve_execution"
         | "reject_execution" => RouteTarget::Approval,
         "query_audit_logs" | "get_audit_entry" | "export_audit_logs" => RouteTarget::Audit,

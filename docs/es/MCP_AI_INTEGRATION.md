@@ -108,8 +108,8 @@ Toda solicitud de IA se hace cumplir a través de todas estas capas, en orden:
    el esquema completo de eventos.
 
 Las tools que no reciben conexión (`list_connections`, las de scripts salvo
-`execute_script`, las de auditoría, `list_pending_executions` y
-`get_pending_execution`) no pasan por el gate de conexión y se evalúan en un scope sin
+`execute_script`, las de auditoría, `list_pending_executions`,
+`get_pending_execution` y `wait_for_approval`) no pasan por el gate de conexión y se evalúan en un scope sin
 conexión. En ese scope cada trusted client activo tiene `builtin/read-only` más
 todos los roles y policies que tenga asignados en cualquier conexión con MCP
 habilitado. Un cliente que puede escribir en una conexión puede, por lo tanto,
@@ -159,7 +159,8 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado de consultas de base de datos contra una conexión. La clasificación se deriva del cuerpo del script. Los scripts Lua, Python y Bash se rechazan (ver más abajo) |
 | Aprobación      | `request_execution`       | admin                                  | Encola una llamada para que la apruebe una persona. Una vez aprobada, llama a la tool con los mismos argumentos para ejecutarla una vez |
 | Aprobación      | `list_pending_executions` | read                                   | Muestra las ejecuciones pendientes de aprobación del cliente que llama; las de otros clientes nunca se listan |
-| Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente del cliente que llama; la de otro cliente se informa como no encontrada. Una rechazada devuelve `status: "rejected"` y el motivo |
+| Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente del cliente que llama; la de otro cliente se informa como no encontrada. Una aprobada, rechazada o vencida devuelve ese estado, y la rechazada además el motivo |
+| Aprobación      | `wait_for_approval`       | read                                   | Espera, sin sondeo, hasta que se decide una ejecución pendiente del cliente que llama o transcurre `timeout_secs` (por defecto 60, de 1 a 120). Devuelve `approved`, `rejected` (con el motivo), `expired`, `still_pending` o `not_found`; la solicitud de otro cliente se informa como no encontrada |
 | Aprobación      | `approve_execution`       | —                                      | Siempre se deniega por MCP. Una persona aprueba en DBFlux                                                            |
 | Aprobación      | `reject_execution`        | —                                      | Siempre se deniega por MCP. Una persona rechaza en DBFlux                                                            |
 | Auditoría       | `query_audit_logs`        | read                                   | Busca y filtra el audit trail                                                                                        |
@@ -216,12 +217,17 @@ que ninguna otra policy asignada al actor la permita.
 
 1. El agente llama a una tool cuya clase la policy decide como Ask. El servidor
    encola la llamada como ejecución pendiente, registra un evento de auditoría
-   `mcp_authorize` con outcome `pending` y responde con un error JSON-RPC cuyos
-   datos son `{"code": "approval_required", "status": "pending", "pending_id": "..."}`.
+   `mcp_authorize` con outcome `pending` y responde con un resultado normal, no un error, cuyo
+   contenido estructurado es `{"code": "approval_required", "status": "pending", "pending_id": "...", "wait_tool": "wait_for_approval", ...}` y cuyo texto indica al agente qué hacer.
 2. Una persona aprueba o rechaza la llamada en DBFlux (**Workspace → Pending
    Approvals**). El servidor y la app comparten la cola a través de
    `dbflux.db`, así que una llamada encolada por `dbflux mcp` aparece en la app.
-3. El agente vuelve a llamar a la misma tool con los mismos argumentos. El
+3. El agente llama a `wait_for_approval` con el `pending_id`. Relee la cola compartida
+   aproximadamente una vez por segundo, como máximo `timeout_secs` (por defecto 60,
+   máximo 120), y devuelve `approved`, `rejected`, `expired` o `still_pending`; con
+   `still_pending` el agente vuelve a llamarla. Una llamada en espera no bloquea
+   otras llamadas de la misma sesión.
+4. Tras `approved`, el agente vuelve a llamar a la misma tool con los mismos argumentos. El
    servidor encuentra la aprobación que coincide con el actor, la conexión, la
    tool y los argumentos, la consume y ejecuta la llamada. El evento
    `mcp_authorize` de esa llamada tiene outcome `success` y nombra la aprobación
@@ -231,14 +237,20 @@ Una aprobación ejecuta una llamada. Repetir la llamada otra vez encola una nuev
 solicitud, igual que cambiar cualquier argumento. Una llamada rechazada nunca se
 ejecuta. Una aprobación vence 24 horas después de encolarse la llamada.
 
-Tras un rechazo, `get_pending_execution` devuelve `status: "rejected"` y un
+`wait_for_approval` devuelve `next_action`: `repeat_identical_call` para `approved`,
+`do_not_retry` para `rejected` y `expired`, y `call_wait_for_approval_again` para
+`still_pending`. `get_pending_execution` informa del mismo estado real (`approved`,
+`rejected`, `expired`) en lugar de no encontrada, pero los agentes deben preferir
+`wait_for_approval` al sondeo.
+
+Tras un rechazo, `wait_for_approval` y `get_pending_execution` devuelven `status: "rejected"` y un
 campo `reason` con el texto que la persona escribió al rechazar, recortado y
 limitado a 500 caracteres, o `null` si no escribió ninguno. El mismo motivo queda
 registrado en el evento de auditoría `mcp_reject_execution`.
 
 `request_execution` encola una llamada de forma explícita, con el mismo resultado
-que llamar a la tool bajo Ask. `request_execution`, `list_pending_executions` y
-`get_pending_execution` solo crean o leen entradas de la cola, así que bajo Ask
+que llamar a la tool bajo Ask. `request_execution`, `list_pending_executions`,
+`get_pending_execution` y `wait_for_approval` solo crean o leen entradas de la cola, así que bajo Ask
 se ejecutan sin encolarse ellas mismas.
 
 Los clientes MCP nunca pueden aprobar ni rechazar: `approve_execution` y
@@ -561,9 +573,10 @@ Para evitar contaminar las máquinas de desarrollo durante los tests:
 
 ### La llamada responde con `approval_required`
 
-- La policy decide la clase de la llamada como Ask. Aprueba la ejecución
-  pendiente indicada por `pending_id` en **Workspace → Pending Approvals** y
-  repite la llamada con los mismos argumentos.
+- La policy decide la clase de la llamada como Ask. Es un resultado normal, no un
+  error: la llamada no se ejecutó. Aprueba la ejecución pendiente indicada por
+  `pending_id` en **Workspace → Pending Approvals**; el agente lo sabe mediante
+  `wait_for_approval` y repite la llamada con los mismos argumentos.
 - Repetir la llamada con otros argumentos encola una nueva solicitud en lugar de
   usar la aprobación.
 - Un agente no puede aprobar sus propias llamadas: `approve_execution` y

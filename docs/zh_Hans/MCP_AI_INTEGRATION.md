@@ -83,7 +83,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 5. **审批流程**：Ask 决定会把调用排入待审批执行队列。由人在 DBFlux 中批准或驳回；已批准的调用会在智能体以相同参数再次调用时执行一次。
 6. **审计追踪**：每一个决策都会追加到统一 SQLite 数据库的 `aud_audit_events` 表中，可查询、可导出。完整的事件结构参见 `docs/AUDIT.md`。
 
-不接收连接的工具（`list_connections`、除 `execute_script` 外的脚本工具、审计工具、`list_pending_executions` 与 `get_pending_execution`）不经过连接闸门，而是在无连接的作用域中评估。在该作用域中，每个处于活动状态的受信任客户端都拥有 `builtin/read-only`，以及它在任何启用了 MCP 的连接上被分配的所有角色和策略。因此，在某个连接上可以写入的客户端可以创建和更新脚本，并同样受 Allow、Ask 或 Deny 决策约束；没有任何连接分配的客户端仍保持只读访问。该作用域在 MCP 服务器启动时计算，因此修改分配后请重启代理的 MCP 会话。
+不接收连接的工具（`list_connections`、除 `execute_script` 外的脚本工具、审计工具、`list_pending_executions`、`get_pending_execution` 与 `wait_for_approval`）不经过连接闸门，而是在无连接的作用域中评估。在该作用域中，每个处于活动状态的受信任客户端都拥有 `builtin/read-only`，以及它在任何启用了 MCP 的连接上被分配的所有角色和策略。因此，在某个连接上可以写入的客户端可以创建和更新脚本，并同样受 Allow、Ask 或 Deny 决策约束；没有任何连接分配的客户端仍保持只读访问。该作用域在 MCP 服务器启动时计算，因此修改分配后请重启代理的 MCP 会话。
 
 这六层都会在每一个 `tools/call` 请求中，于服务器进程内依次执行；任何一层都无法从客户端绕过。
 
@@ -125,7 +125,8 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 脚本 | `execute_script` | computed | 对某个连接执行已保存的数据库查询脚本。执行类别由脚本内容推导。Lua、Python 和 Bash 脚本会被拒绝（见下文） |
 | 审批 | `request_execution` | admin | 把一次调用排队等待人工审批。批准后，以相同参数调用该工具本身即可执行一次 |
 | 审批 | `list_pending_executions` | read | 查看调用方客户端自己等待审批的执行；其他客户端的执行不会列出 |
-| 审批 | `get_pending_execution` | read | 获取调用方客户端某个待审批执行的详情；其他客户端的执行会报告为未找到。被驳回的执行返回 `status: "rejected"` 以及审批人给出的原因 |
+| 审批 | `get_pending_execution` | read | 获取调用方客户端某个待审批执行的详情；其他客户端的执行会报告为未找到。已批准、被驳回或已过期的执行返回相应状态，被驳回的还附带审批人给出的原因 |
+| 审批 | `wait_for_approval` | read | 无需轮询，等待调用方客户端的某个待审批执行被决定，或等到 `timeout_secs`（默认 60，范围 1 到 120）秒。返回 `approved`、`rejected`（附原因）、`expired`、`still_pending` 或 `not_found`；其他客户端的请求会报告为未找到 |
 | 审批 | `approve_execution` | — | 通过 MCP 调用时始终被拒绝。由人在 DBFlux 中批准 |
 | 审批 | `reject_execution` | — | 通过 MCP 调用时始终被拒绝。由人在 DBFlux 中驳回 |
 | 审计 | `query_audit_logs` | read | 搜索并筛选审计追踪 |
@@ -171,15 +172,18 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 
 ### 审批流程
 
-1. 智能体调用的工具，其类别被策略决定为 Ask。服务器把该调用排入待审批执行队列，记录一条 outcome 为 `pending` 的 `mcp_authorize` 审计事件，并返回一个 JSON-RPC 错误，其数据为 `{"code": "approval_required", "status": "pending", "pending_id": "..."}`。
+1. 智能体调用的工具，其类别被策略决定为 Ask。服务器把该调用排入待审批执行队列，记录一条 outcome 为 `pending` 的 `mcp_authorize` 审计事件，并返回一个普通结果而不是错误，其结构化内容为 `{"code": "approval_required", "status": "pending", "pending_id": "...", "wait_tool": "wait_for_approval", ...}`，文本则告诉智能体下一步该做什么。
 2. 由人在 DBFlux 中批准或驳回该调用（**Workspace → 待审批项**）。服务器与应用通过 `dbflux.db` 共享该队列，因此由 `dbflux mcp` 排队的调用会出现在应用中。
-3. 智能体以相同参数再次调用同一工具。服务器找到与执行者、连接、工具及参数都匹配的批准记录，消耗它并执行该调用。该调用的 `mcp_authorize` 事件 outcome 为 `success`，并在 `details_json.pending_execution_id` 中注明所用的批准记录。
+3. 智能体用 `pending_id` 调用 `wait_for_approval`。它大约每秒重新读取一次共享队列，最长 `timeout_secs`（默认 60，最大 120）秒，然后返回 `approved`、`rejected`、`expired` 或 `still_pending`；若为 `still_pending`，智能体再次调用它。等待中的调用不会阻塞同一会话上的其他调用。
+4. 在 `approved` 之后，智能体以相同参数再次调用同一工具。服务器找到与执行者、连接、工具及参数都匹配的批准记录，消耗它并执行该调用。该调用的 `mcp_authorize` 事件 outcome 为 `success`，并在 `details_json.pending_execution_id` 中注明所用的批准记录。
 
 一次批准只执行一次调用。再次重复调用会排入新的请求，修改任何参数也是如此。被驳回的调用永远不会执行。批准在调用排队 24 小时后失效。
 
-驳回之后，`get_pending_execution` 返回 `status: "rejected"` 以及 `reason` 字段，其中是审批人驳回时输入的文本（去除首尾空白，最多 500 个字符）；未填写时为 `null`。同一原因也会记录在 `mcp_reject_execution` 审计事件中。
+`wait_for_approval` 会返回 `next_action`：`approved` 为 `repeat_identical_call`，`rejected` 与 `expired` 为 `do_not_retry`，`still_pending` 为 `call_wait_for_approval_again`。`get_pending_execution` 也会报告同样的真实状态（`approved`、`rejected`、`expired`），而不是未找到，但智能体应优先使用 `wait_for_approval` 而不是轮询。
 
-`request_execution` 显式地把调用排队，效果与在 Ask 下直接调用该工具相同。`request_execution`、`list_pending_executions` 与 `get_pending_execution` 只创建或读取队列条目，因此在 Ask 下它们直接执行，自身不会被排队。
+驳回之后，`wait_for_approval` 与 `get_pending_execution` 返回 `status: "rejected"` 以及 `reason` 字段，其中是审批人驳回时输入的文本（去除首尾空白，最多 500 个字符）；未填写时为 `null`。同一原因也会记录在 `mcp_reject_execution` 审计事件中。
+
+`request_execution` 显式地把调用排队，效果与在 Ask 下直接调用该工具相同。`request_execution`、`list_pending_executions`、`get_pending_execution` 与 `wait_for_approval` 只创建或读取队列条目，因此在 Ask 下它们直接执行，自身不会被排队。
 
 MCP 客户端永远不能批准或驳回：无论策略如何设置，`approve_execution` 与 `reject_execution` 通过 MCP 调用时都会被拒绝，错误代码为 `self_approval_forbidden`，且每次尝试都会被审计。只有人在 DBFlux 界面中处理待审批执行。
 
@@ -414,7 +418,7 @@ if !outcome.allowed {
 
 ### 调用返回 `approval_required`
 
-- 策略把该调用的类别决定为 Ask。请在 **Workspace → 待审批项** 中批准 `pending_id` 所指的待审批执行，然后以相同参数重复该调用。
+- 策略把该调用的类别决定为 Ask。这是普通结果而不是错误：该调用尚未执行。请在 **Workspace → 待审批项** 中批准 `pending_id` 所指的待审批执行；智能体通过 `wait_for_approval` 得知后，以相同参数重复该调用。
 - 以不同参数重复调用会排入新的请求，而不会使用该批准。
 - 智能体不能批准自己的调用：`approve_execution` 与 `reject_execution` 通过 MCP 调用时始终被拒绝（`self_approval_forbidden`）。
 

@@ -83,7 +83,7 @@ Every AI request is enforced through all of these layers in order:
 5. **Approval path**: an Ask decision queues the call as a pending execution. A person approves or rejects it in DBFlux, and an approved call runs once when the agent repeats it with the same arguments.
 6. **Audit trail**: every decision is appended to `aud_audit_events` in the unified SQLite database and is queryable/exportable. See `docs/AUDIT.md` for the full event schema.
 
-Tools that take no connection (`list_connections`, the script tools except `execute_script`, the audit tools, `list_pending_executions` and `get_pending_execution`) skip the connection gate and are evaluated against a scope with no connection. On that scope every active trusted client holds `builtin/read-only` plus every role and policy it is assigned on any connection with MCP enabled. A client that may write on one connection can therefore create and update scripts, subject to the same Allow, Ask or Deny decisions; a client with no connection assignments keeps read-only access. The scope is computed when the MCP server starts, so restart the agent's MCP session after changing assignments.
+Tools that take no connection (`list_connections`, the script tools except `execute_script`, the audit tools, `list_pending_executions`, `get_pending_execution` and `wait_for_approval`) skip the connection gate and are evaluated against a scope with no connection. On that scope every active trusted client holds `builtin/read-only` plus every role and policy it is assigned on any connection with MCP enabled. A client that may write on one connection can therefore create and update scripts, subject to the same Allow, Ask or Deny decisions; a client with no connection assignments keeps read-only access. The scope is computed when the MCP server starts, so restart the agent's MCP session after changing assignments.
 
 All six layers run inside the server process on every `tools/call` request. None can be bypassed from the client side.
 
@@ -125,7 +125,8 @@ All six layers run inside the server process on every `tools/call` request. None
 | Scripts | `execute_script` | computed | Execute a saved database-query script against a connection. Classification is derived from the script body. Lua, Python and Bash scripts are rejected (see below) |
 | Approval | `request_execution` | admin | Queue a call for approval by a person. Once approved, call the tool itself with the same arguments to run it once |
 | Approval | `list_pending_executions` | read | View the calling client's executions awaiting approval; other clients' executions are never listed |
-| Approval | `get_pending_execution` | read | Retrieve details of one of the calling client's pending executions; another client's is reported as not found. A rejected one returns `status: "rejected"` and the reason the person gave |
+| Approval | `get_pending_execution` | read | Retrieve details of one of the calling client's pending executions; another client's is reported as not found. An approved, rejected or expired one returns that status, and a rejected one also the reason the person gave |
+| Approval | `wait_for_approval` | read | Wait, without polling, until one of the calling client's pending executions is decided or `timeout_secs` (default 60, from 1 to 120) elapse. Returns `approved`, `rejected` (with the reason), `expired`, `still_pending` or `not_found`; another client's request is reported as not found |
 | Approval | `approve_execution` | — | Always denied over MCP. A person approves in DBFlux |
 | Approval | `reject_execution` | — | Always denied over MCP. A person rejects in DBFlux |
 | Audit | `query_audit_logs` | read | Search and filter the audit trail |
@@ -171,15 +172,18 @@ An actor can hold several policies on a connection, directly and through roles. 
 
 ### The approval flow
 
-1. The agent calls a tool whose class the policy decides as Ask. The server queues the call as a pending execution, records an `mcp_authorize` audit event with outcome `pending`, and answers with a JSON-RPC error whose data is `{"code": "approval_required", "status": "pending", "pending_id": "..."}`.
+1. The agent calls a tool whose class the policy decides as Ask. The server queues the call as a pending execution, records an `mcp_authorize` audit event with outcome `pending`, and answers with a normal result, not an error, whose structured content is `{"code": "approval_required", "status": "pending", "pending_id": "...", "wait_tool": "wait_for_approval", ...}` and whose text tells the agent what to do next.
 2. A person approves or rejects the call in DBFlux (**Workspace → Pending Approvals**). The server and the app share the queue through `dbflux.db`, so a call queued by `dbflux mcp` appears in the app.
-3. The agent calls the same tool again with the same arguments. The server finds the approval that matches the actor, connection, tool and arguments, consumes it, and runs the call. The `mcp_authorize` event of that call has outcome `success` and names the approval in `details_json.pending_execution_id`.
+3. The agent calls `wait_for_approval` with the `pending_id`. It re-reads the shared queue about once a second, for at most `timeout_secs` (default 60, maximum 120), and returns `approved`, `rejected`, `expired` or `still_pending`; on `still_pending` the agent calls it again. A waiting call does not block other calls on the same session.
+4. After `approved`, the agent calls the same tool again with the same arguments. The server finds the approval that matches the actor, connection, tool and arguments, consumes it, and runs the call. The `mcp_authorize` event of that call has outcome `success` and names the approval in `details_json.pending_execution_id`.
 
 One approval runs one call. Repeating the call again queues a new request, and so does changing any argument. A rejected call never runs. An approval expires 24 hours after the call was queued.
 
-After a rejection, `get_pending_execution` returns `status: "rejected"` and a `reason` field with the text the person typed when rejecting, trimmed and capped at 500 characters, or `null` when they gave none. The same reason is recorded in the `mcp_reject_execution` audit event.
+`wait_for_approval` returns `next_action`: `repeat_identical_call` for `approved`, `do_not_retry` for `rejected` and `expired`, and `call_wait_for_approval_again` for `still_pending`. `get_pending_execution` reports the same real status (`approved`, `rejected`, `expired`) instead of not found, so agents can tell them apart, but agents should prefer `wait_for_approval` over polling it.
 
-`request_execution` queues a call explicitly, with the same result as calling the tool under Ask. `request_execution`, `list_pending_executions` and `get_pending_execution` only create or read queue entries, so under Ask they run without being queued themselves.
+After a rejection, `wait_for_approval` and `get_pending_execution` return `status: "rejected"` and a `reason` field with the text the person typed when rejecting, trimmed and capped at 500 characters, or `null` when they gave none. The same reason is recorded in the `mcp_reject_execution` audit event.
+
+`request_execution` queues a call explicitly, with the same result as calling the tool under Ask. `request_execution`, `list_pending_executions`, `get_pending_execution` and `wait_for_approval` only create or read queue entries, so under Ask they run without being queued themselves.
 
 MCP clients can never approve or reject: `approve_execution` and `reject_execution` are denied over MCP whatever the policies say, with the error code `self_approval_forbidden`, and each attempt is audited. Only a person resolves pending executions, in the DBFlux UI.
 
@@ -414,7 +418,7 @@ To avoid polluting developer machines during tests:
 
 ### Call answered with `approval_required`
 
-- The policy decides the call's class as Ask. Approve the pending execution named by `pending_id` in **Workspace → Pending Approvals**, then repeat the call with the same arguments.
+- The policy decides the call's class as Ask. This is a normal result, not an error: the call has not run. Approve the pending execution named by `pending_id` in **Workspace → Pending Approvals**; the agent learns of it through `wait_for_approval` and then repeats the call with the same arguments.
 - Repeating the call with different arguments queues a new request instead of using the approval.
 - An agent cannot approve its own calls: `approve_execution` and `reject_execution` are always denied over MCP (`self_approval_forbidden`).
 

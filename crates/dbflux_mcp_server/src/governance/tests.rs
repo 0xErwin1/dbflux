@@ -1301,13 +1301,11 @@ async fn telemetry_denied_and_approval_queue_zero_then_approved_retry_one() {
                 },
             )
         };
-        let queued = scope_call(invoke())
-            .await
-            .expect_err("admin destructive requires approval");
-        let pending_id = queued.data.expect("approval data")["pending_id"]
-            .as_str()
-            .expect("id")
-            .to_owned();
+        let pending_id = queued_pending_id(
+            &scope_call(invoke())
+                .await
+                .expect("admin destructive waits for approval without failing"),
+        );
         runtime
             .write()
             .await
@@ -1333,11 +1331,12 @@ fn approval_required_message_tells_the_agent_exactly_what_to_do() {
     );
 
     for expected in [
+        "Waiting for approval",
         "has NOT run",
         "pending execution 1234",
         "Pending Approvals",
-        "Do not call approve_execution or reject_execution",
-        "get_pending_execution",
+        "never call approve_execution or reject_execution",
+        "wait_for_approval",
         "\"pending_id\": \"1234\"",
         "repeat this exact call",
         "identical arguments",
@@ -1504,6 +1503,27 @@ async fn authorize_on(
     )
 }
 
+/// Asserts that `result` is the successful "queued for approval" result and
+/// returns its pending execution id.
+fn queued_pending_id(result: &CallToolResult) -> String {
+    assert_eq!(result.is_error, Some(false), "queued is not an error");
+    let data = result
+        .structured_content
+        .as_ref()
+        .expect("a queued call carries structured content");
+    assert_eq!(data["code"], serde_json::json!(APPROVAL_REQUIRED_CODE));
+    assert_eq!(data["status"], serde_json::json!("pending"));
+    assert_eq!(data["wait_tool"], serde_json::json!("wait_for_approval"));
+    assert_eq!(
+        data["status_tool"],
+        serde_json::json!("get_pending_execution")
+    );
+    data["pending_id"]
+        .as_str()
+        .expect("a queued call carries its pending id")
+        .to_string()
+}
+
 #[tokio::test]
 async fn read_only_profile_denies_a_write_before_the_policy() {
     let (state, connection_id) = state_with_profile(true).await;
@@ -1555,13 +1575,8 @@ async fn writable_profile_leaves_a_write_to_the_policy() {
     )
     .await;
 
-    let error = result.expect_err("the admin role asks for approval of a write");
-    let code = error
-        .data
-        .as_ref()
-        .and_then(|data| data.get("code"))
-        .and_then(|code| code.as_str());
-    assert_eq!(code, Some(APPROVAL_REQUIRED_CODE));
+    let queued = result.expect("the admin role queues a write for approval without failing");
+    queued_pending_id(&queued);
     assert!(!handler_ran);
 }
 
@@ -1629,13 +1644,8 @@ async fn profile_made_writable_after_startup_leaves_a_write_to_the_policy() {
     )
     .await;
 
-    let error = result.expect_err("the admin role asks for approval of a write");
-    let code = error
-        .data
-        .as_ref()
-        .and_then(|data| data.get("code"))
-        .and_then(|code| code.as_str());
-    assert_eq!(code, Some(APPROVAL_REQUIRED_CODE));
+    let queued = result.expect("the admin role queues a write for approval without failing");
+    queued_pending_id(&queued);
     assert!(!handler_ran);
 }
 

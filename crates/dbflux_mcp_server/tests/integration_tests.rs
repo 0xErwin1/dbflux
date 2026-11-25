@@ -924,9 +924,13 @@ async fn builtin_admin_write_is_queued_and_runs_once_after_a_person_approves() {
 
     let queued = run()
         .await
-        .expect_err("a Write call must wait for approval");
-    let data = queued.data.expect("a queued call carries error data");
+        .expect("a Write call waits for approval without failing");
+    assert_eq!(queued.is_error, Some(false));
+    let data = queued
+        .structured_content
+        .expect("a queued call carries structured content");
     assert_eq!(data["code"], "approval_required");
+    assert_eq!(data["wait_tool"], "wait_for_approval");
     let pending_id = data["pending_id"]
         .as_str()
         .expect("a queued call carries its pending id")
@@ -960,9 +964,9 @@ async fn builtin_admin_write_is_queued_and_runs_once_after_a_person_approves() {
 
     let requeued = run()
         .await
-        .expect_err("one approval authorizes exactly one call");
+        .expect("one approval authorizes exactly one call; the next is queued");
     assert_eq!(
-        requeued.data.expect("error data")["code"],
+        requeued.structured_content.expect("structured content")["code"],
         "approval_required"
     );
 }

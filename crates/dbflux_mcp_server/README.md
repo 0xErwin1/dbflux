@@ -211,7 +211,8 @@ See [DDL Safety Guide](./docs/DDL_SAFETY.md) for detailed classification rules.
 | Tool | Description | Classification |
 |------|-------------|----------------|
 | `list_pending_executions` | List operations awaiting approval | Metadata |
-| `get_pending_execution` | Get pending execution details | Metadata |
+| `get_pending_execution` | Get pending execution details; reports approved, rejected and expired requests with their real status | Metadata |
+| `wait_for_approval` | Wait (default 60 s, max 120 s) until a pending execution is approved, rejected or expired; returns `approved`, `rejected`, `expired`, `still_pending` or `not_found` | Read |
 | `request_execution` | Queue an operation for approval by a person | Admin |
 | `approve_execution` | Always denied over MCP; a person approves in DBFlux | — |
 | `reject_execution` | Always denied over MCP; a person rejects in DBFlux | — |
@@ -440,9 +441,10 @@ Register AI clients to assign policies:
 ### Approval Workflow
 
 1. **Operation requires approval**: the policy decides its class as Ask (e.g., `DROP TABLE` under the built-in `admin` policy)
-2. **Queued in pending executions**, stored in `dbflux.db` and shared with the DBFlux app; the call returns a JSON-RPC error with `code: "approval_required"` and the `pending_id`
+2. **Queued in pending executions**, stored in `dbflux.db` and shared with the DBFlux app; the call returns a normal (non-error) result whose structured content has `code: "approval_required"`, the `pending_id` and `wait_tool: "wait_for_approval"`
 3. **A person approves or rejects** it in DBFlux (Workspace → Pending Approvals). MCP clients cannot: `approve_execution` / `reject_execution` are always denied over MCP
-4. **The agent repeats the call** with the same arguments: an approved call runs once, a rejected one is queued again and never runs
+4. **The agent calls `wait_for_approval`** with the `pending_id` instead of polling; it returns `approved`, `rejected` (with the reason), `expired` or `still_pending` (call it again)
+5. **The agent repeats the call** with the same arguments: an approved call runs once, a rejected one is queued again and never runs
 
 ### Audit Logging
 
@@ -640,7 +642,7 @@ See `crates/dbflux_core/src/query/column_ref.rs` for implementation.
 | Error | Cause | Recovery |
 |-------|-------|----------|
 | `PolicyDenied` | Policy engine denied request | Check trusted clients and role policies |
-| `ApprovalRequired` | Operation requires human approval | Call `list_pending_executions` and wait for approval |
+| `ApprovalRequired` | Operation requires human approval | Call `wait_for_approval` with the `pending_id`, then repeat the identical call once approved |
 | `InvalidWhereClause` | WHERE clause syntax error | Fix JSON structure, check operator usage |
 | `ColumnNotFound` | Column does not exist | Use `describe_object` to get column names |
 | `TypeMismatch` | Type coercion failed | Fix value type or use explicit casting |
