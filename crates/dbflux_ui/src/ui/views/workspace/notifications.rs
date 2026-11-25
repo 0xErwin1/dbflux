@@ -184,17 +184,21 @@ impl Workspace {
     /// when the governance service cannot list them.
     #[cfg(feature = "mcp")]
     pub(super) fn pending_approvals(&self, cx: &App) -> Vec<PendingApproval> {
+        self.try_pending_approvals(cx).unwrap_or_else(|error| {
+            log::debug!("Failed to list pending MCP approvals: {error}");
+            Vec::new()
+        })
+    }
+
+    /// MCP executions waiting for a decision, or why the queue could not be
+    /// read, so a caller can tell a failed read from an empty queue.
+    #[cfg(feature = "mcp")]
+    pub(super) fn try_pending_approvals(&self, cx: &App) -> Result<Vec<PendingApproval>, String> {
         use crate::ui::document::McpApprovalsView;
 
-        let pending = match self.app_state.read(cx).list_mcp_pending_executions() {
-            Ok(pending) => pending,
-            Err(error) => {
-                log::debug!("Failed to list pending MCP approvals: {error}");
-                return Vec::new();
-            }
-        };
+        let pending = self.app_state.read(cx).list_mcp_pending_executions()?;
 
-        pending
+        Ok(pending
             .into_iter()
             .map(|pending| PendingApproval {
                 classification_label: McpApprovalsView::classification_display(
@@ -207,7 +211,7 @@ impl Workspace {
                 connection_id: pending.connection_id,
                 created_at_epoch_ms: pending.created_at_epoch_ms,
             })
-            .collect()
+            .collect())
     }
 
     #[cfg(not(feature = "mcp"))]

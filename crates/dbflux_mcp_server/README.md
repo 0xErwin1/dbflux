@@ -444,7 +444,7 @@ Register AI clients to assign policies:
 2. **Queued in pending executions**, stored in `dbflux.db` and shared with the DBFlux app; the call returns a normal (non-error) result whose structured content has `code: "approval_required"`, the `pending_id` and `wait_tool: "wait_for_approval"`
 3. **A person approves or rejects** it in DBFlux (Workspace → Pending Approvals). MCP clients cannot: `approve_execution` / `reject_execution` are always denied over MCP
 4. **The agent calls `wait_for_approval`** with the `pending_id` instead of polling; it returns `approved`, `rejected` (with the reason), `expired` or `still_pending` (call it again)
-   Agents that can run a background command may instead run the `watch_command` from the `approval_required` result (`dbflux mcp approvals watch --pending-id <id>`): it prints one JSON line (`approved`, `rejected` with `reason`, `expired` or `not_found`) and exits `0` (`1` for `not_found`; `124` with `--timeout` and `still_pending`). Without `--pending-id` it streams one line per event (`pending`, `approved`, `rejected`, `expired`); `--client-id` filters by actor. See `dbflux mcp approvals watch --help`
+   Agents that can run a background command may instead run the `watch_command` from the `approval_required` result (`dbflux mcp approvals watch --pending-id <id>`): it prints one JSON line (`approved`, `rejected` with `reason`, `expired` or `not_found`) and exits `0` (`1` for `not_found`; `124` with `--timeout` and `still_pending`). Without `--pending-id` it streams one line per event (`pending`, `approved`, `rejected`, `expired`); `--client-id` filters by actor. Stream mode only reports decisions for requests it already announced as `pending`; a request created and decided within one poll (about a second) yields no line, so use `--pending-id` for a specific request. See `dbflux mcp approvals watch --help`
 5. **The agent repeats the call** with the same arguments: an approved call runs once, a rejected one is queued again and never runs
 
 ### Audit Logging
@@ -643,7 +643,6 @@ See `crates/dbflux_core/src/query/column_ref.rs` for implementation.
 | Error | Cause | Recovery |
 |-------|-------|----------|
 | `PolicyDenied` | Policy engine denied request | Check trusted clients and role policies |
-| `ApprovalRequired` | Operation requires human approval | Call `wait_for_approval` with the `pending_id`, then repeat the identical call once approved |
 | `InvalidWhereClause` | WHERE clause syntax error | Fix JSON structure, check operator usage |
 | `ColumnNotFound` | Column does not exist | Use `describe_object` to get column names |
 | `TypeMismatch` | Type coercion failed | Fix value type or use explicit casting |

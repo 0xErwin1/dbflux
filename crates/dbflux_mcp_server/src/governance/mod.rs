@@ -496,8 +496,28 @@ fn approval_queued_result(
 pub fn watch_command(executable: &std::path::Path, pending_id: &str) -> String {
     format!(
         "{} mcp approvals watch --pending-id {pending_id}",
-        shell_quote(&executable.to_string_lossy())
+        command_prefix(&executable.to_string_lossy(), cfg!(windows))
     )
+}
+
+/// The executable as the start of a command line: POSIX shell quoting on
+/// Unix, and on Windows a PowerShell call (`& '...'`), since PowerShell
+/// treats a quoted path without the call operator as a string.
+fn command_prefix(executable: &str, windows: bool) -> String {
+    if !windows {
+        return shell_quote(executable);
+    }
+
+    let plain = !executable.is_empty()
+        && executable
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "\\/._-:".contains(c));
+
+    if plain {
+        executable.to_string()
+    } else {
+        format!("& '{}'", executable.replace('\'', "''"))
+    }
 }
 
 fn shell_quote(text: &str) -> String {

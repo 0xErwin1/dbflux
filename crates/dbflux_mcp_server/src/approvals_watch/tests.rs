@@ -96,19 +96,17 @@ fn reports_approved_and_rejected_with_reason() {
 #[test]
 fn reports_expired_for_an_undecided_request_and_for_a_stale_approval() {
     let mut store = InMemoryPendingExecutionStore::default();
-    let soon = Some(now_epoch_ms() + 50);
-    let undecided = store.create_pending(&plan("agent"), soon).unwrap();
-    let approved = store.create_pending(&plan("agent"), soon).unwrap();
-    let mut tracked = HashSet::new();
-    poll_events(&store, &mut tracked, None, now_epoch_ms()).unwrap();
+    // Already past its deadline, so no wall-clock race decides the outcome;
+    // the watcher announced both while they were still pending.
+    let past = Some(now_epoch_ms() - 1_000);
+    let undecided = store.create_pending(&plan("agent"), past).unwrap();
+    let approved = store.create_pending(&plan("agent"), past).unwrap();
+    let mut tracked = HashSet::from([undecided.id, approved.id]);
     store
         .update_status(approved.id, PendingStatus::Approved)
         .unwrap();
 
-    // The store filters its pending list by the wall clock.
-    std::thread::sleep(Duration::from_millis(80));
-    let later = now_epoch_ms();
-    let events = poll_events(&store, &mut tracked, None, later).unwrap();
+    let events = poll_events(&store, &mut tracked, None, now_epoch_ms()).unwrap();
 
     assert!(
         events

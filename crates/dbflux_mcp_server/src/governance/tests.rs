@@ -1695,12 +1695,29 @@ async fn unreadable_profile_store_still_allows_a_read() {
 fn watch_command_is_ready_to_run_and_quotes_unsafe_paths() {
     use std::path::Path;
 
+    let plain = if cfg!(windows) {
+        r"C:\dbflux\dbflux.exe"
+    } else {
+        "/usr/bin/dbflux"
+    };
     assert_eq!(
-        watch_command(Path::new("/usr/bin/dbflux"), "abc"),
-        "/usr/bin/dbflux mcp approvals watch --pending-id abc"
+        watch_command(Path::new(plain), "abc"),
+        format!("{plain} mcp approvals watch --pending-id abc")
     );
     assert_eq!(
-        watch_command(Path::new("/opt/my apps/it's/dbflux"), "abc"),
-        "'/opt/my apps/it'\\''s/dbflux' mcp approvals watch --pending-id abc"
+        command_prefix("/opt/my apps/it's/dbflux", false),
+        "'/opt/my apps/it'\\''s/dbflux'"
+    );
+}
+
+#[test]
+fn watch_command_on_windows_is_a_powershell_call() {
+    assert_eq!(
+        command_prefix(r"C:\dbflux\dbflux.exe", true),
+        r"C:\dbflux\dbflux.exe"
+    );
+    assert_eq!(
+        command_prefix(r"C:\Program Files\DBFlux's\dbflux.exe", true),
+        r"& 'C:\Program Files\DBFlux''s\dbflux.exe'"
     );
 }

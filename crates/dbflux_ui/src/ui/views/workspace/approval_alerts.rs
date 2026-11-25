@@ -148,7 +148,15 @@ impl Workspace {
     }
 
     fn poll_approval_alerts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let pending = self.pending_approvals(cx);
+        // A failed read is not an empty queue: forgetting every announced
+        // request here would alert on all of them again at the next poll.
+        let pending = match self.try_pending_approvals(cx) {
+            Ok(pending) => pending,
+            Err(error) => {
+                log::debug!("Skipping this MCP approval poll: {error}");
+                return;
+            }
+        };
         let pending_ids: Vec<String> = pending.iter().map(|request| request.id.clone()).collect();
 
         // Requests seen while alerts are off still count as announced, so

@@ -17,6 +17,9 @@ Options:
 
 Without --pending-id the watcher streams until --timeout (or forever). It
 reports the requests already pending at start and every later one.
+It reports a decision only for a request it already announced as pending:
+a request created and decided within one poll (about a second) produces no
+line. Use --pending-id to follow a specific request.
 
 Events (JSON, one object per line):
   pending     A request is waiting for a decision
