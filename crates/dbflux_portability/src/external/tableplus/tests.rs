@@ -167,6 +167,46 @@ fn sqlite_path_comes_from_host_field() {
 }
 
 #[test]
+fn sqlite_path_keeps_surrounding_whitespace() {
+    let candidate = parse_one(&[
+        ("Driver", string("SQLite")),
+        ("DatabaseHost", string("/tmp/archive.sqlite ")),
+    ]);
+
+    match &candidate.config {
+        DbConfig::SQLite { path, .. } => {
+            assert_eq!(path, &PathBuf::from("/tmp/archive.sqlite "));
+        }
+        other => panic!("expected SQLite config, got {other:?}"),
+    }
+}
+
+#[test]
+fn identifiers_keep_whitespace_while_host_and_name_are_trimmed() {
+    let candidate = parse_one(&[
+        ("ConnectionName", string("  Demo  ")),
+        ("DatabaseHost", string(" db.example.invalid ")),
+        ("DatabaseUser", string("demo ")),
+        ("DatabaseName", string(" app")),
+    ]);
+
+    assert_eq!(candidate.name, "Demo");
+    match &candidate.config {
+        DbConfig::Postgres {
+            host,
+            user,
+            database,
+            ..
+        } => {
+            assert_eq!(host, "db.example.invalid");
+            assert_eq!(user, "demo ");
+            assert_eq!(database, " app");
+        }
+        other => panic!("expected Postgres config, got {other:?}"),
+    }
+}
+
+#[test]
 fn redis_numeric_database_becomes_index() {
     let candidate = parse_one(&[("Driver", string("Redis")), ("DatabaseName", string("3"))]);
 

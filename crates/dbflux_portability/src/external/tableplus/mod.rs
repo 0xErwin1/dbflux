@@ -89,7 +89,7 @@ impl ConnectionImporter for TablePlusImporter {
             match map_connection(&entry) {
                 Ok(candidate) => outcome.candidates.push(candidate),
                 Err(reason) => outcome.skips.push(ExternalImportSkip {
-                    name: entry.text("ConnectionName").unwrap_or_default(),
+                    name: entry.trimmed("ConnectionName").unwrap_or_default(),
                     reason,
                 }),
             }
@@ -102,12 +102,18 @@ impl ConnectionImporter for TablePlusImporter {
 struct Entry<'a>(&'a HashMap<String, PlistValue>);
 
 impl Entry<'_> {
-    /// A string field, or `None` when it is absent or blank.
+    /// A string field exactly as stored, or `None` when it is absent or blank.
     fn text(&self, key: &str) -> Option<String> {
         match self.0.get(key)? {
-            PlistValue::String(value) if !value.trim().is_empty() => Some(value.trim().to_string()),
+            PlistValue::String(value) if !value.trim().is_empty() => Some(value.clone()),
             _ => None,
         }
+    }
+
+    /// A string field with surrounding whitespace removed, for values such as
+    /// names and hostnames where that whitespace never means anything.
+    fn trimmed(&self, key: &str) -> Option<String> {
+        self.text(key).map(|value| value.trim().to_string())
     }
 
     fn flag(&self, key: &str) -> bool {
@@ -127,7 +133,7 @@ impl Entry<'_> {
     }
 
     fn required_host(&self) -> Result<String, String> {
-        self.text("DatabaseHost")
+        self.trimmed("DatabaseHost")
             .ok_or_else(|| "missing required field 'host'".to_string())
     }
 }
@@ -135,12 +141,12 @@ impl Entry<'_> {
 /// Maps one TablePlus connection dictionary to a candidate, or a skip reason.
 fn map_connection(entry: &Entry<'_>) -> Result<ExternalImportCandidate, String> {
     let name = entry
-        .text("ConnectionName")
-        .or_else(|| entry.text("ID"))
+        .trimmed("ConnectionName")
+        .or_else(|| entry.trimmed("ID"))
         .ok_or_else(|| "connection has no name".to_string())?;
 
     let driver = entry
-        .text("Driver")
+        .trimmed("Driver")
         .ok_or_else(|| "connection has no driver".to_string())?;
 
     if entry.flag("UseSock") || entry.flag("isUseSocket") {
@@ -220,7 +226,7 @@ fn map_connection(entry: &Entry<'_>) -> Result<ExternalImportCandidate, String> 
                 host: entry.required_host()?,
                 port: port.unwrap_or(6379),
                 user,
-                database: database.and_then(|index| index.parse::<u32>().ok()),
+                database: database.and_then(|index| index.trim().parse::<u32>().ok()),
                 tls: false,
                 ssl_mode: None,
                 ssl_root_cert_path: None,
@@ -273,7 +279,7 @@ fn ssh_tunnel(entry: &Entry<'_>) -> Result<Option<SshTunnelConfig>, String> {
     }
 
     let host = entry
-        .text("ServerAddress")
+        .trimmed("ServerAddress")
         .ok_or_else(|| "SSH is enabled but no SSH server address is set".to_string())?;
 
     let auth_method = if entry.flag("isUsePrivateKey") {
