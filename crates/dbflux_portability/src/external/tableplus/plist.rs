@@ -33,7 +33,18 @@ pub(super) fn parse(text: &str) -> Result<PlistValue, String> {
         }
     }
 
-    parser.value()
+    let root = parser.value()?;
+
+    match parser.next_significant()? {
+        Token::End(name) if name == "plist" => {}
+        Token::Eof => return Err("unterminated <plist>".to_string()),
+        _ => return Err("expected </plist> after the root value".to_string()),
+    }
+
+    match parser.next_significant()? {
+        Token::Eof => Ok(root),
+        _ => Err("unexpected content after </plist>".to_string()),
+    }
 }
 
 enum Token {

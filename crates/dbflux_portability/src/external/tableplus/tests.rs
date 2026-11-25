@@ -367,6 +367,25 @@ fn malformed_xml_is_a_plist_error() {
 }
 
 #[test]
+fn plist_must_close_and_end_the_document() {
+    assert!(matches!(
+        parse("<plist><array/>"),
+        Err(ExternalImportError::InvalidPlist(_))
+    ));
+    assert!(matches!(
+        parse("<plist><array/><array/></plist>"),
+        Err(ExternalImportError::InvalidPlist(_))
+    ));
+    assert!(matches!(
+        parse("<plist><array/></plist><dict/>"),
+        Err(ExternalImportError::InvalidPlist(_))
+    ));
+
+    let outcome = parse("<plist><array/></plist>\r\n<!-- trailing -->\r\n").expect("parse");
+    assert!(outcome.candidates.is_empty());
+}
+
+#[test]
 fn binary_plist_is_rejected_as_unsupported() {
     let mut bytes = b"bplist00".to_vec();
     bytes.extend_from_slice(&[0xD1, 0x01, 0x02, 0xFF, 0x00]);
