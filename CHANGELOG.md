@@ -5,6 +5,7 @@ All notable changes to DBFlux will be documented in this file.
 ## [Unreleased]
 
 ### Added
+* **CLI help and version output** — `dbflux --help` and `dbflux --version` now provide useful output directly from the command line. This foundation enables future headless capabilities for queries, scripts and exports.
 
 * **Copy a table name** — The sidebar context menu of a table (right click or `m`) lists Copy table name after View relationships, a view lists Copy view name, and a collection lists Copy collection name after Refresh. Each copies the bare name, without the schema or database, the way Copy column name does (#1394).
 * **Completion shows what each suggestion is** — In SQL editors every suggestion carries a translated word on the right of its row: table, view, schema, column, alias, keyword, or cte for a name from the query's own `WITH` clause, which is told apart from a table or view with the same name. Labels are drawn in the color the same token has in the editor (type, namespace, field, keyword, function and so on), and the MongoDB, Redis and Lua editors color their method, function, class and operator suggestions the same way, without the word; values and any other kind keep the plain style. The menu counts the word when it sizes itself, and its width cap follows the interface font size, in editors and the Redis console that were already open too. The match highlight is unchanged. See `docs/EDITOR.md` § Completion (#1013).
