@@ -15,6 +15,10 @@ fn integer(value: i64) -> String {
 
 /// One connection dictionary carrying the fields TablePlus always writes,
 /// with `overrides` replacing or adding entries.
+///
+/// The base fields and CRLF layout mirror a real Windows `Connections.plist`.
+/// Fixtures that add macOS-only keys use the field names Raycast's TablePlus
+/// extension reads; no real macOS file has been checked.
 fn connection(overrides: &[(&str, String)]) -> String {
     let mut fields: Vec<(&str, String)> = vec![
         ("ID", string("00000000-0000-0000-0000-000000000001")),
@@ -289,6 +293,7 @@ fn socket_connections_are_skipped_under_either_platform_key() {
             ("ConnectionName", string("Windows socket")),
             ("UseSock", integer(1)),
         ]),
+        // macOS key taken from Raycast's TablePlus extension, not from a real macOS file.
         connection(&[
             ("ConnectionName", string("macOS socket")),
             ("Driver", string("MySQL")),

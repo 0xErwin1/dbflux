@@ -6,6 +6,10 @@
 /// `~/Library/Application Support/com.tinyapp.TablePlus/Data/Connections.plist`,
 /// or under `com.tinyapp.TablePlus-setapp` for the Setapp build.
 ///
+/// Only the Windows layout has been checked against a real file. The macOS
+/// field names (such as `isUseSocket`) follow the ones Raycast's TablePlus
+/// extension reads.
+///
 /// macOS can write a plist in binary form, which starts with `bplist00`; that
 /// form is rejected with a clear error rather than misreported as malformed
 /// XML.
