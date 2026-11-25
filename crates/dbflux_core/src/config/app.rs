@@ -428,6 +428,11 @@ pub struct GeneralSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent_light: Option<AccentColor>,
 
+    /// Notify when an MCP agent requests approval. Global only: it has no
+    /// per-driver override. On by default.
+    #[serde(default = "default_true")]
+    pub mcp_approval_notifications: bool,
+
     /// When scrollbars are shown in every window. While scrolling by default.
     #[serde(default)]
     pub scrollbar_visibility: ScrollbarVisibility,
@@ -598,6 +603,7 @@ impl Default for GeneralSettings {
             grid_fk_labels: false,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: true,
             scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,

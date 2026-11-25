@@ -4784,6 +4784,9 @@ settings:
         "8s": "8초"
         "15s": "15초"
         never: "닫을 때까지 유지"
+    mcp_approval_notifications:
+      label: "MCP 에이전트가 승인을 요청하면 알림"
+      hint: "데스크톱 알림을 표시하며, DBFlux가 활성 상태일 때는 앱 내 알림으로 표시합니다."
     share_stable_db:
       label: 안정 데이터베이스 사용
       error: 공유 데이터베이스 설정을 업데이트하지 못했습니다

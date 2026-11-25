@@ -45,7 +45,7 @@ impl GeneralSettingsRepository {
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
                        grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
-                       accent_dark, accent_light, updated_at
+                       accent_dark, accent_light, mcp_approval_notifications, updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -93,7 +93,8 @@ impl GeneralSettingsRepository {
                 workspace_inspector_width_px: read_inspector_width(row, 34)?,
                 accent_dark: row.get(35)?,
                 accent_light: row.get(36)?,
-                updated_at: row.get(37)?,
+                mcp_approval_notifications: row.get(37)?,
+                updated_at: row.get(38)?,
             })
         });
 
@@ -126,8 +127,8 @@ impl GeneralSettingsRepository {
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
                     grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
-                    accent_dark, accent_light, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, datetime('now'))
+                    accent_dark, accent_light, mcp_approval_notifications, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -165,6 +166,7 @@ impl GeneralSettingsRepository {
                     workspace_inspector_width_px = excluded.workspace_inspector_width_px,
                     accent_dark = excluded.accent_dark,
                     accent_light = excluded.accent_light,
+                    mcp_approval_notifications = excluded.mcp_approval_notifications,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -204,6 +206,7 @@ impl GeneralSettingsRepository {
                     settings.workspace_inspector_width_px,
                     settings.accent_dark,
                     settings.accent_light,
+                    settings.mcp_approval_notifications,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -308,6 +311,8 @@ pub struct GeneralSettingsDto {
     pub accent_dark: Option<String>,
     /// The `#RRGGBB` accent picked for the Light palette.
     pub accent_light: Option<String>,
+    /// Whether a new pending MCP approval raises a notification (1) or not (0).
+    pub mcp_approval_notifications: i32,
     pub updated_at: String,
 }
 
@@ -405,6 +410,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
 
@@ -471,6 +477,7 @@ mod tests {
                 workspace_inspector_width_px: None,
                 accent_dark: None,
                 accent_light: None,
+                mcp_approval_notifications: 1,
                 updated_at: String::new(),
             };
 
@@ -557,6 +564,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
 
@@ -661,6 +669,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
 
@@ -721,6 +730,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
 
@@ -813,6 +823,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
 
@@ -895,6 +906,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
 
@@ -931,6 +943,15 @@ mod tests {
         let seeded = repo.get().expect("should get").expect("the row is seeded");
         assert_eq!(seeded.accent_dark, None);
         assert_eq!(seeded.accent_light, None);
+        assert_eq!(seeded.mcp_approval_notifications, 1);
+
+        repo.upsert(&GeneralSettingsDto {
+            mcp_approval_notifications: 0,
+            ..seeded.clone()
+        })
+        .expect("should upsert the notification toggle");
+        let toggled = repo.get().expect("should get").expect("should exist");
+        assert_eq!(toggled.mcp_approval_notifications, 0);
 
         repo.upsert(&GeneralSettingsDto {
             accent_dark: Some("#2F7D6D".to_string()),

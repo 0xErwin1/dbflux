@@ -4784,6 +4784,9 @@ settings:
         "8s": "8 segundos"
         "15s": "15 segundos"
         never: "Mantener hasta descartarlos"
+    mcp_approval_notifications:
+      label: "Avisar cuando un agente MCP solicita aprobación"
+      hint: "Muestra una notificación de escritorio, o un aviso dentro de la app cuando DBFlux tiene el foco."
     share_stable_db:
       label: Usar la base de datos estable
       error: No se pudo actualizar la configuración de base de datos compartida

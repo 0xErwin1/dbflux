@@ -4784,6 +4784,9 @@ settings:
         "8s": "8 seconds"
         "15s": "15 seconds"
         never: "Keep until dismissed"
+    mcp_approval_notifications:
+      label: "Notify when an MCP agent requests approval"
+      hint: "Shows a desktop notification, or a toast when DBFlux is focused."
     share_stable_db:
       label: Use the stable database
       error: Failed to update the shared-database setting

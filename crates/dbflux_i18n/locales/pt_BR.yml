@@ -4777,6 +4777,9 @@ settings:
         "8s": "8 segundos"
         "15s": "15 segundos"
         never: "Manter até dispensar"
+    mcp_approval_notifications:
+      label: "Notificar quando um agente MCP solicitar aprovação"
+      hint: "Mostra uma notificação da área de trabalho, ou um aviso no app quando o DBFlux está em foco."
     share_stable_db:
       label: Usar o banco de dados estável
       error: Falha ao atualizar a configuração de banco de dados compartilhado

@@ -4784,6 +4784,9 @@ settings:
         "8s": "8 秒"
         "15s": "15 秒"
         never: "保留直到关闭"
+    mcp_approval_notifications:
+      label: "MCP 代理请求批准时通知"
+      hint: "显示桌面通知；当 DBFlux 处于焦点时显示应用内通知。"
     share_stable_db:
       label: 使用稳定数据库
       error: 更新共享数据库设置失败

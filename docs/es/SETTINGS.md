@@ -97,6 +97,11 @@ Los avisos se apilan en la esquina superior derecha del área de documentos. Se
 muestran como máximo cuatro a la vez; los más antiguos se pliegan en una entrada
 *N más* que los expande o los descarta todos juntos.
 
+**Avisar cuando un agente MCP solicita aprobación** (activado de forma
+predeterminada, solo en builds con soporte MCP) muestra una notificación de
+escritorio cuando un agente MCP crea una aprobación pendiente, o un aviso dentro
+de la app cuando DBFlux tiene el foco.
+
 ### Seguridad de ejecución (confirmación de queries peligrosas)
 
 Estos tres settings gobiernan cómo DBFlux trata las queries riesgosas en
