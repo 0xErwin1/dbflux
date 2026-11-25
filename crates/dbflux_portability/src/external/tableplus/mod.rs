@@ -6,6 +6,10 @@
 /// `~/Library/Application Support/com.tinyapp.TablePlus/Data/Connections.plist`,
 /// or under `com.tinyapp.TablePlus-setapp` for the Setapp build.
 ///
+/// macOS can write a plist in binary form, which starts with `bplist00`; that
+/// form is rejected with a clear error rather than misreported as malformed
+/// XML.
+///
 /// Ports are stored as strings and flags as integers. A SQLite connection
 /// stores the full file path in `DatabaseHost`, while `DatabaseName` holds
 /// only the file name. A socket connection is flagged `UseSock` on Windows and
@@ -33,6 +37,8 @@ use super::{
     ExternalImportSkip, ImportInput,
 };
 
+const BINARY_PLIST_MAGIC: &[u8] = b"bplist00";
+
 const PASSWORD_SKIP_REASON: &str =
     "TablePlus does not store passwords in its connection file; re-enter it after import";
 
@@ -48,7 +54,12 @@ impl ConnectionImporter for TablePlusImporter {
     }
 
     fn parse(&self, input: &ImportInput<'_>) -> Result<ExternalImportOutcome, ExternalImportError> {
-        let text = std::str::from_utf8(input.primary.as_bytes()?)
+        let bytes = input.primary.as_bytes()?;
+        if bytes.starts_with(BINARY_PLIST_MAGIC) {
+            return Err(ExternalImportError::BinaryPlist);
+        }
+
+        let text = std::str::from_utf8(bytes)
             .map_err(|e| ExternalImportError::InvalidUtf8(e.to_string()))?;
 
         let PlistValue::Array(entries) =

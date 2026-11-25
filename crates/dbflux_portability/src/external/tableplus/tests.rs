@@ -322,6 +322,17 @@ fn malformed_xml_is_a_plist_error() {
 }
 
 #[test]
+fn binary_plist_is_rejected_as_unsupported() {
+    let mut bytes = b"bplist00".to_vec();
+    bytes.extend_from_slice(&[0xD1, 0x01, 0x02, 0xFF, 0x00]);
+    let source = ImportSource::Bytes(bytes);
+
+    let result = TablePlusImporter.parse(&ImportInput::new(&source));
+
+    assert!(matches!(result, Err(ExternalImportError::BinaryPlist)));
+}
+
+#[test]
 fn non_array_root_is_a_structure_error() {
     let result = parse("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict /></plist>");
 

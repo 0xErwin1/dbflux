@@ -142,6 +142,11 @@ pub enum ExternalImportError {
     #[error("input is not a valid property list: {0}")]
     InvalidPlist(String),
 
+    #[error(
+        "binary property lists are not supported; convert the file to XML with `plutil -convert xml1`"
+    )]
+    BinaryPlist,
+
     #[error("unexpected structure: {0}")]
     Structure(String),
 
