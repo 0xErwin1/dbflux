@@ -700,10 +700,6 @@ pub(crate) const SECRET_DOCUMENT: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ResultsCopyCell),
         ),
         (
-            "secret-document-details-copy-arn",
-            KeyboardPath::Command(Command::ResultsCopyCell),
-        ),
-        (
             "secret-document-refresh",
             KeyboardPath::Command(Command::RefreshSchema),
         ),
@@ -793,6 +789,11 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         (
             "secret-details-copy-name",
             KeyboardPath::Menu("secret-copy-name"),
+        ),
+        // The ARN row's copy button, in the pane and in the tab.
+        (
+            "secret-document-details-copy-arn",
+            KeyboardPath::Command(Command::ResultsCopyCell),
         ),
         (
             "secret-details-close",

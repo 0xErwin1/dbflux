@@ -43,6 +43,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Copy a secret's ARN from the details pane** — The ARN row of a secret store's details pane has the Copy ARN button its design shows, the same one the secret's tab draws, so the ARN no longer needs the secret opened in a tab to be copied.
 * **MCP approvals update on their own** — An open MCP approvals tab now shows requests from the standalone MCP server, and drops decided ones, within about two seconds, instead of waiting for Refresh or for the tab to be opened again.
 * **MCP tool list no longer clipped** — The effective "Tools:" line in a connection's MCP tab wraps instead of running off the panel.
 * **Files and folders open on your own GPU on Linux** — Opening a file with the system handler, or revealing it in a folder when no file manager portal answers, started `xdg-open` (or the desktop's other opener) with the Vulkan driver DBFlux selected for itself at launch, so the program it opened stayed on the boot GPU. Those launchers now drop that selection, like every other program DBFlux starts.

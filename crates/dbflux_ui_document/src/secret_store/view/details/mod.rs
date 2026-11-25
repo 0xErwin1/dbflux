@@ -520,14 +520,14 @@ impl SecretView {
         rows
     }
 
-    /// The ARN row, with a copy button beside it in the tab.
+    /// The ARN row, with a copy button beside it when the store reports one.
     fn resource_id_row(
         &self,
         row: AnyElement,
         has_resource_id: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if !self.in_tab() || !has_resource_id {
+        if !has_resource_id {
             return row;
         }
 

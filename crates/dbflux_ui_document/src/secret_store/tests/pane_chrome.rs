@@ -200,6 +200,25 @@ fn no_action_is_drawn_twice_in_the_pane(cx: &mut TestAppContext) {
     assert_eq!(unique.len(), labels.len(), "{labels:?}");
 }
 
+/// The details pane's ARN row has the same copy button the tab draws, and it
+/// copies the ARN the describe reported.
+#[gpui::test]
+fn the_pane_copies_the_arn_from_its_row(cx: &mut TestAppContext) {
+    let mut opened = production_pane(cx);
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    let button = opened.bounds("secret-document-details-copy-arn");
+    opened
+        .window
+        .simulate_click(button.center(), gpui::Modifiers::default());
+    opened.window.run_until_parked();
+
+    assert_eq!(
+        opened.clipboard(),
+        Some(format!("arn:fake:secret:{KEY_VALUE_SECRET}"))
+    );
+}
+
 /// The description edit says what it changes, and so do the others.
 #[gpui::test]
 fn each_edit_is_labelled_by_what_it_changes(cx: &mut TestAppContext) {
