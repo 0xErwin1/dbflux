@@ -3983,9 +3983,22 @@ fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) 
     let text = opened.rendered_text();
     assert!(text.contains("Copy name"), "{text}");
     assert!(text.contains("Retrieve value"), "{text}");
+    // The details pane draws its own Copy ARN beside the ARN row, so the
+    // check is on the menu's labels rather than the whole window.
+    let labels: Vec<String> = opened.read(|doc| {
+        doc.context_menu
+            .as_ref()
+            .map(|menu| {
+                menu.items
+                    .iter()
+                    .map(|item| item.label.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
     assert!(
-        !text.contains("Copy ARN"),
-        "parameters carry no ARN item: {text}"
+        !labels.iter().any(|label| label == "Copy ARN"),
+        "parameters carry no ARN menu item: {labels:?}"
     );
 }
 
