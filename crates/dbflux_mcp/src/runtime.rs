@@ -30,6 +30,7 @@ pub const APPROVAL_QUEUE_TOOLS: &[&str] = &[
     "request_execution",
     "list_pending_executions",
     "get_pending_execution",
+    "wait_for_approval",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

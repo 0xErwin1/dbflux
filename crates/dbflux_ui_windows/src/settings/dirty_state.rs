@@ -28,6 +28,7 @@ impl SettingsWindow {
             || self.gen_settings.vim_leader != saved.vim_leader
             || self.gen_settings.table_alias_completion != saved.table_alias_completion
             || self.gen_settings.table_alias_use_as != saved.table_alias_use_as
+            || self.gen_settings.mcp_approval_notifications != saved.mcp_approval_notifications
         {
             return true;
         }

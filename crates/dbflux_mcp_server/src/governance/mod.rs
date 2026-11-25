@@ -210,7 +210,11 @@ impl GovernanceMiddleware {
         drop(runtime);
 
         if !outcome.allowed {
-            return Err(authorization_error(&outcome, tool_id, classification));
+            if outcome.deny_code == Some(APPROVAL_REQUIRED_CODE) {
+                return Ok(approval_queued_result(&outcome, tool_id, classification));
+            }
+
+            return Err(authorization_error(&outcome));
         }
 
         let (result, audit_result) = self
@@ -425,37 +429,12 @@ impl GovernanceMiddleware {
     }
 }
 
-/// Builds the error returned for a call that authorization did not allow.
-///
-/// A call queued for approval carries its pending execution id and the exact
-/// steps an agent must follow, so it can hand the decision to the user and
-/// retry correctly without guessing.
-fn authorization_error(
-    outcome: &AuthorizationOutcome,
-    tool_id: &str,
-    classification: ExecutionClassification,
-) -> McpError {
+/// Builds the error returned for a call that authorization denied.
+fn authorization_error(outcome: &AuthorizationOutcome) -> McpError {
     let reason = outcome
         .deny_reason
         .as_deref()
         .unwrap_or("authorization denied");
-
-    if outcome.deny_code == Some(APPROVAL_REQUIRED_CODE) {
-        let pending_id = outcome.pending_execution_id.as_deref().unwrap_or("unknown");
-
-        return McpError::new(
-            rmcp::model::ErrorCode::INVALID_REQUEST,
-            approval_required_message(tool_id, classification, pending_id),
-            Some(serde_json::json!({
-                "code": APPROVAL_REQUIRED_CODE,
-                "status": "pending",
-                "pending_id": outcome.pending_execution_id,
-                "tool_id": tool_id,
-                "next_action": "wait_for_human_approval_then_repeat_identical_call",
-                "status_tool": "get_pending_execution",
-            })),
-        );
-    }
 
     McpError::new(
         rmcp::model::ErrorCode::INVALID_REQUEST,
@@ -466,25 +445,109 @@ fn authorization_error(
     )
 }
 
-/// Instructions returned to the agent when a call is queued for approval.
+/// Builds the result for a call a policy queued for approval.
+///
+/// Waiting for a person is not a failure, so this is a successful result
+/// (`is_error` false). Its structured content carries the pending execution
+/// id and the exact steps an agent must follow, so it can hand the decision to
+/// the user and retry correctly without guessing.
+fn approval_queued_result(
+    outcome: &AuthorizationOutcome,
+    tool_id: &str,
+    classification: ExecutionClassification,
+) -> CallToolResult {
+    let pending_id = outcome.pending_execution_id.as_deref().unwrap_or("unknown");
+    let watch_command = outcome.pending_execution_id.as_deref().and_then(|id| {
+        std::env::current_exe()
+            .ok()
+            .map(|exe| watch_command(&exe, id))
+    });
+
+    let mut message = approval_required_message(tool_id, classification, pending_id);
+    if let Some(command) = &watch_command {
+        message.push_str(&format!(
+            " An agent that can run a background command may instead run `{command}`: it prints \
+             one JSON line (approved, rejected, expired) and exits when the request is decided."
+        ));
+    }
+
+    let mut content = serde_json::json!({
+        "code": APPROVAL_REQUIRED_CODE,
+        "status": "pending",
+        "message": message,
+        "pending_id": outcome.pending_execution_id,
+        "tool_id": tool_id,
+        "classification": format!("{classification:?}"),
+        "next_action": "call_wait_for_approval_then_repeat_identical_call_when_approved",
+        "wait_tool": "wait_for_approval",
+        "status_tool": "get_pending_execution",
+    });
+
+    if let Some(command) = watch_command
+        && let Some(object) = content.as_object_mut()
+    {
+        object.insert("watch_command".to_string(), serde_json::json!(command));
+    }
+
+    CallToolResult::structured(content)
+}
+
+/// The ready-to-run command that waits for `pending_id` to be decided.
+pub fn watch_command(executable: &std::path::Path, pending_id: &str) -> String {
+    format!(
+        "{} mcp approvals watch --pending-id {pending_id}",
+        command_prefix(&executable.to_string_lossy(), cfg!(windows))
+    )
+}
+
+/// The executable as the start of a command line: POSIX shell quoting on
+/// Unix, and on Windows a PowerShell call (`& '...'`), since PowerShell
+/// treats a quoted path without the call operator as a string.
+fn command_prefix(executable: &str, windows: bool) -> String {
+    if !windows {
+        return shell_quote(executable);
+    }
+
+    let plain = !executable.is_empty()
+        && executable
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "\\/._-:".contains(c));
+
+    if plain {
+        executable.to_string()
+    } else {
+        format!("& '{}'", executable.replace('\'', "''"))
+    }
+}
+
+fn shell_quote(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%=,".contains(c));
+
+    if plain {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+/// Short, calm message for a call that was queued for approval.
 pub fn approval_required_message(
     tool_id: &str,
     classification: ExecutionClassification,
     pending_id: &str,
 ) -> String {
     format!(
-        "Approval required: the policy requires a person to approve '{tool_id}' calls of class \
-         {classification:?}. This call has NOT run; it was queued as pending execution \
-         {pending_id}. Next steps: (1) Tell the user that pending execution {pending_id} is \
-         waiting for their approval in DBFlux (Workspace > Pending Approvals). (2) Wait for the \
-         user. Do not call approve_execution or reject_execution; they are always denied to MCP \
-         clients. (3) To check the status, call get_pending_execution with \
-         {{\"pending_id\": \"{pending_id}\"}}: while its status is 'pending', it is still \
-         waiting for a decision; status 'rejected' means the user rejected it, and its 'reason' \
-         field carries what they wrote; once it is no longer found, it was approved or has \
-         expired. (4) After the user approves it, repeat this exact call: the same tool \
-         '{tool_id}' with identical arguments. It then runs once. If it was rejected or expired, \
-         repeating it queues a new request instead of running."
+        "Waiting for approval: '{tool_id}' ({classification:?}) is queued as pending execution \
+         {pending_id}; it has NOT run. Tell the user it is waiting in DBFlux (Workspace > \
+         Pending Approvals); never call approve_execution or reject_execution, they are always \
+         denied to MCP clients. Call wait_for_approval with {{\"pending_id\": \"{pending_id}\"}} \
+         (it waits a bounded time; call it again while the status is 'still_pending'). When the \
+         status is 'approved', repeat this exact call once: the same tool '{tool_id}' with \
+         identical arguments. On 'rejected' (the 'reason' field carries what the user wrote) or \
+         'expired', do not retry unchanged; repeating the call queues a new request."
     )
 }
 

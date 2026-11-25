@@ -72,12 +72,12 @@ impl NotificationsPopoverState {
 }
 
 /// What an approval row shows about a pending MCP execution.
-struct PendingApproval {
-    id: String,
-    tool_id: String,
-    actor_id: String,
-    connection_id: String,
-    classification_label: String,
+pub(super) struct PendingApproval {
+    pub(super) id: String,
+    pub(super) tool_id: String,
+    pub(super) actor_id: String,
+    pub(super) connection_id: String,
+    pub(super) classification_label: String,
     classification_tone: BadgeTone,
     created_at_epoch_ms: i64,
 }
@@ -183,18 +183,22 @@ impl Workspace {
     /// MCP executions waiting for a decision; empty without MCP support or
     /// when the governance service cannot list them.
     #[cfg(feature = "mcp")]
-    fn pending_approvals(&self, cx: &App) -> Vec<PendingApproval> {
+    pub(super) fn pending_approvals(&self, cx: &App) -> Vec<PendingApproval> {
+        self.try_pending_approvals(cx).unwrap_or_else(|error| {
+            log::debug!("Failed to list pending MCP approvals: {error}");
+            Vec::new()
+        })
+    }
+
+    /// MCP executions waiting for a decision, or why the queue could not be
+    /// read, so a caller can tell a failed read from an empty queue.
+    #[cfg(feature = "mcp")]
+    pub(super) fn try_pending_approvals(&self, cx: &App) -> Result<Vec<PendingApproval>, String> {
         use crate::ui::document::McpApprovalsView;
 
-        let pending = match self.app_state.read(cx).list_mcp_pending_executions() {
-            Ok(pending) => pending,
-            Err(error) => {
-                log::debug!("Failed to list pending MCP approvals: {error}");
-                return Vec::new();
-            }
-        };
+        let pending = self.app_state.read(cx).list_mcp_pending_executions()?;
 
-        pending
+        Ok(pending
             .into_iter()
             .map(|pending| PendingApproval {
                 classification_label: McpApprovalsView::classification_display(
@@ -207,12 +211,28 @@ impl Workspace {
                 connection_id: pending.connection_id,
                 created_at_epoch_ms: pending.created_at_epoch_ms,
             })
-            .collect()
+            .collect())
     }
 
     #[cfg(not(feature = "mcp"))]
     fn pending_approvals(&self, _cx: &App) -> Vec<PendingApproval> {
         Vec::new()
+    }
+
+    /// The profile name of an approval's connection, its raw id when no
+    /// profile matches, or a dash when the request names no connection.
+    pub(super) fn approval_connection_name(&self, connection_id: &str, cx: &App) -> String {
+        if connection_id.is_empty() {
+            return "\u{2014}".to_string();
+        }
+
+        self.app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .find(|profile| profile.id.to_string() == connection_id)
+            .map(|profile| profile.name.clone())
+            .unwrap_or_else(|| connection_id.to_string())
     }
 
     fn notification_sources(&self, cx: &App) -> NotificationSources {
@@ -324,7 +344,12 @@ impl Workspace {
         self.mark_notification_read(key, cx);
     }
 
-    fn review_approval(&mut self, pending_id: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn review_approval(
+        &mut self,
+        pending_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_notifications(window, cx);
 
         #[cfg(feature = "mcp")]
@@ -838,17 +863,7 @@ impl Workspace {
             .into_iter()
             .find(|pending| pending.id == pending_id)?;
 
-        let connection = if pending.connection_id.is_empty() {
-            "\u{2014}".to_string()
-        } else {
-            self.app_state
-                .read(cx)
-                .profiles()
-                .iter()
-                .find(|profile| profile.id.to_string() == pending.connection_id)
-                .map(|profile| profile.name.clone())
-                .unwrap_or_else(|| pending.connection_id.clone())
-        };
+        let connection = self.approval_connection_name(&pending.connection_id, cx);
 
         let waiting = waiting_label(pending.created_at_epoch_ms, now.timestamp_millis());
 

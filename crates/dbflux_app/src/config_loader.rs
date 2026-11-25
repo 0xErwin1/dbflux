@@ -142,6 +142,7 @@ fn save_general_settings_to(
         workspace_inspector_width_px: settings.workspace_inspector_width_px.map(f64::from),
         accent_dark: settings.accent_dark.map(dbflux_core::AccentColor::to_hex),
         accent_light: settings.accent_light.map(dbflux_core::AccentColor::to_hex),
+        mcp_approval_notifications: i32::from(settings.mcp_approval_notifications),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1180,6 +1181,7 @@ fn load_general_settings(
         scrollbar_visibility: scrollbar_visibility_from_storage(&dto.scrollbar_visibility),
         accent_dark: accent_from_storage(dto.accent_dark.as_deref()),
         accent_light: accent_from_storage(dto.accent_light.as_deref()),
+        mcp_approval_notifications: dto.mcp_approval_notifications != 0,
     }
 }
 
@@ -2814,6 +2816,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
 
@@ -2916,6 +2919,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
         runtime
@@ -3118,6 +3122,35 @@ mod tests {
 
         assert_eq!(super::accent_from_storage(Some("not a color")), None);
         assert_eq!(super::accent_from_storage(None), None);
+    }
+
+    #[test]
+    fn mcp_approval_notifications_default_on_and_stored_zero_loads_as_false() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert!(loaded.general_settings.mcp_approval_notifications);
+
+        let dto = runtime
+            .general_settings()
+            .get()
+            .expect("load dto")
+            .expect("general settings row");
+        runtime
+            .general_settings()
+            .upsert(
+                &dbflux_storage::repositories::general_settings::GeneralSettingsDto {
+                    mcp_approval_notifications: 0,
+                    ..dto
+                },
+            )
+            .expect("store zero");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(!loaded.general_settings.mcp_approval_notifications);
+
+        super::save_general_settings(&runtime, &loaded.general_settings).expect("save");
+        let dto = runtime.general_settings().get().expect("dto").expect("row");
+        assert_eq!(dto.mcp_approval_notifications, 0);
     }
 
     #[test]
@@ -3389,6 +3422,7 @@ mod tests {
             workspace_inspector_width_px: None,
             accent_dark: None,
             accent_light: None,
+            mcp_approval_notifications: 1,
             updated_at: String::new(),
         };
         runtime

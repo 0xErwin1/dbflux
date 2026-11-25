@@ -1,3 +1,4 @@
+pub mod approvals_watch;
 pub mod connection_cache;
 mod error_messages;
 pub mod governance;

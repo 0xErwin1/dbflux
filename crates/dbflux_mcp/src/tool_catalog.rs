@@ -54,6 +54,7 @@ pub const CANONICAL_V1_TOOLS: &[&str] = &[
     "request_execution",
     "list_pending_executions",
     "get_pending_execution",
+    "wait_for_approval",
     "approve_execution",
     "reject_execution",
     // Audit logs

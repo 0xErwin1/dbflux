@@ -92,6 +92,10 @@ Toasts stack in the top-right corner of the document area. At most four are
 shown at once; older ones fold into an *N more* entry that expands them or
 dismisses them together.
 
+**Notify when an MCP agent requests approval** (default on, builds with MCP
+support only) shows a desktop notification when an MCP agent creates a pending
+approval, or a toast when DBFlux is focused.
+
 ### Execution safety (dangerous-query confirmation)
 
 These three settings govern how DBFlux treats risky queries across **all**

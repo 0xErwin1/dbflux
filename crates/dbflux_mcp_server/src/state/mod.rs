@@ -422,6 +422,19 @@ fn pending_execution_store(
     }
 }
 
+/// Opens the shared pending executions store of `dbflux.db` for a process that
+/// only reads and watches the queue. Unlike the server's own store, it never
+/// falls back to memory: an empty private queue would make a watcher report
+/// that nothing is pending.
+pub fn open_shared_pending_store() -> Result<Box<dyn dbflux_approval::PendingExecutionStore>, String>
+{
+    let storage_runtime = open_storage_runtime()?;
+    let store = storage_runtime
+        .pending_executions()
+        .map_err(|error| format!("Failed to open the shared pending executions store: {error}"))?;
+    Ok(Box::new(store))
+}
+
 fn validate_client_id(
     runtime: &McpRuntime,
     client_id: &str,

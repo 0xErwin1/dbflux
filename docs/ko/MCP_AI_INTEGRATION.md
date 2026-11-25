@@ -83,7 +83,7 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 5. **승인 경로**: Ask 결정은 호출을 대기 중인 실행으로 큐에 넣습니다. 사람이 DBFlux에서 승인하거나 거부하며, 승인된 호출은 에이전트가 같은 인수로 다시 호출할 때 한 번 실행됩니다.
 6. **감사 기록**: 모든 결정은 통합 SQLite 데이터베이스의 `aud_audit_events`에 추가되며 조회와 내보내기가 가능합니다. 전체 이벤트 스키마는 `docs/AUDIT.md`를 참조하세요.
 
-연결을 받지 않는 도구(`list_connections`, `execute_script`를 제외한 스크립트 도구, 감사 도구, `list_pending_executions`, `get_pending_execution`)는 연결 게이트를 거치지 않고 연결이 없는 범위에서 평가됩니다. 이 범위에서 활성화된 모든 신뢰 클라이언트는 `builtin/read-only`와 함께, MCP가 활성화된 어떤 연결에서든 할당받은 모든 역할과 정책을 가집니다. 따라서 한 연결에서 쓰기가 허용된 클라이언트는 동일한 Allow, Ask, Deny 결정에 따라 스크립트를 만들고 수정할 수 있으며, 연결 할당이 없는 클라이언트는 읽기 전용 접근을 유지합니다. 이 범위는 MCP 서버가 시작될 때 계산되므로, 할당을 변경한 후에는 에이전트의 MCP 세션을 다시 시작하세요.
+연결을 받지 않는 도구(`list_connections`, `execute_script`를 제외한 스크립트 도구, 감사 도구, `list_pending_executions`, `get_pending_execution`, `wait_for_approval`)는 연결 게이트를 거치지 않고 연결이 없는 범위에서 평가됩니다. 이 범위에서 활성화된 모든 신뢰 클라이언트는 `builtin/read-only`와 함께, MCP가 활성화된 어떤 연결에서든 할당받은 모든 역할과 정책을 가집니다. 따라서 한 연결에서 쓰기가 허용된 클라이언트는 동일한 Allow, Ask, Deny 결정에 따라 스크립트를 만들고 수정할 수 있으며, 연결 할당이 없는 클라이언트는 읽기 전용 접근을 유지합니다. 이 범위는 MCP 서버가 시작될 때 계산되므로, 할당을 변경한 후에는 에이전트의 MCP 세션을 다시 시작하세요.
 
 여섯 계층은 모두 `tools/call` 요청마다 서버 프로세스 내부에서 실행됩니다. 어떤 계층도 클라이언트 쪽에서 우회할 수 없습니다.
 
@@ -125,7 +125,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 스크립트 | `execute_script` | computed | 연결에 대해 저장된 데이터베이스 쿼리 스크립트를 실행합니다. 분류는 스크립트 본문에서 도출됩니다. Lua, Python, Bash 스크립트는 거부됩니다(아래 참조) |
 | 승인 | `request_execution` | admin | 사람의 승인을 받도록 호출을 큐에 넣습니다. 승인되면 같은 인수로 해당 도구를 직접 호출해 한 번 실행합니다 |
 | 승인 | `list_pending_executions` | read | 호출한 클라이언트의 승인 대기 중인 실행을 봅니다. 다른 클라이언트의 실행은 표시되지 않습니다 |
-| 승인 | `get_pending_execution` | read | 호출한 클라이언트의 특정 대기 중 실행의 세부 정보를 가져옵니다. 다른 클라이언트의 실행은 찾을 수 없음으로 보고됩니다 |
+| 승인 | `get_pending_execution` | read | 호출한 클라이언트의 특정 대기 중 실행의 세부 정보를 가져옵니다. 다른 클라이언트의 실행은 찾을 수 없음으로 보고됩니다. 승인되었거나 거부되었거나 만료된 실행은 해당 상태를 반환합니다 |
+| 승인 | `wait_for_approval` | read | 폴링 없이, 호출한 클라이언트의 대기 중 실행이 결정되거나 `timeout_secs`(기본 60, 1~120)가 지날 때까지 기다립니다. `approved`, `rejected`(사유 포함), `expired`, `still_pending`, `not_found`를 반환하며, 다른 클라이언트의 요청은 찾을 수 없음으로 보고됩니다 |
 | 승인 | `approve_execution` | — | MCP로는 항상 거부됩니다. 사람이 DBFlux에서 승인합니다 |
 | 승인 | `reject_execution` | — | MCP로는 항상 거부됩니다. 사람이 DBFlux에서 거부합니다 |
 | 감사 | `query_audit_logs` | read | 감사 기록을 검색하고 필터링합니다 |
@@ -171,13 +172,18 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 
 ### 승인 흐름
 
-1. 에이전트가 정책이 Ask로 결정한 클래스의 도구를 호출합니다. 서버는 호출을 대기 중인 실행으로 큐에 넣고, outcome이 `pending`인 `mcp_authorize` 감사 이벤트를 기록하며, 데이터가 `{"code": "approval_required", "status": "pending", "pending_id": "..."}`인 JSON-RPC 오류로 응답합니다.
+1. 에이전트가 정책이 Ask로 결정한 클래스의 도구를 호출합니다. 서버는 호출을 대기 중인 실행으로 큐에 넣고, outcome이 `pending`인 `mcp_authorize` 감사 이벤트를 기록하고, 오류가 아닌 일반 결과로 응답합니다. 그 구조화된 콘텐츠는 `{"code": "approval_required", "status": "pending", "pending_id": "...", "wait_tool": "wait_for_approval", ...}`이고 텍스트는 에이전트가 다음에 할 일을 알려 줍니다.
 2. 사람이 DBFlux에서 호출을 승인하거나 거부합니다 (**워크스페이스 → 대기 중인 승인**). 서버와 앱은 `dbflux.db`를 통해 큐를 공유하므로, `dbflux mcp`가 큐에 넣은 호출이 앱에 나타납니다.
-3. 에이전트가 같은 도구를 같은 인수로 다시 호출합니다. 서버는 액터, 연결, 도구, 인수가 일치하는 승인을 찾아 소비하고 호출을 실행합니다. 그 호출의 `mcp_authorize` 이벤트는 outcome이 `success`이며 `details_json.pending_execution_id`에 사용된 승인을 기록합니다.
+3. 에이전트가 `pending_id`로 `wait_for_approval`을 호출합니다. 공유 큐를 약 1초마다 다시 읽으며 최대 `timeout_secs`(기본 60, 최대 120) 동안 기다린 뒤 `approved`, `rejected`, `expired`, `still_pending`을 반환합니다. `still_pending`이면 에이전트가 다시 호출합니다. 대기 중인 호출은 같은 세션의 다른 호출을 막지 않습니다.
+4. `approved` 이후 에이전트가 같은 도구를 같은 인수로 다시 호출합니다. 서버는 액터, 연결, 도구, 인수가 일치하는 승인을 찾아 소비하고 호출을 실행합니다. 그 호출의 `mcp_authorize` 이벤트는 outcome이 `success`이며 `details_json.pending_execution_id`에 사용된 승인을 기록합니다.
 
 승인 하나는 호출 하나를 실행합니다. 호출을 다시 반복하면 새 요청이 큐에 들어가며, 인수를 바꿔도 마찬가지입니다. 거부된 호출은 절대 실행되지 않습니다. 승인은 호출이 큐에 들어간 지 24시간 후에 만료됩니다.
 
-`request_execution`은 호출을 명시적으로 큐에 넣으며, Ask 상태에서 도구를 호출한 것과 결과가 같습니다. `request_execution`, `list_pending_executions`, `get_pending_execution`은 큐 항목을 만들거나 읽기만 하므로, Ask 상태에서도 자신은 큐에 들어가지 않고 실행됩니다.
+`wait_for_approval`은 `next_action`을 반환합니다: `approved`는 `repeat_identical_call`, `rejected`와 `expired`는 `do_not_retry`, `still_pending`은 `call_wait_for_approval_again`입니다. `get_pending_execution`도 찾을 수 없음 대신 같은 실제 상태(`approved`, `rejected`, `expired`)를 보고하지만, 에이전트는 폴링보다 `wait_for_approval`을 사용해야 합니다.
+
+백그라운드 명령을 실행할 수 있는 에이전트는 `wait_for_approval`을 호출하는 대신 큐를 감시할 수 있습니다. `approval_required` 결과에는 바로 실행할 수 있는 `<dbflux> mcp approvals watch --pending-id <id>`인 `watch_command`가 들어 있습니다. 같은 `dbflux.db`를 약 1초마다 읽고, JSON 한 줄 `{"event": "approved" | "rejected" | "expired" | "not_found", "pending_id": ..., "tool_id": ..., "actor_id": ..., "connection_id": ..., "reason": ...}`(`reason`은 사유가 있는 거부에만)을 정확히 한 번 출력하고 `0`으로 종료합니다. `not_found`는 `1`로 종료합니다. `--timeout <secs>`를 주면 제때 결정되지 않았을 때 `{"event": "still_pending", "pending_id": ...}`를 출력하고 `124`로 종료합니다. `--pending-id`가 없으면 이벤트(`pending`, `approved`, `rejected`, `expired`)마다 한 줄씩 `--timeout`(종료 코드 `0`)까지 또는 무기한 스트리밍하며, 시작 시점에 이미 대기 중인 요청도 포함합니다. `--client-id <id>`는 해당 액터의 요청만 남깁니다. 스트림 모드는 이미 `pending`으로 알린 요청의 결정만 보고합니다. 한 번의 폴링(약 1초) 안에 생성되고 결정된 요청은 아무 줄도 출력하지 않으므로, 특정 요청을 따라가려면 `--pending-id`를 사용하세요. 모든 줄은 즉시 flush됩니다. `dbflux.db`를 열 수 없으면 명령은 stderr에 오류를 쓰고 0이 아닌 코드로 종료합니다. `dbflux mcp approvals watch --help`에 이벤트와 종료 코드가 나열됩니다.
+
+`request_execution`은 호출을 명시적으로 큐에 넣으며, Ask 상태에서 도구를 호출한 것과 결과가 같습니다. `request_execution`, `list_pending_executions`, `get_pending_execution`, `wait_for_approval`은 큐 항목을 만들거나 읽기만 하므로, Ask 상태에서도 자신은 큐에 들어가지 않고 실행됩니다.
 
 MCP 클라이언트는 절대 승인하거나 거부할 수 없습니다: `approve_execution`과 `reject_execution`은 정책과 관계없이 MCP로는 오류 코드 `self_approval_forbidden`과 함께 거부되며, 모든 시도가 감사됩니다. 대기 중인 실행은 DBFlux UI에서 사람만 처리합니다.
 
@@ -411,7 +417,7 @@ AI 클라이언트를 MCP 서버에 연결하기 전에:
 
 ### 호출이 `approval_required`로 응답됨
 
-- 정책이 호출의 클래스를 Ask로 결정했습니다. **워크스페이스 → 대기 중인 승인**에서 `pending_id`가 가리키는 대기 중인 실행을 승인한 다음, 같은 인수로 호출을 반복하십시오.
+- 정책이 호출의 클래스를 Ask로 결정했습니다. 이는 오류가 아닌 일반 결과이며 호출은 실행되지 않았습니다. **워크스페이스 → 대기 중인 승인**에서 `pending_id`가 가리키는 대기 중인 실행을 승인하면, 에이전트가 `wait_for_approval`로 이를 알게 되어 같은 인수로 호출을 반복합니다.
 - 다른 인수로 호출을 반복하면 승인을 사용하지 않고 새 요청이 큐에 들어갑니다.
 - 에이전트는 자신의 호출을 승인할 수 없습니다: `approve_execution`과 `reject_execution`은 MCP로는 항상 거부됩니다 (`self_approval_forbidden`).
 

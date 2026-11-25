@@ -476,6 +476,9 @@ fn run_gui() {
 
         let channel = dbflux_core::ReleaseChannel::current();
 
+        // Names desktop notifications after this channel's build.
+        cx.set_app_identity(channel.app_id(), channel.display_name());
+
         // Open the window where the user left it, pushed back inside the work
         // area of the displays attached now. With nothing saved this is the
         // first-run size, fitted the same way; leaving the placement to gpui

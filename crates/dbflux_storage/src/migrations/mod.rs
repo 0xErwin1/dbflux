@@ -194,6 +194,7 @@ impl MigrationRegistry {
         registry.register(mod_049_general_settings_inspector_width::MigrationImpl);
         registry.register(mod_050_cfg_telemetry::MigrationImpl);
         registry.register(mod_051_general_settings_accent_color::MigrationImpl);
+        registry.register(mod_052_general_settings_mcp_approval_notifications::MigrationImpl);
         registry
     }
 
@@ -435,6 +436,7 @@ mod mod_048_general_settings_scrollbar_visibility;
 mod mod_049_general_settings_inspector_width;
 mod mod_050_cfg_telemetry;
 mod mod_051_general_settings_accent_color;
+mod mod_052_general_settings_mcp_approval_notifications;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1191,6 +1193,7 @@ mod tests {
             "049_general_settings_inspector_width",
             "050_cfg_telemetry",
             "051_general_settings_accent_color",
+            "052_general_settings_mcp_approval_notifications",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

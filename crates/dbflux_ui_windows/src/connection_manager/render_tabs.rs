@@ -1223,6 +1223,7 @@ impl ConnectionManagerWindow {
         let Some(actor_id) = selected_actor_id else {
             return div()
                 .flex_1()
+                .min_w_0()
                 .h_full()
                 .p(Spacing::SM)
                 .opacity(opacity)
@@ -1239,6 +1240,7 @@ impl ConnectionManagerWindow {
         let mut column = div()
             .id("connection-mcp-client-detail")
             .flex_1()
+            .min_w_0()
             .h_full()
             .track_scroll(&self.mcp_tab.conn_mcp_detail_scroll_handle)
             .overflow_y_scrollbar()

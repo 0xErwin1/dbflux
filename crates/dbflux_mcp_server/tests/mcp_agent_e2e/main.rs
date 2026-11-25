@@ -3,8 +3,8 @@
 //! Every call here crosses the real JSON-RPC boundary: the server is served over
 //! an in-memory transport and driven by a real MCP client. That covers the
 //! handshake, the advertised capabilities, tool argument deserialization, the
-//! governance decision (which surfaces as a JSON-RPC *error*, not as a tool
-//! result carrying `is_error`), the approval lifecycle, and the audit trail as a
+//! governance decision (a denial surfaces as a JSON-RPC *error*; a call queued for
+//! approval is a successful result), the approval lifecycle, and the audit trail as a
 //! client actually observes them.
 //!
 //! Data comes from the SQLite driver against a temporary file. No Docker, no OS
@@ -42,6 +42,7 @@ mod select_data_column_check;
 mod select_data_joins;
 mod select_data_pseudo_columns;
 mod sqlite_name_resolution;
+mod wait_for_approval;
 
 /// Actor id every call in this file runs as.
 const AGENT: &str = "e2e-agent";
@@ -135,42 +136,42 @@ impl Agent {
 /// Asserts that a call was queued for approval and returns its pending id.
 #[expect(
     clippy::expect_used,
-    clippy::panic,
     clippy::indexing_slicing,
-    reason = "asserts the exact shape of the server's approval_required error: the data \
-        object and its fields are emitted by the approval queue path, so any drift \
-        must abort the test"
+    reason = "asserts the exact shape of the server's queued-for-approval result: the \
+        structured content is emitted by the approval queue path, so any drift must \
+        abort the test"
 )]
 fn expect_queued(result: Result<CallToolResult, rmcp::ServiceError>) -> String {
-    let error = result.expect_err("the call should wait for approval instead of running");
-    let rmcp::ServiceError::McpError(error) = error else {
-        panic!("expected an MCP error for a queued call");
-    };
+    let result = result.expect("a call waiting for approval is a result, not a protocol error");
+    assert_eq!(result.is_error, Some(false), "queued is not an error");
 
-    assert_eq!(error.code, ErrorCode::INVALID_REQUEST);
-    let data = error.data.expect("a queued call carries error data");
+    let data = result
+        .structured_content
+        .clone()
+        .expect("a queued call carries structured content");
     assert_eq!(data["code"], json!("approval_required"));
     assert_eq!(data["status"], json!("pending"));
-    assert_eq!(
-        data["next_action"],
-        json!("wait_for_human_approval_then_repeat_identical_call")
-    );
+    assert_eq!(data["wait_tool"], json!("wait_for_approval"));
     assert_eq!(data["status_tool"], json!("get_pending_execution"));
-
-    let pending_id = data["pending_id"].as_str().unwrap_or_default();
     assert!(
-        error
-            .message
-            .contains(&format!("pending execution {pending_id}"))
-            && error.message.contains("repeat this exact call"),
-        "the error must tell the agent what to do next: {}",
-        error.message
+        data["next_action"]
+            .as_str()
+            .is_some_and(|action| action.contains("wait_for_approval")),
+        "{data}"
     );
 
-    data["pending_id"]
+    let pending_id = data["pending_id"]
         .as_str()
         .expect("a queued call carries its pending id")
-        .to_string()
+        .to_string();
+
+    let text = text_content(&result);
+    assert!(
+        text.contains(&pending_id) && text.contains("wait_for_approval"),
+        "the text must tell the agent what to do next: {text}"
+    );
+
+    pending_id
 }
 
 /// Serves the server over an in-memory transport and completes the MCP

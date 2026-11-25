@@ -4784,6 +4784,9 @@ settings:
         "8s": "8 segundos"
         "15s": "15 segundos"
         never: "Mantener hasta descartarlos"
+    mcp_approval_notifications:
+      label: "Avisar cuando un agente MCP solicita aprobación"
+      hint: "Muestra una notificación de escritorio, o un aviso dentro de la app cuando DBFlux tiene el foco."
     share_stable_db:
       label: Usar la base de datos estable
       error: No se pudo actualizar la configuración de base de datos compartida
@@ -5299,6 +5302,9 @@ settings:
       get_pending_execution:
         name: Obtener pendiente
         description: Obtener los detalles de una ejecución pendiente específica
+      wait_for_approval:
+        name: Esperar aprobación
+        description: Esperar a que una ejecución pendiente se apruebe, se rechace o expire
       query_audit_logs:
         name: Consultar registros de auditoría
         description: Buscar y filtrar el registro de auditoría
@@ -6273,6 +6279,9 @@ notifications:
     title: Estás al día
     message: Aquí aparecen las aprobaciones, las actualizaciones y las tareas fallidas. Las leídas se conservan hasta que las borres.
   approval:
+    alert_title: "Aprobación solicitada"
+    alert_body: "%{client} quiere ejecutar %{tool} (%{classification}) en %{connection}"
+    alert_body_many: "%{count} solicitudes MCP esperan tu aprobación"
     meta: "%{connection} · %{client} · %{waiting}"
     review: Revisar
   update:

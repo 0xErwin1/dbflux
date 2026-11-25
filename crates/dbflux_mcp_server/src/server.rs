@@ -2253,14 +2253,18 @@ impl ServerHandler for DbFluxServer {
              All operations are subject to role-based access control and audit logging.\n\
              \n\
              Approvals: a policy can require a person to approve a call. Such a call does not \
-             run; it fails with error data code \"approval_required\" and a \"pending_id\". \
-             Then: (1) tell the user that pending execution <pending_id> is waiting for their \
-             approval in DBFlux (Workspace > Pending Approvals); (2) wait, and never call \
-             approve_execution or reject_execution, which are always denied to MCP clients; \
-             (3) check the status with get_pending_execution: while its status is \"pending\", \
-             it is still waiting, and status \"rejected\" carries the user's reason; (4) after \
-             the user approves it, repeat the identical call (same tool, same arguments) and \
-             it runs once. A rejected or expired call, or one \
+             run; it returns a normal (non-error) result whose structured content has code \
+             \"approval_required\", a \"pending_id\" and \"wait_tool\". Then: (1) tell the user \
+             that pending execution <pending_id> is waiting for their approval in DBFlux \
+             (Workspace > Pending Approvals); (2) never call approve_execution or \
+             reject_execution, which are always denied to MCP clients; (3) call \
+             wait_for_approval with the pending_id instead of polling get_pending_execution: it \
+             waits a bounded time (default 60 s, max 120 s) and returns status \"approved\", \
+             \"rejected\" (with the user's reason), \"expired\" or \"still_pending\"; on \
+             \"still_pending\" call it again (an agent that can run a background command may instead \
+             run the \"watch_command\" from the result: it prints one JSON line and exits when \
+             the request is decided); (4) when it is \"approved\", repeat the identical \
+             call (same tool, same arguments) and it runs once. A rejected or expired call, or one \
              repeated with different arguments, is queued again instead of running.",
         )
     }
