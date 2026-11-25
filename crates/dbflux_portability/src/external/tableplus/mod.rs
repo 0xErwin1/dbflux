@@ -153,107 +153,13 @@ fn map_connection(entry: &Entry<'_>) -> Result<ExternalImportCandidate, String> 
         return Err("socket connections are not supported".to_string());
     }
 
-    let user = entry.text("DatabaseUser");
-    let database = entry.text("DatabaseName");
-    let port = entry.port("DatabasePort");
-
     let (config, kind) = match driver.as_str() {
-        "PostgreSQL" => (
-            DbConfig::Postgres {
-                use_uri: false,
-                uri: None,
-                host: entry.required_host()?,
-                port: port.unwrap_or(5432),
-                user: user.unwrap_or_default(),
-                database: database.unwrap_or_default(),
-                ssl_mode: None,
-                ssl_root_cert_path: None,
-                ssl_client_cert_path: None,
-                ssl_client_key_path: None,
-                ssh_tunnel: ssh_tunnel(entry)?,
-                ssh_tunnel_profile_id: None,
-            },
-            DbKind::Postgres,
-        ),
-
-        "MySQL" | "MariaDB" => {
-            let kind = if driver == "MariaDB" {
-                DbKind::MariaDB
-            } else {
-                DbKind::MySQL
-            };
-            (
-                DbConfig::MySQL {
-                    use_uri: false,
-                    uri: None,
-                    host: entry.required_host()?,
-                    port: port.unwrap_or(3306),
-                    user: user.unwrap_or_default(),
-                    database,
-                    ssl_mode: None,
-                    ssl_root_cert_path: None,
-                    ssl_client_cert_path: None,
-                    ssl_client_key_path: None,
-                    ssh_tunnel: ssh_tunnel(entry)?,
-                    ssh_tunnel_profile_id: None,
-                },
-                kind,
-            )
-        }
-
-        "MicrosoftSQLServer" => (
-            DbConfig::SqlServer {
-                use_uri: false,
-                uri: None,
-                host: entry.required_host()?,
-                port: port.unwrap_or(1433),
-                user: user.unwrap_or_default(),
-                database,
-                instance: None,
-                ssl_mode: None,
-                trust_server_certificate: false,
-                ssl_root_cert_path: None,
-                ssh_tunnel: ssh_tunnel(entry)?,
-                ssh_tunnel_profile_id: None,
-            },
-            DbKind::SqlServer,
-        ),
-
-        "Redis" => (
-            DbConfig::Redis {
-                use_uri: false,
-                uri: None,
-                host: entry.required_host()?,
-                port: port.unwrap_or(6379),
-                user,
-                database: database.and_then(|index| index.trim().parse::<u32>().ok()),
-                tls: false,
-                ssl_mode: None,
-                ssl_root_cert_path: None,
-                ssl_client_cert_path: None,
-                ssl_client_key_path: None,
-                ssh_tunnel: ssh_tunnel(entry)?,
-                ssh_tunnel_profile_id: None,
-                topology: None,
-                sentinel_master_name: None,
-                additional_nodes: None,
-            },
-            DbKind::Redis,
-        ),
-
-        "SQLite" => {
-            let path = entry
-                .text("DatabaseHost")
-                .ok_or_else(|| "sqlite connection has no database file path".to_string())?;
-            (
-                DbConfig::SQLite {
-                    path: PathBuf::from(path),
-                    connection_id: None,
-                },
-                DbKind::SQLite,
-            )
-        }
-
+        "PostgreSQL" => (postgres_config(entry)?, DbKind::Postgres),
+        "MySQL" => (mysql_config(entry)?, DbKind::MySQL),
+        "MariaDB" => (mysql_config(entry)?, DbKind::MariaDB),
+        "MicrosoftSQLServer" => (sql_server_config(entry)?, DbKind::SqlServer),
+        "Redis" => (redis_config(entry)?, DbKind::Redis),
+        "SQLite" => (sqlite_config(entry)?, DbKind::SQLite),
         other => return Err(format!("unsupported driver '{other}'")),
     };
 
@@ -265,6 +171,92 @@ fn map_connection(entry: &Entry<'_>) -> Result<ExternalImportCandidate, String> 
         kind,
         secret: None,
         secret_skip_reason,
+    })
+}
+
+fn postgres_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
+    Ok(DbConfig::Postgres {
+        use_uri: false,
+        uri: None,
+        host: entry.required_host()?,
+        port: entry.port("DatabasePort").unwrap_or(5432),
+        user: entry.text("DatabaseUser").unwrap_or_default(),
+        database: entry.text("DatabaseName").unwrap_or_default(),
+        ssl_mode: None,
+        ssl_root_cert_path: None,
+        ssl_client_cert_path: None,
+        ssl_client_key_path: None,
+        ssh_tunnel: ssh_tunnel(entry)?,
+        ssh_tunnel_profile_id: None,
+    })
+}
+
+fn mysql_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
+    Ok(DbConfig::MySQL {
+        use_uri: false,
+        uri: None,
+        host: entry.required_host()?,
+        port: entry.port("DatabasePort").unwrap_or(3306),
+        user: entry.text("DatabaseUser").unwrap_or_default(),
+        database: entry.text("DatabaseName"),
+        ssl_mode: None,
+        ssl_root_cert_path: None,
+        ssl_client_cert_path: None,
+        ssl_client_key_path: None,
+        ssh_tunnel: ssh_tunnel(entry)?,
+        ssh_tunnel_profile_id: None,
+    })
+}
+
+fn sql_server_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
+    Ok(DbConfig::SqlServer {
+        use_uri: false,
+        uri: None,
+        host: entry.required_host()?,
+        port: entry.port("DatabasePort").unwrap_or(1433),
+        user: entry.text("DatabaseUser").unwrap_or_default(),
+        database: entry.text("DatabaseName"),
+        instance: None,
+        ssl_mode: None,
+        trust_server_certificate: false,
+        ssl_root_cert_path: None,
+        ssh_tunnel: ssh_tunnel(entry)?,
+        ssh_tunnel_profile_id: None,
+    })
+}
+
+fn redis_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
+    Ok(DbConfig::Redis {
+        use_uri: false,
+        uri: None,
+        host: entry.required_host()?,
+        port: entry.port("DatabasePort").unwrap_or(6379),
+        user: entry.text("DatabaseUser"),
+        database: entry
+            .text("DatabaseName")
+            .and_then(|index| index.trim().parse::<u32>().ok()),
+        tls: false,
+        ssl_mode: None,
+        ssl_root_cert_path: None,
+        ssl_client_cert_path: None,
+        ssl_client_key_path: None,
+        ssh_tunnel: ssh_tunnel(entry)?,
+        ssh_tunnel_profile_id: None,
+        topology: None,
+        sentinel_master_name: None,
+        additional_nodes: None,
+    })
+}
+
+/// TablePlus stores a SQLite file's full path in `DatabaseHost`.
+fn sqlite_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
+    let path = entry
+        .text("DatabaseHost")
+        .ok_or_else(|| "sqlite connection has no database file path".to_string())?;
+
+    Ok(DbConfig::SQLite {
+        path: PathBuf::from(path),
+        connection_id: None,
     })
 }
 
