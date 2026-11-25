@@ -64,8 +64,9 @@ impl TelemetryConfig {
     /// This reader exists only when the app's optional telemetry module exists.
     /// Construction/startup never invokes it implicitly.
     ///
-    /// Without overrides the compiled collector is used. `DBFLUX_TELEMETRY=off`
-    /// disables delivery regardless of any endpoint.
+    /// Without overrides the compiled collector is used, except in debug
+    /// builds, which deliver only to an explicit `DBFLUX_TELEMETRY_ENDPOINT`.
+    /// `DBFLUX_TELEMETRY=off` disables delivery regardless of any endpoint.
     pub fn from_environment(isolated: bool) -> Result<Self, TelemetryError> {
         Self::from_lookup(
             |name| match std::env::var(name) {
@@ -74,19 +75,28 @@ impl TelemetryConfig {
                 Err(_) => Err(TelemetryError::InvalidConfiguration),
             },
             isolated,
+            cfg!(debug_assertions),
         )
     }
     /// The kill switch is resolved before the endpoint override is read, so a
     /// disabled install never fails on an override it would not use.
+    ///
+    /// A debug build of a release branch carries a published version, so the
+    /// collector would admit it as a real installation; it gets no compiled
+    /// endpoint and reports only where a developer explicitly points it.
     fn from_lookup(
         read: impl Fn(&str) -> Result<Option<String>, TelemetryError>,
         isolated: bool,
+        debug_build: bool,
     ) -> Result<Self, TelemetryError> {
         let switch = read("DBFLUX_TELEMETRY")?;
         if Self::switched_off(switch.as_deref()) {
             return Ok(Self::default());
         }
         let endpoint = read("DBFLUX_TELEMETRY_ENDPOINT")?;
+        if debug_build && endpoint.is_none() {
+            return Ok(Self::default());
+        }
         let allow = read("DBFLUX_TELEMETRY_ALLOW_LOOPBACK_HTTP").ok().flatten();
         Self::resolve(
             endpoint.as_deref(),
