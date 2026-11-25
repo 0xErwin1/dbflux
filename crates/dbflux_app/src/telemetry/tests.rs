@@ -1383,7 +1383,7 @@ fn telemetry_kill_switch_wins_over_an_unreadable_endpoint_override() {
         "DBFLUX_TELEMETRY" => Ok(Some("off".to_owned())),
         _ => Err(TelemetryError::InvalidConfiguration),
     };
-    let config = TelemetryConfig::from_lookup(lookup, false).expect("disabled, not invalid");
+    let config = TelemetryConfig::from_lookup(lookup, false, false).expect("disabled, not invalid");
     assert!(config.endpoint.is_none());
 
     let enabled = |name: &str| match name {
@@ -1391,9 +1391,36 @@ fn telemetry_kill_switch_wins_over_an_unreadable_endpoint_override() {
         _ => Ok(None),
     };
     assert_eq!(
-        TelemetryConfig::from_lookup(enabled, false).err(),
+        TelemetryConfig::from_lookup(enabled, false, false).err(),
         Some(TelemetryError::InvalidConfiguration),
         "an invalid override still fails closed when delivery is enabled"
+    );
+}
+
+#[test]
+fn telemetry_debug_build_without_an_override_never_reaches_the_production_collector() {
+    let unset = |_: &str| Ok(None);
+    let config = TelemetryConfig::from_lookup(unset, false, true).expect("debug");
+    assert!(config.endpoint.is_none());
+
+    let release = TelemetryConfig::from_lookup(unset, false, false).expect("release");
+    assert_eq!(
+        release.endpoint,
+        Some(Endpoint::parse(Some(DEFAULT_TELEMETRY_ENDPOINT), false).expect("production"))
+    );
+}
+
+#[test]
+fn telemetry_debug_build_still_delivers_to_an_explicit_override() {
+    let custom = "https://collector.example.test/v1/events";
+    let lookup = |name: &str| match name {
+        "DBFLUX_TELEMETRY_ENDPOINT" => Ok(Some(custom.to_owned())),
+        _ => Ok(None),
+    };
+    let config = TelemetryConfig::from_lookup(lookup, false, true).expect("override");
+    assert_eq!(
+        config.endpoint,
+        Some(Endpoint::parse(Some(custom), false).expect("custom"))
     );
 }
 

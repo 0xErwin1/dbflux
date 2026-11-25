@@ -90,7 +90,9 @@ HTTPS, los informes se envían allí una vez confirmado el aviso, y un valor no
 válido desactiva el envío en lugar de volver al destino por defecto. La
 retención, el país y los encargados del tratamiento descritos en esta sección
 se refieren solo al colector del proyecto; un destino sustituido lo rige quien
-lo opere.
+lo opere. Una compilación de depuración no tiene destino por defecto: solo envía
+informes a un `DBFLUX_TELEMETRY_ENDPOINT` explícito, de modo que las ejecuciones
+de desarrollo nunca llegan al colector del proyecto.
 
 #### Qué operaciones cuentan
 

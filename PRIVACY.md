@@ -84,7 +84,10 @@ destination, not the only possible one. Setting `DBFLUX_TELEMETRY_ENDPOINT` to
 another HTTPS URL sends reports there once you have confirmed the disclosure,
 and an invalid value disables delivery instead of falling back. The retention,
 country and processor terms in this section describe the project's collector
-only; an overridden endpoint is governed by whoever runs it.
+only; an overridden endpoint is governed by whoever runs it. A debug build has
+no default destination: it reports only to an explicit
+`DBFLUX_TELEMETRY_ENDPOINT`, so development runs never reach the project's
+collector.
 
 #### Which operations count
 
