@@ -1,6 +1,8 @@
+pub mod outcome;
 pub mod service;
 pub mod store;
 
+pub use outcome::{ApprovalOutcome, classify_execution};
 pub use service::{
     ApprovalDecision, ApprovalError, ApprovalService, ApprovedExecution,
     MAX_REJECTION_REASON_CHARS, RejectedExecution, normalize_rejection_reason,

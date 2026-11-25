@@ -8,7 +8,8 @@
 //! - `approve_execution` / `reject_execution`: always denied over MCP by
 //!   authorization; a person resolves pending executions in DBFlux
 
-use dbflux_approval::store::{ExecutionPlan, PendingExecution, PendingStatus};
+use dbflux_approval::store::{ExecutionPlan, PendingExecution};
+use dbflux_approval::{ApprovalOutcome, classify_execution};
 use dbflux_policy::ExecutionClassification;
 use rmcp::{
     ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
@@ -481,16 +482,12 @@ fn approval_state(
         return ApprovalState::NotFound;
     };
 
-    let expired = execution
-        .expires_at
-        .is_some_and(|expires| expires <= now_ms);
-
-    match execution.status {
-        PendingStatus::Rejected => ApprovalState::Rejected,
-        PendingStatus::Consumed => ApprovalState::NotFound,
-        PendingStatus::Pending | PendingStatus::Approved if expired => ApprovalState::Expired,
-        PendingStatus::Pending => ApprovalState::Pending,
-        PendingStatus::Approved => ApprovalState::Approved,
+    match classify_execution(execution, now_ms) {
+        ApprovalOutcome::Pending => ApprovalState::Pending,
+        ApprovalOutcome::Approved => ApprovalState::Approved,
+        ApprovalOutcome::Rejected => ApprovalState::Rejected,
+        ApprovalOutcome::Expired => ApprovalState::Expired,
+        ApprovalOutcome::Consumed => ApprovalState::NotFound,
     }
 }
 

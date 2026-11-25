@@ -457,18 +457,58 @@ fn approval_queued_result(
     classification: ExecutionClassification,
 ) -> CallToolResult {
     let pending_id = outcome.pending_execution_id.as_deref().unwrap_or("unknown");
+    let watch_command = outcome.pending_execution_id.as_deref().and_then(|id| {
+        std::env::current_exe()
+            .ok()
+            .map(|exe| watch_command(&exe, id))
+    });
 
-    CallToolResult::structured(serde_json::json!({
+    let mut message = approval_required_message(tool_id, classification, pending_id);
+    if let Some(command) = &watch_command {
+        message.push_str(&format!(
+            " An agent that can run a background command may instead run `{command}`: it prints \
+             one JSON line (approved, rejected, expired) and exits when the request is decided."
+        ));
+    }
+
+    let mut content = serde_json::json!({
         "code": APPROVAL_REQUIRED_CODE,
         "status": "pending",
-        "message": approval_required_message(tool_id, classification, pending_id),
+        "message": message,
         "pending_id": outcome.pending_execution_id,
         "tool_id": tool_id,
         "classification": format!("{classification:?}"),
         "next_action": "call_wait_for_approval_then_repeat_identical_call_when_approved",
         "wait_tool": "wait_for_approval",
         "status_tool": "get_pending_execution",
-    }))
+    });
+
+    if let Some(command) = watch_command {
+        content["watch_command"] = serde_json::json!(command);
+    }
+
+    CallToolResult::structured(content)
+}
+
+/// The ready-to-run command that waits for `pending_id` to be decided.
+pub fn watch_command(executable: &std::path::Path, pending_id: &str) -> String {
+    format!(
+        "{} mcp approvals watch --pending-id {pending_id}",
+        shell_quote(&executable.to_string_lossy())
+    )
+}
+
+fn shell_quote(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%=,".contains(c));
+
+    if plain {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
 }
 
 /// Short, calm message for a call that was queued for approval.

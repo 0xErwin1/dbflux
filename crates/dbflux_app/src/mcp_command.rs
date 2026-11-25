@@ -1,5 +1,11 @@
 #[cfg(feature = "mcp")]
 pub fn run_mcp_command(args: &[String]) -> i32 {
+    if let Some((subcommand, rest)) = args.split_first()
+        && subcommand == "approvals"
+    {
+        return dbflux_mcp_server::approvals_watch::run_approvals_command(rest);
+    }
+
     match parse_mcp_args(args) {
         Ok(mcp_args) => {
             // Create tokio runtime for async MCP server
@@ -77,6 +83,9 @@ fn parse_mcp_args(args: &[String]) -> Result<dbflux_mcp_server::McpServerArgs, S
 #[cfg(feature = "mcp")]
 fn print_mcp_help() {
     eprintln!("Usage: dbflux mcp --client-id <id> [options]");
+    eprintln!(
+        "       dbflux mcp approvals watch [--pending-id <id>] [--client-id <id>] [--timeout <secs>]"
+    );
     eprintln!();
     eprintln!("Run DBFlux as an MCP (Model Context Protocol) server for AI clients.");
     eprintln!();
@@ -85,6 +94,11 @@ fn print_mcp_help() {
     eprintln!("                        Must match a trusted client in MCP settings");
     eprintln!("  --config-dir <path>   Override config directory (default: ~/.local/share/dbflux)");
     eprintln!("  --help, -h            Show this help message");
+    eprintln!();
+    eprintln!("Subcommands:");
+    eprintln!(
+        "  approvals watch      Print approval events as JSON lines (see: dbflux mcp approvals watch --help)"
+    );
     eprintln!();
     eprintln!("Example:");
     eprintln!("  dbflux mcp --client-id claude-desktop");

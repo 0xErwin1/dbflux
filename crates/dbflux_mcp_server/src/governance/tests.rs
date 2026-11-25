@@ -1690,3 +1690,17 @@ async fn unreadable_profile_store_still_allows_a_read() {
     assert!(result.is_ok(), "{result:?}");
     assert!(handler_ran);
 }
+
+#[test]
+fn watch_command_is_ready_to_run_and_quotes_unsafe_paths() {
+    use std::path::Path;
+
+    assert_eq!(
+        watch_command(Path::new("/usr/bin/dbflux"), "abc"),
+        "/usr/bin/dbflux mcp approvals watch --pending-id abc"
+    );
+    assert_eq!(
+        watch_command(Path::new("/opt/my apps/it's/dbflux"), "abc"),
+        "'/opt/my apps/it'\\''s/dbflux' mcp approvals watch --pending-id abc"
+    );
+}

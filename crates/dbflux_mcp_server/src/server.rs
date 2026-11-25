@@ -2261,7 +2261,9 @@ impl ServerHandler for DbFluxServer {
              wait_for_approval with the pending_id instead of polling get_pending_execution: it \
              waits a bounded time (default 60 s, max 120 s) and returns status \"approved\", \
              \"rejected\" (with the user's reason), \"expired\" or \"still_pending\"; on \
-             \"still_pending\" call it again; (4) when it is \"approved\", repeat the identical \
+             \"still_pending\" call it again (an agent that can run a background command may instead \
+             run the \"watch_command\" from the result: it prints one JSON line and exits when \
+             the request is decided); (4) when it is \"approved\", repeat the identical \
              call (same tool, same arguments) and it runs once. A rejected or expired call, or one \
              repeated with different arguments, is queued again instead of running.",
         )
