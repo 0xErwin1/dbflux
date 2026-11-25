@@ -6276,6 +6276,9 @@ notifications:
     title: Estás al día
     message: Aquí aparecen las aprobaciones, las actualizaciones y las tareas fallidas. Las leídas se conservan hasta que las borres.
   approval:
+    alert_title: "Aprobación solicitada"
+    alert_body: "%{client} quiere ejecutar %{tool} (%{classification}) en %{connection}"
+    alert_body_many: "%{count} solicitudes MCP esperan tu aprobación"
     meta: "%{connection} · %{client} · %{waiting}"
     review: Revisar
   update:

@@ -6276,6 +6276,9 @@ notifications:
     title: You are up to date
     message: Approvals, updates and failed tasks show up here. Read items are kept until you clear them.
   approval:
+    alert_title: "Approval requested"
+    alert_body: "%{client} wants to run %{tool} (%{classification}) on %{connection}"
+    alert_body_many: "%{count} MCP requests are waiting for your approval"
     meta: "%{connection} · %{client} · %{waiting}"
     review: Review
   update:

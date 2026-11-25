@@ -6274,6 +6274,9 @@ notifications:
     title: 一切都是最新的
     message: 审批、更新和失败的任务会显示在这里。已读项目会保留，直到你清除它们。
   approval:
+    alert_title: "请求审批"
+    alert_body: "%{client} 想在 %{connection} 上运行 %{tool}（%{classification}）"
+    alert_body_many: "%{count} 个 MCP 请求正在等待你的审批"
     meta: "%{connection} · %{client} · %{waiting}"
     review: 查看
   update:

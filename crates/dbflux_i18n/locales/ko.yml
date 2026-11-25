@@ -6275,6 +6275,9 @@ notifications:
     title: 모두 확인했습니다
     message: 승인, 업데이트, 실패한 작업이 여기에 표시됩니다. 읽은 항목은 지울 때까지 유지됩니다.
   approval:
+    alert_title: "승인 요청"
+    alert_body: "%{client}이(가) %{connection}에서 %{tool}(%{classification})을(를) 실행하려고 합니다"
+    alert_body_many: "MCP 요청 %{count}개가 승인을 기다리고 있습니다"
     meta: "%{connection} · %{client} · %{waiting}"
     review: 검토
   update:
