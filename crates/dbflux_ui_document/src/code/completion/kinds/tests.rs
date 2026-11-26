@@ -125,7 +125,7 @@ fn the_kind_words_are_resolved_once_per_request_whatever_the_item_count() {
         lookups.set(lookups.get() + 1);
         key.to_string()
     });
-    assert_eq!(lookups.get(), 7, "one lookup per kind word");
+    assert_eq!(lookups.get(), 8, "one lookup per kind word");
 
     let source = "SELECT * FROM a";
     let before = lookups.get();
@@ -181,4 +181,17 @@ fn a_schema_qualified_relation_is_not_a_cte_of_the_same_name() {
 fn an_unqualified_cte_still_shadows_a_catalog_relation() {
     let items = qualified_items("WITH access_log AS (SELECT 1) SELECT * FROM a");
     assert_eq!(description_of(&items, "access_log"), Some(word("cte")));
+}
+
+#[test]
+fn a_snippet_gets_its_word() {
+    let mut items = vec![CompletionItem {
+        label: "sel".to_string(),
+        kind: Some(lsp_types::CompletionItemKind::SNIPPET),
+        ..CompletionItem::default()
+    }];
+
+    super::describe_items(&mut items, &words(), &[], |_| false);
+
+    assert_eq!(description_of(&items, "sel"), Some(word("snippet")));
 }

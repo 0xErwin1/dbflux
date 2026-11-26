@@ -1306,6 +1306,21 @@ document:
       alias: "alias"
       keyword: "keyword"
       cte: "cte"
+      snippet: "snippet"
+    snippets:
+      picker:
+        title: "Insert snippet"
+        search_placeholder: "Search %{language} snippets"
+        builtin: "Built-in"
+        no_match: "No snippets match “%{query}”"
+        empty: "No %{language} snippets yet"
+        empty_hint: "Snippets belong to one query language and only appear in editors of that language. Add yours in Settings › Snippets."
+        count_one: "1 snippet"
+        count_many: "%{count} snippets"
+        hint_insert: "Enter Insert"
+        hint_close: "Esc Close"
+        load_error: "Could not load the snippets"
+        invalid_body: "The snippet “%{prefix}” has an invalid body and was not inserted"
     layout:
       split_save_failed: "Could not save the editor and results split: %{error}"
     vim:
@@ -4483,6 +4498,8 @@ palette:
       name: Toggle line comment
     format_query:
       name: Format query
+    insert_snippet:
+      name: "Insert snippet"
     go_to_query_error:
       name: Go to query error
     open_history:
@@ -4914,6 +4931,7 @@ settings:
       add_external_scripts_folder: "Add external scripts folder…"
       toggle_comment: Toggle line comment
       format_query: Format query
+      insert_snippet: "Insert snippet"
       go_to_query_error: Go to query error
       export_results: Export results
       clear_filter: Clear filter

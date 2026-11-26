@@ -1306,6 +1306,21 @@ document:
       alias: "별칭"
       keyword: "키워드"
       cte: "cte"
+      snippet: "스니펫"
+    snippets:
+      picker:
+        title: "스니펫 삽입"
+        search_placeholder: "%{language} 스니펫 검색"
+        builtin: "기본 제공"
+        no_match: "“%{query}”와(과) 일치하는 스니펫이 없습니다"
+        empty: "%{language} 스니펫이 아직 없습니다"
+        empty_hint: "스니펫은 하나의 쿼리 언어에 속하며 해당 언어의 편집기에만 표시됩니다. 설정 › 스니펫에서 추가하세요."
+        count_one: "스니펫 1개"
+        count_many: "스니펫 %{count}개"
+        hint_insert: "Enter 삽입"
+        hint_close: "Esc 닫기"
+        load_error: "스니펫을 불러오지 못했습니다"
+        invalid_body: "스니펫 “%{prefix}”의 본문이 올바르지 않아 삽입하지 않았습니다"
     layout:
       split_save_failed: "편집기와 결과 분할을 저장할 수 없습니다: %{error}"
     vim:
@@ -4483,6 +4498,8 @@ palette:
       name: 주석 전환
     format_query:
       name: 쿼리 서식 지정
+    insert_snippet:
+      name: "스니펫 삽입"
     go_to_query_error:
       name: 쿼리 오류로 이동
     open_history:
@@ -4914,6 +4931,7 @@ settings:
       add_external_scripts_folder: "외부 스크립트 폴더 추가…"
       toggle_comment: 주석 전환
       format_query: 쿼리 서식 지정
+      insert_snippet: "스니펫 삽입"
       go_to_query_error: 쿼리 오류로 이동
       export_results: 결과 내보내기
       clear_filter: 필터 지우기

@@ -58,6 +58,7 @@ mod result_warnings;
 pub mod schema_viz;
 pub mod secret_document;
 pub mod secret_store;
+pub(crate) mod snippet_picker;
 pub mod tab_bar;
 pub mod tab_manager;
 mod task_runner;

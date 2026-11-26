@@ -9,7 +9,7 @@ use std::collections::HashSet;
 mod tests;
 
 /// Every kind word, translated. Built once per completion request, before the
-/// loop over the suggestions, so a keystroke costs seven lookups whatever the
+/// loop over the suggestions, so a keystroke costs eight lookups whatever the
 /// number of items.
 pub(super) struct KindWords {
     table: String,
@@ -19,6 +19,7 @@ pub(super) struct KindWords {
     alias: String,
     keyword: String,
     cte: String,
+    snippet: String,
 }
 
 impl KindWords {
@@ -32,6 +33,7 @@ impl KindWords {
             alias: translate("document.code.completion_kind.alias"),
             keyword: translate("document.code.completion_kind.keyword"),
             cte: translate("document.code.completion_kind.cte"),
+            snippet: translate("document.code.completion_kind.snippet"),
         }
     }
 
@@ -77,6 +79,8 @@ pub(super) fn describe_items(
             &words.alias
         } else if kind == CompletionItemKind::KEYWORD {
             &words.keyword
+        } else if kind == CompletionItemKind::SNIPPET {
+            &words.snippet
         } else {
             continue;
         };

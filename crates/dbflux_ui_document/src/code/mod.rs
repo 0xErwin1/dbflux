@@ -75,12 +75,13 @@ pub(crate) mod pane;
 mod query_error;
 mod render;
 mod results_split;
+mod snippet_insert;
 mod snippet_session;
 mod statements;
 mod vim;
 
 use code_actions::SqlCodeActionProvider;
-pub(crate) use completion::QueryCompletionProvider;
+pub(crate) use completion::{QueryCompletionProvider, SnippetOffers};
 pub(crate) use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 pub(crate) use vim::VimMode;
@@ -402,6 +403,9 @@ pub(super) struct EditorState {
     pub(super) _input_subscriptions: Vec<Subscription>,
     /// Tabstop session state, shared with the editor's Tab interceptor.
     pub(super) snippet: snippet_session::SnippetHooks,
+    /// The snippets the last completion request offered, to recognise the
+    /// commit of one of them.
+    pub(super) snippet_offers: SnippetOffers,
     pub(super) original_content: String,
     pub(super) saved_query_id: Option<Uuid>,
     pub(super) current_editor_mode: String,
@@ -600,6 +604,8 @@ pub struct CodeDocument {
     script_confirm_focus: ModalFocus,
     /// Keyboard focus for the dangerous query confirmation.
     dangerous_query_focus: ModalFocus,
+    /// The Insert snippet picker, while it is open.
+    snippet_picker: Option<snippet_insert::OpenSnippetPicker>,
     context_bar_slot: ContextBarSlot,
     results_maximized: bool,
 
@@ -828,6 +834,7 @@ impl CodeDocument {
         let completion_menu_width_sub = follow_ui_font_size(&input_state, cx);
 
         let completion_query_generation = Rc::new(std::cell::Cell::new(0u64));
+        let snippet_offers = SnippetOffers::default();
         let supports_connection_context = editor_profile.supports_connection_context;
 
         let input_change_sub = cx.subscribe_in(
@@ -1052,15 +1059,17 @@ impl CodeDocument {
             exec_ctx.schema = Some("public".to_string());
         }
 
-        let completion_provider: Rc<dyn CompletionProvider> =
-            Rc::new(QueryCompletionProvider::new(
+        let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
+            QueryCompletionProvider::new(
                 query_language.clone(),
                 app_state.clone(),
                 connection_id,
                 exec_ctx.database.clone(),
                 exec_ctx.schema.clone(),
                 completion_query_generation.clone(),
-            ));
+            )
+            .with_snippets(snippet_offers.clone()),
+        );
 
         let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
             app_state.clone(),
@@ -1083,6 +1092,9 @@ impl CodeDocument {
             },
         );
         let snippet_vim_sub = cx.observe_self(|this, cx| this.snippet_follow_vim_mode(cx));
+        let snippet_commit_sub = cx.observe_in(&input_state, window, |this, _, window, cx| {
+            this.snippet_after_completion(window, cx)
+        });
 
         let (connection_dropdown, conn_sub) =
             Self::create_connection_dropdown(&app_state, &exec_ctx, window, cx);
@@ -1175,8 +1187,10 @@ impl CodeDocument {
                     completion_menu_width_sub,
                     snippet_caret_sub,
                     snippet_vim_sub,
+                    snippet_commit_sub,
                 ],
                 snippet,
+                snippet_offers,
                 original_content: String::new(),
                 saved_query_id: None,
                 current_editor_mode: editor_profile.editor_mode.clone(),
@@ -1247,6 +1261,7 @@ impl CodeDocument {
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             script_confirm_focus: ModalFocus::new(cx),
+            snippet_picker: None,
             dangerous_query_focus: ModalFocus::new(cx),
             context_bar_slot: ContextBarSlot::Connection,
             results_maximized: false,
@@ -1971,6 +1986,7 @@ impl CodeDocument {
             }
             Command::ToggleComment => self.toggle_comment(window, cx),
             Command::FormatQuery => self.format_query(window, cx),
+            Command::InsertSnippet => self.open_snippet_picker(window, cx),
             Command::GoToQueryError => self.go_to_query_error(window, cx),
             Command::Cancel | Command::CancelQuery if self.runner.is_primary_active() => {
                 self.cancel_query(cx);

@@ -1303,6 +1303,21 @@ document:
       alias: "alias"
       keyword: "palavra-chave"
       cte: "cte"
+      snippet: "snippet"
+    snippets:
+      picker:
+        title: "Inserir snippet"
+        search_placeholder: "Buscar snippets de %{language}"
+        builtin: "Integrado"
+        no_match: "Nenhum snippet corresponde a “%{query}”"
+        empty: "Ainda não há snippets de %{language}"
+        empty_hint: "Os snippets pertencem a uma linguagem de consulta e só aparecem nos editores dessa linguagem. Adicione os seus em Configurações › Snippets."
+        count_one: "1 snippet"
+        count_many: "%{count} snippets"
+        hint_insert: "Enter Inserir"
+        hint_close: "Esc Fechar"
+        load_error: "Não foi possível carregar os snippets"
+        invalid_body: "O snippet “%{prefix}” tem um corpo inválido e não foi inserido"
     layout:
       split_save_failed: "Não foi possível salvar a divisão entre o editor e os resultados: %{error}"
     vim:
@@ -4477,6 +4492,8 @@ palette:
       name: Alternar comentário de linha
     format_query:
       name: Formatar consulta
+    insert_snippet:
+      name: "Inserir snippet"
     go_to_query_error:
       name: Ir para o erro da consulta
     open_history:
@@ -4907,6 +4924,7 @@ settings:
       add_external_scripts_folder: "Adicionar pasta externa de scripts…"
       toggle_comment: Alternar comentário de linha
       format_query: Formatar consulta
+      insert_snippet: "Inserir snippet"
       go_to_query_error: Ir para o erro da consulta
       export_results: Exportar resultados
       clear_filter: Limpar filtro

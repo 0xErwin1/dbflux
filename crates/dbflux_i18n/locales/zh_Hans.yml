@@ -1306,6 +1306,21 @@ document:
       alias: "别名"
       keyword: "关键字"
       cte: "cte"
+      snippet: "代码片段"
+    snippets:
+      picker:
+        title: "插入代码片段"
+        search_placeholder: "搜索 %{language} 代码片段"
+        builtin: "内置"
+        no_match: "没有与“%{query}”匹配的代码片段"
+        empty: "还没有 %{language} 代码片段"
+        empty_hint: "代码片段属于某一种查询语言，只会出现在该语言的编辑器中。可在 设置 › 代码片段 中添加。"
+        count_one: "1 个代码片段"
+        count_many: "%{count} 个代码片段"
+        hint_insert: "Enter 插入"
+        hint_close: "Esc 关闭"
+        load_error: "无法加载代码片段"
+        invalid_body: "代码片段“%{prefix}”的内容无效，未插入"
     layout:
       split_save_failed: "无法保存编辑器与结果的分割比例：%{error}"
     vim:
@@ -4483,6 +4498,8 @@ palette:
       name: 切换注释
     format_query:
       name: 格式化查询
+    insert_snippet:
+      name: "插入代码片段"
     go_to_query_error:
       name: 转到查询错误
     open_history:
@@ -4914,6 +4931,7 @@ settings:
       add_external_scripts_folder: "添加外部脚本文件夹…"
       toggle_comment: 切换注释
       format_query: 格式化查询
+      insert_snippet: "插入代码片段"
       go_to_query_error: 转到查询错误
       export_results: 导出结果
       clear_filter: 清除筛选
