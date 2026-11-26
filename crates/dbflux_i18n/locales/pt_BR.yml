@@ -1615,6 +1615,7 @@ document:
       header: "%{column} · linha %{row}"
       item:
         copy: Copiar
+        copy_as_markdown: Copiar como Markdown
         copy_column_name: Copiar nome da coluna
         view_document: Ver documento
         add_document: Adicionar documento
@@ -4495,6 +4496,8 @@ palette:
       name: Mover aba para a direita
     export_results:
       name: Exportar resultados
+    results_copy_as_markdown:
+      name: Copiar como Markdown
     open_connection_manager:
       name: Abrir gerenciador de conexões
     disconnect:
@@ -4924,6 +4927,7 @@ settings:
       results_duplicate_row: Duplicar linha
       results_copy_row: Copiar linha
       results_copy_cell: Copiar célula
+      results_copy_as_markdown: Copiar como Markdown
       toggle_record_view: Alternar visão de registro
       cycle_document_view: Alternar árvore / tabela / JSON
       cycle_result_view: "Alternar visão do resultado"

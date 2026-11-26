@@ -133,6 +133,7 @@ impl Workspace {
             Command::ResultsAddRow
             | Command::ResultsCopyRow
             | Command::ResultsCopyCell
+            | Command::ResultsCopyAsMarkdown
             | Command::ToggleRecordView
             | Command::CycleDocumentView
             | Command::CycleResultView

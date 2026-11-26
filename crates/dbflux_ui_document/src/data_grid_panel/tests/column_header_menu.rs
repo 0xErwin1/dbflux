@@ -72,7 +72,7 @@ fn selecting_copy_column_name_copies_the_header_name(cx: &mut TestAppContext) {
 }
 
 /// The table menu (`m`) carries Copy column name for the active cell's
-/// column, right after Copy, so the keyboard reaches it without the header.
+/// column, right after Copy and Copy as Markdown, so the keyboard reaches it without the header.
 #[gpui::test]
 fn table_menu_copies_the_active_column_name_from_the_keyboard(cx: &mut TestAppContext) {
     use dbflux_app::keymap::ContextId;
@@ -115,7 +115,7 @@ fn table_menu_copies_the_active_column_name_from_the_keyboard(cx: &mut TestAppCo
         "`m` opens the table menu"
     );
 
-    for key in ["j", "enter"] {
+    for key in ["j", "j", "enter"] {
         window.simulate_keystrokes(key);
         window.run_until_parked();
     }

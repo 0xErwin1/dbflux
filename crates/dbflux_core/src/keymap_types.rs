@@ -113,6 +113,9 @@ pub enum Command {
     ResultsDuplicateRow,
     ResultsCopyRow,
     ResultsCopyCell,
+    /// Copies the selected cells, or the whole loaded result when one cell is
+    /// selected, as a Markdown table. Bound to nothing by default.
+    ResultsCopyAsMarkdown,
     ToggleRecordView,
     CycleDocumentView,
     /// Shows the next view of a result (Data, JSON, Chart and the others
@@ -325,6 +328,7 @@ impl Command {
             "move_tab_left" => Some(Command::MoveTabLeft),
             "move_tab_right" => Some(Command::MoveTabRight),
             "export_results" => Some(Command::ExportResults),
+            "results_copy_as_markdown" => Some(Command::ResultsCopyAsMarkdown),
             "open_connection_manager" => Some(Command::OpenConnectionManager),
             "export_connections" => Some(Command::ExportConnections),
             "disconnect" => Some(Command::Disconnect),
@@ -449,6 +453,7 @@ impl Command {
             Command::ResultsDuplicateRow => "Duplicate row",
             Command::ResultsCopyRow => "Copy row",
             Command::ResultsCopyCell => "Copy cell",
+            Command::ResultsCopyAsMarkdown => "Copy as Markdown",
             Command::ToggleRecordView => "Toggle record view",
             Command::CycleDocumentView => "Cycle tree / table / JSON",
             Command::CycleResultView => "Cycle result view",
@@ -660,6 +665,7 @@ impl Command {
             Command::ResultsDuplicateRow => "results_duplicate_row",
             Command::ResultsCopyRow => "results_copy_row",
             Command::ResultsCopyCell => "results_copy_cell",
+            Command::ResultsCopyAsMarkdown => "results_copy_as_markdown",
             Command::ToggleRecordView => "toggle_record_view",
             Command::CycleDocumentView => "cycle_document_view",
             Command::CycleResultView => "cycle_result_view",
@@ -888,6 +894,7 @@ impl Command {
             Command::ResultsDuplicateRow,
             Command::ResultsCopyRow,
             Command::ResultsCopyCell,
+            Command::ResultsCopyAsMarkdown,
             Command::ToggleRecordView,
             Command::CycleDocumentView,
             Command::CycleResultView,
@@ -1091,6 +1098,7 @@ impl Command {
             | Command::ResultsDuplicateRow
             | Command::ResultsCopyRow
             | Command::ResultsCopyCell
+            | Command::ResultsCopyAsMarkdown
             | Command::ToggleRecordView
             | Command::CycleDocumentView
             | Command::CycleResultView
@@ -1819,6 +1827,7 @@ mod tests {
             "next_tab",
             "prev_tab",
             "export_results",
+            "results_copy_as_markdown",
             "open_connection_manager",
             "export_connections",
             "disconnect",
@@ -1908,6 +1917,19 @@ mod tests {
         assert!(
             ContextId::global_chords_predicate().starts_with(ContextId::GLOBAL_CHORDS_IDENTIFIER)
         );
+    }
+
+    #[test]
+    fn copy_as_markdown_is_a_palette_command_with_no_default_binding_slot() {
+        assert_eq!(
+            Command::from_palette_id("results_copy_as_markdown"),
+            Some(Command::ResultsCopyAsMarkdown)
+        );
+        assert_eq!(
+            Command::ResultsCopyAsMarkdown.id(),
+            "results_copy_as_markdown"
+        );
+        assert!(Command::all_variants().contains(&Command::ResultsCopyAsMarkdown));
     }
 
     #[test]

@@ -1598,6 +1598,9 @@ impl DataGridPanel {
                     self.handle_copy(window, cx);
                 }
             }
+            ContextMenuAction::CopyAsMarkdown => {
+                self.copy_to_clipboard_with_format(ExportFormat::Markdown, window, cx);
+            }
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
             ContextMenuAction::ViewValue => {
@@ -4568,6 +4571,7 @@ mod tests {
             labels(&items),
             vec![
                 item_label("document.data.context_menu.item.copy"),
+                item_label("document.data.context_menu.item.copy_as_markdown"),
                 item_label("document.data.context_menu.item.copy_column_name"),
             ]
         );
@@ -4588,19 +4592,28 @@ mod tests {
         assert!(!without_row.contains(&item_label("document.data.context_menu.item.view_value")));
     }
 
-    /// Copy column name sits right after Copy, and the document menu, which
-    /// has no columns, leaves it out.
+    /// Copy as Markdown and Copy column name sit right after Copy, and the
+    /// document menu, which has no columns or table, leaves both out.
     #[test]
     fn copy_column_name_follows_copy_in_the_table_menu_only() {
         let table = DataGridPanel::build_context_menu_items(false, false, true, false, true);
         assert_eq!(
             table[1].action,
+            Some(dbflux_components::components::data_table::ContextMenuAction::CopyAsMarkdown)
+        );
+        assert_eq!(
+            table[2].action,
             Some(dbflux_components::components::data_table::ContextMenuAction::CopyColumnName)
         );
 
         let document = DataGridPanel::build_context_menu_items(true, true, true, false, true);
-        assert!(!document.iter().any(|item| item.action
-            == Some(dbflux_components::components::data_table::ContextMenuAction::CopyColumnName)));
+        assert!(!document.iter().any(|item| matches!(
+            item.action,
+            Some(
+                dbflux_components::components::data_table::ContextMenuAction::CopyColumnName
+                    | dbflux_components::components::data_table::ContextMenuAction::CopyAsMarkdown
+            )
+        )));
     }
 
     #[test]

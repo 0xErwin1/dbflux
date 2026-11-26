@@ -1618,6 +1618,7 @@ document:
       header: "%{column} · row %{row}"
       item:
         copy: Copy
+        copy_as_markdown: Copy as Markdown
         copy_column_name: Copy column name
         view_document: View document
         add_document: Add document
@@ -4501,6 +4502,8 @@ palette:
       name: Move tab right
     export_results:
       name: Export results
+    results_copy_as_markdown:
+      name: Copy as Markdown
     open_connection_manager:
       name: Open connection manager
     disconnect:
@@ -4931,6 +4934,7 @@ settings:
       results_duplicate_row: Duplicate row
       results_copy_row: Copy row
       results_copy_cell: Copy cell
+      results_copy_as_markdown: Copy as Markdown
       toggle_record_view: Toggle record view
       cycle_document_view: Cycle tree / table / JSON
       cycle_result_view: "Cycle result view"

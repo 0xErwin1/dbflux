@@ -101,6 +101,15 @@ pub(super) fn build_context_menu_items(
             disabled: false,
         },
         ContextMenuItem {
+            label: dbflux_i18n::t!("document.data.context_menu.item.copy_as_markdown").into(),
+            action: Some(ContextMenuAction::CopyAsMarkdown),
+            icon: Some(AppIcon::Table),
+            is_separator: false,
+            is_danger: false,
+            detail: None,
+            disabled: false,
+        },
+        ContextMenuItem {
             label: dbflux_i18n::t!("document.data.context_menu.item.copy_column_name").into(),
             action: Some(ContextMenuAction::CopyColumnName),
             icon: Some(AppIcon::Copy),

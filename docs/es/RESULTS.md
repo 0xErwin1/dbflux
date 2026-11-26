@@ -287,6 +287,14 @@ en el orden de la cuadrícula y tal como esta las muestra, con las ediciones sin
 guardar y las inserciones pendientes incluidas. Una sola celda seleccionada es el
 cursor, así que la copia toma todas las filas cargadas.
 
+El menú contextual de las celdas de la tabla (clic derecho, o `m`) incluye
+**Copiar como Markdown** justo después de **Copiar**. Copia el rango seleccionado
+como tabla Markdown, o todas las filas cargadas cuando hay una sola celda
+seleccionada, igual que **Markdown** en la sección de copia del menú de
+exportación. El command palette lista la misma acción como **Copiar como
+Markdown** (`results_copy_as_markdown`); no tiene atajo por defecto, así que
+asígnale uno en Settings → Keybindings si lo quieres.
+
 Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
 menú añade **Exportar todas las filas a un archivo**, en CSV, JSON (un array
 con un objeto por línea) o JSON Lines (un objeto por línea, `.jsonl`), o como tabla HTML, tabla

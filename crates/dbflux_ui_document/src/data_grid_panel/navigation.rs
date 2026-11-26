@@ -922,6 +922,14 @@ impl DataGridPanel {
                 self.handle_copy(window, cx);
                 true
             }
+            Command::ResultsCopyAsMarkdown => {
+                self.copy_to_clipboard_with_format(
+                    dbflux_export::ExportFormat::Markdown,
+                    window,
+                    cx,
+                );
+                true
+            }
             Command::CycleDocumentView => {
                 self.toggle_view_mode(cx);
                 true
