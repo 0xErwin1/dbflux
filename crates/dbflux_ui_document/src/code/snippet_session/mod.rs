@@ -185,7 +185,7 @@ impl SnippetHooks {
     /// Frames every field except the current one. Applied after the running
     /// editor update, because the collection updates the editor itself.
     fn refresh_highlights(&self, state: &GpuiEditorState, cx: &mut Context<GpuiEditorState>) {
-        let color = cx.theme().primary.opacity(0.6);
+        let color = cx.theme().muted_foreground;
         let frames: Vec<RangeDecoration> = self
             .session
             .borrow()
