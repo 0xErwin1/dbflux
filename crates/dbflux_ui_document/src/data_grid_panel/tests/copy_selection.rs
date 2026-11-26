@@ -139,3 +139,29 @@ fn pending_rows_and_edits_are_copied_as_the_grid_shows_them(cx: &mut TestAppCont
 
     assert_eq!(copied, "id,name\n1,edited\n9,new\n2,row 2\n");
 }
+
+#[gpui::test]
+fn the_whole_result_copy_shows_pending_rows_and_edits(cx: &mut TestAppContext) {
+    let (panel, table_state, window) = result_grid(cx);
+    window.update(|_, cx| {
+        table_state.update(cx, |state, _| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_cell(0, 1, CellValue::text("edited"));
+            buffer.add_pending_insert_after(0, vec![CellValue::int(9), CellValue::text("new")]);
+        });
+    });
+    select(
+        window,
+        &table_state,
+        CellCoord::new(2, 1),
+        CellCoord::new(2, 1),
+    );
+
+    let copied = copy_as(window, &panel, ExportFormat::Csv);
+
+    assert_eq!(copied, "id,name\n1,edited\n9,new\n2,row 2\n3,row 3\n");
+    let expected_toast =
+        crate::labels::context_menu_clipboard_copied_rows_toast(4, "CSV", copied.len());
+    window.run_until_parked();
+    assert_eq!(last_toast_title(window), Some(expected_toast));
+}

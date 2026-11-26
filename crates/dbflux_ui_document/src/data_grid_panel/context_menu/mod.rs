@@ -1359,7 +1359,7 @@ impl DataGridPanel {
             return;
         }
 
-        let selected = self.selected_cells_result(cx);
+        let selected = self.copied_cells_result(cx);
         let copied = selected.as_ref().unwrap_or(&self.result);
 
         let mut buffer: Vec<u8> = Vec::new();
