@@ -97,5 +97,6 @@ pub fn to_transfer_column(column: &ColumnMeta) -> TransferColumn {
         type_name: Some(column.type_name.clone()),
         nullable: column.nullable,
         is_primary_key: column.is_primary_key,
+        kind: column.kind,
     }
 }

@@ -421,6 +421,38 @@ fn browse_source_stops_reading_once_cancelled() {
 }
 
 #[test]
+fn browse_source_carries_the_driver_column_kind_into_the_markdown_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "dbflux_transfer_browse_source_kind_test_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("users.md");
+
+    let connection = Arc::new(PagedConnection::new(2));
+    let mut source = BrowseSource::open(connection, table_read(), 10, None).expect("opens");
+    let columns = source.columns().to_vec();
+    assert_eq!(columns[0].kind, ColumnKind::Integer);
+
+    let column_map = AutoColumnMap::new(&columns, &columns);
+    let mut sink = FileSink::to_file(&path, FileFormat::Markdown);
+    run_transfer(
+        &mut source,
+        &column_map,
+        &mut sink,
+        TableMappingMode::Existing,
+        &CancelToken::new(),
+        &mut |_, _| {},
+    )
+    .expect("transfer runs");
+
+    let contents = std::fs::read_to_string(&path).expect("file written");
+    assert_eq!(contents, "| id |\n| ---: |\n| 0 |\n| 1 |\n");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn browse_source_streams_every_page_into_one_file() {
     let dir = std::env::temp_dir().join(format!(
         "dbflux_transfer_browse_source_test_{}",

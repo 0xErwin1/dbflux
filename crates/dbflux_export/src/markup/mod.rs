@@ -8,7 +8,7 @@
 use crate::ExportError;
 use crate::csv::{checked_field, value_to_field};
 use crate::options::FormatOptions;
-use dbflux_core::{ColumnMeta, Value};
+use dbflux_core::{ColumnKind, ColumnMeta, Value};
 use std::io::Write;
 
 /// Writes one HTML document holding a single table. Cells keep their line
@@ -99,7 +99,13 @@ impl<W: Write> MarkdownStreamWriter<W> {
             .map(|column| escape_markdown_cell(&column.name))
             .collect();
         self.write_line(&names)?;
-        let separators = vec!["---".to_string(); columns.len()];
+        let separators: Vec<String> = columns
+            .iter()
+            .map(|column| match column.kind {
+                ColumnKind::Integer | ColumnKind::Float => "---:".to_string(),
+                _ => "---".to_string(),
+            })
+            .collect();
         self.write_line(&separators)
     }
 

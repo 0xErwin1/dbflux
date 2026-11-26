@@ -91,6 +91,49 @@ fn markdown_writes_a_table_with_header_separator_and_rows() {
     );
 }
 
+fn column_of(name: &str, kind: ColumnKind) -> ColumnMeta {
+    ColumnMeta {
+        kind,
+        ..column(name)
+    }
+}
+
+#[test]
+fn markdown_right_aligns_integer_and_float_columns() {
+    let columns = vec![
+        column_of("n", ColumnKind::Integer),
+        column_of("x", ColumnKind::Float),
+    ];
+    assert_eq!(markdown(&columns, &[]), "| n | x |\n| ---: | ---: |\n");
+}
+
+#[test]
+fn markdown_keeps_text_unknown_and_timestamp_columns_left_aligned() {
+    let columns = vec![
+        column_of("a", ColumnKind::Text),
+        column_of("b", ColumnKind::Unknown),
+        column_of("c", ColumnKind::Timestamp),
+    ];
+    assert_eq!(
+        markdown(&columns, &[]),
+        "| a | b | c |\n| --- | --- | --- |\n"
+    );
+}
+
+#[test]
+fn markdown_aligns_a_mixed_header_in_column_order() {
+    let columns = vec![
+        column_of("id", ColumnKind::Integer),
+        column_of("name", ColumnKind::Text),
+        column_of("price", ColumnKind::Float),
+        column_of("at", ColumnKind::Timestamp),
+    ];
+    assert_eq!(
+        markdown(&columns, &[]),
+        "| id | name | price | at |\n| ---: | --- | ---: | --- |\n"
+    );
+}
+
 #[test]
 fn markdown_keeps_pipes_and_line_breaks_inside_the_cell() {
     let rows = vec![vec![Value::Int(1), Value::Text("x | y\nz\\w".to_string())]];

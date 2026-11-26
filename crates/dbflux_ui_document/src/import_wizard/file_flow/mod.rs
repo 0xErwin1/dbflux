@@ -240,6 +240,7 @@ fn existing_table_columns(
                     type_name: Some(column.type_name),
                     nullable: column.nullable,
                     is_primary_key: column.is_primary_key,
+                    kind: dbflux_core::ColumnKind::Unknown,
                 })
                 .collect();
 

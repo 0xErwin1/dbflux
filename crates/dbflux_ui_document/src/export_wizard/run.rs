@@ -51,6 +51,7 @@ fn to_transfer_columns(columns: Vec<dbflux_core::ColumnInfo>) -> Vec<dbflux_core
     columns
         .into_iter()
         .map(|c| dbflux_core::TransferColumn {
+            kind: dbflux_core::infer_column_kind(&c.type_name),
             name: c.name,
             type_name: Some(c.type_name),
             nullable: c.nullable,
@@ -553,10 +554,40 @@ mod tests {
     // the tests need (see `import_wizard::tests` for the same constraint).
     use super::{
         ExportOutcome, ExportedTable, ResultKind, ResultRow, RunTaskAction, build_export_options,
-        resolve_run_outcome, result_rows, summarize, table_status_line,
+        resolve_run_outcome, result_rows, summarize, table_status_line, to_transfer_columns,
     };
     use dbflux_export::{CsvDelimiter, DateFormat, FormatOptions, TextEncoding};
     use dbflux_transfer::{FileFormat, TableTransferStatus, TransferError};
+
+    #[test]
+    fn schema_columns_carry_the_kind_inferred_from_their_type() {
+        let info = |name: &str, type_name: &str| dbflux_core::ColumnInfo {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            enum_values: None,
+        };
+
+        let columns = to_transfer_columns(vec![
+            info("id", "integer"),
+            info("price", "numeric(10,2)"),
+            info("name", "varchar(80)"),
+            info("blob", "bytea"),
+        ]);
+
+        let kinds: Vec<_> = columns.iter().map(|column| column.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                dbflux_core::ColumnKind::Integer,
+                dbflux_core::ColumnKind::Float,
+                dbflux_core::ColumnKind::Text,
+                dbflux_core::ColumnKind::Unknown,
+            ]
+        );
+    }
 
     #[test]
     fn the_chosen_format_options_reach_the_engine_options() {

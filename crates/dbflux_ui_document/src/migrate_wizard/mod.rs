@@ -68,6 +68,7 @@ fn to_transfer_columns(columns: Vec<ColumnInfo>) -> Vec<TransferColumn> {
             type_name: Some(c.type_name),
             nullable: c.nullable,
             is_primary_key: c.is_primary_key,
+            kind: dbflux_core::ColumnKind::Unknown,
         })
         .collect()
 }
@@ -1746,6 +1747,7 @@ mod tests {
             type_name: Some("text".to_string()),
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 

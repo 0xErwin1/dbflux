@@ -392,6 +392,7 @@ fn query_target_columns(
             type_name: Some(c.type_name),
             nullable: c.nullable,
             is_primary_key: c.is_primary_key,
+            kind: dbflux_core::ColumnKind::Unknown,
         })
         .collect())
 }
@@ -593,6 +594,7 @@ mod tests {
             type_name: Some("integer".to_string()),
             nullable: false,
             is_primary_key: true,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 
@@ -1023,6 +1025,7 @@ mod tests {
                         type_name: Some("text".to_string()),
                         nullable: true,
                         is_primary_key: false,
+                        kind: dbflux_core::ColumnKind::Unknown,
                     },
                 ],
                 row_count: 2,

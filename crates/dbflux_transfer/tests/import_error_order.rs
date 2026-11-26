@@ -34,6 +34,7 @@ fn a_missing_table_file_is_reported_before_a_missing_target_table() {
                 type_name: None,
                 nullable: true,
                 is_primary_key: false,
+                kind: dbflux_core::ColumnKind::Unknown,
             }],
             row_count: 1,
             fk_order_index: 0,

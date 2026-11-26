@@ -1095,6 +1095,7 @@ mod tests {
             type_name: Some("text".to_string()),
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 

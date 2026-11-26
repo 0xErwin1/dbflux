@@ -401,6 +401,7 @@ mod tests {
             type_name: Some("text".to_string()),
             nullable: !is_pk,
             is_primary_key: is_pk,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 
@@ -1306,6 +1307,7 @@ mod tests {
             type_name: Some("TEXT); DROP TABLE users; --".to_string()),
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         };
 
         let result = sink.begin(&[malicious_column], TableMappingMode::Create);

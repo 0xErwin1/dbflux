@@ -292,6 +292,7 @@ fn people_row() -> crate::import_wizard::TableImportConfig {
             type_name: None,
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         }],
         row_count: 0,
         fk_order_index: 0,

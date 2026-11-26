@@ -337,7 +337,7 @@ fn to_column_meta(col: &TransferColumn) -> ColumnMeta {
     ColumnMeta {
         name: col.name.clone(),
         type_name: col.type_name.clone().unwrap_or_default(),
-        kind: ColumnKind::Unknown,
+        kind: col.kind,
         nullable: col.nullable,
         is_primary_key: col.is_primary_key,
     }
@@ -531,6 +531,7 @@ mod tests {
             type_name: Some("text".to_string()),
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 
@@ -650,6 +651,29 @@ mod tests {
             let contents = std::fs::read_to_string(&path).unwrap();
             assert!(contents.contains(expected), "{format:?}: {contents}");
         }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn markdown_right_aligns_columns_by_their_carried_kind() {
+        let dir = temp_dir("markdown_kind");
+        let mut id = column("id");
+        id.type_name = Some("int4".to_string());
+        id.kind = dbflux_core::ColumnKind::Integer;
+        let columns = vec![id, column("name")];
+
+        let mut sink = FileSink::new(&dir, None, "aligned", FileFormat::Markdown);
+        sink.begin(&columns, TableMappingMode::Existing).unwrap();
+        sink.write_chunk(&RowChunk(vec![vec![
+            Value::Int(7),
+            Value::Text("Ada".to_string()),
+        ]]))
+        .unwrap();
+        sink.finish().unwrap();
+
+        let contents = std::fs::read_to_string(dir.join("aligned.md")).unwrap();
+        assert_eq!(contents, "| id | name |\n| ---: | --- |\n| 7 | Ada |\n");
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -66,6 +66,7 @@ fn transfer_column(col: &ColumnInfo) -> TransferColumn {
         type_name: Some(col.type_name.clone()),
         nullable: col.nullable,
         is_primary_key: col.is_primary_key,
+        kind: dbflux_core::ColumnKind::Unknown,
     }
 }
 
