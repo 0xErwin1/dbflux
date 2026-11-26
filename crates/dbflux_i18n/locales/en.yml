@@ -5678,6 +5678,58 @@ settings:
       save_failed_copy: "Failed to save: %{error}"
     toast:
       saved: Audit settings saved.
+  snippets:
+    header:
+      title: "Snippets"
+      subtitle: "Templates you insert into the query editor by prefix or from the snippet picker. Each snippet belongs to one query language."
+    list:
+      new: "New snippet"
+      empty: "No snippets yet"
+      builtin: "Built-in"
+    empty:
+      title: "No snippets yet"
+      hint: "Create one to insert it from the completion menu or the snippet picker."
+    form:
+      group:
+        snippet: "Snippet"
+        body: "Body"
+      name: "Name"
+      name_placeholder: "Snippet name"
+      prefix: "Prefix"
+      prefix_placeholder: "prefix"
+      prefix_hint: "Type it in the editor to see the snippet in the completion menu"
+      language: "Language"
+      language_hint: "Snippets only appear in editors of this language"
+      body: "Body"
+      body_hint: "Use $1, $2… for fields, ${1:default} for a field with a default, and $0 for where the cursor ends. Repeating a number mirrors that field."
+    language:
+      sql: "SQL"
+    action:
+      save: "Save"
+      update: "Update"
+      delete: "Delete"
+      cancel: "Cancel"
+    delete:
+      title: "Delete snippet"
+      message: "Are you sure you want to delete snippet \"%{name}\"?"
+    validation:
+      name_required: "Name is required"
+      prefix_required: "Prefix is required"
+      body_required: "Body is required"
+      duplicate_prefix: "Another %{language} snippet already uses the prefix %{prefix}"
+      parse:
+        unclosed_placeholder: "Unclosed placeholder at line %{line}, column %{column}: %{excerpt}"
+        nested_placeholder: "Nested placeholder at line %{line}, column %{column}: %{excerpt}"
+        unsupported_choice: "Choices are not supported at line %{line}, column %{column}: %{excerpt}"
+        unsupported_variable: "Variables are not supported at line %{line}, column %{column}: %{excerpt}"
+        invalid_placeholder: "Invalid placeholder at line %{line}, column %{column}: %{excerpt}"
+    toast:
+      saved: "Snippet saved"
+      deleted: "Snippet deleted"
+    error:
+      save: "Could not save the snippet"
+      delete: "Could not delete the snippet"
+      load: "Could not load the snippets"
   nav:
     no_results: "No settings match"
     search_placeholder: "Search settings"
@@ -5685,6 +5737,7 @@ settings:
     general: General
     appearance: Appearance
     keybindings: Keybindings
+    snippets: "Snippets"
     updates: Updates & privacy
     audit: Audit
     about: About

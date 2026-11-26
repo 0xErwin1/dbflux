@@ -105,6 +105,7 @@ When the tree gains focus with no row selected, the row selected last is selecte
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Save file as |
 | `Ctrl+/` / `Cmd+/` | Toggle line comment |
 | `Ctrl+Shift+f` / `Cmd+Option+l` | Format the selection, or the statement under the cursor |
+| `Ctrl+Alt+j` / `Cmd+j` | Insert snippet (opens the snippet picker) |
 | `Shift+F10` | Open the pane actions menu |
 | `Enter` | Focus / execute |
 

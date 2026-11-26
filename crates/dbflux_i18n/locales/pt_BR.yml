@@ -5671,6 +5671,58 @@ settings:
       save_failed_copy: "Falha ao salvar: %{error}"
     toast:
       saved: Configurações de auditoria salvas.
+  snippets:
+    header:
+      title: "Snippets"
+      subtitle: "Modelos que você insere no editor de consultas por prefixo ou pelo seletor de snippets. Cada snippet pertence a uma linguagem de consulta."
+    list:
+      new: "Novo snippet"
+      empty: "Ainda não há snippets"
+      builtin: "Integrado"
+    empty:
+      title: "Ainda não há snippets"
+      hint: "Crie um para inseri-lo pelo menu de autocompletar ou pelo seletor de snippets."
+    form:
+      group:
+        snippet: "Snippet"
+        body: "Corpo"
+      name: "Nome"
+      name_placeholder: "Nome do snippet"
+      prefix: "Prefixo"
+      prefix_placeholder: "prefixo"
+      prefix_hint: "Digite-o no editor para ver o snippet no menu de autocompletar"
+      language: "Linguagem"
+      language_hint: "Os snippets só aparecem nos editores desta linguagem"
+      body: "Corpo"
+      body_hint: "Use $1, $2… para os campos, ${1:padrão} para um campo com valor padrão e $0 para onde o cursor termina. Repetir um número espelha esse campo."
+    language:
+      sql: "SQL"
+    action:
+      save: "Salvar"
+      update: "Atualizar"
+      delete: "Excluir"
+      cancel: "Cancelar"
+    delete:
+      title: "Excluir snippet"
+      message: "Tem certeza de que deseja excluir o snippet \"%{name}\"?"
+    validation:
+      name_required: "O nome é obrigatório"
+      prefix_required: "O prefixo é obrigatório"
+      body_required: "O corpo é obrigatório"
+      duplicate_prefix: "Outro snippet de %{language} já usa o prefixo %{prefix}"
+      parse:
+        unclosed_placeholder: "Marcador não fechado na linha %{line}, coluna %{column}: %{excerpt}"
+        nested_placeholder: "Marcador aninhado na linha %{line}, coluna %{column}: %{excerpt}"
+        unsupported_choice: "Opções não são suportadas na linha %{line}, coluna %{column}: %{excerpt}"
+        unsupported_variable: "Variáveis não são suportadas na linha %{line}, coluna %{column}: %{excerpt}"
+        invalid_placeholder: "Marcador inválido na linha %{line}, coluna %{column}: %{excerpt}"
+    toast:
+      saved: "Snippet salvo"
+      deleted: "Snippet excluído"
+    error:
+      save: "Não foi possível salvar o snippet"
+      delete: "Não foi possível excluir o snippet"
+      load: "Não foi possível carregar os snippets"
   nav:
     no_results: "Nenhuma configuração corresponde"
     search_placeholder: "Buscar configurações"
@@ -5678,6 +5730,7 @@ settings:
     general: Geral
     appearance: Aparência
     keybindings: Atalhos de teclado
+    snippets: "Snippets"
     updates: Atualizações
     audit: Auditoria
     about: Sobre

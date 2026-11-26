@@ -5678,6 +5678,58 @@ settings:
       save_failed_copy: "No se pudo guardar: %{error}"
     toast:
       saved: Ajustes de auditoría guardados.
+  snippets:
+    header:
+      title: "Fragmentos"
+      subtitle: "Plantillas que insertas en el editor de consultas por prefijo o desde el selector de fragmentos. Cada fragmento pertenece a un lenguaje de consulta."
+    list:
+      new: "Nuevo fragmento"
+      empty: "Aún no hay fragmentos"
+      builtin: "Integrado"
+    empty:
+      title: "Aún no hay fragmentos"
+      hint: "Crea uno para insertarlo desde el menú de autocompletado o el selector de fragmentos."
+    form:
+      group:
+        snippet: "Fragmento"
+        body: "Cuerpo"
+      name: "Nombre"
+      name_placeholder: "Nombre del fragmento"
+      prefix: "Prefijo"
+      prefix_placeholder: "prefijo"
+      prefix_hint: "Escríbelo en el editor para ver el fragmento en el menú de autocompletado"
+      language: "Lenguaje"
+      language_hint: "Los fragmentos solo aparecen en los editores de este lenguaje"
+      body: "Cuerpo"
+      body_hint: "Usa $1, $2… para los campos, ${1:valor} para un campo con valor por defecto y $0 para donde termina el cursor. Repetir un número refleja ese campo."
+    language:
+      sql: "SQL"
+    action:
+      save: "Guardar"
+      update: "Actualizar"
+      delete: "Eliminar"
+      cancel: "Cancelar"
+    delete:
+      title: "Eliminar fragmento"
+      message: "¿Seguro que quieres eliminar el fragmento \"%{name}\"?"
+    validation:
+      name_required: "El nombre es obligatorio"
+      prefix_required: "El prefijo es obligatorio"
+      body_required: "El cuerpo es obligatorio"
+      duplicate_prefix: "Otro fragmento de %{language} ya usa el prefijo %{prefix}"
+      parse:
+        unclosed_placeholder: "Marcador sin cerrar en la línea %{line}, columna %{column}: %{excerpt}"
+        nested_placeholder: "Marcador anidado en la línea %{line}, columna %{column}: %{excerpt}"
+        unsupported_choice: "Las opciones no están admitidas en la línea %{line}, columna %{column}: %{excerpt}"
+        unsupported_variable: "Las variables no están admitidas en la línea %{line}, columna %{column}: %{excerpt}"
+        invalid_placeholder: "Marcador no válido en la línea %{line}, columna %{column}: %{excerpt}"
+    toast:
+      saved: "Fragmento guardado"
+      deleted: "Fragmento eliminado"
+    error:
+      save: "No se pudo guardar el fragmento"
+      delete: "No se pudo eliminar el fragmento"
+      load: "No se pudieron cargar los fragmentos"
   nav:
     no_results: "Ningún ajuste coincide"
     search_placeholder: "Buscar en ajustes"
@@ -5685,6 +5737,7 @@ settings:
     general: General
     appearance: Apariencia
     keybindings: Atajos de teclado
+    snippets: "Fragmentos"
     updates: Actualizaciones y privacidad
     audit: Auditoría
     about: Acerca de

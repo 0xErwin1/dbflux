@@ -95,6 +95,7 @@ DBFlux 使用分层、随上下文变化的键位映射。当前生效的层取�
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | 文件另存为             |
 | `Ctrl+/` / `Cmd+/`             | 切换行注释             |
 | `Ctrl+Shift+f` / `Cmd+Option+l` | 格式化选区或光标所在的语句 |
+| `Ctrl+Alt+j` / `Cmd+j` | 插入代码片段（打开代码片段选择器） |
 | `Shift+F10`                    | 打开面板操作菜单       |
 | `Enter`                        | 聚焦 / 执行            |
 
