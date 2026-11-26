@@ -15,49 +15,105 @@
       "title": "Plan tab, Diagram view fit to view with node inspector",
       "tradeoff": "The default view, drawn like the schema diagram: edge width follows the rows, each node shows its self cost as a % of the plan total with a bar, and one key condition when the engine gives one. Tooltips explain the operation name and an inspector field, and the inspector repeats the operation text. Fit scales it to 72%, so the text is small until the panel is expanded.",
       "width": 1920,
-      "height": 1040
+      "height": 1040,
+      "tooltips": [
+        {
+          "anchor": "Diagram node Seq Scan: operation name",
+          "title": "Seq Scan",
+          "text": "Reads every row of the table and keeps the ones that match the filter."
+        }
+      ],
+      "visible_tooltip": {
+        "anchor": "Inspector field: Index Cond (Details section)",
+        "title": "Index Cond"
+      }
     },
     {
       "file": "03-isl-query-plan-diagram-expanded.html",
       "title": "Plan tab, Diagram view with the results expanded",
       "tradeoff": "The same diagram at 87% (fit to the wider canvas) once the existing expand button gives the panel the editor area. Tooltips on the cost field and on the self-cost share.",
       "width": 1920,
-      "height": 1040
+      "height": 1040,
+      "tooltips": [
+        {
+          "anchor": "Diagram node Nested Loop: cost figure",
+          "title": "Estimated cost",
+          "text": "In the planner's own units, children included. Compare it only inside this plan."
+        }
+      ],
+      "visible_tooltip": {
+        "anchor": "Diagram node Sort: self cost % and bar",
+        "title": "Self cost"
+      }
     },
     {
       "file": "04-isl-query-plan-tree.html",
       "title": "Plan tab, Tree view with results expanded",
       "tradeoff": "The plain list for scanning costs in a column, now with a Self cost column and the key condition under the node. The condition line makes rows taller, so it is drawn with the results expanded. Tooltips on the Self cost header and on the costliest marker.",
       "width": 1920,
-      "height": 1040
+      "height": 1040,
+      "tooltips": [
+        {
+          "anchor": "Tree row Seq Scan: COSTLIEST badge",
+          "title": "Costliest",
+          "text": "The node with the highest self cost in this plan."
+        }
+      ],
+      "visible_tooltip": {
+        "anchor": "Tree column header: Self cost",
+        "title": "Self cost"
+      }
     },
     {
       "file": "05-isl-query-plan-raw.html",
       "title": "Plan tab, Raw view",
       "tradeoff": "The engine's own text next to the tree for anyone who needs it; it is long and scrolls inside the panel. Tooltip on the Raw switch.",
       "width": 1920,
-      "height": 1040
+      "height": 1040,
+      "visible_tooltip": {
+        "anchor": "View switch: Raw",
+        "title": "Raw"
+      }
     },
     {
       "file": "06-isl-query-plan-no-costs.html",
       "title": "Plan without costs (SQLite), Diagram view",
       "tradeoff": "Nodes carry no cost, rows or self share and every edge has the same thickness, so the diagram never shows made-up numbers; the key condition still shows where the engine gives one. Tooltip shows the driver's own explanation of SEARCH.",
       "width": 1920,
-      "height": 1040
+      "height": 1040,
+      "visible_tooltip": {
+        "anchor": "Diagram node header: SEARCH (first node)",
+        "title": "SEARCH"
+      }
     },
     {
       "file": "07-isl-query-plan-analyze.html",
       "title": "Analyze opt-in gate, Diagram view",
       "tradeoff": "Analyze needs a deliberate second click on a production connection; it adds one step for users who want real timings. Diagram is the active view. Tooltip on the Analyze switch.",
       "width": 1920,
-      "height": 1040
+      "height": 1040,
+      "visible_tooltip": {
+        "anchor": "Mode switch: Analyze",
+        "title": "Analyze"
+      }
     },
     {
       "file": "08-isl-query-plan-analyze-write.html",
       "title": "Analyze refused for a write statement, Diagram view",
       "tradeoff": "The estimate still shows as a diagram and Analyze is dimmed with the reason in place, so the refusal explains itself without a dialog. Tooltips on the plan totals and on an edge row count.",
       "width": 1920,
-      "height": 1040
+      "height": 1040,
+      "tooltips": [
+        {
+          "anchor": "Diagram edge Seq Scan to Update: row count",
+          "title": "Estimated rows",
+          "text": "Rows this step passes to the next one. A thicker line means more rows."
+        }
+      ],
+      "visible_tooltip": {
+        "anchor": "Plan totals in the toolbar (total cost and rows)",
+        "title": "Plan totals"
+      }
     },
     {
       "file": "09-isl-query-plan-states.html",
@@ -65,6 +121,52 @@
       "tradeoff": "Unsupported driver, several statements, server error and loading keep the Plan tab chrome; the way out is always visible.",
       "width": 1920,
       "height": 1040
+    },
+    {
+      "file": "10-isl-query-plan-analyzed-diagram.html",
+      "title": "Analyzed plan, Diagram view with node inspector",
+      "tradeoff": "The same six nodes after the query ran: every node adds its actual time, loops and actual rows beside the estimates, and the self bar shows share of execution time. The node whose actual rows differ most from the estimate carries the existing warning style with the ratio (a fact, no advice); the slowest node is marked SLOWEST. Planning and execution time replace the cost in the totals slot, and the tab and footer say the query was run. Drawn with the results expanded because the extra line per node does not fit the fit-to-view panel. Tooltips on the row-gap badge, the plan totals and Loops.",
+      "width": 1920,
+      "height": 1040,
+      "tooltips": [
+        {
+          "anchor": "Toolbar totals: planning and execution times",
+          "title": "Plan totals",
+          "text": "Planning is the time spent building the plan. Execution is the time spent running it. Both are measured on the server."
+        },
+        {
+          "anchor": "Inspector field: Loops",
+          "title": "Loops",
+          "text": "How many times the engine ran this step. Time is the total across loops; rows are per loop, like the estimate."
+        }
+      ],
+      "visible_tooltip": {
+        "anchor": "Diagram node Seq Scan: 15.5x badge",
+        "title": "Rows off the estimate"
+      }
+    },
+    {
+      "file": "11-isl-query-plan-analyzed-tree.html",
+      "title": "Analyzed plan, Tree view with node inspector",
+      "tradeoff": "The plain list gains Est. rows, Actual rows, Time, Loops and Self time next to the cost; the node with the widest row gap shows its ratio and the slowest node its marker. The inspector shows Estimate and Actual as two sections for the selected Seq Scan, including the versus-estimate line. Tooltips on Actual rows, Self time and the SLOWEST marker.",
+      "width": 1920,
+      "height": 1040,
+      "tooltips": [
+        {
+          "anchor": "Tree column header: Actual rows",
+          "title": "Actual rows",
+          "text": "Rows this step returned for each run of it, to compare with the estimate beside it."
+        },
+        {
+          "anchor": "Tree column header: Self time",
+          "title": "Self time",
+          "text": "Time spent in this node alone, without its children, as a share of the execution time. The bar shows the same share."
+        }
+      ],
+      "visible_tooltip": {
+        "anchor": "Tree row Index Scan: SLOWEST badge",
+        "title": "Slowest"
+      }
     }
   ]
 }
