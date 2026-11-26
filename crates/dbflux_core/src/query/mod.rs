@@ -5,6 +5,7 @@ pub(crate) mod join_condition;
 pub(crate) mod keyset;
 pub(crate) mod language_service;
 pub(crate) mod name_suggestion;
+pub(crate) mod plan;
 pub(crate) mod relational_filter;
 pub(crate) mod relaxed_json;
 pub(crate) mod safety;
@@ -49,6 +50,7 @@ pub use language_service::{
     strip_leading_comments,
 };
 pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
+pub use plan::{PlanFormat, PlanNode, QueryPlan, QueryPlanRequest};
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{
     classify_query_for_governance, classify_sql_execution, contains_compound_block,

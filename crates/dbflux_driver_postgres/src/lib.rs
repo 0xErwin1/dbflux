@@ -12,6 +12,7 @@
 pub mod driver;
 mod facets;
 pub mod instance_catalog;
+mod plan;
 mod table_views;
 mod tls;
 mod vector;

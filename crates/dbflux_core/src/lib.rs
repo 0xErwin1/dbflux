@@ -234,6 +234,7 @@ pub use query::{
     ParsedSnippet, PlaceholderSpan, SnippetParseError, SnippetParseErrorKind, Tabstop,
     parse_snippet, snippet_placeholder_spans,
 };
+pub use query::{PlanFormat, PlanNode, QueryPlan, QueryPlanRequest};
 pub use query::{normalize_relaxed_json, parse_relaxed_json};
 
 pub use query::relational_filter::{

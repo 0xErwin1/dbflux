@@ -2767,6 +2767,15 @@ impl Connection for PostgresConnection {
         self.execute(&QueryRequest::new(sql))
     }
 
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        let sql = crate::plan::explain_statement(&request.query)?;
+        let result = self.execute(&QueryRequest::new(sql))?;
+        crate::plan::parse_explain_json(&crate::plan::raw_plan_from_result(&result)?)
+    }
+
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
         let schema = request.table.schema.as_deref().unwrap_or("public");
         let escaped_schema = schema.replace('\'', "''");
