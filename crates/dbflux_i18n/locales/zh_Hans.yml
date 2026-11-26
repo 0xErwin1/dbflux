@@ -1329,6 +1329,7 @@ document:
         title: 包含多条语句
       failed:
         title: 计划失败
+      origin_gone: "生成此结果的连接已断开。请重新连接并再次运行该查询，然后再解释它。"
       cancelled:
         title: 计划已取消
     explain:
@@ -1754,6 +1755,7 @@ document:
         duplicate_row: 复制行
         delete_row: 删除行
         chart_this_query: 将此查询制作成图表
+        explain_this_query: 解释此查询
       submenu:
         copy_query:
           sql: 复制为 SQL

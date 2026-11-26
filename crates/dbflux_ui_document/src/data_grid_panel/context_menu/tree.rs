@@ -184,6 +184,10 @@ fn build_cell_menu(
         push_menu_item_row(panel, item, menu, &mut rows, cx);
     }
 
+    if !is_document_view && panel.can_explain_from_context_menu(cx) {
+        push_explain_row(&mut rows);
+    }
+
     let table_queries = panel.offers_table_query_actions();
     let has_filter = table_queries && panel.has_filter_submenu(backend, is_document_view, cx);
     let has_order =
@@ -318,6 +322,26 @@ fn push_menu_item_row(
         node = node.disabled();
     }
     rows.push(node);
+}
+
+/// "Explain this query", right after "Chart this query" when the menu has
+/// it, else as a row of its own below a separator.
+fn push_explain_row(rows: &mut Vec<MenuNode>) {
+    let follows_chart = rows
+        .last()
+        .is_some_and(|row| row.id.as_deref() == Some("chart-this-query"));
+
+    if !follows_chart {
+        rows.push(MenuNode::separator());
+    }
+
+    rows.push(
+        MenuNode::row(dbflux_i18n::t!(
+            "document.data.context_menu.item.explain_this_query"
+        ))
+        .id(super::explain::EXPLAIN_THIS_QUERY_ID)
+        .icon(AppIcon::Info),
+    );
 }
 
 /// The "Set value" trigger's flyout rows: the column default, the type's

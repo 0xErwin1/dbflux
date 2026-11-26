@@ -1963,6 +1963,19 @@ impl CodeDocument {
             grid.set_result_caption(caption, cx);
         });
 
+        if self.supports_connection_context() {
+            let document = cx.entity().downgrade();
+            grid.update(cx, |grid, _| {
+                grid.set_explain_host(Some(std::rc::Rc::new(move |query, cx| {
+                    if let Err(error) = document.update(cx, |document, cx| {
+                        document.explain_result_query(tab_id, query, cx);
+                    }) {
+                        log::debug!("document closed before its result was explained: {error}");
+                    }
+                })));
+            });
+        }
+
         if let Some(panel) = self.source.source_time_range_panel.clone() {
             grid.update(cx, |g, cx| {
                 g.set_chart_time_range_panel(Some(panel), cx);
@@ -2006,9 +2019,9 @@ impl CodeDocument {
                     cx.emit(DocumentEvent::CloseInspector);
                 }
                 DataGridEvent::ChartThisQuery { .. } => {
-                    // CodeDocument result tabs use QueryResult sources created without an
-                    // original_query, so can_chart_from_context_menu is always false for them.
-                    // This arm exists only for exhaustiveness.
+                    // Result tabs carry their `original_query`, so the menu offers
+                    // Chart this query, but the code document does not act on
+                    // this event; it charts from its own toolbar.
                 }
                 DataGridEvent::RefreshPolicyReset(_) => {
                     // ResultPanel for result tabs has no refresh dropdown

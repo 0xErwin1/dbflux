@@ -4,7 +4,9 @@
 
 // Explicit imports rather than the parent glob: combining `use super::*` with
 // `#[gpui::test]` sends the gpui_macros expansion into unbounded recursion.
-use crate::code::{CodeDocument, SqlQueryFocus, SqlQueryLayout};
+use crate::code::{
+    CodeDocument, ExecutionSessionContext, ResultOrigin, SqlQueryFocus, SqlQueryLayout,
+};
 use crate::handle::DocumentEvent;
 use crate::keyboard_coverage::{CODE_EDITOR_CHROME, DATA_GRID, QUERY_PLAN};
 use crate::keyboard_test_support::{connected_app_state, host_document};
@@ -68,6 +70,8 @@ struct Doc<'a> {
     driver: FakeDriver,
     frame: Arc<FrameCapture>,
     events: Rc<RefCell<Vec<String>>>,
+    app_state: Entity<dbflux_ui_base::AppStateEntity>,
+    profile_id: uuid::Uuid,
 }
 
 fn open<'a>(cx: &'a mut TestAppContext, driver: FakeDriver, content: &str) -> Doc<'a> {
@@ -79,12 +83,13 @@ fn open<'a>(cx: &'a mut TestAppContext, driver: FakeDriver, content: &str) -> Do
     let (app_state, profile_id) = connected_app_state(cx, &driver, "shop-pg");
 
     let content = content.to_string();
+    let state_for_document = app_state.clone();
     let (host, window) = host_document(
         cx,
         move |window, cx| {
             cx.new(|cx| {
                 let mut document = CodeDocument::new_with_language(
-                    app_state,
+                    state_for_document,
                     None,
                     QueryLanguage::Sql,
                     window,
@@ -123,6 +128,8 @@ fn open<'a>(cx: &'a mut TestAppContext, driver: FakeDriver, content: &str) -> Do
         driver,
         frame,
         events,
+        app_state,
+        profile_id,
     }
 }
 
@@ -243,6 +250,109 @@ impl Doc<'_> {
         self.settle();
     }
 
+    /// Opens the cell menu of the first result tab and chooses its
+    /// "Explain this query" row.
+    fn explain_from_result_menu(&mut self) {
+        self.window.update(|window, cx| {
+            let grid = self.document.read(cx).result_tabs.result_tabs[0]
+                .grid
+                .clone();
+            grid.update(cx, |grid, cx| {
+                grid.open_context_menu_on_selection_for_test(window, cx);
+                grid.activate_menu_row_for_test("explain-this-query", window, cx);
+            });
+        });
+        self.settle();
+    }
+
+    /// Connects a second profile named `name` through `driver` and returns
+    /// its id.
+    fn connect_other(&mut self, driver: &FakeDriver, name: &str) -> uuid::Uuid {
+        let other = uuid::Uuid::new_v4();
+        let profile = dbflux_core::ConnectionProfile::new(
+            name,
+            dbflux_core::DbConfig::SQLite {
+                path: std::path::PathBuf::from(":memory:"),
+                connection_id: None,
+            },
+        );
+        let connection = driver.connect_arc(&profile).expect("fake connection");
+
+        self.window.update(|_, cx| {
+            self.app_state.update(cx, |state, _| {
+                state.connections_mut().insert(
+                    other,
+                    dbflux_core::ConnectedProfile {
+                        profile,
+                        connection,
+                        schema: None,
+                        mutation_policy: dbflux_core::MutationPolicy::default(),
+                        read_only_reason: None,
+                        database_schemas: Default::default(),
+                        table_details: Default::default(),
+                        collection_children: Default::default(),
+                        schema_types: Default::default(),
+                        schema_columns: Default::default(),
+                        schema_indexes: Default::default(),
+                        schema_foreign_keys: Default::default(),
+                        schema_routines: Default::default(),
+                        dependents_cache: Default::default(),
+                        active_database: None,
+                        redis_key_cache: Default::default(),
+                        database_connections: Default::default(),
+                        proxy_tunnel: None,
+                    },
+                );
+            });
+        });
+        other
+    }
+
+    /// A result tab for "SELECT 1" that ran on the connection the document
+    /// started with, then points the document at `other`.
+    fn result_from_origin_then_switch_to(&mut self, other: uuid::Uuid) {
+        self.window.update(|window, cx| {
+            let origin_connection = self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(&self.profile_id)
+                .map(|connected| connected.connection.clone())
+                .expect("the origin is connected");
+
+            self.document.update(cx, |document, cx| {
+                document.result_tabs.run_in_new_tab = true;
+                document.setup_data_grid(
+                    one_row_result(),
+                    "SELECT 1".into(),
+                    None,
+                    Some(ResultOrigin {
+                        connection_id: self.profile_id,
+                        context: ExecutionSessionContext {
+                            root: origin_connection,
+                            database: None,
+                        },
+                        exec_ctx: Default::default(),
+                        language: QueryLanguage::Sql,
+                    }),
+                    window,
+                    cx,
+                );
+                document.layout = SqlQueryLayout::Split;
+                document.connection_id = Some(other);
+            });
+        });
+        self.settle();
+    }
+
+    fn disconnect(&mut self, id: uuid::Uuid) {
+        self.window.update(|_, cx| {
+            self.app_state.update(cx, |state, _| {
+                state.connections_mut().remove(&id);
+            });
+        });
+    }
+
     fn events(&self) -> Vec<String> {
         self.events.borrow().clone()
     }
@@ -281,6 +391,88 @@ fn explain_plans_the_statement_under_the_cursor_without_running_it(cx: &mut Test
     );
     assert!(doc.plan_state(ready));
     assert!(doc.plan_shown());
+}
+
+#[gpui::test]
+fn explaining_a_result_plans_the_query_that_produced_it_not_the_buffer(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), SCRIPT);
+    doc.add_result_tab();
+
+    doc.explain_from_result_menu();
+
+    assert_eq!(
+        doc.requests(),
+        ["SELECT 1"],
+        "the result's own query, sent as a plan request"
+    );
+    assert!(
+        doc.driver.stats().executed_requests.is_empty(),
+        "nothing is run"
+    );
+    assert!(doc.plan_state(ready));
+    assert!(doc.plan_shown());
+}
+
+#[gpui::test]
+fn explaining_a_result_plans_on_the_connection_that_produced_it(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), SCRIPT);
+    let other_driver = pg(Some(sample_plan()));
+    let other = doc.connect_other(&other_driver, "reporting");
+    doc.result_from_origin_then_switch_to(other);
+
+    doc.explain_from_result_menu();
+
+    assert_eq!(doc.requests(), ["SELECT 1"], "the origin's driver is asked");
+    assert!(
+        other_driver.stats().query_plan_requests.is_empty(),
+        "the connection the document moved to is not"
+    );
+    assert!(doc.plan_state(ready));
+}
+
+#[gpui::test]
+fn the_editor_explain_keeps_using_the_documents_current_connection(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 2");
+    let other_driver = pg(Some(sample_plan()));
+    let other = doc.connect_other(&other_driver, "reporting");
+    doc.result_from_origin_then_switch_to(other);
+
+    doc.explain_and_settle();
+
+    assert!(doc.requests().is_empty());
+    let asked: Vec<String> = other_driver
+        .stats()
+        .query_plan_requests
+        .into_iter()
+        .map(|request| request.query)
+        .collect();
+    assert_eq!(asked, ["SELECT 2"]);
+}
+
+#[gpui::test]
+fn explaining_a_result_whose_connection_is_gone_says_so_and_asks_nobody(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), SCRIPT);
+    let other_driver = pg(Some(sample_plan()));
+    let other = doc.connect_other(&other_driver, "reporting");
+    doc.result_from_origin_then_switch_to(other);
+    let origin = doc.profile_id;
+    doc.disconnect(origin);
+
+    doc.explain_from_result_menu();
+
+    assert!(doc.requests().is_empty());
+    assert!(other_driver.stats().query_plan_requests.is_empty());
+    assert!(doc.plan_shown());
+    let message = doc.plan_state(|state| match state {
+        PlanState::Failed(failure) => Some(failure.summary.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        message.as_deref(),
+        Some(
+            "The connection this result came from is no longer connected. Reconnect it and run the query again to explain it."
+        )
+    );
 }
 
 #[gpui::test]

@@ -13,6 +13,11 @@ asks the database for the plan and never runs the statement.
 3. Read the **Plan** tab: the box with the biggest **self cost** is marked
    **COSTLIEST**, and the thickest line carries the most rows.
 
+To plan the query behind a result, right-click a cell (or press `m`) and choose
+**Explain this query**: it explains the query that produced that result tab, not
+the text now in the editor, and is offered only when the connection's driver has
+query plans.
+
 Explaining again replaces the Plan tab. Close it with the button on the tab, or
 with `Alt+W` while it is shown.
 

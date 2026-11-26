@@ -52,6 +52,18 @@ use self::model::{NodeId, PlanModel};
 
 pub(crate) use actions::pane_actions;
 
+/// Whether the connection's driver says it has no query plans. A driver that
+/// declares no query capabilities is not taken to lack them. Read from the
+/// declared capabilities, so no driver is named.
+pub(crate) fn declares_no_plans(connected: &dbflux_core::ConnectedProfile) -> bool {
+    connected
+        .connection
+        .metadata()
+        .query
+        .as_ref()
+        .is_some_and(|query| !query.supports_explain)
+}
+
 /// The three ways to read a plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum PlanViewMode {

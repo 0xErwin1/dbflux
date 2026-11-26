@@ -1329,6 +1329,7 @@ document:
         title: More than one statement
       failed:
         title: Plan failed
+      origin_gone: "The connection this result came from is no longer connected. Reconnect it and run the query again to explain it."
       cancelled:
         title: Plan cancelled
     explain:
@@ -1754,6 +1755,7 @@ document:
         duplicate_row: Duplicate row
         delete_row: Delete row
         chart_this_query: Chart this query
+        explain_this_query: Explain this query
       submenu:
         copy_query:
           sql: Copy as SQL

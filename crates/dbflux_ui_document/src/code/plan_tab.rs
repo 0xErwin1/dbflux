@@ -15,9 +15,33 @@ use crate::query_plan::{self, PlanFailure, PlanView, PlanViewEvent, PlanViewMode
 use dbflux_core::{DbError, QueryPlan, QueryPlanRequest};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, record_error};
 
+/// The connection a plan is asked of.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum PlanRoute {
+    /// The document's current connection and database: the editor Explain.
+    Current,
+    /// The connection and database a result was produced on, whatever the
+    /// document points at now.
+    Origin {
+        connection_id: Uuid,
+        database: Option<String>,
+    },
+}
+
+impl PlanRoute {
+    fn connection_id(&self, current: Option<Uuid>) -> Option<Uuid> {
+        match self {
+            Self::Current => current,
+            Self::Origin { connection_id, .. } => Some(*connection_id),
+        }
+    }
+}
+
 /// The text a plan covers and how the tab names it.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PlanTarget {
+    /// Where the plan is asked.
+    pub(super) route: PlanRoute,
     pub(super) text: String,
     /// "Statement L7–16", "Selection L3–5" or "Whole script · 3 statements".
     pub(super) scope: String,
@@ -31,6 +55,8 @@ pub(super) struct PlanTab {
     target: PlanTarget,
     /// The plan being produced, if it is still on its way.
     running: Option<dbflux_core::TaskId>,
+    /// The connection the plan was asked of, for the messages that name it.
+    connection_id: Option<Uuid>,
     _view_subscription: Subscription,
     _task: Option<Task<()>>,
 }
@@ -72,14 +98,8 @@ impl CodeDocument {
         let conn_id = self.connection_id?;
         let app_state = self.app_state.read(cx);
         let connected = app_state.connections().get(&conn_id)?;
-        let declares_no_plans = connected
-            .connection
-            .metadata()
-            .query
-            .as_ref()
-            .is_some_and(|query| !query.supports_explain);
 
-        declares_no_plans.then(|| {
+        query_plan::declares_no_plans(connected).then(|| {
             dbflux_i18n::t!(
                 "document.query_plan.explain.unavailable",
                 connection = connected.profile.name
@@ -104,6 +124,7 @@ impl CodeDocument {
                 statements::line_at(&buffer, last.end.saturating_sub(1).max(first.start)),
             );
             return Some(PlanTarget {
+                route: PlanRoute::Current,
                 statement_count: language.statement_count(&text),
                 text,
                 scope: dbflux_i18n::t!(
@@ -124,6 +145,7 @@ impl CodeDocument {
             let start = statements::line_at(&buffer, range.start);
             let end = start + statement.trim_end().matches('\n').count();
             return Some(PlanTarget {
+                route: PlanRoute::Current,
                 text: statement.to_string(),
                 statement_count: 1,
                 scope: dbflux_i18n::t!(
@@ -143,6 +165,7 @@ impl CodeDocument {
         };
 
         Some(PlanTarget {
+            route: PlanRoute::Current,
             text: buffer,
             scope,
             statement_count,
@@ -173,13 +196,57 @@ impl CodeDocument {
         self.start_plan(target, cx);
     }
 
+    /// "Explain this query" from a result tab's cell menu: plans the query
+    /// that produced that result, not the buffer, in the same Plan tab
+    /// Explain uses. Never runs the query.
+    pub(super) fn explain_result_query(
+        &mut self,
+        tab_id: Uuid,
+        query: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+        else {
+            return;
+        };
+
+        let language = tab.origin.as_ref().map_or_else(
+            || self.effective_language().clone(),
+            |origin| origin.language.clone(),
+        );
+        // A result that carries its origin is explained there, even when the
+        // document has moved to another connection or database since.
+        let route = tab
+            .origin
+            .as_ref()
+            .map_or(PlanRoute::Current, |origin| PlanRoute::Origin {
+                connection_id: origin.connection_id,
+                database: origin.context.database.clone(),
+            });
+
+        self.start_plan(
+            PlanTarget {
+                route,
+                statement_count: language.statement_count(&query),
+                scope: tab.title.clone(),
+                text: query,
+            },
+            cx,
+        );
+    }
+
     /// The connection a plan runs on and the task target it is registered
     /// under. `None` after telling the user why there is none.
     fn resolve_plan_connection(
         &self,
+        route: &PlanRoute,
         cx: &mut Context<Self>,
     ) -> Option<(Arc<dyn dbflux_core::Connection>, dbflux_core::TaskTarget)> {
-        let Some(conn_id) = self.connection_id else {
+        let Some(conn_id) = route.connection_id(self.connection_id) else {
             let message = dbflux_i18n::t!("document.code.execution.toast.no_active_connection");
             Toast::error(message.clone())
                 .meta_right(now_hms())
@@ -199,12 +266,11 @@ impl CodeDocument {
                 return None;
             };
 
-            let database = self
-                .source
-                .exec_ctx
-                .database
-                .clone()
-                .or_else(|| connected.active_database.clone());
+            let database = match route {
+                PlanRoute::Current => self.source.exec_ctx.database.clone(),
+                PlanRoute::Origin { database, .. } => database.clone(),
+            }
+            .or_else(|| connected.active_database.clone());
 
             connected
                 .resolve_connection_for_execution(database.as_deref())
@@ -239,9 +305,23 @@ impl CodeDocument {
     /// Asks the driver for the plan of `target` and shows the Plan tab,
     /// loading, replacing the one a previous Explain left.
     pub(super) fn start_plan(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
-        let Some((connection, task_target)) = self.resolve_plan_connection(cx) else {
+        if let PlanRoute::Origin { connection_id, .. } = &target.route
+            && self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(connection_id)
+                .is_none()
+        {
+            self.show_plan_origin_gone(target, cx);
+            return;
+        }
+
+        let Some((connection, task_target)) = self.resolve_plan_connection(&target.route, cx)
+        else {
             return;
         };
+        let connection_id = target.route.connection_id(self.connection_id);
 
         self.clear_query_error(cx);
         self.clear_live_output();
@@ -289,6 +369,7 @@ impl CodeDocument {
             view,
             target,
             running: Some(task_id),
+            connection_id,
             _view_subscription: subscription,
             _task: Some(task),
         });
@@ -298,6 +379,48 @@ impl CodeDocument {
         }
 
         cx.emit(DocumentEvent::ExecutionStarted);
+        cx.notify();
+    }
+
+    /// The connection a result came from is gone: the Plan tab says so in
+    /// its error state. Nothing is asked of any other connection.
+    fn show_plan_origin_gone(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
+        if self
+            .plan
+            .tab
+            .as_ref()
+            .is_some_and(|tab| tab.running.is_some())
+        {
+            self.cancel_query(cx);
+        }
+
+        let mode = self
+            .plan
+            .view()
+            .map_or(PlanViewMode::default(), |view| view.read(cx).mode());
+        self.hide_plan_inspector(cx);
+
+        let message = dbflux_i18n::t!("document.query_plan.state.origin_gone");
+        let failure =
+            self.record_plan_failure(&DbError::connection_failed(message.clone()), message, cx);
+
+        let view = cx.new(|cx| PlanView::new(target.scope.clone(), mode, cx));
+        view.update(cx, |view, cx| view.set_failed(failure, cx));
+        let subscription = cx.subscribe(&view, Self::on_plan_event);
+
+        self.plan.tab = Some(PlanTab {
+            view,
+            connection_id: target.route.connection_id(self.connection_id),
+            target,
+            running: None,
+            _view_subscription: subscription,
+            _task: None,
+        });
+        self.plan.shown = true;
+        if self.layout == SqlQueryLayout::EditorOnly {
+            self.layout = SqlQueryLayout::Split;
+        }
+
         cx.notify();
     }
 
@@ -321,7 +444,7 @@ impl CodeDocument {
 
         let view = tab.view.clone();
         let multiple_statements = tab.target.statement_count > 1;
-        let connection_name = self
+        let connection_name = tab
             .connection_id
             .and_then(|id| self.app_state.read(cx).connections().get(&id))
             .map(|connected| connected.profile.name.clone())

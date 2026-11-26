@@ -968,6 +968,9 @@ pub struct DataGridPanel {
     /// rail) to the workspace through `side_panels`, so the grid does not
     /// dock them inside itself.
     side_panels_hosted: bool,
+    /// What "Explain this query" in the cell menu hands the result's query
+    /// to; set by a document that can show a plan.
+    explain_host: Option<context_menu::ExplainHost>,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     /// A save that writes SQL expressions, held until the user confirms it.
@@ -1582,6 +1585,7 @@ impl DataGridPanel {
             context_menu: None,
             is_active_tab: true,
             side_panels_hosted: false,
+            explain_host: None,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
             pending_expression_confirm: None,

@@ -1329,6 +1329,7 @@ document:
         title: 문이 둘 이상입니다
       failed:
         title: 계획 생성 실패
+      origin_gone: "이 결과를 만든 연결이 더 이상 연결되어 있지 않습니다. 다시 연결한 뒤 쿼리를 다시 실행해 설명하세요."
       cancelled:
         title: 계획 생성이 취소되었습니다
     explain:
@@ -1754,6 +1755,7 @@ document:
         duplicate_row: 행 복제
         delete_row: 행 삭제
         chart_this_query: 이 쿼리로 차트 만들기
+        explain_this_query: 이 쿼리 설명하기
       submenu:
         copy_query:
           sql: SQL로 복사

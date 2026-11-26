@@ -1329,6 +1329,7 @@ document:
         title: Más de una sentencia
       failed:
         title: Falló el plan
+      origin_gone: "La conexión de la que salió este resultado ya no está conectada. Vuelve a conectarla y ejecuta la consulta de nuevo para explicarla."
       cancelled:
         title: Plan cancelado
     explain:
@@ -1754,6 +1755,7 @@ document:
         duplicate_row: Duplicar fila
         delete_row: Eliminar fila
         chart_this_query: Graficar esta consulta
+        explain_this_query: Explicar esta consulta
       submenu:
         copy_query:
           sql: Copiar como SQL

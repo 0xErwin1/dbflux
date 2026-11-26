@@ -694,6 +694,7 @@ mod column_header_menu;
 mod copy_as_markdown;
 mod copy_selection;
 mod edit_guard;
+mod explain_entry;
 mod export_all;
 mod expressions;
 mod facets;

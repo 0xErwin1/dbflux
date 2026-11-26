@@ -1326,6 +1326,7 @@ document:
         title: Mais de uma instrução
       failed:
         title: Falha no plano
+      origin_gone: "A conexão da qual este resultado veio não está mais conectada. Reconecte-a e execute a consulta novamente para explicá-la."
       cancelled:
         title: Plano cancelado
     explain:
@@ -1751,6 +1752,7 @@ document:
         duplicate_row: Duplicar linha
         delete_row: Excluir linha
         chart_this_query: Criar gráfico desta consulta
+        explain_this_query: Explicar esta consulta
       submenu:
         copy_query:
           sql: Copiar como SQL
