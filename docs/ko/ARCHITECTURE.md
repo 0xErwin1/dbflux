@@ -549,10 +549,14 @@ crates/
       audit.rs              # AuditEventDto가 있는 AuditRepository
       *.rs                  # 기타 도메인 리포지토리
     src/legacy.rs           # JSON-to-SQLite 가져오기
+  dbflux_diagram/           # 도메인과 무관한 다이어그램 기하 (GPUI 없음)
+    src/layout/             # LayoutNode + LayoutEdge(간선 가중치) 위의 layered_left_right / compact_grid / radial
+    src/routing.rs          # route_edge: 노드 사각형 사이의 축 정렬 간선 경로
+    src/navigation/         # next_in_direction / spatial_order: 노드 간 키보드 선택
   dbflux_schema_viz/        # 스키마 시각화
     src/lib.rs              # 재내보내기: graph, layout, dbml, sql 모듈, DbmlScope, SqlScope
     src/graph.rs            # SchemaGraph, TableNode, FkEdge
-    src/layout.rs           # 레이아웃 알고리즘: LeftRight, Snowflake, Compact
+    src/layout.rs           # 테이블 크기 계산 + LeftRight, Snowflake, Compact, 배치는 dbflux_diagram이 수행
     src/dbml.rs             # DBML 내보내기 (3가지 범위: FocalTable, Subgraph, FullSchema)
     src/sql.rs              # SQL DDL 내보내기: CREATE TABLE + ALTER TABLE ADD CONSTRAINT (같은 3가지 범위)
   dbflux_test_support/       # 통합 테스트용 Docker 컨테이너 및 픽스처
@@ -662,7 +666,8 @@ crates/
 - **문서 트리**: `crates/dbflux_components/src/components/document_tree/` — 키보드 탐색(j/k/h/l), 검색(Ctrl+F 또는 /), 접을 수 있는 노드, 뷰 모드(Keys Only, Keys+Preview, Full Values)를 갖춘 문서 데이터베이스용 계층적 JSON/BSON 뷰어입니다.
 - **키-값 뷰**: `crates/dbflux_ui_document/src/key_value/` — 타입별 렌더링(String, Hash, List, Set, SortedSet, Stream), 페이지 나누기, 변경, 상황에 맞는 메뉴를 갖춘 Redis 전용 문서 탭입니다. `key_value/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
 - **네이티브 콘솔**: `crates/dbflux_ui_document/src/console/`는 드라이버가 `DriverCapabilities::NATIVE_CONSOLE`을 알리는 연결을 위한 명령 콘솔입니다. `DriverMetadata::native_console()`은 쿼리 언어에서 프롬프트와 예시를 도출합니다. 명령은 드라이버 `LanguageService`의 검증과 위험 명령 감지를 거친 뒤 `Connection::execute`로 실행되고(드라이버가 격리된 세션을 제공하면 편집기의 `ExecutionSessionBinding`을 통해), 확인 후에는 확인된 상한을 함께 가지며, 편집기와 같은 `query_execute` 감사 행을 남기고 공유 쿼리 기록에 들어갑니다. 편집기의 행 제한은 `DriverCapabilities::REQUEST_ROW_LIMIT`을 알리는 드라이버에만 전송됩니다. 입력 자동 완성은 편집기의 `QueryCompletionProvider`를 재사용합니다. 키-값 문서와 테이블 및 컬렉션 `DataDocument`가 이 콘솔을 붙이며, `ConsoleDocument`(`console_document/`, `DocumentKey::Console`)는 사이드바의 데이터베이스 메뉴에서 여는 별도 탭에서 이 콘솔을 호스팅합니다.
-- **스키마 시각화**: `crates/dbflux_schema_viz/`는 `SchemaGraph`(테이블 노드와 외래 키 간선), 레이아웃 알고리즘(LeftRight, Snowflake, Compact), DBML 내보내기, SQL DDL 내보내기를 제공합니다. `crates/dbflux_ui_document/src/schema_viz/mod.rs`의 `SchemaVizDocument`를 통해 사용하며, 도구 모음 드롭다운(Layout, Export), 토스트 피드백, 감사 이벤트, 취소 가능한 백그라운드 작업 로딩을 갖추고 있습니다. `schema_viz/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
+- **다이어그램 캔버스**: `crates/dbflux_diagram/`은 도메인과 무관한 기하(크기가 있는 노드와 가중치가 있는 간선 위의 계층형·컴팩트 그리드·방사형 레이아웃, 직교 간선 라우팅, 공간 기반 키보드 탐색)를, `crates/dbflux_components/src/diagram/`은 그 위에 구축된 GPUI 캔버스(이동/확대·축소/맞춤을 위한 뷰포트 계산, 점 격자와 변환된 표면, 두께가 있는 간선, 헤더/본문/푸터 슬롯을 갖춘 노드 카드)를 담고 있습니다. 노드 내용과 이벤트 핸들러는 사용하는 쪽에서 제공하며, 현재 사용하는 쪽은 스키마 다이어그램입니다.
+- **스키마 시각화**: `crates/dbflux_schema_viz/`는 `SchemaGraph`(테이블 노드와 외래 키 간선), 레이아웃 알고리즘(LeftRight, Snowflake, Compact — 테이블 크기를 계산하고 배치는 `dbflux_diagram`에 위임), DBML 내보내기, SQL DDL 내보내기를 제공합니다. `crates/dbflux_ui_document/src/schema_viz/mod.rs`의 `SchemaVizDocument`를 통해 사용하며, 도구 모음 드롭다운(Layout, Export), 토스트 피드백, 감사 이벤트, 취소 가능한 백그라운드 작업 로딩을 갖추고 있습니다. `schema_viz/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
 - 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다.
 - 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다.
 - 명령 팔레트: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` — 모든 앱 액션을 위한 퍼지 검색 명령 팔레트입니다.

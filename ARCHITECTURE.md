@@ -557,10 +557,14 @@ crates/
       audit.rs              # AuditRepository with AuditEventDto
       *.rs                  # Other domain repositories
     src/legacy.rs           # JSON-to-SQLite import
+  dbflux_diagram/           # Domain-free diagram geometry (no GPUI)
+    src/layout/             # layered_left_right / compact_grid / radial over LayoutNode + LayoutEdge (edge weight)
+    src/routing.rs          # route_edge: axis-aligned edge routes between node rectangles
+    src/navigation/         # next_in_direction / spatial_order: keyboard selection between nodes
   dbflux_schema_viz/        # Schema visualization
     src/lib.rs              # Re-exports: graph, layout, dbml, sql modules, DbmlScope, SqlScope
     src/graph.rs            # SchemaGraph, TableNode, FkEdge
-    src/layout.rs           # Layout algorithms: LeftRight, Snowflake, Compact
+    src/layout.rs           # Table sizing + LeftRight, Snowflake, Compact, placed by dbflux_diagram
     src/dbml.rs             # DBML export (3 scopes: FocalTable, Subgraph, FullSchema)
     src/sql.rs              # SQL DDL export: CREATE TABLE + ALTER TABLE ADD CONSTRAINT (same 3 scopes)
   dbflux_test_support/       # Docker containers and fixtures for integration tests
@@ -679,7 +683,8 @@ A right-rail builder composes SELECT/UPDATE/DELETE statements without writing SQ
 - **Document tree**: `crates/dbflux_components/src/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
 - **Key-value view**: `crates/dbflux_ui_document/src/key_value/` Redis-specific document tab with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu. Integrates with the workspace via a `PaneHandle` constructed in `key_value/pane.rs`.
 - **Native console**: `crates/dbflux_ui_document/src/console/` is a command console for connections whose driver advertises `DriverCapabilities::NATIVE_CONSOLE`; `DriverMetadata::native_console()` derives its prompt and example from the query language. Commands run through `Connection::execute` (through the editor's `ExecutionSessionBinding` where the driver offers isolated sessions) after the driver's `LanguageService` validation and dangerous-command detection, carry the confirmed ceiling after a confirmation, emit the same `query_execute` audit rows as the editor and land in the shared query history. The editor row limit is sent only to drivers that advertise `DriverCapabilities::REQUEST_ROW_LIMIT`. Input completion reuses the editor's `QueryCompletionProvider`. The key-value document and the table and collection `DataDocument` dock it; `ConsoleDocument` (`console_document/`, `DocumentKey::Console`) hosts it in its own tab, opened from a database's sidebar menu.
-- **Schema visualization**: `crates/dbflux_schema_viz/` provides `SchemaGraph` (table nodes and FK edges), layout algorithms (LeftRight, Snowflake, Compact), DBML export, and SQL DDL export. Accessed via `SchemaVizDocument` in `crates/dbflux_ui_document/src/schema_viz/mod.rs` with toolbar dropdowns (Layout, Export), toast feedback, audit events, and cancellable background task loading. Integrates with the workspace via a `PaneHandle` constructed in `schema_viz/pane.rs`.
+- **Diagram canvas**: `crates/dbflux_diagram/` holds the domain-free geometry (layered, compact-grid and radial layouts over sized nodes and weighted edges, orthogonal edge routing, spatial keyboard navigation) and `crates/dbflux_components/src/diagram/` the GPUI canvas built on it (viewport pan/zoom/fit math, dot grid and transformed surface, edges drawn with a width, node card with header/body/footer slots). Node content and event handlers come from the consumer; the schema diagram is the consumer today.
+- **Schema visualization**: `crates/dbflux_schema_viz/` provides `SchemaGraph` (table nodes and FK edges), layout algorithms (LeftRight, Snowflake, Compact) that size the tables and delegate placement to `dbflux_diagram`, DBML export, and SQL DDL export. Accessed via `SchemaVizDocument` in `crates/dbflux_ui_document/src/schema_viz/mod.rs` with toolbar dropdowns (Layout, Export), toast feedback, audit events, and cancellable background task loading. Integrates with the workspace via a `PaneHandle` constructed in `schema_viz/pane.rs`.
 - Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
 - Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor.
 - Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.

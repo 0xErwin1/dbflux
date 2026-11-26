@@ -3286,6 +3286,7 @@ dependencies = [
  "bolt",
  "chrono",
  "dbflux_core",
+ "dbflux_diagram",
  "dbflux_i18n",
  "gpui-base",
  "gpui-component",
@@ -3354,6 +3355,13 @@ dependencies = [
  "dbflux_byte_source",
  "encoding_rs",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dbflux_diagram"
+version = "0.12.0-dev.0"
+dependencies = [
+ "petgraph",
 ]
 
 [[package]]
@@ -3814,6 +3822,7 @@ name = "dbflux_schema_viz"
 version = "0.12.0-dev.0"
 dependencies = [
  "dbflux_core",
+ "dbflux_diagram",
  "dbml-rs",
  "log",
  "petgraph",
@@ -4014,6 +4023,7 @@ dependencies = [
  "dbflux_components",
  "dbflux_core",
  "dbflux_delimited",
+ "dbflux_diagram",
  "dbflux_driver_mongodb",
  "dbflux_driver_mssql",
  "dbflux_export",

@@ -1,0 +1,19 @@
+[package]
+name = "dbflux_diagram"
+version.workspace = true
+publish = false
+edition.workspace = true
+authors.workspace = true
+description = "Domain-free diagram geometry for DBFlux: graph-of-boxes layout, orthogonal edge routing and spatial navigation"
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+petgraph.workspace = true
+
+[lints]
+workspace = true
