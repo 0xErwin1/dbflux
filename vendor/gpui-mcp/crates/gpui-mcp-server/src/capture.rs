@@ -40,7 +40,14 @@ pub(crate) async fn capture(
     .await
     .map_err(|_| "native screenshot capture exceeded the 15 second deadline".to_owned())?
     .map_err(|error| {
-        tracing::warn!(%error, "native screenshot worker failed");
+        let panic_message = error.try_into_panic().ok().map(|payload| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned())
+        });
+        tracing::warn!(?panic_message, "native screenshot worker failed");
         "native screenshot worker failed".to_owned()
     })?
     .map_err(|error| {

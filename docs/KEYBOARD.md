@@ -105,6 +105,7 @@ When the tree gains focus with no row selected, the row selected last is selecte
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Save file as |
 | `Ctrl+/` / `Cmd+/` | Toggle line comment |
 | `Ctrl+Shift+f` / `Cmd+Option+l` | Format the selection, or the statement under the cursor |
+| `Ctrl+Alt+j` / `Cmd+j` | Insert snippet (opens the snippet picker) |
 | `Shift+F10` | Open the pane actions menu |
 | `Enter` | Focus / execute |
 
@@ -129,6 +130,11 @@ it with the next / previous one, wrapping at either end. Once `Tab` has inserted
 a suggestion, the arrow keys also update the text. `Enter`, or typing any other
 character, keeps the inserted suggestion and closes the menu; `Escape` restores
 the word you typed. The whole cycle is one undo step.
+
+While a snippet is being filled in and no completion menu is open, `Tab` /
+`Shift+Tab` move to the next / previous snippet field instead of indenting.
+`Tab` on the last field, or `Escape`, ends the snippet. With a completion menu
+open, `Tab` keeps cycling its suggestions.
 
 The action strip on the editor's left edge is also a menu. `Shift+F10` opens the **pane actions** menu
 from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to

@@ -27,7 +27,7 @@ use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
 use dbflux_storage::repositories::viz_saved_chart_series::SavedChartSeriesRepository;
 use dbflux_storage::repositories::viz_saved_charts::SavedChartsRepository;
-use dbflux_storage::{DocumentQueryRepo, SavedQueryRepo};
+use dbflux_storage::{DocumentQueryRepo, SavedQueryRepo, SnippetRepo};
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
@@ -166,6 +166,8 @@ pub struct AppState {
     pub saved_query_repo: Arc<SavedQueryRepo>,
     /// Repository for `qry_saved_document_queries`.
     pub document_query_repo: Arc<DocumentQueryRepo>,
+    /// Repository for `snp_snippets`.
+    pub snippet_repo: Arc<SnippetRepo>,
     /// Repository for `sch_schema_snapshots` and its child tables.
     pub schema_snapshot_repo: Arc<SchemaSnapshotRepo>,
 }

@@ -338,6 +338,13 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some(key) = super::EditorKey::from_action(&*action)
+            && !self.is_context_menu_open(cx)
+            && let Some(interceptor) = self.extras.key_interceptor.clone()
+            && interceptor(key, self, window, cx)
+        {
+            return true;
+        }
         let closes_overlay =
             crate::input::Enter::is_primary(&*action) || action.partial_eq(&crate::input::Escape);
         let kind = if self.extras.context_menu_content.completion.open {
@@ -388,7 +395,7 @@ impl InputBaseState<EditorMode> {
         } else if action.partial_eq(&MoveDown) || action.partial_eq(&MoveUp) {
             action.boxed_clone()
         } else if crate::input::Enter::is_primary(action) {
-            self.commit_completion_preview();
+            self.accept_completion_preview(window, cx);
             self.hide_context_menu(cx);
             return Some(true);
         } else if action.partial_eq(&crate::input::Escape) {

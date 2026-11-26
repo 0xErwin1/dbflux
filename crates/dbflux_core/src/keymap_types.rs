@@ -84,6 +84,9 @@ pub enum Command {
     /// Reformats the selection, or the statement under the cursor, with
     /// the connection's language service.
     FormatQuery,
+    /// Opens the picker that lists the snippets of the editor's language and
+    /// inserts the chosen one at the cursor.
+    InsertSnippet,
     /// Moves the cursor to the token the server named in the last failed
     /// run, while the editor still marks it.
     GoToQueryError,
@@ -316,6 +319,7 @@ impl Command {
             "open_script_file" => Some(Command::OpenScriptFile),
             "toggle_comment" => Some(Command::ToggleComment),
             "format_query" => Some(Command::FormatQuery),
+            "insert_snippet" => Some(Command::InsertSnippet),
             "go_to_query_error" => Some(Command::GoToQueryError),
             "open_history" => Some(Command::ToggleHistoryDropdown),
             "cancel_query" => Some(Command::CancelQuery),
@@ -431,6 +435,7 @@ impl Command {
             Command::AddExternalScriptsFolder => "Add external scripts folder…",
             Command::ToggleComment => "Toggle line comment",
             Command::FormatQuery => "Format query",
+            Command::InsertSnippet => "Insert snippet",
             Command::GoToQueryError => "Go to query error",
 
             Command::ExportResults => "Export results",
@@ -642,6 +647,7 @@ impl Command {
             Command::AddExternalScriptsFolder => "add_external_scripts_folder",
             Command::ToggleComment => "toggle_comment",
             Command::FormatQuery => "format_query",
+            Command::InsertSnippet => "insert_snippet",
             Command::GoToQueryError => "go_to_query_error",
 
             Command::ExportResults => "export_results",
@@ -871,6 +877,7 @@ impl Command {
             Command::AddExternalScriptsFolder,
             Command::ToggleComment,
             Command::FormatQuery,
+            Command::InsertSnippet,
             Command::GoToQueryError,
             Command::ExportResults,
             Command::ClearFilter,
@@ -1076,6 +1083,7 @@ impl Command {
             | Command::AddExternalScriptsFolder
             | Command::ToggleComment
             | Command::FormatQuery
+            | Command::InsertSnippet
             | Command::GoToQueryError => "Editor",
 
             Command::ExportResults

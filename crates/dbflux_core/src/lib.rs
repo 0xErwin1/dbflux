@@ -230,6 +230,10 @@ pub use query::{
     semantic_filter_to_filter_node,
 };
 pub use query::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
+pub use query::{
+    ParsedSnippet, PlaceholderSpan, SnippetParseError, SnippetParseErrorKind, Tabstop,
+    parse_snippet, snippet_placeholder_spans,
+};
 pub use query::{normalize_relaxed_json, parse_relaxed_json};
 
 pub use query::relational_filter::{

@@ -294,6 +294,10 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# xcap 0.9.10 linux/impl_window.rs:92 subtracts i16 window coordinates and wraps for windows on hidden Hyprland workspaces; the wrapped value is correct.
+[profile.dev.package.xcap]
+overflow-checks = false
+
 # Release build profile tuned for binary size and runtime speed.
 # `panic` is intentionally left at the default `unwind`: switching to `abort` is a
 # separate decision that loses `catch_unwind` and may break GPUI internals that

@@ -102,6 +102,63 @@ Redis and Lua editors color their suggestions the same way (methods, functions,
 classes and operators like the same token in their editor), without a kind word.
 A suggestion of any other kind keeps the plain style.
 
+## Snippets
+
+A snippet is a text template you insert into the query editor. It has a name, a
+prefix, a body and the query language it belongs to, and it only shows up in
+editors of that language. DBFlux ships six SQL snippets; you can edit or delete
+them, and add your own in [Settings → Snippets](SETTINGS.md#snippets).
+
+### Inserting a snippet
+
+- **By prefix.** Type the prefix (for example `sel`) and the snippet appears in
+  the completion menu with the kind word **snippet**. Choosing it, as with any
+  suggestion, replaces the prefix with the snippet's text.
+- **From the picker.** `Ctrl+Alt+J` (`Cmd+J` on macOS), or **Insert snippet** in
+  the command palette, opens a filterable list of the snippets of the editor's
+  language. Type to filter, move with the arrow keys, and press `Enter` to
+  insert the highlighted snippet or `Escape` to close the list. The snippet
+  replaces the selection, or goes in at the cursor.
+
+### Placeholders
+
+| Syntax | Meaning |
+|---|---|
+| `$1`, `$2`… | A field the cursor visits, in numeric order. |
+| `${1:default}` | A field that starts with `default` selected, so typing replaces it. |
+| `$0` | Where the cursor ends. When the body has no `$0`, the end of the text. |
+
+Repeating a number mirrors the field: every `$1` (or `${1:…}`) shows what you
+type in the first one. `\$`, `\}` and `\\` insert a literal `$`, `}` and `\`.
+Nested placeholders, variables (`$NAME`) and choices (`${1|a,b|}`) are not
+supported; Settings rejects a body that uses them and points at the line and
+column.
+
+After the insertion the cursor goes to the first field, with its default text
+selected. `Tab` moves to the next field and `Shift+Tab` to the previous one.
+While the completion menu is open, `Tab` keeps cycling through the suggestions
+(see [Completion](#completion)); with no menu open, `Tab` and `Shift+Tab` move
+between fields. The fields start to work when a suggestion is committed, not
+during the `Tab` preview.
+
+The session ends when you reach the last field (`$0`), press `Escape`, move the
+cursor out of the fields, edit the text outside them, undo the insertion, or
+leave Vim Insert mode.
+
+### Built-in snippets
+
+| Prefix | Name |
+|---|---|
+| `sel` | Select rows |
+| `ins` | Insert a row |
+| `upd` | Update rows |
+| `del` | Delete rows |
+| `cte` | Common table expression |
+| `cnt` | Count rows |
+
+They are ordinary snippets: edit or delete them in Settings. A built-in you
+delete stays deleted.
+
 ## Formatting
 
 - `Ctrl+Shift+F` (`Cmd+Option+L` on macOS) — **Format query**.

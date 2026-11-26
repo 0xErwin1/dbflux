@@ -382,7 +382,27 @@ fn validate_image_dimensions(image: &RgbaImage) -> Result<(), CaptureFailure> {
     }
 }
 
+/// Convert a panic raised by the native capture backend into a sanitized failure.
+///
+/// Backend crates such as `xcap` can panic on unusual window geometry; a capture request must
+/// report that as a failure instead of unwinding through the caller's worker thread.
+fn contain_backend_panic<T>(
+    operation: impl FnOnce() -> Result<T, CaptureFailure>,
+) -> Result<T, CaptureFailure> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+        .unwrap_or(Err(CaptureFailure::CaptureUnavailable))
+}
+
 fn capture_frame(
+    target: CaptureTarget,
+    settle: impl FnOnce(
+        &mut dyn FnMut() -> Result<RgbaImage, CaptureFailure>,
+    ) -> Result<RgbaImage, CaptureFailure>,
+) -> Result<NativeFrame, CaptureFailure> {
+    contain_backend_panic(|| capture_frame_unguarded(target, settle))
+}
+
+fn capture_frame_unguarded(
     target: CaptureTarget,
     settle: impl FnOnce(
         &mut dyn FnMut() -> Result<RgbaImage, CaptureFailure>,
@@ -840,7 +860,7 @@ mod tests {
     use super::{
         CaptureFailure, CaptureGeometry, CaptureOptions, DEFAULT_SETTLE_DEADLINE,
         MAX_MEASURED_ALLOWANCE, MIN_FRESHNESS_SAMPLES, RegionMapping, capture_fresh_frame,
-        capture_stable_frame, region_mapping, validate_target,
+        capture_stable_frame, contain_backend_panic, region_mapping, validate_target,
     };
 
     #[test]
@@ -1284,6 +1304,22 @@ mod tests {
                 },
             ),
             Err(CaptureFailure::MissingGeometry)
+        );
+    }
+
+    #[test]
+    fn a_backend_panic_becomes_a_capture_failure() {
+        let result: Result<(), CaptureFailure> =
+            contain_backend_panic(|| std::panic::resume_unwind(Box::new("overflow")));
+        assert_eq!(result, Err(CaptureFailure::CaptureUnavailable));
+    }
+
+    #[test]
+    fn a_backend_result_passes_through_the_panic_guard() {
+        assert_eq!(contain_backend_panic(|| Ok(7)), Ok(7));
+        assert_eq!(
+            contain_backend_panic::<()>(|| Err(CaptureFailure::FrameTimeout)),
+            Err(CaptureFailure::FrameTimeout)
         );
     }
 }

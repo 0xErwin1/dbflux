@@ -1306,6 +1306,21 @@ document:
       alias: "별칭"
       keyword: "키워드"
       cte: "cte"
+      snippet: "스니펫"
+    snippets:
+      picker:
+        title: "스니펫 삽입"
+        search_placeholder: "%{language} 스니펫 검색"
+        builtin: "기본 제공"
+        no_match: "“%{query}”와(과) 일치하는 스니펫이 없습니다"
+        empty: "%{language} 스니펫이 아직 없습니다"
+        empty_hint: "스니펫은 하나의 쿼리 언어에 속하며 해당 언어의 편집기에만 표시됩니다. 설정 › 스니펫에서 추가하세요."
+        count_one: "스니펫 1개"
+        count_many: "스니펫 %{count}개"
+        hint_insert: "Enter 삽입"
+        hint_close: "Esc 닫기"
+        load_error: "스니펫을 불러오지 못했습니다"
+        invalid_body: "스니펫 “%{prefix}”의 본문이 올바르지 않아 삽입하지 않았습니다"
     layout:
       split_save_failed: "편집기와 결과 분할을 저장할 수 없습니다: %{error}"
     vim:
@@ -4483,6 +4498,8 @@ palette:
       name: 주석 전환
     format_query:
       name: 쿼리 서식 지정
+    insert_snippet:
+      name: "스니펫 삽입"
     go_to_query_error:
       name: 쿼리 오류로 이동
     open_history:
@@ -4914,6 +4931,7 @@ settings:
       add_external_scripts_folder: "외부 스크립트 폴더 추가…"
       toggle_comment: 주석 전환
       format_query: 쿼리 서식 지정
+      insert_snippet: "스니펫 삽입"
       go_to_query_error: 쿼리 오류로 이동
       export_results: 결과 내보내기
       clear_filter: 필터 지우기
@@ -5659,6 +5677,58 @@ settings:
       save_failed_copy: "저장하지 못했습니다: %{error}"
     toast:
       saved: 감사 설정을 저장했습니다.
+  snippets:
+    header:
+      title: "스니펫"
+      subtitle: "접두사로 또는 스니펫 선택기에서 쿼리 편집기에 삽입하는 템플릿입니다. 각 스니펫은 하나의 쿼리 언어에 속합니다."
+    list:
+      new: "새 스니펫"
+      empty: "스니펫이 아직 없습니다"
+      builtin: "기본 제공"
+    empty:
+      title: "스니펫이 아직 없습니다"
+      hint: "스니펫을 만들면 자동 완성 메뉴나 스니펫 선택기에서 삽입할 수 있습니다."
+    form:
+      group:
+        snippet: "스니펫"
+        body: "본문"
+      name: "이름"
+      name_placeholder: "스니펫 이름"
+      prefix: "접두사"
+      prefix_placeholder: "접두사"
+      prefix_hint: "편집기에서 입력하면 자동 완성 메뉴에 스니펫이 표시됩니다"
+      language: "언어"
+      language_hint: "스니펫은 이 언어의 편집기에만 표시됩니다"
+      body: "본문"
+      body_hint: "필드에는 $1, $2…, 기본값이 있는 필드에는 ${1:기본값}, 커서가 끝날 위치에는 $0을 사용하세요. 같은 번호를 반복하면 해당 필드가 함께 바뀝니다."
+    language:
+      sql: "SQL"
+    action:
+      save: "저장"
+      update: "업데이트"
+      delete: "삭제"
+      cancel: "취소"
+    delete:
+      title: "스니펫 삭제"
+      message: "스니펫 \"%{name}\"을(를) 삭제하시겠습니까?"
+    validation:
+      name_required: "이름을 입력해야 합니다"
+      prefix_required: "접두사를 입력해야 합니다"
+      body_required: "본문을 입력해야 합니다"
+      duplicate_prefix: "다른 %{language} 스니펫이 이미 접두사 %{prefix}을(를) 사용하고 있습니다"
+      parse:
+        unclosed_placeholder: "%{line}행 %{column}열에 닫히지 않은 자리 표시자: %{excerpt}"
+        nested_placeholder: "%{line}행 %{column}열에 중첩된 자리 표시자: %{excerpt}"
+        unsupported_choice: "%{line}행 %{column}열의 선택 목록은 지원되지 않습니다: %{excerpt}"
+        unsupported_variable: "%{line}행 %{column}열의 변수는 지원되지 않습니다: %{excerpt}"
+        invalid_placeholder: "%{line}행 %{column}열에 잘못된 자리 표시자: %{excerpt}"
+    toast:
+      saved: "스니펫을 저장했습니다"
+      deleted: "스니펫을 삭제했습니다"
+    error:
+      save: "스니펫을 저장하지 못했습니다"
+      delete: "스니펫을 삭제하지 못했습니다"
+      load: "스니펫을 불러오지 못했습니다"
   nav:
     no_results: "일치하는 설정 없음"
     search_placeholder: "설정 검색"
@@ -5666,6 +5736,7 @@ settings:
     general: 일반
     appearance: 모양
     keybindings: 키 바인딩
+    snippets: "스니펫"
     updates: 업데이트 및 개인정보
     audit: 감사
     about: 정보

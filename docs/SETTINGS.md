@@ -13,6 +13,7 @@ window is organized into sections down the left side.
 | [Updates & privacy](#updates--privacy) | Update checks, the changelog, and the optional telemetry levels. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
+| [Snippets](#snippets) | Templates inserted into the query editor by prefix or from the picker. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels) | SOCKS5 / HTTP proxy profiles. |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels) | Reusable SSH tunnel profiles. |
@@ -407,6 +408,36 @@ Changes apply at once in every window, without a restart. Only your overrides
 are stored, in the `cfg_keybinding_overrides` table of `dbflux.db`, so bindings
 you did not change follow the defaults of future releases. An override whose
 default binding a later release removes is ignored.
+
+---
+
+## Snippets
+
+This section manages the templates you insert into the query editor, by prefix
+or from the snippet picker (see [Editor → Snippets](EDITOR.md#snippets)). It sits
+in the General group, right after Keybindings.
+
+The list on the left shows every snippet with its name, its prefix, its
+language, and a **Built-in** tag on the ones DBFlux ships. **New snippet** opens
+a blank form; selecting a row opens that snippet. With the keyboard, `j` / `k`
+move through the list, `n` starts a new snippet and `d` deletes the open one.
+
+| Field | Description |
+|---|---|
+| **Name** | What the snippet is called in the list and the picker. Names need not be unique. |
+| **Prefix** | What you type in the editor to see the snippet in the completion menu. Unique per language: two SQL snippets cannot share a prefix. |
+| **Language** | The query language of the editors where the snippet appears. SQL is the only choice for now. |
+| **Body** | The text that is inserted, with `$1`, `${1:default}` and `$0` placeholders. Repeating a number mirrors the field. |
+
+**Save** (`Ctrl+S`; the button reads **Update** for an existing snippet) checks
+the form and shows what is wrong under the field: *Name is required*, *Prefix is
+required*, *Body is required*, *Another SQL snippet already uses the prefix
+sel*, or the placeholder error with its line, column and the offending text
+(*Unclosed placeholder at line 2, column 6: ${1:table*). Nothing is stored until
+every field is valid. **Delete** asks for confirmation first.
+
+The six built-in SQL snippets are ordinary rows: edit or delete them like your
+own. A built-in you delete stays deleted.
 
 ---
 

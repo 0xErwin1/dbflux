@@ -24,6 +24,7 @@ use crate::saved_chart_manager::SavedChartManager;
 use crate::saved_document_query_manager::SavedDocumentQueryManager;
 use crate::saved_query_manager::SavedQueryManager;
 use crate::schema_snapshot_manager::SchemaSnapshotManager;
+use crate::snippet_manager::SnippetManager;
 use crate::user_error::{ErrorKind, UserFacingError};
 
 /// Publishes the Vim settings now and after every app-state change, so every
@@ -294,6 +295,9 @@ pub struct AppStateEntity {
     /// Queries saved from the document query builder, listed per collection.
     pub saved_document_queries: SavedDocumentQueryManager,
 
+    /// Code snippets of every language, loaded lazily from SQLite.
+    pub snippets: SnippetManager,
+
     /// Persisted schema-snapshot manager — mutated via `capture`/`capture_deep`
     /// (on-connect auto-capture and the explicit deep-capture path).
     pub schema_snapshots: SchemaSnapshotManager,
@@ -362,6 +366,7 @@ impl AppStateEntity {
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
         let saved_document_queries =
             SavedDocumentQueryManager::new(Arc::clone(&inner.document_query_repo));
+        let snippets = SnippetManager::new(Arc::clone(&inner.snippet_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
         let hook_load_diagnostics = inner.take_hook_load_diagnostics();
         let scripts_directory_diagnostics = inner.take_scripts_directory_diagnostics();
@@ -373,6 +378,7 @@ impl AppStateEntity {
             dashboards,
             saved_queries,
             saved_document_queries,
+            snippets,
             schema_snapshots,
             object_tree: ObjectTreeCoordinator::default(),
             pending_edit_reconnect_prompt: None,
@@ -406,6 +412,7 @@ impl AppStateEntity {
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
         let saved_document_queries =
             SavedDocumentQueryManager::new(Arc::clone(&inner.document_query_repo));
+        let snippets = SnippetManager::new(Arc::clone(&inner.snippet_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
         let hook_load_diagnostics = inner.take_hook_load_diagnostics();
         let scripts_directory_diagnostics = inner.take_scripts_directory_diagnostics();
@@ -417,6 +424,7 @@ impl AppStateEntity {
             dashboards,
             saved_queries,
             saved_document_queries,
+            snippets,
             schema_snapshots,
             object_tree: ObjectTreeCoordinator::default(),
             pending_edit_reconnect_prompt: None,

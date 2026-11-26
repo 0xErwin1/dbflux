@@ -5,7 +5,7 @@
 use super::hooks_section::{HookFocus, HookFormField};
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSelection};
 use super::{ActiveSettingsSection, SettingsCoordinator, SettingsFocus, SettingsSectionId};
-use dbflux_app::keymap::Command;
+use dbflux_app::keymap::{Command, ContextId};
 use dbflux_core::{HookExecutionMode, ThemeSetting};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::AppStateEntity;
@@ -715,6 +715,33 @@ fn recording_a_leader_binding_keeps_it_relative_to_the_leader(cx: &mut TestAppCo
     });
 }
 
+/// The Snippets section's own clickable elements: a row is picked with J and
+/// K, Delete (D) asks to delete the open snippet, Cancel (Escape) leaves a new
+/// snippet's form and the language dropdown opens with Enter.
+const SNIPPETS_SURFACE: dbflux_ui_base::keyboard_coverage::SurfaceRegistry =
+    dbflux_ui_base::keyboard_coverage::SurfaceRegistry {
+        name: "settings snippets",
+        contexts: &[ContextId::Settings, ContextId::FormNavigation],
+        entries: &[
+            (
+                "snippet-row-*",
+                dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::SelectNext),
+            ),
+            (
+                "delete-snippet",
+                dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Delete),
+            ),
+            (
+                "cancel-snippet",
+                dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Cancel),
+            ),
+            (
+                "snippet-language.*",
+                dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Execute),
+            ),
+        ],
+    };
+
 /// Every section of the settings window. The tests above prove the
 /// navigation, section keys and form rings.
 #[gpui::test]
@@ -730,6 +757,7 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
         SettingsSectionId::Appearance,
         SettingsSectionId::Audit,
         SettingsSectionId::Keybindings,
+        SettingsSectionId::Snippets,
         SettingsSectionId::Updates,
         SettingsSectionId::Proxies,
         SettingsSectionId::SshTunnels,
@@ -754,12 +782,43 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
         });
         window.run_until_parked();
 
-        let checked = Coverage::new(SETTINGS).assert_covered(&capture.frame(window));
+        let checked = Coverage::new(SETTINGS)
+            .with_surface(SNIPPETS_SURFACE)
+            .assert_covered(&capture.frame(window));
         assert!(
             checked.iter().any(|id| id.starts_with("settings-nav-")),
             "{section:?}: {checked:?}"
         );
     }
+}
+
+/// A new snippet's form adds the Cancel button, and each key it answers is
+/// bound.
+#[gpui::test]
+fn the_new_snippet_form_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SETTINGS;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Snippets);
+    let capture = FrameCapture::observe(window);
+    window.update(|window, cx| {
+        settings.update(cx, |settings, cx| match &settings.active_section_entity {
+            ActiveSettingsSection::Snippets(section) => {
+                section.update(cx, |section, cx| section.begin_new_snippet(window, cx))
+            }
+            _ => unreachable!("the snippets section is open"),
+        })
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let covered = Coverage::new(SETTINGS)
+        .with_surface(SNIPPETS_SURFACE)
+        .assert_covered(&capture.frame(window));
+    assert!(
+        covered.iter().any(|id| id == "cancel-snippet"),
+        "{covered:?}"
+    );
 }
 
 /// The shared confirmation a section opens adds its buttons and the dialog
