@@ -1633,6 +1633,7 @@ document:
       header: "%{column} · fila %{row}"
       item:
         copy: Copiar
+        copy_as_markdown: Copiar como Markdown
         copy_column_name: Copiar nombre de columna
         view_document: Ver documento
         add_document: Agregar documento
@@ -4518,6 +4519,8 @@ palette:
       name: Mover pestaña a la derecha
     export_results:
       name: Exportar resultados
+    results_copy_as_markdown:
+      name: Copiar como Markdown
     open_connection_manager:
       name: Abrir gestor de conexiones
     disconnect:
@@ -4949,6 +4952,7 @@ settings:
       results_duplicate_row: Duplicar fila
       results_copy_row: Copiar fila
       results_copy_cell: Copiar celda
+      results_copy_as_markdown: Copiar como Markdown
       toggle_record_view: Alternar vista de registro
       cycle_document_view: Alternar árbol / tabla / JSON
       cycle_result_view: "Alternar vista del resultado"

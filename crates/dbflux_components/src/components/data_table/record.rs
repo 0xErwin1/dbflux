@@ -25,7 +25,6 @@ use crate::fonts;
 use crate::primitives::{Chamfer, ChamferRing, Text};
 use crate::tokens::{ChromeColors, FontSizes, RowColors, Spacing, SyntaxColors};
 
-use super::events::DataTableEvent;
 use super::model::{CellValue, EditBuffer, TableModel, VisualRowSource};
 use super::selection::CellCoord;
 use super::state::DataTableState;
@@ -421,14 +420,12 @@ fn render_fields(
                             move |event: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
                                 state_for_context.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                    state.select_cell(coord, cx);
-                                    cx.emit(DataTableEvent::ContextMenuRequested {
-                                        row: coord.row,
-                                        col: coord.col,
-                                        position: event.position,
-                                        is_column_header: false,
-                                    });
+                                    state.request_cell_context_menu(
+                                        coord,
+                                        event.position,
+                                        window,
+                                        cx,
+                                    );
                                 });
                             },
                         )

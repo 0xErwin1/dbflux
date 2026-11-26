@@ -64,6 +64,9 @@ pub enum FilterOperator {
 pub enum ContextMenuAction {
     /// Copy the selected cell value to clipboard.
     Copy,
+    /// Copy the selected cells, or the whole loaded result when one cell is
+    /// selected, as a Markdown table.
+    CopyAsMarkdown,
     /// Paste from clipboard into the selected cell.
     Paste,
     /// Start inline editing of the selected cell.

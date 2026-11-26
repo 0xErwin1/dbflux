@@ -139,3 +139,55 @@ fn pending_rows_and_edits_are_copied_as_the_grid_shows_them(cx: &mut TestAppCont
 
     assert_eq!(copied, "id,name\n1,edited\n9,new\n2,row 2\n");
 }
+
+#[gpui::test]
+fn the_whole_result_copy_shows_pending_rows_and_edits(cx: &mut TestAppContext) {
+    let (panel, table_state, window) = result_grid(cx);
+    window.update(|_, cx| {
+        table_state.update(cx, |state, _| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_cell(0, 1, CellValue::text("edited"));
+            buffer.add_pending_insert_after(0, vec![CellValue::int(9), CellValue::text("new")]);
+        });
+    });
+    select(
+        window,
+        &table_state,
+        CellCoord::new(2, 1),
+        CellCoord::new(2, 1),
+    );
+
+    let copied = copy_as(window, &panel, ExportFormat::Csv);
+
+    assert_eq!(copied, "id,name\n1,edited\n9,new\n2,row 2\n3,row 3\n");
+    let expected_toast =
+        crate::labels::context_menu_clipboard_copied_rows_toast(4, "CSV", copied.len());
+    window.run_until_parked();
+    assert_eq!(last_toast_title(window), Some(expected_toast));
+}
+
+#[gpui::test]
+fn pending_json_and_binary_cells_copy_as_the_grid_shows_them(cx: &mut TestAppContext) {
+    let (panel, table_state, window) = result_grid(cx);
+    window.update(|_, cx| {
+        table_state.update(cx, |state, _| {
+            let buffer = state.edit_buffer_mut();
+            buffer.add_pending_insert_after(
+                0,
+                vec![CellValue::json(r#"{"enabled":true}"#), CellValue::bytes(3)],
+            );
+        });
+    });
+    select(
+        window,
+        &table_state,
+        CellCoord::new(1, 0),
+        CellCoord::new(1, 1),
+    );
+
+    let json = copy_as(window, &panel, ExportFormat::JsonCompact);
+    let csv = copy_as(window, &panel, ExportFormat::Csv);
+
+    assert_eq!(json, r#"[{"id":{"enabled":true},"name":"<3 bytes>"}]"#);
+    assert_eq!(csv, "id,name\n\"{\"\"enabled\"\":true}\",<3 bytes>\n");
+}

@@ -1633,6 +1633,7 @@ document:
       header: "%{column} · 행 %{row}"
       item:
         copy: 복사
+        copy_as_markdown: Markdown으로 복사
         copy_column_name: 열 이름 복사
         view_document: 문서 보기
         add_document: 문서 추가
@@ -4518,6 +4519,8 @@ palette:
       name: 탭을 오른쪽으로 이동
     export_results:
       name: 결과 내보내기
+    results_copy_as_markdown:
+      name: Markdown으로 복사
     open_connection_manager:
       name: 연결 관리자 열기
     disconnect:
@@ -4949,6 +4952,7 @@ settings:
       results_duplicate_row: 행 복제
       results_copy_row: 행 복사
       results_copy_cell: 셀 복사
+      results_copy_as_markdown: Markdown으로 복사
       toggle_record_view: 레코드 뷰 전환
       cycle_document_view: 트리 / 테이블 / JSON 전환
       cycle_result_view: "결과 보기 전환"

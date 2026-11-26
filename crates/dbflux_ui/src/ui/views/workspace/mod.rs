@@ -2073,6 +2073,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.command.export_results.name"),
                 dbflux_i18n::t!("palette.category.results"),
             ),
+            PaletteCommand::new(
+                "results_copy_as_markdown",
+                dbflux_i18n::t!("palette.command.results_copy_as_markdown.name"),
+                dbflux_i18n::t!("palette.category.results"),
+            ),
             // Connections
             PaletteCommand::new(
                 "open_connection_manager",

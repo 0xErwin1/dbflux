@@ -1633,6 +1633,7 @@ document:
       header: "%{column} · 第 %{row} 行"
       item:
         copy: 复制
+        copy_as_markdown: 复制为 Markdown
         copy_column_name: 复制列名
         view_document: 查看文档
         add_document: 添加文档
@@ -4518,6 +4519,8 @@ palette:
       name: 向右移动标签页
     export_results:
       name: 导出结果
+    results_copy_as_markdown:
+      name: 复制为 Markdown
     open_connection_manager:
       name: 打开连接管理器
     disconnect:
@@ -4949,6 +4952,7 @@ settings:
       results_duplicate_row: 复制行
       results_copy_row: 复制行
       results_copy_cell: 复制单元格
+      results_copy_as_markdown: 复制为 Markdown
       toggle_record_view: 切换记录视图
       cycle_document_view: 切换树 / 表格 / JSON
       cycle_result_view: "切换结果视图"

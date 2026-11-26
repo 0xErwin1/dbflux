@@ -589,6 +589,7 @@ fn cell_menu_header_node(
 pub(super) fn action_key(action: ContextMenuAction) -> Cow<'static, str> {
     match action {
         ContextMenuAction::Copy => Cow::Borrowed("copy"),
+        ContextMenuAction::CopyAsMarkdown => Cow::Borrowed("copy-as-markdown"),
         ContextMenuAction::Paste => Cow::Borrowed("paste"),
         ContextMenuAction::Edit => Cow::Borrowed("edit"),
         ContextMenuAction::EditInModal => Cow::Borrowed("edit-in-modal"),
@@ -635,6 +636,7 @@ pub(super) fn action_key(action: ContextMenuAction) -> Cow<'static, str> {
 pub(super) fn action_from_key(key: &str) -> Option<ContextMenuAction> {
     match key {
         "copy" => Some(ContextMenuAction::Copy),
+        "copy-as-markdown" => Some(ContextMenuAction::CopyAsMarkdown),
         "paste" => Some(ContextMenuAction::Paste),
         "edit" => Some(ContextMenuAction::Edit),
         "edit-in-modal" => Some(ContextMenuAction::EditInModal),
@@ -893,6 +895,7 @@ mod tests {
             ids,
             vec![
                 "copy",
+                "copy-as-markdown",
                 "copy-column-name",
                 "view-value",
                 "paste",
@@ -977,6 +980,7 @@ mod tests {
     fn every_context_menu_action_round_trips_through_its_key() {
         let actions = [
             ContextMenuAction::Copy,
+            ContextMenuAction::CopyAsMarkdown,
             ContextMenuAction::Paste,
             ContextMenuAction::Edit,
             ContextMenuAction::EditInModal,

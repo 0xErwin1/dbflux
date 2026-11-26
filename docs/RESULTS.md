@@ -263,6 +263,16 @@ entries copy only the selected rows and columns, in grid order and as the grid
 shows them, unsaved edits and pending inserts included. A single selected cell
 is the cursor, so the copy takes every loaded row.
 
+The table cell context menu (right click, or `m`) lists **Copy as Markdown**
+right after **Copy**. It copies the selected range as a Markdown table, or every
+loaded row when one cell is selected, exactly like **Markdown** in the export
+menu's copy section. The command palette lists the same action as **Copy as
+Markdown** (`results_copy_as_markdown`); it has no default key binding, and
+Settings → Keybindings cannot assign one to it yet.
+Right-clicking a cell inside
+the current selection keeps that selection, so these copy entries act on the
+whole range; right-clicking outside it selects the clicked cell.
+
 When the grid shows a table or a collection read page by page, the menu adds
 **Export all rows to file**, in CSV, JSON (one array with an object per
 line) or JSON Lines (one object per line, `.jsonl`), or as an HTML table, a

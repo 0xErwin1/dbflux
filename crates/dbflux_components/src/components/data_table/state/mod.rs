@@ -702,6 +702,33 @@ impl DataTableState {
         cx.notify();
     }
 
+    /// Right-click on a body cell: focus the table, commit an open inline
+    /// editor, select the cell unless it already lies inside the selected
+    /// range (so the menu's copy rows act on the whole range; anchor and
+    /// active stay where they were), and ask for the context menu.
+    pub fn request_cell_context_menu(
+        &mut self,
+        coord: CellCoord,
+        position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus(window, cx);
+        self.commit_edit_in_progress(cx);
+        // The commit asks the table to take focus back on its next render,
+        // which would pull it away from the menu that is about to open.
+        self.pending_refocus = false;
+        if !self.selection.is_selected(coord) {
+            self.select_cell(coord, cx);
+        }
+        cx.emit(DataTableEvent::ContextMenuRequested {
+            row: coord.row,
+            col: coord.col,
+            position,
+            is_column_header: false,
+        });
+    }
+
     pub fn extend_selection(&mut self, coord: CellCoord, cx: &mut Context<Self>) {
         self.commit_edit_in_progress(cx);
         self.selection.extend_to(coord);
@@ -4221,5 +4248,6 @@ mod tests {
         );
     }
 
+    mod context_menu;
     mod expressions;
 }
