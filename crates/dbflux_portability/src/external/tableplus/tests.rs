@@ -219,6 +219,115 @@ fn redis_numeric_database_becomes_index() {
     }
 }
 
+fn ssl_mode_of(driver: &str, tls_mode: i64) -> Option<String> {
+    let candidate = parse_one(&[("Driver", string(driver)), ("tLSMode", integer(tls_mode))]);
+
+    match candidate.config {
+        DbConfig::Postgres { ssl_mode, .. }
+        | DbConfig::MySQL { ssl_mode, .. }
+        | DbConfig::SqlServer { ssl_mode, .. }
+        | DbConfig::Redis { ssl_mode, .. } => ssl_mode,
+        other => panic!("expected a networked config, got {other:?}"),
+    }
+}
+
+/// Each driver's indices were read from a Windows TablePlus file with one
+/// connection saved per SSL dropdown option.
+#[test]
+fn tls_mode_maps_each_dropdown_index_per_driver() {
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "PostgreSQL",
+            &[
+                "prefer",
+                "disable",
+                "require",
+                "allow",
+                "verify-ca",
+                "verify-full",
+            ],
+        ),
+        (
+            "MySQL",
+            &[
+                "PREFERRED",
+                "DISABLED",
+                "REQUIRED",
+                "PREFERRED",
+                "VERIFY_CA",
+                "VERIFY_IDENTITY",
+            ],
+        ),
+        ("MariaDB", &["PREFERRED", "REQUIRED", "VERIFY_IDENTITY"]),
+        ("Redis", &["off", "on"]),
+    ];
+
+    for (driver, expected) in cases {
+        for (index, mode) in expected.iter().enumerate() {
+            assert_eq!(
+                ssl_mode_of(driver, index as i64).as_deref(),
+                Some(*mode),
+                "{driver} tLSMode {index}"
+            );
+        }
+    }
+}
+
+#[test]
+fn sql_server_keeps_the_driver_tls_default() {
+    assert_eq!(ssl_mode_of("MicrosoftSQLServer", 0), None);
+}
+
+#[test]
+fn absent_tls_mode_leaves_ssl_mode_unset() {
+    let outcome = parse(&document(&[connection(&[])]).replace(
+        "      <key>tLSMode</key>\r\n      <integer>0</integer>\r\n",
+        "",
+    ))
+    .expect("parse");
+
+    assert!(matches!(
+        &outcome.candidates[0].config,
+        DbConfig::Postgres { ssl_mode: None, .. }
+    ));
+}
+
+#[test]
+fn unknown_tls_mode_skips_the_entry() {
+    let outcome = parse(&document(&[
+        connection(&[
+            ("ConnectionName", string("Redis verify")),
+            ("Driver", string("Redis")),
+            ("tLSMode", integer(2)),
+        ]),
+        connection(&[
+            ("ConnectionName", string("Negative")),
+            ("tLSMode", integer(-1)),
+        ]),
+    ]))
+    .expect("parse");
+
+    assert!(outcome.candidates.is_empty());
+    let reasons: Vec<(&str, &str)> = outcome
+        .skips
+        .iter()
+        .map(|skip| (skip.name.as_str(), skip.reason.as_str()))
+        .collect();
+    assert_eq!(
+        reasons,
+        vec![
+            (
+                "Redis verify",
+                "TLS mode 2 is not recognized; add this connection by hand"
+            ),
+            (
+                "Negative",
+                "TLS mode -1 is not recognized; add this connection by hand"
+            ),
+        ]
+    );
+}
+
 #[test]
 fn ssh_with_private_key_builds_key_tunnel_on_default_port() {
     let candidate = parse_one(&[

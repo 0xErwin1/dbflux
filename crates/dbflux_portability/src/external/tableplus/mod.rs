@@ -20,6 +20,13 @@
 /// `isUseSocket` on macOS; the DBFlux configs this importer builds have no
 /// socket mode, so those entries are skipped.
 ///
+/// `tLSMode` is the index of the option picked in the driver's SSL dropdown.
+/// The lists below were read from a Windows TablePlus file with one
+/// connection saved per option. They differ by driver: MySQL has the same six
+/// options as PostgreSQL there, unlike what some other importers assume.
+/// SQL Server has no SSL dropdown, so it keeps the driver default. An index
+/// outside the list skips the entry instead of guessing a weaker mode.
+///
 /// Passwords are not in the plist. TablePlus keeps them in its own encrypted
 /// store on Windows and in the Keychain on macOS, so this importer cannot
 /// recover them.
@@ -42,6 +49,32 @@ use super::{
 };
 
 const BINARY_PLIST_MAGIC: &[u8] = b"bplist00";
+
+const POSTGRES_TLS_MODES: &[&str] = &[
+    "prefer",
+    "disable",
+    "require",
+    "allow",
+    "verify-ca",
+    "verify-full",
+];
+
+/// TablePlus offers ALLOW for MySQL; DBFlux has no such mode, and PREFERRED is
+/// the closest that still uses TLS when the server offers it.
+const MYSQL_TLS_MODES: &[&str] = &[
+    "PREFERRED",
+    "DISABLED",
+    "REQUIRED",
+    "PREFERRED",
+    "VERIFY_CA",
+    "VERIFY_IDENTITY",
+];
+
+/// TablePlus labels these Preferred, Enforce and Verify server cert.
+const MARIADB_TLS_MODES: &[&str] = &["PREFERRED", "REQUIRED", "VERIFY_IDENTITY"];
+
+/// TablePlus labels these SSL_OFF and SSL_VERIFY_NONE.
+const REDIS_TLS_MODES: &[&str] = &["off", "on"];
 
 const PASSWORD_SKIP_REASON: &str =
     "TablePlus does not store passwords in its connection file; re-enter it after import";
@@ -132,6 +165,30 @@ impl Entry<'_> {
         }
     }
 
+    fn integer(&self, key: &str) -> Option<i64> {
+        match self.0.get(key)? {
+            PlistValue::Integer(value) => Some(*value),
+            PlistValue::String(value) => value.trim().parse::<i64>().ok(),
+            _ => None,
+        }
+    }
+
+    /// The DBFlux `ssl_mode` id for the entry's `tLSMode`, which indexes
+    /// `modes`. `None` when the field is absent.
+    fn tls_mode(&self, modes: &[&str]) -> Result<Option<String>, String> {
+        let Some(index) = self.integer("tLSMode") else {
+            return Ok(None);
+        };
+
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| modes.get(index))
+            .map(|mode| Some((*mode).to_string()))
+            .ok_or_else(|| {
+                format!("TLS mode {index} is not recognized; add this connection by hand")
+            })
+    }
+
     fn required_host(&self) -> Result<String, String> {
         self.trimmed("DatabaseHost")
             .ok_or_else(|| "missing required field 'host'".to_string())
@@ -155,8 +212,8 @@ fn map_connection(entry: &Entry<'_>) -> Result<ExternalImportCandidate, String> 
 
     let (config, kind) = match driver.as_str() {
         "PostgreSQL" => (postgres_config(entry)?, DbKind::Postgres),
-        "MySQL" => (mysql_config(entry)?, DbKind::MySQL),
-        "MariaDB" => (mysql_config(entry)?, DbKind::MariaDB),
+        "MySQL" => (mysql_config(entry, MYSQL_TLS_MODES)?, DbKind::MySQL),
+        "MariaDB" => (mysql_config(entry, MARIADB_TLS_MODES)?, DbKind::MariaDB),
         "MicrosoftSQLServer" => (sql_server_config(entry)?, DbKind::SqlServer),
         "Redis" => (redis_config(entry)?, DbKind::Redis),
         "SQLite" => (sqlite_config(entry)?, DbKind::SQLite),
@@ -182,7 +239,7 @@ fn postgres_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
         port: entry.port("DatabasePort").unwrap_or(5432),
         user: entry.text("DatabaseUser").unwrap_or_default(),
         database: entry.text("DatabaseName").unwrap_or_default(),
-        ssl_mode: None,
+        ssl_mode: entry.tls_mode(POSTGRES_TLS_MODES)?,
         ssl_root_cert_path: None,
         ssl_client_cert_path: None,
         ssl_client_key_path: None,
@@ -191,7 +248,7 @@ fn postgres_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
     })
 }
 
-fn mysql_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
+fn mysql_config(entry: &Entry<'_>, tls_modes: &[&str]) -> Result<DbConfig, String> {
     Ok(DbConfig::MySQL {
         use_uri: false,
         uri: None,
@@ -199,7 +256,7 @@ fn mysql_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
         port: entry.port("DatabasePort").unwrap_or(3306),
         user: entry.text("DatabaseUser").unwrap_or_default(),
         database: entry.text("DatabaseName"),
-        ssl_mode: None,
+        ssl_mode: entry.tls_mode(tls_modes)?,
         ssl_root_cert_path: None,
         ssl_client_cert_path: None,
         ssl_client_key_path: None,
@@ -236,7 +293,7 @@ fn redis_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
             .text("DatabaseName")
             .and_then(|index| index.trim().parse::<u32>().ok()),
         tls: false,
-        ssl_mode: None,
+        ssl_mode: entry.tls_mode(REDIS_TLS_MODES)?,
         ssl_root_cert_path: None,
         ssl_client_cert_path: None,
         ssl_client_key_path: None,
