@@ -72,6 +72,7 @@ enum Outcome {
 }
 
 struct Fixture<'a> {
+    picker: Entity<SnippetPicker>,
     window: &'a mut VisualTestContext,
     outcomes: Rc<RefCell<Vec<Outcome>>>,
 }
@@ -81,8 +82,11 @@ fn open(cx: &mut TestAppContext, snippets: Vec<SnippetRecord>) -> Fixture<'_> {
 
     let outcomes: Rc<RefCell<Vec<Outcome>>> = Rc::default();
     let log = outcomes.clone();
+    let slot: Rc<RefCell<Option<Entity<SnippetPicker>>>> = Rc::default();
+    let writer = slot.clone();
     let (_, window) = cx.add_window_view(move |window, cx| {
         let picker = cx.new(|cx| SnippetPicker::new("SQL".to_string(), snippets, window, cx));
+        writer.replace(Some(picker.clone()));
         cx.subscribe(&picker, move |_, _, event: &SnippetPickerEvent, _| {
             log.borrow_mut().push(match event {
                 SnippetPickerEvent::Chosen(snippet) => Outcome::Chosen(snippet.prefix.clone()),
@@ -94,7 +98,12 @@ fn open(cx: &mut TestAppContext, snippets: Vec<SnippetRecord>) -> Fixture<'_> {
     });
     window.run_until_parked();
 
-    Fixture { window, outcomes }
+    let picker = slot.borrow().clone().expect("picker");
+    Fixture {
+        picker,
+        window,
+        outcomes,
+    }
 }
 
 impl Fixture<'_> {
@@ -106,6 +115,12 @@ impl Fixture<'_> {
     fn keys(&mut self, keystrokes: &str) {
         self.window.simulate_keystrokes(keystrokes);
         self.window.run_until_parked();
+    }
+
+    fn scroll_offset_y(&mut self) -> gpui::Pixels {
+        let picker = self.picker.clone();
+        self.window
+            .update(|_, cx| picker.read(cx).list_scroll_offset_y())
     }
 
     fn outcomes(&self) -> Vec<Outcome> {
@@ -135,6 +150,37 @@ fn the_picker_lists_the_snippets_and_filters_as_you_type(cx: &mut TestAppContext
 
     picker.type_text("count");
     assert_eq!(picker.visible_rows(), 1);
+}
+
+#[gpui::test]
+fn changing_the_query_scrolls_the_list_back_to_the_top(cx: &mut TestAppContext) {
+    let many: Vec<SnippetRecord> = (0..40)
+        .map(|index| {
+            record(
+                &format!("p{index:02}"),
+                &format!("Snippet {index:02}"),
+                false,
+            )
+        })
+        .collect();
+    let mut picker = open(cx, many);
+
+    let handle = picker.picker.clone();
+    for _ in 0..35 {
+        picker
+            .window
+            .update(|_, cx| handle.update(cx, |picker, cx| picker.select_next(cx)));
+        picker.window.run_until_parked();
+    }
+    let scrolled = picker.scroll_offset_y();
+    assert!(
+        scrolled < gpui::px(0.0),
+        "the list scrolled to keep the highlight"
+    );
+
+    picker.type_text(" ");
+
+    assert_eq!(picker.scroll_offset_y(), gpui::px(0.0));
 }
 
 #[gpui::test]
@@ -275,10 +321,10 @@ mod preview {
         cx.update(dbflux_components::theme::init);
 
         cx.update(|cx| {
-            let purple = gpui::hsla(0.8, 0.6, 0.6, 1.0);
             let theme = gpui_component::Theme::global_mut(cx);
-            theme.primary = purple;
-            theme.accent = purple;
+            let marker = theme.success;
+            theme.primary = marker;
+            theme.accent = marker;
             let theme = cx.theme();
             let palette = ChipPalette::from_theme(theme);
 
@@ -297,7 +343,7 @@ mod preview {
                 palette.delimiter,
                 palette.text,
             ] {
-                assert_ne!(color, purple, "chips never use the primary or accent color");
+                assert_ne!(color, marker, "chips never use the primary or accent color");
             }
         });
     }

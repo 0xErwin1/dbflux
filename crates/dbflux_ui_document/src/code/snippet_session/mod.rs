@@ -38,6 +38,15 @@ struct SnippetSession {
     /// Where each field's first range started, to tell an undone insertion
     /// (every field collapsed onto one offset) from a live one.
     initial_starts: Vec<usize>,
+    /// The document and the current field as they were before the edit the
+    /// next `Change` reports.
+    before: Option<Before>,
+}
+
+/// The state the next edit is judged against.
+struct Before {
+    text: String,
+    field: Vec<Range<usize>>,
 }
 
 /// The session slot and the frames drawn around the fields that are not
@@ -49,7 +58,11 @@ pub(crate) struct SnippetHooks {
 }
 
 impl SnippetHooks {
-    pub(super) fn install(state: &mut GpuiEditorState, cx: &mut Context<GpuiEditorState>) -> Self {
+    pub(super) fn install(
+        state: &mut GpuiEditorState,
+        offers: SnippetOffers,
+        cx: &mut Context<GpuiEditorState>,
+    ) -> Self {
         let hooks = Self {
             session: Rc::new(RefCell::new(None)),
             highlights: state.create_range_decorations_collection(Vec::new(), cx),
@@ -57,6 +70,13 @@ impl SnippetHooks {
         let for_keys = hooks.clone();
         state.set_key_interceptor(move |key, state, _window, cx| {
             for_keys.handle_key(key, state, cx)
+        });
+        let for_commits = hooks.clone();
+        state.set_completion_commit_handler(move |item, range, state, window, cx| {
+            let text = state.text().to_string();
+            if let Some(parsed) = offers.take_committed(item, &text, range.clone()) {
+                for_commits.start(state, &parsed, range, window, cx);
+            }
         });
         hooks
     }
@@ -86,8 +106,9 @@ impl SnippetHooks {
 
         let session = SnippetSession::track(state, parsed, base, group);
         match session {
-            Some(session) if session.fields.len() > 1 => {
+            Some(mut session) if session.fields.len() > 1 => {
                 session.select_current(state, cx);
+                session.remember(state);
                 *self.session.borrow_mut() = Some(session);
                 self.refresh_highlights(state, cx);
             }
@@ -130,6 +151,7 @@ impl SnippetHooks {
         if finished {
             session.release(state);
         } else {
+            session.remember(state);
             *self.session.borrow_mut() = Some(session);
         }
         self.refresh_highlights(state, cx);
@@ -144,16 +166,20 @@ impl SnippetHooks {
         window: &mut Window,
         cx: &mut Context<GpuiEditorState>,
     ) {
-        let Some(session) = self.session.borrow_mut().take() else {
+        let Some(mut session) = self.session.borrow_mut().take() else {
             return;
         };
-        if !session.cursor_in_current(state) || !session.is_coherent(state) {
+        if !session.cursor_in_current(state)
+            || !session.edit_stayed_in_field(state)
+            || !session.is_coherent(state)
+        {
             session.release(state);
             self.refresh_highlights(state, cx);
             return;
         }
 
         session.mirror_current(state, window, cx);
+        session.remember(state);
         *self.session.borrow_mut() = Some(session);
         self.refresh_highlights(state, cx);
     }
@@ -213,6 +239,7 @@ impl SnippetSession {
             current: 0,
             group,
             initial_starts: Vec::new(),
+            before: None,
         };
 
         for tabstop in parsed.tabstops() {
@@ -267,6 +294,32 @@ impl SnippetSession {
                 .iter()
                 .any(|range| range.start <= selection.start && selection.end <= range.end)
         })
+    }
+
+    /// Records the document and the current field, the baseline the next
+    /// edit is judged against.
+    fn remember(&mut self, state: &GpuiEditorState) {
+        self.before = Some(Before {
+            text: state.text().to_string(),
+            field: self.resolved(state, self.current).unwrap_or_default(),
+        });
+    }
+
+    /// Whether the edit that just happened touched nothing but one range of
+    /// the current field, judged by the text outside that range. The anchors
+    /// have already moved by now, so a selection that reaches into the field
+    /// (`Lx` replaced by `z` over `L${1:x}`) would otherwise look like an edit
+    /// of the field, and so would an undo that removes the inserted text.
+    fn edit_stayed_in_field(&self, state: &GpuiEditorState) -> bool {
+        let Some(before) = &self.before else {
+            return true;
+        };
+        let now = state.text().to_string();
+        now == before.text
+            || before
+                .field
+                .iter()
+                .any(|range| only_inside_changed(&before.text, &now, range))
     }
 
     /// False once an undo has folded every field onto one offset.
@@ -326,6 +379,7 @@ impl SnippetSession {
         window: &mut Window,
         cx: &mut Context<GpuiEditorState>,
     ) {
+        let typed = self.typed_text(state);
         let Some(ranges) = self.resolved(state, self.current).filter(|r| r.len() > 1) else {
             return;
         };
@@ -363,6 +417,30 @@ impl SnippetSession {
         if let Some(start) = moved {
             state.set_selected_range(start + relative..start + relative, cx);
         }
+
+        // Rewriting the mirrors dropped the completion request the keystroke
+        // started; ask again for the buffer as it is now.
+        if let Some(typed) = typed {
+            state.retrigger_completion(&typed, window, cx);
+        }
+    }
+
+    /// The text the last edit entered, ending at the caret: what the editor
+    /// handed its completion provider.
+    fn typed_text(&self, state: &GpuiEditorState) -> Option<String> {
+        let before = self.before.as_ref()?;
+        let now = state.text().to_string();
+        let caret = state.cursor();
+        let tail = now.len().checked_sub(caret)?;
+        let old_end = before.text.len().checked_sub(tail)?;
+        let common = before
+            .text
+            .bytes()
+            .zip(now.bytes())
+            .take_while(|(old, new)| old == new)
+            .count();
+        let start = common.min(old_end);
+        now.get(start..caret).map(str::to_string)
     }
 
     fn inactive_ranges(&self, state: &GpuiEditorState) -> Vec<Range<usize>> {
@@ -392,6 +470,15 @@ impl SnippetSession {
             state.request_end_edit_group(group);
         }
     }
+}
+
+/// Whether `new` differs from `old` only where `field` (a range of `old`)
+/// was: the text before and after it is unchanged.
+fn only_inside_changed(old: &str, new: &str, field: &Range<usize>) -> bool {
+    let (Some(head), Some(tail)) = (old.get(..field.start), old.get(field.end..)) else {
+        return false;
+    };
+    new.len() >= head.len() + tail.len() && new.starts_with(head) && new.ends_with(tail)
 }
 
 impl CodeDocument {

@@ -131,6 +131,11 @@ a suggestion, the arrow keys also update the text. `Enter`, or typing any other
 character, keeps the inserted suggestion and closes the menu; `Escape` restores
 the word you typed. The whole cycle is one undo step.
 
+While a snippet is being filled in and no completion menu is open, `Tab` /
+`Shift+Tab` move to the next / previous snippet field instead of indenting.
+`Tab` on the last field, or `Escape`, ends the snippet. With a completion menu
+open, `Tab` keeps cycling its suggestions.
+
 The action strip on the editor's left edge is also a menu. `Shift+F10` opens the **pane actions** menu
 from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
 the execution context bar, where `m` (or `Shift+F10`) opens it too. A script

@@ -1,5 +1,5 @@
 //! The picker inside a real `CodeDocument`, driven through the app keymap the
-//! way the workspace drives it: Ctrl+Alt+J opens it, typing and Enter go to
+//! way the workspace drives it: the picker shortcut opens it, typing and Enter go to
 //! the focused search input.
 
 use crate::code::{CodeDocument, VimMode};
@@ -9,6 +9,12 @@ use dbflux_core::QueryLanguage;
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::AppStateEntity;
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+
+/// The default keymap binds the picker to Cmd+J on macOS and Ctrl+Alt+J elsewhere.
+#[cfg(target_os = "macos")]
+const INSERT_SNIPPET_KEYS: &str = "cmd-j";
+#[cfg(not(target_os = "macos"))]
+const INSERT_SNIPPET_KEYS: &str = "ctrl-alt-j";
 
 struct Fixture<'a> {
     document: Entity<CodeDocument>,
@@ -100,9 +106,18 @@ impl Fixture<'_> {
             .update(|_, cx| document.read(cx).snippet_picker_highlighted_name(cx))
     }
 
+    fn last_toast_title(&mut self) -> Option<String> {
+        self.window.update(|_, cx| {
+            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx)
+                .last_toast_title()
+        })
+    }
+
     fn open_filtered(&mut self) {
-        self.keys("ctrl-alt-j");
-        assert!(self.picker_open(), "Ctrl+Alt+J opens the picker");
+        self.keys(INSERT_SNIPPET_KEYS);
+        assert!(self.picker_open(), "the picker shortcut opens the picker");
         self.type_text("cte");
     }
 }
@@ -136,7 +151,7 @@ fn escape_closes_without_inserting(cx: &mut TestAppContext) {
 #[gpui::test]
 fn enter_with_no_match_keeps_the_picker_open(cx: &mut TestAppContext) {
     let mut fixture = open(cx);
-    fixture.keys("ctrl-alt-j");
+    fixture.keys(INSERT_SNIPPET_KEYS);
     fixture.type_text("zzzzqq");
 
     fixture.keys("enter");
@@ -193,8 +208,11 @@ fn enter_in_vim_normal_mode_switches_to_insert_and_inserts(cx: &mut TestAppConte
 #[gpui::test]
 fn each_arrow_press_moves_the_highlight_one_row(cx: &mut TestAppContext) {
     let mut fixture = open(cx);
-    fixture.keys("ctrl-alt-j");
-    assert!(fixture.picker_open(), "Ctrl+Alt+J opens the picker");
+    fixture.keys(INSERT_SNIPPET_KEYS);
+    assert!(
+        fixture.picker_open(),
+        "the picker shortcut opens the picker"
+    );
 
     fixture.keys("down");
     assert_eq!(
@@ -215,4 +233,29 @@ fn each_arrow_press_moves_the_highlight_one_row(cx: &mut TestAppContext) {
     let (text, _) = fixture.text_and_selection();
     assert!(text.contains("WITH name AS ("), "{text:?}");
     assert!(!fixture.picker_open());
+}
+
+#[gpui::test]
+fn the_run_commands_do_nothing_while_the_picker_is_open(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    fixture.keys(INSERT_SNIPPET_KEYS);
+    assert!(fixture.picker_open());
+
+    for command in [Command::RunQuery, Command::RunQueryInNewTab] {
+        let document = fixture.document.clone();
+        let handled = fixture.window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.dispatch_command(command, window, cx)
+            })
+        });
+        fixture.window.run_until_parked();
+
+        assert!(handled, "{command:?} is consumed by the picker");
+        assert_eq!(
+            fixture.last_toast_title(),
+            None,
+            "{command:?} did not reach the query runner"
+        );
+        assert!(fixture.picker_open());
+    }
 }

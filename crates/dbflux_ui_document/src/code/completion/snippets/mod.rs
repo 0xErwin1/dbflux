@@ -2,9 +2,9 @@
 //!
 //! A snippet shows up under its prefix with the `snippet` kind word. The
 //! item writes the expanded body (the Tab preview of the menu shows it), and
-//! the document starts the tabstop session once the menu commits the item,
-//! because the vendored menu has no commit hook: [`SnippetOffers`] remembers
-//! what the last menu offered so the document can recognise the commit.
+//! the document starts the tabstop session when the editor reports that the
+//! user committed the item: [`SnippetOffers`] remembers what the last menu
+//! offered so the commit can be matched to its snippet.
 
 use super::*;
 use crate::snippet_picker::snippet_language_id;
@@ -21,12 +21,13 @@ const RANK_SNIPPET: u8 = 0;
 
 /// One snippet the last completion request put in the menu.
 struct SnippetOffer {
-    start: usize,
+    label: String,
     parsed: ParsedSnippet,
 }
 
 /// What the last completion request offered, shared between the completion
-/// provider (which fills it) and the document (which reads it on a change).
+/// provider (which fills it) and the document (which reads it when the editor
+/// reports a committed completion item).
 #[derive(Clone, Default)]
 pub(crate) struct SnippetOffers {
     offers: Rc<RefCell<Vec<SnippetOffer>>>,
@@ -37,37 +38,32 @@ impl SnippetOffers {
         *self.offers.borrow_mut() = offers;
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.offers.borrow().is_empty()
     }
 
-    /// Whether an offered expansion would end at `cursor`: a cheap test that
-    /// keeps the editor's many notifications from copying its text.
-    fn may_end_at(&self, cursor: usize) -> bool {
-        self.offers
-            .borrow()
-            .iter()
-            .any(|offer| offer.start + offer.parsed.text().len() == cursor)
-    }
-
-    /// The offered snippet that `text` now holds, expanded, ending at
-    /// `cursor`: the editor committed its menu item. The offers are spent, so
-    /// the edit that starts the session does not match again.
+    /// The offered snippet behind `item`, the item the user committed. The
+    /// offer is picked by the item's identity (its label is the snippet's
+    /// prefix, unique per language) and only when `text` still holds its
+    /// expansion at `range`. The offers are spent, so a later edit does not
+    /// match again.
     pub(crate) fn take_committed(
         &self,
+        item: &CompletionItem,
         text: &str,
-        cursor: usize,
-    ) -> Option<(ParsedSnippet, Range<usize>)> {
+        range: Range<usize>,
+    ) -> Option<ParsedSnippet> {
+        if item.kind != Some(CompletionItemKind::SNIPPET) {
+            return None;
+        }
         let mut offers = self.offers.borrow_mut();
         let found = offers.iter().position(|offer| {
-            let end = offer.start + offer.parsed.text().len();
-            end == cursor && text.get(offer.start..end) == Some(offer.parsed.text())
+            offer.label == item.label && text.get(range.clone()) == Some(offer.parsed.text())
         })?;
         let offer = offers.swap_remove(found);
         offers.clear();
-
-        let end = offer.start + offer.parsed.text().len();
-        Some((offer.parsed, offer.start..end))
+        Some(offer.parsed)
     }
 }
 
@@ -152,7 +148,7 @@ pub(super) fn snippet_completion_items(
             ..CompletionItem::default()
         });
         recorded.push(SnippetOffer {
-            start: prefix_start,
+            label: snippet.prefix.clone(),
             parsed,
         });
     }
@@ -197,37 +193,5 @@ impl QueryCompletionProvider {
             snippet_completion_items(&snippets, source, cursor, offers, &self.snippet_warnings);
         kinds::describe_items(&mut items, &KindWords::from_catalog(), &[], |_| false);
         items
-    }
-}
-
-impl CodeDocument {
-    /// Starts the tabstop session when the completion menu has just committed
-    /// a snippet item. While the menu is still open the editor is only
-    /// previewing the item (Tab cycling), and no session starts.
-    ///
-    /// The menu writes its item without an `InputEvent::Change`, so the
-    /// document watches the editor's notifications instead.
-    pub(in crate::code) fn snippet_after_completion(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.editor.snippet_offers.is_empty() {
-            return;
-        }
-
-        let input = self.editor.input_state.read(cx);
-        if input.completion_menu_state().open {
-            return;
-        }
-        let cursor = input.selected_range().end;
-        if !self.editor.snippet_offers.may_end_at(cursor) {
-            return;
-        }
-        let text = input.value().to_string();
-
-        if let Some((parsed, range)) = self.editor.snippet_offers.take_committed(&text, cursor) {
-            self.insert_snippet(&parsed, range, window, cx);
-        }
     }
 }

@@ -95,12 +95,26 @@ pub(crate) type KeyInterceptor = Rc<
     ) -> bool,
 >;
 
+/// Told when the user commits a completion item. See
+/// [`InputBaseState::set_completion_commit_handler`].
+pub(crate) type CompletionCommitHandler = Rc<
+    dyn Fn(
+        &CompletionItem,
+        Range<usize>,
+        &mut InputBaseState<EditorMode>,
+        &mut Window,
+        &mut Context<InputBaseState<EditorMode>>,
+    ),
+>;
+
 /// Reads the item the completion menu currently highlights.
 pub(crate) type CompletionSelectionReader = Rc<dyn Fn(&App) -> Option<CompletionItem>>;
 
 /// An item written into the editor while Tab cycles the completion menu.
 #[derive(Clone, Debug)]
 pub(crate) struct CompletionPreview {
+    /// The item written into the document.
+    pub(crate) item: CompletionItem,
     /// The inserted span, in current document offsets.
     pub(crate) range: Range<usize>,
     /// The text the inserted span replaced.
@@ -234,6 +248,65 @@ impl InputBaseState<EditorMode> {
         self.extras.key_interceptor = Some(Rc::new(interceptor));
     }
 
+    /// Calls `handler` with the item and the document range it now occupies
+    /// when the user commits a completion item: Enter or a click on a menu
+    /// row, or Enter on an item previewed with Tab. It is not called while
+    /// Tab previews an item, when Escape cancels a preview, or when typing
+    /// keeps a previewed item. Without a handler nothing changes.
+    pub fn set_completion_commit_handler(
+        &mut self,
+        handler: impl Fn(
+            &CompletionItem,
+            Range<usize>,
+            &mut InputBaseState<EditorMode>,
+            &mut Window,
+            &mut Context<InputBaseState<EditorMode>>,
+        ) + 'static,
+    ) {
+        self.extras.completion_commit_handler = Some(Rc::new(handler));
+    }
+
+    fn notify_completion_committed(
+        &mut self,
+        item: &CompletionItem,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(handler) = self.extras.completion_commit_handler.clone() {
+            handler(item, range, self, window, cx);
+        }
+    }
+
+    /// Asks the completion provider again, as if `typed` had just been
+    /// entered and ended at the caret. For owners that rewrite the document
+    /// right after a keystroke with [`Self::replace_ranges`], which drops the
+    /// request that keystroke started. Does nothing without a provider or
+    /// when the provider does not trigger on `typed`.
+    pub fn retrigger_completion(
+        &mut self,
+        typed: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let caret = self.cursor();
+        let range = caret.saturating_sub(typed.len())..caret;
+        self.handle_completion_trigger(&range, typed, window, cx);
+    }
+
+    /// Keeps the previewed item as the user's choice (Enter on a Tab preview).
+    pub(crate) fn accept_completion_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let accepted = self.extras.context_menu_content.completion_preview.clone();
+        self.commit_completion_preview();
+        if let Some(preview) = accepted {
+            self.notify_completion_committed(&preview.item, preview.range, window, cx);
+        }
+    }
+
     /// Applies disjoint `(byte range in the current text, replacement)` edits
     /// as one undo step. Unlike typing, this triggers no completion request
     /// and closes any open completion menu; the cursor ends after the last
@@ -290,11 +363,14 @@ impl InputBaseState<EditorMode> {
         // The item's ranges describe the document the menu was opened for.
         self.restore_completion_preview_text(window, cx);
         let (range, new_text) = self.resolve_completion_edit(item, fallback_range);
+        let start = range.start;
         let range = self.range_to_utf16(&range);
         self.replace_text_in_range_silent(Some(range), &new_text, window, cx);
         self.completion_inserting = false;
         self.commit_completion_preview();
         self.focus(window, cx);
+        let end = self.cursor().max(start);
+        self.notify_completion_committed(item, start..end, window, cx);
     }
 
     /// The document range an item replaces and the text it writes there.
@@ -379,6 +455,7 @@ impl InputBaseState<EditorMode> {
         // the item text, marks where the inserted span ends.
         let end = self.cursor().max(range.start);
         self.extras.context_menu_content.completion_preview = Some(CompletionPreview {
+            item,
             range: range.start..end,
             original_text,
             fallback_range,

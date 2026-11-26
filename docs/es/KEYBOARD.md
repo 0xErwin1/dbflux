@@ -135,6 +135,11 @@ texto. `Enter`, o escribir cualquier otro carácter, conserva la sugerencia
 insertada y cierra el menú; `Escape` restaura la palabra escrita. Todo el ciclo
 es un único paso de deshacer.
 
+Mientras se completa un snippet y no hay un menú de sugerencias abierto, `Tab` /
+`Shift+Tab` pasan al campo siguiente / anterior del snippet en lugar de indentar.
+`Tab` en el último campo, o `Escape`, termina el snippet. Con un menú de
+sugerencias abierto, `Tab` sigue recorriendo sus sugerencias.
+
 La barra de acciones del borde izquierdo del editor también es un menú. `Shift+F10` abre el menú de **acciones
 del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
 `Ctrl+k` mueve el foco a la barra de contexto de ejecución, donde `m` (o

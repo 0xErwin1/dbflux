@@ -1,4 +1,4 @@
-use super::{SnippetFocus, SnippetFormField, SnippetsSection};
+use super::{PendingSnippetAction, SnippetFocus, SnippetFormField, SnippetsSection};
 use crate::settings::form_section::FormSection;
 use crate::settings::section_trait::SectionFocusEvent;
 use dbflux_app::keymap::{KeyChord, Modifiers};
@@ -12,7 +12,7 @@ impl SnippetsSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.pending_delete_id.is_some() {
+        if self.pending_delete_id.is_some() || self.pending_discard_action.is_some() {
             return;
         }
 
@@ -104,7 +104,7 @@ impl SnippetsSection {
             "g" if plain && count > 0 => self.select_index(0, window, cx),
             "g" if shifted && count > 0 => self.select_index(count - 1, window, cx),
             "n" if plain => {
-                self.begin_new_snippet(window, cx);
+                self.request_form_action(PendingSnippetAction::New, window, cx);
                 self.focus = SnippetFocus::Form;
                 self.form_field = SnippetFormField::Name;
             }

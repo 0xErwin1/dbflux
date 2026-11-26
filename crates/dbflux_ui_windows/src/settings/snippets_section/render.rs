@@ -1,4 +1,6 @@
-use super::{SnippetFocus, SnippetFormField, SnippetsSection, language_label};
+use super::{
+    PendingSnippetAction, SnippetFocus, SnippetFormField, SnippetsSection, language_label,
+};
 use crate::settings::layout;
 use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_components::controls::{Button, Input, InputState};
@@ -8,8 +10,8 @@ use dbflux_components::tokens::{ChamferCut, Spacing, ui};
 use dbflux_storage::SnippetRecord;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::input::Editor;
+use gpui_component::{ActiveTheme, Theme};
 
 /// Height of the body editor: about eight lines of the editor font.
 const BODY_EDITOR_HEIGHT: Rems = ui(180.0);
@@ -61,7 +63,7 @@ impl SnippetsSection {
                 .icon(AppIcon::Plus)
                 .focused(new_button_focused)
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.begin_new_snippet(window, cx);
+                    this.request_form_action(PendingSnippetAction::New, window, cx);
                     this.focus = SnippetFocus::Form;
                     this.form_field = SnippetFormField::Name;
                 }))
@@ -91,7 +93,7 @@ impl SnippetsSection {
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.focus = SnippetFocus::Form;
-                    this.select_snippet(&id, window, cx);
+                    this.request_form_action(PendingSnippetAction::Select(id.clone()), window, cx);
                 }))
                 .into_any_element()
             })
@@ -168,13 +170,38 @@ impl SnippetsSection {
         frame.on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, window, cx| {
-                this.switching_input = true;
+                // Only a press that takes focus off an input produces the
+                // Blur that clears the flag; a press on the input that
+                // already has focus would leave it set.
+                this.switching_input = this.press_moves_input_focus(field, window, cx);
                 this.focus = SnippetFocus::Form;
                 this.form_field = field;
                 this.focus_form_field(window, cx);
                 cx.notify();
             }),
         )
+    }
+
+    /// Whether pressing `field` takes focus off the input that has it.
+    pub(super) fn press_moves_input_focus(
+        &self,
+        field: SnippetFormField,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        let focused = |handle: FocusHandle| handle.is_focused(window);
+        let name = focused(self.input_name.read(cx).focus_handle(cx));
+        let prefix = focused(self.input_prefix.read(cx).focus_handle(cx));
+        let body = focused(self.input_body.read(cx).focus_handle(cx));
+
+        let target_has_focus = match field {
+            SnippetFormField::Name => name,
+            SnippetFormField::Prefix => prefix,
+            SnippetFormField::Body => body,
+            _ => false,
+        };
+
+        (name || prefix || body) && !target_has_focus
     }
 
     /// Error under a field: the icon and the message in the danger color.
@@ -239,6 +266,47 @@ impl SnippetsSection {
         )
     }
 
+    /// The body editor with its error and hint: the frame turns danger-colored
+    /// while the body has an error.
+    fn render_body_block(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let body_editor = self.field_press(
+            SnippetFormField::Body,
+            layout::cursor_ring(
+                self.is_cursor_on(SnippetFormField::Body),
+                div()
+                    .relative()
+                    .w_full()
+                    .h(BODY_EDITOR_HEIGHT)
+                    .font_family(dbflux_components::fonts::editor_family(cx))
+                    .child(
+                        Chamfer::new(ChamferCut::CONTROL)
+                            .fill(theme.background)
+                            .border(if self.errors.body.is_some() {
+                                theme.danger
+                            } else {
+                                theme.border
+                            }),
+                    )
+                    .child(Editor::new(&self.input_body).bordered(false).size_full()),
+                cx,
+            ),
+            cx,
+        );
+
+        div()
+            .py(FormMetrics::ROW_PADDING_Y)
+            .flex()
+            .flex_col()
+            .gap(FormMetrics::HELP_GAP)
+            .child(body_editor)
+            .when_some(self.errors.body.clone(), |column, message| {
+                column.child(Self::error_line(message, cx))
+            })
+            .child(layout::help_text(dbflux_i18n::t!(
+                "settings.snippets.form.body_hint"
+            )))
+    }
+
     fn render_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let name_label = dbflux_i18n::t!("settings.snippets.form.name");
@@ -299,42 +367,7 @@ impl SnippetsSection {
             cx,
         );
 
-        let body_editor = self.field_press(
-            SnippetFormField::Body,
-            layout::cursor_ring(
-                self.is_cursor_on(SnippetFormField::Body),
-                div()
-                    .relative()
-                    .w_full()
-                    .h(BODY_EDITOR_HEIGHT)
-                    .font_family(dbflux_components::fonts::editor_family(cx))
-                    .child(
-                        Chamfer::new(ChamferCut::CONTROL)
-                            .fill(theme.background)
-                            .border(if self.errors.body.is_some() {
-                                theme.danger
-                            } else {
-                                theme.border
-                            }),
-                    )
-                    .child(Editor::new(&self.input_body).bordered(false).size_full()),
-                cx,
-            ),
-            cx,
-        );
-
-        let body_block = div()
-            .py(FormMetrics::ROW_PADDING_Y)
-            .flex()
-            .flex_col()
-            .gap(FormMetrics::HELP_GAP)
-            .child(body_editor)
-            .when_some(self.errors.body.clone(), |column, message| {
-                column.child(Self::error_line(message, cx))
-            })
-            .child(layout::help_text(dbflux_i18n::t!(
-                "settings.snippets.form.body_hint"
-            )));
+        let body_block = self.render_body_block(&theme, cx);
 
         layout::sticky_form_shell(
             dbflux_components::composites::section_header(

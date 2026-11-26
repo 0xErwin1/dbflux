@@ -1,6 +1,7 @@
 // Explicit imports: a parent glob would make `#[test]` resolve to
 // `gpui::test`, whose expansion recurses without bound.
-use super::SnippetsSection;
+use super::actions::upsert_record;
+use super::{PendingSnippetAction, SnippetFormField, SnippetsSection};
 use dbflux_storage::SnippetRecord;
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::AppStateEntity;
@@ -347,6 +348,191 @@ fn the_confirmation_names_the_snippet(cx: &mut TestAppContext) {
     });
 }
 
+fn type_name(harness: &Harness, window: &mut VisualTestContext, name: &str) {
+    window.update(|window, cx| {
+        harness.section.update(cx, |section, cx| {
+            section
+                .input_name
+                .update(cx, |input, cx| input.set_value(name, window, cx));
+        });
+    });
+    window.run_until_parked();
+}
+
+fn form_name(harness: &Harness, window: &mut VisualTestContext) -> String {
+    window.update(|_, cx| harness.section.read(cx).form_values(cx).name)
+}
+
+fn request(harness: &Harness, window: &mut VisualTestContext, action: PendingSnippetAction) {
+    window.update(|window, cx| {
+        harness.section.update(cx, |section, cx| {
+            section.request_form_action(action, window, cx)
+        });
+    });
+    window.run_until_parked();
+}
+
+#[gpui::test]
+fn picking_another_snippet_with_unsaved_edits_asks_before_discarding(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+    let all = stored(&harness, window);
+    let open_id = window
+        .update(|_, cx| harness.section.read(cx).editing_id.clone())
+        .expect("a snippet is open");
+    let other = all
+        .iter()
+        .find(|snippet| snippet.id != open_id)
+        .expect("another snippet")
+        .clone();
+    type_name(&harness, window, "My draft");
+
+    request(
+        &harness,
+        window,
+        PendingSnippetAction::Select(other.id.clone()),
+    );
+
+    assert_eq!(form_name(&harness, window), "My draft", "the draft stays");
+    window.update(|_, cx| {
+        let section = harness.section.read(cx);
+        assert_eq!(section.editing_id.as_deref(), Some(open_id.as_str()));
+        assert_eq!(
+            section.pending_discard_action,
+            Some(PendingSnippetAction::Select(other.id.clone()))
+        );
+        assert!(section.discard_confirm.read(cx).is_visible());
+    });
+
+    window.update(|_, cx| {
+        harness.section.update(cx, |section, cx| {
+            section
+                .discard_confirm
+                .update(cx, |modal, cx| modal.cancel(cx));
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(form_name(&harness, window), "My draft", "Cancel keeps it");
+    window.update(|_, cx| assert_eq!(harness.section.read(cx).pending_discard_action, None));
+
+    request(
+        &harness,
+        window,
+        PendingSnippetAction::Select(other.id.clone()),
+    );
+    window.update(|_, cx| {
+        harness.section.update(cx, |section, cx| {
+            section
+                .discard_confirm
+                .update(cx, |modal, cx| modal.confirm(cx));
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(form_name(&harness, window), other.name);
+    window.update(|_, cx| {
+        let section = harness.section.read(cx);
+        assert_eq!(section.editing_id.as_deref(), Some(other.id.as_str()));
+        assert_eq!(section.pending_discard_action, None);
+    });
+}
+
+#[gpui::test]
+fn a_new_snippet_with_unsaved_edits_asks_before_discarding(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+    type_name(&harness, window, "My draft");
+
+    request(&harness, window, PendingSnippetAction::New);
+
+    window.update(|_, cx| {
+        let section = harness.section.read(cx);
+        assert!(!section.new_form_open, "the form was not replaced");
+        assert_eq!(
+            section.pending_discard_action,
+            Some(PendingSnippetAction::New)
+        );
+    });
+    assert_eq!(form_name(&harness, window), "My draft");
+}
+
+#[gpui::test]
+fn picking_a_snippet_without_unsaved_edits_opens_it_at_once(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+    let open_id = window
+        .update(|_, cx| harness.section.read(cx).editing_id.clone())
+        .expect("a snippet is open");
+    let other = stored(&harness, window)
+        .into_iter()
+        .find(|snippet| snippet.id != open_id)
+        .expect("another snippet");
+
+    request(
+        &harness,
+        window,
+        PendingSnippetAction::Select(other.id.clone()),
+    );
+
+    window.update(|_, cx| {
+        let section = harness.section.read(cx);
+        assert_eq!(section.editing_id.as_deref(), Some(other.id.as_str()));
+        assert_eq!(section.pending_discard_action, None);
+        assert!(!section.discard_confirm.read(cx).is_visible());
+    });
+}
+
+#[test]
+fn a_committed_record_replaces_its_entry_or_joins_the_list() {
+    fn record(id: &str, name: &str) -> SnippetRecord {
+        SnippetRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            prefix: id.to_string(),
+            language: "sql".to_string(),
+            body: "x".to_string(),
+            builtin_key: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    let mut list = vec![record("a", "A"), record("b", "B")];
+
+    upsert_record(&mut list, record("b", "B renamed"));
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[1].name, "B renamed");
+
+    upsert_record(&mut list, record("c", "C"));
+    assert_eq!(
+        list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        ["a", "b", "c"]
+    );
+}
+
+#[gpui::test]
+fn pressing_the_focused_input_does_not_arm_the_blur_guard(cx: &mut TestAppContext) {
+    let (harness, window) = open(cx);
+
+    window.update(|window, cx| {
+        harness.section.update(cx, |section, cx| {
+            section
+                .input_body
+                .update(cx, |state, cx| state.focus(window, cx));
+        });
+    });
+    window.run_until_parked();
+
+    window.update(|window, cx| {
+        let section = harness.section.read(cx);
+        assert!(
+            !section.press_moves_input_focus(SnippetFormField::Body, window, cx),
+            "focus stays where it is, so no Blur will clear the flag"
+        );
+        assert!(
+            section.press_moves_input_focus(SnippetFormField::Name, window, cx),
+            "another input takes focus, the old one blurs"
+        );
+    });
+}
+
 const SNIPPETS_CATALOG_KEYS: &[&str] = &[
     "settings.nav.snippets",
     "settings.snippets.header.title",
@@ -441,10 +627,10 @@ mod placeholder_chips {
         cx.update(dbflux_components::theme::init);
 
         cx.update(|cx| {
-            let purple = gpui::hsla(0.8, 0.6, 0.6, 1.0);
             let theme = gpui_component::Theme::global_mut(cx);
-            theme.primary = purple;
-            theme.accent = purple;
+            let marker = theme.success;
+            theme.primary = marker;
+            theme.accent = marker;
 
             let colors = PlaceholderColors::from_theme(cx.theme());
             let decorations = placeholder_decorations(SEL, colors);
@@ -502,12 +688,12 @@ mod placeholder_chips {
                 ]
             );
             assert_eq!(styled.last(), Some(&("$0", colors.delimiter)));
-            assert!(styled.iter().all(|(_, color)| *color != purple));
+            assert!(styled.iter().all(|(_, color)| *color != marker));
             assert!(
                 decorations
                     .chips
                     .iter()
-                    .all(|chip| chip.color() != Some(purple)),
+                    .all(|chip| chip.color() != Some(marker)),
                 "no chip uses the primary or accent color"
             );
         });

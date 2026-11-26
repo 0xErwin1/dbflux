@@ -11,7 +11,7 @@ use dbflux_storage::{SnippetDraft, SnippetRecord};
 use dbflux_ui_base::AppStateEntity;
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use gpui_component::Root;
-use lsp_types::CompletionItemKind;
+use lsp_types::{CompletionItem, CompletionItemKind};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -116,21 +116,52 @@ fn a_snippet_whose_body_does_not_parse_is_left_out() {
 }
 
 #[test]
-fn only_the_offered_expansion_at_the_caret_counts_as_a_commit() {
+fn only_the_committed_item_with_its_expansion_in_place_counts() {
     let snippets = [record("sel", "Select rows", "SELECT ${1:*}$0")];
-    let (_, offers) = items_for(&snippets, "se");
+    let (items, offers) = items_for(&snippets, "se");
+    let item = items.first().expect("item").clone();
 
     assert!(
-        offers.take_committed("se", 2).is_none(),
+        offers.take_committed(&item, "se", 0..2).is_none(),
         "nothing expanded yet"
     );
-    assert!(offers.take_committed("SELECT *x", 9).is_none());
-    let (parsed, range) = offers
-        .take_committed("SELECT *", 8)
-        .expect("the expansion ends at the caret");
+    assert!(offers.take_committed(&item, "SELECT *x", 0..9).is_none());
+    let keyword = CompletionItem {
+        label: "sel".to_string(),
+        ..CompletionItem::default()
+    };
+    assert!(
+        offers.take_committed(&keyword, "SELECT *", 0..8).is_none(),
+        "an item that is not a snippet is not a commit"
+    );
+    let parsed = offers
+        .take_committed(&item, "SELECT *", 0..8)
+        .expect("the committed item expanded in place");
     assert_eq!(parsed.text(), "SELECT *");
-    assert_eq!(range, 0..8);
     assert!(offers.is_empty(), "a commit spends the offers");
+}
+
+#[test]
+fn two_offers_with_the_same_expansion_commit_the_item_that_was_chosen() {
+    let snippets = [
+        record("sa", "First", "$1 + $2$0"),
+        record("sb", "Second", "$2 + $1$0"),
+    ];
+    let (items, offers) = items_for(&snippets, "s");
+    let second = items.iter().find(|item| item.label == "sb").expect("sb");
+
+    let parsed = offers
+        .take_committed(second, " + ", 0..3)
+        .expect("the second item commits");
+    assert_eq!(
+        parsed
+            .tabstops()
+            .first()
+            .and_then(|stop| stop.ranges.first())
+            .map(|range| range.start),
+        Some(3),
+        "the first field sits after the plus sign, as in the second snippet"
+    );
 }
 
 struct Fixture<'a> {
@@ -327,6 +358,37 @@ fn the_tab_preview_does_not_start_a_session(cx: &mut TestAppContext) {
         !editor.session_active(),
         "previewing with Tab only writes the item"
     );
+}
+
+#[gpui::test]
+fn escape_on_a_tab_preview_starts_no_session(cx: &mut TestAppContext) {
+    let mut editor = open(cx, QueryLanguage::Sql);
+    editor.add_snippet("selz", "sql", "SELECT ${1:a}$0");
+    editor.type_text("selz");
+    editor.keys("tab");
+    editor.keys("escape");
+
+    assert_eq!(editor.text(), "selz", "Escape restores the typed word");
+    assert!(!editor.session_active());
+}
+
+#[gpui::test]
+fn dismissing_the_menu_over_text_equal_to_the_expansion_starts_no_session(cx: &mut TestAppContext) {
+    let mut editor = open(cx, QueryLanguage::Sql);
+    editor.add_snippet("abc", "sql", "${1:abc}$0");
+    editor.type_text("abc");
+    assert!(
+        editor
+            .menu()
+            .iter()
+            .any(|item| item.kind == Some(CompletionItemKind::SNIPPET)),
+        "the snippet is offered"
+    );
+
+    editor.keys("escape");
+
+    assert_eq!(editor.text(), "abc");
+    assert!(!editor.session_active(), "nothing was committed");
 }
 
 #[gpui::test]

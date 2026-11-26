@@ -1,6 +1,6 @@
 use super::{
-    FormValues, SnippetFocus, SnippetFormErrors, SnippetFormField, SnippetsSection, language_items,
-    language_label,
+    FormValues, PendingSnippetAction, SnippetFocus, SnippetFormErrors, SnippetFormField,
+    SnippetsSection, language_items, language_label,
 };
 use dbflux_components::modals::{ConfirmRequest, ModalVariant};
 use dbflux_core::{SnippetParseError, SnippetParseErrorKind, parse_snippet};
@@ -75,6 +75,15 @@ pub(super) fn validate_form(values: &FormValues) -> SnippetFormErrors {
     }
 
     errors
+}
+
+/// Puts `record` in `snippets`: over the entry with its id, or after the
+/// others when it is new.
+pub(super) fn upsert_record(snippets: &mut Vec<SnippetRecord>, record: SnippetRecord) {
+    match snippets.iter_mut().find(|snippet| snippet.id == record.id) {
+        Some(existing) => *existing = record,
+        None => snippets.push(record),
+    }
 }
 
 impl SnippetsSection {
@@ -190,7 +199,90 @@ impl SnippetsSection {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self.snippets.get(index).map(|snippet| snippet.id.clone()) {
-            self.select_snippet(&id, window, cx);
+            self.request_form_action(PendingSnippetAction::Select(id), window, cx);
+        }
+    }
+
+    /// Runs a form change the user asked for: straight away when the form
+    /// holds no unsaved edits, after confirming the discard when it does.
+    pub(super) fn request_form_action(
+        &mut self,
+        action: PendingSnippetAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.has_unsaved_changes(cx) {
+            self.pending_discard_action = Some(action);
+            cx.notify();
+            return;
+        }
+
+        self.apply_form_action(action, window, cx);
+    }
+
+    fn apply_form_action(
+        &mut self,
+        action: PendingSnippetAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_discard_action = None;
+
+        match action {
+            PendingSnippetAction::Select(id) => self.select_snippet(&id, window, cx),
+            PendingSnippetAction::New => self.begin_new_snippet(window, cx),
+        }
+    }
+
+    pub(super) fn confirm_discard_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(action) = self.pending_discard_action.take() else {
+            return;
+        };
+
+        self.apply_form_action(action, window, cx);
+    }
+
+    pub(super) fn cancel_discard_changes(&mut self, cx: &mut Context<Self>) {
+        self.pending_discard_action = None;
+        cx.notify();
+    }
+
+    /// Opens the discard confirmation while a discard is pending, only when
+    /// the request changed so later renders do not steal focus back.
+    pub(super) fn open_discard_confirmation(&mut self, cx: &mut Context<Self>) {
+        let Some(action) = self.pending_discard_action.clone() else {
+            return;
+        };
+
+        let target = match action {
+            PendingSnippetAction::Select(id) => self
+                .snippets
+                .iter()
+                .find(|snippet| snippet.id == id)
+                .map(|snippet| snippet.name.clone()),
+            PendingSnippetAction::New => Some(dbflux_i18n::t!("settings.snippets.list.new")),
+        };
+        let Some(target) = target else {
+            self.pending_discard_action = None;
+            return;
+        };
+
+        let body = dbflux_i18n::t!("settings.discard.body", section = target);
+        let needs_open = !self.discard_confirm.read(cx).is_visible()
+            || self.discard_confirm.read(cx).current_body() != Some(body.as_str());
+
+        if needs_open {
+            self.discard_confirm.update(cx, |confirm, cx| {
+                confirm.open(
+                    ConfirmRequest {
+                        title: dbflux_i18n::t!("settings.discard.title"),
+                        body,
+                        variant: ModalVariant::Default,
+                        confirm_label: dbflux_i18n::t!("settings.discard.confirm"),
+                    },
+                    cx,
+                );
+            });
         }
     }
 
@@ -327,6 +419,9 @@ impl SnippetsSection {
     }
 
     fn finish_save(&mut self, record: SnippetRecord, window: &mut Window, cx: &mut Context<Self>) {
+        // The write committed, so the list holds its record even when the
+        // refresh below cannot read the store back.
+        upsert_record(&mut self.snippets, record.clone());
         self.reload_snippets(cx);
         self.select_snippet(&record.id, window, cx);
         self.focus = SnippetFocus::Form;

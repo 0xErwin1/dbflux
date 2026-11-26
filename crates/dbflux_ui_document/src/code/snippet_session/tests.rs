@@ -15,6 +15,12 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
+/// The editor binds Undo to Cmd+Z on macOS and Ctrl+Z elsewhere.
+#[cfg(target_os = "macos")]
+const UNDO_KEYS: &str = "cmd-z";
+#[cfg(not(target_os = "macos"))]
+const UNDO_KEYS: &str = "ctrl-z";
+
 const CTE: &str = "WITH ${1:name} AS (\n  ${2:SELECT 1}\n)\nSELECT *\nFROM $1;$0";
 const SELECT: &str = "SELECT ${2:*}\nFROM ${1:table}\nWHERE ${3:condition};$0";
 
@@ -292,7 +298,7 @@ fn undo_reverts_the_insertion_and_ends_the_session(cx: &mut TestAppContext) {
     editor.insert(CTE, 0..0);
     editor.type_text("orders");
 
-    editor.keys("ctrl-z");
+    editor.keys(UNDO_KEYS);
     assert!(!editor.active());
     assert_eq!(
         editor.text(),
@@ -450,4 +456,100 @@ fn replace_ranges_ignores_overlapping_or_out_of_bounds_edits(cx: &mut TestAppCon
         });
     });
     assert_eq!(editor.text(), "AbcdZ");
+}
+
+#[gpui::test]
+fn replacing_a_selection_that_reaches_into_a_field_ends_the_session(cx: &mut TestAppContext) {
+    let mut editor = open(cx, "", false);
+    editor.insert("L${1:x} / $1$0", 0..0);
+    assert_eq!(editor.selected_text(), "x");
+
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| state.set_selected_range(0..2, cx));
+    });
+    editor.type_text("z");
+
+    assert_eq!(
+        editor.text(),
+        "z / x",
+        "the untouched mirror is not rewritten"
+    );
+    assert!(!editor.active());
+}
+
+#[gpui::test]
+fn undoing_a_snippet_whose_fields_start_together_ends_the_session(cx: &mut TestAppContext) {
+    let mut editor = open(cx, "", false);
+    editor.insert("$1$0 tail", 0..0);
+    assert!(editor.active());
+
+    editor.keys(UNDO_KEYS);
+
+    assert_eq!(editor.text(), "");
+    assert!(!editor.active());
+}
+
+#[gpui::test]
+fn replacing_the_buffer_ends_the_session(cx: &mut TestAppContext) {
+    let mut editor = open(cx, "", false);
+    editor.insert(CTE, 0..0);
+    assert!(editor.active());
+
+    let document = editor.document.clone();
+    editor.window.update(|window, cx| {
+        document.update(cx, |document, cx| {
+            document.set_content("SELECT 1", window, cx)
+        })
+    });
+    editor.window.run_until_parked();
+
+    assert_eq!(editor.text(), "SELECT 1");
+    assert!(!editor.active());
+}
+
+struct OffersTables;
+
+impl gpui_base::input::CompletionProvider for OffersTables {
+    fn completions(
+        &self,
+        _text: &gpui_base::input::Rope,
+        _offset: usize,
+        _trigger: lsp_types::CompletionContext,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::App,
+    ) -> gpui::Task<anyhow::Result<lsp_types::CompletionResponse>> {
+        gpui::Task::ready(Ok(lsp_types::CompletionResponse::Array(vec![
+            completion("orders"),
+            completion("users"),
+        ])))
+    }
+
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut gpui::App) -> bool {
+        !new_text.is_empty()
+    }
+}
+
+#[gpui::test]
+fn typing_in_a_mirrored_field_keeps_the_completion_menu(cx: &mut TestAppContext) {
+    let mut editor = open(cx, "", false);
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, _| {
+            state.lsp_mut().completion_provider = Some(Rc::new(OffersTables));
+        });
+    });
+    editor.insert("SELECT * FROM ${1:t}; SELECT * FROM $1;$0", 0..0);
+
+    editor.type_text("o");
+
+    assert_eq!(editor.text(), "SELECT * FROM o; SELECT * FROM o;");
+    assert!(editor.active());
+    let open = editor.window.update(|_, cx| {
+        let input = document.read(cx).editor.input_state.read(cx);
+        input.completion_menu_state().open
+    });
+    assert!(open, "the mirror rewrite did not drop the completion menu");
 }

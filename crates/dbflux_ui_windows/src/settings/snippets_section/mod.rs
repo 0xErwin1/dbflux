@@ -24,6 +24,16 @@ use gpui_component::input::{EditorState, RangeDecorationCollection, TextDecorati
 #[cfg(test)]
 mod tests;
 
+/// A change of the form that would drop the unsaved edits, held back until
+/// the user confirms discarding them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PendingSnippetAction {
+    /// Open this saved snippet.
+    Select(String),
+    /// Open a blank form.
+    New,
+}
+
 /// Stable id of the SQL language, as snippets store it.
 pub(super) const SQL_LANGUAGE_ID: &str = "sql";
 
@@ -109,6 +119,11 @@ pub(super) struct SnippetsSection {
     /// Outcome of `delete_confirm`, drained in `render` where a `Window` is
     /// available (the outcome subscription records it without one).
     pending_delete_confirm_resolution: Option<ConfirmOutcome>,
+    /// The form change waiting for the user to confirm discarding the edits.
+    pub(super) pending_discard_action: Option<PendingSnippetAction>,
+    /// Confirmation of the discard, opened by `render` while one is pending.
+    pub(super) discard_confirm: Entity<ModalConfirm>,
+    pending_discard_confirm_resolution: Option<ConfirmOutcome>,
     pub(super) input_name: Entity<InputState>,
     pub(super) input_prefix: Entity<InputState>,
     pub(super) language_dropdown: Entity<Dropdown>,
@@ -200,6 +215,13 @@ impl SnippetsSection {
                 cx.notify();
             });
 
+        let discard_confirm = cx.new(ModalConfirm::new);
+        let discard_confirm_subscription =
+            cx.subscribe(&discard_confirm, |this, _, outcome: &ConfirmOutcome, cx| {
+                this.pending_discard_confirm_resolution = Some(*outcome);
+                cx.notify();
+            });
+
         let mut section = Self {
             app_state,
             snippets: Vec::new(),
@@ -209,6 +231,9 @@ impl SnippetsSection {
             pending_delete_id: None,
             delete_confirm,
             pending_delete_confirm_resolution: None,
+            pending_discard_action: None,
+            discard_confirm,
+            pending_discard_confirm_resolution: None,
             input_name,
             input_prefix,
             language_dropdown,
@@ -231,6 +256,7 @@ impl SnippetsSection {
                 body_sub,
                 language_sub,
                 delete_confirm_subscription,
+                discard_confirm_subscription,
             ],
         };
 
@@ -439,7 +465,15 @@ impl Render for SnippetsSection {
             }
         }
 
+        if let Some(outcome) = self.pending_discard_confirm_resolution.take() {
+            match outcome {
+                ConfirmOutcome::Confirmed => self.confirm_discard_changes(window, cx),
+                ConfirmOutcome::Cancelled => self.cancel_discard_changes(cx),
+            }
+        }
+
         self.open_delete_confirmation(cx);
+        self.open_discard_confirmation(cx);
 
         div()
             .size_full()
@@ -449,5 +483,6 @@ impl Render for SnippetsSection {
             .overflow_hidden()
             .child(self.render_snippets_section(cx))
             .child(self.delete_confirm.clone())
+            .child(self.discard_confirm.clone())
     }
 }

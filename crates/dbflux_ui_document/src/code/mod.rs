@@ -1081,7 +1081,7 @@ impl CodeDocument {
             state.lsp_mut().completion_provider =
                 supports_connection_context.then_some(completion_provider.clone());
             state.lsp_mut().code_action_providers = vec![code_action_provider.clone()];
-            snippet_session::SnippetHooks::install(state, cx)
+            snippet_session::SnippetHooks::install(state, snippet_offers.clone(), cx)
         });
         let snippet_caret_sub = cx.subscribe(
             &input_state,
@@ -1092,9 +1092,6 @@ impl CodeDocument {
             },
         );
         let snippet_vim_sub = cx.observe_self(|this, cx| this.snippet_follow_vim_mode(cx));
-        let snippet_commit_sub = cx.observe_in(&input_state, window, |this, _, window, cx| {
-            this.snippet_after_completion(window, cx)
-        });
 
         let (connection_dropdown, conn_sub) =
             Self::create_connection_dropdown(&app_state, &exec_ctx, window, cx);
@@ -1187,7 +1184,6 @@ impl CodeDocument {
                     completion_menu_width_sub,
                     snippet_caret_sub,
                     snippet_vim_sub,
-                    snippet_commit_sub,
                 ],
                 snippet,
                 snippet_offers,
@@ -1417,9 +1413,12 @@ impl CodeDocument {
     /// cannot reach the dirty-marking handler at all.
     pub fn set_content(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
         let sql_owned = sql.to_string();
-        self.editor
-            .input_state
-            .update(cx, |state, cx| state.set_value(&sql_owned, window, cx));
+        let snippet = self.editor.snippet.clone();
+        self.editor.input_state.update(cx, |state, cx| {
+            // Its anchors and undo group do not survive a replaced buffer.
+            snippet.end(state, cx);
+            state.set_value(&sql_owned, window, cx)
+        });
         self.editor.original_content = sql_owned;
         self.editor.is_dirty = false;
         self.refresh_editor_diagnostics(window, cx);

@@ -120,8 +120,7 @@ impl SnippetPicker {
                 if let InputEvent::Change = event {
                     this.query = input.read(cx).value().to_string();
                     this.matches = filter_snippets(&this.snippets, &this.query);
-                    this.selected = 0;
-                    cx.notify();
+                    this.select(0, cx);
                 }
             },
         );
@@ -149,6 +148,11 @@ impl SnippetPicker {
     #[cfg(test)]
     pub(crate) fn highlighted_name(&self) -> Option<String> {
         self.selected_snippet().map(|snippet| snippet.name.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn list_scroll_offset_y(&self) -> gpui::Pixels {
+        self.list_scroll.offset().y
     }
 
     pub(crate) fn select_next(&mut self, cx: &mut Context<Self>) {

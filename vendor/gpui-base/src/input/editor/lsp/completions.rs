@@ -395,7 +395,7 @@ impl InputBaseState<EditorMode> {
         } else if action.partial_eq(&MoveDown) || action.partial_eq(&MoveUp) {
             action.boxed_clone()
         } else if crate::input::Enter::is_primary(action) {
-            self.commit_completion_preview();
+            self.accept_completion_preview(window, cx);
             self.hide_context_menu(cx);
             return Some(true);
         } else if action.partial_eq(&crate::input::Escape) {

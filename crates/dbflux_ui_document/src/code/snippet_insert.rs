@@ -91,6 +91,9 @@ impl CodeDocument {
             Command::Cancel => picker.update(cx, |picker, cx| picker.close(cx)),
             Command::SelectNext => picker.update(cx, |picker, cx| picker.select_next(cx)),
             Command::SelectPrev => picker.update(cx, |picker, cx| picker.select_prev(cx)),
+            // The editor behind the picker must not run while the picker owns
+            // the keyboard.
+            Command::RunQuery | Command::RunQueryInNewTab => {}
             _ => return false,
         }
         true
