@@ -1256,6 +1256,102 @@ document:
         empty: Nenhuma combinação de dimensões
         connection_not_found: Conexão não encontrada ou inativa
         catalog_unsupported: A conexão não oferece suporte a catálogo de métricas
+  query_plan:
+    tab:
+      title: Plano
+    view:
+      switch: Visualização do plano
+      diagram: Diagrama
+      tree: Árvore
+      raw: Bruto
+    scope:
+      selection: "Seleção L%{start}–%{end}"
+      script: "Script inteiro · %{count} instruções"
+    totals:
+      cost: custo total
+      rows: linhas
+    controls:
+      zoom_out: Diminuir zoom
+      zoom_in: Aumentar zoom
+      zoom_reset: Redefinir zoom
+      fit: Ajustar
+    warnings:
+      one: 1 aviso.
+      many: "%{count} avisos."
+    node:
+      costliest: MAIS CARO
+      table: tabela
+      index: índice
+      cost: custo
+      rows: linhas
+      self: próprio
+    tree:
+      node: Nó
+      index: Índice
+      cost: Custo
+      self_cost: Custo próprio
+      rows: Linhas
+      on_relation: em
+    raw:
+      copy: Copiar
+    footer:
+      nodes:
+        one: "%{count} nó"
+        many: "%{count} nós"
+      not_run: consulta não executada
+      format:
+        json: Plano em JSON
+        xml: Plano em XML
+        text: Plano em texto
+    inspector:
+      node: "nó %{id}"
+      estimate: Estimativa
+      reads: Lê
+      details: Detalhes
+      startup_cost: Custo de início
+      total_cost: Custo total
+      self_cost: Custo próprio
+      rows: Linhas
+      relation: Relação
+      index: Índice
+    loading:
+      running: Calculando o plano da consulta…
+      cancel: Cancelar
+    state:
+      retry: Tentar novamente
+      unsupported:
+        title: Este driver não oferece suporte a planos de consulta
+        body: "%{connection} não tem plano para mostrar para os seus comandos."
+      multi_statement:
+        title: Mais de uma instrução
+      failed:
+        title: Falha no plano
+      cancelled:
+        title: Plano cancelado
+    explain:
+      unavailable: "%{connection} não oferece planos de consulta"
+    tooltip:
+      diagram_body: "O plano como grafo: uma caixa por etapa, lida da esquerda e terminando no resultado final."
+      tree_body: "O plano como lista recuada, com os números em colunas."
+      raw_body: O plano exatamente como o motor o devolveu.
+      totals_title: Totais do plano
+      totals_body: "Custo total do plano inteiro, em unidades do planejador, e as linhas que ele espera devolver."
+      cost_title: Custo estimado
+      cost_body: "Nas unidades do próprio planejador, incluindo os filhos. Compare apenas dentro deste plano."
+      startup_cost_title: Custo de início
+      startup_cost_body: Custo estimado antes de a primeira linha poder ser devolvida.
+      self_cost_title: Custo próprio
+      self_cost_node_body: "Parcela do total do plano gasta apenas neste nó, sem os filhos."
+      self_cost_column_body: "Custo do nó menos o dos filhos, como parcela do total do plano. A barra mostra a mesma parcela."
+      rows_title: Linhas estimadas
+      rows_body: Linhas que esta etapa passa para a seguinte. Uma linha mais grossa significa mais linhas.
+      costliest_title: Mais caro
+      costliest_body: O nó com o maior custo próprio neste plano.
+      index_title: Índice
+      index_body: O índice que esta etapa usa para encontrar linhas.
+      relation_title: Relação
+      relation_body: A tabela ou visão que esta etapa lê.
+      condition_body: "A condição que melhor explica esta etapa, como o motor a informa."
   code:
     gutter:
       run_statement: Executar esta instrução

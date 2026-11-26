@@ -97,6 +97,7 @@ impl CodeDocument {
         let mut panels = Vec::new();
 
         if self.layout != SqlQueryLayout::EditorOnly
+            && !self.plan_shown()
             && let Some(grid) = self.active_result_grid()
         {
             panels.extend(grid.update(cx, |grid, cx| grid.side_panels(cx)));

@@ -1259,6 +1259,102 @@ document:
         empty: No dimension combinations
         connection_not_found: Connection not found or not active
         catalog_unsupported: Connection does not support metric catalog
+  query_plan:
+    tab:
+      title: Plan
+    view:
+      switch: Plan view
+      diagram: Diagram
+      tree: Tree
+      raw: Raw
+    scope:
+      selection: "Selection L%{start}–%{end}"
+      script: "Whole script · %{count} statements"
+    totals:
+      cost: total cost
+      rows: rows
+    controls:
+      zoom_out: Zoom out
+      zoom_in: Zoom in
+      zoom_reset: Reset zoom
+      fit: Fit
+    warnings:
+      one: 1 warning.
+      many: "%{count} warnings."
+    node:
+      costliest: COSTLIEST
+      table: table
+      index: index
+      cost: cost
+      rows: rows
+      self: self
+    tree:
+      node: Node
+      index: Index
+      cost: Cost
+      self_cost: Self cost
+      rows: Rows
+      on_relation: on
+    raw:
+      copy: Copy
+    footer:
+      nodes:
+        one: "%{count} node"
+        many: "%{count} nodes"
+      not_run: query not run
+      format:
+        json: JSON plan
+        xml: XML plan
+        text: Text plan
+    inspector:
+      node: "node %{id}"
+      estimate: Estimate
+      reads: Reads
+      details: Details
+      startup_cost: Startup cost
+      total_cost: Total cost
+      self_cost: Self cost
+      rows: Rows
+      relation: Relation
+      index: Index
+    loading:
+      running: Planning the query…
+      cancel: Cancel
+    state:
+      retry: Retry
+      unsupported:
+        title: Query plans are not supported by this driver
+        body: "%{connection} has no plan to show for its commands."
+      multi_statement:
+        title: More than one statement
+      failed:
+        title: Plan failed
+      cancelled:
+        title: Plan cancelled
+    explain:
+      unavailable: "%{connection} does not provide query plans"
+    tooltip:
+      diagram_body: "The plan as a graph: one box per step, read from the left and ending in the final result."
+      tree_body: "The plan as an indented list, with the numbers in columns."
+      raw_body: The plan exactly as the engine returned it.
+      totals_title: Plan totals
+      totals_body: "Total cost of the whole plan, in planner units, and the rows it expects to return."
+      cost_title: Estimated cost
+      cost_body: "In the planner's own units, children included. Compare it only inside this plan."
+      startup_cost_title: Startup cost
+      startup_cost_body: Estimated cost before the first row can be returned.
+      self_cost_title: Self cost
+      self_cost_node_body: "Share of the plan total spent in this node alone, without its children."
+      self_cost_column_body: "Node cost minus its children, as a share of the plan total. The bar shows the same share."
+      rows_title: Estimated rows
+      rows_body: Rows this step passes to the next one. A thicker line means more rows.
+      costliest_title: Costliest
+      costliest_body: The node with the highest self cost in this plan.
+      index_title: Index
+      index_body: The index this step uses to find rows.
+      relation_title: Relation
+      relation_body: The table or view this step reads.
+      condition_body: "The condition that best explains this step, as the engine reports it."
   code:
     gutter:
       run_statement: Run this statement

@@ -41,6 +41,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
       'schema_browser',
       'editor',
       'results',
+      'query_plans',
       'table_views',
       'console',
       'key_value',

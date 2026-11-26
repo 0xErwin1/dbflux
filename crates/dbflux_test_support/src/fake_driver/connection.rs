@@ -88,6 +88,22 @@ impl Connection for FakeConnection {
         self.execute_internal(req).map_err(|error| *error)
     }
 
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        mutex_lock(&self.state.query_plan_requests).push(request.clone());
+
+        let Some(outcome) = rwlock_read(&self.state.plan_outcome).clone() else {
+            return Err(DbError::NotSupported(
+                "Query plans are not supported by this driver".to_string(),
+            ));
+        };
+
+        dbflux_core::single_plan_statement(&request.query)?;
+        outcome.to_result()
+    }
+
     fn execute_with_handle(
         &self,
         req: &QueryRequest,

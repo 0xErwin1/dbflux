@@ -81,6 +81,23 @@ impl FakeQueryOutcome {
     }
 }
 
+/// What `FakeConnection::query_plan` answers. A fake without one behaves like
+/// a driver with no plans: the trait's default `NotSupported`.
+#[derive(Debug, Clone)]
+pub enum FakePlanOutcome {
+    Plan(Box<dbflux_core::QueryPlan>),
+    Error(String),
+}
+
+impl FakePlanOutcome {
+    fn to_result(&self) -> Result<dbflux_core::QueryPlan, DbError> {
+        match self {
+            Self::Plan(plan) => Ok((**plan).clone()),
+            Self::Error(message) => Err(DbError::query_failed(message.clone())),
+        }
+    }
+}
+
 /// What `FakeConnection::table_details` answers for one table.
 #[derive(Debug, Clone)]
 pub enum FakeTableDetails {
@@ -109,6 +126,8 @@ pub struct FakeDriverStats {
     pub cancelled_handle_count: usize,
     pub cancel_active_calls: usize,
     pub close_calls: usize,
+    /// Every structured plan the connection was asked for.
+    pub query_plan_requests: Vec<dbflux_core::QueryPlanRequest>,
 }
 
 #[derive(Default)]
@@ -134,6 +153,8 @@ struct FakeDriverState {
     available_regions: RwLock<Vec<String>>,
     region_list_error: RwLock<Option<String>>,
     available_regions_calls: AtomicUsize,
+    plan_outcome: RwLock<Option<FakePlanOutcome>>,
+    query_plan_requests: Mutex<Vec<dbflux_core::QueryPlanRequest>>,
 }
 
 #[derive(Clone)]
@@ -251,6 +272,30 @@ impl FakeDriver {
         self
     }
 
+    /// Declares whether the fake's query capabilities include EXPLAIN
+    /// (`supports_explain`), which the editor reads to enable its Explain
+    /// button.
+    pub fn with_explain_support(mut self, supported: bool) -> Self {
+        let metadata = Arc::make_mut(&mut self.metadata);
+        if let Some(query) = metadata.query.as_mut() {
+            query.supports_explain = supported;
+        }
+        self
+    }
+
+    /// Gives the fake query plans: every statement it is asked to plan gets
+    /// `plan`, after the single-statement guard real drivers apply.
+    pub fn with_query_plan(self, plan: dbflux_core::QueryPlan) -> Self {
+        *rwlock_write(&self.state.plan_outcome) = Some(FakePlanOutcome::Plan(Box::new(plan)));
+        self
+    }
+
+    /// Gives the fake query plans that fail with a server error.
+    pub fn with_query_plan_error(self, message: impl Into<String>) -> Self {
+        *rwlock_write(&self.state.plan_outcome) = Some(FakePlanOutcome::Error(message.into()));
+        self
+    }
+
     pub fn with_default_result(self, result: QueryResult) -> Self {
         *rwlock_write(&self.state.default_outcome) = Some(FakeQueryOutcome::success(result));
         self
@@ -348,6 +393,7 @@ impl FakeDriver {
             cancelled_handle_count: mutex_lock(&self.state.cancelled_handles).len(),
             cancel_active_calls: self.state.cancel_active_calls.load(Ordering::Relaxed),
             close_calls: self.state.close_calls.load(Ordering::Relaxed),
+            query_plan_requests: mutex_lock(&self.state.query_plan_requests).clone(),
         }
     }
 

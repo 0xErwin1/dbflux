@@ -131,7 +131,7 @@ pub(super) fn run_summary_label(statement_count: Option<usize>) -> Option<String
 }
 
 /// One-based line of byte `offset` in `text`.
-fn line_at(text: &str, offset: usize) -> usize {
+pub(super) fn line_at(text: &str, offset: usize) -> usize {
     text.get(..offset)
         .map_or(0, |prefix| prefix.matches('\n').count())
         + 1
