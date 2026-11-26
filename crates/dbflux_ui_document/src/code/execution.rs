@@ -4099,6 +4099,45 @@ mod result_tab_keyboard_tests {
         assert_eq!(mode(window), Some(ResultViewMode::Table));
     }
 
+    fn clipboard_text(window: &mut VisualTestContext) -> String {
+        window.update(|_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()
+        })
+    }
+
+    /// The palette runs Copy as Markdown while the query text has the
+    /// keyboard; it still copies from the shown result grid.
+    #[gpui::test]
+    fn copy_as_markdown_copies_the_shown_result_with_the_editor_focused(cx: &mut TestAppContext) {
+        use crate::code::SqlQueryFocus;
+
+        let (document, window) = document_with_result_tabs(cx, 1);
+        window.update(|_, cx| {
+            document.update(cx, |document, _| {
+                document.focus_mode = SqlQueryFocus::Editor
+            })
+        });
+
+        dispatch(window, &document, Command::ResultsCopyAsMarkdown);
+
+        assert_eq!(clipboard_text(window), "| id |\n| --- |\n| v |\n");
+    }
+
+    #[gpui::test]
+    fn copy_as_markdown_is_not_handled_without_a_result_grid(cx: &mut TestAppContext) {
+        let (document, window) = document_with_result_tabs(cx, 0);
+
+        let handled = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.dispatch_command(Command::ResultsCopyAsMarkdown, window, cx)
+            })
+        });
+
+        assert!(!handled);
+    }
+
     #[gpui::test]
     fn result_tab_commands_switch_and_close_the_shown_tab(cx: &mut TestAppContext) {
         let (document, window) = document_with_result_tabs(cx, 3);

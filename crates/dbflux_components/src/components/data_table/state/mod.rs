@@ -702,10 +702,10 @@ impl DataTableState {
         cx.notify();
     }
 
-    /// Right-click on a body cell: focus the table, select the cell unless it
-    /// already lies inside the selected range (so the menu's copy rows act on
-    /// the whole range; anchor and active stay where they were), and ask for
-    /// the context menu.
+    /// Right-click on a body cell: focus the table, commit an open inline
+    /// editor, select the cell unless it already lies inside the selected
+    /// range (so the menu's copy rows act on the whole range; anchor and
+    /// active stay where they were), and ask for the context menu.
     pub fn request_cell_context_menu(
         &mut self,
         coord: CellCoord,
@@ -714,6 +714,7 @@ impl DataTableState {
         cx: &mut Context<Self>,
     ) {
         self.focus(window, cx);
+        self.commit_edit_in_progress(cx);
         if !self.selection.is_selected(coord) {
             self.select_cell(coord, cx);
         }
@@ -4244,5 +4245,6 @@ mod tests {
         );
     }
 
+    mod context_menu;
     mod expressions;
 }

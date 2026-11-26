@@ -1947,6 +1947,15 @@ impl CodeDocument {
             return true;
         }
 
+        // The palette runs this with the query text focused, so it cannot
+        // wait for the results to own the keyboard.
+        if cmd == Command::ResultsCopyAsMarkdown {
+            return match self.active_result_grid() {
+                Some(grid) => grid.update(cx, |g, cx| g.dispatch_command(cmd, window, cx)),
+                None => false,
+            };
+        }
+
         // When focused on results, delegate to active DataGridPanel
         if self.focus_mode == SqlQueryFocus::Results
             && let Some(grid) = self.active_result_grid()

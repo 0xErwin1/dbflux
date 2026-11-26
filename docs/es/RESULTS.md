@@ -292,9 +292,9 @@ El menú contextual de las celdas de la tabla (clic derecho, o `m`) incluye
 como tabla Markdown, o todas las filas cargadas cuando hay una sola celda
 seleccionada, igual que **Markdown** en la sección de copia del menú de
 exportación. El command palette lista la misma acción como **Copiar como
-Markdown** (`results_copy_as_markdown`); no tiene atajo por defecto, así que
-asígnale uno en Settings → Keybindings si lo quieres.
- Hacer clic derecho en una celda
+Markdown** (`results_copy_as_markdown`); no tiene atajo por defecto y
+Settings → Keybindings todavía no permite asignarle uno.
+Hacer clic derecho en una celda
 dentro de la selección actual la conserva, así que estas entradas de copia actúan
 sobre todo el rango; hacerlo fuera de ella selecciona la celda pulsada.
 

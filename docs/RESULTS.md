@@ -267,9 +267,9 @@ The table cell context menu (right click, or `m`) lists **Copy as Markdown**
 right after **Copy**. It copies the selected range as a Markdown table, or every
 loaded row when one cell is selected, exactly like **Markdown** in the export
 menu's copy section. The command palette lists the same action as **Copy as
-Markdown** (`results_copy_as_markdown`); it has no default key binding, so bind
-it in Settings → Keybindings if you want one.
- Right-clicking a cell inside
+Markdown** (`results_copy_as_markdown`); it has no default key binding, and
+Settings → Keybindings cannot assign one to it yet.
+Right-clicking a cell inside
 the current selection keeps that selection, so these copy entries act on the
 whole range; right-clicking outside it selects the clicked cell.
 
