@@ -171,6 +171,7 @@ JSON、XML 或纯文本显示值（根据内容检测，且仅在确实能解析
 
 - **CSV**
 - **JSON（美化）** 与 **JSON（紧凑）**
+- **Markdown**（GitHub Flavored Markdown 表格，用于表格结果）
 - **文本**
 - **二进制**（用于二进制形态的结果）
 
