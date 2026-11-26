@@ -163,6 +163,7 @@ JOIN은 허용됩니다. 소스 테이블의 열은 편집할 수 있고, 조인
 
 - **CSV**
 - **JSON (pretty)** 및 **JSON (compact)**
+- **Markdown** (테이블 결과용 GitHub Flavored Markdown 표)
 - **텍스트**
 - **바이너리** (바이너리 형태의 결과용)
 
