@@ -1081,6 +1081,10 @@ impl Connection for TursoConnection {
         &self,
         request: &dbflux_core::QueryPlanRequest,
     ) -> Result<dbflux_core::QueryPlan, DbError> {
+        if request.mode == dbflux_core::QueryPlanMode::Analyze {
+            return Err(dbflux_core::analyze_unsupported());
+        }
+
         let result = self.run_sql(&crate::plan::explain_statement(&request.query)?)?;
         dbflux_core::parse_sqlite_query_plan(&result)
     }

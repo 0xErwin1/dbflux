@@ -1698,6 +1698,11 @@ pub struct QueryCapabilities {
 
     /// Whether the driver supports EXPLAIN (query planning).
     pub supports_explain: bool,
+
+    /// Whether the driver can run a read statement and report an analyzed
+    /// plan with actual rows and timings.
+    #[serde(default)]
+    pub supports_explain_analyze: bool,
 }
 
 impl Default for QueryCapabilities {
@@ -1736,6 +1741,7 @@ impl Default for QueryCapabilities {
             supports_window_functions: true,
             supports_ctes: true,
             supports_explain: true,
+            supports_explain_analyze: false,
         }
     }
 }

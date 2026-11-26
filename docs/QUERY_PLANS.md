@@ -3,7 +3,9 @@
 **Explain** shows how the database intends to run a statement, so you can see
 why it is slow before you run it. The plan appears as a **Plan** tab next to the
 result tabs of the editor, as a diagram, a tree or the engine's own text. DBFlux
-asks the database for the plan and never runs the statement.
+asks the database for the plan and, for an estimate, never runs the statement.
+An analyzed plan, available for some drivers, does run it; see
+[Analyzed plans](#analyzed-plans).
 
 ## Quick path
 
@@ -137,11 +139,62 @@ Other drivers answer that they have no plans. Each driver also supplies the
 plain-language text for its own operations, so those explanations are in the
 engine's vocabulary and are not translated.
 
+## Analyzed plans
+
+An **estimate** asks the database how it would run the statement. An **analyzed
+plan** runs the statement and reports what happened: the rows each step really
+returned, the time each step took, how many times it ran (loops), and the
+planning and execution time of the whole statement. Where the numbers differ
+from the estimate, the estimate is what misled the planner.
+
+Running the statement has a price, so an analyzed plan is stricter than an
+estimate:
+
+- **It only runs read statements.** The shared classifier must mark the
+  statement `Read` or `Metadata` (a `SELECT`, or a `WITH` that only reads). An
+  `INSERT`, `UPDATE`, `DELETE`, DDL, or a `WITH` that deletes, is refused before
+  anything is sent, with: *Analyze is only available for read statements; this
+  statement is not a plain read, so only the estimate can run.* The estimate of such a
+  statement is still available and never runs it.
+- **The server refuses writes too.** The driver runs the statement inside a
+  read-only transaction and rolls it back, so a write the classifier cannot see,
+  such as a function that inserts, fails instead of changing data.
+- **It is one statement**, like an estimate.
+- **Side effects a read-only transaction does not stop** (for example advisory
+  locks or functions that reach outside the database) still happen. Analyze runs
+  the statement for real, so a function with side effects outside the transaction
+  (session locks, remote writes through extensions) takes effect exactly as when
+  you run the query. The statement
+  also takes as long as it takes to run.
+
+| Driver | Analyzed plan | Notes |
+|--------|---------------|-------|
+| PostgreSQL | `EXPLAIN (ANALYZE, FORMAT JSON)` in `BEGIN READ ONLY` | Planning and execution time; `Rows Removed by Filter` and similar counters stay in the node details |
+| MySQL 8.0.18+ | `EXPLAIN ANALYZE` in `START TRANSACTION READ ONLY` | Actuals come from the TREE text; no planning time; MySQL 5.7 has no analyze |
+| MariaDB | `ANALYZE FORMAT=JSON` in `START TRANSACTION READ ONLY` | Times are reported over all loops and shown per loop |
+| DuckDB | `EXPLAIN (ANALYZE, FORMAT JSON)` in a `READ ONLY` transaction | Operator time is CPU time summed over threads; DuckDB must parse the statement as a `SELECT` |
+| SQL Server, SQLite, Turso | Not supported | Answer *Analyzed plans are not supported by this driver* before anything is sent |
+
+A driver advertises analyzed plans with the `supports_explain_analyze` query
+capability. The Plan tab does not offer an Analyze switch yet; until it does,
+analyzed plans are available to the drivers' `query_plan` callers.
+
+### Reading analyzed numbers
+
+| Number | Meaning |
+|--------|---------|
+| **Actual rows** | Rows the step returned, per loop |
+| **Loops** | How many times the step ran. A step that never ran has zero loops |
+| **Actual time** | Milliseconds per loop until the first and the last row |
+| **Self time** | The step's time over all its loops minus its children's, never below zero. It points at where the time went |
+| **Estimate gap** | Actual rows against estimated rows per loop, in either direction. The largest gap is flagged only when it is 10 times or more, and the deepest step wins a tie |
+
 ## Limits
 
-- The plan is an estimate. Nothing is executed, so there are no real timings or
-  row counts. An analyzed plan, which does run the statement, is not offered yet.
-- A write statement is planned without running, like any other.
+- An estimate is a guess made without running the statement, so it has no real
+  timings or row counts. Use an analyzed plan, where the driver has one, for those.
+- A write statement is planned without running, like any other, and is never
+  analyzed.
 - A plan covers one statement at a time.
 - A very large raw plan (an XML plan of a big query) is long; it scrolls inside
   the tab.

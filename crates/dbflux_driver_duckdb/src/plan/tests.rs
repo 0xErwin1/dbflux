@@ -302,3 +302,236 @@ fn a_logical_plan_is_never_returned_as_the_physical_plan() {
         .unwrap_err();
     assert!(error.to_string().contains("physical plan"), "{error}");
 }
+
+const ANALYZED_PLAN: &str = r#"{
+    "operator": [
+        {
+            "extra_info": {},
+            "intermediate_rows": 0,
+            "timing": 0.0,
+            "type": "RESULT_COLLECTOR",
+            "children": [
+                {
+                    "extra_info": {},
+                    "intermediate_rows": 0,
+                    "timing": 0.0,
+                    "type": "EXECUTE",
+                    "children": [
+                        {
+                            "extra_info": {},
+                            "intermediate_rows": 0,
+                            "timing": 4.53e-7,
+                            "type": "EXPLAIN_ANALYZE",
+                            "children": [
+                                {
+                                    "extra_info": {
+                                        "Order By": "count_star() ASC",
+                                        "Estimated Cardinality": "6"
+                                    },
+                                    "intermediate_rows": 7,
+                                    "timing": 0.0002,
+                                    "type": "ORDER_BY",
+                                    "children": [
+                                        {
+                                            "extra_info": {
+                                                "Table": "memory.main.p",
+                                                "Type": "Sequential Scan",
+                                                "Filters": "(id > 10)",
+                                                "Estimated Cardinality": "200"
+                                            },
+                                            "intermediate_rows": 989,
+                                            "row_groups_scanned": 1,
+                                            "rows_scanned": 1000,
+                                            "timing": 0.0001,
+                                            "type": "TABLE_SCAN"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "planner": {"total_time": 0.003},
+    "optimizer": {"total_time": 0.002},
+    "physical_planner": {"total_time": 0.001},
+    "query": {"total_time": 0.008}
+}"#;
+
+#[test]
+fn an_analyzed_plan_skips_the_explain_wrappers() {
+    let plan = parse_analyzed_json(ANALYZED_PLAN).unwrap();
+
+    assert_eq!(plan.raw_format, PlanFormat::Json);
+    assert_eq!(plan.roots.len(), 1);
+    assert_eq!(plan.roots[0].operation, "ORDER_BY");
+    assert_eq!(plan.roots[0].children[0].operation, "TABLE_SCAN");
+}
+
+#[test]
+fn an_analyzed_plan_maps_cardinality_and_cumulative_timing() {
+    let plan = parse_analyzed_json(ANALYZED_PLAN).unwrap();
+
+    let sort = &plan.roots[0];
+    let scan = &sort.children[0];
+
+    assert_eq!(scan.estimated_rows, Some(200.0));
+    assert_eq!(scan.actual_rows, Some(989.0));
+    assert_eq!(scan.actual_loops, Some(1));
+    // Operator timing is seconds spent in the operator alone; the model keeps
+    // an inclusive total in milliseconds, so self time comes back out.
+    assert!((scan.actual_total_time.unwrap() - 0.1).abs() < 1e-9);
+    assert!((scan.actual_self_time().unwrap() - 0.1).abs() < 1e-9);
+    assert!((sort.actual_total_time.unwrap() - 0.3).abs() < 1e-9);
+    assert!((sort.actual_self_time().unwrap() - 0.2).abs() < 1e-9);
+    assert_eq!(sort.actual_rows, Some(7.0));
+}
+
+#[test]
+fn an_analyzed_plan_keeps_scan_counters_as_details() {
+    let plan = parse_analyzed_json(ANALYZED_PLAN).unwrap();
+    let scan = &plan.roots[0].children[0];
+
+    assert_eq!(detail(scan, "rows_scanned"), Some("1000"));
+    assert_eq!(detail(scan, "row_groups_scanned"), Some("1"));
+    assert_eq!(detail(scan, "intermediate_rows"), None);
+    assert_eq!(detail(scan, "timing"), None);
+    assert_eq!(scan.relation.as_deref(), Some("memory.main.p"));
+}
+
+#[test]
+fn an_analyzed_plan_reports_planning_and_execution_time_in_milliseconds() {
+    let plan = parse_analyzed_json(ANALYZED_PLAN).unwrap();
+
+    assert!((plan.planning_time.unwrap() - 6.0).abs() < 1e-9);
+    assert!((plan.execution_time.unwrap() - 2.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_analyzed_gap_comes_out_of_the_parsed_plan() {
+    let plan = parse_analyzed_json(ANALYZED_PLAN).unwrap();
+
+    // 989 actual rows against 200 estimated: 4.945x, under the threshold.
+    assert!(plan.largest_estimate_gap().is_none());
+}
+
+#[test]
+fn an_analyzed_document_without_operators_is_an_error() {
+    assert!(parse_analyzed_json("{}").is_err());
+    assert!(parse_analyzed_json("[]").is_err());
+    assert!(parse_analyzed_json("nope").is_err());
+}
+
+#[test]
+fn the_analyzed_plan_row_is_found_by_its_key() {
+    let mut result = QueryResult::empty();
+    result.rows = vec![vec![
+        Value::Text("analyzed_plan".to_string()),
+        Value::Text("{}".to_string()),
+    ]];
+
+    assert_eq!(plan_text_from_result(&result).unwrap(), "{}");
+}
+
+#[test]
+fn the_analyze_statement_runs_the_one_read_statement_with_analyze() {
+    assert_eq!(
+        analyze_explain_statement("SELECT 1;").unwrap(),
+        "EXPLAIN (ANALYZE, FORMAT JSON) SELECT 1"
+    );
+}
+
+#[test]
+fn the_analyze_statement_refuses_writes_and_batches() {
+    for query in ["UPDATE t SET a = 1", "DELETE FROM t", "DROP TABLE t"] {
+        assert_eq!(
+            analyze_explain_statement(query).unwrap_err().to_string(),
+            "Analyze is only available for read statements; this statement is not a plain read, so only the estimate can run.",
+            "{query}"
+        );
+    }
+
+    assert!(analyze_explain_statement("SELECT 1; SELECT 2").is_err());
+}
+
+#[test]
+fn analyzing_a_real_select_reports_actuals_and_changes_nothing() {
+    let connection = connect();
+    connection
+        .execute(&QueryRequest::new(
+            "CREATE TABLE p AS SELECT range AS id, range % 7 AS g FROM range(1000)",
+        ))
+        .unwrap();
+
+    let plan = connection
+        .query_plan(&QueryPlanRequest::analyzed(
+            "SELECT g, count(*) FROM p WHERE id > 10 GROUP BY g ORDER BY 2",
+        ))
+        .unwrap();
+
+    assert!(plan.execution_time.is_some());
+    assert!(plan.planning_time.is_some());
+    let mut stack: Vec<&dbflux_core::PlanNode> = plan.roots.iter().collect();
+    let mut scanned = None;
+    while let Some(node) = stack.pop() {
+        if node.relation.as_deref() == Some("memory.main.p") {
+            scanned = Some(node);
+        }
+        stack.extend(&node.children);
+    }
+    let scan = scanned.expect("a node scans p");
+    assert_eq!(scan.actual_rows, Some(989.0));
+    assert!(scan.actual_total_time.is_some());
+
+    let count = connection
+        .execute(&QueryRequest::new("SELECT count(*) FROM p"))
+        .unwrap();
+    assert_eq!(count.rows[0][0], Value::Int(1000));
+}
+
+#[test]
+fn analyzing_a_write_is_refused_and_the_rows_stay() {
+    let connection = connect();
+    connection
+        .execute(&QueryRequest::new("CREATE TABLE guard AS SELECT 1 AS id"))
+        .unwrap();
+
+    for statement in [
+        "DELETE FROM guard",
+        "UPDATE guard SET id = 2",
+        "INSERT INTO guard VALUES (3)",
+    ] {
+        let error = connection
+            .query_plan(&QueryPlanRequest::analyzed(statement))
+            .unwrap_err();
+        assert!(
+            error.to_string().starts_with("Analyze is only available"),
+            "{statement}: {error}"
+        );
+    }
+
+    let rows = connection
+        .execute(&QueryRequest::new("SELECT id FROM guard"))
+        .unwrap();
+    assert_eq!(rows.rows, vec![vec![Value::Int(1)]]);
+}
+
+#[test]
+fn the_estimate_request_still_never_analyzes() {
+    let connection = connect();
+    connection
+        .execute(&QueryRequest::new("CREATE TABLE est AS SELECT 1 AS id"))
+        .unwrap();
+
+    let plan = connection
+        .query_plan(&QueryPlanRequest::new("DELETE FROM est"))
+        .unwrap();
+    assert!(plan.execution_time.is_none());
+
+    let rows = connection
+        .execute(&QueryRequest::new("SELECT count(*) FROM est"))
+        .unwrap();
+    assert_eq!(rows.rows[0][0], Value::Int(1));
+}

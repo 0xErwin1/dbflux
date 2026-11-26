@@ -229,6 +229,7 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         supports_window_functions: false,
         supports_ctes: false,
         supports_explain: false,
+        supports_explain_analyze: false,
         max_query_parameters: 0,
         max_order_by_columns: 0,
         max_group_by_columns: 0,

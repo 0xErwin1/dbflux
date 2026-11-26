@@ -100,7 +100,15 @@ impl Connection for FakeConnection {
             ));
         };
 
-        dbflux_core::single_plan_statement(&request.query)?;
+        match request.mode {
+            dbflux_core::QueryPlanMode::Estimate => {
+                dbflux_core::single_plan_statement(&request.query)?;
+            }
+            dbflux_core::QueryPlanMode::Analyze => {
+                dbflux_core::analyze_statement(&dbflux_core::QueryLanguage::Sql, &request.query)?;
+            }
+        }
+
         outcome.to_result()
     }
 

@@ -136,6 +136,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_window_functions: true,
         supports_ctes: true,
         supports_explain: true,
+        supports_explain_analyze: true,
         max_query_parameters: 32767,
         max_order_by_columns: 0,
         max_group_by_columns: 0,
@@ -2771,8 +2772,22 @@ impl Connection for PostgresConnection {
         &self,
         request: &dbflux_core::QueryPlanRequest,
     ) -> Result<dbflux_core::QueryPlan, DbError> {
-        let sql = crate::plan::explain_statement(&request.query)?;
-        let result = self.execute(&QueryRequest::new(sql))?;
+        let query_request = match request.mode {
+            dbflux_core::QueryPlanMode::Estimate => {
+                QueryRequest::new(crate::plan::explain_statement(&request.query)?)
+            }
+            dbflux_core::QueryPlanMode::Analyze => {
+                // The statement runs, so the server must refuse writes even
+                // when the classifier missed one (a volatile function):
+                // `execute` runs a `read_only` request inside `BEGIN READ
+                // ONLY` and always rolls it back.
+                let mut query_request =
+                    QueryRequest::new(crate::plan::analyze_explain_statement(&request.query)?);
+                query_request.read_only = dbflux_core::ReadOnlyEnforcement::Required;
+                query_request
+            }
+        };
+        let result = self.execute(&query_request)?;
         crate::plan::parse_explain_json(&crate::plan::raw_plan_from_result(&result)?)
     }
 

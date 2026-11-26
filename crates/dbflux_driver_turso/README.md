@@ -51,6 +51,7 @@ Remote Turso / libSQL database over HTTP.
 
 ## Limitations
 
+- Analyzed query plans (actual rows and timings) are not supported; the plan view offers only the estimate.
 - `execute()` rejects a statement timeout with `NotSupported` before running SQL. The request row limit is one budget across all statements of a batch, and it bounds only the retained rows: the whole response is still transferred.
 - Batched primary-key row lookup sends at most 100 values per query; a larger
   request runs as several `IN (...)` statements.

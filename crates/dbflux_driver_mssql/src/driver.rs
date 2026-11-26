@@ -195,6 +195,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_window_functions: true,
         supports_ctes: true,
         supports_explain: true,
+        supports_explain_analyze: false,
         max_query_parameters: 2100,
         max_order_by_columns: 0,
         max_group_by_columns: 0,
@@ -3485,6 +3486,10 @@ impl Connection for MssqlConnection {
         &self,
         request: &dbflux_core::QueryPlanRequest,
     ) -> Result<dbflux_core::QueryPlan, DbError> {
+        if request.mode == dbflux_core::QueryPlanMode::Analyze {
+            return Err(dbflux_core::analyze_unsupported());
+        }
+
         let statement = crate::plan::plan_statement(&request.query)?;
 
         match self.run_showplan(&statement) {

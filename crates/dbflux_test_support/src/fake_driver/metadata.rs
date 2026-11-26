@@ -118,6 +118,7 @@ pub(super) static FAKE_CLICKHOUSE_METADATA: LazyLock<DriverMetadata> =
             supports_window_functions: true,
             supports_ctes: true,
             supports_explain: true,
+            supports_explain_analyze: false,
             max_query_parameters: 0,
             max_order_by_columns: 0,
             max_group_by_columns: 0,
@@ -451,6 +452,7 @@ pub(super) static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> =
             supports_window_functions: false,
             supports_ctes: false,
             supports_explain: false,
+            supports_explain_analyze: false,
             ..Default::default()
         }),
         mutation: None,

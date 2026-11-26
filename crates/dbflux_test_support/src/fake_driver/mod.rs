@@ -283,6 +283,16 @@ impl FakeDriver {
         self
     }
 
+    /// Declares whether the fake's query capabilities include analyzed plans
+    /// (`supports_explain_analyze`).
+    pub fn with_explain_analyze_support(mut self, supported: bool) -> Self {
+        let metadata = Arc::make_mut(&mut self.metadata);
+        if let Some(query) = metadata.query.as_mut() {
+            query.supports_explain_analyze = supported;
+        }
+        self
+    }
+
     /// Gives the fake query plans: every statement it is asked to plan gets
     /// `plan`, after the single-statement guard real drivers apply.
     pub fn with_query_plan(self, plan: dbflux_core::QueryPlan) -> Self {

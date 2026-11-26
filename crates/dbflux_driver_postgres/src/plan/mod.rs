@@ -4,7 +4,7 @@ use dbflux_core::{DbError, PlanCondition, PlanFormat, PlanNode, QueryPlan, Query
 use serde_json::Value as Json;
 
 /// Keys mapped to `PlanNode` fields; every other scalar/array key is a detail.
-const MAPPED_KEYS: [&str; 9] = [
+const MAPPED_KEYS: [&str; 13] = [
     "Parent Relationship",
     "Plan Width",
     "Node Type",
@@ -14,6 +14,10 @@ const MAPPED_KEYS: [&str; 9] = [
     "Total Cost",
     "Plan Rows",
     "Plans",
+    "Actual Startup Time",
+    "Actual Total Time",
+    "Actual Rows",
+    "Actual Loops",
 ];
 
 /// Conditions that can explain a node, best first. The first one present wins
@@ -35,6 +39,16 @@ pub(crate) fn explain_statement(query: &str) -> Result<String, DbError> {
     Ok(format!(
         "EXPLAIN (FORMAT JSON) {}",
         dbflux_core::single_plan_statement(query)?
+    ))
+}
+
+/// Builds the analyzed plan statement for `query`. The statement runs, so it
+/// must pass the shared read guard and the single-statement guard first; the
+/// driver additionally runs it inside a read-only transaction.
+pub(crate) fn analyze_explain_statement(query: &str) -> Result<String, DbError> {
+    Ok(format!(
+        "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+        dbflux_core::analyze_statement(&dbflux_core::QueryLanguage::Sql, query)?
     ))
 }
 
@@ -64,7 +78,20 @@ pub(crate) fn parse_explain_json(raw: &str) -> Result<QueryPlan, DbError> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(QueryPlan::new(roots, raw, PlanFormat::Json))
+    let mut plan = QueryPlan::new(roots, raw, PlanFormat::Json);
+    plan.planning_time = sum_entry_field(entries, "Planning Time");
+    plan.execution_time = sum_entry_field(entries, "Execution Time");
+
+    Ok(plan)
+}
+
+/// Totals a per-query timing across every explained query, or `None` when
+/// the engine reported it for none of them.
+fn sum_entry_field(entries: &[Json], field: &str) -> Option<f64> {
+    entries
+        .iter()
+        .filter_map(|entry| entry.get(field).and_then(Json::as_f64))
+        .reduce(|total, value| total + value)
 }
 
 fn parse_node(value: &Json) -> Result<PlanNode, DbError> {
@@ -89,6 +116,10 @@ fn parse_node(value: &Json) -> Result<PlanNode, DbError> {
     node.estimated_startup_cost = object.get("Startup Cost").and_then(Json::as_f64);
     node.estimated_total_cost = object.get("Total Cost").and_then(Json::as_f64);
     node.estimated_rows = object.get("Plan Rows").and_then(Json::as_f64);
+    node.actual_startup_time = object.get("Actual Startup Time").and_then(Json::as_f64);
+    node.actual_total_time = object.get("Actual Total Time").and_then(Json::as_f64);
+    node.actual_rows = object.get("Actual Rows").and_then(Json::as_f64);
+    node.actual_loops = object.get("Actual Loops").and_then(Json::as_u64);
 
     node.key_condition = KEY_CONDITION_PRIORITY.iter().find_map(|label| {
         object.get(*label).map(|value| PlanCondition {

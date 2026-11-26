@@ -1,4 +1,5 @@
 use super::*;
+use crate::QueryLanguage;
 use crate::{QueryResult, Value};
 
 #[test]
@@ -411,5 +412,279 @@ fn sqlite_plan_keeps_the_single_statement_guard() {
     assert_eq!(
         sqlite_plan_statement(" ").unwrap_err().to_string(),
         "A query plan needs a statement; the query is empty."
+    );
+}
+
+fn timed(operation: &str, total: f64, loops: u64, children: Vec<PlanNode>) -> PlanNode {
+    PlanNode {
+        actual_total_time: Some(total),
+        actual_loops: Some(loops),
+        children,
+        ..PlanNode::new(operation)
+    }
+}
+
+fn counted(operation: &str, estimated: f64, actual: f64, children: Vec<PlanNode>) -> PlanNode {
+    PlanNode {
+        estimated_rows: Some(estimated),
+        actual_rows: Some(actual),
+        actual_loops: Some(1),
+        children,
+        ..PlanNode::new(operation)
+    }
+}
+
+fn plan_of(root: PlanNode) -> QueryPlan {
+    QueryPlan::new(vec![root], "", PlanFormat::Text)
+}
+
+#[test]
+fn requests_estimate_by_default_and_analyze_on_demand() {
+    assert_eq!(
+        QueryPlanRequest::new("SELECT 1").mode,
+        QueryPlanMode::Estimate
+    );
+    assert_eq!(
+        QueryPlanRequest::analyzed("SELECT 1").mode,
+        QueryPlanMode::Analyze
+    );
+    assert_eq!(QueryPlanMode::default(), QueryPlanMode::Estimate);
+}
+
+#[test]
+fn actual_self_time_subtracts_children_and_scales_by_loops() {
+    let node = timed(
+        "Nested Loop",
+        10.0,
+        1,
+        vec![
+            timed("Seq Scan", 2.0, 3, vec![]),
+            timed("Index", 1.0, 1, vec![]),
+        ],
+    );
+
+    // 10 - (2 * 3 + 1 * 1) = 3
+    assert_eq!(node.actual_self_time(), Some(3.0));
+}
+
+#[test]
+fn actual_self_time_never_goes_below_zero() {
+    let node = timed("Limit", 1.0, 1, vec![timed("Scan", 5.0, 1, vec![])]);
+
+    assert_eq!(node.actual_self_time(), Some(0.0));
+}
+
+#[test]
+fn actual_self_time_is_unknown_when_a_time_is_missing() {
+    let child = PlanNode::new("Scan");
+    let node = timed("Limit", 4.0, 1, vec![child]);
+
+    assert_eq!(node.actual_self_time(), None);
+    assert_eq!(PlanNode::new("Scan").actual_self_time(), None);
+}
+
+#[test]
+fn actual_self_time_of_a_leaf_is_its_total_across_loops() {
+    assert_eq!(timed("Scan", 2.5, 4, vec![]).actual_self_time(), Some(10.0));
+    // Loops not reported count as one.
+    let node = PlanNode {
+        actual_total_time: Some(2.5),
+        ..PlanNode::new("Scan")
+    };
+    assert_eq!(node.actual_self_time(), Some(2.5));
+}
+
+#[test]
+fn a_node_that_never_ran_costs_nothing() {
+    let node = timed("Join", 3.0, 1, vec![timed("Skipped", 0.0, 0, vec![])]);
+
+    assert_eq!(node.actual_self_time(), Some(3.0));
+}
+
+#[test]
+fn the_gap_marker_needs_a_tenfold_gap() {
+    let nine = plan_of(counted("Scan", 100.0, 900.0, vec![]));
+    assert!(nine.largest_estimate_gap().is_none());
+
+    let ten = plan_of(counted("Scan", 100.0, 1000.0, vec![]));
+    let gap = ten.largest_estimate_gap().expect("10x is marked");
+    assert_eq!(gap.ratio, 10.0);
+    assert_eq!(gap.node.operation, "Scan");
+}
+
+#[test]
+fn the_gap_marker_works_in_both_directions() {
+    let over = plan_of(counted("Scan", 5000.0, 50.0, vec![]));
+    assert_eq!(over.largest_estimate_gap().unwrap().ratio, 100.0);
+
+    let under = plan_of(counted("Scan", 50.0, 5000.0, vec![]));
+    assert_eq!(under.largest_estimate_gap().unwrap().ratio, 100.0);
+}
+
+#[test]
+fn the_gap_marker_picks_the_largest_gap_and_reports_its_path() {
+    let root = counted(
+        "Join",
+        10.0,
+        10.0,
+        vec![
+            counted("A", 1.0, 20.0, vec![]),
+            counted("B", 100.0, 1.0, vec![counted("C", 1.0, 500.0, vec![])]),
+        ],
+    );
+
+    let plan = plan_of(root);
+    let gap = plan.largest_estimate_gap().unwrap();
+
+    assert_eq!(gap.node.operation, "C");
+    assert_eq!(gap.path, vec![0, 1, 0]);
+    assert_eq!(gap.ratio, 500.0);
+}
+
+#[test]
+fn the_gap_marker_prefers_the_deepest_node_on_ties() {
+    let root = counted(
+        "Parent",
+        10.0,
+        100.0,
+        vec![counted("Child", 10.0, 100.0, vec![])],
+    );
+
+    let plan = plan_of(root);
+    assert_eq!(plan.largest_estimate_gap().unwrap().node.operation, "Child");
+
+    let siblings = plan_of(counted(
+        "Parent",
+        1.0,
+        1.0,
+        vec![
+            counted("First", 10.0, 100.0, vec![]),
+            counted("Second", 10.0, 100.0, vec![]),
+        ],
+    ));
+    assert_eq!(
+        siblings.largest_estimate_gap().unwrap().node.operation,
+        "First"
+    );
+}
+
+#[test]
+fn the_gap_marker_ignores_nodes_without_both_numbers_or_that_never_ran() {
+    let estimate_only = PlanNode {
+        estimated_rows: Some(1.0),
+        ..PlanNode::new("Scan")
+    };
+    assert!(plan_of(estimate_only).largest_estimate_gap().is_none());
+
+    let mut never = counted("Scan", 1.0, 0.0, vec![]);
+    never.actual_loops = Some(0);
+    never.estimated_rows = Some(1000.0);
+    assert!(plan_of(never).largest_estimate_gap().is_none());
+}
+
+#[test]
+fn zero_rows_are_compared_as_one() {
+    let plan = plan_of(counted("Scan", 1.0, 0.0, vec![]));
+    assert!(plan.largest_estimate_gap().is_none());
+
+    let plan = plan_of(counted("Scan", 500.0, 0.0, vec![]));
+    assert_eq!(plan.largest_estimate_gap().unwrap().ratio, 500.0);
+}
+
+const REFUSAL: &str = "Analyze is only available for read statements; this statement is not a plain read, so only the estimate can run.";
+
+#[test]
+fn analyze_is_allowed_for_reads_and_metadata() {
+    for statement in [
+        "SELECT 1",
+        "select * from t where id = 1",
+        "WITH x AS (SELECT 1) SELECT * FROM x",
+        "SHOW TABLES",
+    ] {
+        analyze_allowed(&QueryLanguage::Sql, statement)
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    }
+}
+
+#[test]
+fn analyze_is_refused_for_anything_that_changes_data() {
+    for statement in [
+        "INSERT INTO t VALUES (1)",
+        "UPDATE t SET a = 1",
+        "DELETE FROM t",
+        "DROP TABLE t",
+        "CREATE TABLE t (a int)",
+        "TRUNCATE t",
+        "WITH gone AS (DELETE FROM t RETURNING *) SELECT * FROM gone",
+        "SELECT 1 INTO OUTFILE '/tmp/x'",
+    ] {
+        let error = analyze_allowed(&QueryLanguage::Sql, statement)
+            .expect_err(&format!("{statement} must be refused"));
+        assert_eq!(error.to_string(), REFUSAL, "{statement}");
+    }
+}
+
+#[test]
+fn analyze_is_refused_for_languages_without_a_read_verdict() {
+    let error = analyze_allowed(&QueryLanguage::Custom("x".into()), "anything").unwrap_err();
+    assert_eq!(error.to_string(), REFUSAL);
+}
+
+#[test]
+fn analyze_statement_applies_the_single_statement_guard_then_the_read_guard() {
+    assert_eq!(
+        analyze_statement(&QueryLanguage::Sql, " SELECT 1; ").unwrap(),
+        "SELECT 1"
+    );
+
+    let many = analyze_statement(&QueryLanguage::Sql, "SELECT 1; SELECT 2").unwrap_err();
+    assert!(many.to_string().contains("exactly one statement"));
+
+    let write = analyze_statement(&QueryLanguage::Sql, "DELETE FROM t").unwrap_err();
+    assert_eq!(write.to_string(), REFUSAL);
+}
+
+#[test]
+fn drivers_without_analyze_refuse_with_one_message() {
+    match analyze_unsupported() {
+        DbError::NotSupported(message) => {
+            assert_eq!(message, "Analyzed plans are not supported by this driver");
+        }
+        other => panic!("expected NotSupported, got {other:?}"),
+    }
+}
+
+#[test]
+fn analyze_refuses_writes_hidden_by_comments_quotes_or_a_nested_explain() {
+    for statement in [
+        "SELECT 1 /*! ; DELETE FROM t */",
+        "SELECT 1 --; DELETE FROM t",
+        "SELECT $$ ; DELETE FROM t $$",
+        "SELECT E'a\\'; DELETE FROM t; --'",
+        "SELECT 1 /* /* */ ; DELETE FROM t */",
+        "EXPLAIN ANALYZE DELETE FROM t",
+        "EXPLAIN (ANALYZE) DELETE FROM t",
+        "SELECT * FROM t FOR NO KEY UPDATE",
+        "SELECT * FROM t LOCK IN SHARE MODE",
+        "COPY (SELECT 1) TO '/tmp/x'",
+        "EXECUTE stmt",
+        "ANALYZE t",
+        "SELECT 1 # ; DELETE FROM t",
+    ] {
+        let error = analyze_statement(&QueryLanguage::Sql, statement)
+            .expect_err(&format!("{statement} must be refused"));
+        // A `#` comment is MySQL-only, so the splitter may refuse the text
+        // as two statements before the classifier sees it; either refusal
+        // sends nothing.
+        let message = error.to_string();
+        assert!(
+            message == REFUSAL || message.contains("exactly one statement"),
+            "{statement}: {message}"
+        );
+    }
+
+    assert_eq!(
+        analyze_statement(&QueryLanguage::Sql, "SELECT 1 /* ; DELETE */").unwrap(),
+        "SELECT 1 /* ; DELETE */"
     );
 }

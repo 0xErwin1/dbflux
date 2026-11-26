@@ -1,12 +1,29 @@
 //! Structured query plan for MySQL and MariaDB, built from `EXPLAIN FORMAT=JSON`.
 //!
+//! Analyzed plans use each flavour's own syntax: MariaDB's `ANALYZE
+//! FORMAT=JSON` is the same JSON with `r_*` actuals, MySQL 8.0.18+ only
+//! reports actuals in the `EXPLAIN ANALYZE` TREE text, parsed by [`tree`].
+//!
 //! Both engines nest the same kind of containers (`query_block`,
 //! `nested_loop`, `table`, operation wrappers) but name costs and row
 //! estimates differently, so the walker maps either spelling and keeps every
 //! other scalar as a detail.
 
-use dbflux_core::{DbError, PlanCondition, PlanFormat, PlanNode, QueryPlan};
+use dbflux_core::{DbError, DbKind, PlanCondition, PlanFormat, PlanNode, QueryPlan};
 use serde_json::{Map, Value as Json};
+
+mod tree;
+pub(crate) use tree::parse_analyze_tree;
+
+/// Keys that carry MariaDB's actuals; they map to `PlanNode` fields.
+const ACTUAL_KEYS: [&str; 6] = [
+    "r_loops",
+    "r_rows",
+    "r_output_rows",
+    "r_total_time_ms",
+    "r_table_time_ms",
+    "r_other_time_ms",
+];
 
 /// Keys of a `table` object mapped to `PlanNode` fields.
 const TABLE_KEYS: [&str; 5] = [
@@ -26,6 +43,56 @@ pub(crate) fn explain_statement(query: &str) -> Result<String, DbError> {
     ))
 }
 
+/// Builds the analyzed plan statement for `query` in the syntax of `kind`.
+/// The statement runs, so it must pass the shared read guard and the
+/// single-statement guard first; the driver also runs it inside a read-only
+/// transaction.
+pub(crate) fn analyze_statement(kind: DbKind, query: &str) -> Result<String, DbError> {
+    let statement = dbflux_core::analyze_statement(&dbflux_core::QueryLanguage::Sql, query)?;
+
+    Ok(match kind {
+        DbKind::MariaDB => format!("ANALYZE FORMAT=JSON {statement}"),
+        _ => format!("EXPLAIN ANALYZE {statement}"),
+    })
+}
+
+/// Refuses an analyzed plan on a server whose version has no analyze syntax,
+/// before the statement is sent: MySQL gained `EXPLAIN ANALYZE` in 8.0.18 and
+/// MariaDB has `ANALYZE FORMAT=JSON` since 10.1. A version string that cannot
+/// be read does not block the request; the server answers it.
+pub(crate) fn analyze_version_gate(kind: DbKind, version: &str) -> Result<(), DbError> {
+    let is_mariadb = kind == DbKind::MariaDB;
+
+    // MariaDB may report a replication-compatibility prefix: `5.5.5-10.11.6-MariaDB`.
+    let numbers = if is_mariadb {
+        version.strip_prefix("5.5.5-").unwrap_or(version)
+    } else {
+        version
+    };
+
+    let mut parts = numbers
+        .split(|character: char| !character.is_ascii_digit())
+        .map(|part| part.parse::<u32>().ok());
+    let (Some(Some(major)), Some(Some(minor))) = (parts.next(), parts.next()) else {
+        return Ok(());
+    };
+    let patch = parts.next().flatten().unwrap_or(0);
+
+    if is_mariadb {
+        if (major, minor) < (10, 1) {
+            return Err(DbError::NotSupported(
+                "Analyzed plans need MariaDB 10.1 or later".to_string(),
+            ));
+        }
+    } else if (major, minor, patch) < (8, 0, 18) {
+        return Err(DbError::NotSupported(
+            "Analyzed plans need MySQL 8.0.18 or later".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub(crate) fn parse_explain_json(raw: &str) -> Result<QueryPlan, DbError> {
     let document: Json = serde_json::from_str(raw).map_err(|error| {
         DbError::query_failed(format!("EXPLAIN returned invalid JSON: {error}"))
@@ -37,7 +104,34 @@ pub(crate) fn parse_explain_json(raw: &str) -> Result<QueryPlan, DbError> {
 
     let root = container_node("query_block", block)?;
 
-    Ok(QueryPlan::new(vec![root], raw, PlanFormat::Json))
+    let execution_time = root.actual_total_time;
+    let mut plan = QueryPlan::new(vec![root], raw, PlanFormat::Json);
+    plan.planning_time = document
+        .get("query_optimization")
+        .and_then(|optimization| number(optimization.get("r_total_time_ms")));
+    plan.execution_time = execution_time;
+
+    Ok(plan)
+}
+
+/// Maps MariaDB's `r_*` keys. Its times are totals over every loop, while
+/// `PlanNode` keeps them per loop, as PostgreSQL and MySQL report them.
+fn apply_actuals(node: &mut PlanNode, object: &Map<String, Json>) {
+    node.actual_loops = object.get("r_loops").and_then(Json::as_u64);
+    node.actual_rows = number(object.get("r_rows")).or_else(|| number(object.get("r_output_rows")));
+
+    let total = number(object.get("r_total_time_ms")).or_else(|| {
+        let table = number(object.get("r_table_time_ms"));
+        let other = number(object.get("r_other_time_ms"));
+        (table.is_some() || other.is_some())
+            .then(|| table.unwrap_or_default() + other.unwrap_or_default())
+    });
+
+    node.actual_total_time = total.map(|total| match node.actual_loops {
+        Some(0) => 0.0,
+        Some(loops) => total / loops as f64,
+        None => total,
+    });
 }
 
 fn container_node(key: &str, value: &Json) -> Result<PlanNode, DbError> {
@@ -59,6 +153,7 @@ fn container_node(key: &str, value: &Json) -> Result<PlanNode, DbError> {
             number(object.get("rows_examined_per_scan")).or_else(|| number(object.get("rows")));
     }
 
+    apply_actuals(&mut node, object);
     node.key_condition = key_condition(object, is_table);
     node.description = describe(&node.operation).map(str::to_string);
 
@@ -77,7 +172,12 @@ fn container_node(key: &str, value: &Json) -> Result<PlanNode, DbError> {
     }
 
     for (name, entry) in object {
-        if name == "cost_info" || name == "cost" {
+        if name == "cost_info" || name == "cost" || ACTUAL_KEYS.contains(&name.as_str()) {
+            continue;
+        }
+
+        if name == "r_engine_stats" {
+            node.details.push((name.clone(), detail_text(entry)));
             continue;
         }
 
@@ -203,6 +303,96 @@ const GLOSSARY: &[(&str, &str)] = &[
     ),
 ];
 
+/// Glossary of the operation names the TREE text uses.
+const TREE_GLOSSARY: &[(&str, &str)] = &[
+    ("Table scan", "Reads every row of the table."),
+    (
+        "Index scan",
+        "Reads every entry of an index instead of the table rows.",
+    ),
+    (
+        "Covering index scan",
+        "Reads every entry of an index that holds all the columns the query needs.",
+    ),
+    (
+        "Index range scan",
+        "Reads the rows whose index values fall in a range.",
+    ),
+    (
+        "Index lookup",
+        "Finds the rows whose index value equals the value it is compared with.",
+    ),
+    (
+        "Single-row index lookup",
+        "Finds the one row that matches through a unique index.",
+    ),
+    (
+        "Covering index lookup",
+        "Finds the rows through an index that holds all the columns the query needs.",
+    ),
+    ("Filter", "Keeps only the rows that satisfy the condition."),
+    ("Sort", "Orders the rows by the sort key."),
+    (
+        "Limit",
+        "Stops after the number of rows the query asks for.",
+    ),
+    (
+        "Aggregate",
+        "Computes the aggregates over all the rows of its input.",
+    ),
+    (
+        "Group aggregate",
+        "Computes the aggregates of each group from rows that arrive already grouped.",
+    ),
+    (
+        "Aggregate using temporary table",
+        "Groups the rows in a temporary table and computes the aggregates of each group.",
+    ),
+    (
+        "Nested loop inner join",
+        "For each row from the first input, looks up the matching rows in the second.",
+    ),
+    (
+        "Nested loop left join",
+        "For each row from the first input, looks up the matching rows in the second and keeps the row when there are none.",
+    ),
+    (
+        "Inner hash join",
+        "Builds a hash table from one input and probes it with each row of the other to find matches.",
+    ),
+    (
+        "Left hash join",
+        "Probes a hash table with each row of the left input and keeps the row when nothing matches.",
+    ),
+    (
+        "Hash",
+        "Builds the in-memory hash table that a hash join probes.",
+    ),
+    (
+        "Materialize",
+        "Stores the rows of its input so they can be read again without recomputing them.",
+    ),
+    (
+        "Stream results",
+        "Passes the rows through as they arrive, without storing them.",
+    ),
+    (
+        "Temporary table",
+        "Stores the intermediate rows in a temporary table.",
+    ),
+    (
+        "Remove duplicates from input sorted",
+        "Removes consecutive duplicate rows from a sorted input.",
+    ),
+];
+
+fn describe_tree(operation: &str) -> Option<&'static str> {
+    TREE_GLOSSARY
+        .iter()
+        .find(|(name, _)| *name == operation)
+        .map(|(_, text)| *text)
+}
+
 fn describe(operation: &str) -> Option<&'static str> {
     GLOSSARY
         .iter()
@@ -268,6 +458,12 @@ fn nested_loop(value: &Json) -> Result<Vec<PlanNode>, DbError> {
     }
 
     let mut wrapper = PlanNode::new("Nested loop");
+    wrapper.description = describe("Nested loop").map(str::to_string);
+    wrapper.actual_total_time = nodes
+        .iter()
+        .map(|node| Some(node.actual_total_time? * node.actual_loops.unwrap_or(1) as f64))
+        .sum::<Option<f64>>();
+    wrapper.actual_loops = wrapper.actual_total_time.map(|_| 1);
     wrapper.children = nodes;
     Ok(vec![wrapper])
 }

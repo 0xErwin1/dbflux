@@ -39,3 +39,27 @@ fn a_pragma_is_refused_before_anything_is_sent() {
         "{error}"
     );
 }
+
+#[test]
+fn an_analyze_request_is_refused_before_anything_is_sent() {
+    use dbflux_core::{Connection, DbError, QueryPlanRequest};
+
+    let builder = turso_serverless::Builder::new_remote("wss://127.0.0.1:1");
+    let connection = crate::connection::TursoConnection::open_root(builder)
+        .expect("open_root performs no I/O against a closed local URL");
+
+    match connection.query_plan(&QueryPlanRequest::analyzed("SELECT 1")) {
+        Err(DbError::NotSupported(message)) => {
+            assert_eq!(message, "Analyzed plans are not supported by this driver");
+        }
+        other => panic!("expected NotSupported, got {other:?}"),
+    }
+    assert!(
+        !connection
+            .metadata()
+            .query
+            .as_ref()
+            .unwrap()
+            .supports_explain_analyze
+    );
+}
