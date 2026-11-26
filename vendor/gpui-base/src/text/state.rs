@@ -51,6 +51,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-c", input::Copy, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-c", input::Copy, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-insert", input::Copy, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-a", input::SelectAll, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]

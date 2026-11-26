@@ -109,6 +109,7 @@ actions!(
         ShowCharacterPalette,
         Copy,
         Cut,
+        CutOrDelete,
         Paste,
         Undo,
         Redo,
@@ -152,7 +153,10 @@ pub(crate) fn init(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("ctrl-backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("delete", Delete, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
         KeyBinding::new("shift-delete", Delete, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("shift-delete", CutOrDelete, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-backspace", DeleteToBeginningOfLine, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
@@ -265,6 +269,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-insert", Copy, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
@@ -273,6 +279,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-v", Paste, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("shift-insert", Paste, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("ctrl-a", MoveHome, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
@@ -2295,9 +2303,8 @@ impl<M: InputModeKind> InputBaseState<M> {
         // (without Shift) is treated as submit: propagate the action and emit
         // PressEnter without inserting a newline. `Shift+Enter` still inserts
         // a newline. With line breaks off no key inserts one.
-        let insert_newline = self.is_multi_line()
-            && self.line_breaks
-            && (!self.submit_on_enter || action.shift);
+        let insert_newline =
+            self.is_multi_line() && self.line_breaks && (!self.submit_on_enter || action.shift);
 
         if insert_newline {
             if !self.selections.is_single() {
@@ -3048,6 +3055,22 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         self.undo_manager.set_pending_intent(EditIntent::Atomic);
         self.replace_text_in_range_silent(None, "", window, cx);
+    }
+
+    /// Shift+Delete on Linux and Windows: cuts a selection that may leave the
+    /// field, and otherwise behaves as Delete, so an empty selection still
+    /// deletes forward and a masked field still loses its selected text.
+    pub(super) fn cut_or_delete(
+        &mut self,
+        _: &CutOrDelete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_copyable() {
+            self.cut(&Cut, window, cx);
+        } else {
+            self.delete(&Delete, window, cx);
+        }
     }
 
     pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
@@ -5049,6 +5072,7 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                     .on_action(window.listener_for(&entity, InputBaseState::escape))
                     .on_action(window.listener_for(&entity, InputBaseState::paste))
                     .on_action(window.listener_for(&entity, InputBaseState::cut))
+                    .on_action(window.listener_for(&entity, InputBaseState::cut_or_delete))
                     .on_action(window.listener_for(&entity, InputBaseState::undo))
                     .on_action(window.listener_for(&entity, InputBaseState::redo))
                     .when(self.is_multi_line(), |this| {
@@ -10147,6 +10171,114 @@ mod tests {
                 assert_eq!(state.value(), "ab");
             });
         });
+    }
+
+    /// Builds a focused single-line input holding `value` with `selection` selected.
+    #[cfg(not(target_os = "macos"))]
+    fn focused_input_with_selection(
+        cx: &mut TestAppContext,
+        masked: bool,
+        value: &'static str,
+        selection: std::ops::Range<usize>,
+    ) -> (InputView<InputMode>, VisualTestContext) {
+        let view = InputView::build(cx, move |state| state.masked(masked));
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.set_value(value, window, cx);
+                state.set_selected_range(selection, cx);
+            });
+            cx.write_to_clipboard(ClipboardItem::new_string("previous".to_string()));
+        });
+        (view, cx)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn clipboard_text(cx: &mut VisualTestContext) -> Option<String> {
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn ctrl_insert_copies_the_selection(cx: &mut TestAppContext) {
+        let (view, mut cx) = focused_input_with_selection(cx, false, "SELECT 1;", 0..6);
+        cx.simulate_keystrokes("ctrl-insert");
+        assert_eq!(clipboard_text(&mut cx).as_deref(), Some("SELECT"));
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(state.value(), "SELECT 1;");
+            assert_eq!(state.selected_range(), 0..6);
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn shift_insert_pastes_the_clipboard(cx: &mut TestAppContext) {
+        let (view, mut cx) = focused_input_with_selection(cx, false, "SELECT 1;", 9..9);
+        cx.simulate_keystrokes("shift-insert");
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(state.value(), "SELECT 1;previous");
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn shift_delete_cuts_the_selection(cx: &mut TestAppContext) {
+        let (view, mut cx) = focused_input_with_selection(cx, false, "SELECT 1;", 0..6);
+        cx.simulate_keystrokes("shift-delete");
+        assert_eq!(clipboard_text(&mut cx).as_deref(), Some("SELECT"));
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(state.value(), " 1;");
+        });
+        cx.simulate_keystrokes("ctrl-v");
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(state.value(), "SELECT 1;");
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn shift_delete_without_selection_deletes_forward(cx: &mut TestAppContext) {
+        let (view, mut cx) = focused_input_with_selection(cx, false, "SELECT 1;", 0..0);
+        cx.simulate_keystrokes("shift-delete");
+        assert_eq!(clipboard_text(&mut cx).as_deref(), Some("previous"));
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(state.value(), "ELECT 1;");
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn shift_delete_in_a_masked_input_deletes_without_copying(cx: &mut TestAppContext) {
+        let (view, mut cx) = focused_input_with_selection(cx, true, "hunter2", 0..6);
+        cx.simulate_keystrokes("shift-delete");
+        assert_eq!(clipboard_text(&mut cx).as_deref(), Some("previous"));
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(state.value(), "2");
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn shift_delete_in_a_readonly_input_changes_nothing(cx: &mut TestAppContext) {
+        let (view, mut cx) = focused_input_with_selection(cx, false, "SELECT 1;", 0..6);
+        cx.update(|_, cx| {
+            view.input
+                .update(cx, |state, cx| state.set_readonly(true, cx));
+        });
+        cx.simulate_keystrokes("shift-delete");
+        assert_eq!(clipboard_text(&mut cx).as_deref(), Some("previous"));
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(state.value(), "SELECT 1;");
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn ctrl_insert_in_a_masked_input_leaves_the_clipboard(cx: &mut TestAppContext) {
+        let (_view, mut cx) = focused_input_with_selection(cx, true, "hunter2", 0..6);
+        cx.simulate_keystrokes("ctrl-insert");
+        assert_eq!(clipboard_text(&mut cx).as_deref(), Some("previous"));
     }
 
     #[gpui::test]

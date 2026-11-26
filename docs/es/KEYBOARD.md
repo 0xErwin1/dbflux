@@ -893,6 +893,9 @@ Mientras un campo de texto o un desplegable abierto tiene el foco, estas teclas 
 | `Ctrl+Enter` / `Cmd+Enter` | Ejecutar la consulta |
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Ejecutar la consulta en una pestaña nueva |
 | `Ctrl+Shift+z` | Rehacer (Linux y Windows; macOS usa `Cmd+Shift+z`) |
+| `Ctrl+Insert` | Copiar la selección (Linux y Windows) |
+| `Shift+Insert` | Pegar (Linux y Windows) |
+| `Shift+Delete` | Cortar la selección, o borrar el carácter siguiente si no hay nada seleccionado (Linux y Windows) |
 
 Mientras escribes en un campo de texto fuera de un diálogo, como la búsqueda de
 la sidebar o la barra de contexto de ejecución, los atajos globales que llevan

@@ -856,6 +856,9 @@ While a text field or an open dropdown has focus, these keys (including `Enter`)
 | `Ctrl+Enter` / `Cmd+Enter` | Run the query |
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Run the query in a new tab |
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
+| `Ctrl+Insert` | Copy the selection (Linux and Windows) |
+| `Shift+Insert` | Paste (Linux and Windows) |
+| `Shift+Delete` | Cut the selection, or delete the next character when nothing is selected (Linux and Windows) |
 
 While you type in a text field outside a dialog, such as the sidebar search or
 the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd`, or

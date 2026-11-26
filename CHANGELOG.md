@@ -43,6 +43,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **CUA clipboard shortcuts in text fields** — On Linux and Windows, `Ctrl+Insert` copies the selection and `Shift+Insert` pastes in every text field and the editor, and `Shift+Delete` cuts the selection instead of deleting it. With nothing selected, or in a password field, `Shift+Delete` still deletes as before. ([#1407](https://github.com/0xErwin1/dbflux/issues/1407))
 * **Copy a secret's ARN from the details pane** — The ARN row of a secret store's details pane has the Copy ARN button its design shows, the same one the secret's tab draws, so the ARN no longer needs the secret opened in a tab to be copied.
 * **MCP approvals update on their own** — An open MCP approvals tab now shows requests from the standalone MCP server, and drops decided ones, within about two seconds, instead of waiting for Refresh or for the tab to be opened again.
 * **MCP tool list no longer clipped** — The effective "Tools:" line in a connection's MCP tab wraps instead of running off the panel.
