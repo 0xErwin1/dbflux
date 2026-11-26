@@ -75,6 +75,7 @@ pub(crate) mod pane;
 mod query_error;
 mod render;
 mod results_split;
+mod snippet_session;
 mod statements;
 mod vim;
 
@@ -399,6 +400,8 @@ pub(super) enum LanguageBinding {
 pub(super) struct EditorState {
     pub(super) input_state: Entity<GpuiEditorState>,
     pub(super) _input_subscriptions: Vec<Subscription>,
+    /// Tabstop session state, shared with the editor's Tab interceptor.
+    pub(super) snippet: snippet_session::SnippetHooks,
     pub(super) original_content: String,
     pub(super) saved_query_id: Option<Uuid>,
     pub(super) current_editor_mode: String,
@@ -832,6 +835,7 @@ impl CodeDocument {
             window,
             |this, input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
+                    this.snippet_after_change(_window, cx);
                     this.finish_replace_once(_window, cx);
                     this.clear_query_error(cx);
                     this.refresh_statements(cx);
@@ -1064,11 +1068,21 @@ impl CodeDocument {
             exec_ctx.database.clone(),
         ));
 
-        input_state.update(cx, |state, _cx| {
+        let snippet = input_state.update(cx, |state, cx| {
             state.lsp_mut().completion_provider =
                 supports_connection_context.then_some(completion_provider.clone());
             state.lsp_mut().code_action_providers = vec![code_action_provider.clone()];
+            snippet_session::SnippetHooks::install(state, cx)
         });
+        let snippet_caret_sub = cx.subscribe(
+            &input_state,
+            |this, _input, event: &gpui_base::input::InputPointerEvent, cx| match event {
+                gpui_base::input::InputPointerEvent::CaretPlaced => {
+                    this.snippet_after_caret_placed(cx);
+                }
+            },
+        );
+        let snippet_vim_sub = cx.observe_self(|this, cx| this.snippet_follow_vim_mode(cx));
 
         let (connection_dropdown, conn_sub) =
             Self::create_connection_dropdown(&app_state, &exec_ctx, window, cx);
@@ -1156,7 +1170,13 @@ impl CodeDocument {
             app_state,
             editor: EditorState {
                 input_state,
-                _input_subscriptions: vec![input_change_sub, completion_menu_width_sub],
+                _input_subscriptions: vec![
+                    input_change_sub,
+                    completion_menu_width_sub,
+                    snippet_caret_sub,
+                    snippet_vim_sub,
+                ],
+                snippet,
                 original_content: String::new(),
                 saved_query_id: None,
                 current_editor_mode: editor_profile.editor_mode.clone(),

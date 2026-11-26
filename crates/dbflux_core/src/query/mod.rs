@@ -10,6 +10,7 @@ pub(crate) mod relaxed_json;
 pub(crate) mod safety;
 pub(crate) mod script_operation;
 pub(crate) mod semantic;
+pub(crate) mod snippet;
 pub(crate) mod sql_context;
 pub(crate) mod sql_format;
 pub(crate) mod table_browser;
@@ -62,6 +63,9 @@ pub use semantic::{
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, parse_semantic_filter_json, render_semantic_filter_sql,
     semantic_filter_to_filter_node,
+};
+pub use snippet::{
+    ParsedSnippet, SnippetParseError, SnippetParseErrorKind, Tabstop, parse_snippet,
 };
 pub use sql_context::{
     ScopeRelation, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,

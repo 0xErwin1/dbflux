@@ -338,6 +338,13 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some(key) = super::EditorKey::from_action(&*action)
+            && !self.is_context_menu_open(cx)
+            && let Some(interceptor) = self.extras.key_interceptor.clone()
+            && interceptor(key, self, window, cx)
+        {
+            return true;
+        }
         let closes_overlay =
             crate::input::Enter::is_primary(&*action) || action.partial_eq(&crate::input::Escape);
         let kind = if self.extras.context_menu_content.completion.open {

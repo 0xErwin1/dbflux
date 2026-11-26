@@ -63,6 +63,38 @@ pub(crate) type OverlayActionHandler = Rc<
     ) -> bool,
 >;
 
+/// A key the editor offers to its owner before acting on it. See
+/// [`InputBaseState::set_key_interceptor`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorKey {
+    Tab,
+    ShiftTab,
+    Escape,
+}
+
+impl EditorKey {
+    pub(crate) fn from_action(action: &dyn gpui::Action) -> Option<Self> {
+        if action.partial_eq(&crate::input::IndentInline) {
+            Some(Self::Tab)
+        } else if action.partial_eq(&crate::input::OutdentInline) {
+            Some(Self::ShiftTab)
+        } else if action.partial_eq(&crate::input::Escape) {
+            Some(Self::Escape)
+        } else {
+            None
+        }
+    }
+}
+
+pub(crate) type KeyInterceptor = Rc<
+    dyn Fn(
+        EditorKey,
+        &mut InputBaseState<EditorMode>,
+        &mut Window,
+        &mut Context<InputBaseState<EditorMode>>,
+    ) -> bool,
+>;
+
 /// Reads the item the completion menu currently highlights.
 pub(crate) type CompletionSelectionReader = Rc<dyn Fn(&App) -> Option<CompletionItem>>;
 
@@ -181,6 +213,37 @@ impl InputBaseState<EditorMode> {
         reader: impl Fn(&App) -> Option<CompletionItem> + 'static,
     ) {
         self.extras.completion_selection_reader = Some(Rc::new(reader));
+    }
+
+    /// Offers Tab, Shift+Tab and Escape to `interceptor` before the editor
+    /// indents, outdents or escapes. Returning `true` consumes the key; the
+    /// editor ignores the result for Escape. The interceptor is not asked
+    /// while a completion or code-action menu is open, so Tab keeps cycling
+    /// its items. Without an interceptor the keys behave as usual.
+    pub fn set_key_interceptor(
+        &mut self,
+        interceptor: impl Fn(
+            EditorKey,
+            &mut InputBaseState<EditorMode>,
+            &mut Window,
+            &mut Context<InputBaseState<EditorMode>>,
+        ) -> bool
+        + 'static,
+    ) {
+        self.extras.key_interceptor = Some(Rc::new(interceptor));
+    }
+
+    /// Applies disjoint `(byte range in the current text, replacement)` edits
+    /// as one undo step. Unlike typing, this triggers no completion request
+    /// and closes any open completion menu; the cursor ends after the last
+    /// replacement, so callers place it afterwards.
+    pub fn replace_ranges(
+        &mut self,
+        edits: &[(Range<usize>, String)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.replace_text_in_ranges(edits, window, cx);
     }
 
     pub fn has_overlay_action_handler(&self) -> bool {
