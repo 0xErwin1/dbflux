@@ -258,6 +258,10 @@ command palette. The available formats depend on the result shape and include:
 The menu's **Save loaded rows as file** and **Copy loaded rows to clipboard**
 sections write the rows the grid holds, which for a table is the current page,
 and the toast states how many rows went into the file or the clipboard.
+When the table view has a range of more than one cell selected, the copy
+entries copy only the selected rows and columns, in grid order and as the grid
+shows them, unsaved edits and pending inserts included. A single selected cell
+is the cursor, so the copy takes every loaded row.
 
 When the grid shows a table or a collection read page by page, the menu adds
 **Export all rows to file**, in CSV, JSON (one array with an object per

@@ -281,7 +281,11 @@ resultado e incluyen:
 Las secciones **Guardar filas cargadas como archivo** y **Copiar filas cargadas
 al portapapeles** del menú escriben las filas que tiene la cuadrícula, que en una
 tabla son la página actual, y el aviso indica cuántas filas fueron al archivo o
-al portapapeles.
+al portapapeles. Cuando la vista de tabla tiene seleccionado un rango de más de
+una celda, las entradas de copia copian solo las filas y columnas seleccionadas,
+en el orden de la cuadrícula y tal como esta las muestra, con las ediciones sin
+guardar y las inserciones pendientes incluidas. Una sola celda seleccionada es el
+cursor, así que la copia toma todas las filas cargadas.
 
 Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
 menú añade **Exportar todas las filas a un archivo**, en CSV, JSON (un array
