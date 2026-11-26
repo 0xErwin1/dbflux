@@ -40,6 +40,7 @@ pub enum ExportFormat {
     Csv,
     JsonPretty,
     JsonCompact,
+    Markdown,
     Text,
     Binary,
     Hex,
@@ -52,6 +53,7 @@ impl ExportFormat {
             Self::Csv => "CSV",
             Self::JsonPretty => "JSON (pretty)",
             Self::JsonCompact => "JSON (compact)",
+            Self::Markdown => "Markdown",
             Self::Text => "Text",
             Self::Binary => "Binary",
             Self::Hex => "Hex",
@@ -63,6 +65,7 @@ impl ExportFormat {
         match self {
             Self::Csv => "csv",
             Self::JsonPretty | Self::JsonCompact => "json",
+            Self::Markdown => "md",
             Self::Text => "txt",
             Self::Binary => "bin",
             Self::Hex => "hex",
@@ -77,6 +80,7 @@ pub fn available_formats(shape: &QueryResultShape) -> &'static [ExportFormat] {
             ExportFormat::Csv,
             ExportFormat::JsonPretty,
             ExportFormat::JsonCompact,
+            ExportFormat::Markdown,
         ],
         QueryResultShape::Json => &[
             ExportFormat::JsonPretty,
@@ -101,6 +105,7 @@ pub fn export(
         ExportFormat::Csv => CsvExporter.export(result, writer),
         ExportFormat::JsonPretty => JsonExporter { pretty: true }.export(result, writer),
         ExportFormat::JsonCompact => JsonExporter { pretty: false }.export(result, writer),
+        ExportFormat::Markdown => export_markdown(result, writer),
         ExportFormat::Text => TextExporter.export(result, writer),
         ExportFormat::Binary => BinaryExporter {
             mode: BinaryExportMode::Raw,
@@ -117,7 +122,19 @@ pub fn export(
     }
 }
 
+fn export_markdown(result: &QueryResult, writer: &mut dyn Write) -> Result<(), ExportError> {
+    let mut markdown = MarkdownStreamWriter::new(writer);
+    markdown.write_header(&result.columns)?;
+    for row in &result.rows {
+        markdown.write_row(row)?;
+    }
+    markdown.finish()
+}
+
 pub fn export_text_payload(payload: &str, writer: &mut dyn Write) -> Result<(), ExportError> {
     writer.write_all(payload.as_bytes())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

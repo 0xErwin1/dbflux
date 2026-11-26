@@ -19,6 +19,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-insert", Copy, Some(CONTEXT)),
     ]);
 }
 

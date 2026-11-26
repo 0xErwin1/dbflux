@@ -13,6 +13,7 @@
 /// in `ExternalImportOutcome`, while every other entry still imports.
 pub mod beekeeper;
 pub mod dbeaver;
+pub mod tableplus;
 
 use std::path::PathBuf;
 
@@ -138,6 +139,14 @@ pub enum ExternalImportError {
     #[error("input is not valid JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
 
+    #[error("input is not a valid property list: {0}")]
+    InvalidPlist(String),
+
+    #[error(
+        "binary property lists are not supported; convert the file to XML with `plutil -convert xml1`"
+    )]
+    BinaryPlist,
+
     #[error("unexpected structure: {0}")]
     Structure(String),
 
@@ -166,6 +175,7 @@ pub fn importers() -> Vec<Box<dyn ConnectionImporter>> {
     vec![
         Box::new(dbeaver::DBeaverImporter),
         Box::new(beekeeper::BeekeeperImporter),
+        Box::new(tableplus::TablePlusImporter),
     ]
 }
 

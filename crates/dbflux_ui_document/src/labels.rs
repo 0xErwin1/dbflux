@@ -137,6 +137,7 @@ pub(crate) fn export_format_label(format: dbflux_export::ExportFormat) -> String
         ExportFormat::JsonCompact => {
             dbflux_i18n::t!("document.data.grid.export.format.json_compact")
         }
+        ExportFormat::Markdown => dbflux_i18n::t!("document.data.grid.export.format.markdown"),
         ExportFormat::Text => dbflux_i18n::t!("document.data.grid.export.format.text"),
         ExportFormat::Binary => dbflux_i18n::t!("document.data.grid.export.format.binary"),
         ExportFormat::Hex => dbflux_i18n::t!("document.data.grid.export.format.hex"),
