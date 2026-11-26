@@ -1,66 +1,141 @@
 use crate::query::types::{ColumnKind, ColumnMeta};
 use crate::query::visual_query::{AggFn, VisualQuerySpec};
 
-/// Infers a `ColumnKind` from a driver-reported `type_name` string using
-/// case-insensitive substring matching.
+/// Infers a `ColumnKind` from a driver-reported `type_name` string.
 ///
 /// This is a fallback for columns that arrive via schema cache (`ColumnInfo`)
 /// before a query has run. Drivers that set `ColumnMeta.kind` directly remain
 /// authoritative; this function is only called when `kind` is not yet known.
 ///
-/// Mapping rules (case-insensitive substring match against `type_name`):
-/// - `Timestamp` — contains: `timestamp`, `datetime`, `date`, `time`
-/// - `Float` — contains: `real`, `double`, `float`, `numeric`, `decimal`, `money`
-/// - `Integer` — contains: `int`, `serial`, `bigserial`, `smallint`, `bigint`,
-///   `tinyint`
-/// - `Text` — contains: `char`, `text`, `varchar`, `nvarchar`, `string`, `uuid`,
-///   `json`, `xml`
-/// - `Unknown` — everything else (e.g. `bytea`, `blob`, `enum`, empty string)
+/// The name is normalized (lowercased, parenthesized arguments such as
+/// `(10,2)` removed, `unsigned`/`signed`/`zerofill` modifiers dropped, ClickHouse
+/// `Nullable(..)`/`LowCardinality(..)` wrappers unwrapped) and then matched as
+/// a whole type token, never as a substring:
+/// - `Timestamp` — `timestamp`, `timestamptz`, `datetime`, `datetime2`, `date`,
+///   `time`, `timestamp with time zone`, ...
+/// - `Float` — `real`, `float`, `float8`, `double`, `double precision`,
+///   `numeric`, `decimal`, `money`, ...
+/// - `Integer` — `int`, `integer`, `int4`, `smallint`, `bigint`, `tinyint`,
+///   `serial`, `bigserial`, `uint8`, ...
+/// - `Text` — `char`, `varchar`, `character varying`, `nvarchar`, `text`,
+///   `string`, `uuid`, `uniqueidentifier`, `json`, `jsonb`, `xml`, ...
+/// - `Unknown` — everything else, including arrays (`int[]`, PostgreSQL's
+///   internal `_int4`, `array<..>`, `Array(..)`), geometric types such as
+///   `point`, `interval`, `bytea`, `blob`, `enum` and the empty string
 pub fn infer_column_kind(type_name: &str) -> ColumnKind {
-    let lower = type_name.to_lowercase();
+    let Some(token) = scalar_type_token(type_name) else {
+        return ColumnKind::Unknown;
+    };
 
-    if lower.contains("timestamp")
-        || lower.contains("datetime")
-        || lower.contains("date")
-        || lower.contains("time")
-    {
-        return ColumnKind::Timestamp;
+    match token.as_str() {
+        "timestamp"
+        | "timestamptz"
+        | "timestamp with time zone"
+        | "timestamp without time zone"
+        | "timestamp with local time zone"
+        | "timestamp_ntz"
+        | "timestamp_ltz"
+        | "timestamp_tz"
+        | "datetime"
+        | "datetime2"
+        | "datetime64"
+        | "datetimeoffset"
+        | "smalldatetime"
+        | "date"
+        | "date32"
+        | "timestamp_s"
+        | "timestamp_ms"
+        | "timestamp_ns"
+        | "time"
+        | "timetz"
+        | "time with time zone"
+        | "time without time zone" => ColumnKind::Timestamp,
+
+        "real" | "float" | "float4" | "float8" | "float16" | "float32" | "float64" | "bfloat16"
+        | "double" | "double precision" | "binary_float" | "binary_double" | "numeric"
+        | "decimal" | "dec" | "decimal32" | "decimal64" | "decimal128" | "decimal256" | "money"
+        | "smallmoney" => ColumnKind::Float,
+
+        "int" | "integer" | "int1" | "int2" | "int4" | "int8" | "int16" | "int32" | "int64"
+        | "int128" | "int256" | "uint8" | "uint16" | "uint32" | "uint64" | "uint128"
+        | "uint256" | "tinyint" | "smallint" | "mediumint" | "bigint" | "varint" | "hugeint"
+        | "uhugeint" | "utinyint" | "usmallint" | "uinteger" | "ubigint" | "serial" | "serial2"
+        | "serial4" | "serial8" | "smallserial" | "bigserial" => ColumnKind::Integer,
+
+        "char"
+        | "character"
+        | "nchar"
+        | "bpchar"
+        | "varchar"
+        | "varchar2"
+        | "nvarchar"
+        | "nvarchar2"
+        | "character varying"
+        | "char varying"
+        | "national character"
+        | "national character varying"
+        | "text"
+        | "tinytext"
+        | "mediumtext"
+        | "longtext"
+        | "ntext"
+        | "citext"
+        | "string"
+        | "fixedstring"
+        | "uuid"
+        | "uniqueidentifier"
+        | "json"
+        | "jsonb"
+        | "xml" => ColumnKind::Text,
+
+        _ => ColumnKind::Unknown,
+    }
+}
+
+/// Reduces a driver type name to a lowercase scalar type token, or `None` for
+/// non-scalar types (arrays, generics) that must not be classified by their
+/// element type.
+fn scalar_type_token(type_name: &str) -> Option<String> {
+    let mut lower = type_name.trim().to_lowercase();
+
+    loop {
+        let unwrapped = ["nullable(", "lowcardinality("]
+            .iter()
+            .find_map(|wrapper| lower.strip_prefix(wrapper))
+            .and_then(|inner| inner.strip_suffix(')'))
+            .map(|inner| inner.trim().to_string());
+
+        match unwrapped {
+            Some(inner) => lower = inner,
+            None => break,
+        }
     }
 
-    if lower.contains("real")
-        || lower.contains("double")
-        || lower.contains("float")
-        || lower.contains("numeric")
-        || lower.contains("decimal")
-        || lower.contains("money")
+    if lower.starts_with('_')
+        || lower.starts_with("array")
+        || lower.contains('[')
+        || lower.contains('<')
     {
-        return ColumnKind::Float;
+        return None;
     }
 
-    if lower.contains("int")
-        || lower.contains("serial")
-        || lower.contains("bigserial")
-        || lower.contains("smallint")
-        || lower.contains("bigint")
-        || lower.contains("tinyint")
-    {
-        return ColumnKind::Integer;
+    let mut without_arguments = String::with_capacity(lower.len());
+    let mut depth = 0usize;
+    for character in lower.chars() {
+        match character {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => without_arguments.push(character),
+            _ => {}
+        }
     }
 
-    if lower.contains("char")
-        || lower.contains("text")
-        || lower.contains("varchar")
-        || lower.contains("nvarchar")
-        || lower.contains("string")
-        || lower.contains("uuid")
-        || lower.contains("identifier")
-        || lower.contains("json")
-        || lower.contains("xml")
-    {
-        return ColumnKind::Text;
-    }
+    let words: Vec<&str> = without_arguments
+        .split_whitespace()
+        .filter(|word| !matches!(*word, "unsigned" | "signed" | "zerofill"))
+        .collect();
 
-    ColumnKind::Unknown
+    Some(words.join(" "))
 }
 
 /// Overwrites `ColumnKind` on aggregate result columns in a grouped query.
@@ -229,5 +304,76 @@ mod tests {
     #[test]
     fn money_maps_to_float() {
         assert_eq!(infer_column_kind("money"), ColumnKind::Float);
+    }
+
+    #[test]
+    fn non_scalar_types_are_not_numeric_or_timestamp() {
+        for name in [
+            "point",
+            "int[]",
+            "_int4",
+            "numeric[]",
+            "integer[]",
+            "timestamp[]",
+            "interval",
+            "array<int>",
+            "Array(Int32)",
+            "_timestamptz",
+            "line",
+            "polygon",
+        ] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Unknown, "{name}");
+        }
+    }
+
+    #[test]
+    fn integer_tokens_keep_integer_kind() {
+        for name in [
+            "integer",
+            "int4",
+            "bigint",
+            "smallint",
+            "int unsigned",
+            "bigint unsigned",
+            "tinyint(1)",
+            "int(11)",
+            "Nullable(Int32)",
+            "serial",
+        ] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Integer, "{name}");
+        }
+    }
+
+    #[test]
+    fn float_tokens_keep_float_kind() {
+        for name in [
+            "numeric(10,2)",
+            "decimal",
+            "decimal(10, 2)",
+            "double precision",
+            "real",
+            "float8",
+            "DOUBLE PRECISION",
+            "Decimal(18, 4)",
+        ] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Float, "{name}");
+        }
+    }
+
+    #[test]
+    fn multi_word_scalar_tokens_keep_their_kind() {
+        assert_eq!(
+            infer_column_kind("timestamp with time zone"),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(
+            infer_column_kind("timestamp(3) without time zone"),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(
+            infer_column_kind("character varying(255)"),
+            ColumnKind::Text
+        );
+        assert_eq!(infer_column_kind("varchar(255)"), ColumnKind::Text);
     }
 }
