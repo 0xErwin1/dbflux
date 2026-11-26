@@ -43,6 +43,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Copy from the export menu respects the selection** — The **Copy** rows of the results export menu (`Ctrl+E`) copied every loaded row whatever the grid selection. With a range of more than one cell selected in the table view they now copy only those rows and columns, in grid order and as the grid shows them, unsaved edits and pending inserts included; a single selected cell is the cursor and still copies every loaded row. See `docs/RESULTS.md` § Exporting (#1408).
 * **Copy a secret's ARN from the details pane** — The ARN row of a secret store's details pane has the Copy ARN button its design shows, the same one the secret's tab draws, so the ARN no longer needs the secret opened in a tab to be copied.
 * **MCP approvals update on their own** — An open MCP approvals tab now shows requests from the standalone MCP server, and drops decided ones, within about two seconds, instead of waiting for Refresh or for the tab to be opened again.
 * **MCP tool list no longer clipped** — The effective "Tools:" line in a connection's MCP tab wraps instead of running off the panel.

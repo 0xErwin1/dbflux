@@ -34,6 +34,7 @@ use std::time::Instant;
 
 mod items;
 mod sections;
+mod selection_copy;
 mod set_value;
 mod tree;
 
@@ -1358,8 +1359,11 @@ impl DataGridPanel {
             return;
         }
 
+        let selected = self.selected_cells_result(cx);
+        let copied = selected.as_ref().unwrap_or(&self.result);
+
         let mut buffer: Vec<u8> = Vec::new();
-        let export_result = dbflux_export::export(&self.result, format, &mut buffer);
+        let export_result = dbflux_export::export(copied, format, &mut buffer);
 
         let format_name = format.name();
         let audit_service = self.app_state.read(cx).audit_service().clone();
@@ -1370,7 +1374,7 @@ impl DataGridPanel {
                     let byte_len = text.len();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
-                    let message = match loaded_row_count(&self.result) {
+                    let message = match loaded_row_count(copied) {
                         Some(count) => crate::labels::context_menu_clipboard_copied_rows_toast(
                             count,
                             format_name,
