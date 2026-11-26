@@ -656,7 +656,7 @@ CSV 或 TSV 标签页的表格接收[数据表格](#数据表格)按键以及以
 | `Ctrl+Shift+z` | 重做（Linux 和 Windows；macOS 使用 `Cmd+Shift+z`） |
 | `Ctrl+Insert` | 复制所选内容（Linux 和 Windows） |
 | `Shift+Insert` | 粘贴（Linux 和 Windows） |
-| `Shift+Delete` | 剪切所选内容；未选中内容时删除下一个字符（Linux 和 Windows） |
+| `Shift+Delete` | 剪切所选内容；未选中内容时删除下一个字符（Linux 和 Windows）。在密码字段中删除所选内容但不复制 |
 
 在对话框之外的文本输入框中输入时（例如侧边栏搜索或执行上下文栏），带 `Ctrl` 或 `Cmd`、或以 `F11` 等功能键开头的全局快捷键仍然有效：`Ctrl+Tab`、`Ctrl+1` .. `Ctrl+9`、`Ctrl+w`、`Ctrl+Shift+P` 以及[全局](#全局无论焦点在哪都可用)中的其他快捷键。其他按键（包括 `Tab`、`Escape`、`Enter` 和方向键）仍由输入框处理。输入框自身绑定的快捷键（如 `Ctrl+a` 或 `Ctrl+c`）优先于全局快捷键。在对话框、菜单、下拉列表或选择器中，全局快捷键要等它关闭后才生效。
 

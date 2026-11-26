@@ -858,7 +858,7 @@ While a text field or an open dropdown has focus, these keys (including `Enter`)
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
 | `Ctrl+Insert` | Copy the selection (Linux and Windows) |
 | `Shift+Insert` | Paste (Linux and Windows) |
-| `Shift+Delete` | Cut the selection, or delete the next character when nothing is selected (Linux and Windows) |
+| `Shift+Delete` | Cut the selection, or delete the next character when nothing is selected (Linux and Windows). In a password field it deletes the selection without copying it |
 
 While you type in a text field outside a dialog, such as the sidebar search or
 the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd`, or

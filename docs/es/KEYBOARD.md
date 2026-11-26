@@ -895,7 +895,7 @@ Mientras un campo de texto o un desplegable abierto tiene el foco, estas teclas 
 | `Ctrl+Shift+z` | Rehacer (Linux y Windows; macOS usa `Cmd+Shift+z`) |
 | `Ctrl+Insert` | Copiar la selección (Linux y Windows) |
 | `Shift+Insert` | Pegar (Linux y Windows) |
-| `Shift+Delete` | Cortar la selección, o borrar el carácter siguiente si no hay nada seleccionado (Linux y Windows) |
+| `Shift+Delete` | Cortar la selección, o borrar el carácter siguiente si no hay nada seleccionado (Linux y Windows). En un campo de contraseña borra la selección sin copiarla |
 
 Mientras escribes en un campo de texto fuera de un diálogo, como la búsqueda de
 la sidebar o la barra de contexto de ejecución, los atajos globales que llevan

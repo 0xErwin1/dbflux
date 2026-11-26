@@ -464,7 +464,7 @@ SQL 스크립트의 구성 단계에서는 커서가 **오류 시**와 **하나�
 | `Ctrl+Shift+z` | 다시 실행(Linux와 Windows, macOS는 `Cmd+Shift+z`) |
 | `Ctrl+Insert` | 선택 영역 복사(Linux와 Windows) |
 | `Shift+Insert` | 붙여넣기(Linux와 Windows) |
-| `Shift+Delete` | 선택 영역 잘라내기, 선택한 것이 없으면 다음 문자 삭제(Linux와 Windows) |
+| `Shift+Delete` | 선택 영역 잘라내기, 선택한 것이 없으면 다음 문자 삭제(Linux와 Windows). 비밀번호 필드에서는 선택 영역을 복사하지 않고 삭제 |
 
 대화 상자 밖의 텍스트 입력창(예: 사이드바 검색이나 실행 컨텍스트 바)에서 입력하는
 동안에도 `Ctrl` 또는 `Cmd`가 포함되거나 `F11` 같은 기능 키로 시작하는 전역
