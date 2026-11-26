@@ -87,7 +87,7 @@ fn markdown_export_writes_header_separator_and_one_line_per_row() {
     assert_eq!(
         output,
         "| id | name | email | created\\_at |\n\
-         | --- | --- | --- | --- |\n\
+         | ---: | --- | --- | --- |\n\
          | 1 | Alice | alice@example.com | 2026-11-01 10:00:00 |\n\
          | 3 | Bob |  | 2026-11-03 14:30:00 |\n"
     );
@@ -118,6 +118,6 @@ fn markdown_export_of_an_empty_result_still_writes_the_header() {
 
     assert_eq!(
         export_to_string(&result, ExportFormat::Markdown),
-        "| id |\n| --- |\n"
+        "| id |\n| ---: |\n"
     );
 }

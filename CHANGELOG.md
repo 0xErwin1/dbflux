@@ -35,6 +35,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* **Markdown tables right-align numeric columns** — The Markdown export (export wizard, Export all rows, and the results export menu's Save and Copy) writes `---:` in the separator for integer and float columns, so numbers line up when the table renders; every other column keeps `---`. See `docs/RESULTS.md` § Exporting (#1408).
 * **Faster cold start on Linux** — The window no longer waits for the system fonts or for every installed Vulkan driver. System fonts load in the background and the interface switches to them as soon as they arrive (a font named in settings is applied then, and text drawn before they arrive uses a bundled font instead of failing). The app restarts itself once at launch with only the boot GPU's Vulkan driver selected (`VK_LOADER_DRIVERS_SELECT`), retries with every driver if that one cannot open the window, and does nothing when a `VK_*` driver variable is already set or `GPUI_VULKAN_DRIVER_SELECT=0`. On a hybrid Intel/NVIDIA laptop the first frame of a cold start went from about one second to about 200 ms.
 
 * **Settings → Appearance** — Theme, density, language and the interface, editor and data grid font and size settings moved from Settings → General to a new Appearance page listed right after General. Show scrollbars moved with them and is the last row of the page. The settings, their saved values and their keyboard navigation are unchanged, and the duplicate "Appearance" heading is gone.
