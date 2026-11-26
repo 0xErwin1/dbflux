@@ -63,6 +63,8 @@ pub mod qry_saved_queries;
 
 pub mod sch_schema_snapshots;
 
+pub mod snp_snippets;
+
 /// Returns a `filter_map` adapter for the rows of a list query that keeps
 /// readable rows and logs the ones that fail to read.
 ///

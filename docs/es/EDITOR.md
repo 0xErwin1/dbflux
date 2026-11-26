@@ -112,6 +112,64 @@ igual (métodos, funciones, clases y operadores con el color del mismo token en
 su editor), sin palabra de tipo. Una sugerencia de cualquier otro tipo conserva
 el estilo plano.
 
+## Snippets
+
+Un snippet es una plantilla de texto que insertas en el editor de queries. Tiene
+un nombre, un prefijo, un cuerpo y el lenguaje de query al que pertenece, y solo
+aparece en los editores de ese lenguaje. DBFlux incluye seis snippets de SQL;
+puedes editarlos o borrarlos, y añadir los tuyos en
+[Settings → Snippets](SETTINGS.md#snippets).
+
+### Insertar un snippet
+
+- **Por prefijo.** Escribe el prefijo (por ejemplo `sel`) y el snippet aparece en
+  el menú de autocompletado con la palabra de tipo **snippet**. Al elegirlo, como
+  con cualquier sugerencia, el prefijo se sustituye por el texto del snippet.
+- **Desde el selector.** `Ctrl+Alt+J` (`Cmd+J` en macOS), o **Insert snippet** en
+  la paleta de comandos, abre una lista filtrable con los snippets del lenguaje
+  del editor. Escribe para filtrar, muévete con las flechas y pulsa `Enter` para
+  insertar el snippet resaltado o `Escape` para cerrar la lista. El snippet
+  sustituye la selección, o se inserta en el cursor.
+
+### Marcadores
+
+| Sintaxis | Significado |
+|---|---|
+| `$1`, `$2`… | Un campo que visita el cursor, en orden numérico. |
+| `${1:default}` | Un campo que empieza con `default` seleccionado, así que escribir lo sustituye. |
+| `$0` | Dónde termina el cursor. Si el cuerpo no tiene `$0`, el final del texto. |
+
+Repetir un número refleja el campo: cada `$1` (o `${1:…}`) muestra lo que
+escribes en el primero. `\$`, `\}` y `\\` insertan un `$`, un `}` y un `\`
+literales. Los marcadores anidados, las variables (`$NAME`) y las opciones
+(`${1|a,b|}`) no están soportados; Settings rechaza un cuerpo que los use y
+señala la línea y la columna.
+
+Tras la inserción, el cursor va al primer campo, con su texto por defecto
+seleccionado. `Tab` pasa al campo siguiente y `Shift+Tab` al anterior. Mientras
+el menú de autocompletado está abierto, `Tab` sigue recorriendo las sugerencias
+(ver [Autocompletado](#autocompletado)); sin menú abierto, `Tab` y `Shift+Tab`
+se mueven entre campos. Los campos empiezan a funcionar cuando se confirma una
+sugerencia, no durante la vista previa de `Tab`.
+
+La sesión termina cuando llegas al último campo (`$0`), pulsas `Escape`, mueves
+el cursor fuera de los campos, editas el texto fuera de ellos, deshaces la
+inserción o sales del modo Insert de Vim.
+
+### Snippets integrados
+
+| Prefijo | Nombre |
+|---|---|
+| `sel` | Select rows |
+| `ins` | Insert a row |
+| `upd` | Update rows |
+| `del` | Delete rows |
+| `cte` | Common table expression |
+| `cnt` | Count rows |
+
+Son snippets normales: edítalos o bórralos en Settings. Un snippet integrado que
+borras sigue borrado.
+
 ## Formatear
 
 - `Ctrl+Shift+F` (`Cmd+Option+L` en macOS) — **Formatear consulta**.

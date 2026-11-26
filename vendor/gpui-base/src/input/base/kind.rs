@@ -28,7 +28,8 @@ use ropey::Rope;
 
 use super::decorations::DecorationCollections;
 use super::lsp::{
-    CompletionSelectionReader, ContextMenuContent, HoverDefinition, InlineCompletion,
+    CompletionCommitHandler, CompletionSelectionReader, ContextMenuContent, HoverDefinition,
+    InlineCompletion, KeyInterceptor,
 };
 use crate::input::{
     HighlightStyleResolver, InputEdit, InputHighlighter, RangeDecoration, SyntaxContext,
@@ -388,6 +389,8 @@ pub struct EditorExtras {
     pub(crate) hover_definition: HoverDefinition,
     pub(crate) context_menu_task: Task<anyhow::Result<()>>,
     pub(crate) completion_selection_reader: Option<CompletionSelectionReader>,
+    pub(crate) key_interceptor: Option<KeyInterceptor>,
+    pub(crate) completion_commit_handler: Option<CompletionCommitHandler>,
 }
 
 impl Default for EditorExtras {
@@ -402,6 +405,8 @@ impl Default for EditorExtras {
             hover_definition: HoverDefinition::default(),
             context_menu_task: Task::ready(Ok(())),
             completion_selection_reader: None,
+            key_interceptor: None,
+            completion_commit_handler: None,
         }
     }
 }

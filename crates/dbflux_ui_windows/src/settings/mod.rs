@@ -28,6 +28,7 @@ mod rpc_services;
 mod section_trait;
 mod services_section;
 mod sidebar_nav;
+mod snippets_section;
 mod ssh_tunnels;
 mod ssh_tunnels_section;
 mod updates_section;
@@ -53,6 +54,7 @@ use mcp_section::{McpSection, McpSectionVariant};
 
 use proxies_section::ProxiesSection;
 use services_section::ServicesSection;
+use snippets_section::SnippetsSection;
 use ssh_tunnels_section::SshTunnelsSection;
 use updates_section::UpdatesSection;
 
@@ -99,6 +101,7 @@ enum ActiveSettingsSection {
     McpPolicies(Entity<McpSection>),
     Proxies(Entity<ProxiesSection>),
     Services(Entity<ServicesSection>),
+    Snippets(Entity<SnippetsSection>),
     SshTunnels(Entity<SshTunnelsSection>),
     Updates(Entity<UpdatesSection>),
 }
@@ -136,6 +139,7 @@ impl ActiveSettingsSection {
             }
             Self::Proxies(section) => AnyView::from(section.clone()),
             Self::Services(section) => AnyView::from(section.clone()),
+            Self::Snippets(section) => AnyView::from(section.clone()),
             Self::SshTunnels(section) => AnyView::from(section.clone()),
             Self::Updates(section) => AnyView::from(section.clone()),
         }
@@ -199,6 +203,11 @@ impl ActiveSettingsSection {
                     section.handle_key_event(event, window, cx)
                 });
             }
+            Self::Snippets(section) => {
+                section.update(cx, |section, cx| {
+                    section.handle_key_event(event, window, cx)
+                });
+            }
             Self::SshTunnels(section) => {
                 section.update(cx, |section, cx| {
                     section.handle_key_event(event, window, cx)
@@ -245,6 +254,9 @@ impl ActiveSettingsSection {
             Self::Services(section) => {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
+            Self::Snippets(section) => {
+                section.update(cx, |section, cx| section.focus_in(window, cx));
+            }
             Self::SshTunnels(section) => {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
@@ -287,6 +299,9 @@ impl ActiveSettingsSection {
             Self::Services(section) => {
                 section.update(cx, |section, cx| section.focus_out(window, cx));
             }
+            Self::Snippets(section) => {
+                section.update(cx, |section, cx| section.focus_out(window, cx));
+            }
             Self::SshTunnels(section) => {
                 section.update(cx, |section, cx| section.focus_out(window, cx));
             }
@@ -311,6 +326,7 @@ impl ActiveSettingsSection {
             }
             Self::Proxies(section) => section.read(cx).is_dirty(cx),
             Self::Services(section) => section.read(cx).is_dirty(cx),
+            Self::Snippets(section) => section.read(cx).is_dirty(cx),
             Self::SshTunnels(section) => section.read(cx).is_dirty(cx),
             Self::Updates(section) => section.read(cx).is_dirty(cx),
         }
@@ -353,6 +369,9 @@ impl ActiveSettingsSection {
             Self::Services(section) => {
                 section.update(cx, |section, cx| section.render_footer_actions(window, cx))
             }
+            Self::Snippets(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
             Self::SshTunnels(section) => {
                 section.update(cx, |section, cx| section.render_footer_actions(window, cx))
             }
@@ -379,6 +398,7 @@ impl ActiveSettingsSection {
             }
             Self::Proxies(section) => section.read(cx).unsaved_change_count(cx),
             Self::Services(section) => section.read(cx).unsaved_change_count(cx),
+            Self::Snippets(section) => section.read(cx).unsaved_change_count(cx),
             Self::SshTunnels(section) => section.read(cx).unsaved_change_count(cx),
             Self::Updates(section) => section.read(cx).unsaved_change_count(cx),
         }
@@ -424,6 +444,9 @@ impl ActiveSettingsSection {
             Self::Services(section) => section.update(cx, |section, cx| {
                 section.render_footer_leading_actions(window, cx)
             }),
+            Self::Snippets(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
             Self::SshTunnels(section) => section.update(cx, |section, cx| {
                 section.render_footer_leading_actions(window, cx)
             }),
@@ -464,6 +487,9 @@ impl ActiveSettingsSection {
                 section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
             }
             Self::Services(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Snippets(section) => {
                 section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
             }
             Self::SshTunnels(section) => {

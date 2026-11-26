@@ -291,6 +291,16 @@ impl SettingsCoordinator {
                     vec![subscription, focus_sub],
                 )
             }
+            SettingsSectionId::Snippets => {
+                let section = cx.new(|cx| SnippetsSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::Snippets(section), vec![focus_sub])
+            }
             SettingsSectionId::Drivers => {
                 let section = cx.new(|cx| DriversSection::new(app_state, window, cx));
                 let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {

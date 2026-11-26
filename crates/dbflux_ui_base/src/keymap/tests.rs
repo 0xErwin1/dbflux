@@ -235,6 +235,44 @@ fn format_query_is_bound_in_the_editor_without_taking_replace() {
 }
 
 #[test]
+fn insert_snippet_is_bound_in_the_editor_next_to_the_pane_move() {
+    let keymap = default_keymap();
+
+    #[cfg(target_os = "macos")]
+    let snippet_chord = KeyChord::new("j", Modifiers::primary());
+    #[cfg(not(target_os = "macos"))]
+    let snippet_chord = KeyChord::new(
+        "j",
+        Modifiers {
+            ctrl: true,
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+
+    assert_eq!(
+        keymap.resolve(ContextId::Editor, &snippet_chord),
+        Some(Command::InsertSnippet)
+    );
+    // Insert snippet is an editor command; the sidebar keeps whatever the
+    // chord had there.
+    assert_ne!(
+        keymap.resolve(ContextId::Sidebar, &snippet_chord),
+        Some(Command::InsertSnippet)
+    );
+    // Plain Ctrl+J stays the pane move.
+    assert_eq!(
+        keymap.resolve(ContextId::Editor, &KeyChord::new("j", Modifiers::ctrl())),
+        Some(Command::FocusDown)
+    );
+    assert_eq!(
+        Command::from_palette_id("insert_snippet"),
+        Some(Command::InsertSnippet)
+    );
+    assert_eq!(Command::InsertSnippet.id(), "insert_snippet");
+}
+
+#[test]
 fn test_global_fallback_from_sidebar() {
     let keymap = default_keymap();
 

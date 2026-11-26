@@ -1345,6 +1345,9 @@ impl Render for CodeDocument {
             .when(self.pending.script_confirm.is_some(), |el| {
                 el.child(self.render_script_confirm_modal(cx))
             })
+            .when_some(self.snippet_picker.as_ref(), |el, open| {
+                el.child(open.picker.clone())
+            })
     }
 }
 

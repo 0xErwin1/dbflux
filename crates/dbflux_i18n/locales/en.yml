@@ -1306,6 +1306,21 @@ document:
       alias: "alias"
       keyword: "keyword"
       cte: "cte"
+      snippet: "snippet"
+    snippets:
+      picker:
+        title: "Insert snippet"
+        search_placeholder: "Search %{language} snippets"
+        builtin: "Built-in"
+        no_match: "No snippets match “%{query}”"
+        empty: "No %{language} snippets yet"
+        empty_hint: "Snippets belong to one query language and only appear in editors of that language. Add yours in Settings › Snippets."
+        count_one: "1 snippet"
+        count_many: "%{count} snippets"
+        hint_insert: "Enter Insert"
+        hint_close: "Esc Close"
+        load_error: "Could not load the snippets"
+        invalid_body: "The snippet “%{prefix}” has an invalid body and was not inserted"
     layout:
       split_save_failed: "Could not save the editor and results split: %{error}"
     vim:
@@ -4484,6 +4499,8 @@ palette:
       name: Toggle line comment
     format_query:
       name: Format query
+    insert_snippet:
+      name: "Insert snippet"
     go_to_query_error:
       name: Go to query error
     open_history:
@@ -4917,6 +4934,7 @@ settings:
       add_external_scripts_folder: "Add external scripts folder…"
       toggle_comment: Toggle line comment
       format_query: Format query
+      insert_snippet: "Insert snippet"
       go_to_query_error: Go to query error
       export_results: Export results
       clear_filter: Clear filter
@@ -5664,6 +5682,58 @@ settings:
       save_failed_copy: "Failed to save: %{error}"
     toast:
       saved: Audit settings saved.
+  snippets:
+    header:
+      title: "Snippets"
+      subtitle: "Templates you insert into the query editor by prefix or from the snippet picker. Each snippet belongs to one query language."
+    list:
+      new: "New snippet"
+      empty: "No snippets yet"
+      builtin: "Built-in"
+    empty:
+      title: "No snippets yet"
+      hint: "Create one to insert it from the completion menu or the snippet picker."
+    form:
+      group:
+        snippet: "Snippet"
+        body: "Body"
+      name: "Name"
+      name_placeholder: "Snippet name"
+      prefix: "Prefix"
+      prefix_placeholder: "prefix"
+      prefix_hint: "Type it in the editor to see the snippet in the completion menu"
+      language: "Language"
+      language_hint: "Snippets only appear in editors of this language"
+      body: "Body"
+      body_hint: "Use $1, $2… for fields, ${1:default} for a field with a default, and $0 for where the cursor ends. Repeating a number mirrors that field."
+    language:
+      sql: "SQL"
+    action:
+      save: "Save"
+      update: "Update"
+      delete: "Delete"
+      cancel: "Cancel"
+    delete:
+      title: "Delete snippet"
+      message: "Are you sure you want to delete snippet \"%{name}\"?"
+    validation:
+      name_required: "Name is required"
+      prefix_required: "Prefix is required"
+      body_required: "Body is required"
+      duplicate_prefix: "Another %{language} snippet already uses the prefix %{prefix}"
+      parse:
+        unclosed_placeholder: "Unclosed placeholder at line %{line}, column %{column}: %{excerpt}"
+        nested_placeholder: "Nested placeholder at line %{line}, column %{column}: %{excerpt}"
+        unsupported_choice: "Choices are not supported at line %{line}, column %{column}: %{excerpt}"
+        unsupported_variable: "Variables are not supported at line %{line}, column %{column}: %{excerpt}"
+        invalid_placeholder: "Invalid placeholder at line %{line}, column %{column}: %{excerpt}"
+    toast:
+      saved: "Snippet saved"
+      deleted: "Snippet deleted"
+    error:
+      save: "Could not save the snippet"
+      delete: "Could not delete the snippet"
+      load: "Could not load the snippets"
   nav:
     no_results: "No settings match"
     search_placeholder: "Search settings"
@@ -5671,6 +5741,7 @@ settings:
     general: General
     appearance: Appearance
     keybindings: Keybindings
+    snippets: "Snippets"
     updates: Updates & privacy
     audit: Audit
     about: About

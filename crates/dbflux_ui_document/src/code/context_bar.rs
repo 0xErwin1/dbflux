@@ -234,15 +234,17 @@ impl CodeDocument {
         self.editor.cached_comment_prefix = editor_profile.comment_prefix;
         self.editor.cached_effective_language = query_language.clone();
 
-        let completion_provider: Rc<dyn CompletionProvider> =
-            Rc::new(QueryCompletionProvider::new(
+        let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
+            QueryCompletionProvider::new(
                 query_language,
                 self.app_state.clone(),
                 connection_id,
                 self.source.exec_ctx.database.clone(),
                 self.source.exec_ctx.schema.clone(),
                 self.editor.completion_query_generation.clone(),
-            ));
+            )
+            .with_snippets(self.editor.snippet_offers.clone()),
+        );
         let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
             self.app_state.clone(),
             connection_id,

@@ -70,6 +70,18 @@ pub(crate) const CODE_EDITOR_CHROME: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// The Insert snippet picker over the code editor. It answers the history
+/// modal's keys: Up and Down move through the rows and Enter inserts the
+/// highlighted one, as a click on a row does.
+pub(crate) const SNIPPET_PICKER: SurfaceRegistry = SurfaceRegistry {
+    name: "snippet picker",
+    contexts: &[ContextId::HistoryModal],
+    entries: &[(
+        "snippet-picker-row-*",
+        KeyboardPath::Command(Command::Execute),
+    )],
+};
+
 /// The data grid: the table, its toolbar and footer, its menus and its side
 /// islands. The table menu (`m`) ends with a Toolbar submenu that lists the
 /// toolbar buttons shown (`DataGridPanel::toolbar_actions`).

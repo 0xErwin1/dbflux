@@ -497,6 +497,21 @@ fn editor_layer() -> KeymapLayer {
     let format_query = KeyChord::new("f", Modifiers::ctrl_shift());
     layer.bind(format_query, Command::FormatQuery);
 
+    // Insert snippet. Plain Ctrl+J is the pane move FocusDown, so Linux and
+    // Windows add Alt; Cmd+J is free on macOS.
+    #[cfg(target_os = "macos")]
+    let insert_snippet = KeyChord::new("j", Modifiers::primary());
+    #[cfg(not(target_os = "macos"))]
+    let insert_snippet = KeyChord::new(
+        "j",
+        Modifiers {
+            ctrl: true,
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+    layer.bind(insert_snippet, Command::InsertSnippet);
+
     // The toolbar menu from the text itself: Shift+F10 types nothing, so it
     // is free in every Vim mode and without Vim.
     layer.bind(

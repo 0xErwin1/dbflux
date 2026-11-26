@@ -1306,6 +1306,21 @@ document:
       alias: "别名"
       keyword: "关键字"
       cte: "cte"
+      snippet: "代码片段"
+    snippets:
+      picker:
+        title: "插入代码片段"
+        search_placeholder: "搜索 %{language} 代码片段"
+        builtin: "内置"
+        no_match: "没有与“%{query}”匹配的代码片段"
+        empty: "还没有 %{language} 代码片段"
+        empty_hint: "代码片段属于某一种查询语言，只会出现在该语言的编辑器中。可在 设置 › 代码片段 中添加。"
+        count_one: "1 个代码片段"
+        count_many: "%{count} 个代码片段"
+        hint_insert: "Enter 插入"
+        hint_close: "Esc 关闭"
+        load_error: "无法加载代码片段"
+        invalid_body: "代码片段“%{prefix}”的内容无效，未插入"
     layout:
       split_save_failed: "无法保存编辑器与结果的分割比例：%{error}"
     vim:
@@ -4484,6 +4499,8 @@ palette:
       name: 切换注释
     format_query:
       name: 格式化查询
+    insert_snippet:
+      name: "插入代码片段"
     go_to_query_error:
       name: 转到查询错误
     open_history:
@@ -4917,6 +4934,7 @@ settings:
       add_external_scripts_folder: "添加外部脚本文件夹…"
       toggle_comment: 切换注释
       format_query: 格式化查询
+      insert_snippet: "插入代码片段"
       go_to_query_error: 转到查询错误
       export_results: 导出结果
       clear_filter: 清除筛选
@@ -5664,6 +5682,58 @@ settings:
       save_failed_copy: "保存失败：%{error}"
     toast:
       saved: 审计设置已保存。
+  snippets:
+    header:
+      title: "代码片段"
+      subtitle: "可通过前缀或代码片段选择器插入到查询编辑器中的模板。每个代码片段属于一种查询语言。"
+    list:
+      new: "新建代码片段"
+      empty: "还没有代码片段"
+      builtin: "内置"
+    empty:
+      title: "还没有代码片段"
+      hint: "创建一个，即可从补全菜单或代码片段选择器中插入。"
+    form:
+      group:
+        snippet: "代码片段"
+        body: "内容"
+      name: "名称"
+      name_placeholder: "代码片段名称"
+      prefix: "前缀"
+      prefix_placeholder: "前缀"
+      prefix_hint: "在编辑器中输入它，即可在补全菜单中看到该代码片段"
+      language: "语言"
+      language_hint: "代码片段只会出现在该语言的编辑器中"
+      body: "内容"
+      body_hint: "用 $1、$2… 表示字段，用 ${1:默认值} 表示带默认值的字段，用 $0 表示光标最终停留的位置。重复同一个编号会同步镜像该字段。"
+    language:
+      sql: "SQL"
+    action:
+      save: "保存"
+      update: "更新"
+      delete: "删除"
+      cancel: "取消"
+    delete:
+      title: "删除代码片段"
+      message: "确定要删除代码片段“%{name}”吗？"
+    validation:
+      name_required: "名称不能为空"
+      prefix_required: "前缀不能为空"
+      body_required: "内容不能为空"
+      duplicate_prefix: "另一个 %{language} 代码片段已使用前缀 %{prefix}"
+      parse:
+        unclosed_placeholder: "第 %{line} 行第 %{column} 列存在未闭合的占位符：%{excerpt}"
+        nested_placeholder: "第 %{line} 行第 %{column} 列存在嵌套的占位符：%{excerpt}"
+        unsupported_choice: "第 %{line} 行第 %{column} 列不支持选项：%{excerpt}"
+        unsupported_variable: "第 %{line} 行第 %{column} 列不支持变量：%{excerpt}"
+        invalid_placeholder: "第 %{line} 行第 %{column} 列存在无效的占位符：%{excerpt}"
+    toast:
+      saved: "代码片段已保存"
+      deleted: "代码片段已删除"
+    error:
+      save: "无法保存代码片段"
+      delete: "无法删除代码片段"
+      load: "无法加载代码片段"
   nav:
     no_results: "没有匹配的设置"
     search_placeholder: "搜索设置"
@@ -5671,6 +5741,7 @@ settings:
     general: 常规
     appearance: 外观
     keybindings: 键盘快捷键
+    snippets: "代码片段"
     updates: 更新与隐私
     audit: 审计
     about: 关于

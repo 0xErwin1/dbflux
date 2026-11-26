@@ -13,6 +13,7 @@ pub enum SettingsSectionId {
     #[cfg(feature = "mcp")]
     McpPolicies,
     Keybindings,
+    Snippets,
     Updates,
     Proxies,
     SshTunnels,

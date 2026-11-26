@@ -38,6 +38,11 @@ impl SettingsCoordinator {
                         AppIcon::Keyboard,
                     ),
                     (
+                        "snippets",
+                        dbflux_i18n::t!("settings.nav.snippets"),
+                        AppIcon::Braces,
+                    ),
+                    (
                         "updates",
                         dbflux_i18n::t!("settings.nav.updates"),
                         AppIcon::Bell,
@@ -163,6 +168,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             "mcp-policies" => Some(SettingsSectionId::McpPolicies),
             "keybindings" => Some(SettingsSectionId::Keybindings),
+            "snippets" => Some(SettingsSectionId::Snippets),
             "updates" => Some(SettingsSectionId::Updates),
             "proxies" => Some(SettingsSectionId::Proxies),
             "ssh-tunnels" => Some(SettingsSectionId::SshTunnels),
@@ -187,6 +193,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpPolicies => "mcp-policies",
             SettingsSectionId::Keybindings => "keybindings",
+            SettingsSectionId::Snippets => "snippets",
             SettingsSectionId::Updates => "updates",
             SettingsSectionId::Proxies => "proxies",
             SettingsSectionId::SshTunnels => "ssh-tunnels",
@@ -264,6 +271,7 @@ mod tests {
             SettingsSectionId::Appearance,
             SettingsSectionId::Audit,
             SettingsSectionId::Keybindings,
+            SettingsSectionId::Snippets,
             SettingsSectionId::Updates,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,
@@ -322,6 +330,30 @@ mod tests {
     }
 
     #[test]
+    fn snippets_maps_to_its_tree_id_and_back() {
+        assert_eq!(
+            SettingsCoordinator::tree_id_for_section(SettingsSectionId::Snippets),
+            "snippets"
+        );
+        assert_eq!(
+            SettingsCoordinator::section_for_tree_id("snippets"),
+            Some(SettingsSectionId::Snippets)
+        );
+    }
+
+    #[test]
+    fn snippets_is_listed_right_after_keybindings() {
+        let tree = SettingsCoordinator::build_sidebar_tree("");
+        let ids: Vec<&str> = tree.rows().iter().map(|row| row.id.as_ref()).collect();
+        let keybindings = ids
+            .iter()
+            .position(|id| *id == "keybindings")
+            .expect("keybindings");
+
+        assert_eq!(ids[keybindings + 1], "snippets");
+    }
+
+    #[test]
     fn searching_for_appearance_finds_the_page() {
         let tree = SettingsCoordinator::build_sidebar_tree("appearance");
 
@@ -364,6 +396,7 @@ mod tests {
         "settings.nav.general",
         "settings.nav.appearance",
         "settings.nav.keybindings",
+        "settings.nav.snippets",
         "settings.nav.updates",
         "settings.nav.audit",
         "settings.nav.about",

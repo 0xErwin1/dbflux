@@ -2021,6 +2021,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.editor"),
             ),
             PaletteCommand::new(
+                "insert_snippet",
+                dbflux_i18n::t!("palette.command.insert_snippet.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
                 "go_to_query_error",
                 dbflux_i18n::t!("palette.command.go_to_query_error.name"),
                 dbflux_i18n::t!("palette.category.editor"),

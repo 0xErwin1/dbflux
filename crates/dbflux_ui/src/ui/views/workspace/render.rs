@@ -40,6 +40,14 @@ fn palette_command_focuses_a_popover(command_id: &str) -> bool {
     command_id == "toggle_notifications"
 }
 
+/// Palette commands that open a picker over the focused document and move
+/// focus into its search input. The workspace still takes focus before the
+/// command, leaving the closed palette's input, but must not take it again
+/// afterwards: that refocus would pull the keys away from the picker.
+fn palette_command_opens_a_picker(command_id: &str) -> bool {
+    command_id == "insert_snippet"
+}
+
 impl Workspace {
     /// Renders the active document from TabManager (v0.3).
     ///
@@ -200,6 +208,7 @@ impl Render for Workspace {
             // returns, or not at all if the window closes first.
             let refocus_parent = !palette_command_opens_native_window(command_id)
                 && !palette_command_focuses_a_popover(command_id);
+            let refocus_after = refocus_parent && !palette_command_opens_a_picker(command_id);
             defer_to_end_of_effect_cycle(window, cx, move |this, window, cx| {
                 // Focus leaves the closed palette's input first, so a menu
                 // the command opens returns focus to the workspace, not to
@@ -208,7 +217,7 @@ impl Render for Workspace {
                     this.focus_handle.focus(window, cx);
                 }
                 this.handle_command(command_id, window, cx);
-                if refocus_parent {
+                if refocus_after {
                     this.focus_handle.focus(window, cx);
                 }
             });
@@ -1052,7 +1061,7 @@ mod tests {
 
     use super::{
         defer_to_end_of_effect_cycle, palette_command_focuses_a_popover,
-        palette_command_opens_native_window,
+        palette_command_opens_a_picker, palette_command_opens_native_window,
     };
 
     #[test]
@@ -1111,6 +1120,13 @@ mod tests {
     fn popover_palette_commands_skip_the_parent_refocus() {
         assert!(palette_command_focuses_a_popover("toggle_notifications"));
         assert!(!palette_command_focuses_a_popover("open_audit_viewer"));
+    }
+
+    #[test]
+    fn picker_palette_commands_skip_the_refocus_after_the_command() {
+        assert!(palette_command_opens_a_picker("insert_snippet"));
+        assert!(!palette_command_opens_a_picker("format_query"));
+        assert!(!palette_command_opens_a_picker("open_audit_viewer"));
     }
 
     #[test]
