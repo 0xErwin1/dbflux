@@ -237,3 +237,65 @@ fn a_deleted_built_in_does_not_come_back_when_migrations_run_again() {
             .all(|record| record.builtin_key.as_deref() != Some("sql.select"))
     );
 }
+
+fn schema_without_snippets(conn: &Connection) -> Vec<(String, String)> {
+    let mut statement = conn
+        .prepare(
+            "SELECT name, COALESCE(sql, '') FROM sqlite_master \
+             WHERE name NOT LIKE '%snp_%' ORDER BY name",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[test]
+fn upgrading_an_existing_file_db_seeds_once_and_leaves_other_tables() {
+    let dir = std::env::temp_dir().join(format!("snp-upgrade-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dbflux.db");
+    {
+        let runtime = StorageRuntime::for_path(path.clone()).unwrap();
+        let conn = runtime.open_dbflux_db().unwrap();
+        conn.execute_batch(
+            "DROP TABLE snp_snippets; DELETE FROM sys_migrations WHERE name = '053_snp_snippets';",
+        )
+        .unwrap();
+    }
+    let schema_before = schema_without_snippets(&Connection::open(&path).unwrap());
+
+    let runtime = StorageRuntime::for_path(path.clone()).unwrap();
+    let conn = runtime.open_dbflux_db().unwrap();
+    let rows: Vec<(String, String, String, Option<String>)> = conn
+        .prepare("SELECT prefix, language, body, builtin_key FROM snp_snippets ORDER BY prefix")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(rows.len(), 6);
+    assert!(rows.iter().all(|row| row.1 == "sql" && row.3.is_some()));
+    let select = rows.iter().find(|row| row.0 == "sel").unwrap();
+    assert_eq!(
+        select.2.as_bytes(),
+        b"SELECT ${2:*}\nFROM ${1:table}\nWHERE ${3:condition};$0"
+    );
+    assert_eq!(schema_without_snippets(&conn), schema_before);
+
+    conn.execute("DELETE FROM snp_snippets WHERE builtin_key = 'sql.cte'", [])
+        .unwrap();
+    drop(conn);
+    drop(runtime);
+    let runtime = StorageRuntime::for_path(path.clone()).unwrap();
+    let conn = runtime.open_dbflux_db().unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM snp_snippets", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 5);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

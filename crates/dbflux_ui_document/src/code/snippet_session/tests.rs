@@ -429,3 +429,25 @@ fn an_editor_without_the_hook_still_indents_on_tab(cx: &mut TestAppContext) {
     assert_ne!(text, "a", "Tab indents an editor with no interceptor");
     assert!(text.ends_with('a'));
 }
+
+#[gpui::test]
+fn replace_ranges_ignores_overlapping_or_out_of_bounds_edits(cx: &mut TestAppContext) {
+    let mut editor = open(cx, "abcdef", false);
+    let document = editor.document.clone();
+    editor.window.update(|window, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| {
+            state.replace_ranges(&[(0..3, "x".into()), (2..4, "y".into())], window, cx);
+            state.replace_ranges(&[(4..99, "z".into())], window, cx);
+        });
+    });
+    assert_eq!(editor.text(), "abcdef");
+
+    editor.window.update(|window, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| {
+            state.replace_ranges(&[(4..6, "Z".into()), (0..1, "A".into())], window, cx);
+        });
+    });
+    assert_eq!(editor.text(), "AbcdZ");
+}

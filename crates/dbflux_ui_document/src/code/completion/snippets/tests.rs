@@ -367,3 +367,17 @@ fn a_keyword_completion_still_inserts_plain_text(cx: &mut TestAppContext) {
     assert_eq!(editor.text().trim_end(), "SELECT");
     assert!(!editor.session_active());
 }
+
+#[gpui::test]
+fn a_tab_preview_starts_nothing_until_enter_commits_it(cx: &mut TestAppContext) {
+    let mut editor = open(cx, QueryLanguage::Sql);
+    editor.add_snippet("selz", "sql", "SELECT ${1:a} FROM ${2:b}$0");
+    editor.type_text("selz");
+
+    editor.keys("tab");
+    assert!(!editor.session_active(), "a preview is not a commit");
+
+    editor.keys("enter");
+    assert!(editor.session_active());
+    assert_eq!(&editor.text()[editor.selection()], "a");
+}

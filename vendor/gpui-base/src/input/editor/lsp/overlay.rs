@@ -216,8 +216,9 @@ impl InputBaseState<EditorMode> {
     }
 
     /// Offers Tab, Shift+Tab and Escape to `interceptor` before the editor
-    /// indents, outdents or escapes. Returning `true` consumes the key; the
-    /// editor ignores the result for Escape. The interceptor is not asked
+    /// indents, outdents or escapes. Returning `true` consumes the key,
+    /// Escape included, so return `false` for Escape to keep it closing
+    /// overlays. The interceptor is not asked
     /// while a completion or code-action menu is open, so Tab keeps cycling
     /// its items. Without an interceptor the keys behave as usual.
     pub fn set_key_interceptor(
@@ -243,6 +244,17 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let text_len = self.text.len();
+        let mut sorted: Vec<&Range<usize>> = edits.iter().map(|(range, _)| range).collect();
+        sorted.sort_by_key(|range| range.start);
+        let in_bounds = sorted
+            .iter()
+            .all(|range| range.start <= range.end && range.end <= text_len);
+        let disjoint = sorted.windows(2).all(|pair| pair[0].end <= pair[1].start);
+        if !in_bounds || !disjoint {
+            tracing::warn!("replace_ranges ignored edits that overlap or fall outside the text");
+            return;
+        }
         self.replace_text_in_ranges(edits, window, cx);
     }
 

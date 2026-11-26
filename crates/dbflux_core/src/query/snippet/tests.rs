@@ -228,3 +228,24 @@ fn crlf_counts_one_line_break() {
 fn columns_count_characters_not_bytes() {
     assert_eq!(error("éé${1"), (Kind::UnclosedPlaceholder, 1, 3));
 }
+
+#[test]
+fn ten_is_one_index_and_braces_split_it() {
+    assert_eq!(stops("$10"), vec![(10, vec![0..0]), (0, vec![0..0])]);
+    assert_eq!(stops("${1}0"), vec![(1, vec![0..0]), (0, vec![1..1])]);
+}
+
+#[test]
+fn empty_default_and_trailing_dollar() {
+    assert_eq!(stops("a${1:}b"), vec![(1, vec![1..1]), (0, vec![2..2])]);
+    assert_eq!(text("SELECT $"), "SELECT $");
+    assert_eq!(text("$$"), "$$");
+}
+
+#[test]
+fn unicode_before_a_field_and_escaped_backslash() {
+    assert_eq!(stops("é ${1:x}"), vec![(1, vec![3..4]), (0, vec![4..4])]);
+    assert_eq!(error("é ${1"), (Kind::UnclosedPlaceholder, 1, 3));
+    assert_eq!(stops("\\\\${1:a}"), vec![(1, vec![1..2]), (0, vec![2..2])]);
+    assert_eq!(text("${1:a\\}b}"), "a}b");
+}
