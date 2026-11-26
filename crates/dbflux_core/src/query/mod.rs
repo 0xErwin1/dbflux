@@ -50,7 +50,10 @@ pub use language_service::{
     strip_leading_comments,
 };
 pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
-pub use plan::{PlanFormat, PlanNode, QueryPlan, QueryPlanRequest};
+pub use plan::{
+    PlanFormat, PlanNode, QueryPlan, QueryPlanRequest, parse_sqlite_query_plan,
+    plan_text_from_result, single_plan_statement,
+};
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{
     classify_query_for_governance, classify_sql_execution, contains_compound_block,

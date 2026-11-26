@@ -19,6 +19,7 @@
 mod connection;
 mod dialect;
 mod driver;
+mod plan;
 mod session;
 
 pub use connection::{TursoConnection, TursoErrorFormatter};

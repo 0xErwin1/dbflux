@@ -1,6 +1,6 @@
 //! Structured query plan for PostgreSQL, built from `EXPLAIN (FORMAT JSON)`.
 
-use dbflux_core::{DbError, PlanFormat, PlanNode, QueryLanguage, QueryPlan, QueryResult, Value};
+use dbflux_core::{DbError, PlanFormat, PlanNode, QueryPlan, QueryResult};
 use serde_json::Value as Json;
 
 /// Keys mapped to `PlanNode` fields; every other scalar/array key is a detail.
@@ -14,37 +14,18 @@ const MAPPED_KEYS: [&str; 7] = [
     "Plans",
 ];
 
-/// Builds the plan statement for `query`.
-///
-/// The text is split with the shared SQL splitter and anything other than one
-/// statement is refused, so a buffer is never sent to EXPLAIN as one string.
-/// Plain `EXPLAIN` never executes the statement, so writes are allowed;
-/// `ANALYZE` is deliberately never added.
+/// Builds the plan statement for `query` through the shared single-statement
+/// guard; `ANALYZE` is deliberately never added.
 pub(crate) fn explain_statement(query: &str) -> Result<String, DbError> {
-    let mut statements = QueryLanguage::Sql.split_statements(query);
-
-    match statements.len() {
-        0 => Err(DbError::query_failed(
-            "A query plan needs a statement; the query is empty.",
-        )),
-        1 => Ok(format!("EXPLAIN (FORMAT JSON) {}", statements.remove(0))),
-        count => Err(DbError::query_failed(format!(
-            "A query plan covers exactly one statement; the query has {count}. Select a single statement."
-        ))),
-    }
+    Ok(format!(
+        "EXPLAIN (FORMAT JSON) {}",
+        dbflux_core::single_plan_statement(query)?
+    ))
 }
 
 /// Extracts the JSON document `EXPLAIN (FORMAT JSON)` returned.
 pub(crate) fn raw_plan_from_result(result: &QueryResult) -> Result<String, DbError> {
-    let cell = result.rows.first().and_then(|row| row.first());
-
-    match cell {
-        Some(Value::Json(text) | Value::Text(text)) => Ok(text.clone()),
-        _ => result
-            .text_body
-            .clone()
-            .ok_or_else(|| DbError::query_failed("EXPLAIN returned no plan")),
-    }
+    dbflux_core::plan_text_from_result(result)
 }
 
 pub(crate) fn parse_explain_json(raw: &str) -> Result<QueryPlan, DbError> {

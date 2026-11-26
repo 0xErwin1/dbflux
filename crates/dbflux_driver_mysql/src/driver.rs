@@ -2949,6 +2949,15 @@ impl Connection for MysqlConnection {
         self.execute(&QueryRequest::new(sql))
     }
 
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        let sql = crate::plan::explain_statement(&request.query)?;
+        let result = self.execute(&QueryRequest::new(sql))?;
+        crate::plan::parse_explain_json(&dbflux_core::plan_text_from_result(&result)?)
+    }
+
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
         let sql = format!("DESCRIBE {}", request.table.quoted_with(self.dialect()));
         self.execute(&QueryRequest::new(sql))

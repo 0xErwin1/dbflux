@@ -1,0 +1,142 @@
+//! Parser for SQLite's `EXPLAIN QUERY PLAN`, shared by every driver that
+//! speaks that dialect (SQLite and Turso).
+
+use std::collections::HashSet;
+
+use crate::{DbError, PlanFormat, PlanNode, QueryPlan, QueryResult, Value};
+
+struct PlanRow {
+    id: i64,
+    parent: i64,
+    detail: String,
+}
+
+/// Builds a plan from the `(id, parent, notused, detail)` rows of
+/// `EXPLAIN QUERY PLAN`. The engine reports no costs or row estimates.
+pub fn parse_sqlite_query_plan(result: &QueryResult) -> Result<QueryPlan, DbError> {
+    let rows = result
+        .rows
+        .iter()
+        .map(|row| plan_row(row))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if rows.is_empty() {
+        // SQLite reports no steps for some statements, such as a DELETE
+        // without WHERE, which it runs as a table truncate.
+        let mut plan = QueryPlan::new(Vec::new(), String::new(), PlanFormat::Text);
+        plan.warnings
+            .push("The engine reported no plan steps for this statement.".to_string());
+        return Ok(plan);
+    }
+
+    let raw = rows
+        .iter()
+        .map(|row| format!("{}\t{}\t{}", row.id, row.parent, row.detail))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut visited = HashSet::new();
+    let mut roots = Vec::new();
+
+    for row in &rows {
+        let is_root = row.parent == row.id || !rows.iter().any(|other| other.id == row.parent);
+
+        if is_root && visited.insert(row.id) {
+            roots.push(build_node(row, &rows, &mut visited));
+        }
+    }
+
+    Ok(QueryPlan::new(roots, raw, PlanFormat::Text))
+}
+
+fn plan_row(row: &[Value]) -> Result<PlanRow, DbError> {
+    let malformed = || DbError::query_failed("EXPLAIN QUERY PLAN returned an unexpected row");
+
+    match row {
+        [Value::Int(id), Value::Int(parent), _, Value::Text(detail)] => Ok(PlanRow {
+            id: *id,
+            parent: *parent,
+            detail: detail.clone(),
+        }),
+        _ => Err(malformed()),
+    }
+}
+
+fn build_node(row: &PlanRow, rows: &[PlanRow], visited: &mut HashSet<i64>) -> PlanNode {
+    let mut node = parse_detail(&row.detail);
+
+    for child in rows.iter().filter(|child| child.parent == row.id) {
+        if visited.insert(child.id) {
+            node.children.push(build_node(child, rows, visited));
+        }
+    }
+
+    node
+}
+
+fn parse_detail(detail: &str) -> PlanNode {
+    let (operation, rest) = match detail.split_once(' ') {
+        Some((verb @ ("SCAN" | "SEARCH"), rest)) => (verb, rest),
+        _ => return PlanNode::new(detail),
+    };
+
+    let rest = rest.strip_prefix("TABLE ").unwrap_or(rest);
+    let (target, using) = match rest.split_once(" USING ") {
+        Some((target, using)) => (target, Some(using)),
+        None => (rest, None),
+    };
+    let (relation, alias) = match target.split_once(" AS ") {
+        Some((relation, alias)) => (relation, Some(alias)),
+        None => (target, None),
+    };
+
+    if relation.starts_with("SUBQUERY") || relation.starts_with("CONSTANT ROW") {
+        return PlanNode::new(detail);
+    }
+
+    let mut node = PlanNode::new(operation);
+    node.relation = Some(relation.to_string());
+
+    if let Some(alias) = alias {
+        node.details.push(("Alias".to_string(), alias.to_string()));
+    }
+
+    if let Some(using) = using {
+        apply_using(&mut node, using);
+    }
+
+    node
+}
+
+fn apply_using(node: &mut PlanNode, using: &str) {
+    let (access, condition) = match using.split_once(" (") {
+        Some((access, condition)) => (access, Some(format!("({condition}"))),
+        None => (using, None),
+    };
+
+    let mut access = access;
+    if let Some(rest) = access.strip_prefix("AUTOMATIC ") {
+        node.details
+            .push(("Automatic".to_string(), "true".to_string()));
+        access = rest;
+    }
+    if let Some(rest) = access.strip_prefix("COVERING ") {
+        node.details
+            .push(("Covering".to_string(), "true".to_string()));
+        access = rest;
+    }
+
+    match access.strip_prefix("INDEX") {
+        Some(name) => {
+            let name = name.trim();
+            if !name.is_empty() {
+                node.index = Some(name.to_string());
+            }
+        }
+        None => node.details.push(("Key".to_string(), access.to_string())),
+    }
+
+    if let Some(condition) = condition {
+        node.details.push(("Condition".to_string(), condition));
+    }
+}

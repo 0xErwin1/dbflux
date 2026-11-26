@@ -1044,6 +1044,15 @@ impl Connection for DuckDbConnection {
         self.run(&format!("EXPLAIN {query}"), &[], None)
     }
 
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        let sql = crate::plan::explain_statement(&request.query)?;
+        let result = self.run(&sql, &[], None)?;
+        crate::plan::parse_explain_json(&crate::plan::plan_text_from_result(&result)?)
+    }
+
     fn dialect(&self) -> &dyn SqlDialect {
         &DUCKDB_DIALECT
     }

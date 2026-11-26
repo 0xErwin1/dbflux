@@ -421,6 +421,39 @@ fn sqlite_explain() -> Result<(), DbError> {
 }
 
 #[test]
+fn sqlite_query_plan_is_structured_and_never_runs_the_statement() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE plan_test (id INTEGER PRIMARY KEY, name TEXT)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE INDEX idx_plan_name ON plan_test (name)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO plan_test (name) VALUES ('kept')",
+    ))?;
+
+    let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+        "SELECT * FROM plan_test WHERE name = 'kept'",
+    ))?;
+    assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Text);
+    assert_eq!(plan.roots.len(), 1);
+    assert_eq!(plan.roots[0].operation, "SEARCH");
+    assert_eq!(plan.roots[0].relation.as_deref(), Some("plan_test"));
+    assert_eq!(plan.roots[0].index.as_deref(), Some("idx_plan_name"));
+
+    connection.query_plan(&dbflux_core::QueryPlanRequest::new("DELETE FROM plan_test"))?;
+    let remaining = connection.execute(&QueryRequest::new("SELECT count(*) FROM plan_test"))?;
+    assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+    let multiple = connection.query_plan(&dbflux_core::QueryPlanRequest::new("SELECT 1; SELECT 2"));
+    assert!(multiple.is_err());
+
+    Ok(())
+}
+
+#[test]
 fn sqlite_describe_table() -> Result<(), DbError> {
     let connection = connect_sqlite()?;
 

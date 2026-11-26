@@ -234,7 +234,10 @@ pub use query::{
     ParsedSnippet, PlaceholderSpan, SnippetParseError, SnippetParseErrorKind, Tabstop,
     parse_snippet, snippet_placeholder_spans,
 };
-pub use query::{PlanFormat, PlanNode, QueryPlan, QueryPlanRequest};
+pub use query::{
+    PlanFormat, PlanNode, QueryPlan, QueryPlanRequest, parse_sqlite_query_plan,
+    plan_text_from_result, single_plan_statement,
+};
 pub use query::{normalize_relaxed_json, parse_relaxed_json};
 
 pub use query::relational_filter::{

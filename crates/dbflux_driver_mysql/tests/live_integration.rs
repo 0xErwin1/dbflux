@@ -531,6 +531,45 @@ fn mysql_explain() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn mysql_query_plan_is_structured_and_never_runs_the_statement() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name VARCHAR(20), KEY idx_name (name))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO plan_test (id, name) VALUES (1, 'kept')",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "SELECT * FROM plan_test WHERE name = 'kept'",
+        ))?;
+        assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Json);
+        assert_eq!(plan.roots.len(), 1);
+        let table = &plan.roots[0].children[0];
+        assert_eq!(table.relation.as_deref(), Some("plan_test"));
+        assert_eq!(table.index.as_deref(), Some("idx_name"));
+        assert!(plan.roots[0].estimated_total_cost.is_some());
+
+        connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "DELETE FROM plan_test WHERE id = 1",
+        ))?;
+        let remaining = connection.execute(&QueryRequest::new("SELECT count(*) FROM plan_test"))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+        let multiple =
+            connection.query_plan(&dbflux_core::QueryPlanRequest::new("SELECT 1; SELECT 2"));
+        assert!(multiple.is_err());
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn mysql_describe_table() -> Result<(), DbError> {
     containers::with_mysql_url(|uri| {
         let (connection, _) = connect_mysql(uri)?;

@@ -51,6 +51,7 @@ Each metric is returned as a single `(timestamp_ms, value)` row for live chartin
 Exposes tabular snapshots of running server state:
 
 - `mysql.processlist` — active sessions from `information_schema.PROCESSLIST` (user, host, db, command, time, state, info)
+- Structured query plan (`Connection::query_plan`): runs `EXPLAIN FORMAT=JSON` on exactly one statement, never `ANALYZE`, so the statement is not executed, and maps the MySQL 8 and MariaDB plan trees (table, access type, key, rows examined or estimated, costs, other attributes) into the driver-agnostic plan model. A query with several statements, or an empty one, is refused before anything is sent.
 
 ## Limitations
 

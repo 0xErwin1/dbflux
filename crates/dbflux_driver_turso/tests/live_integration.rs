@@ -453,6 +453,47 @@ fn turso_crud_operations() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon or TURSO_TEST_URL"]
+fn turso_query_plan_is_structured_and_never_runs_the_statement() -> Result<(), DbError> {
+    containers::with_libsql_server(|url| {
+        let connection = connect(&url)?;
+        let table = unique_table("plan");
+        let _cleanup = TableCleanup {
+            connection: connection.as_ref(),
+            tables: vec![table.clone()],
+        };
+
+        connection.execute(&QueryRequest::new(format!(
+            "CREATE TABLE \"{table}\" (id INTEGER PRIMARY KEY, name TEXT)"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "INSERT INTO \"{table}\" (name) VALUES ('kept')"
+        )))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(format!(
+            "SELECT * FROM \"{table}\" WHERE id = 1"
+        )))?;
+        assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Text);
+        assert!(!plan.roots.is_empty());
+        assert_eq!(plan.roots[0].relation.as_deref(), Some(table.as_str()));
+
+        connection.query_plan(&dbflux_core::QueryPlanRequest::new(format!(
+            "DELETE FROM \"{table}\""
+        )))?;
+        let remaining = connection.execute(&QueryRequest::new(format!(
+            "SELECT count(*) FROM \"{table}\""
+        )))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+        let multiple =
+            connection.query_plan(&dbflux_core::QueryPlanRequest::new("SELECT 1; SELECT 2"));
+        assert!(multiple.is_err());
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon or TURSO_TEST_URL"]
 fn turso_browse_count_explain_describe() -> Result<(), DbError> {
     containers::with_libsql_server(|url| {
         let connection = connect(&url)?;
