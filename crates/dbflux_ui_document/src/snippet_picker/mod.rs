@@ -24,7 +24,6 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::input::{MoveDown, MoveUp};
 use gpui_component::{ActiveTheme, Sizable};
 
 mod preview;
@@ -145,6 +144,11 @@ impl SnippetPicker {
         self.matches
             .get(self.selected)
             .and_then(|index| self.snippets.get(*index))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn highlighted_name(&self) -> Option<String> {
+        self.selected_snippet().map(|snippet| snippet.name.clone())
     }
 
     pub(crate) fn select_next(&mut self, cx: &mut Context<Self>) {
@@ -353,10 +357,6 @@ impl Render for SnippetPicker {
             .key_context(ContextId::HistoryModal.as_gpui_context())
             .flex()
             .flex_col()
-            // The single-line search field takes Up and Down for itself, so
-            // the picker claims them before the field sees them.
-            .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.select_next(cx)))
-            .capture_action(cx.listener(|this, _: &MoveUp, _, cx| this.select_prev(cx)))
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select_next(cx)))
             .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.select_prev(cx)))
             .on_action(cx.listener(|this, _: &Execute, window, cx| this.choose(window, cx)))

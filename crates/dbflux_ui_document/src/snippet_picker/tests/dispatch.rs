@@ -33,13 +33,17 @@ fn open(cx: &mut TestAppContext) -> Fixture<'_> {
             })
         },
         |document, cx| document.active_context(cx),
-        // The workspace answers Execute itself whenever a document has focus
-        // (`dispatch/navigation.rs`), so an Enter bound as a command never
-        // reaches an element listener of the picker; the document must take
-        // it from `dispatch_command`.
+        // The workspace answers Execute, SelectNext and SelectPrev itself
+        // whenever a document has focus (`dispatch/navigation.rs`), so those
+        // keys never reach an element listener of the picker; the document
+        // must take them from `dispatch_command`.
         |document, command, window, cx| {
             let handled = document.dispatch_command(command, window, cx);
-            handled || command == Command::Execute
+            handled
+                || matches!(
+                    command,
+                    Command::Execute | Command::SelectNext | Command::SelectPrev
+                )
         },
     );
     let document = window.update(|_, cx| host.read(cx).document.clone());
@@ -88,6 +92,12 @@ impl Fixture<'_> {
     fn vim_mode(&mut self) -> Option<VimMode> {
         let document = self.document.clone();
         self.window.update(|_, cx| document.read(cx).vim_mode())
+    }
+
+    fn highlighted_name(&mut self) -> Option<String> {
+        let document = self.document.clone();
+        self.window
+            .update(|_, cx| document.read(cx).snippet_picker_highlighted_name(cx))
     }
 
     fn open_filtered(&mut self) {
@@ -177,5 +187,32 @@ fn enter_in_vim_normal_mode_switches_to_insert_and_inserts(cx: &mut TestAppConte
     assert_eq!(selected, "name");
     assert_eq!(fixture.vim_mode(), Some(VimMode::Insert));
     assert!(fixture.session_active());
+    assert!(!fixture.picker_open());
+}
+
+#[gpui::test]
+fn each_arrow_press_moves_the_highlight_one_row(cx: &mut TestAppContext) {
+    let mut fixture = open(cx);
+    fixture.keys("ctrl-alt-j");
+    assert!(fixture.picker_open(), "Ctrl+Alt+J opens the picker");
+
+    fixture.keys("down");
+    assert_eq!(
+        fixture.highlighted_name().as_deref(),
+        Some("Common table expression")
+    );
+
+    fixture.keys("down");
+    assert_eq!(fixture.highlighted_name().as_deref(), Some("Delete rows"));
+
+    fixture.keys("up");
+    assert_eq!(
+        fixture.highlighted_name().as_deref(),
+        Some("Common table expression")
+    );
+
+    fixture.keys("enter");
+    let (text, _) = fixture.text_and_selection();
+    assert!(text.contains("WITH name AS ("), "{text:?}");
     assert!(!fixture.picker_open());
 }

@@ -138,15 +138,12 @@ fn the_picker_lists_the_snippets_and_filters_as_you_type(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn enter_chooses_the_highlighted_snippet(cx: &mut TestAppContext) {
+fn enter_chooses_the_first_snippet_by_default(cx: &mut TestAppContext) {
     let mut picker = open(cx, snippets());
 
     picker.keys("enter");
-    assert_eq!(picker.outcomes(), [Outcome::Chosen("cnt".to_string())]);
 
-    picker.keys("down");
-    picker.keys("enter");
-    assert_eq!(picker.outcomes(), [Outcome::Chosen("sel".to_string())]);
+    assert_eq!(picker.outcomes(), [Outcome::Chosen("cnt".to_string())]);
 }
 
 #[gpui::test]

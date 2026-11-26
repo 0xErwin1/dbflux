@@ -162,6 +162,11 @@ impl CodeDocument {
         self.snippet_picker.is_some()
     }
 
+    pub(crate) fn snippet_picker_highlighted_name(&self, cx: &App) -> Option<String> {
+        let open = self.snippet_picker.as_ref()?;
+        open.picker.read(cx).highlighted_name()
+    }
+
     pub(crate) fn editor_text_and_selection(&self, cx: &App) -> (String, std::ops::Range<usize>) {
         let state = self.editor.input_state.read(cx);
         (state.value().to_string(), state.selected_range())
