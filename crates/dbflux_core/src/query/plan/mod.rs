@@ -40,10 +40,24 @@ pub struct PlanNode {
     pub estimated_startup_cost: Option<f64>,
     pub estimated_total_cost: Option<f64>,
     pub estimated_rows: Option<f64>,
+    /// Plain-language explanation of what the operation does, from the
+    /// driver's own glossary. `None` when the driver has no entry for it.
+    pub description: Option<String>,
+    /// The one condition that best explains the node (filter, index
+    /// condition, join condition or sort key), chosen by the driver.
+    pub key_condition: Option<PlanCondition>,
     /// Remaining engine attributes (join type, filters, sort keys...).
     pub details: Vec<(String, String)>,
     pub warnings: Vec<String>,
     pub children: Vec<PlanNode>,
+}
+
+/// A labelled condition shown on a plan node, such as `Index Cond`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanCondition {
+    /// The engine's own name for the condition (for example `Filter`).
+    pub label: String,
+    pub value: String,
 }
 
 impl PlanNode {
@@ -52,6 +66,19 @@ impl PlanNode {
             operation: operation.into(),
             ..Self::default()
         }
+    }
+
+    /// Estimated cost of this node alone: its total cost minus the total
+    /// cost of its direct children, never below zero. `None` when the node
+    /// or any child reports no total cost.
+    pub fn estimated_self_cost(&self) -> Option<f64> {
+        let total = self.estimated_total_cost?;
+        let children = self
+            .children
+            .iter()
+            .map(|child| child.estimated_total_cost)
+            .sum::<Option<f64>>()?;
+        Some((total - children).max(0.0))
     }
 }
 

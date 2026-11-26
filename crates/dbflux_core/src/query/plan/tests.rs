@@ -192,3 +192,40 @@ fn plan_text_is_read_from_the_first_cell_or_the_text_body() {
 
     assert!(plan_text_from_result(&QueryResult::empty()).is_err());
 }
+
+fn costed(operation: &str, total: f64, children: Vec<PlanNode>) -> PlanNode {
+    PlanNode {
+        estimated_total_cost: Some(total),
+        children,
+        ..PlanNode::new(operation)
+    }
+}
+
+#[test]
+fn self_cost_subtracts_the_direct_children() {
+    let node = costed(
+        "Nested Loop",
+        100.0,
+        vec![
+            costed("Seq Scan", 60.0, vec![]),
+            costed("Index Scan", 15.0, vec![]),
+        ],
+    );
+
+    assert_eq!(node.estimated_self_cost(), Some(25.0));
+}
+
+#[test]
+fn self_cost_never_goes_below_zero() {
+    let node = costed("Limit", 10.0, vec![costed("Sort", 12.0, vec![])]);
+
+    assert_eq!(node.estimated_self_cost(), Some(0.0));
+}
+
+#[test]
+fn self_cost_is_unknown_when_a_child_has_no_cost() {
+    let node = costed("Nested Loop", 100.0, vec![PlanNode::new("SCAN t")]);
+
+    assert_eq!(node.estimated_self_cost(), None);
+    assert_eq!(PlanNode::new("SCAN t").estimated_self_cost(), None);
+}
