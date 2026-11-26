@@ -29,6 +29,10 @@ fn right_clicking_inside_the_selection_commits_the_edit_in_progress(cx: &mut gpu
     window.update(|_, app| {
         let state = state.read(app);
         assert!(state.editing_cell.is_none(), "the editor closes");
+        assert!(
+            !state.pending_refocus,
+            "the context menu keeps the focus; the table must not take it back on the next render"
+        );
         assert_eq!(
             state.selection.anchor,
             Some(CellCoord::new(1, 0)),

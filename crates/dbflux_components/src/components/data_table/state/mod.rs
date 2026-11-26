@@ -715,6 +715,9 @@ impl DataTableState {
     ) {
         self.focus(window, cx);
         self.commit_edit_in_progress(cx);
+        // The commit asks the table to take focus back on its next render,
+        // which would pull it away from the menu that is about to open.
+        self.pending_refocus = false;
         if !self.selection.is_selected(coord) {
             self.select_cell(coord, cx);
         }
