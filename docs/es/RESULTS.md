@@ -274,6 +274,7 @@ resultado e incluyen:
 
 - **CSV**
 - **JSON (pretty)** y **JSON (compact)**
+- **Markdown** (una tabla de GitHub Flavored Markdown, para resultados de tabla)
 - **Text**
 - **Binary** (para resultados con forma binaria)
 

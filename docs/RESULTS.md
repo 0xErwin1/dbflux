@@ -251,6 +251,7 @@ command palette. The available formats depend on the result shape and include:
 
 - **CSV**
 - **JSON (pretty)** and **JSON (compact)**
+- **Markdown** (a GitHub Flavored Markdown table, for table results)
 - **Text**
 - **Binary** (for binary-shaped results)
 
