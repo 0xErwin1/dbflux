@@ -551,5 +551,133 @@ pub fn radial(nodes: &[LayoutNode], edges: &[LayoutEdge], focal: usize) -> Diagr
     graph.into_layout(&positions, max_x - min_x + 100.0, max_y - min_y + 100.0)
 }
 
+/// Tree layout, left to right, for a diagram that is a forest.
+///
+/// `parents[i]` is the parent of node `i`, `None` for a root. The column of a
+/// node comes from its depth alone: roots sit in the rightmost column and every
+/// child exactly one column to the left of its parent, so no edge skips a column
+/// or passes under a node (unlike [`layered_left_right`], which pulls every leaf
+/// to the first column). Siblings keep their input order from top to bottom and
+/// a parent is centred on its first and last child. A subtree owns a vertical
+/// band at least as tall as its root, so nodes in the same column never overlap.
+///
+/// Edges run from each child to its parent, in node order, with weight 0.0; a
+/// consumer that wants a width keeps its own table by node index.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "every index is a node index below `count` (parents are filtered to that range) or a column below `max_depth + 1`, and every per-node vector has `count` entries"
+)]
+pub fn layered_tree_right(nodes: &[LayoutNode], parents: &[Option<usize>]) -> DiagramLayout {
+    let count = nodes.len();
+    if count == 0 {
+        return DiagramLayout::empty();
+    }
+
+    let parent_of = |index: usize| parents.get(index).copied().flatten().filter(|p| *p < count);
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); count];
+    let mut roots = Vec::new();
+    for index in 0..count {
+        match parent_of(index) {
+            Some(parent) if parent != index => children[parent].push(index),
+            _ => roots.push(index),
+        }
+    }
+
+    let mut depth = vec![0_usize; count];
+    let mut order = Vec::with_capacity(count);
+    let mut stack: Vec<usize> = roots.iter().rev().copied().collect();
+    while let Some(index) = stack.pop() {
+        order.push(index);
+        for &child in children[index].iter().rev() {
+            depth[child] = depth[index] + 1;
+            stack.push(child);
+        }
+    }
+
+    let max_depth = depth.iter().copied().max().unwrap_or(0);
+    let mut column_width = vec![0.0_f32; max_depth + 1];
+    for &index in &order {
+        let column = max_depth - depth[index];
+        column_width[column] = column_width[column].max(nodes[index].width);
+    }
+    let mut column_x = vec![0.0_f32; max_depth + 1];
+    for column in 1..=max_depth {
+        column_x[column] = column_x[column - 1] + column_width[column - 1] + LAYER_GUTTER_X;
+    }
+
+    let mut band = vec![0.0_f32; count];
+    for &index in order.iter().rev() {
+        let kids = &children[index];
+        let block: f32 = kids.iter().map(|&k| band[k]).sum::<f32>()
+            + kids.len().saturating_sub(1) as f32 * NODE_SPACING_Y;
+        band[index] = block.max(nodes[index].height);
+    }
+
+    let mut y = vec![0.0_f32; count];
+    let mut top_of = vec![0.0_f32; count];
+    let mut cursor = 0.0_f32;
+    for &root in &roots {
+        top_of[root] = cursor;
+        cursor += band[root] + NODE_SPACING_Y;
+    }
+    for &index in &order {
+        let kids = &children[index];
+        let top = top_of[index];
+        let block: f32 = kids.iter().map(|&k| band[k]).sum::<f32>()
+            + kids.len().saturating_sub(1) as f32 * NODE_SPACING_Y;
+        let mut child_top = top + (band[index] - block) / 2.0;
+        for &kid in kids {
+            top_of[kid] = child_top;
+            child_top += band[kid] + NODE_SPACING_Y;
+        }
+        y[index] = top;
+    }
+    // Parents are placed after their children are known: deepest first.
+    for &index in order.iter().rev() {
+        let kids = &children[index];
+        let height = nodes[index].height;
+        let (top, limit) = (top_of[index], band[index]);
+        let centre = match (kids.first(), kids.last()) {
+            (Some(&first), Some(&last)) => {
+                (y[first] + nodes[first].height / 2.0 + y[last] + nodes[last].height / 2.0) / 2.0
+            }
+            _ => top + limit / 2.0,
+        };
+        y[index] = (centre - height / 2.0).clamp(top, top + (limit - height).max(0.0));
+    }
+
+    let placed: Vec<PlacedNode> = (0..count)
+        .map(|index| PlacedNode {
+            x: column_x[max_depth - depth[index]],
+            y: y[index],
+            width: nodes[index].width,
+            height: nodes[index].height,
+        })
+        .collect();
+    let edges = (0..count)
+        .filter_map(|index| {
+            let parent = parent_of(index).filter(|p| *p != index)?;
+            let (from, to) = (placed.get(index)?, placed.get(parent)?);
+            Some(PlacedEdge {
+                from: index,
+                to: parent,
+                from_anchor: (from.x + from.width, from.y + from.height / 2.0),
+                to_anchor: (to.x, to.y + to.height / 2.0),
+                weight: 0.0,
+            })
+        })
+        .collect();
+
+    let total_width = column_x[max_depth] + column_width[max_depth];
+    let total_height = (cursor - NODE_SPACING_Y).max(0.0);
+
+    DiagramLayout {
+        nodes: placed,
+        edges,
+        total_width,
+        total_height,
+    }
+}
+
 #[cfg(test)]
 mod tests;

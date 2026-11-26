@@ -291,3 +291,107 @@ fn a_self_edge_on_the_focal_node_leaves_it_at_the_centre() {
     assert_eq!(with_loop.nodes, without.nodes);
     assert_eq!(with_loop.edges.len(), 2);
 }
+
+fn tree_node(height: f32) -> LayoutNode {
+    node("n", 100.0, height)
+}
+
+/// 0 -> (1, 2); 2 -> (3, 4); 4 -> 5: the shape of a join with a hash side.
+fn join_tree() -> (Vec<LayoutNode>, Vec<Option<usize>>) {
+    (
+        (0..6).map(|_| tree_node(60.0)).collect(),
+        vec![None, Some(0), Some(0), Some(2), Some(2), Some(4)],
+    )
+}
+
+#[test]
+fn a_tree_layout_puts_each_child_exactly_one_column_left_of_its_parent() {
+    let (nodes, parents) = join_tree();
+    let layout = layered_tree_right(&nodes, &parents);
+
+    for (child, parent) in parents.iter().enumerate() {
+        let Some(parent) = parent else { continue };
+        let (c, p) = (layout.nodes[child], layout.nodes[*parent]);
+        assert!(c.x + c.width < p.x, "node {child} is left of {parent}");
+        assert_eq!(layout.edges.iter().filter(|e| e.from == child).count(), 1);
+    }
+    // Siblings share a column, and the root is the rightmost.
+    assert_eq!(layout.nodes[1].x, layout.nodes[2].x);
+    assert_eq!(layout.nodes[3].x, layout.nodes[4].x);
+    assert!(layout.nodes.iter().all(|n| n.x <= layout.nodes[0].x));
+    // A leaf at depth 1 does not sit in the first column.
+    assert!(layout.nodes[5].x < layout.nodes[3].x);
+    assert!(layout.nodes[1].x > layout.nodes[5].x);
+}
+
+#[test]
+fn no_tree_edge_skips_a_column() {
+    let (nodes, parents) = join_tree();
+    let layout = layered_tree_right(&nodes, &parents);
+    let mut columns: Vec<f32> = layout.nodes.iter().map(|n| n.x).collect();
+    columns.sort_by(f32::total_cmp);
+    columns.dedup();
+
+    for edge in &layout.edges {
+        let from = columns.iter().position(|x| *x == layout.nodes[edge.from].x);
+        let to = columns.iter().position(|x| *x == layout.nodes[edge.to].x);
+        assert_eq!(from.map(|c| c + 1), to, "{edge:?}");
+    }
+}
+
+#[test]
+fn a_tree_parent_is_centred_on_its_first_and_last_child() {
+    let (nodes, parents) = join_tree();
+    let layout = layered_tree_right(&nodes, &parents);
+    let centre = |i: usize| layout.nodes[i].y + layout.nodes[i].height / 2.0;
+
+    assert!((centre(0) - (centre(1) + centre(2)) / 2.0).abs() < 0.01);
+    assert!((centre(2) - (centre(3) + centre(4)) / 2.0).abs() < 0.01);
+    assert!(
+        (centre(4) - centre(5)).abs() < 0.01,
+        "an only child is level"
+    );
+}
+
+#[test]
+fn tree_nodes_in_one_column_never_overlap_even_with_different_heights() {
+    let nodes = vec![
+        tree_node(200.0),
+        tree_node(40.0),
+        tree_node(160.0),
+        tree_node(90.0),
+        tree_node(30.0),
+    ];
+    let parents = vec![None, Some(0), Some(0), Some(1), Some(2)];
+    let layout = layered_tree_right(&nodes, &parents);
+
+    for a in 0..nodes.len() {
+        for b in (a + 1)..nodes.len() {
+            let (p, q) = (layout.nodes[a], layout.nodes[b]);
+            if (p.x - q.x).abs() < 0.01 {
+                assert!(
+                    p.y + p.height <= q.y || q.y + q.height <= p.y,
+                    "{a} and {b} overlap: {p:?} {q:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_deep_tree_chain_runs_one_column_per_level() {
+    let nodes: Vec<LayoutNode> = (0..9).map(|_| tree_node(50.0)).collect();
+    let parents: Vec<Option<usize>> = (0..9_usize).map(|i| i.checked_sub(1)).collect();
+    let layout = layered_tree_right(&nodes, &parents);
+
+    for i in 1..9 {
+        assert!(layout.nodes[i].x < layout.nodes[i - 1].x);
+        assert_eq!(layout.nodes[i].y, layout.nodes[0].y, "a chain is one row");
+    }
+    assert_eq!(layout.nodes[0].x + 100.0, layout.total_width);
+}
+
+#[test]
+fn an_empty_tree_is_an_empty_layout() {
+    assert_eq!(layered_tree_right(&[], &[]), DiagramLayout::empty());
+}

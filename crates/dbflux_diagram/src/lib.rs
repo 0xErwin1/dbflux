@@ -13,7 +13,7 @@ pub mod routing;
 
 pub use layout::{
     DiagramLayout, LayoutEdge, LayoutNode, PlacedEdge, PlacedNode, compact_grid,
-    layered_left_right, radial,
+    layered_left_right, layered_tree_right, radial,
 };
 pub use navigation::{Direction, next_in_direction, spatial_order};
 pub use routing::{NodeBounds, OrthogonalRoute, RoutePoint, route_edge};
