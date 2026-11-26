@@ -4,7 +4,9 @@ use dbflux_core::{DbError, PlanCondition, PlanFormat, PlanNode, QueryPlan, Query
 use serde_json::Value as Json;
 
 /// Keys mapped to `PlanNode` fields; every other scalar/array key is a detail.
-const MAPPED_KEYS: [&str; 7] = [
+const MAPPED_KEYS: [&str; 9] = [
+    "Parent Relationship",
+    "Plan Width",
     "Node Type",
     "Relation Name",
     "Index Name",
@@ -82,18 +84,26 @@ fn parse_node(value: &Json) -> Result<PlanNode, DbError> {
     node.estimated_total_cost = object.get("Total Cost").and_then(Json::as_f64);
     node.estimated_rows = object.get("Plan Rows").and_then(Json::as_f64);
 
-    node.details = object
-        .iter()
-        .filter(|(key, _)| !MAPPED_KEYS.contains(&key.as_str()))
-        .map(|(key, value)| (key.clone(), detail_text(value)))
-        .collect();
-
     node.key_condition = KEY_CONDITION_PRIORITY.iter().find_map(|label| {
         object.get(*label).map(|value| PlanCondition {
             label: (*label).to_string(),
             value: detail_text(value),
         })
     });
+
+    // Details are what the node says beyond its columns: a flag that is off,
+    // an attribute already shown elsewhere or the key condition itself would
+    // only repeat or add noise.
+    let condition_label = node.key_condition.as_ref().map(|c| c.label.as_str());
+    node.details = object
+        .iter()
+        .filter(|(key, value)| {
+            !MAPPED_KEYS.contains(&key.as_str())
+                && Some(key.as_str()) != condition_label
+                && **value != Json::Bool(false)
+        })
+        .map(|(key, value)| (key.clone(), detail_text(value)))
+        .collect();
     node.description = describe(operation, object).map(str::to_string);
 
     if let Some(children) = object.get("Plans").and_then(Json::as_array) {

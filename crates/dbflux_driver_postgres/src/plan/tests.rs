@@ -65,7 +65,11 @@ fn nested_join_maps_the_tree_costs_relations_and_index() {
     assert_eq!(seq.operation, "Seq Scan");
     assert_eq!(seq.relation.as_deref(), Some("orders"));
     assert_eq!(seq.index, None);
-    assert_eq!(detail(seq, "Filter"), Some("(status = 'open'::text)"));
+    assert_eq!(
+        detail(seq, "Filter"),
+        None,
+        "the key condition is not repeated"
+    );
     assert_eq!(detail(seq, "Alias"), Some("o"));
     assert!(seq.children.is_empty());
 
@@ -73,7 +77,11 @@ fn nested_join_maps_the_tree_costs_relations_and_index() {
     assert_eq!(index.operation, "Index Scan");
     assert_eq!(index.relation.as_deref(), Some("customers"));
     assert_eq!(index.index.as_deref(), Some("customers_pkey"));
-    assert_eq!(detail(index, "Index Cond"), Some("(id = o.customer_id)"));
+    assert_eq!(detail(index, "Index Cond"), None);
+    assert_eq!(
+        condition(index),
+        Some(("Index Cond", "(id = o.customer_id)"))
+    );
 }
 
 #[test]
@@ -89,6 +97,8 @@ fn keys_already_mapped_to_fields_are_not_repeated_as_details() {
         "Total Cost",
         "Plan Rows",
         "Plans",
+        "Parent Relationship",
+        "Plan Width",
     ] {
         assert_eq!(detail(index, key), None, "{key} must not be a detail");
     }
@@ -112,12 +122,28 @@ fn seq_scan_with_only_a_node_type_leaves_optional_fields_empty() {
 
 #[test]
 fn non_string_attributes_are_kept_as_text_details() {
-    let raw = r#"[{"Plan": {"Node Type": "Sort", "Sort Key": ["a", "b DESC"], "Parallel Aware": false}}]"#;
+    let raw = r#"[{"Plan": {"Node Type": "Sort", "Workers Planned": 2, "Parallel Aware": true}}]"#;
     let plan = parse_explain_json(raw).unwrap();
     let node = &plan.roots[0];
 
-    assert_eq!(detail(node, "Sort Key"), Some("a, b DESC"));
-    assert_eq!(detail(node, "Parallel Aware"), Some("false"));
+    assert_eq!(detail(node, "Workers Planned"), Some("2"));
+    assert_eq!(detail(node, "Parallel Aware"), Some("true"));
+}
+
+#[test]
+fn details_leave_out_flags_that_are_off_noise_keys_and_the_key_condition() {
+    let raw = r#"[{"Plan": {
+        "Node Type": "Sort", "Parent Relationship": "Outer", "Plan Width": 52,
+        "Parallel Aware": false, "Async Capable": false, "Inner Unique": true,
+        "Startup Cost": 1.0, "Total Cost": 2.0, "Plan Rows": 3,
+        "Sort Key": ["a", "b DESC"], "Sort Method": "quicksort"
+    }}]"#;
+    let plan = parse_explain_json(raw).unwrap();
+    let node = &plan.roots[0];
+
+    assert_eq!(condition(node), Some(("Sort Key", "a, b DESC")));
+    let keys: Vec<&str> = node.details.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, ["Inner Unique", "Sort Method"]);
 }
 
 #[test]
