@@ -3511,6 +3511,7 @@ dependencies = [
  "hex",
  "indexmap 2.14.2",
  "log",
+ "quick-xml 0.39.4",
  "serde_json",
  "sha2 0.11.1",
  "socket2 0.6.3",

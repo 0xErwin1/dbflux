@@ -132,6 +132,7 @@ fn cleanup_test_tables(conn: &dyn Connection) {
         "limit_test",
         "limit_xml_test",
         "explain_test",
+        "plan_test",
         "describe_test",
         "codegen_test",
         "cancel_test",
@@ -747,6 +748,131 @@ fn mssql_explain_returns_xml_plan() -> Result<(), DbError> {
         assert_eq!(normal.rows.len(), 1);
 
         cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_is_structured() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50))",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "SELECT * FROM plan_test WHERE id = 1",
+        ))?;
+        assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Xml);
+        assert!(plan.raw.contains("ShowPlanXML"));
+        assert_eq!(plan.roots.len(), 1);
+
+        let mut nodes = vec![&plan.roots[0]];
+        let mut seek = None;
+        while let Some(node) = nodes.pop() {
+            if node.relation.is_some() {
+                seek = Some(node);
+            }
+            nodes.extend(node.children.iter());
+        }
+        let seek = seek.expect("the plan reads plan_test");
+        assert_eq!(seek.relation.as_deref(), Some("dbo.plan_test"));
+        assert!(seek.index.is_some());
+        assert!(seek.estimated_total_cost.is_some());
+
+        let multiple =
+            connection.query_plan(&dbflux_core::QueryPlanRequest::new("SELECT 1; SELECT 2"));
+        assert!(multiple.is_err());
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_of_a_delete_leaves_the_row() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO plan_test (id, name) VALUES (1, 'kept')",
+        ))?;
+
+        let plan =
+            connection.query_plan(&dbflux_core::QueryPlanRequest::new("DELETE FROM plan_test"))?;
+        assert!(!plan.roots.is_empty());
+
+        let remaining = connection.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_failure_does_not_leave_the_session_in_plan_mode() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        let error = connection
+            .query_plan(&dbflux_core::QueryPlanRequest::new(
+                "SELECT * FROM table_that_does_not_exist",
+            ))
+            .expect_err("an unknown table has no plan");
+        assert!(!error.to_string().is_empty());
+
+        let normal = connection.execute(&QueryRequest::new("SELECT 1 AS one"))?;
+        assert_eq!(normal.columns[0].name, "one");
+        assert_eq!(normal.rows.len(), 1);
+        assert_eq!(normal.rows[0][0], Value::Int(1));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_refuses_statements_without_semicolons() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        for query in [
+            "SELECT 1 AS a\nSELECT 2 AS b",
+            "SELECT 1 AS a SELECT 2 AS b",
+        ] {
+            let error = connection
+                .query_plan(&dbflux_core::QueryPlanRequest::new(query))
+                .expect_err("two statements have no single plan");
+            assert!(
+                error
+                    .to_string()
+                    .contains("A query plan covers exactly one statement; the query has 2."),
+                "{error}"
+            );
+        }
+
+        for query in [
+            "WITH numbers AS (SELECT 1 AS a) SELECT a FROM numbers",
+            "IF 1 = 1 BEGIN SELECT 1 AS a END",
+        ] {
+            connection
+                .query_plan(&dbflux_core::QueryPlanRequest::new(query))
+                .map_err(|error| DbError::query_failed(format!("{query:?}: {error}")))?;
+        }
+
+        let normal = connection.execute(&QueryRequest::new("SELECT 1 AS one"))?;
+        assert_eq!(normal.rows[0][0], Value::Int(1));
+
         Ok(())
     })
 }
