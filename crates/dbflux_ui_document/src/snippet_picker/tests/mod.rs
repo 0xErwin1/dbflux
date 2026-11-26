@@ -1,6 +1,8 @@
 //! The picker against a real window: the filter, the keys and the empty
 //! states, plus the keyboard coverage of its clickable rows.
 
+mod dispatch;
+
 use super::{SnippetPicker, SnippetPickerEvent, filter_snippets};
 use crate::keyboard_coverage::SNIPPET_PICKER;
 use crate::keyboard_test_support::init_keyboard_runtime;

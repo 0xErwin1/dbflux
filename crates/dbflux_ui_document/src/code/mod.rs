@@ -1929,6 +1929,11 @@ impl CodeDocument {
             }
         }
 
+        // The Insert snippet picker owns the keyboard while it is open.
+        if self.snippet_picker.is_some() && self.dispatch_to_snippet_picker(cmd, window, cx) {
+            return true;
+        }
+
         // While the history panel owns the keyboard, route commands to it first
         if self.history.history_panel.read(cx).owns_keyboard()
             && self.dispatch_to_history_panel(cmd, window, cx)

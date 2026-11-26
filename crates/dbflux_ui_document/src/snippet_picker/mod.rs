@@ -5,9 +5,10 @@
 //! the chosen snippet. The document turns the choice into an insertion at the
 //! cursor (`CodeDocument::insert_snippet`), which starts the tabstop session.
 //!
-//! The keys are the history modal's (Up/Down, Ctrl+J/K, Enter, Escape): the
-//! search input lets them through, and the picker answers the actions they
-//! run, so it needs no key context of its own.
+//! The keys are the history modal's (Up/Down, Ctrl+J/K, Enter, Escape). Under
+//! the workspace they arrive as commands, which `CodeDocument::dispatch_command`
+//! hands to the picker (`dispatch_to_snippet_picker`); the picker's own action
+//! listeners answer the same keys when nothing above it claims them.
 
 use dbflux_app::keymap::ContextId;
 use dbflux_components::actions::{Cancel, Execute, SelectNext, SelectPrev};
@@ -144,13 +145,13 @@ impl SnippetPicker {
             .and_then(|index| self.snippets.get(*index))
     }
 
-    fn select_next(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn select_next(&mut self, cx: &mut Context<Self>) {
         if self.selected + 1 < self.matches.len() {
             self.select(self.selected + 1, cx);
         }
     }
 
-    fn select_prev(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn select_prev(&mut self, cx: &mut Context<Self>) {
         if let Some(previous) = self.selected.checked_sub(1) {
             self.select(previous, cx);
         }
@@ -164,13 +165,13 @@ impl SnippetPicker {
 
     /// Reports the highlighted snippet. With no match there is nothing to
     /// choose, so Enter does nothing.
-    fn choose(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn choose(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(snippet) = self.selected_snippet().cloned() {
             cx.emit(SnippetPickerEvent::Chosen(Box::new(snippet)));
         }
     }
 
-    fn close(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
         cx.emit(SnippetPickerEvent::Closed);
     }
 

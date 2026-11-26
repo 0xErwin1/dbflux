@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::snippet_picker::{SnippetPicker, SnippetPickerEvent, snippet_language_id};
+use dbflux_components::vim::VimBinding;
 use dbflux_core::parse_snippet;
 use dbflux_storage::SnippetRecord;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -69,6 +70,32 @@ impl CodeDocument {
         true
     }
 
+    /// Routes the modal keys to the open picker. The keymap runs Enter, Escape
+    /// and the arrows in the picker's context as `RunCommand`s that reach the
+    /// document through the workspace before any element listener of the
+    /// picker, so the document hands them over itself. Returns whether the
+    /// command was consumed.
+    pub(super) fn dispatch_to_snippet_picker(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(open) = self.snippet_picker.as_ref() else {
+            return false;
+        };
+        let picker = open.picker.clone();
+
+        match cmd {
+            Command::Execute => picker.update(cx, |picker, cx| picker.choose(window, cx)),
+            Command::Cancel => picker.update(cx, |picker, cx| picker.close(cx)),
+            Command::SelectNext => picker.update(cx, |picker, cx| picker.select_next(cx)),
+            Command::SelectPrev => picker.update(cx, |picker, cx| picker.select_prev(cx)),
+            _ => return false,
+        }
+        true
+    }
+
     fn close_snippet_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.snippet_picker.take().is_some() {
             self.focus(window, cx);
@@ -103,7 +130,40 @@ impl CodeDocument {
             }
         };
 
+        self.enter_vim_insert_for_snippet(window, cx);
         let range = self.editor.input_state.read(cx).selected_range();
         self.insert_snippet(&parsed, range, window, cx);
+    }
+
+    /// Vim Normal mode keeps the input read-only, so a snippet could not be
+    /// written into it. Enter Insert mode the way the user would, by typing
+    /// `i`; the session then lives and ends with Insert mode like any other.
+    fn enter_vim_insert_for_snippet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only || self.vim_mode() != Some(VimMode::Normal) {
+            return;
+        }
+
+        let Ok(keystroke) = Keystroke::parse("i") else {
+            return;
+        };
+        let input = self.vim.input_id();
+        let event = KeyDownEvent {
+            keystroke,
+            is_held: false,
+            prefer_character_input: false,
+        };
+        VimBinding::key_down(self, input, &event, window, cx);
+    }
+}
+
+#[cfg(test)]
+impl CodeDocument {
+    pub(crate) fn snippet_picker_open(&self) -> bool {
+        self.snippet_picker.is_some()
+    }
+
+    pub(crate) fn editor_text_and_selection(&self, cx: &App) -> (String, std::ops::Range<usize>) {
+        let state = self.editor.input_state.read(cx);
+        (state.value().to_string(), state.selected_range())
     }
 }
