@@ -1,0 +1,28 @@
+{
+  "title": "DBFlux redesign: Code snippets (#910) \u00b7 dark",
+  "brief": "Issue #910: user snippets with tabstop placeholders per query language. Settings section with list and form (built-in SQL snippets are editable and deletable), prefix completion with its own kind and a Tab/Shift+Tab field session in the editor, and a keybinding-driven Insert snippet picker with preview and empty states.",
+  "feature": "odd/tasks/code-snippets.md",
+  "artboards": [
+    {
+      "file": "01-isl-snippets-settings.html",
+      "title": "Settings \u203a Snippets: list, form and states",
+      "tradeoff": "Reuses the Hooks list + form so nothing new has to be learned; the body area is a code box, which is heavier than the Hooks inputs and needs the fields-tinted highlighting to explain ${1:table}.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-snippets-editor.html",
+      "title": "Editor: prefix completion, field session and rules",
+      "tradeoff": "Reuses the completion menu row exactly (one new kind word, no preview panel), so the snippet body is only seen after insertion; the dashed outlines make fields discoverable at the cost of some visual noise in the code.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-snippets-picker.html",
+      "title": "Insert snippet picker with body preview",
+      "tradeoff": "A wider overlay than the completion menu buys a body preview, which prefix completion cannot show; it adds a second way to insert, so its keybinding has to be discoverable in the palette.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}
