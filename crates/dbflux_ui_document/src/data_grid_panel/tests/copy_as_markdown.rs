@@ -130,3 +130,66 @@ fn the_command_copies_the_whole_result_for_a_single_cell(cx: &mut TestAppContext
         "| id | name |\n| --- | --- |\n| 1 | row 1 |\n| 2 | row 2 |\n| 3 | row 3 |\n"
     );
 }
+
+fn right_click_cell(
+    window: &mut VisualTestContext,
+    table_state: &gpui::Entity<DataTableState>,
+    coord: CellCoord,
+) {
+    window.update(|window, cx| {
+        table_state.update(cx, |state, cx| {
+            state.request_cell_context_menu(
+                coord,
+                gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                window,
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+}
+
+fn selection_corners(
+    window: &mut VisualTestContext,
+    table_state: &gpui::Entity<DataTableState>,
+) -> (Option<CellCoord>, Option<CellCoord>) {
+    window.update(|_, cx| {
+        let selection = table_state.read(cx).selection();
+        (selection.anchor, selection.active)
+    })
+}
+
+#[gpui::test]
+fn right_clicking_inside_the_selection_keeps_it_and_copies_the_range(cx: &mut TestAppContext) {
+    let (panel, table_state, window) = result_grid(cx);
+    select_two_rows(window, &table_state);
+
+    right_click_cell(window, &table_state, CellCoord::new(1, 0));
+
+    assert_eq!(
+        selection_corners(window, &table_state),
+        (Some(CellCoord::new(0, 0)), Some(CellCoord::new(1, 1)))
+    );
+    assert!(window.update(|_, cx| panel.read(cx).context_menu.is_some()));
+
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.handle_context_menu_action(ContextMenuAction::CopyAsMarkdown, window, cx);
+        });
+    });
+    assert_eq!(clipboard_text(window), SELECTED_TABLE);
+}
+
+#[gpui::test]
+fn right_clicking_outside_the_selection_selects_the_clicked_cell(cx: &mut TestAppContext) {
+    let (panel, table_state, window) = result_grid(cx);
+    select_two_rows(window, &table_state);
+
+    right_click_cell(window, &table_state, CellCoord::new(2, 1));
+
+    assert_eq!(
+        selection_corners(window, &table_state),
+        (Some(CellCoord::new(2, 1)), Some(CellCoord::new(2, 1)))
+    );
+    assert!(window.update(|_, cx| panel.read(cx).context_menu.is_some()));
+}

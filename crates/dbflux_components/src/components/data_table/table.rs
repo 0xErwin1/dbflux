@@ -1253,14 +1253,12 @@ impl DataTable {
                                 let coord = CellCoord::new(coord.row, coord.col);
                                 cx.stop_propagation();
                                 state.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                    state.select_cell(coord, cx);
-                                    cx.emit(DataTableEvent::ContextMenuRequested {
-                                        row: coord.row,
-                                        col: coord.col,
-                                        position: event.position,
-                                        is_column_header: false,
-                                    });
+                                    state.request_cell_context_menu(
+                                        coord,
+                                        event.position,
+                                        window,
+                                        cx,
+                                    );
                                 });
                             },
                         )

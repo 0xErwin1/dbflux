@@ -130,10 +130,14 @@ impl Workspace {
                 Some(true)
             }
 
+            Command::ResultsCopyAsMarkdown => Some(
+                self.tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+            ),
+
             Command::ResultsAddRow
             | Command::ResultsCopyRow
             | Command::ResultsCopyCell
-            | Command::ResultsCopyAsMarkdown
             | Command::ToggleRecordView
             | Command::CycleDocumentView
             | Command::CycleResultView

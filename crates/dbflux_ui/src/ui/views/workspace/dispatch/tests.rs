@@ -227,3 +227,19 @@ fn interface_size_commands_change_the_saved_font_sizes(cx: &mut TestAppContext) 
         assert_eq!(settings.grid_font_size, 12.5);
     });
 }
+
+/// With no tab open the active document cannot take the command, and the
+/// dispatch says so instead of reporting it handled.
+#[gpui::test]
+fn results_copy_as_markdown_reports_the_active_tab_outcome(cx: &mut TestAppContext) {
+    let app_state = init(cx);
+    let (workspace, window) = open_workspace(&app_state, cx);
+
+    let routed = window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.route_command(Command::ResultsCopyAsMarkdown, window, cx)
+        })
+    });
+
+    assert_eq!(routed, Some(false));
+}
