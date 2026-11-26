@@ -282,7 +282,13 @@ fn sql_server_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
     })
 }
 
+/// TablePlus saves the Redis "Mode" dropdown as `DriverVersion`: 0 for
+/// Default, 1 for Sentinel.
 fn redis_config(entry: &Entry<'_>) -> Result<DbConfig, String> {
+    if entry.integer("DriverVersion").unwrap_or(0) != 0 {
+        return Err("only Redis connections in Default mode are supported".to_string());
+    }
+
     Ok(DbConfig::Redis {
         use_uri: false,
         uri: None,

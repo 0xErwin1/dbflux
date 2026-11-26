@@ -329,6 +329,22 @@ fn unknown_tls_mode_skips_the_entry() {
 }
 
 #[test]
+fn redis_sentinel_mode_is_skipped() {
+    let outcome = parse(&document(&[connection(&[
+        ("ConnectionName", string("Sentinel")),
+        ("Driver", string("Redis")),
+        ("DriverVersion", integer(1)),
+    ])]))
+    .expect("parse");
+
+    assert!(outcome.candidates.is_empty());
+    assert_eq!(
+        outcome.skips[0].reason,
+        "only Redis connections in Default mode are supported"
+    );
+}
+
+#[test]
 fn ssh_with_private_key_builds_key_tunnel_on_default_port() {
     let candidate = parse_one(&[
         ("Driver", string("MySQL")),
