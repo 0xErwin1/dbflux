@@ -1,5 +1,7 @@
 use super::DataGridPanel;
-use dbflux_components::components::data_table::model::{CellValue, EditBuffer, VisualRowSource};
+use dbflux_components::components::data_table::model::{
+    CellKind, CellValue, EditBuffer, VisualRowSource,
+};
 use dbflux_core::{QueryResult, Value};
 use gpui::App;
 use std::ops::RangeInclusive;
@@ -61,7 +63,7 @@ impl DataGridPanel {
                         let value = values.get(column).cloned().unwrap_or(Value::Null);
                         if buffer.is_cell_dirty(row, column) {
                             let base = CellValue::from(&value);
-                            self.cell_to_value(buffer.get_cell(row, column, &base))
+                            self.shown_cell_value(buffer.get_cell(row, column, &base))
                         } else {
                             value
                         }
@@ -75,11 +77,23 @@ impl DataGridPanel {
                     .map(|column| {
                         cells
                             .get(column)
-                            .map_or(Value::Null, |cell| self.cell_to_value(cell))
+                            .map_or(Value::Null, |cell| self.shown_cell_value(cell))
                     })
                     .collect();
                 Some(shown)
             }
+        }
+    }
+
+    /// A pending or edited cell as the copy writes it. JSON stays JSON, and a
+    /// binary cell, whose bytes the grid does not hold, is written as the
+    /// `<N bytes>` text the grid shows (the TSV copy writes the same);
+    /// everything else converts as the row inspector does.
+    fn shown_cell_value(&self, cell: &CellValue) -> Value {
+        match &cell.kind {
+            CellKind::Json(text) => Value::Json(text.to_string()),
+            CellKind::Bytes(len) => Value::Text(format!("<{len} bytes>")),
+            _ => self.cell_to_value(cell),
         }
     }
 }
