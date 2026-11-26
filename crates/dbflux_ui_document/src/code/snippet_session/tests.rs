@@ -491,6 +491,33 @@ fn undoing_a_snippet_whose_fields_start_together_ends_the_session(cx: &mut TestA
     assert!(!editor.active());
 }
 
+fn clearing_the_only_field_keeps_the_session(editor: &mut Fixture<'_>, key: &str) {
+    editor.insert("SELECT ${1:cols}$0", 0..0);
+    assert_eq!(editor.selected_text(), "cols");
+
+    editor.keys(key);
+    assert!(editor.active(), "clearing the field keeps the session");
+    assert_eq!(editor.text(), "SELECT ");
+
+    editor.type_text("id");
+    editor.keys("tab");
+    assert_eq!(editor.text(), "SELECT id");
+    assert_eq!(editor.selection(), 9..9, "Tab jumps to the final stop");
+    assert!(!editor.active());
+}
+
+#[gpui::test]
+fn clearing_the_only_field_with_backspace_keeps_the_session(cx: &mut TestAppContext) {
+    let mut editor = open(cx, "", false);
+    clearing_the_only_field_keeps_the_session(&mut editor, "backspace");
+}
+
+#[gpui::test]
+fn clearing_the_only_field_with_delete_keeps_the_session(cx: &mut TestAppContext) {
+    let mut editor = open(cx, "", false);
+    clearing_the_only_field_keeps_the_session(&mut editor, "delete");
+}
+
 #[gpui::test]
 fn replacing_the_buffer_ends_the_session(cx: &mut TestAppContext) {
     let mut editor = open(cx, "", false);

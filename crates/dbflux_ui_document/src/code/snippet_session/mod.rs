@@ -35,9 +35,11 @@ struct SnippetSession {
     current: usize,
     /// Undo group covering the insertion and every edit made in its fields.
     group: Option<u64>,
-    /// Where each field's first range started, to tell an undone insertion
-    /// (every field collapsed onto one offset) from a live one.
-    initial_starts: Vec<usize>,
+    /// The whole inserted text, anchored at both ends. An undone insertion
+    /// empties it, which a field being cleared never does.
+    span: Option<FieldRange>,
+    /// Whether the inserted text was not empty to begin with.
+    span_had_text: bool,
     /// The document and the current field as they were before the edit the
     /// next `Change` reports.
     before: Option<Before>,
@@ -238,9 +240,22 @@ impl SnippetSession {
             fields: Vec::new(),
             current: 0,
             group,
-            initial_starts: Vec::new(),
+            span: None,
+            span_had_text: !parsed.text().is_empty(),
             before: None,
         };
+        let span_start = state.create_edit_anchor(base, EditAnchorAffinity::Left);
+        let span_end =
+            state.create_edit_anchor(base + parsed.text().len(), EditAnchorAffinity::Right);
+        match (span_start, span_end) {
+            (Some(start), Some(end)) => session.span = Some(FieldRange { start, end }),
+            (start, end) => {
+                for anchor in start.into_iter().chain(end) {
+                    state.remove_edit_anchor(anchor);
+                }
+                return None;
+            }
+        }
 
         for tabstop in parsed.tabstops() {
             let start_affinity = if tabstop.index == 0 {
@@ -264,9 +279,6 @@ impl SnippetSession {
                     }
                 }
             }
-            session
-                .initial_starts
-                .push(base + tabstop.ranges.first().map_or(0, |range| range.start));
             session.fields.push(field);
         }
         Some(session)
@@ -322,23 +334,16 @@ impl SnippetSession {
                 .any(|range| only_inside_changed(&before.text, &now, range))
     }
 
-    /// False once an undo has folded every field onto one offset.
+    /// False once an undo has emptied the inserted text. Clearing a field
+    /// moves anchors too, but leaves the literal text around it.
     fn is_coherent(&self, state: &GpuiEditorState) -> bool {
-        let mut starts = Vec::with_capacity(self.fields.len());
-        for field in 0..self.fields.len() {
-            match self
-                .resolved(state, field)
-                .and_then(|ranges| ranges.first().cloned())
-            {
-                Some(range) => starts.push(range.start),
-                None => return false,
-            }
+        let Some(span) = &self.span else {
+            return false;
+        };
+        match Self::resolve(state, span) {
+            Some(range) => !self.span_had_text || !range.is_empty(),
+            None => false,
         }
-        let spread =
-            |offsets: &[usize]| offsets.iter().any(|offset| Some(offset) != offsets.first());
-        let initially_spread = spread(&self.initial_starts);
-        let collapsed = !spread(&starts);
-        !(initially_spread && collapsed)
     }
 
     fn select_current(&self, state: &mut GpuiEditorState, cx: &mut Context<GpuiEditorState>) {
@@ -457,6 +462,10 @@ impl SnippetSession {
     }
 
     fn remove_anchors(&self, state: &mut GpuiEditorState) {
+        if let Some(span) = &self.span {
+            state.remove_edit_anchor(span.start);
+            state.remove_edit_anchor(span.end);
+        }
         for range in self.fields.iter().flat_map(|field| &field.ranges) {
             state.remove_edit_anchor(range.start);
             state.remove_edit_anchor(range.end);
