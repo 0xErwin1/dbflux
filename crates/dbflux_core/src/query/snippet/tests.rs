@@ -3,7 +3,7 @@
     reason = "a tabstop holds a Vec of ranges, and one-range vectors are what the cases assert"
 )]
 
-use super::{SnippetParseErrorKind as Kind, parse_snippet};
+use super::{SnippetParseErrorKind as Kind, parse_snippet, snippet_placeholder_spans};
 
 fn stops(body: &str) -> Vec<(u32, Vec<std::ops::Range<usize>>)> {
     parse_snippet(body)
@@ -248,4 +248,118 @@ fn unicode_before_a_field_and_escaped_backslash() {
     assert_eq!(error("é ${1"), (Kind::UnclosedPlaceholder, 1, 3));
     assert_eq!(stops("\\\\${1:a}"), vec![(1, vec![1..2]), (0, vec![2..2])]);
     assert_eq!(text("${1:a\\}b}"), "a}b");
+}
+
+/// Each span as the raw text of its token and of its default.
+fn spans(body: &str) -> Vec<(&str, Option<&str>)> {
+    snippet_placeholder_spans(body)
+        .into_iter()
+        .map(|span| {
+            (
+                &body[span.range],
+                span.default.map(|default| &body[default]),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn placeholder_spans_cover_every_built_in_body() {
+    let sel = "SELECT ${2:*}\nFROM ${1:table}\nWHERE ${3:condition};$0";
+    assert_eq!(
+        spans(sel),
+        vec![
+            ("${2:*}", Some("*")),
+            ("${1:table}", Some("table")),
+            ("${3:condition}", Some("condition")),
+            ("$0", None),
+        ]
+    );
+
+    let ins = "INSERT INTO ${1:table} (${2:columns})\nVALUES (${3:values});$0";
+    assert_eq!(spans(ins).len(), 4);
+
+    let upd = "UPDATE ${1:table}\nSET ${2:column} = ${3:value}\nWHERE ${4:condition};$0";
+    assert_eq!(spans(upd).len(), 5);
+
+    let del = "DELETE FROM ${1:table}\nWHERE ${2:condition};$0";
+    assert_eq!(spans(del).len(), 3);
+
+    let cte = "WITH ${1:name} AS (\n  ${2:SELECT 1}\n)\nSELECT *\nFROM $1;$0";
+    assert_eq!(
+        spans(cte),
+        vec![
+            ("${1:name}", Some("name")),
+            ("${2:SELECT 1}", Some("SELECT 1")),
+            ("$1", None),
+            ("$0", None),
+        ]
+    );
+
+    let cnt = "SELECT COUNT(*)\nFROM ${1:table};$0";
+    assert_eq!(
+        spans(cnt),
+        vec![("${1:table}", Some("table")), ("$0", None)]
+    );
+}
+
+#[test]
+fn placeholder_spans_are_byte_ranges_of_the_raw_body() {
+    let body = "ab${1:xy}$0";
+    let found = snippet_placeholder_spans(body);
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].range, 2..9);
+    assert_eq!(found[0].default, Some(6..8));
+    assert_eq!(found[1].range, 9..11);
+    assert_eq!(found[1].default, None);
+}
+
+#[test]
+fn placeholder_spans_accept_braced_indexes_without_a_default() {
+    assert_eq!(spans("a ${2} b"), vec![("${2}", None)]);
+    assert_eq!(spans("${1:}"), vec![("${1:}", Some(""))]);
+}
+
+#[test]
+fn placeholder_spans_skip_escapes() {
+    assert_eq!(spans(r"cost \$5 ${1:a}"), vec![("${1:a}", Some("a"))]);
+    assert_eq!(spans(r"\${1:a}"), vec![]);
+    assert_eq!(spans(r"\\$1"), vec![("$1", None)]);
+    assert_eq!(spans(r"${1:a\}b}"), vec![(r"${1:a\}b}", Some(r"a\}b"))]);
+    assert_eq!(spans(r"\$1 \$0"), vec![]);
+}
+
+#[test]
+fn placeholder_spans_read_multi_digit_indexes() {
+    assert_eq!(
+        spans("$10 and ${11:x}"),
+        vec![("$10", None), ("${11:x}", Some("x"))]
+    );
+}
+
+#[test]
+fn placeholder_spans_return_what_precedes_an_unclosed_placeholder() {
+    assert_eq!(spans("${1:a} ${2:abc"), vec![("${1:a}", Some("a"))]);
+    assert_eq!(spans("${1"), vec![]);
+    assert_eq!(spans("$1 ${"), vec![("$1", None)]);
+    assert_eq!(spans("${"), vec![]);
+    assert_eq!(spans("$"), vec![]);
+    assert_eq!(spans("a\\"), vec![]);
+}
+
+#[test]
+fn placeholder_spans_skip_choices_and_variables_without_failing() {
+    assert_eq!(spans("${1|a,b|} $NAME ${NAME} $1"), vec![("$1", None)]);
+    assert_eq!(spans("$ $x $"), vec![]);
+}
+
+#[test]
+fn placeholder_spans_count_bytes_after_unicode_text() {
+    let body = "-- ñandú ✓ ${1:tabla}";
+    let found = snippet_placeholder_spans(body);
+    assert_eq!(found.len(), 1);
+    assert_eq!(&body[found[0].range.clone()], "${1:tabla}");
+    let default = found[0].default.clone().expect("default");
+    assert_eq!(&body[default], "tabla");
+    assert!(body.is_char_boundary(found[0].range.start));
 }

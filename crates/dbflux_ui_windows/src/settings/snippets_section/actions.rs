@@ -148,6 +148,7 @@ impl SnippetsSection {
         self.input_body.update(cx, |input, cx| {
             input.set_value(values.body.as_str(), window, cx)
         });
+        self.refresh_placeholder_chips(cx);
         self.set_language(language, cx);
         self.errors = SnippetFormErrors::default();
         self.form_field = SnippetFormField::Name;

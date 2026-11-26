@@ -27,6 +27,8 @@ use gpui::*;
 use gpui_component::input::{MoveDown, MoveUp};
 use gpui_component::{ActiveTheme, Sizable};
 
+mod preview;
+
 #[cfg(test)]
 mod tests;
 
@@ -252,7 +254,7 @@ impl SnippetPicker {
                     .h_full()
                     .overflow_y_scroll()
                     .p(Spacing::MD)
-                    .child(Text::code(preview)),
+                    .child(preview::render_preview(&preview, theme)),
             )
             .into_any_element()
     }

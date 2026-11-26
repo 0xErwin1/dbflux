@@ -87,6 +87,106 @@ impl fmt::Display for SnippetParseError {
 
 impl std::error::Error for SnippetParseError {}
 
+/// One placeholder in the raw (unexpanded) body, as byte ranges into it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaceholderSpan {
+    /// The whole token: `${1:table}`, `$1`, `${2}` or `$0`.
+    pub range: Range<usize>,
+    /// The default text of `${N:default}`, without the delimiters.
+    pub default: Option<Range<usize>>,
+}
+
+/// Locates the placeholders of a raw body for display.
+///
+/// Unlike [`parse_snippet`] it never fails: the Settings editor shows bodies
+/// while they are typed, so on malformed input (an unclosed `${1:abc`, a
+/// choice, a variable) it skips the broken token and returns the spans found.
+/// Escaped `\$`, `\}` and `\\` are never placeholders.
+pub fn snippet_placeholder_spans(body: &str) -> Vec<PlaceholderSpan> {
+    let bytes = body.as_bytes();
+    let mut spans = Vec::new();
+    let mut position = 0;
+
+    while let Some(&current) = bytes.get(position) {
+        match current {
+            b'\\' => {
+                position += match bytes.get(position + 1) {
+                    Some(b'$' | b'}' | b'\\') => 2,
+                    _ => 1,
+                };
+            }
+            b'$' => match placeholder_at(bytes, position) {
+                Some(span) => {
+                    position = span.range.end;
+                    spans.push(span);
+                }
+                None => position += 1,
+            },
+            _ => position += 1,
+        }
+    }
+    spans
+}
+
+fn digits_end(bytes: &[u8], from: usize) -> usize {
+    from + bytes
+        .get(from..)
+        .unwrap_or_default()
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count()
+}
+
+/// The placeholder that starts at the `$` at `start`, if it is a complete one.
+fn placeholder_at(bytes: &[u8], start: usize) -> Option<PlaceholderSpan> {
+    match bytes.get(start + 1)? {
+        digit if digit.is_ascii_digit() => Some(PlaceholderSpan {
+            range: start..digits_end(bytes, start + 1),
+            default: None,
+        }),
+        b'{' => {
+            let digits = start + 2;
+            let after = digits_end(bytes, digits);
+            if after == digits {
+                return None;
+            }
+            match bytes.get(after)? {
+                b'}' => Some(PlaceholderSpan {
+                    range: start..after + 1,
+                    default: None,
+                }),
+                b':' => {
+                    let default_end = default_end(bytes, after + 1)?;
+                    Some(PlaceholderSpan {
+                        range: start..default_end + 1,
+                        default: Some(after + 1..default_end),
+                    })
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The position of the `}` that closes a default starting at `from`.
+fn default_end(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut position = from;
+    while let Some(&current) = bytes.get(position) {
+        match current {
+            b'}' => return Some(position),
+            b'\\' => {
+                position += match bytes.get(position + 1) {
+                    Some(b'$' | b'}' | b'\\') => 2,
+                    _ => 1,
+                };
+            }
+            _ => position += 1,
+        }
+    }
+    None
+}
+
 enum Piece {
     Text(String),
     Stop { index: u32, default: Option<String> },

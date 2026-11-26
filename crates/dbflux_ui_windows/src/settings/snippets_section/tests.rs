@@ -423,3 +423,154 @@ fn snippets_strings_are_translated_not_copied() {
         );
     }
 }
+
+mod placeholder_chips {
+    use super::{open, save_new};
+    use crate::settings::snippets_section::placeholders::{
+        PlaceholderColors, placeholder_decorations,
+    };
+    use dbflux_core::snippet_placeholder_spans;
+    use gpui::TestAppContext;
+    use gpui_component::ActiveTheme as _;
+
+    const SEL: &str = "SELECT ${2:*}\nFROM ${1:table}\nWHERE ${3:condition};$0";
+
+    #[gpui::test]
+    fn each_placeholder_gets_a_fill_a_frame_and_colored_text(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        cx.update(|cx| {
+            let purple = gpui::hsla(0.8, 0.6, 0.6, 1.0);
+            let theme = gpui_component::Theme::global_mut(cx);
+            theme.primary = purple;
+            theme.accent = purple;
+
+            let colors = PlaceholderColors::from_theme(cx.theme());
+            let decorations = placeholder_decorations(SEL, colors);
+
+            let tokens: Vec<_> = snippet_placeholder_spans(SEL)
+                .into_iter()
+                .map(|span| span.range)
+                .collect();
+            let fills: Vec<_> = decorations
+                .chips
+                .iter()
+                .filter(|chip| chip.style() == gpui_component::input::RangeDecorationStyle::Fill)
+                .collect();
+            let frames: Vec<_> = decorations
+                .chips
+                .iter()
+                .filter(|chip| chip.style() == gpui_component::input::RangeDecorationStyle::Frame)
+                .collect();
+            assert_eq!(
+                fills
+                    .iter()
+                    .map(|chip| chip.range().clone())
+                    .collect::<Vec<_>>(),
+                tokens
+            );
+            assert_eq!(
+                frames
+                    .iter()
+                    .map(|chip| chip.range().clone())
+                    .collect::<Vec<_>>(),
+                tokens
+            );
+            assert!(
+                fills
+                    .iter()
+                    .all(|chip| chip.color() == Some(colors.background))
+            );
+            assert!(
+                frames
+                    .iter()
+                    .all(|chip| chip.color() == Some(colors.border))
+            );
+
+            let styled: Vec<(&str, gpui::Hsla)> = decorations
+                .text
+                .iter()
+                .map(|text| (&SEL[text.range.clone()], text.style.color.expect("color")))
+                .collect();
+            assert_eq!(
+                styled[..3],
+                [
+                    ("${2:", colors.delimiter),
+                    ("*", colors.text),
+                    ("}", colors.delimiter),
+                ]
+            );
+            assert_eq!(styled.last(), Some(&("$0", colors.delimiter)));
+            assert!(styled.iter().all(|(_, color)| *color != purple));
+            assert!(
+                decorations
+                    .chips
+                    .iter()
+                    .all(|chip| chip.color() != Some(purple)),
+                "no chip uses the primary or accent color"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn loading_and_editing_the_body_updates_the_chips(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+
+        let chip_ranges = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| {
+                let section = harness.section.read(cx);
+                let body = section.input_body.read(cx).value().to_string();
+                let expected: Vec<_> = snippet_placeholder_spans(&body)
+                    .into_iter()
+                    .flat_map(|span| [span.range.clone(), span.range])
+                    .collect();
+                (section.placeholder_chips.get_ranges(cx), expected)
+            })
+        };
+
+        let (shown, expected) = chip_ranges(window);
+        assert!(!expected.is_empty(), "the first built-in has placeholders");
+        assert_eq!(shown, expected, "the loaded body is decorated");
+
+        window.update(|window, cx| {
+            harness.section.update(cx, |section, cx| {
+                section
+                    .input_body
+                    .update(cx, |input, cx| input.focus(window, cx));
+            });
+        });
+        window.simulate_input("${9:x} ");
+        window.run_until_parked();
+
+        let (shown, expected) = chip_ranges(window);
+        assert!(window.update(|_, cx| {
+            harness
+                .section
+                .read(cx)
+                .input_body
+                .read(cx)
+                .value()
+                .contains("${9:x}")
+        }));
+        assert_eq!(shown, expected, "typing a placeholder decorates it");
+    }
+
+    #[gpui::test]
+    fn a_body_being_typed_never_panics_and_keeps_the_complete_chips(cx: &mut TestAppContext) {
+        let (harness, window) = open(cx);
+        save_new(
+            &harness,
+            window,
+            "Typing",
+            "typ",
+            "SELECT ${1:a} ${2:unclosed",
+        );
+
+        window.update(|_, cx| {
+            let section = harness.section.read(cx);
+            let body = section.input_body.read(cx).value().to_string();
+            assert_eq!(snippet_placeholder_spans(&body).len(), 1);
+        });
+    }
+}

@@ -211,3 +211,97 @@ fn the_rows_have_a_keyboard_path(cx: &mut TestAppContext) {
         "{checked:?}"
     );
 }
+
+mod preview {
+    use super::super::preview::{ChipPalette, PreviewRun, PreviewTone, preview_runs};
+    use gpui::TestAppContext;
+    use gpui_component::ActiveTheme as _;
+
+    const SEL: &str = "SELECT ${2:*}\nFROM ${1:table}\nWHERE ${3:condition};$0";
+
+    fn run(range: std::ops::Range<usize>, tone: PreviewTone, chip: Option<usize>) -> PreviewRun {
+        PreviewRun { range, tone, chip }
+    }
+
+    #[test]
+    fn the_sel_preview_marks_every_placeholder_as_a_chip() {
+        let runs = preview_runs(SEL);
+        let text = |range: &std::ops::Range<usize>| &SEL[range.clone()];
+
+        let chips: Vec<(&str, PreviewTone, Option<usize>)> = runs
+            .iter()
+            .filter(|run| run.chip.is_some())
+            .map(|run| (text(&run.range), run.tone, run.chip))
+            .collect();
+        assert_eq!(
+            chips,
+            [
+                ("${2:", PreviewTone::Delimiter, Some(0)),
+                ("*", PreviewTone::Default, Some(0)),
+                ("}", PreviewTone::Delimiter, Some(0)),
+                ("${1:", PreviewTone::Delimiter, Some(1)),
+                ("table", PreviewTone::Default, Some(1)),
+                ("}", PreviewTone::Delimiter, Some(1)),
+                ("${3:", PreviewTone::Delimiter, Some(2)),
+                ("condition", PreviewTone::Default, Some(2)),
+                ("}", PreviewTone::Delimiter, Some(2)),
+                ("$0", PreviewTone::Delimiter, Some(3)),
+            ]
+        );
+        assert_eq!(
+            runs.first(),
+            Some(&run(0..7, PreviewTone::Plain, None)),
+            "the keyword text before the first chip stays plain"
+        );
+    }
+
+    #[test]
+    fn the_runs_cover_the_body_without_gaps() {
+        let runs = preview_runs(SEL);
+        let mut cursor = 0;
+        for run in &runs {
+            assert_eq!(run.range.start, cursor);
+            cursor = run.range.end;
+        }
+        assert_eq!(cursor, SEL.len());
+    }
+
+    #[test]
+    fn a_body_with_an_unclosed_placeholder_keeps_it_as_plain_text() {
+        let runs = preview_runs("a ${1:b");
+        assert_eq!(runs, [run(0..7, PreviewTone::Plain, None)]);
+    }
+
+    #[gpui::test]
+    fn the_chip_colors_are_neutral_theme_colors(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        cx.update(|cx| {
+            let purple = gpui::hsla(0.8, 0.6, 0.6, 1.0);
+            let theme = gpui_component::Theme::global_mut(cx);
+            theme.primary = purple;
+            theme.accent = purple;
+            let theme = cx.theme();
+            let palette = ChipPalette::from_theme(theme);
+
+            assert_eq!(palette.background, theme.secondary);
+            assert_eq!(palette.border, theme.border);
+            assert_eq!(
+                palette.color(PreviewTone::Delimiter),
+                theme.muted_foreground
+            );
+            assert_eq!(palette.color(PreviewTone::Default), theme.foreground);
+            assert_eq!(palette.color(PreviewTone::Plain), theme.foreground);
+
+            for color in [
+                palette.background,
+                palette.border,
+                palette.delimiter,
+                palette.text,
+            ] {
+                assert_ne!(color, purple, "chips never use the primary or accent color");
+            }
+        });
+    }
+}

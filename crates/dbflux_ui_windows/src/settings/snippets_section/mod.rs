@@ -4,6 +4,7 @@
 
 mod actions;
 mod keys;
+mod placeholders;
 mod render;
 
 use super::SettingsSection;
@@ -17,7 +18,8 @@ use dbflux_storage::SnippetRecord;
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::EditorState;
+use gpui_component::ActiveTheme as _;
+use gpui_component::input::{EditorState, RangeDecorationCollection, TextDecorationCollection};
 
 #[cfg(test)]
 mod tests;
@@ -111,6 +113,9 @@ pub(super) struct SnippetsSection {
     pub(super) input_prefix: Entity<InputState>,
     pub(super) language_dropdown: Entity<Dropdown>,
     pub(super) input_body: Entity<EditorState>,
+    /// Chips drawn over the placeholders of the body.
+    placeholder_chips: RangeDecorationCollection,
+    placeholder_text: TextDecorationCollection,
     pub(super) errors: SnippetFormErrors,
     pub(super) error_values: FormValues,
     pub(super) focus: SnippetFocus,
@@ -149,6 +154,13 @@ impl SnippetsSection {
                 .line_number(true)
         });
 
+        let (placeholder_chips, placeholder_text) = input_body.update(cx, |state, cx| {
+            (
+                state.create_range_decorations_collection(Vec::new(), cx),
+                state.create_decorations_collection(Vec::new(), cx),
+            )
+        });
+
         let name_sub = notify_on_input_change(&input_name, window, cx, |this, cx| {
             this.drop_stale_error(SnippetFormField::Name, cx);
         });
@@ -160,6 +172,7 @@ impl SnippetsSection {
             window,
             |this, _, event: &InputEvent, _, cx| match event {
                 InputEvent::Change => {
+                    this.refresh_placeholder_chips(cx);
                     this.drop_stale_error(SnippetFormField::Body, cx);
                     cx.notify();
                 }
@@ -200,6 +213,8 @@ impl SnippetsSection {
             input_prefix,
             language_dropdown,
             input_body,
+            placeholder_chips,
+            placeholder_text,
             errors: SnippetFormErrors::default(),
             error_values: FormValues::default(),
             focus: SnippetFocus::List,
@@ -227,6 +242,19 @@ impl SnippetsSection {
         }
 
         section
+    }
+}
+
+impl SnippetsSection {
+    /// Redraws the placeholder chips for the body as it is now. `set_value`
+    /// emits no change, so the callers that load a body call this too.
+    pub(super) fn refresh_placeholder_chips(&self, cx: &mut Context<Self>) {
+        let body = self.input_body.read(cx).value().to_string();
+        let colors = placeholders::PlaceholderColors::from_theme(cx.theme());
+        let decorations = placeholders::placeholder_decorations(&body, colors);
+
+        self.placeholder_chips.set(decorations.chips, cx);
+        self.placeholder_text.set(decorations.text, cx);
     }
 }
 

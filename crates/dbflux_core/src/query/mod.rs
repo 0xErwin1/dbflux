@@ -65,7 +65,8 @@ pub use semantic::{
     semantic_filter_to_filter_node,
 };
 pub use snippet::{
-    ParsedSnippet, SnippetParseError, SnippetParseErrorKind, Tabstop, parse_snippet,
+    ParsedSnippet, PlaceholderSpan, SnippetParseError, SnippetParseErrorKind, Tabstop,
+    parse_snippet, snippet_placeholder_spans,
 };
 pub use sql_context::{
     ScopeRelation, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,
