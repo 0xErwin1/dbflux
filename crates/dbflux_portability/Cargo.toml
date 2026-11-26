@@ -29,6 +29,7 @@ age = { workspace = true, optional = true }
 rusqlite = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true, features = ["alloc"] }
+quick-xml = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
