@@ -192,3 +192,155 @@ fn raw_plan_is_read_from_the_json_cell() {
 fn raw_plan_from_an_empty_result_is_an_error() {
     assert!(raw_plan_from_result(&QueryResult::empty()).is_err());
 }
+
+fn condition(node: &dbflux_core::PlanNode) -> Option<(&str, &str)> {
+    node.key_condition
+        .as_ref()
+        .map(|condition| (condition.label.as_str(), condition.value.as_str()))
+}
+
+#[test]
+fn known_nodes_get_a_description_and_the_engines_condition_label() {
+    let plan = parse_explain_json(NESTED_JOIN).unwrap();
+    let root = &plan.roots[0];
+
+    assert_eq!(
+        root.description.as_deref(),
+        Some("For each row from the first input, looks up the matching rows in the second.")
+    );
+    assert_eq!(root.key_condition, None);
+
+    let seq = &root.children[0];
+    assert_eq!(
+        seq.description.as_deref(),
+        Some("Reads every row of the table and keeps the ones that match the filter.")
+    );
+    assert_eq!(condition(seq), Some(("Filter", "(status = 'open'::text)")));
+
+    let index = &root.children[1];
+    assert_eq!(
+        index.description.as_deref(),
+        Some("Finds the matching rows through an index instead of reading the whole table.")
+    );
+    assert_eq!(
+        condition(index),
+        Some(("Index Cond", "(id = o.customer_id)"))
+    );
+}
+
+#[test]
+fn the_key_condition_follows_the_documented_priority() {
+    let order = [
+        "Index Cond",
+        "Recheck Cond",
+        "Hash Cond",
+        "Merge Cond",
+        "Join Filter",
+        "Filter",
+        "Sort Key",
+        "Group Key",
+    ];
+
+    for (position, label) in order.iter().enumerate() {
+        let mut node = serde_json::Map::new();
+        node.insert("Node Type".into(), "Seq Scan".into());
+        for later in &order[position..] {
+            node.insert((*later).into(), format!("value of {later}").into());
+        }
+        let raw = serde_json::json!([{ "Plan": node }]).to_string();
+
+        let plan = parse_explain_json(&raw).unwrap();
+
+        assert_eq!(
+            condition(&plan.roots[0]),
+            Some((*label, format!("value of {label}").as_str()))
+        );
+    }
+}
+
+#[test]
+fn array_conditions_are_joined_like_details() {
+    let raw = r#"[{"Plan": {"Node Type": "Sort", "Sort Key": ["a", "b DESC"]}}]"#;
+    let plan = parse_explain_json(raw).unwrap();
+
+    assert_eq!(condition(&plan.roots[0]), Some(("Sort Key", "a, b DESC")));
+    assert_eq!(
+        plan.roots[0].description.as_deref(),
+        Some("Orders the rows by the sort key.")
+    );
+}
+
+#[test]
+fn aggregate_and_modify_table_descriptions_follow_the_strategy_and_operation() {
+    let hashed = parse_explain_json(
+        r#"[{"Plan": {"Node Type": "Aggregate", "Strategy": "Hashed", "Group Key": ["a"]}}]"#,
+    )
+    .unwrap();
+    assert_eq!(
+        hashed.roots[0].description.as_deref(),
+        Some("Groups the rows with a hash table and computes the aggregates of each group.")
+    );
+    assert_eq!(condition(&hashed.roots[0]), Some(("Group Key", "a")));
+
+    let update =
+        parse_explain_json(r#"[{"Plan": {"Node Type": "ModifyTable", "Operation": "Update"}}]"#)
+            .unwrap();
+    assert_eq!(
+        update.roots[0].description.as_deref(),
+        Some("Changes the rows its input returns.")
+    );
+}
+
+#[test]
+fn every_listed_node_type_has_a_description() {
+    for node_type in [
+        "Seq Scan",
+        "Index Scan",
+        "Index Only Scan",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Hash Join",
+        "Merge Join",
+        "Hash",
+        "Sort",
+        "Incremental Sort",
+        "Aggregate",
+        "HashAggregate",
+        "GroupAggregate",
+        "Limit",
+        "Materialize",
+        "Memoize",
+        "Gather",
+        "Gather Merge",
+        "Append",
+        "Subquery Scan",
+        "CTE Scan",
+        "Function Scan",
+        "Values Scan",
+        "Result",
+        "Unique",
+        "WindowAgg",
+        "ModifyTable",
+        "Insert",
+        "Update",
+        "Delete",
+        "LockRows",
+    ] {
+        let raw = serde_json::json!([{ "Plan": { "Node Type": node_type } }]).to_string();
+        let plan = parse_explain_json(&raw).unwrap();
+
+        assert!(
+            plan.roots[0].description.is_some(),
+            "{node_type} has no description"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_node_type_has_no_description_and_no_condition() {
+    let plan = parse_explain_json(r#"[{"Plan": {"Node Type": "Teleport Scan"}}]"#).unwrap();
+
+    assert_eq!(plan.roots[0].description, None);
+    assert_eq!(plan.roots[0].key_condition, None);
+}

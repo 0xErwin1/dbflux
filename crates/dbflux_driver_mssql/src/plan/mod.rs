@@ -9,6 +9,11 @@ use dbflux_core::{DbError, PlanFormat, PlanNode, QueryPlan};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
+mod condition;
+mod glossary;
+
+use condition::{ConditionCapture, SEEK_LABEL};
+
 const SHOWPLAN_ON: &str = "SET SHOWPLAN_XML ON";
 const SHOWPLAN_OFF: &str = "SET SHOWPLAN_XML OFF";
 
@@ -278,6 +283,7 @@ fn relop_node(attributes: &Attributes) -> Result<PlanNode, DbError> {
     let number = |name: &str| attribute(attributes, name).and_then(|v| v.parse::<f64>().ok());
 
     let mut node = PlanNode::new(operation);
+    node.description = glossary::describe(operation).map(str::to_string);
     node.estimated_rows = number("EstimateRows");
     node.estimated_total_cost = number("EstimatedTotalSubtreeCost");
     node.details = OPERATOR_DETAILS
@@ -352,6 +358,7 @@ struct ShowplanParser {
     missing_group_impact: Option<String>,
     missing_index: Option<MissingIndex>,
     top_level_statements: usize,
+    conditions: ConditionCapture,
 }
 
 fn attribute_texts(attributes: &Attributes) -> Vec<String> {
@@ -384,6 +391,9 @@ impl ShowplanParser {
         if name.starts_with("Stmt") && self.is_batch_statement() {
             self.top_level_statements += 1;
         }
+
+        self.conditions
+            .open(name, attributes, &self.path, self.open_nodes.len());
 
         match name {
             "RelOp" => self.open_nodes.push(relop_node(attributes)?),
@@ -462,6 +472,13 @@ impl ShowplanParser {
             } else {
                 format!("{entry_name} ({})", details.join(", "))
             });
+        }
+
+        if let Some(condition) = self.conditions.close(name, &self.path)
+            && let Some(node) = self.open_nodes.last_mut()
+            && (condition.label == SEEK_LABEL || node.key_condition.is_none())
+        {
+            node.key_condition = Some(condition);
         }
 
         match name {

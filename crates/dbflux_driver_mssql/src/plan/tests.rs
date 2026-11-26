@@ -320,3 +320,92 @@ fn a_disarmed_restore_guard_does_nothing() {
 
     assert!(!fired.get());
 }
+
+const SEEK_PLAN: &str = r#"<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan" Version="1.6"><BatchSequence><Batch><Statements><StmtSimple><QueryPlan><RelOp NodeId="0" PhysicalOp="Filter" LogicalOp="Filter" EstimateRows="1" EstimatedTotalSubtreeCost="0.01"><Filter><Predicate><ScalarOperator ScalarString="[shop].[dbo].[orders].[total]&gt;(10)"><Compare CompareOp="GT"><ScalarOperator><Identifier/></ScalarOperator></Compare></ScalarOperator></Predicate><RelOp NodeId="1" PhysicalOp="Clustered Index Seek" LogicalOp="Clustered Index Seek" EstimateRows="1" EstimatedTotalSubtreeCost="0.003"><IndexScan Ordered="1"><Object Database="[shop]" Schema="[dbo]" Table="[orders]" Index="[PK_orders]" Alias="[o]" IndexKind="Clustered"/><SeekPredicates><SeekPredicateNew><SeekKeys><Prefix ScanType="EQ"><RangeColumns><ColumnReference Database="[shop]" Schema="[dbo]" Table="[orders]" Alias="[o]" Column="id"/></RangeColumns><RangeExpressions><ScalarOperator ScalarString="(1)"><Const ConstValue="(1)"/></ScalarOperator></RangeExpressions></Prefix></SeekKeys></SeekPredicateNew></SeekPredicates><Predicate><ScalarOperator ScalarString="[o].[status]='open'"/></Predicate></IndexScan></RelOp></Filter></RelOp></QueryPlan></StmtSimple></Statements></Batch></BatchSequence></ShowPlanXML>"#;
+
+const UNKNOWN_PLAN: &str = r#"<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan"><BatchSequence><Batch><Statements><StmtSimple><QueryPlan><RelOp NodeId="0" PhysicalOp="Teleport" LogicalOp="Teleport" EstimateRows="1" EstimatedTotalSubtreeCost="0.01"/></QueryPlan></StmtSimple></Statements></Batch></BatchSequence></ShowPlanXML>"#;
+
+fn condition(node: &PlanNode) -> Option<(&str, &str)> {
+    node.key_condition
+        .as_ref()
+        .map(|condition| (condition.label.as_str(), condition.value.as_str()))
+}
+
+#[test]
+fn a_seek_node_gets_a_description_and_its_seek_predicate() {
+    let plan = parse_showplan_xml(SEEK_PLAN).unwrap();
+    let seek = &plan.roots[0].children[0];
+
+    assert_eq!(seek.operation, "Clustered Index Seek");
+    assert_eq!(
+        seek.description.as_deref(),
+        Some(
+            "Finds the matching rows through the clustered index instead of reading the whole table."
+        )
+    );
+    assert_eq!(condition(seek), Some(("Seek Predicates", "[o].[id] = (1)")));
+}
+
+#[test]
+fn a_predicate_is_the_key_condition_when_there_is_no_seek() {
+    let plan = parse_showplan_xml(SEEK_PLAN).unwrap();
+    let filter = &plan.roots[0];
+
+    assert!(filter.description.is_some());
+    assert_eq!(
+        condition(filter),
+        Some(("Predicate", "[shop].[dbo].[orders].[total]>(10)"))
+    );
+}
+
+#[test]
+fn a_node_without_predicates_has_no_key_condition() {
+    let plan = parse_showplan_xml(JOIN_PLAN).unwrap();
+
+    assert_eq!(plan.roots[0].key_condition, None);
+    assert_eq!(plan.roots[0].children[0].key_condition, None);
+    assert_eq!(
+        plan.roots[0].description.as_deref(),
+        Some("For each row from the first input, looks up the matching rows in the second.")
+    );
+}
+
+#[test]
+fn an_unknown_operation_has_no_description() {
+    let plan = parse_showplan_xml(UNKNOWN_PLAN).unwrap();
+
+    assert_eq!(plan.roots[0].description, None);
+    assert_eq!(plan.roots[0].key_condition, None);
+}
+
+#[test]
+fn every_listed_operation_has_a_description() {
+    for operation in [
+        "Clustered Index Seek",
+        "Clustered Index Scan",
+        "Index Seek",
+        "Index Scan",
+        "Table Scan",
+        "Nested Loops",
+        "Hash Match",
+        "Merge Join",
+        "Sort",
+        "Stream Aggregate",
+        "Top",
+        "Compute Scalar",
+        "Key Lookup",
+        "RID Lookup",
+        "Filter",
+        "Parallelism",
+    ] {
+        let xml = format!(
+            r#"<ShowPlanXML><BatchSequence><Batch><Statements><StmtSimple><QueryPlan><RelOp NodeId="0" PhysicalOp="{operation}" LogicalOp="{operation}"/></QueryPlan></StmtSimple></Statements></Batch></BatchSequence></ShowPlanXML>"#
+        );
+        let plan = parse_showplan_xml(&xml).unwrap();
+
+        assert!(
+            plan.roots[0].description.is_some(),
+            "{operation} has no description"
+        );
+    }
+}

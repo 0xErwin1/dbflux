@@ -229,3 +229,59 @@ fn self_cost_is_unknown_when_a_child_has_no_cost() {
     assert_eq!(node.estimated_self_cost(), None);
     assert_eq!(PlanNode::new("SCAN t").estimated_self_cost(), None);
 }
+
+#[test]
+fn search_gets_a_description_and_its_condition_as_the_key_condition() {
+    let plan = parse_sqlite_query_plan(&eqp_result(&[(3, 0, "SEARCH t USING INDEX idx_a (a=?)")]))
+        .unwrap();
+    let node = &plan.roots[0];
+
+    assert_eq!(
+        node.description.as_deref(),
+        Some("Looks rows up through an index instead of scanning the whole table.")
+    );
+    let condition = node.key_condition.as_ref().expect("a key condition");
+    assert_eq!(condition.label, "Condition");
+    assert_eq!(condition.value, "(a=?)");
+}
+
+#[test]
+fn a_scan_has_a_description_and_no_key_condition() {
+    let plan = parse_sqlite_query_plan(&eqp_result(&[(3, 0, "SCAN t")])).unwrap();
+
+    assert!(plan.roots[0].description.is_some());
+    assert_eq!(plan.roots[0].key_condition, None);
+}
+
+#[test]
+fn engine_steps_get_their_glossary_text() {
+    let plan = parse_sqlite_query_plan(&eqp_result(&[
+        (1, 0, "USE TEMP B-TREE FOR ORDER BY"),
+        (2, 0, "MATERIALIZE x"),
+        (3, 0, "CO-ROUTINE y"),
+        (4, 0, "COMPOUND QUERY"),
+        (5, 0, "SCAN CONSTANT ROW"),
+        (6, 0, "SCAN SUBQUERY 1"),
+    ]))
+    .unwrap();
+
+    assert_eq!(
+        plan.roots[0].description.as_deref(),
+        Some("Builds a temporary index to group or order the rows.")
+    );
+    for node in &plan.roots {
+        assert!(
+            node.description.is_some(),
+            "{} has no description",
+            node.operation
+        );
+    }
+}
+
+#[test]
+fn an_unknown_step_has_no_description() {
+    let plan = parse_sqlite_query_plan(&eqp_result(&[(2, 0, "TELEPORT t")])).unwrap();
+
+    assert_eq!(plan.roots[0].description, None);
+    assert_eq!(plan.roots[0].key_condition, None);
+}

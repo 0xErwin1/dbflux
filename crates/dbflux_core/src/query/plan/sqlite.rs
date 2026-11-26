@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use crate::{DbError, PlanFormat, PlanNode, QueryPlan, QueryResult, Value};
+use crate::{DbError, PlanCondition, PlanFormat, PlanNode, QueryPlan, QueryResult, Value};
 
 struct PlanRow {
     id: i64,
@@ -75,6 +75,12 @@ fn build_node(row: &PlanRow, rows: &[PlanRow], visited: &mut HashSet<i64>) -> Pl
 }
 
 fn parse_detail(detail: &str) -> PlanNode {
+    let mut node = parse_detail_fields(detail);
+    node.description = describe(detail).map(str::to_string);
+    node
+}
+
+fn parse_detail_fields(detail: &str) -> PlanNode {
     let (operation, rest) = match detail.split_once(' ') {
         Some((verb @ ("SCAN" | "SEARCH"), rest)) => (verb, rest),
         _ => return PlanNode::new(detail),
@@ -137,6 +143,88 @@ fn apply_using(node: &mut PlanNode, using: &str) {
     }
 
     if let Some(condition) = condition {
+        node.key_condition = Some(PlanCondition {
+            label: "Condition".to_string(),
+            value: condition.clone(),
+        });
         node.details.push(("Condition".to_string(), condition));
     }
+}
+
+/// Glossary of `EXPLAIN QUERY PLAN` steps, matched on whole leading words so
+/// `SCAN` does not capture `SCAN SUBQUERY 1`. More specific entries come first.
+const GLOSSARY: &[(&str, &str)] = &[
+    (
+        "SCAN CONSTANT ROW",
+        "Produces a single row without reading any table.",
+    ),
+    ("SCAN SUBQUERY", "Reads the rows a subquery produced."),
+    ("SCAN", "Reads every row of the table."),
+    (
+        "SEARCH",
+        "Looks rows up through an index instead of scanning the whole table.",
+    ),
+    (
+        "USE TEMP B-TREE",
+        "Builds a temporary index to group or order the rows.",
+    ),
+    (
+        "CO-ROUTINE",
+        "Runs a subquery step by step, feeding its rows to the outer query as they are produced.",
+    ),
+    (
+        "MATERIALIZE",
+        "Computes a subquery once and stores its rows in a temporary table.",
+    ),
+    (
+        "COMPOUND QUERY",
+        "Combines the results of several SELECT statements.",
+    ),
+    (
+        "LEFT-MOST SUBQUERY",
+        "Runs the first SELECT of a compound query.",
+    ),
+    (
+        "UNION ALL",
+        "Appends the rows of the next SELECT of a compound query.",
+    ),
+    (
+        "UNION",
+        "Combines the rows of the SELECT statements of a compound query.",
+    ),
+    (
+        "MERGE",
+        "Merges the sorted results of the SELECT statements of a compound query.",
+    ),
+    (
+        "MULTI-INDEX OR",
+        "Looks rows up through one index for each OR term and combines the results.",
+    ),
+    (
+        "INDEX",
+        "Looks rows up through one index of a multi-index search.",
+    ),
+    (
+        "LIST SUBQUERY",
+        "Computes the list of values an IN clause compares against.",
+    ),
+    (
+        "CORRELATED SCALAR SUBQUERY",
+        "Runs a subquery once for each row of the outer query to get a single value.",
+    ),
+    (
+        "SCALAR SUBQUERY",
+        "Runs a subquery once to get a single value.",
+    ),
+];
+
+fn describe(detail: &str) -> Option<&'static str> {
+    GLOSSARY
+        .iter()
+        .find(|(prefix, _)| {
+            detail
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+        })
+        .map(|(_, text)| *text)
 }

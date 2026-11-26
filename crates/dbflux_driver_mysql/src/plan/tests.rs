@@ -300,3 +300,104 @@ fn several_statements_and_empty_queries_are_refused() {
         "A query plan needs a statement; the query is empty."
     );
 }
+
+fn condition(node: &dbflux_core::PlanNode) -> Option<(&str, &str)> {
+    node.key_condition
+        .as_ref()
+        .map(|condition| (condition.label.as_str(), condition.value.as_str()))
+}
+
+#[test]
+fn access_types_get_a_description() {
+    let plan = parse_explain_json(MARIADB_JOIN).unwrap();
+    let nested = &plan.roots[0].children[0];
+
+    assert_eq!(
+        nested.children[0].description.as_deref(),
+        Some("Reads every row of the table.")
+    );
+    assert!(nested.children[1].description.is_some());
+    assert!(plan.roots[0].description.is_some());
+}
+
+#[test]
+fn attached_condition_is_the_key_condition() {
+    let plan = parse_explain_json(MARIADB_JOIN).unwrap();
+    let scan = &plan.roots[0].children[0].children[0];
+
+    assert_eq!(
+        condition(scan),
+        Some(("Attached condition", "o.status = 'open'"))
+    );
+}
+
+#[test]
+fn used_key_parts_are_the_key_condition_without_an_attached_condition() {
+    let plan = parse_explain_json(MARIADB_JOIN).unwrap();
+    let lookup = &plan.roots[0].children[0].children[1];
+
+    assert_eq!(condition(lookup), Some(("Used key parts", "id")));
+}
+
+#[test]
+fn an_attached_condition_wins_over_used_key_parts() {
+    let plan = parse_explain_json(
+        r#"{"query_block":{"table":{"table_name":"t","access_type":"ref","key":"k","used_key_parts":["a"],"attached_condition":"t.b > 1"}}}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        condition(&plan.roots[0].children[0]),
+        Some(("Attached condition", "t.b > 1"))
+    );
+}
+
+#[test]
+fn operation_containers_get_a_description() {
+    let plan = parse_explain_json(MYSQL_8_SORT).unwrap();
+    let ordering = &plan.roots[0].children[0];
+
+    assert_eq!(ordering.operation, "Ordering operation");
+    assert!(ordering.description.is_some());
+    assert!(ordering.children[0].description.is_some());
+}
+
+#[test]
+fn unknown_containers_and_access_types_have_no_description() {
+    let plan = parse_explain_json(
+        r#"{"query_block":{"teleport_operation":{"table":{"table_name":"t","access_type":"warp"}}}}"#,
+    )
+    .unwrap();
+    let teleport = &plan.roots[0].children[0];
+
+    assert_eq!(teleport.description, None);
+    assert_eq!(teleport.children[0].description, None);
+    assert_eq!(teleport.children[0].key_condition, None);
+}
+
+#[test]
+fn every_listed_access_type_has_a_description() {
+    for access in [
+        "ALL",
+        "index",
+        "range",
+        "ref",
+        "eq_ref",
+        "const",
+        "system",
+        "fulltext",
+        "index_merge",
+        "ref_or_null",
+        "unique_subquery",
+        "index_subquery",
+    ] {
+        let raw = serde_json::json!({"query_block": {"table": {"table_name": "t", "access_type": access}}})
+            .to_string();
+        let plan = parse_explain_json(&raw).unwrap();
+
+        assert!(
+            plan.roots[0].children[0].description.is_some(),
+            "{access} has no description"
+        );
+    }
+}

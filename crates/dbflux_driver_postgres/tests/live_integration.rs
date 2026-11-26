@@ -997,6 +997,10 @@ fn postgres_query_plan_is_structured_and_never_runs_the_statement() -> Result<()
         assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Json);
         assert_eq!(plan.roots.len(), 1);
         assert_eq!(plan.roots[0].relation.as_deref(), Some("plan_test"));
+        assert!(
+            plan.roots[0].description.is_some(),
+            "the leaf scan node has a description"
+        );
 
         connection.query_plan(&dbflux_core::QueryPlanRequest::new("DELETE FROM plan_test"))?;
         let remaining = connection.execute(&QueryRequest::new("SELECT count(*) FROM plan_test"))?;

@@ -781,6 +781,10 @@ fn mssql_query_plan_is_structured() -> Result<(), DbError> {
         let seek = seek.expect("the plan reads plan_test");
         assert_eq!(seek.relation.as_deref(), Some("dbo.plan_test"));
         assert!(seek.index.is_some());
+        assert!(
+            seek.description.is_some(),
+            "the leaf scan node has a description"
+        );
         assert!(seek.estimated_total_cost.is_some());
 
         let multiple =

@@ -5,7 +5,7 @@
 //! estimates differently, so the walker maps either spelling and keeps every
 //! other scalar as a detail.
 
-use dbflux_core::{DbError, PlanFormat, PlanNode, QueryPlan};
+use dbflux_core::{DbError, PlanCondition, PlanFormat, PlanNode, QueryPlan};
 use serde_json::{Map, Value as Json};
 
 /// Keys of a `table` object mapped to `PlanNode` fields.
@@ -59,6 +59,9 @@ fn container_node(key: &str, value: &Json) -> Result<PlanNode, DbError> {
             number(object.get("rows_examined_per_scan")).or_else(|| number(object.get("rows")));
     }
 
+    node.key_condition = key_condition(object, is_table);
+    node.description = describe(&node.operation).map(str::to_string);
+
     let cost_info = object.get("cost_info").and_then(Json::as_object);
     node.estimated_total_cost = cost_info
         .and_then(|costs| number(costs.get("prefix_cost")).or(number(costs.get("query_cost"))))
@@ -90,6 +93,121 @@ fn container_node(key: &str, value: &Json) -> Result<PlanNode, DbError> {
     }
 
     Ok(node)
+}
+
+/// The attached condition when the engine gives one, otherwise the key parts
+/// a table access uses.
+fn key_condition(object: &Map<String, Json>, is_table: bool) -> Option<PlanCondition> {
+    let attached = ("attached_condition", "Attached condition");
+    let key_parts = ("used_key_parts", "Used key parts");
+    let candidates: &[(&str, &str)] = if is_table {
+        &[attached, key_parts]
+    } else {
+        &[attached]
+    };
+
+    candidates.iter().find_map(|(key, label)| {
+        let value = detail_text(object.get(*key)?);
+        (!value.is_empty()).then(|| PlanCondition {
+            label: (*label).to_string(),
+            value,
+        })
+    })
+}
+
+/// Glossary of access types and operation containers, keyed by the operation
+/// name the node carries.
+const GLOSSARY: &[(&str, &str)] = &[
+    ("ALL", "Reads every row of the table."),
+    (
+        "index",
+        "Reads every entry of an index instead of the table rows.",
+    ),
+    (
+        "range",
+        "Reads the rows whose index values fall in a range.",
+    ),
+    (
+        "ref",
+        "Finds the rows whose index value equals the value it is compared with.",
+    ),
+    (
+        "eq_ref",
+        "Finds the one row that matches each row of the previous table through a unique index.",
+    ),
+    (
+        "ref_or_null",
+        "Finds the rows whose index value equals the value it is compared with, plus the rows where it is NULL.",
+    ),
+    (
+        "const",
+        "Reads the single row that matches a constant through a unique index.",
+    ),
+    ("system", "Reads a table that has a single row."),
+    ("fulltext", "Finds the rows through a full-text index."),
+    (
+        "index_merge",
+        "Combines the rows found through several indexes.",
+    ),
+    (
+        "unique_subquery",
+        "Looks the value up in a unique index to evaluate an IN subquery.",
+    ),
+    (
+        "index_subquery",
+        "Looks the value up in an index to evaluate an IN subquery.",
+    ),
+    ("Table", "Reads rows from a table."),
+    (
+        "Query block",
+        "A SELECT of the statement, with the operations it runs.",
+    ),
+    (
+        "Nested loop",
+        "For each row from the first table, looks up the matching rows in the next.",
+    ),
+    ("Ordering operation", "Orders the rows by the sort key."),
+    (
+        "Grouping operation",
+        "Groups the rows and computes the aggregates of each group.",
+    ),
+    ("Duplicates removal", "Removes duplicate rows."),
+    ("Windowing", "Computes window functions over the rows."),
+    (
+        "Buffer result",
+        "Stores the rows of its input in a buffer before they are used.",
+    ),
+    (
+        "Union result",
+        "Combines the rows of several SELECT statements.",
+    ),
+    (
+        "Query specifications",
+        "The SELECT statements that a union combines.",
+    ),
+    (
+        "Materialized from subquery",
+        "Computes a subquery once and stores its rows in a temporary table.",
+    ),
+    (
+        "Read sorted file",
+        "Reads the rows back from the sorted temporary file.",
+    ),
+    (
+        "Filesort",
+        "Orders the rows by the sort key, using a temporary file when they do not fit in memory.",
+    ),
+    (
+        "Temporary table",
+        "Stores the intermediate rows in a temporary table.",
+    ),
+];
+
+fn describe(operation: &str) -> Option<&'static str> {
+    GLOSSARY
+        .iter()
+        .find(|(name, _)| *name == operation)
+        .map(|(_, text)| *text)
 }
 
 fn table_operation(object: &Map<String, Json>) -> String {

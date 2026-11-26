@@ -183,3 +183,69 @@ fn the_connection_returns_a_structured_plan_and_never_runs_the_statement() {
             .is_err()
     );
 }
+
+fn condition(node: &dbflux_core::PlanNode) -> Option<(&str, &str)> {
+    node.key_condition
+        .as_ref()
+        .map(|condition| (condition.label.as_str(), condition.value.as_str()))
+}
+
+#[test]
+fn known_operators_get_a_description_and_their_extra_info_condition() {
+    let plan = parse_explain_json(JOIN_PLAN).unwrap();
+    let order = &plan.roots[0];
+    let join = &order.children[0];
+    let scan = &join.children[0];
+
+    assert_eq!(
+        order.description.as_deref(),
+        Some("Orders the rows by the sort key.")
+    );
+    assert_eq!(condition(order), Some(("Order By", "a ASC")));
+    assert!(join.description.is_some());
+    assert_eq!(condition(join), Some(("Conditions", "id = id")));
+    assert!(scan.description.is_some());
+    assert_eq!(condition(scan), Some(("Filters", "(id = 5)")));
+}
+
+#[test]
+fn conditions_win_over_filters() {
+    let plan = parse_explain_json(
+        r#"[{"name":"HASH_JOIN","children":[],"extra_info":{"Filters":"x > 1","Conditions":"a = b"}}]"#,
+    )
+    .unwrap();
+
+    assert_eq!(condition(&plan.roots[0]), Some(("Conditions", "a = b")));
+}
+
+#[test]
+fn an_unknown_operator_has_no_description_and_a_textual_extra_info_no_condition() {
+    let plan =
+        parse_explain_json(r#"[{"name":"TELEPORT","children":[],"extra_info":"Filters: x"}]"#)
+            .unwrap();
+
+    assert_eq!(plan.roots[0].description, None);
+    assert_eq!(plan.roots[0].key_condition, None);
+}
+
+#[test]
+fn every_listed_operator_has_a_description() {
+    for name in [
+        "SEQ_SCAN",
+        "TABLE_SCAN",
+        "FILTER",
+        "PROJECTION",
+        "HASH_JOIN",
+        "HASH_GROUP_BY",
+        "ORDER_BY",
+        "TOP_N",
+    ] {
+        let raw = serde_json::json!([{ "name": name, "children": [] }]).to_string();
+        let plan = parse_explain_json(&raw).unwrap();
+
+        assert!(
+            plan.roots[0].description.is_some(),
+            "{name} has no description"
+        );
+    }
+}
