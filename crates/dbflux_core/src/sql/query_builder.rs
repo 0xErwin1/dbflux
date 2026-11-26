@@ -886,12 +886,14 @@ mod tests {
                     type_name: Some("integer".to_string()),
                     nullable: false,
                     is_primary_key: true,
+                    kind: crate::ColumnKind::Unknown,
                 },
                 crate::TransferColumn {
                     name: "name".to_string(),
                     type_name: Some("text".to_string()),
                     nullable: true,
                     is_primary_key: false,
+                    kind: crate::ColumnKind::Unknown,
                 },
             ],
             if_not_exists: false,
@@ -917,6 +919,7 @@ mod tests {
                 type_name: None,
                 nullable: true,
                 is_primary_key: false,
+                kind: crate::ColumnKind::Unknown,
             }],
             if_not_exists: false,
         };
@@ -940,6 +943,7 @@ mod tests {
                 type_name: None,
                 nullable: true,
                 is_primary_key: false,
+                kind: crate::ColumnKind::Unknown,
             }],
             if_not_exists: true,
         };
@@ -964,6 +968,7 @@ mod tests {
                 type_name: Some("TEXT); DROP TABLE users; --".to_string()),
                 nullable: true,
                 is_primary_key: false,
+                kind: crate::ColumnKind::Unknown,
             }],
             if_not_exists: false,
         };
@@ -1008,6 +1013,7 @@ mod tests {
                     type_name: Some(type_name.to_string()),
                     nullable: true,
                     is_primary_key: false,
+                    kind: crate::ColumnKind::Unknown,
                 }],
                 if_not_exists: false,
             };
@@ -1046,6 +1052,7 @@ mod tests {
                     type_name: Some(type_name.to_string()),
                     nullable: true,
                     is_primary_key: false,
+                    kind: crate::ColumnKind::Unknown,
                 }],
                 if_not_exists: false,
             };

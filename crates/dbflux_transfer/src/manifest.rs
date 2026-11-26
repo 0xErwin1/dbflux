@@ -112,12 +112,14 @@ mod tests {
                         type_name: Some("int4".to_string()),
                         nullable: false,
                         is_primary_key: true,
+                        kind: dbflux_core::ColumnKind::Unknown,
                     },
                     TransferColumn {
                         name: "email".to_string(),
                         type_name: Some("text".to_string()),
                         nullable: true,
                         is_primary_key: false,
+                        kind: dbflux_core::ColumnKind::Unknown,
                     },
                 ],
                 row_count: 42,
@@ -125,6 +127,31 @@ mod tests {
                 options: FormatOptions::default(),
             }],
         }
+    }
+
+    #[test]
+    fn a_column_written_before_kind_existed_deserializes_as_unknown() {
+        let column: TransferColumn = serde_json::from_str(
+            r#"{"name":"id","type_name":"int4","nullable":false,"is_primary_key":true}"#,
+        )
+        .expect("deserialize legacy column");
+
+        assert_eq!(column.kind, dbflux_core::ColumnKind::Unknown);
+    }
+
+    #[test]
+    fn a_column_kind_survives_the_json_round_trip() {
+        let mut manifest = sample_manifest();
+        manifest.tables[0].columns[0].kind = dbflux_core::ColumnKind::Integer;
+
+        let json = serde_json::to_string(&manifest).expect("serialize manifest");
+        let round_tripped: TransferManifest =
+            serde_json::from_str(&json).expect("deserialize manifest");
+
+        assert_eq!(
+            round_tripped.tables[0].columns[0].kind,
+            dbflux_core::ColumnKind::Integer
+        );
     }
 
     #[test]

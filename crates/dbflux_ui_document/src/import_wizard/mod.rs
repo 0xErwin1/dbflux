@@ -445,6 +445,7 @@ impl ImportWizard {
                                 type_name: Some(c.type_name),
                                 nullable: c.nullable,
                                 is_primary_key: c.is_primary_key,
+                                kind: dbflux_core::ColumnKind::Unknown,
                             })
                             .collect::<Vec<_>>()
                     });
@@ -941,6 +942,7 @@ mod tests {
                 type_name: Some("integer".to_string()),
                 nullable: false,
                 is_primary_key: true,
+                kind: dbflux_core::ColumnKind::Unknown,
             }],
             row_count: 0,
             fk_order_index: 0,
@@ -965,6 +967,7 @@ mod tests {
                 type_name: Some("integer".to_string()),
                 nullable: false,
                 is_primary_key: true,
+                kind: dbflux_core::ColumnKind::Unknown,
             }],
             row_count: 0,
             fk_order_index: 0,

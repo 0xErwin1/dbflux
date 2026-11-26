@@ -63,6 +63,7 @@ impl PageShape for DocumentPageShape {
                 type_name: None,
                 nullable: false,
                 is_primary_key: false,
+                kind: dbflux_core::ColumnKind::Unknown,
             }];
         }
 

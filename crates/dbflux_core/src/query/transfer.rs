@@ -18,4 +18,9 @@ pub struct TransferColumn {
     pub type_name: Option<String>,
     pub nullable: bool,
     pub is_primary_key: bool,
+    /// The driver-reported semantic kind. Sinks that format by column kind
+    /// (Markdown's numeric alignment) read it; a manifest written before the
+    /// field existed deserializes as `Unknown`.
+    #[serde(default = "crate::query::types::default_column_kind_unknown")]
+    pub kind: crate::query::types::ColumnKind,
 }

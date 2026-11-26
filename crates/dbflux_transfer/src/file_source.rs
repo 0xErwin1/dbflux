@@ -713,6 +713,7 @@ mod tests {
             type_name: Some(type_name.to_string()),
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 

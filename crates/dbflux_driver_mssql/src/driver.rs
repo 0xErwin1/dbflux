@@ -6853,6 +6853,7 @@ mod tests {
                 type_name: Some("INT".to_string()),
                 nullable: false,
                 is_primary_key: true,
+                kind: dbflux_core::ColumnKind::Unknown,
             }],
             if_not_exists: false,
         };

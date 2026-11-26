@@ -128,6 +128,7 @@ impl ImportFile {
                 type_name: None,
                 nullable: true,
                 is_primary_key: false,
+                kind: dbflux_core::ColumnKind::Unknown,
             })
             .collect();
 
