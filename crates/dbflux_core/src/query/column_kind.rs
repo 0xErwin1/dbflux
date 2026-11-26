@@ -376,4 +376,47 @@ mod tests {
         );
         assert_eq!(infer_column_kind("varchar(255)"), ColumnKind::Text);
     }
+
+    #[test]
+    fn former_substring_false_positives_are_unknown() {
+        for name in [
+            "interval",
+            "interval day to second",
+            "int4range",
+            "daterange",
+            "timeuuid",
+            "Map(String, UInt64)",
+            "Tuple(Int32, String)",
+            "money[]",
+            "_numeric",
+        ] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Unknown, "{name}");
+        }
+    }
+
+    #[test]
+    fn driver_numeric_names_keep_their_kind() {
+        for name in [
+            "mediumint unsigned zerofill",
+            "smallint unsigned",
+            "UInt64",
+            "Int64",
+            "int64",
+            "hugeint",
+        ] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Integer, "{name}");
+        }
+        for name in [
+            "Float32",
+            "Float64",
+            "Decimal128",
+            "smallmoney",
+            "Nullable(Decimal(18, 4))",
+            "double unsigned",
+            "decimal(10,2) unsigned",
+            "float(53)",
+        ] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Float, "{name}");
+        }
+    }
 }
