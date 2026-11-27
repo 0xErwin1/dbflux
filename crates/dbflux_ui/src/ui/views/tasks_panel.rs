@@ -1,9 +1,13 @@
+mod rows;
+
+use self::rows::{ReasonFill, cancelled_with_stages_text, reason_row, stage_rows, status_glyph};
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::icons::AppIcon;
+use crate::ui::labels::{TaskHeadline, task_headline, task_profile_name};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics};
-use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
+use dbflux_core::{TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -70,16 +74,10 @@ impl TasksPanel {
         }
     }
 
-    /// The tasks in the order the panel lists them: running ones first, then
-    /// the finished ones [`visible_finished_tasks`] keeps.
+    /// The rows of the panel in order: running ones first, then the finished
+    /// ones [`visible_finished_tasks`] keeps. Stages of a parent are not rows.
     fn visible_tasks(&self, cx: &App) -> Vec<TaskSnapshot> {
-        let tasks = self.app_state.read(cx).tasks();
-
-        tasks
-            .running_tasks()
-            .into_iter()
-            .chain(visible_finished_tasks(tasks.recent_tasks(usize::MAX)))
-            .collect()
+        top_level_tasks(self.app_state.read(cx).tasks())
     }
 
     /// Row of the selected task in `tasks`, or of the row that took its
@@ -280,6 +278,11 @@ impl TasksPanel {
 
     fn dismiss_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
+            let stages = state.tasks().children_of(task_id);
+
+            for stage in stages {
+                state.tasks_mut().remove(stage.id);
+            }
             state.tasks_mut().remove(task_id);
             cx.emit(AppStateChanged);
         });
@@ -321,25 +324,7 @@ impl TasksPanel {
         (progress.clamp(0.0, 1.0) * 100.0).round() as u32
     }
 
-    fn status_icon(status: &TaskStatus, theme: &gpui_component::Theme) -> (AppIcon, Hsla) {
-        match status {
-            TaskStatus::Running | TaskStatus::Cancelling => {
-                (AppIcon::Loader, ChromeColors::tint(theme))
-            }
-            TaskStatus::Completed => (AppIcon::CircleCheck, theme.success),
-            TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger),
-            TaskStatus::Cancelled => (AppIcon::CircleX, theme.muted_foreground),
-            TaskStatus::Pending | TaskStatus::Skipped => (AppIcon::CircleX, theme.muted_foreground),
-        }
-    }
-
-    fn render_header(
-        &self,
-        running: usize,
-        failed: usize,
-        finished: usize,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    fn render_header(&self, counts: HeaderCounts, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let title_color = if self.focused {
             ChromeColors::tint(theme)
@@ -376,15 +361,24 @@ impl TasksPanel {
                     .font_weight(FontWeight::SEMIBOLD)
                     .color(title_color),
             )
-            .when(running > 0, |header| {
+            .when(counts.running > 0, |header| {
                 header.child(Badge::new(
-                    dbflux_i18n::t!("tasks_panel.running", count = running),
+                    dbflux_i18n::t!("tasks_panel.running", count = counts.running),
                     BadgeTone::Accent,
                 ))
             })
-            .when(failed > 0, |header| {
+            .when(counts.cancelling > 0, |header| {
+                header.child(
+                    Badge::new(
+                        dbflux_i18n::t!("tasks_panel.cancelling_count", count = counts.cancelling),
+                        BadgeTone::Warning,
+                    )
+                    .id("tasks-cancelling-badge"),
+                )
+            })
+            .when(counts.failed > 0, |header| {
                 header.child(Badge::new(
-                    dbflux_i18n::t!("tasks_panel.failed", count = failed),
+                    dbflux_i18n::t!("tasks_panel.failed", count = counts.failed),
                     BadgeTone::Danger,
                 ))
             })
@@ -395,7 +389,7 @@ impl TasksPanel {
                     dbflux_i18n::t!("tasks_panel.clear_finished"),
                 )
                 .icon(AppIcon::CircleX)
-                .disabled(finished == 0)
+                .disabled(counts.finished == 0)
                 .on_click(cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();
                     this.clear_finished(cx);
@@ -405,17 +399,22 @@ impl TasksPanel {
 
     fn render_task_row(
         &mut self,
-        task: &TaskSnapshot,
+        view: &TaskRowView,
         index: usize,
         is_selected: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let theme = cx.theme();
+        let task = &view.task;
         let task_id = task.id;
         let task_kind = task.kind;
         let task_profile_id = task.profile_id;
         let is_cancellable = task.is_cancellable;
         let is_running = !task.status.is_terminal();
+        let is_cancelling = task.status == TaskStatus::Cancelling;
+        let show_cancel = is_cancellable
+            || (task.status.is_in_flight()
+                && (is_cancelling || task.cancel_unavailable_reason.is_some()));
         let failure = match &task.status {
             TaskStatus::Failed(error) => Some(error.clone()),
             _ => None,
@@ -423,7 +422,6 @@ impl TasksPanel {
         let details_text = task.details.clone();
         let has_details = has_output(task);
         let is_expanded = self.expanded_task_ids.contains(&task_id);
-        let (status_icon, status_color) = Self::status_icon(&task.status, theme);
         let name_color = if is_running {
             ChromeColors::strong(theme)
         } else {
@@ -436,6 +434,15 @@ impl TasksPanel {
         let fill = theme.primary;
         let danger = theme.danger;
         let selected_fill = ChromeColors::tint(theme).opacity(ShellMetrics::TASK_SELECTED_ALPHA);
+        let reason_id = SharedString::from(format!("task-reason-{task_id}"));
+        let reason = Self::reason_sub_row(view, reason_id, theme);
+        let stages = (!view.stages.is_empty()).then(|| {
+            stage_rows(
+                &view.stages,
+                dbflux_components::fonts::editor_family(cx),
+                theme,
+            )
+        });
 
         div()
             .w_full()
@@ -479,20 +486,8 @@ impl TasksPanel {
                             )
                         },
                     ))
-                    .child(
-                        Icon::new(status_icon)
-                            .size(ShellMetrics::TASK_ICON)
-                            .color(status_color),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .text_color(name_color)
-                            .child(task.description.clone()),
-                    )
+                    .child(status_glyph(&task.status, theme))
+                    .child(Self::render_title(view, name_color, muted))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -501,6 +496,15 @@ impl TasksPanel {
                             .text_color(muted)
                             .child(Self::format_elapsed(task.elapsed_secs)),
                     )
+                    .when(is_cancelling, |row| {
+                        row.child(
+                            Badge::new(
+                                dbflux_i18n::t!("tasks_panel.cancelling_badge"),
+                                BadgeTone::Warning,
+                            )
+                            .id(SharedString::from(format!("task-cancelling-{task_id}"))),
+                        )
+                    })
                     .child(div().flex_1())
                     .when_some(progress, |row, progress| {
                         row.child(
@@ -525,7 +529,7 @@ impl TasksPanel {
                                 .child(format!("{}%", Self::progress_percent(progress))),
                         )
                     })
-                    .when(is_cancellable, |row| {
+                    .when(show_cancel, |row| {
                         let element_id = format!("cancel-task-{}", task_id);
                         row.child(
                             div().debug_selector(move || element_id).child(
@@ -536,6 +540,7 @@ impl TasksPanel {
                                 .icon(AppIcon::X)
                                 .icon_size(ShellMetrics::TASK_CHEVRON)
                                 .icon_only()
+                                .disabled(!is_cancellable)
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         cx.stop_propagation();
@@ -567,6 +572,7 @@ impl TasksPanel {
                         )
                     }),
             )
+            .children(reason)
             .when_some(failure, |el, error| {
                 el.child(
                     div()
@@ -585,6 +591,7 @@ impl TasksPanel {
                         ),
                 )
             })
+            .children(stages)
             .when(has_details && is_expanded, |el| {
                 let details = details_text.unwrap_or_default();
 
@@ -608,6 +615,75 @@ impl TasksPanel {
             })
     }
 
+    /// "target · kind" with the target in semibold, or the description when
+    /// the task has no target.
+    fn render_title(view: &TaskRowView, name_color: Hsla, muted: Hsla) -> Div {
+        let title = div()
+            .flex()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_color(name_color);
+
+        match &view.headline {
+            Some(headline) => title
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(headline.target.clone()),
+                )
+                .child(div().flex_shrink_0().text_color(muted).child(" \u{b7} "))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(headline.kind.clone()),
+                ),
+            None => title.child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(view.task.description.clone()),
+            ),
+        }
+    }
+
+    /// The sub-row that explains a task whose cancel is waiting, refused, or
+    /// settled together with its stages.
+    fn reason_sub_row(
+        view: &TaskRowView,
+        id: SharedString,
+        theme: &gpui_component::Theme,
+    ) -> Option<Stateful<Div>> {
+        let task = &view.task;
+
+        match &task.status {
+            TaskStatus::Cancelling => {
+                let text = if task.kind == TaskKind::Query {
+                    dbflux_i18n::t!("tasks_panel.cancelling_reason_query")
+                } else {
+                    dbflux_i18n::t!("tasks_panel.cancelling_reason")
+                };
+
+                Some(reason_row(id, ReasonFill::Warning, text, theme))
+            }
+            TaskStatus::Running => task
+                .cancel_unavailable_reason
+                .clone()
+                .map(|reason| reason_row(id, ReasonFill::Raised, reason, theme)),
+            TaskStatus::Cancelled if !view.stages.is_empty() => Some(reason_row(
+                id,
+                ReasonFill::Raised,
+                cancelled_with_stages_text(&view.stages),
+                theme,
+            )),
+            _ => None,
+        }
+    }
+
     /// The first 40 lines of a task's output, with a marker when more were cut.
     fn truncated_lines(text: &str) -> Vec<String> {
         let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
@@ -628,6 +704,60 @@ fn has_output(task: &TaskSnapshot) -> bool {
         .is_some_and(|details| !details.trim().is_empty())
 }
 
+/// The tasks the panel lists as rows: those in flight, then the finished
+/// ones [`visible_finished_tasks`] keeps. A stage is shown under its parent.
+fn top_level_tasks(tasks: &TaskManager) -> Vec<TaskSnapshot> {
+    tasks
+        .running_tasks()
+        .into_iter()
+        .filter(|task| task.parent_id.is_none())
+        .chain(visible_finished_tasks(tasks.recent_tasks(usize::MAX)))
+        .collect()
+}
+
+/// Counts the header badges show.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct HeaderCounts {
+    running: usize,
+    cancelling: usize,
+    failed: usize,
+    finished: usize,
+}
+
+impl HeaderCounts {
+    fn of(tasks: &[TaskSnapshot]) -> Self {
+        tasks
+            .iter()
+            .fold(Self::default(), |counts, task| match task.status {
+                TaskStatus::Running => Self {
+                    running: counts.running + 1,
+                    ..counts
+                },
+                TaskStatus::Cancelling => Self {
+                    cancelling: counts.cancelling + 1,
+                    ..counts
+                },
+                TaskStatus::Failed(_) => Self {
+                    failed: counts.failed + 1,
+                    finished: counts.finished + 1,
+                    ..counts
+                },
+                TaskStatus::Completed | TaskStatus::Cancelled | TaskStatus::Skipped => Self {
+                    finished: counts.finished + 1,
+                    ..counts
+                },
+                TaskStatus::Pending => counts,
+            })
+    }
+}
+
+/// A row of the panel: the task, how its title reads, and its stages.
+struct TaskRowView {
+    task: TaskSnapshot,
+    headline: Option<TaskHeadline>,
+    stages: Vec<TaskSnapshot>,
+}
+
 /// Number of completed or cancelled tasks the panel lists under the running ones.
 const RECENT_FINISHED_TASK_LIMIT: usize = 5;
 
@@ -641,6 +771,7 @@ fn visible_finished_tasks(recent_tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> 
 
     recent_tasks
         .into_iter()
+        .filter(|task| task.parent_id.is_none())
         .filter(|task| match task.status {
             TaskStatus::Running | TaskStatus::Cancelling | TaskStatus::Pending => false,
             TaskStatus::Failed(_) => true,
@@ -655,19 +786,17 @@ fn visible_finished_tasks(recent_tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> 
 impl Render for TasksPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.app_state.read(cx);
-
-        let running_tasks = state.tasks().running_tasks();
-        let finished_tasks = visible_finished_tasks(state.tasks().recent_tasks(usize::MAX));
-
-        let running_count = running_tasks.len();
-        let failed_count = finished_tasks
+        let all_tasks = top_level_tasks(state.tasks());
+        let counts = HeaderCounts::of(&all_tasks);
+        let views: Vec<TaskRowView> = all_tasks
             .iter()
-            .filter(|task| matches!(task.status, TaskStatus::Failed(_)))
-            .count();
-        let finished_count = finished_tasks.len();
+            .map(|task| TaskRowView {
+                headline: task_headline(task, task_profile_name(state.profiles(), task).as_deref()),
+                stages: state.tasks().children_of(task.id),
+                task: task.clone(),
+            })
+            .collect();
 
-        let all_tasks: Vec<TaskSnapshot> =
-            running_tasks.into_iter().chain(finished_tasks).collect();
         let visible_task_ids: HashSet<TaskId> = all_tasks.iter().map(|task| task.id).collect();
         self.expanded_task_ids
             .retain(|task_id| visible_task_ids.contains(task_id));
@@ -678,11 +807,11 @@ impl Render for TasksPanel {
             .flatten();
 
         let mut task_rows: Vec<Div> = Vec::new();
-        for (index, task) in all_tasks.iter().enumerate() {
-            task_rows.push(self.render_task_row(task, index, selected == Some(index), cx));
+        for (index, view) in views.iter().enumerate() {
+            task_rows.push(self.render_task_row(view, index, selected == Some(index), cx));
         }
 
-        let header = self.render_header(running_count, failed_count, finished_count, cx);
+        let header = self.render_header(counts, cx);
         let theme = cx.theme();
 
         div()
@@ -718,259 +847,4 @@ impl Render for TasksPanel {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{RECENT_FINISHED_TASK_LIMIT, TasksPanel, visible_finished_tasks};
-    use crate::app::{AppStateChanged, AppStateEntity};
-    use dbflux_core::{TaskId, TaskKind, TaskManager, TaskStatus};
-    use dbflux_storage::bootstrap::StorageRuntime;
-    use gpui::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext};
-
-    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
-        cx.update(dbflux_components::theme::init);
-
-        cx.update(|cx| {
-            cx.new(|_| {
-                AppStateEntity::new_with_storage_runtime(
-                    StorageRuntime::in_memory().expect("test storage runtime"),
-                )
-                .expect("test app state")
-            })
-        })
-    }
-
-    fn start_task(
-        app_state: &Entity<AppStateEntity>,
-        kind: TaskKind,
-        cx: &mut VisualTestContext,
-    ) -> TaskId {
-        app_state.update(cx, |state, cx| {
-            let (task_id, _token) = state.start_task(kind, kind.label());
-            cx.emit(AppStateChanged);
-            task_id
-        })
-    }
-
-    fn selector(prefix: &str, task_id: TaskId) -> &'static str {
-        format!("{prefix}-{task_id}").leak()
-    }
-
-    #[gpui::test]
-    fn cancel_button_renders_only_for_cancellable_running_tasks(cx: &mut TestAppContext) {
-        let app_state = test_app_state(cx);
-        let (_, window) = cx.add_window_view({
-            let app_state = app_state.clone();
-            move |window, cx| TasksPanel::new(app_state, window, cx)
-        });
-
-        let query_id = start_task(&app_state, TaskKind::Query, window);
-        let key_scan_id = start_task(&app_state, TaskKind::KeyScan, window);
-        let key_read_and_write_ids = [TaskKind::KeyGet, TaskKind::KeyMutation]
-            .map(|kind| start_task(&app_state, kind, window));
-        window.run_until_parked();
-
-        assert!(
-            window
-                .debug_bounds(selector("cancel-task", query_id))
-                .is_some(),
-            "a running query keeps its cancel button"
-        );
-        assert!(
-            window
-                .debug_bounds(selector("cancel-task", key_scan_id))
-                .is_some(),
-            "a running key scan offers a cancel button"
-        );
-
-        for task_id in key_read_and_write_ids {
-            assert!(
-                window
-                    .debug_bounds(selector("cancel-task", task_id))
-                    .is_none(),
-                "a key read or write must not render a cancel button"
-            );
-        }
-    }
-
-    fn start_acknowledged_query(
-        app_state: &Entity<AppStateEntity>,
-        outcome: dbflux_core::CancelOutcome,
-        cx: &mut VisualTestContext,
-    ) -> TaskId {
-        app_state.update(cx, |state, cx| {
-            let request = dbflux_core::TaskRequest::new(TaskKind::Query, "select 1")
-                .policy(dbflux_core::CancelPolicy::WorkerAcknowledged)
-                .cancel_hook(std::sync::Arc::new(move || outcome.clone()));
-            let task_id = state.start_task_handle(request).id();
-            cx.emit(AppStateChanged);
-            task_id
-        })
-    }
-
-    fn click_cancel(task_id: TaskId, window: &mut VisualTestContext) {
-        let bounds = window
-            .debug_bounds(selector("cancel-task", task_id))
-            .expect("a running query renders its cancel button");
-        window.simulate_click(bounds.center(), Modifiers::none());
-        window.run_until_parked();
-    }
-
-    fn status_of(
-        app_state: &Entity<AppStateEntity>,
-        task_id: TaskId,
-        cx: &mut VisualTestContext,
-    ) -> TaskStatus {
-        app_state.read_with(cx, |state, _| {
-            state.tasks().get(task_id).expect("task exists").status
-        })
-    }
-
-    #[gpui::test]
-    fn cancelling_a_query_the_driver_cannot_stop_does_not_mark_it_cancelled(
-        cx: &mut TestAppContext,
-    ) {
-        let app_state = test_app_state(cx);
-        let (_, window) = cx.add_window_view({
-            let app_state = app_state.clone();
-            move |window, cx| TasksPanel::new(app_state, window, cx)
-        });
-        let task_id = start_acknowledged_query(
-            &app_state,
-            dbflux_core::CancelOutcome::NotSupported {
-                reason: "Engine does not support cancelling a running command.".to_string(),
-            },
-            window,
-        );
-        window.run_until_parked();
-
-        click_cancel(task_id, window);
-
-        assert_eq!(status_of(&app_state, task_id, window), TaskStatus::Running);
-        let reason = app_state.read_with(window, |state, _| {
-            state
-                .tasks()
-                .get(task_id)
-                .and_then(|task| task.cancel_unavailable_reason)
-        });
-        assert_eq!(
-            reason.as_deref(),
-            Some("Engine does not support cancelling a running command.")
-        );
-    }
-
-    #[gpui::test]
-    fn cancelling_a_query_with_a_requested_hook_waits_for_the_worker(cx: &mut TestAppContext) {
-        let app_state = test_app_state(cx);
-        let (_, window) = cx.add_window_view({
-            let app_state = app_state.clone();
-            move |window, cx| TasksPanel::new(app_state, window, cx)
-        });
-        let task_id =
-            start_acknowledged_query(&app_state, dbflux_core::CancelOutcome::Requested, window);
-        window.run_until_parked();
-
-        click_cancel(task_id, window);
-
-        assert_eq!(
-            status_of(&app_state, task_id, window),
-            TaskStatus::Cancelling
-        );
-    }
-
-    #[gpui::test]
-    fn cancelling_an_immediate_task_still_marks_it_cancelled(cx: &mut TestAppContext) {
-        let app_state = test_app_state(cx);
-        let (_, window) = cx.add_window_view({
-            let app_state = app_state.clone();
-            move |window, cx| TasksPanel::new(app_state, window, cx)
-        });
-        let task_id = start_task(&app_state, TaskKind::KeyScan, window);
-        window.run_until_parked();
-
-        click_cancel(task_id, window);
-
-        assert_eq!(
-            status_of(&app_state, task_id, window),
-            TaskStatus::Cancelled
-        );
-    }
-
-    #[gpui::test]
-    fn failed_task_survives_retention_and_is_removed_by_dismiss(cx: &mut TestAppContext) {
-        let app_state = test_app_state(cx);
-        let (_, window) = cx.add_window_view({
-            let app_state = app_state.clone();
-            move |window, cx| TasksPanel::new(app_state, window, cx)
-        });
-
-        let failed_id = start_task(&app_state, TaskKind::KeyScan, window);
-        let completed_id = start_task(&app_state, TaskKind::Query, window);
-        app_state.update(window, |state, cx| {
-            state.fail_task(failed_id, "connection reset");
-            state.complete_task(completed_id);
-            state.tasks_mut().cleanup_completed(0);
-            cx.emit(AppStateChanged);
-        });
-        window.run_until_parked();
-
-        assert!(
-            app_state.read_with(window, |state, _| state.tasks().get(completed_id).is_none()),
-            "a completed task is removed once past the retention window"
-        );
-        assert!(
-            window
-                .debug_bounds(selector("dismiss-task", completed_id))
-                .is_none()
-        );
-
-        let dismiss_bounds = window
-            .debug_bounds(selector("dismiss-task", failed_id))
-            .expect("a failed task renders a dismiss button after the retention sweep");
-
-        window.simulate_click(dismiss_bounds.center(), Modifiers::none());
-        window.run_until_parked();
-
-        assert!(
-            app_state.read_with(window, |state, _| state.tasks().get(failed_id).is_none()),
-            "dismiss removes the failed task"
-        );
-        assert!(
-            window
-                .debug_bounds(selector("dismiss-task", failed_id))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn visible_finished_tasks_keeps_every_failure_and_caps_the_rest() {
-        let mut manager = TaskManager::new();
-
-        let failed_ids: Vec<TaskId> = (0..3)
-            .map(|_| {
-                let (id, _token) = manager.start(TaskKind::Export, "export");
-                manager.fail(id, "disk full");
-                id
-            })
-            .collect();
-
-        for _ in 0..(RECENT_FINISHED_TASK_LIMIT + 3) {
-            let (id, _token) = manager.start(TaskKind::Query, "query");
-            manager.complete(id);
-        }
-
-        let (running_id, _token) = manager.start(TaskKind::Query, "running");
-
-        let visible = visible_finished_tasks(manager.recent_tasks(usize::MAX));
-
-        for failed_id in &failed_ids {
-            assert!(visible.iter().any(|task| task.id == *failed_id));
-        }
-        assert!(visible.iter().all(|task| task.id != running_id));
-        assert_eq!(
-            visible
-                .iter()
-                .filter(|task| task.status == TaskStatus::Completed)
-                .count(),
-            RECENT_FINISHED_TASK_LIMIT
-        );
-    }
-}
+mod tests;

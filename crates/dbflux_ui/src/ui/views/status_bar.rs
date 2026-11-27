@@ -30,7 +30,8 @@ impl EventEmitter<OpenApprovalsRequested> for StatusBar {}
 /// What the statement segment on the left of the status bar shows.
 #[derive(Clone, Debug, PartialEq)]
 enum StatementSummary {
-    /// A task is running: its description and elapsed time.
+    /// A task is running: its "target · kind elapsed", or its description and
+    /// elapsed time when it has no target.
     Running(String),
     /// The last task finished: its outcome, description and duration.
     Finished { status: TaskStatus, text: String },
@@ -42,6 +43,7 @@ enum StatementSummary {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TaskCounts {
     running: usize,
+    cancelling: usize,
     failed: usize,
 }
 
@@ -135,6 +137,20 @@ impl StatusBar {
         )
     }
 
+    /// "target · kind 4.2 s" for a task with a target, otherwise
+    /// "description · 4.2 s".
+    fn running_text(task: &TaskSnapshot, profile_name: Option<&str>) -> String {
+        match crate::ui::labels::task_headline(task, profile_name) {
+            Some(headline) => format!(
+                "{} \u{b7} {} {}",
+                headline.target,
+                Self::single_line(&headline.kind),
+                Self::format_elapsed(task.elapsed_secs)
+            ),
+            None => Self::statement_text(task),
+        }
+    }
+
     /// The text of a finished task. A connect that succeeded reads
     /// "Connected to <profile> · 87 ms" instead of the "Connecting to" it ran
     /// under, when `profile_name` names its profile.
@@ -153,11 +169,12 @@ impl StatusBar {
     /// ran for, when it ran for one.
     fn statement_summary(
         running: Option<&TaskSnapshot>,
+        running_profile_name: Option<&str>,
         last_finished: Option<&TaskSnapshot>,
         finished_profile_name: Option<&str>,
     ) -> StatementSummary {
         if let Some(task) = running {
-            return StatementSummary::Running(Self::statement_text(task));
+            return StatementSummary::Running(Self::running_text(task, running_profile_name));
         }
 
         match last_finished {
@@ -169,12 +186,17 @@ impl StatusBar {
         }
     }
 
+    /// Counts the top-level tasks: the stages of a parent are part of it.
     fn task_counts(tasks: &[TaskSnapshot]) -> TaskCounts {
-        tasks
-            .iter()
-            .fold(TaskCounts::default(), |counts, task| match task.status {
-                TaskStatus::Running | TaskStatus::Cancelling => TaskCounts {
+        tasks.iter().filter(|task| task.parent_id.is_none()).fold(
+            TaskCounts::default(),
+            |counts, task| match task.status {
+                TaskStatus::Running => TaskCounts {
                     running: counts.running + 1,
+                    ..counts
+                },
+                TaskStatus::Cancelling => TaskCounts {
+                    cancelling: counts.cancelling + 1,
                     ..counts
                 },
                 TaskStatus::Failed(_) => TaskCounts {
@@ -185,7 +207,8 @@ impl StatusBar {
                 | TaskStatus::Cancelled
                 | TaskStatus::Pending
                 | TaskStatus::Skipped => counts,
-            })
+            },
+        )
     }
 
     fn metadata_text(text: impl Into<SharedString>) -> Text {
@@ -329,6 +352,7 @@ impl StatusBar {
         let theme = cx.theme();
         let tint = dbflux_components::tokens::ChromeColors::tint(theme);
         let danger = theme.danger;
+        let warning = theme.warning;
         let muted = theme.muted_foreground;
 
         let mut segments: Vec<(SharedString, AppIcon, Hsla, String)> = Vec::new();
@@ -339,6 +363,15 @@ impl StatusBar {
                 AppIcon::Loader,
                 tint,
                 crate::ui::labels::tasks_running_label(counts.running),
+            ));
+        }
+
+        if counts.cancelling > 0 {
+            segments.push((
+                "tasks-cancelling".into(),
+                AppIcon::Loader,
+                warning,
+                crate::ui::labels::tasks_cancelling_label(counts.cancelling),
             ));
         }
 
@@ -388,6 +421,12 @@ impl Render for StatusBar {
             .map(Self::read_only_copy);
 
         let running_tasks = app_state.tasks().running_tasks();
+        let oldest_running = running_tasks
+            .iter()
+            .filter(|task| task.parent_id.is_none())
+            .max_by(|left, right| left.elapsed_secs.total_cmp(&right.elapsed_secs));
+        let running_profile_name = oldest_running
+            .and_then(|task| crate::ui::labels::task_profile_name(app_state.profiles(), task));
         let last_finished = app_state.tasks().last_completed_task();
         let finished_profile_name = last_finished
             .as_ref()
@@ -400,7 +439,8 @@ impl Render for StatusBar {
                     .map(|profile| profile.name.clone())
             });
         let summary = Self::statement_summary(
-            running_tasks.first(),
+            oldest_running,
+            running_profile_name.as_deref(),
             last_finished.as_ref(),
             finished_profile_name.as_deref(),
         );
@@ -511,6 +551,8 @@ impl Render for StatusBar {
 #[cfg(test)]
 mod tests {
     use super::{StatementSummary, StatusBar, TaskCounts};
+    use crate::app::{AppStateChanged, AppStateEntity};
+    use crate::ui::document::TabManager;
     use dbflux_components::primitives::TextVariant;
     use dbflux_components::tokens::ShellMetrics;
     use dbflux_components::typography::AppFonts;
@@ -554,18 +596,18 @@ mod tests {
         let finished = task(TaskStatus::Completed, "SELECT 1", 1.1);
 
         assert_eq!(
-            StatusBar::statement_summary(Some(&running), Some(&finished), None),
+            StatusBar::statement_summary(Some(&running), None, Some(&finished), None),
             StatementSummary::Running("SELECT * FROM tasks \u{b7} 250 ms".into())
         );
         assert_eq!(
-            StatusBar::statement_summary(None, Some(&finished), None),
+            StatusBar::statement_summary(None, None, Some(&finished), None),
             StatementSummary::Finished {
                 status: TaskStatus::Completed,
                 text: "SELECT 1 \u{b7} 1.1 s".into(),
             }
         );
         assert_eq!(
-            StatusBar::statement_summary(None, None, None),
+            StatusBar::statement_summary(None, None, None, None),
             StatementSummary::Ready
         );
     }
@@ -584,7 +626,7 @@ mod tests {
         let connected = connect_task(TaskStatus::Completed, 0.087);
 
         assert_eq!(
-            StatusBar::statement_summary(None, Some(&connected), Some("shop-pg")),
+            StatusBar::statement_summary(None, None, Some(&connected), Some("shop-pg")),
             StatementSummary::Finished {
                 status: TaskStatus::Completed,
                 text: format!(
@@ -600,7 +642,7 @@ mod tests {
         let failed = connect_task(TaskStatus::Failed("refused".into()), 0.087);
 
         assert_eq!(
-            StatusBar::statement_summary(None, Some(&failed), Some("shop-pg")),
+            StatusBar::statement_summary(None, None, Some(&failed), Some("shop-pg")),
             StatementSummary::Finished {
                 status: TaskStatus::Failed("refused".into()),
                 text: "Connecting to shop-pg \u{b7} 87 ms".into(),
@@ -633,21 +675,106 @@ mod tests {
     }
 
     #[test]
-    fn task_counts_split_running_and_failed_tasks() {
+    fn task_counts_split_running_cancelling_and_failed_tasks() {
+        let mut stage = task(TaskStatus::Running, "stage", 0.0);
+        stage.parent_id = Some(stage.id);
         let tasks = [
             task(TaskStatus::Running, "a", 0.0),
             task(TaskStatus::Running, "b", 0.0),
-            task(TaskStatus::Failed("refused".into()), "c", 0.0),
-            task(TaskStatus::Completed, "d", 0.0),
-            task(TaskStatus::Cancelled, "e", 0.0),
+            task(TaskStatus::Cancelling, "c", 0.0),
+            task(TaskStatus::Failed("refused".into()), "d", 0.0),
+            task(TaskStatus::Completed, "e", 0.0),
+            task(TaskStatus::Cancelled, "f", 0.0),
+            stage,
         ];
 
         assert_eq!(
             StatusBar::task_counts(&tasks),
             TaskCounts {
                 running: 2,
+                cancelling: 1,
                 failed: 1,
             }
+        );
+    }
+
+    #[test]
+    fn a_running_task_with_a_target_reads_target_kind_and_elapsed() {
+        let mut running = task(TaskStatus::Running, "SELECT *\n  FROM tasks", 4.2);
+        running.target = Some(dbflux_core::TaskTarget {
+            profile_id: uuid::Uuid::new_v4(),
+            database: None,
+        });
+
+        assert_eq!(
+            StatusBar::statement_summary(Some(&running), Some("prod-pg"), None, None),
+            StatementSummary::Running("prod-pg \u{b7} Query 4.2 s".into())
+        );
+        assert_eq!(
+            StatusBar::statement_summary(Some(&running), None, None, None),
+            StatementSummary::Running("SELECT * FROM tasks \u{b7} 4.2 s".into()),
+            "without a profile the description stays"
+        );
+    }
+
+    fn status_bar_window(
+        cx: &mut gpui::TestAppContext,
+    ) -> (gpui::Entity<AppStateEntity>, &mut gpui::VisualTestContext) {
+        use gpui::AppContext as _;
+
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                        .expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+        let (_, window) = cx.add_window_view({
+            let app_state = app_state.clone();
+            move |window, cx| {
+                let tab_manager = cx.new(|_| TabManager::new());
+                StatusBar::new(app_state, tab_manager, window, cx)
+            }
+        });
+
+        (app_state, window)
+    }
+
+    #[gpui::test]
+    fn the_cancelling_chip_appears_only_while_a_task_is_cancelling(cx: &mut gpui::TestAppContext) {
+        let (app_state, window) = status_bar_window(cx);
+        let task_id = app_state.update(window, |state, cx| {
+            let request = dbflux_core::TaskRequest::new(TaskKind::Query, "select 1")
+                .policy(dbflux_core::CancelPolicy::WorkerAcknowledged)
+                .cancel_hook(std::sync::Arc::new(|| {
+                    dbflux_core::CancelOutcome::Requested
+                }));
+            let task_id = state.start_task_handle(request).id();
+            cx.emit(AppStateChanged);
+            task_id
+        });
+        window.run_until_parked();
+
+        assert!(window.debug_bounds("tasks-cancelling").is_none());
+        assert!(window.debug_bounds("tasks-toggle").is_some());
+
+        app_state.update(window, |state, cx| {
+            state.tasks_mut().request_cancel(task_id);
+            cx.emit(AppStateChanged);
+        });
+        window.run_until_parked();
+
+        assert!(window.debug_bounds("tasks-cancelling").is_some());
+        assert!(
+            window.debug_bounds("tasks-toggle").is_none(),
+            "the task is no longer counted as running"
+        );
+        assert_eq!(
+            crate::ui::labels::tasks_cancelling_label(2),
+            dbflux_i18n::t!("status_bar.tasks_cancelling", count = 2)
         );
     }
 
