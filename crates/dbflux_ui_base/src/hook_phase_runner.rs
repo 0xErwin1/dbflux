@@ -104,7 +104,12 @@ impl DetachedHookScope {
         }
     }
 
-    #[cfg_attr(test, allow(dead_code))]
+    /// Cancels the detached hook tasks this scope registered and no others,
+    /// leaving hooks of a concurrent attempt for the same profile running.
+    pub fn cancel_registered(&self, state: &mut AppStateEntity, profile_id: Uuid) -> usize {
+        state.cancel_detached_hook_tasks_in(profile_id, &self.task_ids())
+    }
+
     fn task_ids(&self) -> Vec<TaskId> {
         #[expect(
             clippy::expect_used,
@@ -1087,6 +1092,52 @@ mod tests {
                 .expect("test app state")
             })
         })
+    }
+
+    #[gpui::test]
+    fn cancelling_a_scope_leaves_another_scopes_hook_tasks_running(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let cancelled_attempt = DetachedHookScope::default();
+        let retry_attempt = DetachedHookScope::default();
+
+        let (cancelled_token, retry_token) = cx.update(|cx| {
+            app_state.update(cx, |state, _| {
+                let (cancelled_task, cancelled_token) = state.start_task_for_profile(
+                    dbflux_core::TaskKind::Hook {
+                        phase: HookPhase::PreConnect,
+                    },
+                    "cancelled attempt hook".to_string(),
+                    Some(profile_id),
+                );
+                let (retry_task, retry_token) = state.start_task_for_profile(
+                    dbflux_core::TaskKind::Hook {
+                        phase: HookPhase::PreConnect,
+                    },
+                    "retry hook".to_string(),
+                    Some(profile_id),
+                );
+                state.register_detached_hook_task(profile_id, cancelled_task);
+                state.register_detached_hook_task(profile_id, retry_task);
+                cancelled_attempt.register(cancelled_task);
+                retry_attempt.register(retry_task);
+
+                assert_eq!(cancelled_attempt.cancel_registered(state, profile_id), 1);
+                (cancelled_token, retry_token)
+            })
+        });
+
+        assert!(cancelled_token.is_cancelled());
+        assert!(!retry_token.is_cancelled());
+
+        let remaining = cx.update(|cx| {
+            app_state.update(cx, |state, _| state.cancel_detached_hook_tasks(profile_id))
+        });
+        assert_eq!(
+            remaining, 1,
+            "the retry's hook stays registered for the profile"
+        );
+        assert!(retry_token.is_cancelled());
     }
 
     #[gpui::test]

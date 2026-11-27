@@ -36,11 +36,17 @@ pub struct PipelineProgress {
     state: PipelineState,
     completed_stages: Vec<String>,
     profile_name: String,
+    profile_id: uuid::Uuid,
     _poll_task: Option<gpui::Task<()>>,
 }
 
 impl PipelineProgress {
-    pub fn new(profile_name: String, watcher: StateWatcher, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        profile_id: uuid::Uuid,
+        profile_name: String,
+        watcher: StateWatcher,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let poll_task = cx.spawn({
             let mut watcher = watcher;
             async move |this, cx| {
@@ -82,6 +88,7 @@ impl PipelineProgress {
             state: PipelineState::Idle,
             completed_stages: Vec::new(),
             profile_name,
+            profile_id,
             _poll_task: Some(poll_task),
         }
     }
@@ -89,6 +96,11 @@ impl PipelineProgress {
     #[allow(dead_code)]
     pub fn state(&self) -> &PipelineState {
         &self.state
+    }
+
+    /// The connection profile this pipeline is connecting.
+    pub fn profile_id(&self) -> uuid::Uuid {
+        self.profile_id
     }
 
     pub fn profile_name(&self) -> &str {

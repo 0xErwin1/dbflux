@@ -39,6 +39,9 @@ pub enum LoginModalState {
 
 pub enum LoginModalEvent {
     OpenAuthProfilesSettings,
+    /// The user dismissed a sign-in that a connection pipeline is waiting
+    /// on, so that connection must be cancelled with everything after it.
+    PipelineLoginCancelled,
 }
 
 pub struct LoginModal {
@@ -46,6 +49,9 @@ pub struct LoginModal {
     state: LoginModalState,
     focus_handle: FocusHandle,
     last_provider_name: Option<String>,
+    /// Whether the sign-in shown was requested by a connection pipeline,
+    /// as opposed to a manual sign-in from settings.
+    pipeline_bound: bool,
     timeout_generation: u64,
     success_generation: u64,
     spinner_frame: usize,
@@ -63,6 +69,7 @@ impl LoginModal {
             state: LoginModalState::Idle,
             focus_handle: cx.focus_handle(),
             last_provider_name: None,
+            pipeline_bound: false,
             timeout_generation: 0,
             success_generation: 0,
             spinner_frame: 0,
@@ -88,6 +95,7 @@ impl LoginModal {
                     verification_url
                 );
                 self.visible = true;
+                self.pipeline_bound = true;
                 self.last_provider_name = Some(provider_name.clone());
                 self.state = LoginModalState::WaitingForBrowser {
                     provider_name: provider_name.clone(),
@@ -135,6 +143,22 @@ impl LoginModal {
         cx.notify();
     }
 
+    /// Closes the dialog at the user's request. Dismissing a sign-in that a
+    /// connection is still waiting on cancels that connection, so the
+    /// verification URL arriving later cannot reopen the dialog and a later
+    /// sign-in to the same session cannot connect it behind the user's back.
+    fn dismiss(&mut self, cx: &mut Context<Self>) {
+        let cancels_pipeline =
+            self.pipeline_bound && matches!(self.state, LoginModalState::WaitingForBrowser { .. });
+
+        self.close(cx);
+
+        if cancels_pipeline {
+            self.pipeline_bound = false;
+            cx.emit(LoginModalEvent::PipelineLoginCancelled);
+        }
+    }
+
     fn schedule_timeout(&mut self, cx: &mut Context<Self>) {
         self.timeout_generation += 1;
         let generation = self.timeout_generation;
@@ -156,6 +180,12 @@ impl LoginModal {
                             error: dbflux_i18n::t!("login.error.timed_out"),
                         };
                         this.visible = true;
+                        // The sign-in gave up, so the connection waiting on
+                        // it gives up too instead of running on unseen.
+                        if this.pipeline_bound {
+                            this.pipeline_bound = false;
+                            cx.emit(LoginModalEvent::PipelineLoginCancelled);
+                        }
                         cx.notify();
                     }
                 });
@@ -234,6 +264,7 @@ impl LoginModal {
     ) {
         let provider_name = provider_name.into();
         self.visible = true;
+        self.pipeline_bound = false;
         self.last_provider_name = Some(provider_name.clone());
         self.state = LoginModalState::WaitingForBrowser {
             provider_name,
@@ -456,7 +487,7 @@ impl Render for LoginModal {
 
         let entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
-            entity.update(cx, |this, cx| this.close(cx)).ok();
+            entity.update(cx, |this, cx| this.dismiss(cx)).ok();
         };
 
         let frame = Modal::new(dbflux_i18n::t!("login.window_title"))
@@ -483,7 +514,7 @@ impl Render for LoginModal {
                     .gap(ModalMetrics::FOOTER_GAP)
                     .child(
                         Button::new("sso-cancel", dbflux_i18n::t!("login.action.cancel"))
-                            .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                     )
                     .child(
                         Button::new("sso-copy-url", dbflux_i18n::t!("login.action.copy_url"))
@@ -539,7 +570,7 @@ impl Render for LoginModal {
                     .child(
                         Button::new("sso-failed-close", dbflux_i18n::t!("login.action.close"))
                             .primary()
-                            .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                     );
 
                 frame
@@ -569,8 +600,8 @@ impl Render for LoginModal {
 #[cfg(test)]
 mod tests {
     use super::{
-        LoginModal, SSO_LOGIN_TIMEOUT, failed_state_shows_open_auth_profiles_button,
-        login_progress_label,
+        LoginModal, LoginModalEvent, SSO_LOGIN_TIMEOUT,
+        failed_state_shows_open_auth_profiles_button, login_progress_label,
     };
     use crate::ui::labels::login_user_code;
     use dbflux_core::PipelineState;
@@ -750,6 +781,113 @@ mod tests {
             "the elapsed caption ran ahead of the wall clock ({wall_clock_seconds}s): \
              {shown_seconds:?}"
         );
+    }
+
+    fn waiting_for_login(url: Option<&str>) -> PipelineState {
+        PipelineState::WaitingForLogin {
+            provider_name: "AWS SSO".to_string(),
+            verification_url: url.map(str::to_string),
+        }
+    }
+
+    /// Counts the `PipelineLoginCancelled` events a modal emits.
+    fn count_pipeline_cancellations(
+        modal: &gpui::Entity<LoginModal>,
+        visual: &mut VisualTestContext,
+    ) -> Arc<Mutex<usize>> {
+        let count = Arc::new(Mutex::new(0usize));
+        let count_for_subscription = count.clone();
+        visual.update(|_, cx| {
+            cx.subscribe(modal, move |_, event: &LoginModalEvent, _| {
+                if matches!(event, LoginModalEvent::PipelineLoginCancelled) {
+                    *count_for_subscription.lock().expect("count lock") += 1;
+                }
+            })
+            .detach();
+        });
+        count
+    }
+
+    /// Cancelling or closing a sign-in that a connection waits on asks for
+    /// that connection to be cancelled, once, and hides the dialog.
+    #[gpui::test]
+    fn dismissing_a_pipeline_sign_in_requests_cancellation(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let (modal, visual) = cx.add_window_view(LoginModal::new);
+        let cancellations = count_pipeline_cancellations(&modal, visual);
+
+        visual.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.apply_pipeline_state("dev", &waiting_for_login(None), window, cx);
+                modal.dismiss(cx);
+                modal.dismiss(cx);
+            });
+        });
+        visual.run_until_parked();
+
+        assert_eq!(*cancellations.lock().expect("count lock"), 1);
+        assert!(!visual.update(|_, cx| modal.read(cx).visible));
+    }
+
+    /// A pipeline sign-in that times out cancels its connection, once; a
+    /// manual sign-in that times out cancels nothing.
+    #[gpui::test]
+    fn a_timed_out_pipeline_sign_in_requests_cancellation(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let (modal, visual) = cx.add_window_view(LoginModal::new);
+        let cancellations = count_pipeline_cancellations(&modal, visual);
+
+        visual.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.apply_pipeline_state("dev", &waiting_for_login(None), window, cx);
+            });
+        });
+        visual.executor().advance_clock(SSO_LOGIN_TIMEOUT);
+        visual.run_until_parked();
+
+        assert_eq!(*cancellations.lock().expect("count lock"), 1);
+        visual.update(|_, cx| modal.update(cx, |modal, cx| modal.dismiss(cx)));
+        assert_eq!(*cancellations.lock().expect("count lock"), 1);
+
+        visual.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open_manual("AWS SSO", "dev", None, window, cx)
+            });
+        });
+        visual.executor().advance_clock(SSO_LOGIN_TIMEOUT);
+        visual.run_until_parked();
+
+        assert_eq!(*cancellations.lock().expect("count lock"), 1);
+    }
+
+    /// Closing a manual sign-in from settings, or the failure report of a
+    /// connection, does not cancel anything.
+    #[gpui::test]
+    fn dismissing_a_manual_sign_in_or_a_failure_cancels_nothing(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let (modal, visual) = cx.add_window_view(LoginModal::new);
+        let cancellations = count_pipeline_cancellations(&modal, visual);
+
+        visual.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open_manual("AWS SSO", "dev", None, window, cx);
+                modal.dismiss(cx);
+
+                modal.apply_pipeline_state("dev", &waiting_for_login(None), window, cx);
+                let failed = PipelineState::Failed {
+                    stage: "Authenticating".to_string(),
+                    error: "denied".to_string(),
+                };
+                modal.apply_pipeline_state("dev", &failed, window, cx);
+                modal.dismiss(cx);
+            });
+        });
+        visual.run_until_parked();
+
+        assert_eq!(*cancellations.lock().expect("count lock"), 0);
     }
 
     #[test]
