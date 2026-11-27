@@ -6333,6 +6333,7 @@ tasks_panel:
   output_truncated: "… salida truncada en el panel"
   query_cancel_unsupported: "%{driver} no admite cancelar un comando en ejecución."
   drop_point_of_no_return: "La sentencia ya se envió al servidor y ya no se puede cancelar."
+  mutation_point_of_no_return: "Los cambios se aplican sin transacción y ya no se pueden cancelar."
 toast:
   action:
     copy: Copiar

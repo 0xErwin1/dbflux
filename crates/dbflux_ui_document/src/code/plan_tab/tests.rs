@@ -668,6 +668,45 @@ fn cancel_while_loading_shows_cancelled_and_drops_the_late_answer(cx: &mut TestA
     assert_eq!(state, crate::types::DocumentState::Clean);
 }
 
+fn plan_task_status(doc: &mut Doc<'_>) -> dbflux_core::TaskStatus {
+    doc.window.update(|_, cx| {
+        doc.app_state
+            .read(cx)
+            .tasks()
+            .recent_tasks(10)
+            .into_iter()
+            .find(|task| task.kind == dbflux_core::TaskKind::Query)
+            .expect("the plan runs as a query task")
+            .status
+    })
+}
+
+#[gpui::test]
+fn cancelling_a_plan_leaves_its_task_cancelling_until_the_driver_answers(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.explain();
+
+    // Cancel without settling, so the driver call has not answered yet.
+    let handled = doc.window.update(|window, cx| {
+        doc.document.update(cx, |document, cx| {
+            document.dispatch_command(Command::Cancel, window, cx)
+        })
+    });
+    assert!(handled);
+    assert_eq!(
+        plan_task_status(&mut doc),
+        dbflux_core::TaskStatus::Cancelling,
+        "the explain is still running on the server"
+    );
+
+    doc.settle();
+    assert_eq!(
+        plan_task_status(&mut doc),
+        dbflux_core::TaskStatus::Completed,
+        "an explain the driver finished anyway is not reported as cancelled"
+    );
+}
+
 #[gpui::test]
 fn the_loading_cancel_button_stops_the_plan_through_the_document(cx: &mut TestAppContext) {
     let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
@@ -1393,24 +1432,17 @@ fn the_editor_explain_runs_on_a_shared_session_still_on_the_editors_database(
 fn start_newer_query(doc: &mut Doc<'_>) -> uuid::Uuid {
     doc.window.update(|_, cx| {
         doc.document.update(cx, |document, cx| {
-            let target = document
-                .execution
-                .active_query_task
-                .as_ref()
-                .expect("the plan is the active task")
-                .target
-                .clone();
+            let target = dbflux_core::TaskTarget {
+                profile_id: document.connection_id.expect("a connection"),
+                database: None,
+            };
             let (task_id, _token) = document.runner.start_primary_for_target(
                 dbflux_core::TaskKind::Query,
                 "SELECT newer",
-                Some(target.clone()),
+                Some(target),
                 cx,
             );
-            document.execution.active_query_task = Some(crate::code::ActiveQueryTask {
-                task_id,
-                target,
-                uses_isolated_session: false,
-            });
+            document.execution.active_query_task = Some(crate::code::ActiveQueryTask { task_id });
             document.state = crate::types::DocumentState::Executing;
             task_id
         })
@@ -1832,14 +1864,10 @@ fn analyze_does_not_take_over_a_query_that_is_still_running(cx: &mut TestAppCont
             let (task_id, _token) = document.runner.start_primary_for_target(
                 dbflux_core::TaskKind::Query,
                 "SELECT newer",
-                Some(target.clone()),
+                Some(target),
                 cx,
             );
-            document.execution.active_query_task = Some(crate::code::ActiveQueryTask {
-                task_id,
-                target,
-                uses_isolated_session: false,
-            });
+            document.execution.active_query_task = Some(crate::code::ActiveQueryTask { task_id });
             document.state = crate::types::DocumentState::Executing;
             task_id
         })

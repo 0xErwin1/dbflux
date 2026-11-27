@@ -6332,6 +6332,7 @@ tasks_panel:
   output_truncated: "… 패널에서 출력이 잘렸습니다"
   query_cancel_unsupported: "%{driver}은(는) 실행 중인 명령 취소를 지원하지 않습니다."
   drop_point_of_no_return: "구문이 이미 서버로 전송되어 더 이상 취소할 수 없습니다."
+  mutation_point_of_no_return: "변경 사항이 트랜잭션 없이 적용되어 더 이상 취소할 수 없습니다."
 toast:
   action:
     copy: 복사

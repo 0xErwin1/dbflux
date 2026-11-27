@@ -1103,11 +1103,9 @@ impl ChartDocument {
         request.sql =
             dbflux_core::substitute_time_macros(&request.sql, macro_window, query_language);
 
-        let (task_id, cancel_token) = self.runner.start_primary(
-            dbflux_core::TaskKind::Query,
-            dbflux_i18n::t!("document.chart.status.task_label"),
-            cx,
-        );
+        let (task_id, cancel_token) = self
+            .runner
+            .start_primary_query(dbflux_i18n::t!("document.chart.status.task_label"), cx);
 
         self.exec_state = ExecState::Running;
         self.state = DocumentState::Executing;
@@ -1119,11 +1117,13 @@ impl ChartDocument {
             .background_executor()
             .spawn(async move { conn.execute(&request) });
 
+        let app_state = self.app_state.clone();
         cx.spawn(async move |this, cx| {
             let result = task.await;
 
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
+                    crate::task_runner::settle_task_after_cancel(&app_state, task_id, &result, cx);
                     if let Err(e) = conn_cleanup.cleanup_after_cancel() {
                         log::warn!("[chart-doc] cleanup after cancel failed: {}", e);
                     }

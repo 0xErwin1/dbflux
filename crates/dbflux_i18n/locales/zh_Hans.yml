@@ -6331,6 +6331,7 @@ tasks_panel:
   output_truncated: …面板中输出已截断
   query_cancel_unsupported: "%{driver} 不支持取消正在运行的命令。"
   drop_point_of_no_return: "语句已发送到服务器，无法再取消。"
+  mutation_point_of_no_return: "更改在没有事务的情况下应用，无法再取消。"
 toast:
   action:
     copy: 复制

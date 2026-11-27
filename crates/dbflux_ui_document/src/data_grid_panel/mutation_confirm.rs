@@ -852,7 +852,7 @@ impl DataGridPanel {
                 (None, rows_affected > 0)
             }
             Ok(MutationOutcome::Cancelled { rows_affected }) => {
-                self.runner.cancel_mutation(task_id, cx);
+                self.runner.acknowledge_cancelled(task_id, cx);
                 dbflux_ui_base::toast::Toast::info(
                     crate::labels::mutation_execution_cancelled_toast(rows_affected),
                 )

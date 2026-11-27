@@ -3,7 +3,7 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics};
-use dbflux_core::{CancelRequestOutcome, TaskId, TaskKind, TaskSnapshot, TaskStatus};
+use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -273,14 +273,7 @@ impl TasksPanel {
         }
 
         self.app_state.update(cx, |state, cx| {
-            let outcome = state.request_cancel_task(task_id);
-
-            // Tasks not yet started with a driver cancel hook finish as
-            // `Cancelled` on the spot and still need the driver told.
-            if task_kind == TaskKind::Query && outcome == CancelRequestOutcome::Cancelled {
-                state.cancel_query_for_task(task_id);
-            }
-
+            state.request_cancel_task(task_id);
             cx.emit(AppStateChanged);
         });
     }

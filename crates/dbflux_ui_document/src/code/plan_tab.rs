@@ -63,7 +63,6 @@ pub(super) struct PlanTab {
     /// The database the plan was asked on, which an analysis must still match.
     database: Option<String>,
     _view_subscription: Subscription,
-    _task: Option<Task<()>>,
 }
 
 /// Plan state of a code document: the tab and whether it is the one shown.
@@ -432,17 +431,10 @@ impl CodeDocument {
         self.clear_live_output();
 
         let description = dbflux_core::truncate_string_safe(target.text.trim(), 80);
-        let (task_id, cancel_token) = self.runner.start_primary_for_target(
-            dbflux_core::TaskKind::Query,
-            description,
-            Some(task_target.clone()),
-            cx,
-        );
-        self.execution.active_query_task = Some(ActiveQueryTask {
-            task_id,
-            target: task_target,
-            uses_isolated_session: false,
-        });
+        let (task_id, cancel_token) =
+            self.runner
+                .start_primary_query_for_target(description, task_target.clone(), true, cx);
+        self.execution.active_query_task = Some(ActiveQueryTask { task_id });
         self.state = DocumentState::Executing;
 
         let view_mode = self
@@ -474,8 +466,17 @@ impl CodeDocument {
             let result = connection.query_plan(&request);
             (result, started.elapsed())
         });
-        let task = cx.spawn(async move |this, cx| {
+        let app_state = self.app_state.clone();
+        // Detached: the task must still settle after the tab stopped waiting
+        // for it (Cancel, a newer plan), because the server answers later.
+        cx.spawn(async move |this, cx| {
             let (result, elapsed) = work.await;
+
+            if cancel_token.is_cancelled() {
+                cx.update(|cx| {
+                    crate::task_runner::settle_task_after_cancel(&app_state, task_id, &result, cx);
+                });
+            }
 
             if let Err(error) = this.update(cx, |document, cx| {
                 document.finish_plan(
@@ -489,7 +490,8 @@ impl CodeDocument {
             }) {
                 log::debug!("document closed before its plan arrived: {error}");
             }
-        });
+        })
+        .detach();
 
         self.plan.tab = Some(PlanTab {
             view,
@@ -498,7 +500,6 @@ impl CodeDocument {
             connection_id,
             database: planned_database,
             _view_subscription: subscription,
-            _task: Some(task),
         });
         self.plan.shown = true;
         if self.layout == SqlQueryLayout::EditorOnly {
@@ -575,7 +576,6 @@ impl CodeDocument {
             target,
             running: None,
             _view_subscription: subscription,
-            _task: None,
         });
         self.plan.shown = true;
         if self.layout == SqlQueryLayout::EditorOnly {
@@ -711,7 +711,6 @@ impl CodeDocument {
             self.execution.active_query_task = None;
         }
 
-        tab._task = None;
         let view = tab.view.clone();
         view.update(cx, |view, cx| view.set_cancelled(cx));
     }

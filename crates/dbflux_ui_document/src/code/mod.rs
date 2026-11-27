@@ -669,8 +669,6 @@ struct PendingQueryResult {
 
 pub(super) struct ActiveQueryTask {
     task_id: dbflux_core::TaskId,
-    target: TaskTarget,
-    uses_isolated_session: bool,
 }
 
 // Delayed confirmations must preserve the original trigger, not turn an
