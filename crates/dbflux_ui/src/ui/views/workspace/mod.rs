@@ -1038,6 +1038,9 @@ impl Workspace {
                     let _ = window;
                     this.open_auth_profiles_settings(cx);
                 }
+                LoginModalEvent::PipelineLoginCancelled => {
+                    this.cancel_pipeline_for_dismissed_login(cx);
+                }
             },
         )
         .detach();
@@ -1254,10 +1257,17 @@ impl Workspace {
                     }
                 }
                 SidebarEvent::PipelineStarted {
+                    profile_id,
                     profile_name,
                     watcher,
                 } => {
-                    this.start_pipeline_progress(profile_name.clone(), watcher.clone(), window, cx);
+                    this.start_pipeline_progress(
+                        *profile_id,
+                        profile_name.clone(),
+                        watcher.clone(),
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::RequestDeleteConnection {
                     connection_name,
@@ -2624,12 +2634,14 @@ impl Workspace {
 
     fn start_pipeline_progress(
         &mut self,
+        profile_id: uuid::Uuid,
         profile_name: String,
         watcher: dbflux_core::StateWatcher,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let progress = cx.new(|cx| pipeline::PipelineProgress::new(profile_name, watcher, cx));
+        let progress =
+            cx.new(|cx| pipeline::PipelineProgress::new(profile_id, profile_name, watcher, cx));
 
         let pipeline_profile_name = progress.read(cx).profile_name().to_string();
 
@@ -2694,6 +2706,26 @@ impl Workspace {
 
         self.pipeline_progress = Some(progress);
         self._pipeline_subscription = Some(subscription);
+        cx.notify();
+    }
+
+    /// Cancels the connection whose sign-in the user dismissed, the same way
+    /// cancelling its task from the background tasks panel does, so nothing
+    /// after the sign-in keeps running. The progress subscription is dropped
+    /// at once so a verification URL already in flight cannot reopen the
+    /// dialog before the pipeline observes the cancellation.
+    fn cancel_pipeline_for_dismissed_login(&mut self, cx: &mut Context<Self>) {
+        let Some(progress) = self.pipeline_progress.take() else {
+            return;
+        };
+        self._pipeline_subscription = None;
+
+        let profile_id = progress.read(cx).profile_id();
+        self.app_state.update(cx, |state, cx| {
+            state.cancel_running_connect_tasks_for_profile(profile_id);
+            cx.emit(AppStateChanged);
+        });
+
         cx.notify();
     }
 
