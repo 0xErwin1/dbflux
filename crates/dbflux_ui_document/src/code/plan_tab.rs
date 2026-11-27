@@ -60,6 +60,8 @@ pub(super) struct PlanTab {
     running: Option<dbflux_core::TaskId>,
     /// The connection the plan was asked of, for the messages that name it.
     connection_id: Option<Uuid>,
+    /// The database the plan was asked on, which an analysis must still match.
+    database: Option<String>,
     _view_subscription: Subscription,
     _task: Option<Task<()>>,
 }
@@ -340,6 +342,14 @@ impl CodeDocument {
         (current != expected).then(|| dbflux_i18n::t!(key, origin = expected, current = current))
     }
 
+    /// The database a plan on `route` is asked on.
+    fn plan_database(&self, route: &PlanRoute) -> Option<String> {
+        match route {
+            PlanRoute::Current => self.source.exec_ctx.database.clone(),
+            PlanRoute::Origin { database, .. } => database.clone(),
+        }
+    }
+
     /// Why a plan cannot be asked at all, checked before the driver is
     /// reached. An analyzed plan runs the statement, so it is also refused
     /// when it would run on another connection than the one its confirmation
@@ -361,6 +371,13 @@ impl CodeDocument {
             if target.route.connection_id(self.connection_id) != planned_on {
                 return Some(dbflux_i18n::t!(
                     "document.query_plan.state.analyze_connection_changed"
+                ));
+            }
+
+            let planned_database = self.plan.tab.as_ref().and_then(|tab| tab.database.as_ref());
+            if self.plan_database(&target.route) != planned_database.cloned() {
+                return Some(dbflux_i18n::t!(
+                    "document.query_plan.state.analyze_database_changed"
                 ));
             }
 
@@ -409,6 +426,7 @@ impl CodeDocument {
             return;
         };
         let connection_id = target.route.connection_id(self.connection_id);
+        let planned_database = self.plan_database(&target.route);
 
         self.clear_query_error(cx);
         self.clear_live_output();
@@ -478,6 +496,7 @@ impl CodeDocument {
             target,
             running: Some(task_id),
             connection_id,
+            database: planned_database,
             _view_subscription: subscription,
             _task: Some(task),
         });
@@ -552,6 +571,7 @@ impl CodeDocument {
         self.plan.tab = Some(PlanTab {
             view,
             connection_id: target.route.connection_id(self.connection_id),
+            database: self.plan_database(&target.route),
             target,
             running: None,
             _view_subscription: subscription,

@@ -1377,6 +1377,7 @@ document:
       origin_database_changed: "이 결과가 실행된 데이터베이스(%{origin})가 더 이상 이 연결이 사용 중인 데이터베이스(%{current})가 아닙니다. %{origin}(으)로 다시 전환한 뒤 쿼리를 다시 설명하세요. 지금 계획을 얻으면 다른 데이터베이스를 설명하게 됩니다."
       editor_database_changed: "이 편집기의 데이터베이스(%{origin})가 더 이상 이 연결이 사용 중인 데이터베이스(%{current})가 아닙니다. %{origin}(으)로 다시 전환한 뒤 쿼리를 다시 설명하세요. 지금 계획을 얻으면 다른 데이터베이스를 설명하게 됩니다."
       analyze_connection_changed: "편집기가 이 계획을 만든 연결과 다른 연결을 가리키고 있습니다. 분석하기 전에 새 연결에서 Explain을 다시 실행하세요."
+      analyze_database_changed: "편집기가 이 계획을 만든 데이터베이스와 다른 데이터베이스에 있습니다. 분석하기 전에 Explain을 다시 실행하세요."
       analyze_query_running: "이 편집기에서 쿼리가 아직 실행 중입니다. 끝날 때까지 기다리거나 취소한 뒤 분석을 실행하세요."
       cancelled:
         title: 계획 생성이 취소되었습니다

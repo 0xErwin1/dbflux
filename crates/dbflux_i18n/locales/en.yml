@@ -1377,6 +1377,7 @@ document:
       origin_database_changed: "The database this result ran on (%{origin}) is no longer the one this connection is using (%{current}). Switch back to %{origin} and explain the query again; a plan taken now would describe the wrong database."
       editor_database_changed: "The database this editor is on (%{origin}) is no longer the one this connection is using (%{current}). Switch back to %{origin} and explain the query again; a plan taken now would describe the wrong database."
       analyze_connection_changed: "The editor now points at a different connection than the one this plan was made on. Run Explain again on the new connection before analyzing."
+      analyze_database_changed: "The editor is on a different database than the one this plan was made on. Run Explain again before analyzing."
       analyze_query_running: "A query is still running in this editor. Wait for it to finish or cancel it, then run analyze."
       cancelled:
         title: Plan cancelled

@@ -107,7 +107,7 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   compartido marca como `Read` o `Metadata`, un write se rechaza antes de enviar
   nada, y el statement se ejecuta en `START TRANSACTION READ ONLY` y se revierte,
   así que el servidor también rechaza un write que el clasificador no detectó,
-  como una función almacenada que inserta.
+  como una función almacenada que inserta, salvo en tablas `TEMPORARY`, que una transacción de solo lectura todavía permite (la transacción se revierte después).
 
 ## Limitaciones
 

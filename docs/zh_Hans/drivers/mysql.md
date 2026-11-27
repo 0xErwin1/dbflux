@@ -51,7 +51,7 @@
 
 - `mysql.processlist` —— 来自 `information_schema.PROCESSLIST` 的活动会话（用户、主机、数据库、命令、时间、状态、信息）
 - 结构化查询计划（`Connection::query_plan`）：对恰好一条语句运行 `EXPLAIN FORMAT=JSON`，除非请求分析计划，否则不使用 `ANALYZE`，因此该语句不会被执行，并把 MySQL 8 与 MariaDB 的计划树（表、访问类型、键、检查或预估的行数、成本、其他属性）映射到与驱动程序无关的计划模型。包含多条语句的查询或空查询会在发送任何内容之前被拒绝。
-- 分析计划（`QueryPlanRequest::analyzed`、`supports_explain_analyze`）：MariaDB 运行 `ANALYZE FORMAT=JSON`，返回同样的 JSON，并带有 `r_rows`、`r_loops`、`r_*_time_ms` 实测值与优化器耗时（MariaDB 报告的是所有循环的总时间，计划按每次循环保存）。MySQL 8.0.18+ 运行 `EXPLAIN ANALYZE`，它只以 TREE 文本报告实测值，因此驱动会解析树的各行（`cost`、`rows`、`actual time=startup..total rows=N loops=L`、`never executed`），并把该文本保留为原始计划；MySQL 不报告规划耗时。只接受共享分类器标记为 `Read` 或 `Metadata` 的语句，写入语句会在发送任何内容之前被拒绝，语句在 `START TRANSACTION READ ONLY` 中运行并被回滚，因此即便分类器漏掉了某个写入（例如会插入数据的存储函数），服务器也会拒绝它。
+- 分析计划（`QueryPlanRequest::analyzed`、`supports_explain_analyze`）：MariaDB 运行 `ANALYZE FORMAT=JSON`，返回同样的 JSON，并带有 `r_rows`、`r_loops`、`r_*_time_ms` 实测值与优化器耗时（MariaDB 报告的是所有循环的总时间，计划按每次循环保存）。MySQL 8.0.18+ 运行 `EXPLAIN ANALYZE`，它只以 TREE 文本报告实测值，因此驱动会解析树的各行（`cost`、`rows`、`actual time=startup..total rows=N loops=L`、`never executed`），并把该文本保留为原始计划；MySQL 不报告规划耗时。只接受共享分类器标记为 `Read` 或 `Metadata` 的语句，写入语句会在发送任何内容之前被拒绝，语句在 `START TRANSACTION READ ONLY` 中运行并被回滚，因此即便分类器漏掉了某个写入（例如会插入数据的存储函数），服务器也会拒绝它，但写入 `TEMPORARY` 表除外，只读事务仍然允许这种写入（事务之后会被回滚）。
 
 ## 限制
 

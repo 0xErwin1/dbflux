@@ -1894,3 +1894,25 @@ fn a_read_only_document_does_not_offer_analyze(cx: &mut TestAppContext) {
     assert!(!doc.has("segmented-plan-run-mode-analyze"));
     assert!(!doc.has("plan-analyze-gate"));
 }
+
+#[gpui::test]
+fn analyze_is_refused_on_another_database_than_the_estimate_planned_on(cx: &mut TestAppContext) {
+    let mut doc = open(cx, analyzing(sample_plan()), "SELECT 1");
+    set_editor_database(&mut doc, "shop");
+    doc.explain_and_settle();
+    doc.click("segmented-plan-run-mode-analyze");
+    set_editor_database(&mut doc, "reporting");
+
+    doc.click("plan-analyze-run");
+
+    assert_eq!(
+        doc.modes(),
+        [QueryPlanMode::Estimate],
+        "nothing was analyzed"
+    );
+    assert!(
+        failure_summary(&mut doc).is_some_and(|summary| summary.contains("different database")),
+    );
+    doc.click("segmented-plan-run-mode-estimate");
+    assert!(doc.plan_state(ready), "the estimate is still there");
+}

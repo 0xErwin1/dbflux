@@ -382,6 +382,29 @@ impl PlanView {
         )
     }
 
+    /// The footer status of a tab with no plan: its element id, icon and
+    /// text. An analyzed run executes the statement, so a cancel or an error
+    /// after dispatch cannot claim that nothing ran.
+    fn no_plan_footer_status(&self) -> (&'static str, AppIcon, String) {
+        match (&self.state, self.run_mode) {
+            (PlanState::Cancelled, PlanRunMode::Analyze) => (
+                "plan-footer-analyze-cancelled",
+                AppIcon::X,
+                dbflux_i18n::t!("document.query_plan.footer.analyze_cancelled"),
+            ),
+            (PlanState::Failed(_), PlanRunMode::Analyze) => (
+                "plan-footer-analyze-failed",
+                AppIcon::TriangleAlert,
+                dbflux_i18n::t!("document.query_plan.footer.analyze_failed"),
+            ),
+            _ => (
+                "plan-footer-not-run",
+                AppIcon::Lock,
+                dbflux_i18n::t!("document.query_plan.footer.not_run"),
+            ),
+        }
+    }
+
     /// The strip under the view: what the plan holds, that the query was not
     /// run, how long the plan took and, on the raw plan, Copy.
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -423,25 +446,7 @@ impl PlanView {
                 vec![footer_item(AppIcon::Rows3, summary, cx), run_state]
             }
             _ => {
-                // An analyzed run executes the statement, so a cancel or an
-                // error after dispatch cannot claim that nothing ran.
-                let (id, icon, text) = match (&self.state, self.run_mode) {
-                    (PlanState::Cancelled, PlanRunMode::Analyze) => (
-                        "plan-footer-analyze-cancelled",
-                        AppIcon::X,
-                        dbflux_i18n::t!("document.query_plan.footer.analyze_cancelled"),
-                    ),
-                    (PlanState::Failed(_), PlanRunMode::Analyze) => (
-                        "plan-footer-analyze-failed",
-                        AppIcon::TriangleAlert,
-                        dbflux_i18n::t!("document.query_plan.footer.analyze_failed"),
-                    ),
-                    _ => (
-                        "plan-footer-not-run",
-                        AppIcon::Lock,
-                        dbflux_i18n::t!("document.query_plan.footer.not_run"),
-                    ),
-                };
+                let (id, icon, text) = self.no_plan_footer_status();
                 vec![
                     tagged(id)
                         .child(footer_item(icon, text, cx))

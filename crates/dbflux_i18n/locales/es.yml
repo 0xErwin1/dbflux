@@ -1377,6 +1377,7 @@ document:
       origin_database_changed: "La base de datos en la que se ejecutó este resultado (%{origin}) ya no es la que usa esta conexión (%{current}). Vuelve a %{origin} y explica la consulta de nuevo; un plan obtenido ahora describiría otra base de datos."
       editor_database_changed: "La base de datos de este editor (%{origin}) ya no es la que usa esta conexión (%{current}). Vuelve a %{origin} y explica la consulta de nuevo; un plan obtenido ahora describiría otra base de datos."
       analyze_connection_changed: "El editor ahora apunta a una conexión distinta de aquella en la que se hizo este plan. Vuelve a ejecutar Explain en la nueva conexión antes de analizar."
+      analyze_database_changed: "El editor está en una base de datos distinta de aquella en la que se hizo este plan. Vuelve a ejecutar Explain antes de analizar."
       analyze_query_running: "Todavía hay una consulta en ejecución en este editor. Espera a que termine o cancélala, y luego ejecuta el análisis."
       cancelled:
         title: Plan cancelado

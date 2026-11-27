@@ -1377,6 +1377,7 @@ document:
       origin_database_changed: "生成此结果的数据库（%{origin}）已不是此连接当前使用的数据库（%{current}）。请切回 %{origin} 后再次解释该查询；现在获取的计划会描述另一个数据库。"
       editor_database_changed: "此编辑器所用的数据库（%{origin}）已不是此连接当前使用的数据库（%{current}）。请切回 %{origin} 后再次解释该查询；现在获取的计划会描述另一个数据库。"
       analyze_connection_changed: "编辑器当前指向的连接与生成此计划时不同。请先在新连接上重新运行 Explain，再进行分析。"
+      analyze_database_changed: "编辑器所在的数据库与生成此计划时不同。请先重新运行 Explain，再进行分析。"
       analyze_query_running: "此编辑器中仍有查询在运行。请等待其完成或取消它，然后再运行分析。"
       cancelled:
         title: 计划已取消

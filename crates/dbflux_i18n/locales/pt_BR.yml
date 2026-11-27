@@ -1374,6 +1374,7 @@ document:
       origin_database_changed: "O banco de dados em que este resultado foi executado (%{origin}) não é mais o que esta conexão está usando (%{current}). Volte para %{origin} e explique a consulta novamente; um plano obtido agora descreveria outro banco de dados."
       editor_database_changed: "O banco de dados deste editor (%{origin}) não é mais o que esta conexão está usando (%{current}). Volte para %{origin} e explique a consulta novamente; um plano obtido agora descreveria outro banco de dados."
       analyze_connection_changed: "O editor agora aponta para uma conexão diferente daquela em que este plano foi feito. Execute Explain novamente na nova conexão antes de analisar."
+      analyze_database_changed: "O editor está em um banco de dados diferente daquele em que este plano foi feito. Execute Explain novamente antes de analisar."
       analyze_query_running: "Ainda há uma consulta em execução neste editor. Aguarde o término ou cancele-a e execute a análise."
       cancelled:
         title: Plano cancelado

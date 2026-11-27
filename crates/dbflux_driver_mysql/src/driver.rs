@@ -3277,7 +3277,9 @@ fn is_analyze_plan_statement(stripped: &str) -> bool {
 
     wrapped.starts_with('(')
         || first_word.eq_ignore_ascii_case("SELECT")
-        || first_word.eq_ignore_ascii_case("WITH")
+        // A CTE can front a `DELETE`, `INSERT` or `UPDATE` that a `TEMPORARY`
+        // table would accept in a read-only transaction.
+        || (first_word.eq_ignore_ascii_case("WITH") && dbflux_core::is_safe_read_query(wrapped))
 }
 
 /// `text` without its leading `keyword` (ASCII case-insensitive), when the
@@ -6458,6 +6460,23 @@ mod read_only_tests {
     fn a_read_only_request_accepts_analyze_format_but_not_analyze_table() {
         assert!(ensure_read_only_statements(&statements("ANALYZE FORMAT=JSON SELECT 1")).is_ok());
         assert!(ensure_read_only_statements(&statements("analyze format = json SELECT 1")).is_ok());
+        assert!(
+            ensure_read_only_statements(&statements(
+                "ANALYZE FORMAT=JSON WITH c AS (SELECT 1 AS id) SELECT * FROM c"
+            ))
+            .is_ok()
+        );
+        for write in [
+            "DELETE FROM tmp WHERE id IN (SELECT id FROM c)",
+            "INSERT INTO tmp SELECT id FROM c",
+            "UPDATE tmp SET id = 2 WHERE id IN (SELECT id FROM c)",
+        ] {
+            let sql = format!("ANALYZE FORMAT=JSON WITH c AS (SELECT 1 AS id) {write}");
+            assert!(
+                ensure_read_only_statements(&statements(&sql)).is_err(),
+                "{sql}"
+            );
+        }
         assert!(ensure_read_only_statements(&statements("ANALYZE TABLE t")).is_err());
         assert!(
             ensure_read_only_statements(&statements("ANALYZE NO_WRITE_TO_BINLOG TABLE t")).is_err()

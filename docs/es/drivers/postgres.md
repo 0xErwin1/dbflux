@@ -41,7 +41,7 @@ Base de datos relacional open-source avanzada.
   compartido marca como `Read` o `Metadata`, un write se rechaza antes de enviar
   nada, y el statement se ejecuta en `BEGIN READ ONLY` y se revierte, así que el
   servidor también rechaza un write que el clasificador no detectó, como una
-  función volátil que inserta.
+  función volátil que inserta, salvo en tablas `TEMPORARY`, que una transacción de solo lectura todavía permite (la transacción se revierte después).
 - Incluye generación de SQL/código específica de PostgreSQL para CRUD, índices,
   reindex, foreign keys, y operaciones de tipos.
 - Los scripts multi-sentencia (varias sentencias separadas por `;`) se ejecutan
