@@ -171,7 +171,7 @@ impl KeymapOverrides {
 
     /// The context predicate the binding has once overrides apply.
     pub fn effective_predicate<'a>(&'a self, slot: &BindingSlot) -> Cow<'a, str> {
-        self.0.effective_predicate(&slot.engine())
+        self.0.effective_predicate(vocabulary(), &slot.engine())
     }
 
     /// The predicate the user gave the binding, `None` when it keeps the
