@@ -7,13 +7,17 @@ use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::icons::AppIcon;
 use gpui::{App, Entity};
 
-use super::{PlanState, PlanView, PlanViewMode};
+use super::{PlanRunMode, PlanState, PlanView, PlanViewMode};
 use crate::pane::PaneAction;
 
 /// The menu entries for the plan `view` holds, by what the tab shows.
 pub(crate) fn pane_actions(view: &Entity<PlanView>, cx: &App) -> Vec<PaneAction> {
     let plan = view.read(cx);
     let mut actions = Vec::new();
+
+    if plan.analyze_offer().is_some() && !plan.is_loading() {
+        actions.extend(run_mode_entries(view, plan));
+    }
 
     match plan.state() {
         PlanState::Loading => {
@@ -69,10 +73,49 @@ pub(crate) fn pane_actions(view: &Entity<PlanView>, cx: &App) -> Vec<PaneAction>
             );
         }
         PlanState::Cancelled => actions.push(retry_entry(view)),
+        PlanState::AnalyzeGate => {
+            let run = view.clone();
+            actions.push(
+                PaneAction::callback(
+                    "plan-analyze-run",
+                    dbflux_i18n::t!("document.query_plan.analyze.gate.run"),
+                    move |_, cx| run.update(cx, |plan, cx| plan.request_analysis(cx)),
+                )
+                .icon(AppIcon::Play),
+            );
+        }
         PlanState::Unsupported { .. } | PlanState::MultiStatement { .. } => {}
     }
 
     actions
+}
+
+/// One entry per run mode. Analyze is listed but disabled when the statement
+/// may not run, as the switch dims it.
+fn run_mode_entries(view: &Entity<PlanView>, plan: &PlanView) -> Vec<PaneAction> {
+    PlanRunMode::ALL
+        .iter()
+        .map(|mode| {
+            let mode = *mode;
+            let target = view.clone();
+            let label = match mode {
+                PlanRunMode::Estimate => dbflux_i18n::t!("document.query_plan.run_mode.estimate"),
+                PlanRunMode::Analyze => dbflux_i18n::t!("document.query_plan.run_mode.analyze"),
+            };
+            let allowed = mode == PlanRunMode::Estimate || plan.can_analyze();
+
+            PaneAction::callback(
+                format!("plan-run-mode-{}", mode.key()),
+                label,
+                move |_, cx| target.update(cx, |plan, cx| plan.choose_run_mode(mode, cx)),
+            )
+            .icon(match mode {
+                PlanRunMode::Estimate => AppIcon::Search,
+                PlanRunMode::Analyze => AppIcon::Play,
+            })
+            .enabled(allowed && mode != plan.run_mode())
+        })
+        .collect()
 }
 
 fn retry_entry(view: &Entity<PlanView>) -> PaneAction {

@@ -7,7 +7,7 @@ use dbflux_core::PlanFormat;
 use dbflux_diagram::route_edge;
 use gpui::{point, px, size};
 
-use super::fixtures::{weekly_revenue, without_costs};
+use super::fixtures::{analyzed_weekly_revenue, off_by, weekly_revenue, without_costs};
 use crate::query_plan::Step;
 use crate::query_plan::chrome::format_elapsed;
 use crate::query_plan::diagram::geometry::{
@@ -482,4 +482,168 @@ fn a_leaf_beside_a_deep_branch_sits_in_the_column_of_its_sibling() {
             .any(|node| node.x > child.x + 1.0 && node.x + 1.0 < parent.x);
         assert!(!skipped, "{edge:?}");
     }
+}
+
+fn analyzed_model() -> PlanModel {
+    PlanModel::from_plan(&analyzed_weekly_revenue())
+}
+
+#[test]
+fn an_estimate_has_no_actuals_and_an_analyzed_plan_does() {
+    let estimate = model();
+    assert!(!estimate.analyzed);
+    assert!(estimate.nodes.iter().all(|node| node.actual_rows.is_none()));
+    assert!(!estimate.columns.actual_rows && !estimate.columns.time);
+    assert!(!estimate.columns.loops && !estimate.columns.self_time);
+    assert!(estimate.nodes.iter().all(|node| !node.is_slowest));
+    assert!(
+        estimate
+            .nodes
+            .iter()
+            .all(|node| node.estimate_gap.is_none())
+    );
+
+    let analyzed = analyzed_model();
+    assert!(analyzed.analyzed);
+    assert_eq!(analyzed.planning_time, Some(0.9));
+    assert_eq!(analyzed.execution_time, Some(412.6));
+    assert!(analyzed.columns.actual_rows && analyzed.columns.time);
+    assert!(analyzed.columns.loops && analyzed.columns.self_time);
+}
+
+#[test]
+fn the_slowest_node_is_the_one_with_the_most_self_time_and_replaces_the_costliest() {
+    let analyzed = analyzed_model();
+
+    let slowest: Vec<usize> = analyzed
+        .nodes
+        .iter()
+        .filter(|node| node.is_slowest)
+        .map(|node| node.id)
+        .collect();
+    assert_eq!(slowest, [5], "the Index Scan, 169.1 ms across its loops");
+    assert!(analyzed.nodes.iter().all(|node| !node.is_costliest));
+    assert_eq!(analyzed.entry_node(), Some(5));
+
+    let index_scan = &analyzed.nodes[5];
+    assert_eq!(index_scan.loops, Some(48_200));
+    let time = index_scan.actual_time.expect("total time across loops");
+    assert!((time - 169.1).abs() < 1e-6, "{time}");
+    let share = index_scan.self_time_share.expect("share of execution time");
+    assert_eq!(format_share(share), "41.0%");
+    assert_eq!(index_scan.share, index_scan.self_time_share);
+
+    let limit = &analyzed.nodes[0];
+    assert_eq!(format_share(limit.share.expect("share")), "<0.1%");
+}
+
+#[test]
+fn the_estimate_gap_is_marked_on_one_node_and_only_from_ten_times() {
+    let analyzed = analyzed_model();
+    let marked: Vec<(usize, String)> = analyzed
+        .nodes
+        .iter()
+        .filter_map(|node| node.estimate_gap.map(|gap| (node.id, format!("{gap:.1}"))))
+        .collect();
+    assert_eq!(
+        marked,
+        [(4, "15.5".to_string())],
+        "the Seq Scan wins the tie with the Nested Loop by depth; the Sort at 12.2x is not the largest"
+    );
+    assert!(
+        analyzed
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("48,200") && warning.contains("3,100")),
+        "{:?}",
+        analyzed.warnings
+    );
+
+    let marked = |estimated, actual| {
+        PlanModel::from_plan(&off_by(estimated, actual))
+            .nodes
+            .iter()
+            .any(|node| node.estimate_gap.is_some())
+    };
+    assert!(!marked(100.0, 999.0), "9.99x is below the threshold");
+    assert!(marked(100.0, 1000.0), "10x is the threshold");
+    assert!(marked(1000.0, 100.0), "fewer rows count too");
+}
+
+#[test]
+fn edges_are_weighted_by_actual_rows_times_loops() {
+    let analyzed = analyzed_model();
+
+    assert_eq!(
+        analyzed.nodes[5].edge_rows,
+        Some(48_200.0),
+        "1 row x 48,200 loops"
+    );
+    assert_eq!(analyzed.nodes[4].edge_rows, Some(48_200.0));
+    assert_eq!(analyzed.nodes[1].edge_rows, Some(50.0));
+    assert_eq!(analyzed.max_rows(), Some(48_200.0));
+
+    let estimate = model();
+    assert_eq!(estimate.nodes[5].edge_rows, estimate.nodes[5].rows);
+}
+
+#[test]
+fn analyzed_totals_show_rows_and_leave_the_self_cost_column_out() {
+    let analyzed = analyzed_model();
+
+    assert_eq!(analyzed.total_rows, Some(50.0));
+    assert!(!analyzed.columns.self_cost, "self time replaces self cost");
+    assert!(analyzed.columns.cost, "the cost column stays");
+    assert!(model().columns.self_cost);
+}
+
+#[test]
+fn time_is_formatted_to_the_precision_that_reads() {
+    use crate::query_plan::model::format_time;
+
+    assert_eq!(format_time(0.9), "0.9 ms");
+    assert_eq!(format_time(0.041), "0.041 ms");
+    assert_eq!(format_time(96.2), "96.2 ms");
+    assert_eq!(format_time(412.6), "412.6 ms");
+    assert_eq!(format_time(0.0), "0 ms");
+    assert_eq!(format_time(1500.0), "1.50 s");
+}
+
+#[test]
+fn a_row_count_says_row_for_one_and_rows_otherwise() {
+    use crate::query_plan::model::format_row_count;
+
+    assert_eq!(format_row_count(1.0), "1 row");
+    assert_eq!(format_row_count(0.0), "0 rows");
+    assert_eq!(format_row_count(3100.0), "3,100 rows");
+}
+
+#[test]
+fn a_ratio_drops_the_decimal_from_one_hundred_times() {
+    use crate::query_plan::model::format_ratio;
+
+    assert_eq!(format_ratio(15.5), "15.5×");
+    assert_eq!(format_ratio(99.94), "99.9×");
+    assert_eq!(format_ratio(100.0), "100×");
+    assert_eq!(format_ratio(750.0), "750×");
+}
+
+#[test]
+fn the_gap_warning_and_tooltip_use_the_row_phrase_and_the_short_ratio() {
+    let plan = off_by(1.0, 750.0);
+    let model = PlanModel::from_plan(&plan);
+    let warning = model.warnings.last().expect("the gap warning");
+
+    assert!(warning.contains("750 rows"), "{warning}");
+    assert!(warning.contains("1 row"), "{warning}");
+    assert!(
+        warning.contains("750×") && !warning.contains("750.0"),
+        "{warning}"
+    );
+
+    let body = crate::query_plan::diagram::gap_tooltip_body(&model.nodes[0]);
+    assert!(
+        body.contains("750 rows") && body.contains("1 row"),
+        "{body}"
+    );
 }

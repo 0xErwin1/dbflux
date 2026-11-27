@@ -1262,17 +1262,38 @@ document:
   query_plan:
     tab:
       title: Plan
+      analyzed: "analyzed"
     view:
       switch: Plan view
       diagram: Diagram
       tree: Tree
       raw: Raw
+    rows:
+      one: "%{count} row"
+      many: "%{count} rows"
+    run_mode:
+      switch: "Plan mode"
+      estimate: "Estimate"
+      analyze: "Analyze"
+    analyze:
+      refusal:
+        title: "Analyze is off for this statement."
+        changes_data: "It changes data, so only the estimate runs."
+        several: "Analyze runs one statement at a time."
+      gate:
+        title: "Analyze runs this query on %{connection}"
+        body: "The statement really runs to measure real time and rows. What it does outside the transaction, such as locks or remote calls, still happens."
+        production: "%{connection} is a production connection."
+        cancel: "Cancel"
+        run: "Run analyze"
     scope:
       selection: "Selection L%{start}–%{end}"
       script: "Whole script · %{count} statements"
     totals:
       cost: total cost
       rows: rows
+      planning: "planning"
+      execution: "execution"
     controls:
       zoom_out: Zoom out
       zoom_in: Zoom in
@@ -1281,6 +1302,7 @@ document:
     warnings:
       one: 1 warning.
       many: "%{count} warnings."
+      estimate_gap: "%{node} returned %{actual} against an estimate of %{estimated} (%{ratio})."
     node:
       costliest: COSTLIEST
       table: table
@@ -1288,6 +1310,9 @@ document:
       cost: cost
       rows: rows
       self: self
+      slowest: "SLOWEST"
+      est: "est."
+      actual: "actual"
     tree:
       node: Node
       index: Index
@@ -1295,6 +1320,11 @@ document:
       self_cost: Self cost
       rows: Rows
       on_relation: on
+      est_rows: "Est. rows"
+      actual_rows: "Actual rows"
+      time: "Time"
+      loops: "Loops"
+      self_time: "Self time"
     raw:
       copy: Copy
     footer:
@@ -1306,6 +1336,7 @@ document:
         json: JSON plan
         xml: XML plan
         text: Text plan
+      analyzed: "Analyzed · query was run"
     inspector:
       node: "node %{id}"
       estimate: Estimate
@@ -1317,9 +1348,20 @@ document:
       rows: Rows
       relation: Relation
       index: Index
+      actual: "Actual"
+      rows_per_loop: "Rows per loop"
+      startup_time: "Startup time"
+      total_time: "Total time"
+      self_time: "Self time"
+      loops: "Loops"
+      versus: "Versus estimate"
+      versus_more: "%{ratio} more rows"
+      versus_fewer: "%{ratio} fewer rows"
+      versus_same: "As estimated"
     loading:
       running: Planning the query…
       cancel: Cancel
+      analyzing: "Running the query to measure it…"
     state:
       retry: Retry
       unsupported:
@@ -1358,6 +1400,23 @@ document:
       relation_title: Relation
       relation_body: The table or view this step reads.
       condition_body: "The condition that best explains this step, as the engine reports it."
+      estimate_body: "Plans the query without running it."
+      analyze_body: "Runs the query and measures real time and rows. Estimate only plans it."
+      totals_analyzed_body: "Planning is the time spent building the plan. Execution is the time spent running it. Both are measured on the server."
+      edge_actual_title: "Actual rows"
+      edge_actual_body: "Rows this step passed to the next one, over all its runs. A thicker line means more rows."
+      gap_title: "Rows off the estimate"
+      gap_body: "%{actual} came back against an estimate of %{estimated}, the largest gap in this plan."
+      slowest_title: "Slowest"
+      slowest_body: "The node with the highest self time in this plan."
+      actual_rows_title: "Actual rows"
+      actual_rows_body: "Rows this step returned for each run of it, to compare with the estimate beside it."
+      time_title: "Time"
+      time_body: "Time spent in this step and its children, added up over all its runs."
+      self_time_title: "Self time"
+      self_time_body: "Time spent in this node alone, without its children, as a share of the execution time. The bar shows the same share."
+      loops_title: "Loops"
+      loops_body: "How many times the engine ran this step. Time is the total across loops; rows are per loop, like the estimate."
   code:
     gutter:
       run_statement: Run this statement

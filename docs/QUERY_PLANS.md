@@ -14,6 +14,8 @@ An analyzed plan, available for some drivers, does run it; see
    **Explain query** from the pane actions menu.
 3. Read the **Plan** tab: the box with the biggest **self cost** is marked
    **COSTLIEST**, and the thickest line carries the most rows.
+4. Where the driver supports it, choose **Analyze** to run a read statement and
+   see real times and rows; see [Running an analyzed plan](#running-an-analyzed-plan).
 
 To plan the query behind a result, right-click a cell (or press `m`) and choose
 **Explain this query**: it explains the query that produced that result tab, not
@@ -51,7 +53,7 @@ while the keyboard is in the results, and the pane actions menu lists each one.
 | View | Shows | Use it to |
 |------|-------|-----------|
 | **Diagram** (default) | One box per step, read from the left, ending at the final result | See the shape of the plan and where the rows flow |
-| **Tree** | An indented list with Node, Index, Cost, Self cost and Rows columns | Scan the numbers in a column |
+| **Tree** | An indented list with Node, Index, Cost, Self cost and Rows columns (an analyzed plan adds Actual rows, Time and Loops) | Scan the numbers in a column |
 | **Raw** | The plan exactly as the engine returned it, with **Copy** | Check a detail the other views leave out |
 
 A column the engine has no data for is left out of the Tree, so a plan without
@@ -104,12 +106,12 @@ the same text the tooltip shows, so it is there for keyboard use too.
 | `g` / `Shift+G` | First and last node |
 | `Enter` | Show the selected node in the inspector |
 | `Shift+T` | Next view |
-| `Esc` | Close the inspector, or cancel a plan that is loading |
+| `Esc` | Close the inspector, close the Analyze card, or cancel a plan that is loading |
 | `Alt+H` / `Alt+L` | Previous and next result tab, the Plan tab included |
 | `Alt+W` | Close the tab shown |
 
-The view switch, the zoom controls, **Copy** and the error buttons are entries of
-the pane actions menu (`m` in the context bar, `Shift+F10` in the editor) while the
+The view switch, the Estimate | Analyze switch, the zoom controls, **Copy**, **Run
+analyze** and the error buttons are entries of the pane actions menu (`m` in the context bar, `Shift+F10` in the editor) while the
 Plan tab is shown.
 
 ## When there is no plan
@@ -176,8 +178,45 @@ estimate:
 | SQL Server, SQLite, Turso | Not supported | Answer *Analyzed plans are not supported by this driver* before anything is sent |
 
 A driver advertises analyzed plans with the `supports_explain_analyze` query
-capability. The Plan tab does not offer an Analyze switch yet; until it does,
-analyzed plans are available to the drivers' `query_plan` callers.
+capability. The Plan tab shows the Estimate | Analyze switch only on a
+connection whose driver has it; on every other connection the switch is not
+drawn.
+
+### Running an analyzed plan
+
+1. Explain the statement as usual. The estimate comes first and runs nothing.
+2. Choose **Analyze** in the **Estimate | Analyze** switch, next to the view
+   switch. This runs nothing either: the tab shows a card, **Analyze runs this
+   query on** *connection*, that says the statement really runs to measure real
+   time and rows, and that anything it does outside the transaction (locks,
+   remote calls) still happens. On a production connection the card also says so.
+3. Choose **Run analyze** to send it, or **Cancel** (`Esc`) to go back to the
+   estimate. The analyzed request carries the same statement, on the same
+   connection, as the estimate: the editor's current connection for **Explain**,
+   or the connection the result came from for **Explain this query**.
+4. While it runs the tab shows placeholder rows and **Cancel**. The statement
+   takes as long as the query takes; Cancel stops it through the same task cancel
+   as a query.
+
+When the statement is not a plain read, **Analyze** is dimmed and a band under
+the switch says *Analyze is off for this statement. It changes data, so only the
+estimate runs.* The estimate stays on screen. If the text holds more than one
+statement, Analyze is dimmed with the reason on hover.
+
+The analyzed plan replaces the estimate's numbers in every view, and the tab is
+labelled **analyzed**. Choose **Estimate** to see the estimate again; nothing is
+asked of the server for that. Both plans stay in the tab until you explain again.
+From the keyboard, the pane actions menu has **Estimate**, **Analyze** and, on
+the card, **Run analyze**.
+
+| Where | What changes when the plan is analyzed |
+|-------|-----------------------------------------|
+| Totals | `planning` and `execution` time and the rows returned replace the total cost |
+| Diagram | Each box adds its time, loops and actual rows beside the estimate. **SLOWEST** (most self time) replaces **COSTLIEST**, the bar shows self time as a share of execution, and a line's thickness and label follow actual rows times loops |
+| Gap marker | The box whose actual rows are furthest from the estimate gets a badge with the factor (for example `15.5×`) only when it is 10 times or more, and the warnings band says the same. Hover the badge for the numbers |
+| Tree | Node, Index, Cost, Est. rows, Actual rows, Time, Loops and Self time; a column with no data is left out |
+| Inspector | **Estimate** and **Actual** sections, with **Versus estimate** (for example `15.5× more rows`) |
+| Footer | **Analyzed · query was run** instead of **query not run** |
 
 ### Reading analyzed numbers
 

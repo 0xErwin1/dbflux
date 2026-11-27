@@ -18,7 +18,8 @@ use gpui_component::ActiveTheme;
 use super::diagram::node_icon;
 use super::ids::tagged;
 use super::model::{
-    NodeId, PlanColumns, PlanModel, PlanNodeView, format_cost, format_rows, format_share,
+    NodeId, PlanColumns, PlanModel, PlanNodeView, format_cost, format_loops, format_ratio,
+    format_rows, format_share, format_time,
 };
 use super::tooltip::tip;
 use super::{PlanView, Step};
@@ -27,6 +28,9 @@ const INDEX_WIDTH: Rems = ui(200.0);
 const COST_WIDTH: Rems = ui(110.0);
 const SELF_COST_WIDTH: Rems = ui(180.0);
 const ROWS_WIDTH: Rems = ui(90.0);
+const ACTUAL_ROWS_WIDTH: Rems = ui(100.0);
+const TIME_WIDTH: Rems = ui(90.0);
+const LOOPS_WIDTH: Rems = ui(80.0);
 const BAR_WIDTH: Rems = ui(56.0);
 /// Indent of one tree level. (16 px)
 const INDENT: Rems = ui(16.0);
@@ -119,7 +123,7 @@ impl PlanView {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.render_tree_header(model.columns, cx))
+            .child(self.render_tree_header(model.columns, model.analyzed, cx))
             .child(
                 tagged("plan-tree-rows")
                     .flex_1()
@@ -132,7 +136,12 @@ impl PlanView {
             .into_any_element()
     }
 
-    fn render_tree_header(&self, columns: PlanColumns, cx: &mut Context<Self>) -> AnyElement {
+    fn render_tree_header(
+        &self,
+        columns: PlanColumns,
+        analyzed: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = cx.theme();
         let cell = |id: &'static str,
                     label: String,
@@ -210,12 +219,64 @@ impl PlanView {
             .when(columns.rows, |header| {
                 header.child(cell(
                     "plan-tree-header-rows",
-                    dbflux_i18n::t!("document.query_plan.tree.rows"),
+                    if analyzed {
+                        dbflux_i18n::t!("document.query_plan.tree.est_rows")
+                    } else {
+                        dbflux_i18n::t!("document.query_plan.tree.rows")
+                    },
                     ROWS_WIDTH,
                     true,
                     Some((
                         dbflux_i18n::t!("document.query_plan.tooltip.rows_title"),
                         dbflux_i18n::t!("document.query_plan.tooltip.rows_body"),
+                    )),
+                ))
+            })
+            .when(columns.actual_rows, |header| {
+                header.child(cell(
+                    "plan-tree-header-actual-rows",
+                    dbflux_i18n::t!("document.query_plan.tree.actual_rows"),
+                    ACTUAL_ROWS_WIDTH,
+                    true,
+                    Some((
+                        dbflux_i18n::t!("document.query_plan.tooltip.actual_rows_title"),
+                        dbflux_i18n::t!("document.query_plan.tooltip.actual_rows_body"),
+                    )),
+                ))
+            })
+            .when(columns.time, |header| {
+                header.child(cell(
+                    "plan-tree-header-time",
+                    dbflux_i18n::t!("document.query_plan.tree.time"),
+                    TIME_WIDTH,
+                    true,
+                    Some((
+                        dbflux_i18n::t!("document.query_plan.tooltip.time_title"),
+                        dbflux_i18n::t!("document.query_plan.tooltip.time_body"),
+                    )),
+                ))
+            })
+            .when(columns.loops, |header| {
+                header.child(cell(
+                    "plan-tree-header-loops",
+                    dbflux_i18n::t!("document.query_plan.tree.loops"),
+                    LOOPS_WIDTH,
+                    true,
+                    Some((
+                        dbflux_i18n::t!("document.query_plan.tooltip.loops_title"),
+                        dbflux_i18n::t!("document.query_plan.tooltip.loops_body"),
+                    )),
+                ))
+            })
+            .when(columns.self_time, |header| {
+                header.child(cell(
+                    "plan-tree-header-self-time",
+                    dbflux_i18n::t!("document.query_plan.tree.self_time"),
+                    SELF_COST_WIDTH,
+                    true,
+                    Some((
+                        dbflux_i18n::t!("document.query_plan.tooltip.self_time_title"),
+                        dbflux_i18n::t!("document.query_plan.tooltip.self_time_body"),
                     )),
                 ))
             })
@@ -234,7 +295,7 @@ impl PlanView {
         let tint = ChromeColors::tint(theme);
         let hover = theme.secondary_hover;
         let selected = self.selected == Some(id);
-        let figure_color = if node.is_costliest {
+        let figure_color = if node.is_marked() {
             theme.warning
         } else {
             strong
@@ -299,6 +360,26 @@ impl PlanView {
             })
             .when(columns.rows, |row| {
                 row.child(numeric(ROWS_WIDTH, node.rows.map(format_rows), strong))
+            })
+            .when(columns.actual_rows, |row| {
+                row.child(numeric(
+                    ACTUAL_ROWS_WIDTH,
+                    node.actual_rows.map(format_rows),
+                    strong,
+                ))
+            })
+            .when(columns.time, |row| {
+                row.child(numeric(
+                    TIME_WIDTH,
+                    node.actual_time.map(format_time),
+                    figure_color,
+                ))
+            })
+            .when(columns.loops, |row| {
+                row.child(numeric(LOOPS_WIDTH, node.loops.map(format_loops), strong))
+            })
+            .when(columns.self_time, |row| {
+                row.child(tree_self_cost_cell(node, cx))
             })
             .into_any_element()
     }
@@ -404,6 +485,31 @@ fn tree_title(node: &PlanNodeView, cx: &App) -> AnyElement {
                 )),
         )
     })
+    .when_some(node.estimate_gap, |title, gap| {
+        title.child(
+            tagged(ElementId::Name(format!("plan-tree-row-{id}-gap").into()))
+                .tooltip(tip(
+                    dbflux_i18n::t!("document.query_plan.tooltip.gap_title"),
+                    Some(super::diagram::gap_tooltip_body(node).into()),
+                ))
+                .child(Badge::new(format_ratio(gap), BadgeTone::Warning)),
+        )
+    })
+    .when(node.is_slowest, |title| {
+        title.child(
+            tagged(ElementId::Name(
+                format!("plan-tree-row-{id}-slowest").into(),
+            ))
+            .tooltip(tip(
+                dbflux_i18n::t!("document.query_plan.tooltip.slowest_title"),
+                Some(dbflux_i18n::t!("document.query_plan.tooltip.slowest_body").into()),
+            ))
+            .child(Badge::new(
+                dbflux_i18n::t!("document.query_plan.node.slowest"),
+                BadgeTone::Warning,
+            )),
+        )
+    })
     .when(node.is_costliest, |title| {
         title.child(
             tagged(ElementId::Name(
@@ -428,12 +534,12 @@ fn tree_title(node: &PlanNodeView, cx: &App) -> AnyElement {
 /// The self cost cell: the share as a bar and a percentage.
 fn tree_self_cost_cell(node: &PlanNodeView, cx: &App) -> AnyElement {
     let theme = cx.theme();
-    let color = if node.is_costliest {
+    let color = if node.is_marked() {
         theme.warning
     } else {
         ChromeColors::strong(theme)
     };
-    let bar_color = if node.is_costliest {
+    let bar_color = if node.is_marked() {
         theme.warning
     } else {
         ChromeColors::tint(theme)
@@ -447,7 +553,7 @@ fn tree_self_cost_cell(node: &PlanNodeView, cx: &App) -> AnyElement {
         .items_center()
         .justify_end()
         .gap(Spacing::SM)
-        .when_some(node.self_share, |cell, share| {
+        .when_some(node.share, |cell, share| {
             cell.child(
                 div()
                     .w(BAR_WIDTH)

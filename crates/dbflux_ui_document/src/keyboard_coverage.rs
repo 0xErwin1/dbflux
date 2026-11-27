@@ -70,7 +70,8 @@ pub(crate) const CODE_EDITOR_CHROME: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
-/// The Plan tab of the code editor: its view switch, the diagram's zoom
+/// The Plan tab of the code editor: its view switch, its Estimate | Analyze
+/// switch and the Analyze gate, the diagram's zoom
 /// controls, the nodes and rows, and the buttons of its states. The view
 /// switch, the zoom controls, Copy and the error buttons are entries of the
 /// pane actions menu (`m` in the context bar, Shift+F10 in the editor) while
@@ -80,6 +81,15 @@ pub(crate) const QUERY_PLAN: SurfaceRegistry = SurfaceRegistry {
     contexts: &[ContextId::Results, ContextId::Editor],
     entries: &[
         ("segmented-plan-view-*", KeyboardPath::Menu("plan-view-*")),
+        (
+            "segmented-plan-run-mode-*",
+            KeyboardPath::Menu("plan-run-mode-*"),
+        ),
+        (
+            "plan-analyze-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("plan-analyze-run", KeyboardPath::Menu("plan-analyze-run")),
         ("plan-zoom-out", KeyboardPath::Menu("plan-zoom-out")),
         ("plan-zoom-in", KeyboardPath::Menu("plan-zoom-in")),
         ("plan-zoom-reset", KeyboardPath::Menu("plan-zoom-reset")),

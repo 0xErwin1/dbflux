@@ -15,9 +15,12 @@ use gpui::{
     Styled as _, TestAppContext, VisualTestContext, Window, div, point,
 };
 
-use super::fixtures::{weekly_revenue, without_costs};
+use super::fixtures::{analyzed_weekly_revenue, weekly_revenue, without_costs};
 use crate::query_plan::inspector::PlanInspector;
-use crate::query_plan::{PlanFailure, PlanState, PlanView, PlanViewEvent, PlanViewMode};
+use crate::query_plan::{
+    AnalyzeOffer, AnalyzeRefusal, PlanFailure, PlanRunMode, PlanState, PlanView, PlanViewEvent,
+    PlanViewMode,
+};
 
 /// An id built at run time, for the `&'static str` the debug selectors take.
 fn id(text: String) -> &'static str {
@@ -31,6 +34,7 @@ enum Seen {
     Closed,
     Retry,
     Cancel,
+    Analyze,
 }
 
 struct Harness<'a> {
@@ -62,6 +66,7 @@ fn open(cx: &mut TestAppContext) -> Harness<'_> {
                 PlanViewEvent::CloseInspector => Seen::Closed,
                 PlanViewEvent::RetryRequested => Seen::Retry,
                 PlanViewEvent::CancelRequested => Seen::Cancel,
+                PlanViewEvent::AnalyzeRequested => Seen::Analyze,
             };
             seen.borrow_mut().push(record);
         })
@@ -87,6 +92,37 @@ impl Harness<'_> {
             });
         });
         self.settle();
+    }
+
+    fn offer(&mut self, offer: Option<AnalyzeOffer>) {
+        self.window.update(|_, cx| {
+            self.view
+                .update(cx, |view, cx| view.set_analyze_offer(offer, cx));
+        });
+        self.settle();
+    }
+
+    /// What the document does once the user confirmed the gate: the analyze
+    /// slot loads, then the analyzed plan arrives.
+    fn analyzed(&mut self, plan: &QueryPlan) {
+        let plan = plan.clone();
+        self.window.update(|_, cx| {
+            self.view.update(cx, |view, cx| {
+                view.choose_run_mode(PlanRunMode::Analyze, cx);
+                view.begin_analysis(cx);
+                view.set_ready(&plan, Duration::from_millis(415), cx)
+            });
+        });
+        self.settle();
+    }
+
+    fn run_mode(&mut self) -> PlanRunMode {
+        self.window.update(|_, cx| self.view.read(cx).run_mode())
+    }
+
+    fn gate_is_open(&mut self) -> bool {
+        self.window
+            .update(|_, cx| matches!(self.view.read(cx).state(), PlanState::AnalyzeGate))
     }
 
     fn settle(&mut self) {
@@ -1019,4 +1055,401 @@ fn hovering_a_diagram_cost_and_an_edge_label_explains_them(cx: &mut TestAppConte
     plan.hover_on_surface("plan-edge-4");
     let text = plan.tooltip().expect("the edge label has a tooltip");
     assert!(text.contains("Estimated rows"), "{text}");
+}
+
+fn offer(production: bool, refusal: Option<AnalyzeRefusal>) -> AnalyzeOffer {
+    AnalyzeOffer {
+        connection: "shop-prod".to_string(),
+        production,
+        refusal,
+    }
+}
+
+#[gpui::test]
+fn the_run_mode_switch_is_not_drawn_without_analyze_support(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+
+    assert!(!plan.has("segmented-plan-run-mode-estimate"));
+    assert!(!plan.has("segmented-plan-run-mode-analyze"));
+}
+
+#[gpui::test]
+fn the_run_mode_switch_is_drawn_when_the_connection_can_analyze(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+
+    assert!(plan.has("segmented-plan-run-mode-estimate"));
+    assert!(plan.has("segmented-plan-run-mode-analyze"));
+    assert_eq!(plan.run_mode(), PlanRunMode::Estimate);
+    assert!(!plan.has("plan-analyze-refusal"));
+}
+
+#[gpui::test]
+fn choosing_analyze_shows_the_gate_and_runs_nothing(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(true, None)));
+
+    plan.click("segmented-plan-run-mode-analyze");
+
+    assert_eq!(plan.run_mode(), PlanRunMode::Analyze);
+    assert!(plan.gate_is_open());
+    assert!(plan.has("plan-analyze-gate"));
+    assert!(plan.has("plan-analyze-cancel"));
+    assert!(plan.has("plan-analyze-run"));
+    assert!(!plan.has("plan-node-0"), "the gate replaces the plan");
+    assert!(
+        !plan.seen().contains(&Seen::Analyze),
+        "choosing is not running: {:?}",
+        plan.seen()
+    );
+}
+
+#[test]
+fn the_gate_says_the_statement_runs_for_real_and_names_the_connection() {
+    use crate::query_plan::analyze::{gate_body, gate_title};
+
+    let production = offer(true, None);
+    assert_eq!(
+        gate_title(&production),
+        "Analyze runs this query on shop-prod"
+    );
+    let body = gate_body(&production);
+    assert!(body.contains("really runs"), "{body}");
+    assert!(body.contains("locks or remote calls"), "{body}");
+    assert!(
+        body.contains("shop-prod is a production connection"),
+        "{body}"
+    );
+
+    let body = gate_body(&offer(false, None));
+    assert!(body.contains("really runs"), "{body}");
+    assert!(!body.contains("production connection"), "{body}");
+}
+
+#[test]
+fn the_refusal_says_why_only_the_estimate_runs() {
+    assert_eq!(
+        AnalyzeRefusal::ChangesData.title(),
+        "Analyze is off for this statement."
+    );
+    assert_eq!(
+        AnalyzeRefusal::ChangesData.reason(),
+        "It changes data, so only the estimate runs."
+    );
+}
+
+#[gpui::test]
+fn cancel_on_the_gate_goes_back_to_the_estimate_and_run_asks_the_document(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+
+    plan.click("segmented-plan-run-mode-analyze");
+    plan.click("plan-analyze-cancel");
+    assert_eq!(plan.run_mode(), PlanRunMode::Estimate);
+    assert!(plan.has("plan-node-0"), "the estimate is back");
+    assert!(plan.seen().iter().all(|seen| *seen != Seen::Analyze));
+
+    plan.click("segmented-plan-run-mode-analyze");
+    assert!(plan.press(Command::Cancel), "Escape closes the gate");
+    assert_eq!(plan.run_mode(), PlanRunMode::Estimate);
+
+    plan.click("segmented-plan-run-mode-analyze");
+    plan.click("plan-analyze-run");
+    assert!(plan.seen().contains(&Seen::Analyze));
+}
+
+#[gpui::test]
+fn a_write_statement_disables_analyze_with_the_refusal_and_keeps_the_estimate(
+    cx: &mut TestAppContext,
+) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, Some(AnalyzeRefusal::ChangesData))));
+
+    assert!(plan.has("plan-analyze-refusal"));
+
+    plan.click("segmented-plan-run-mode-analyze");
+
+    assert_eq!(
+        plan.run_mode(),
+        PlanRunMode::Estimate,
+        "the click is refused"
+    );
+    assert!(!plan.has("plan-analyze-gate"));
+    assert!(plan.has("plan-node-0"), "the estimate stays visible");
+    assert!(plan.seen().iter().all(|seen| *seen != Seen::Analyze));
+}
+
+#[gpui::test]
+fn an_analyzed_plan_marks_the_slowest_node_and_the_estimate_gap_in_the_diagram(
+    cx: &mut TestAppContext,
+) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+    plan.analyzed(&analyzed_weekly_revenue());
+
+    assert!(plan.has("plan-node-5-slowest"));
+    assert!(plan.has("plan-node-4-gap"));
+    assert!(
+        !plan.has("plan-node-1-gap"),
+        "only the largest gap is marked"
+    );
+    for node in 0..6 {
+        assert!(
+            !plan.has(id(format!("plan-node-{node}-costliest"))),
+            "{node}"
+        );
+        assert!(plan.has(id(format!("plan-node-{node}-time"))), "{node}");
+    }
+    assert!(plan.has("plan-node-5-share"), "the self time bar");
+    assert!(plan.has("plan-footer-analyzed"));
+    assert!(plan.window.update(|_, cx| plan.view.read(cx).is_analyzed()));
+}
+
+#[gpui::test]
+fn the_analyzed_tree_adds_the_actual_columns_and_drops_self_cost(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+    plan.analyzed(&analyzed_weekly_revenue());
+    plan.click("segmented-plan-view-tree");
+
+    for column in [
+        "index",
+        "cost",
+        "rows",
+        "actual-rows",
+        "time",
+        "loops",
+        "self-time",
+    ] {
+        assert!(
+            plan.has(id(format!("plan-tree-header-{column}"))),
+            "{column}"
+        );
+    }
+    assert!(!plan.has("plan-tree-header-self-cost"));
+    assert!(plan.has("plan-tree-row-5-slowest"));
+    assert!(plan.has("plan-tree-row-4-gap"));
+    assert!(!plan.has("plan-tree-row-1-gap"));
+}
+
+#[gpui::test]
+fn an_estimate_shows_no_actual_columns(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+    plan.click("segmented-plan-view-tree");
+
+    for column in ["actual-rows", "time", "loops", "self-time"] {
+        assert!(
+            !plan.has(id(format!("plan-tree-header-{column}"))),
+            "{column}"
+        );
+    }
+    assert!(!plan.has("plan-footer-analyzed"));
+}
+
+#[gpui::test]
+fn the_inspector_of_an_analyzed_node_has_estimate_actual_and_versus_estimate(
+    cx: &mut TestAppContext,
+) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+    plan.analyzed(&analyzed_weekly_revenue());
+    plan.click("plan-node-4");
+
+    let content = plan
+        .inspectors
+        .borrow()
+        .last()
+        .cloned()
+        .expect("an inspector was mounted");
+    let inspector = content
+        .downcast::<PlanInspector>()
+        .expect("the rail content is the plan inspector");
+
+    struct Mount(Entity<PlanInspector>);
+    impl Render for Mount {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.0.clone())
+        }
+    }
+    let (_mount, rail) = plan.window.add_window_view(|_, _| Mount(inspector));
+    rail.run_until_parked();
+
+    let top = |rail: &mut VisualTestContext, element: &'static str| {
+        rail.debug_bounds(element)
+            .unwrap_or_else(|| panic!("`{element}` is drawn"))
+            .origin
+            .y
+    };
+    let estimate = top(rail, "plan-inspector-section-estimate");
+    let actual = top(rail, "plan-inspector-section-actual");
+    let reads = top(rail, "plan-inspector-section-reads");
+    assert!(estimate < actual && actual < reads);
+    for field in ["loops", "versus", "self-time", "total-time"] {
+        assert!(
+            rail.debug_bounds(id(format!("plan-inspector-field-{field}")))
+                .is_some(),
+            "{field}"
+        );
+    }
+    assert_eq!(
+        crate::query_plan::inspector::versus_label(crate::query_plan::model::RowDrift::More(15.5)),
+        "15.5× more rows"
+    );
+}
+
+#[gpui::test]
+fn the_analyzed_tooltips_explain_on_hover_only(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+    plan.analyzed(&analyzed_weekly_revenue());
+    plan.window
+        .executor()
+        .advance_clock(Duration::from_millis(2000));
+    plan.settle();
+    assert_eq!(plan.tooltip(), None, "opening an analyzed plan shows none");
+
+    plan.hover("plan-totals");
+    let text = plan
+        .tooltip()
+        .expect("the totals explain planning and execution");
+    assert!(
+        text.contains("Planning is the time spent building the plan"),
+        "{text}"
+    );
+
+    plan.hover("plan-run-mode-tip-analyze");
+    let text = plan.tooltip().expect("the Analyze segment has a tooltip");
+    assert!(
+        text.contains("Runs the query and measures real time and rows"),
+        "{text}"
+    );
+
+    plan.click("segmented-plan-view-tree");
+    plan.hover("plan-tree-row-5-slowest");
+    let text = plan.tooltip().expect("the marker has a tooltip");
+    assert!(text.contains("highest self time"), "{text}");
+
+    plan.hover("plan-tree-header-actual-rows");
+    let text = plan.tooltip().expect("the column has a tooltip");
+    assert!(
+        text.contains("Rows this step returned for each run of it"),
+        "{text}"
+    );
+
+    plan.hover("plan-tree-header-self-time");
+    let text = plan.tooltip().expect("the column has a tooltip");
+    assert!(
+        text.contains("without its children, as a share of the execution time"),
+        "{text}"
+    );
+
+    plan.hover("plan-tree-row-4-gap");
+    let text = plan.tooltip().expect("the badge has a tooltip");
+    assert!(text.contains("Rows off the estimate"), "{text}");
+    assert!(
+        text.contains("48,200 rows came back against an estimate of 3,100 rows"),
+        "{text}"
+    );
+}
+
+#[gpui::test]
+fn the_gate_shows_no_tooltip_on_its_own(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(true, None)));
+    plan.click("segmented-plan-run-mode-analyze");
+    plan.window
+        .executor()
+        .advance_clock(Duration::from_millis(2000));
+    plan.settle();
+
+    assert_eq!(plan.tooltip(), None);
+}
+
+#[gpui::test]
+fn analyzing_loads_with_cancel_and_the_estimate_is_one_click_away_afterwards(
+    cx: &mut TestAppContext,
+) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+    plan.click("segmented-plan-run-mode-analyze");
+
+    plan.window.update(|_, cx| {
+        plan.view.update(cx, |view, cx| view.begin_analysis(cx));
+    });
+    plan.settle();
+    assert!(plan.has("plan-state-loading"));
+    assert!(plan.has("plan-cancel"));
+    plan.click("plan-cancel");
+    assert!(plan.seen().contains(&Seen::Cancel));
+
+    plan.window
+        .update(|_, cx| plan.view.update(cx, |view, cx| view.set_cancelled(cx)));
+    plan.settle();
+    plan.click("segmented-plan-run-mode-estimate");
+    assert_eq!(plan.run_mode(), PlanRunMode::Estimate);
+    assert!(plan.has("plan-node-0"), "the estimate was kept");
+}
+
+#[gpui::test]
+fn the_run_mode_switch_waits_while_a_plan_loads(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.offer(Some(offer(false, None)));
+    plan.settle();
+
+    plan.click("segmented-plan-run-mode-analyze");
+
+    assert_eq!(plan.run_mode(), PlanRunMode::Estimate);
+    assert!(!plan.gate_is_open());
+}
+
+#[gpui::test]
+fn the_gate_and_the_analyzed_views_are_covered_by_the_menu_and_the_keyboard(
+    cx: &mut TestAppContext,
+) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+    let checked = covered(&mut plan);
+    assert!(
+        checked
+            .iter()
+            .any(|id| id == "segmented-plan-run-mode-analyze"),
+        "{checked:?}"
+    );
+
+    plan.click("segmented-plan-run-mode-analyze");
+    let checked = covered(&mut plan);
+    for id in ["plan-analyze-cancel", "plan-analyze-run"] {
+        assert!(
+            checked.iter().any(|checked| checked == id),
+            "{id}: {checked:?}"
+        );
+    }
+
+    plan.click("plan-analyze-cancel");
+    plan.analyzed(&analyzed_weekly_revenue());
+    let checked = covered(&mut plan);
+    assert!(checked.iter().any(|id| id == "plan-node-5"), "{checked:?}");
+}
+
+#[gpui::test]
+fn the_refusal_band_is_covered(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, Some(AnalyzeRefusal::ChangesData))));
+
+    covered(&mut plan);
 }

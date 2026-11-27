@@ -1262,17 +1262,38 @@ document:
   query_plan:
     tab:
       title: 실행 계획
+      analyzed: "분석됨"
     view:
       switch: 계획 보기
       diagram: 다이어그램
       tree: 트리
       raw: 원본
+    rows:
+      one: "%{count}행"
+      many: "%{count}행"
+    run_mode:
+      switch: "플랜 모드"
+      estimate: "추정"
+      analyze: "분석"
+    analyze:
+      refusal:
+        title: "이 구문은 분석할 수 없습니다."
+        changes_data: "데이터를 변경하므로 추정만 실행됩니다."
+        several: "분석은 한 번에 구문 하나만 실행합니다."
+      gate:
+        title: "분석은 이 쿼리를 %{connection}에서 실행합니다"
+        body: "구문이 실제 시간과 행 수를 측정하기 위해 실제로 실행됩니다. 락이나 원격 호출처럼 트랜잭션 밖에서 하는 작업은 그대로 일어납니다."
+        production: "%{connection}은(는) 프로덕션 연결입니다."
+        cancel: "취소"
+        run: "분석 실행"
     scope:
       selection: "선택 영역 L%{start}–%{end}"
       script: "전체 스크립트 · 문 %{count}개"
     totals:
       cost: 총 비용
       rows: 행
+      planning: "플래닝"
+      execution: "실행"
     controls:
       zoom_out: 축소
       zoom_in: 확대
@@ -1281,6 +1302,7 @@ document:
     warnings:
       one: 경고 1개.
       many: "경고 %{count}개."
+      estimate_gap: "%{node}이(가) %{actual}을(를) 반환했습니다. 추정은 %{estimated}였습니다 (%{ratio})."
     node:
       costliest: 최고 비용
       table: 테이블
@@ -1288,6 +1310,9 @@ document:
       cost: 비용
       rows: 행
       self: 자체
+      slowest: "가장 느림"
+      est: "추정"
+      actual: "실제"
     tree:
       node: 노드
       index: 인덱스
@@ -1295,6 +1320,11 @@ document:
       self_cost: 자체 비용
       rows: 행
       on_relation: "대상:"
+      est_rows: "추정 행"
+      actual_rows: "실제 행"
+      time: "시간"
+      loops: "반복"
+      self_time: "자체 시간"
     raw:
       copy: 복사
     footer:
@@ -1306,6 +1336,7 @@ document:
         json: JSON 계획
         xml: XML 계획
         text: 텍스트 계획
+      analyzed: "분석됨 · 쿼리가 실행되었습니다"
     inspector:
       node: "노드 %{id}"
       estimate: 추정치
@@ -1317,9 +1348,20 @@ document:
       rows: 행
       relation: 관계
       index: 인덱스
+      actual: "실제"
+      rows_per_loop: "반복당 행"
+      startup_time: "시작 시간"
+      total_time: "총 시간"
+      self_time: "자체 시간"
+      loops: "반복"
+      versus: "추정 대비"
+      versus_more: "행 %{ratio} 더 많음"
+      versus_fewer: "행 %{ratio} 더 적음"
+      versus_same: "추정과 같음"
     loading:
       running: 쿼리 계획을 만드는 중…
       cancel: 취소
+      analyzing: "측정을 위해 쿼리를 실행하는 중…"
     state:
       retry: 다시 시도
       unsupported:
@@ -1358,6 +1400,23 @@ document:
       relation_title: 관계
       relation_body: 이 단계가 읽는 테이블 또는 뷰입니다.
       condition_body: "엔진이 보고한, 이 단계를 가장 잘 설명하는 조건입니다."
+      estimate_body: "쿼리를 실행하지 않고 플랜만 계산합니다."
+      analyze_body: "쿼리를 실행해 실제 시간과 행 수를 측정합니다. 추정은 플랜만 계산합니다."
+      totals_analyzed_body: "플래닝은 플랜을 만드는 데 걸린 시간이고, 실행은 플랜을 실행하는 데 걸린 시간입니다. 둘 다 서버에서 측정됩니다."
+      edge_actual_title: "실제 행"
+      edge_actual_body: "이 단계가 모든 실행에 걸쳐 다음 단계로 넘긴 행 수입니다. 선이 굵을수록 행이 많습니다."
+      gap_title: "추정과 다른 행 수"
+      gap_body: "%{actual}이(가) 반환되었으며 추정은 %{estimated}였습니다. 이 플랜에서 가장 큰 차이입니다."
+      slowest_title: "가장 느림"
+      slowest_body: "이 플랜에서 자체 시간이 가장 긴 노드입니다."
+      actual_rows_title: "실제 행"
+      actual_rows_body: "이 단계가 실행될 때마다 반환한 행 수로, 옆의 추정과 비교합니다."
+      time_title: "시간"
+      time_body: "이 단계와 하위 단계가 모든 실행에 걸쳐 쓴 시간의 합계입니다."
+      self_time_title: "자체 시간"
+      self_time_body: "하위 단계를 뺀 이 노드만의 시간으로, 실행 시간에서 차지하는 비율입니다. 막대도 같은 비율을 보여 줍니다."
+      loops_title: "반복"
+      loops_body: "엔진이 이 단계를 실행한 횟수입니다. 시간은 모든 반복의 합계이고, 행 수는 추정처럼 반복당입니다."
   code:
     gutter:
       run_statement: 이 문 실행

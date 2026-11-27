@@ -11,8 +11,8 @@
 //! header, the keyboard and the inspector rail.
 
 use super::*;
-use crate::query_plan::{self, PlanFailure, PlanView, PlanViewEvent, PlanViewMode};
-use dbflux_core::{DbError, QueryPlan, QueryPlanRequest};
+use crate::query_plan::{self, PlanFailure, PlanRunMode, PlanView, PlanViewEvent, PlanViewMode};
+use dbflux_core::{DbError, QueryLanguage, QueryPlan, QueryPlanMode, QueryPlanRequest};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, record_error, report_error};
 
 /// The connection a plan is asked of.
@@ -43,6 +43,9 @@ pub(super) struct PlanTarget {
     /// Where the plan is asked.
     pub(super) route: PlanRoute,
     pub(super) text: String,
+    /// The language `text` is written in, for the guard that decides whether
+    /// the statement may be analyzed.
+    pub(super) language: QueryLanguage,
     /// "Statement L7–16", "Selection L3–5" or "Whole script · 3 statements".
     pub(super) scope: String,
     /// Statements in `text`, when the language can count them.
@@ -126,6 +129,7 @@ impl CodeDocument {
             return Some(PlanTarget {
                 route: PlanRoute::Current,
                 statement_count: language.statement_count(&text),
+                language: language.clone(),
                 text,
                 scope: dbflux_i18n::t!(
                     "document.query_plan.scope.selection",
@@ -148,6 +152,7 @@ impl CodeDocument {
                 route: PlanRoute::Current,
                 text: statement.to_string(),
                 statement_count: 1,
+                language: language.clone(),
                 scope: dbflux_i18n::t!(
                     "document.code.result.statement_lines",
                     start = start,
@@ -167,6 +172,7 @@ impl CodeDocument {
         Some(PlanTarget {
             route: PlanRoute::Current,
             text: buffer,
+            language: language.clone(),
             scope,
             statement_count,
         })
@@ -234,6 +240,7 @@ impl CodeDocument {
                 statement_count: language.statement_count(&query),
                 scope: tab.title.clone(),
                 text: query,
+                language,
             },
             cx,
         );
@@ -336,6 +343,21 @@ impl CodeDocument {
     /// Asks the driver for the plan of `target` and shows the Plan tab,
     /// loading, replacing the one a previous Explain left.
     pub(super) fn start_plan(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
+        self.launch_plan(target, QueryPlanMode::Estimate, cx);
+    }
+
+    /// Run analyze: asks for the analyzed plan of the statement the tab
+    /// covers, on the connection it was planned on, in the same tab. The
+    /// estimate stays in it, one click away.
+    fn start_analysis(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.plan.tab.as_ref().map(|tab| tab.target.clone()) else {
+            return;
+        };
+
+        self.launch_plan(target, QueryPlanMode::Analyze, cx);
+    }
+
+    fn launch_plan(&mut self, target: PlanTarget, mode: QueryPlanMode, cx: &mut Context<Self>) {
         if let PlanRoute::Origin { connection_id, .. } = &target.route
             && self
                 .app_state
@@ -376,16 +398,30 @@ impl CodeDocument {
         });
         self.state = DocumentState::Executing;
 
-        let mode = self
+        let view_mode = self
             .plan
             .view()
             .map_or(PlanViewMode::default(), |view| view.read(cx).mode());
         self.hide_plan_inspector(cx);
 
-        let view = cx.new(|cx| PlanView::new(target.scope.clone(), mode, cx));
+        let view = match (mode, self.plan.view()) {
+            (QueryPlanMode::Analyze, Some(view)) => {
+                view.update(cx, |view, cx| view.begin_analysis(cx));
+                view
+            }
+            _ => {
+                let offer = self.analyze_offer(&target, cx);
+                let view = cx.new(|cx| PlanView::new(target.scope.clone(), view_mode, cx));
+                view.update(cx, |view, cx| view.set_analyze_offer(offer, cx));
+                view
+            }
+        };
         let subscription = cx.subscribe(&view, Self::on_plan_event);
 
-        let request = QueryPlanRequest::new(target.text.clone());
+        let request = match mode {
+            QueryPlanMode::Estimate => QueryPlanRequest::new(target.text.clone()),
+            QueryPlanMode::Analyze => QueryPlanRequest::analyzed(target.text.clone()),
+        };
         let started = Instant::now();
         let work = cx.background_executor().spawn(async move {
             let result = connection.query_plan(&request);
@@ -395,7 +431,14 @@ impl CodeDocument {
             let (result, elapsed) = work.await;
 
             if let Err(error) = this.update(cx, |document, cx| {
-                document.finish_plan(task_id, cancel_token.is_cancelled(), result, elapsed, cx);
+                document.finish_plan(
+                    task_id,
+                    mode,
+                    cancel_token.is_cancelled(),
+                    result,
+                    elapsed,
+                    cx,
+                );
             }) {
                 log::debug!("document closed before its plan arrived: {error}");
             }
@@ -416,6 +459,23 @@ impl CodeDocument {
 
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
+    }
+
+    /// What the Estimate | Analyze switch offers for `target`: nothing when
+    /// the connection's driver cannot analyze, so no driver is named here.
+    fn analyze_offer(&self, target: &PlanTarget, cx: &App) -> Option<query_plan::AnalyzeOffer> {
+        let connection_id = target.route.connection_id(self.connection_id)?;
+        let connected = self.app_state.read(cx).connections().get(&connection_id)?;
+
+        query_plan::offer_for(connected, &target.language, &target.text)
+    }
+
+    /// The label after the Plan tab's name: `analyzed` once the query ran.
+    pub(super) fn plan_tab_meta(&self, cx: &App) -> Option<SharedString> {
+        self.plan
+            .view()
+            .filter(|view| view.read(cx).is_analyzed())
+            .map(|_| dbflux_i18n::t!("document.query_plan.tab.analyzed").into())
     }
 
     /// The connection a result came from is gone: the Plan tab says so in
@@ -464,6 +524,7 @@ impl CodeDocument {
     fn finish_plan(
         &mut self,
         task_id: dbflux_core::TaskId,
+        mode: QueryPlanMode,
         cancelled: bool,
         result: Result<QueryPlan, DbError>,
         elapsed: std::time::Duration,
@@ -512,7 +573,7 @@ impl CodeDocument {
                 self.runner.complete_primary(task_id, cx);
                 view.update(cx, |view, cx| view.set_ready(&plan, elapsed, cx));
             }
-            Err(DbError::NotSupported(_)) => {
+            Err(DbError::NotSupported(_)) if mode == QueryPlanMode::Estimate => {
                 self.runner.complete_primary(task_id, cx);
                 view.update(cx, |view, cx| view.set_unsupported(connection_name, cx));
             }
@@ -632,10 +693,18 @@ impl CodeDocument {
             }
             PlanViewEvent::CloseInspector => cx.emit(DocumentEvent::CloseInspector),
             PlanViewEvent::RetryRequested => {
-                if let Some(target) = self.plan.tab.as_ref().map(|tab| tab.target.clone()) {
+                let analyzing = self
+                    .plan
+                    .view()
+                    .is_some_and(|view| view.read(cx).run_mode() == PlanRunMode::Analyze);
+
+                if analyzing {
+                    self.start_analysis(cx);
+                } else if let Some(target) = self.plan.tab.as_ref().map(|tab| tab.target.clone()) {
                     self.start_plan(target, cx);
                 }
             }
+            PlanViewEvent::AnalyzeRequested => self.start_analysis(cx),
             PlanViewEvent::CancelRequested => self.cancel_running_plan(cx),
         }
     }

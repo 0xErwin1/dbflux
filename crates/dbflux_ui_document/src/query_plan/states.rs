@@ -90,6 +90,7 @@ impl PlanView {
                 .with_icon(Icon::new(AppIcon::Info).size(Heights::ICON_SM))
                 .with_actions(self.retry_button(cx)),
             ),
+            PlanState::AnalyzeGate => self.render_analyze_gate(cx),
             PlanState::Ready(_) => div().into_any_element(),
         }
     }

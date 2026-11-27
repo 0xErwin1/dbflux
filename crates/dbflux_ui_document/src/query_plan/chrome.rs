@@ -7,16 +7,16 @@ use dbflux_components::controls::Button;
 use dbflux_components::diagram as canvas;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem};
-use dbflux_components::tokens::{ChromeColors, ResultMetrics, Spacing, ui};
+use dbflux_components::tokens::{ChromeColors, FontSizes, ResultMetrics, Spacing, ui};
 use dbflux_core::PlanFormat;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, FontWeight, Role, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
 use super::ids::tagged;
-use super::model::{format_cost, format_rows};
+use super::model::{format_cost, format_rows, format_time};
 use super::tooltip::tip;
-use super::{PlanState, PlanView, PlanViewMode};
+use super::{AnalyzeOffer, PlanRunMode, PlanState, PlanView, PlanViewMode};
 
 impl PlanView {
     pub(super) fn render_body(
@@ -53,6 +53,11 @@ impl PlanView {
             .border_b_1()
             .border_color(theme.border)
             .child(self.render_view_switch(ready, cx))
+            .children(
+                self.offer
+                    .as_ref()
+                    .map(|offer| self.render_run_mode_switch(offer, cx)),
+            )
             .child(self.render_totals(cx))
             .child(div().flex_1())
             .when(in_diagram, |row| row.child(self.render_zoom_controls(cx)))
@@ -114,6 +119,81 @@ impl PlanView {
             .into_any_element()
     }
 
+    /// Estimate | Analyze. Analyze is dimmed, with the reason on hover, when
+    /// the statement is not one that may run.
+    fn render_run_mode_switch(&self, offer: &AnalyzeOffer, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity().downgrade();
+        let items: Vec<SegmentedItem> = PlanRunMode::ALL
+            .iter()
+            .map(|mode| {
+                SegmentedItem::new(mode.key(), run_mode_label(*mode))
+                    .icon(match mode {
+                        PlanRunMode::Estimate => AppIcon::Eye,
+                        PlanRunMode::Analyze => AppIcon::Activity,
+                    })
+                    .disabled(*mode == PlanRunMode::Analyze && offer.refusal.is_some())
+            })
+            .collect();
+
+        let control = SegmentedControl::new(items, self.run_mode.key(), move |selected, _, cx| {
+            let Some(mode) = PlanRunMode::ALL
+                .iter()
+                .copied()
+                .find(|mode| mode.key() == selected.as_ref())
+            else {
+                return;
+            };
+
+            if let Err(error) = view.update(cx, |this, cx| this.choose_run_mode(mode, cx)) {
+                log::debug!("plan view released before its run mode switch: {error}");
+            }
+        })
+        .group("plan-run-mode")
+        .tabs(true)
+        .aria_label(dbflux_i18n::t!("document.query_plan.run_mode.switch"))
+        .disabled(self.is_loading())
+        .segment_bounds(&self.run_mode_bounds);
+
+        let entity = cx.entity();
+        let origin_probe = canvas::measure_bounds(move |bounds, cx| {
+            entity.update(cx, |this, _| this.run_mode_origin = bounds.origin);
+        });
+
+        let tooltips = PlanRunMode::ALL.iter().filter_map(|mode| {
+            let bounds = self.run_mode_bounds.get(mode.key())?;
+            let body = match (mode, offer.refusal) {
+                (PlanRunMode::Analyze, Some(refusal)) => refusal.reason(),
+                (PlanRunMode::Analyze, None) => {
+                    dbflux_i18n::t!("document.query_plan.tooltip.analyze_body")
+                }
+                (PlanRunMode::Estimate, _) => {
+                    dbflux_i18n::t!("document.query_plan.tooltip.estimate_body")
+                }
+            };
+
+            Some(
+                tagged(SharedString::from(format!(
+                    "plan-run-mode-tip-{}",
+                    mode.key()
+                )))
+                .absolute()
+                .left(bounds.origin.x - self.run_mode_origin.x)
+                .top(bounds.origin.y - self.run_mode_origin.y)
+                .w(bounds.size.width)
+                .h(bounds.size.height)
+                .tooltip(tip(run_mode_label(*mode), Some(body.into()))),
+            )
+        });
+
+        tagged("plan-run-mode-switch")
+            .relative()
+            .flex_none()
+            .child(origin_probe)
+            .child(control)
+            .children(tooltips.collect::<Vec<_>>())
+            .into_any_element()
+    }
+
     /// "Statement L7–16 · total cost 9,639.43 · rows 50": what the plan
     /// covers, then the totals the engine reports for it.
     fn render_totals(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -121,9 +201,21 @@ impl PlanView {
         let strong = ChromeColors::strong(theme);
         let model = self.model();
 
-        let total_cost = model.and_then(|model| model.total_cost);
+        let analyzed = model.is_some_and(|model| model.analyzed);
+        let total_cost = model
+            .and_then(|model| model.total_cost)
+            .filter(|_| !analyzed);
         let total_rows = model.and_then(|model| model.total_rows);
-        let has_totals = total_cost.is_some() || total_rows.is_some();
+        let planning = model
+            .and_then(|model| model.planning_time)
+            .filter(|_| analyzed);
+        let execution = model
+            .and_then(|model| model.execution_time)
+            .filter(|_| analyzed);
+        let has_totals = total_cost.is_some()
+            || total_rows.is_some()
+            || planning.is_some()
+            || execution.is_some();
 
         let strong_value = move |value: String| {
             div()
@@ -132,6 +224,11 @@ impl PlanView {
                 .child(value)
         };
         let separator = || div().child("·");
+        let tooltip_body = if analyzed {
+            dbflux_i18n::t!("document.query_plan.tooltip.totals_analyzed_body")
+        } else {
+            dbflux_i18n::t!("document.query_plan.tooltip.totals_body")
+        };
 
         tagged("plan-totals")
             .flex()
@@ -147,6 +244,16 @@ impl PlanView {
                     .child(div().child(dbflux_i18n::t!("document.query_plan.totals.cost")))
                     .child(strong_value(format_cost(cost)))
             })
+            .when_some(planning, |row, time| {
+                row.child(separator())
+                    .child(div().child(dbflux_i18n::t!("document.query_plan.totals.planning")))
+                    .child(strong_value(format_time(time)))
+            })
+            .when_some(execution, |row, time| {
+                row.child(separator())
+                    .child(div().child(dbflux_i18n::t!("document.query_plan.totals.execution")))
+                    .child(strong_value(format_time(time)))
+            })
             .when_some(total_rows, |row, rows| {
                 row.child(separator())
                     .child(div().child(dbflux_i18n::t!("document.query_plan.totals.rows")))
@@ -155,7 +262,7 @@ impl PlanView {
             .when(has_totals, |row| {
                 row.tooltip(tip(
                     dbflux_i18n::t!("document.query_plan.tooltip.totals_title"),
-                    Some(dbflux_i18n::t!("document.query_plan.tooltip.totals_body").into()),
+                    Some(tooltip_body.clone().into()),
                 ))
             })
             .into_any_element()
@@ -247,6 +354,7 @@ impl PlanView {
                 .gap(Spacing::SM)
                 .px(ResultMetrics::FOOTER_PADDING_X)
                 .py(Spacing::SM)
+                .text_size(FontSizes::BASE)
                 .border_b_1()
                 .border_color(theme.border)
                 .bg(theme.warning.opacity(0.08))
@@ -284,7 +392,11 @@ impl PlanView {
         let left: Vec<AnyElement> = match (&self.state, model) {
             (PlanState::Loading, _) => vec![footer_item(
                 AppIcon::Loader,
-                dbflux_i18n::t!("document.query_plan.loading.running"),
+                if self.run_mode == PlanRunMode::Analyze {
+                    dbflux_i18n::t!("document.query_plan.loading.analyzing")
+                } else {
+                    dbflux_i18n::t!("document.query_plan.loading.running")
+                },
                 cx,
             )],
             (_, Some(model)) => {
@@ -293,14 +405,22 @@ impl PlanView {
                 } else {
                     node_count_label(model.nodes.len())
                 };
-                vec![
-                    footer_item(AppIcon::Rows3, summary, cx),
+                let run_state = if model.analyzed {
+                    tagged("plan-footer-analyzed")
+                        .child(footer_item(
+                            AppIcon::Play,
+                            dbflux_i18n::t!("document.query_plan.footer.analyzed"),
+                            cx,
+                        ))
+                        .into_any_element()
+                } else {
                     footer_item(
                         AppIcon::Lock,
                         dbflux_i18n::t!("document.query_plan.footer.not_run"),
                         cx,
-                    ),
-                ]
+                    )
+                };
+                vec![footer_item(AppIcon::Rows3, summary, cx), run_state]
             }
             _ => vec![footer_item(
                 AppIcon::Lock,
@@ -382,6 +502,13 @@ fn mode_label(mode: PlanViewMode) -> String {
         PlanViewMode::Diagram => dbflux_i18n::t!("document.query_plan.view.diagram"),
         PlanViewMode::Tree => dbflux_i18n::t!("document.query_plan.view.tree"),
         PlanViewMode::Raw => dbflux_i18n::t!("document.query_plan.view.raw"),
+    }
+}
+
+fn run_mode_label(mode: PlanRunMode) -> String {
+    match mode {
+        PlanRunMode::Estimate => dbflux_i18n::t!("document.query_plan.run_mode.estimate"),
+        PlanRunMode::Analyze => dbflux_i18n::t!("document.query_plan.run_mode.analyze"),
     }
 }
 

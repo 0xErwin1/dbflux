@@ -15,7 +15,10 @@ use gpui::{
 use gpui_component::ActiveTheme;
 
 use super::ids::tagged;
-use super::model::{PlanNodeView, format_cost, format_rows, format_share};
+use super::model::{
+    PlanNodeView, RowDrift, format_cost, format_loops, format_ratio, format_rows, format_share,
+    format_time,
+};
 use super::tooltip::tip;
 
 /// Width of the label column of a field row. (112 px)
@@ -195,14 +198,99 @@ impl PlanInspector {
             ));
         }
         if let Some(count) = node.rows {
+            let label = if node.has_actuals() {
+                dbflux_i18n::t!("document.query_plan.inspector.rows_per_loop")
+            } else {
+                dbflux_i18n::t!("document.query_plan.inspector.rows")
+            };
             rows.push(self.field(
                 "rows",
-                dbflux_i18n::t!("document.query_plan.inspector.rows"),
+                label,
                 format_rows(count),
                 Some((
                     dbflux_i18n::t!("document.query_plan.tooltip.rows_title"),
                     dbflux_i18n::t!("document.query_plan.tooltip.rows_body"),
                 )),
+                cx,
+            ));
+        }
+
+        rows
+    }
+
+    /// What the engine measured, for a node of an analyzed plan: times across
+    /// all loops, rows per loop, and how far those rows are from the estimate.
+    fn actual_rows(&self, cx: &App) -> Vec<AnyElement> {
+        let node = &self.node;
+        let mut rows = Vec::new();
+
+        if let Some(time) = node.actual_startup_time {
+            rows.push(self.field(
+                "startup-time",
+                dbflux_i18n::t!("document.query_plan.inspector.startup_time"),
+                format_time(time),
+                None,
+                cx,
+            ));
+        }
+        if let Some(time) = node.actual_time {
+            rows.push(self.field(
+                "total-time",
+                dbflux_i18n::t!("document.query_plan.inspector.total_time"),
+                format_time(time),
+                Some((
+                    dbflux_i18n::t!("document.query_plan.tooltip.time_title"),
+                    dbflux_i18n::t!("document.query_plan.tooltip.time_body"),
+                )),
+                cx,
+            ));
+        }
+        if let Some(time) = node.self_time {
+            let value = match node.self_time_share {
+                Some(share) => format!("{} · {}", format_time(time), format_share(share)),
+                None => format_time(time),
+            };
+            rows.push(self.field(
+                "self-time",
+                dbflux_i18n::t!("document.query_plan.inspector.self_time"),
+                value,
+                Some((
+                    dbflux_i18n::t!("document.query_plan.tooltip.self_time_title"),
+                    dbflux_i18n::t!("document.query_plan.tooltip.self_time_body"),
+                )),
+                cx,
+            ));
+        }
+        if let Some(count) = node.actual_rows {
+            rows.push(self.field(
+                "actual-rows",
+                dbflux_i18n::t!("document.query_plan.inspector.rows_per_loop"),
+                format_rows(count),
+                Some((
+                    dbflux_i18n::t!("document.query_plan.tooltip.actual_rows_title"),
+                    dbflux_i18n::t!("document.query_plan.tooltip.actual_rows_body"),
+                )),
+                cx,
+            ));
+        }
+        if let Some(loops) = node.loops {
+            rows.push(self.field(
+                "loops",
+                dbflux_i18n::t!("document.query_plan.inspector.loops"),
+                format_loops(loops),
+                Some((
+                    dbflux_i18n::t!("document.query_plan.tooltip.loops_title"),
+                    dbflux_i18n::t!("document.query_plan.tooltip.loops_body"),
+                )),
+                cx,
+            ));
+        }
+        if let Some(drift) = node.row_drift {
+            rows.push(self.field(
+                "versus",
+                dbflux_i18n::t!("document.query_plan.inspector.versus"),
+                versus_label(drift),
+                None,
                 cx,
             ));
         }
@@ -320,6 +408,21 @@ impl PlanInspector {
     }
 }
 
+/// "15.5× more rows": the actual rows against the estimate.
+pub(super) fn versus_label(drift: RowDrift) -> String {
+    match drift {
+        RowDrift::More(factor) => dbflux_i18n::t!(
+            "document.query_plan.inspector.versus_more",
+            ratio = format_ratio(factor)
+        ),
+        RowDrift::Fewer(factor) => dbflux_i18n::t!(
+            "document.query_plan.inspector.versus_fewer",
+            ratio = format_ratio(factor)
+        ),
+        RowDrift::Same => dbflux_i18n::t!("document.query_plan.inspector.versus_same"),
+    }
+}
+
 fn section(id: &'static str, label: String, rows: Vec<AnyElement>) -> Option<AnyElement> {
     if rows.is_empty() {
         return None;
@@ -354,6 +457,11 @@ impl gpui::Render for PlanInspector {
                 "estimate",
                 dbflux_i18n::t!("document.query_plan.inspector.estimate"),
                 self.estimate_rows(cx),
+            ),
+            section(
+                "actual",
+                dbflux_i18n::t!("document.query_plan.inspector.actual"),
+                self.actual_rows(cx),
             ),
             section(
                 "reads",

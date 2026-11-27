@@ -1262,17 +1262,38 @@ document:
   query_plan:
     tab:
       title: 计划
+      analyzed: "已分析"
     view:
       switch: 计划视图
       diagram: 图表
       tree: 树
       raw: 原始
+    rows:
+      one: "%{count} 行"
+      many: "%{count} 行"
+    run_mode:
+      switch: "计划模式"
+      estimate: "估算"
+      analyze: "分析"
+    analyze:
+      refusal:
+        title: "此语句无法分析。"
+        changes_data: "它会修改数据，因此只运行估算。"
+        several: "分析一次只运行一条语句。"
+      gate:
+        title: "分析将在 %{connection} 上运行此查询"
+        body: "该语句会真正运行，以测量实际耗时和行数。它在事务之外所做的事情，例如加锁或远程调用，仍然会发生。"
+        production: "%{connection} 是生产连接。"
+        cancel: "取消"
+        run: "运行分析"
     scope:
       selection: "选区 L%{start}–%{end}"
       script: "整个脚本 · %{count} 条语句"
     totals:
       cost: 总成本
       rows: 行
+      planning: "规划"
+      execution: "执行"
     controls:
       zoom_out: 缩小
       zoom_in: 放大
@@ -1281,6 +1302,7 @@ document:
     warnings:
       one: 1 条警告。
       many: "%{count} 条警告。"
+      estimate_gap: "%{node} 返回了 %{actual}，而估算为 %{estimated}（%{ratio}）。"
     node:
       costliest: 成本最高
       table: 表
@@ -1288,6 +1310,9 @@ document:
       cost: 成本
       rows: 行
       self: 自身
+      slowest: "最慢"
+      est: "估算"
+      actual: "实际"
     tree:
       node: 节点
       index: 索引
@@ -1295,6 +1320,11 @@ document:
       self_cost: 自身成本
       rows: 行
       on_relation: 于
+      est_rows: "估算行数"
+      actual_rows: "实际行数"
+      time: "耗时"
+      loops: "循环"
+      self_time: "自身耗时"
     raw:
       copy: 复制
     footer:
@@ -1306,6 +1336,7 @@ document:
         json: JSON 计划
         xml: XML 计划
         text: 文本计划
+      analyzed: "已分析 · 查询已运行"
     inspector:
       node: "节点 %{id}"
       estimate: 估算
@@ -1317,9 +1348,20 @@ document:
       rows: 行
       relation: 关系
       index: 索引
+      actual: "实际"
+      rows_per_loop: "每次循环行数"
+      startup_time: "启动耗时"
+      total_time: "总耗时"
+      self_time: "自身耗时"
+      loops: "循环"
+      versus: "与估算对比"
+      versus_more: "多出 %{ratio} 行"
+      versus_fewer: "少了 %{ratio} 行"
+      versus_same: "与估算一致"
     loading:
       running: 正在生成查询计划…
       cancel: 取消
+      analyzing: "正在运行查询以进行测量…"
     state:
       retry: 重试
       unsupported:
@@ -1358,6 +1400,23 @@ document:
       relation_title: 关系
       relation_body: 此步骤读取的表或视图。
       condition_body: 最能说明此步骤的条件，按引擎报告的原样显示。
+      estimate_body: "只生成查询计划，不运行查询。"
+      analyze_body: "运行查询并测量实际耗时和行数。估算只生成计划。"
+      totals_analyzed_body: "规划是构建计划所用的时间，执行是运行计划所用的时间。两者都在服务器上测量。"
+      edge_actual_title: "实际行数"
+      edge_actual_body: "此步骤在所有运行中传给下一步的行数。线越粗，行数越多。"
+      gap_title: "行数偏离估算"
+      gap_body: "返回了 %{actual}，而估算为 %{estimated}，这是此计划中最大的偏差。"
+      slowest_title: "最慢"
+      slowest_body: "此计划中自身耗时最高的节点。"
+      actual_rows_title: "实际行数"
+      actual_rows_body: "此步骤每次运行返回的行数，可与旁边的估算对比。"
+      time_title: "耗时"
+      time_body: "此步骤及其子步骤在所有运行中花费的时间总和。"
+      self_time_title: "自身耗时"
+      self_time_body: "仅此节点自身（不含子节点）花费的时间，占执行时间的比例。进度条显示相同的比例。"
+      loops_title: "循环"
+      loops_body: "引擎运行此步骤的次数。耗时是所有循环的总和；行数与估算一样按每次循环计。"
   code:
     gutter:
       run_statement: 运行此语句

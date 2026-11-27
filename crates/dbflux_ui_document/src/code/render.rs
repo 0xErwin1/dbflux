@@ -778,7 +778,7 @@ impl CodeDocument {
             result_tab(
                 ElementId::Name("result-tab-plan".into()),
                 dbflux_i18n::t!("document.query_plan.tab.title"),
-                None,
+                self.plan_tab_meta(cx),
                 plan_shown,
                 cx,
             )

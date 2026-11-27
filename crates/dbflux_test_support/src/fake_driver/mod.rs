@@ -154,6 +154,8 @@ struct FakeDriverState {
     region_list_error: RwLock<Option<String>>,
     available_regions_calls: AtomicUsize,
     plan_outcome: RwLock<Option<FakePlanOutcome>>,
+    /// What an analyzed request answers, when it differs from `plan_outcome`.
+    analyzed_plan_outcome: RwLock<Option<FakePlanOutcome>>,
     query_plan_requests: Mutex<Vec<dbflux_core::QueryPlanRequest>>,
 }
 
@@ -297,6 +299,14 @@ impl FakeDriver {
     /// `plan`, after the single-statement guard real drivers apply.
     pub fn with_query_plan(self, plan: dbflux_core::QueryPlan) -> Self {
         *rwlock_write(&self.state.plan_outcome) = Some(FakePlanOutcome::Plan(Box::new(plan)));
+        self
+    }
+
+    /// Gives the plan an analyzed request answers, where an estimate keeps
+    /// the plan of [`Self::with_query_plan`].
+    pub fn with_analyzed_query_plan(self, plan: dbflux_core::QueryPlan) -> Self {
+        *rwlock_write(&self.state.analyzed_plan_outcome) =
+            Some(FakePlanOutcome::Plan(Box::new(plan)));
         self
     }
 

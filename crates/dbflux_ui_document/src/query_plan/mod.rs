@@ -14,11 +14,13 @@
 //! - [`inspector`]: the node detail the workspace rail shows.
 //! - [`chrome`], [`states`]: the switch row, the footer and the states a plan
 //!   can be in besides ready.
+//! - [`analyze`]: the Estimate | Analyze choice, its gate and its refusal.
 //! - [`actions`]: the pane actions, the keyboard path of every control.
 
 mod actions;
+mod analyze;
 mod chrome;
-mod diagram;
+pub(crate) mod diagram;
 mod ids;
 mod inspector;
 pub(crate) mod model;
@@ -51,6 +53,7 @@ use self::inspector::{PlanInspector, PlanInspectorEvent};
 use self::model::{NodeId, PlanModel};
 
 pub(crate) use actions::pane_actions;
+pub(crate) use analyze::{AnalyzeOffer, AnalyzeRefusal, offer_for};
 
 /// Whether the connection's driver says it has no query plans. A driver that
 /// declares no query capabilities is not taken to lack them. Read from the
@@ -94,6 +97,27 @@ impl PlanViewMode {
     }
 }
 
+/// Which of the two plans of a statement the tab shows: the estimate, which
+/// only plans it, or the analyzed plan, which runs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum PlanRunMode {
+    #[default]
+    Estimate,
+    Analyze,
+}
+
+impl PlanRunMode {
+    pub(crate) const ALL: [Self; 2] = [Self::Estimate, Self::Analyze];
+
+    /// The id suffix of the mode's switch segment and pane action.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Estimate => "estimate",
+            Self::Analyze => "analyze",
+        }
+    }
+}
+
 /// A failed plan, with what the inline error offers: the correlation id
 /// `View in Audit` opens and the text Copy puts on the clipboard.
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +142,8 @@ pub(crate) enum PlanState {
     },
     Failed(PlanFailure),
     Cancelled,
+    /// Analyze was chosen and nothing has run: the gate asks first.
+    AnalyzeGate,
 }
 
 /// What the view asks of the document that hosts it.
@@ -134,6 +160,9 @@ pub(crate) enum PlanViewEvent {
     RetryRequested,
     /// Stop the plan that is loading.
     CancelRequested,
+    /// Run analyze on the gate: send the analyzed request for the same
+    /// statement.
+    AnalyzeRequested,
 }
 
 impl EventEmitter<PlanViewEvent> for PlanView {}
@@ -163,6 +192,14 @@ impl Camera {
     }
 }
 
+/// The plan of the run mode that is not shown: Estimate while Analyze is
+/// chosen and the other way round, kept so switching back asks nothing.
+struct Parked {
+    state: PlanState,
+    geometry: Option<diagram::DiagramGeometry>,
+    elapsed: Option<Duration>,
+}
+
 struct InspectorMount {
     content: Entity<PlanInspector>,
     _subscription: Subscription,
@@ -182,6 +219,12 @@ pub(crate) struct PlanView {
     camera: Camera,
     switch_bounds: SegmentBounds,
     switch_origin: Point<Pixels>,
+    run_mode: PlanRunMode,
+    parked: Parked,
+    /// What the Estimate | Analyze switch offers; `None` hides the switch.
+    offer: Option<AnalyzeOffer>,
+    run_mode_bounds: SegmentBounds,
+    run_mode_origin: Point<Pixels>,
     inspector: Option<InspectorMount>,
     inspector_open: bool,
     focus_handle: FocusHandle,
@@ -202,6 +245,15 @@ impl PlanView {
             camera: Camera::new(),
             switch_bounds: SegmentBounds::default(),
             switch_origin: Point::default(),
+            run_mode: PlanRunMode::Estimate,
+            parked: Parked {
+                state: PlanState::AnalyzeGate,
+                geometry: None,
+                elapsed: None,
+            },
+            offer: None,
+            run_mode_bounds: SegmentBounds::default(),
+            run_mode_origin: Point::default(),
             inspector: None,
             inspector_open: false,
             focus_handle: cx.focus_handle(),
@@ -229,6 +281,27 @@ impl PlanView {
 
     pub(crate) fn is_loading(&self) -> bool {
         matches!(self.state, PlanState::Loading)
+    }
+
+    pub(crate) fn run_mode(&self) -> PlanRunMode {
+        self.run_mode
+    }
+
+    /// Whether the plan shown is one the query ran for.
+    pub(crate) fn is_analyzed(&self) -> bool {
+        self.model().is_some_and(|model| model.analyzed)
+    }
+
+    /// Whether Analyze can be chosen: the connection offers it and the
+    /// statement is one it may run.
+    pub(crate) fn can_analyze(&self) -> bool {
+        self.offer
+            .as_ref()
+            .is_some_and(|offer| offer.refusal.is_none())
+    }
+
+    pub(crate) fn analyze_offer(&self) -> Option<&AnalyzeOffer> {
+        self.offer.as_ref()
     }
 
     #[cfg(test)]
@@ -284,6 +357,49 @@ impl PlanView {
         self.state = state;
         self.close_inspector(cx);
         cx.notify();
+    }
+
+    // ── Run mode ─────────────────────────────────────────────────────────────
+
+    /// Sets what the Estimate | Analyze switch offers for this statement.
+    pub(crate) fn set_analyze_offer(
+        &mut self,
+        offer: Option<AnalyzeOffer>,
+        cx: &mut Context<Self>,
+    ) {
+        self.offer = offer;
+        cx.notify();
+    }
+
+    /// Shows the plan of `mode`: the one kept for it, or, for Analyze before
+    /// anything ran, the gate. Runs nothing. Waits while a plan is loading.
+    pub(crate) fn choose_run_mode(&mut self, mode: PlanRunMode, cx: &mut Context<Self>) {
+        if mode == self.run_mode || self.is_loading() {
+            return;
+        }
+        if mode == PlanRunMode::Analyze && !self.can_analyze() {
+            return;
+        }
+
+        std::mem::swap(&mut self.state, &mut self.parked.state);
+        std::mem::swap(&mut self.geometry, &mut self.parked.geometry);
+        std::mem::swap(&mut self.elapsed, &mut self.parked.elapsed);
+        self.run_mode = mode;
+        self.camera = Camera::new();
+        self.selected = None;
+        self.collapsed.clear();
+        self.close_inspector(cx);
+        cx.emit(PlanViewEvent::Focused);
+        cx.notify();
+    }
+
+    /// The analyzed plan is on its way: the Analyze slot loads, and the
+    /// estimate waits where it is.
+    pub(crate) fn begin_analysis(&mut self, cx: &mut Context<Self>) {
+        self.choose_run_mode(PlanRunMode::Analyze, cx);
+        if self.run_mode == PlanRunMode::Analyze {
+            self.set_without_plan(PlanState::Loading, cx);
+        }
     }
 
     // ── View switch ──────────────────────────────────────────────────────────
@@ -576,6 +692,10 @@ impl PlanView {
                 self.set_mode(self.mode.next(), cx);
                 true
             }
+            Command::Cancel if matches!(self.state, PlanState::AnalyzeGate) => {
+                self.cancel_gate(cx);
+                true
+            }
             Command::Cancel if self.inspector_open => {
                 self.dismiss_inspector(cx);
                 true
@@ -678,6 +798,7 @@ impl Focusable for PlanView {
 impl gpui::Render for PlanView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let background = cx.theme().background;
+        let refusal = self.render_analyze_refusal(cx);
         let warnings = self.render_warnings(cx);
         let switch_row = self.render_switch_row(cx);
         let body = self.render_body(window, cx);
@@ -691,6 +812,7 @@ impl gpui::Render for PlanView {
             .bg(background)
             .track_focus(&self.focus_handle)
             .child(switch_row)
+            .children(refusal)
             .children(warnings)
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
             .child(footer)

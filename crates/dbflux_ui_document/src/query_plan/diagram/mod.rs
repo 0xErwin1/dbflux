@@ -28,7 +28,10 @@ use gpui_component::theme::Theme;
 
 use super::PlanView;
 use super::ids::{tag, tagged};
-use super::model::{NodeId, PlanNodeView, format_cost, format_rows, format_share};
+use super::model::{
+    NodeId, PlanNodeView, format_cost, format_loops, format_ratio, format_row_count, format_rows,
+    format_share, format_time,
+};
 use super::tooltip::tip;
 use geometry::{CardRows, NODE_WIDTH, ROW_PX};
 
@@ -162,6 +165,18 @@ impl PlanView {
         let (background, border, strong) =
             (theme.background, theme.border, ChromeColors::strong(theme));
         let font = dbflux_components::fonts::editor_family(cx);
+        let analyzed = self.model().is_some_and(|model| model.analyzed);
+        let (rows_title, rows_body) = if analyzed {
+            (
+                dbflux_i18n::t!("document.query_plan.tooltip.edge_actual_title"),
+                dbflux_i18n::t!("document.query_plan.tooltip.edge_actual_body"),
+            )
+        } else {
+            (
+                dbflux_i18n::t!("document.query_plan.tooltip.rows_title"),
+                dbflux_i18n::t!("document.query_plan.tooltip.rows_body"),
+            )
+        };
 
         geometry
             .edges
@@ -190,13 +205,7 @@ impl PlanView {
                                 .font_family(font.clone())
                                 .text_size(SchemaMetrics::INDEX_LABEL_FONT)
                                 .text_color(strong)
-                                .tooltip(tip(
-                                    dbflux_i18n::t!("document.query_plan.tooltip.rows_title"),
-                                    Some(
-                                        dbflux_i18n::t!("document.query_plan.tooltip.rows_body")
-                                            .into(),
-                                    ),
-                                ))
+                                .tooltip(tip(rows_title.clone(), Some(rows_body.clone().into())))
                                 .child(format_rows(rows)),
                         )
                         .into_any_element(),
@@ -253,6 +262,12 @@ impl PlanView {
         if node.is_costliest {
             header = header.child(costliest_badge(id));
         }
+        if node.is_slowest {
+            header = header.child(slowest_badge(id));
+        }
+        if let Some(gap) = node.estimate_gap {
+            header = header.child(gap_badge(node, gap));
+        }
 
         let body_rows = card_rows(node, rows, theme, cx);
 
@@ -290,6 +305,43 @@ fn costliest_badge(id: NodeId) -> AnyElement {
         .into_any_element()
 }
 
+fn slowest_badge(id: NodeId) -> AnyElement {
+    tagged(ElementId::Name(format!("plan-node-{id}-slowest").into()))
+        .flex_shrink_0()
+        .tooltip(tip(
+            dbflux_i18n::t!("document.query_plan.tooltip.slowest_title"),
+            Some(dbflux_i18n::t!("document.query_plan.tooltip.slowest_body").into()),
+        ))
+        .child(Badge::new(
+            dbflux_i18n::t!("document.query_plan.node.slowest"),
+            BadgeTone::Warning,
+        ))
+        .into_any_element()
+}
+
+/// The marker on the node whose rows are furthest from the estimate: the
+/// factor, and on hover what was expected and what came back.
+fn gap_badge(node: &PlanNodeView, gap: f64) -> AnyElement {
+    tagged(ElementId::Name(format!("plan-node-{}-gap", node.id).into()))
+        .flex_shrink_0()
+        .tooltip(tip(
+            dbflux_i18n::t!("document.query_plan.tooltip.gap_title"),
+            Some(gap_tooltip_body(node).into()),
+        ))
+        .child(Badge::new(format_ratio(gap), BadgeTone::Warning))
+        .into_any_element()
+}
+
+/// "48,200 rows came back where 3,100 were expected, the largest gap in this
+/// plan."
+pub(crate) fn gap_tooltip_body(node: &PlanNodeView) -> String {
+    dbflux_i18n::t!(
+        "document.query_plan.tooltip.gap_body",
+        actual = format_row_count(node.actual_rows.unwrap_or_default()),
+        estimated = format_row_count(node.rows.unwrap_or_default())
+    )
+}
+
 /// The icon a node's header carries, chosen from what the node does with
 /// data (reads through an index, reads a relation, combines inputs), never
 /// from the engine's operation name.
@@ -309,7 +361,7 @@ pub(super) fn node_icon(node: &PlanNodeView) -> AppIcon {
 fn card_rows(node: &PlanNodeView, rows: CardRows, theme: &Theme, cx: &App) -> Vec<AnyElement> {
     let strong = ChromeColors::strong(theme);
     let muted = theme.muted_foreground;
-    let emphasis = if node.is_costliest {
+    let emphasis = if node.is_marked() {
         theme.warning
     } else {
         strong
@@ -381,11 +433,23 @@ fn card_rows(node: &PlanNodeView, rows: CardRows, theme: &Theme, cx: &App) -> Ve
     if rows.cost {
         body.push(cost_row(node, emphasis, strong, muted, &row));
     }
-    if let Some(share) = node.self_share.filter(|_| rows.share) {
-        body.push(share_row(node.id, share, node.is_costliest, theme, &row));
+    if rows.actual {
+        body.push(actual_row(node, strong, muted, &row));
+    }
+    if let Some(share) = node.share.filter(|_| rows.share) {
+        body.push(share_row(node, share, theme, &row));
     }
 
     body
+}
+
+fn figure(value: String, label: String, color: Hsla, muted: Hsla) -> Div {
+    div()
+        .flex()
+        .gap(Spacing::XS)
+        .flex_shrink_0()
+        .child(div().text_color(color).child(value))
+        .child(div().text_color(muted).child(label))
 }
 
 fn cost_row(
@@ -395,15 +459,6 @@ fn cost_row(
     muted: Hsla,
     row: &dyn Fn(Vec<AnyElement>) -> AnyElement,
 ) -> AnyElement {
-    let figure = |value: String, label: String, color: Hsla| -> Div {
-        div()
-            .flex()
-            .gap(Spacing::XS)
-            .flex_shrink_0()
-            .child(div().text_color(color).child(value))
-            .child(div().text_color(muted).child(label))
-    };
-
     let mut cells: Vec<AnyElement> = Vec::new();
     if let Some(cost) = node.total_cost {
         cells.push(
@@ -412,6 +467,7 @@ fn cost_row(
                     format_cost(cost),
                     dbflux_i18n::t!("document.query_plan.node.cost"),
                     emphasis,
+                    muted,
                 ),
                 ElementId::Name(format!("plan-node-{}-cost", node.id).into()),
             )
@@ -424,27 +480,73 @@ fn cost_row(
     }
     cells.push(div().flex_1().into_any_element());
     if let Some(rows) = node.rows {
-        cells.push(
-            figure(
-                format_rows(rows),
-                dbflux_i18n::t!("document.query_plan.node.rows"),
-                strong,
-            )
-            .into_any_element(),
-        );
+        let label = if node.has_actuals() {
+            dbflux_i18n::t!("document.query_plan.node.est")
+        } else {
+            dbflux_i18n::t!("document.query_plan.node.rows")
+        };
+        cells.push(figure(format_rows(rows), label, strong, muted).into_any_element());
     }
 
     row(cells)
 }
 
+/// What the engine measured for an analyzed node: its time over all loops
+/// and how many there were, then the rows it returned per loop.
+fn actual_row(
+    node: &PlanNodeView,
+    strong: Hsla,
+    muted: Hsla,
+    row: &dyn Fn(Vec<AnyElement>) -> AnyElement,
+) -> AnyElement {
+    let mut cells: Vec<AnyElement> = Vec::new();
+    if let Some(time) = node.actual_time {
+        cells.push(
+            div()
+                .flex_shrink_0()
+                .text_color(strong)
+                .child(format_time(time))
+                .into_any_element(),
+        );
+    }
+    if let Some(loops) = node.loops {
+        cells.push(
+            div()
+                .flex_shrink_0()
+                .text_color(muted)
+                .child(format!("×{}", format_loops(loops)))
+                .into_any_element(),
+        );
+    }
+    cells.push(div().flex_1().into_any_element());
+    if let Some(rows) = node.actual_rows {
+        cells.push(
+            figure(
+                format_rows(rows),
+                dbflux_i18n::t!("document.query_plan.node.actual"),
+                strong,
+                muted,
+            )
+            .into_any_element(),
+        );
+    }
+
+    tagged(ElementId::Name(
+        format!("plan-node-{}-time", node.id).into(),
+    ))
+    .child(row(cells))
+    .into_any_element()
+}
+
 fn share_row(
-    id: NodeId,
+    node: &PlanNodeView,
     share: f64,
-    costliest: bool,
     theme: &Theme,
     row: &dyn Fn(Vec<AnyElement>) -> AnyElement,
 ) -> AnyElement {
-    let color = if costliest {
+    let id = node.id;
+    let by_time = node.self_time_share.is_some();
+    let color = if node.is_marked() {
         theme.warning
     } else {
         ChromeColors::tint(theme)
@@ -464,10 +566,17 @@ fn share_row(
         );
 
     tagged(ElementId::Name(format!("plan-node-{id}-share").into()))
-        .tooltip(tip(
-            dbflux_i18n::t!("document.query_plan.tooltip.self_cost_title"),
-            Some(dbflux_i18n::t!("document.query_plan.tooltip.self_cost_node_body").into()),
-        ))
+        .tooltip(if by_time {
+            tip(
+                dbflux_i18n::t!("document.query_plan.tooltip.self_time_title"),
+                Some(dbflux_i18n::t!("document.query_plan.tooltip.self_time_body").into()),
+            )
+        } else {
+            tip(
+                dbflux_i18n::t!("document.query_plan.tooltip.self_cost_title"),
+                Some(dbflux_i18n::t!("document.query_plan.tooltip.self_cost_node_body").into()),
+            )
+        })
         .child(row(vec![
             div()
                 .flex_shrink_0()
