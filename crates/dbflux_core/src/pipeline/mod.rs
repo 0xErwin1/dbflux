@@ -357,20 +357,41 @@ async fn run_auth_stage(
             // as soon as the provider discovers it (e.g. from `aws sso login` stdout).
             let state_tx_for_url = state_tx.clone();
             let provider_name_for_url = provider_name.clone();
+            let cancel_for_url = cancel.clone();
             let url_callback = Box::new(move |url: Option<String>| {
                 log::debug!("[pipeline] url_callback fired with url: {:?}", url);
+                // A provider may report the URL from its own thread after the
+                // pipeline was cancelled; publishing it would reopen the
+                // sign-in dialog the user dismissed.
+                if cancel_for_url.is_cancelled() {
+                    return;
+                }
                 let _ = state_tx_for_url.send(PipelineState::WaitingForLogin {
                     provider_name: provider_name_for_url,
                     verification_url: url,
                 });
             });
 
-            provider
-                .login(profile, url_callback)
-                .await
-                .map_err(PipelineError::auth)?
+            // The login waits on the user, possibly for minutes, so it is
+            // raced against cancellation. Dropping the login future is how a
+            // provider learns to abandon the attempt.
+            let login = provider.login(profile, url_callback);
+            let cancelled = cancel.cancelled();
+            futures::pin_mut!(login, cancelled);
+
+            match futures::future::select(login, cancelled).await {
+                futures::future::Either::Left((result, _)) => {
+                    result.map_err(PipelineError::auth)?
+                }
+                futures::future::Either::Right(((), _)) => {
+                    log::debug!("[pipeline] login cancelled while waiting for the user");
+                    return Err(PipelineError::cancelled());
+                }
+            }
         }
     };
+
+    cancel.check_pipeline()?;
 
     let mut session = session;
     if !require_resolved_credentials {
@@ -653,6 +674,172 @@ mod tests {
             Err(err) => assert_eq!(err.stage, "cancelled"),
             Ok(_) => panic!("expected pipeline to fail with cancellation"),
         }
+    }
+
+    /// Cancelling the token while the provider's login is still waiting for
+    /// the browser stops the pipeline at once, instead of letting the login
+    /// finish later (for example when another connection signs in to the
+    /// same SSO session) and connecting a cancelled connection.
+    #[tokio::test]
+    async fn cancelling_during_login_stops_the_pipeline() {
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let (state_tx, mut state_rx) = pipeline_state_channel();
+        let cancel = CancelToken::new();
+
+        let input = PipelineInput {
+            profile,
+            auth_provider: Some(Box::new(MockAuthProvider {
+                should_require_login: true,
+                login_delay_ms: 60_000,
+                resolve_should_fail: false,
+            })),
+            auth_profile: Some(test_auth_profile()),
+            resolver: test_resolver(),
+            access_manager: Arc::new(MockAccessManager),
+            cancel: cancel.clone(),
+        };
+
+        let task = tokio::spawn(async move { run_pipeline(input, &state_tx).await });
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !matches!(&*state_rx.borrow(), PipelineState::WaitingForLogin { .. }) {
+                state_rx
+                    .changed()
+                    .await
+                    .expect("pipeline state channel open");
+            }
+        })
+        .await
+        .expect("pipeline reaches WaitingForLogin");
+
+        cancel.cancel();
+
+        let result = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("pipeline stops promptly after cancellation")
+            .expect("pipeline task join should succeed");
+
+        match result {
+            Err(error) => assert_eq!(error.stage, "cancelled"),
+            Ok(_) => panic!("a pipeline cancelled during login must not complete"),
+        }
+    }
+
+    /// A provider that reports the verification URL from its own thread after
+    /// a delay and never finishes the login, like the AWS CLI flow.
+    struct LateUrlAuthProvider {
+        inner: Box<dyn DynAuthProvider>,
+        url_delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl DynAuthProvider for LateUrlAuthProvider {
+        fn provider_id(&self) -> &str {
+            self.inner.provider_id()
+        }
+
+        fn display_name(&self) -> &str {
+            self.inner.display_name()
+        }
+
+        fn form_def(&self) -> &crate::auth::AuthFormDef {
+            self.inner.form_def()
+        }
+
+        async fn validate_session(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<AuthSessionState, DbError> {
+            Ok(AuthSessionState::LoginRequired)
+        }
+
+        async fn login(
+            &self,
+            _profile: &AuthProfile,
+            url_callback: crate::auth::UrlCallback,
+        ) -> Result<AuthSession, DbError> {
+            let url_delay = self.url_delay;
+            std::thread::spawn(move || {
+                std::thread::sleep(url_delay);
+                url_callback(Some(
+                    "https://device.example.com/?user_code=LATE".to_string(),
+                ));
+            });
+
+            std::future::pending().await
+        }
+
+        async fn resolve_credentials(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<ResolvedCredentials, DbError> {
+            Ok(ResolvedCredentials::default())
+        }
+    }
+
+    /// A verification URL that arrives after the pipeline was cancelled is
+    /// not published, so the sign-in dialog the user dismissed stays closed.
+    #[tokio::test]
+    async fn verification_url_after_cancellation_is_not_published() {
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let (state_tx, mut state_rx) = pipeline_state_channel();
+        let cancel = CancelToken::new();
+        let url_delay = Duration::from_millis(300);
+
+        let input = PipelineInput {
+            profile,
+            auth_provider: Some(Box::new(LateUrlAuthProvider {
+                inner: Box::new(MockAuthProvider {
+                    should_require_login: true,
+                    login_delay_ms: 0,
+                    resolve_should_fail: false,
+                }),
+                url_delay,
+            })),
+            auth_profile: Some(test_auth_profile()),
+            resolver: test_resolver(),
+            access_manager: Arc::new(MockAccessManager),
+            cancel: cancel.clone(),
+        };
+
+        let task = tokio::spawn(async move {
+            let result = run_pipeline(input, &state_tx).await;
+            // Keep the sender alive past the late callback, as the UI does.
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            drop(state_tx);
+            result
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !matches!(&*state_rx.borrow(), PipelineState::WaitingForLogin { .. }) {
+                state_rx
+                    .changed()
+                    .await
+                    .expect("pipeline state channel open");
+            }
+        })
+        .await
+        .expect("pipeline reaches WaitingForLogin");
+
+        cancel.cancel();
+
+        let result = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .expect("pipeline task finishes")
+            .expect("pipeline task join should succeed");
+        assert!(matches!(result, Err(ref error) if error.stage == "cancelled"));
+
+        let last = state_rx.borrow().clone();
+        assert!(
+            !matches!(
+                last,
+                PipelineState::WaitingForLogin {
+                    verification_url: Some(_),
+                    ..
+                }
+            ),
+            "a cancelled pipeline published a late verification URL: {last}"
+        );
     }
 
     #[tokio::test]

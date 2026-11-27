@@ -617,6 +617,30 @@ impl AppState {
             .finish_pending_operation(profile_id, database);
     }
 
+    /// Releases the profile-level pending entry on behalf of a connect
+    /// attempt, unless that attempt's task was cancelled.
+    ///
+    /// [`Self::cancel_running_connect_tasks_for_profile`] already released the
+    /// entry when it cancelled the task, so the user may have started a retry
+    /// by the time the cancelled attempt unwinds; releasing again would drop
+    /// the retry's entry.
+    ///
+    /// Returns whether the entry was released.
+    pub fn release_connect_pending_operation(&mut self, task_id: TaskId, profile_id: Uuid) -> bool {
+        let cancelled = self
+            .facade
+            .tasks
+            .get(task_id)
+            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+
+        if cancelled {
+            return false;
+        }
+
+        self.finish_pending_operation(profile_id, None);
+        true
+    }
+
     // --- Connect failures ---
 
     pub fn record_connect_failure(&mut self, profile_id: Uuid, message: impl Into<String>) {
@@ -2283,6 +2307,29 @@ impl AppState {
             .count()
     }
 
+    /// Cancels only `task_ids` among the profile's detached hook tasks, so a
+    /// caller that owns some of them leaves the rest (a retry's) running.
+    pub fn cancel_detached_hook_tasks_in(
+        &mut self,
+        profile_id: Uuid,
+        task_ids: &[TaskId],
+    ) -> usize {
+        if let Some(registered) = self.detached_hook_tasks.get_mut(&profile_id) {
+            for task_id in task_ids {
+                registered.remove(task_id);
+            }
+
+            if registered.is_empty() {
+                self.detached_hook_tasks.remove(&profile_id);
+            }
+        }
+
+        task_ids
+            .iter()
+            .filter(|task_id| self.facade.tasks.cancel(**task_id))
+            .count()
+    }
+
     pub fn cancel_all_detached_hook_tasks(&mut self) -> usize {
         let profile_ids: Vec<Uuid> = self.detached_hook_tasks.keys().copied().collect();
 
@@ -3569,6 +3616,8 @@ mod tests {
 
     #[cfg(feature = "telemetry")]
     mod telemetry;
+
+    mod pending_operations;
 
     #[test]
     fn profile_session_generation_absent_profile_is_none() {

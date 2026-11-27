@@ -1,5 +1,25 @@
 use super::*;
 
+#[tokio::test]
+async fn cancelled_future_wakes_when_cancelled_from_another_thread() {
+    let token = CancelToken::new();
+    let waiter = tokio::spawn({
+        let token = token.clone();
+        async move { token.cancelled().await }
+    });
+    tokio::task::yield_now().await;
+
+    let canceller = token.clone();
+    std::thread::spawn(move || canceller.cancel())
+        .join()
+        .expect("cancel thread");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+        .await
+        .expect("cancelled() resolves after cancel")
+        .expect("join");
+}
+
 #[test]
 fn import_and_migrate_labels() {
     assert_eq!(TaskKind::Import.label(), "Import");
