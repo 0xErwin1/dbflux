@@ -543,13 +543,13 @@ mod tests {
 
         overrides.set(
             copy_as_markdown(),
-            Some(keys(chord("m", Modifiers::ctrl_shift()))),
+            Some(keys(chord("f19", Modifiers::ctrl_shift()))),
         );
         assert!(overrides.is_overridden(&copy_as_markdown()));
         assert_eq!(
             overrides
                 .apply(&defaults)
-                .resolve(ContextId::Results, &chord("m", Modifiers::ctrl_shift())),
+                .resolve(ContextId::Results, &chord("f19", Modifiers::ctrl_shift())),
             Some(Command::ResultsCopyAsMarkdown)
         );
         let bindings = overrides.effective_bindings(&defaults);
@@ -561,7 +561,7 @@ mod tests {
         assert_eq!(
             overrides
                 .apply(&defaults)
-                .resolve(ContextId::Results, &chord("m", Modifiers::ctrl_shift())),
+                .resolve(ContextId::Results, &chord("f19", Modifiers::ctrl_shift())),
             None
         );
         assert!(overrides.effective_bindings(&defaults).is_empty());
@@ -593,7 +593,7 @@ mod tests {
         let mut overrides = KeymapOverrides::new();
         overrides.set(
             copy_as_markdown(),
-            Some(keys(chord("m", Modifiers::ctrl_shift()))),
+            Some(keys(chord("f19", Modifiers::ctrl_shift()))),
         );
         save_keymap_overrides(&runtime, &overrides).expect("should save");
 
@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(stored[0].context, "results");
         assert_eq!(stored[0].command_id, "results_copy_as_markdown");
         assert_eq!(stored[0].default_keys, "");
-        assert_eq!(stored[0].keys.as_deref(), Some("ctrl+shift+m"));
+        assert_eq!(stored[0].keys.as_deref(), Some("ctrl+shift+f19"));
 
         assert_eq!(load_keymap_overrides(&runtime, &defaults), overrides);
     }

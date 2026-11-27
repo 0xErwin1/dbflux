@@ -307,14 +307,14 @@ fn recording_keys_for_an_unbound_row_binds_them_and_reset_unbinds(cx: &mut TestA
     });
 
     let slot = BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown);
-    let chord = KeyChord::new("m", Modifiers::ctrl_shift());
+    let chord = KeyChord::new("f19", Modifiers::ctrl_shift());
 
     window.update(|_, cx| {
         keybindings.update(cx, |section, cx| {
             section.start_recording(slot.clone(), ContextId::Results, cx)
         })
     });
-    window.simulate_keystrokes("ctrl-shift-m");
+    window.simulate_keystrokes("ctrl-shift-f19");
     window
         .executor()
         .advance_clock(std::time::Duration::from_secs(1));

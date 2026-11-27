@@ -3149,7 +3149,7 @@ fn a_user_key_on_an_unbound_command_dispatches_and_reset_unbinds(cx: &mut gpui::
     cx.update(init_keymap);
 
     let slot = BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown);
-    let keys = KeyChord::new("m", Modifiers::ctrl_shift());
+    let keys = KeyChord::new("f19", Modifiers::ctrl_shift());
 
     assert!(
         run_command_for(ContextId::Results, Command::ResultsCopyAsMarkdown).is_none(),

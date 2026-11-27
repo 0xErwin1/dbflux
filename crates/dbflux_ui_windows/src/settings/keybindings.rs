@@ -1502,7 +1502,7 @@ mod tests {
     #[test]
     fn assigning_keys_to_the_unbound_row_overrides_it_and_reset_empties_it_again() {
         let slot = BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown);
-        let keys = KeySequence::from(KeyChord::new("m", Modifiers::ctrl_shift()));
+        let keys = KeySequence::from(KeyChord::new("f19", Modifiers::ctrl_shift()));
         let mut overrides = KeymapOverrides::new();
         overrides.set(slot.clone(), Some(keys.clone()));
 
