@@ -6089,6 +6089,14 @@ sidebar:
         opening_access: "Pipeline: Opening access (%{method})"
         connecting: "Pipeline: Connecting driver (%{driver})"
         fetching_schema: "Pipeline: Fetching schema"
+      step:
+        pre_connect_hooks: "Pre-connect hooks"
+        authenticating: "Authenticating via %{provider}"
+        resolving_values: "Resolving values"
+        opening_access: "Opening tunnel"
+        connecting: "Connecting driver"
+        fetching_schema: "Fetching schema"
+        post_connect_hooks: "Post-connect hooks"
     listing_secret_paths: "Listing secret paths: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}' updated"
@@ -6096,7 +6104,6 @@ sidebar:
     edit_reconnect_now: Reconnect now
     edit_reconnect_later: Later
     connection_already_pending: Connection already pending
-    operation_started_elsewhere: Operation started by another thread
     background_task_limit: Too many background tasks running, please wait
     connection_cancelled_by_hook: Connection cancelled by hook
     connection_cancelled_by_post_connect_hook: Connection cancelled by post-connect hook

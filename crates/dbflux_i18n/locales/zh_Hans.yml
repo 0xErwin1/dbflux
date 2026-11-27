@@ -6087,6 +6087,14 @@ sidebar:
         opening_access: "流水线：正在打开访问通道（%{method}）"
         connecting: "流水线：正在连接驱动（%{driver}）"
         fetching_schema: "流水线：正在获取 Schema"
+      step:
+        pre_connect_hooks: "连接前钩子"
+        authenticating: "正在通过 %{provider} 认证"
+        resolving_values: "正在解析值"
+        opening_access: "正在打开隧道"
+        connecting: "正在连接驱动"
+        fetching_schema: "正在获取 Schema"
+        post_connect_hooks: "连接后钩子"
     listing_secret_paths: "正在列出密钥路径：%{name}"
   toast:
     edit_reconnect_updated: "%{name} 已更新"
@@ -6094,7 +6102,6 @@ sidebar:
     edit_reconnect_now: 立即重新连接
     edit_reconnect_later: 稍后
     connection_already_pending: 连接已在等待中
-    operation_started_elsewhere: 操作已由其他线程启动
     background_task_limit: 后台任务运行过多，请稍候
     connection_cancelled_by_hook: 连接被 Hook 取消
     connection_cancelled_by_post_connect_hook: 连接被连接后 Hook 取消

@@ -138,6 +138,35 @@ fn cleanup_keeps_failed_tasks_until_they_are_removed() {
 }
 
 #[test]
+fn cleanup_keeps_a_finished_parent_while_its_child_still_runs() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "Connect"));
+    let child = manager.start_handle(
+        TaskRequest::new(
+            TaskKind::Hook {
+                phase: HookPhase::PreConnect,
+            },
+            "tunnel",
+        )
+        .parent(parent.id()),
+    );
+    manager.complete(parent.id());
+
+    manager.cleanup_completed(0);
+
+    assert!(
+        manager.get(parent.id()).is_some(),
+        "the running child would lose its parent row"
+    );
+
+    manager.complete(child.id());
+    manager.cleanup_completed(0);
+
+    assert!(manager.get(parent.id()).is_none());
+    assert!(manager.get(child.id()).is_none());
+}
+
+#[test]
 fn cleanup_removes_completed_and_cancelled_tasks_past_the_retention_window() {
     let mut manager = TaskManager::new();
     let (completed_id, _token) = manager.start(TaskKind::Query, "SELECT 1");

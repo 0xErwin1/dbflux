@@ -1,32 +1,46 @@
 use super::*;
+use dbflux_core::{CancelPolicy, TaskRequest, TaskStatus, TaskTarget};
 
-/// Cancelling a Connect task releases the profile's pending entry at once
-/// so the user can retry. The cancelled attempt unwinding later must not
-/// release the retry's entry; a task that was not cancelled still does.
+fn connect_request(profile_id: Uuid) -> TaskRequest {
+    TaskRequest::new(TaskKind::Connect, "connecting")
+        .target(TaskTarget {
+            profile_id,
+            database: None,
+        })
+        .policy(CancelPolicy::WorkerAcknowledged)
+}
+
+/// Cancelling a connect attempt does not free the profile: the attempt turns
+/// `Cancelled` only when its worker stops, and a retry is refused until then,
+/// so the cancelled attempt can never release the retry's claim.
 #[test]
-fn a_cancelled_connect_attempt_does_not_release_a_retrys_pending_entry() {
+fn a_cancelled_connect_attempt_keeps_the_profile_busy_until_its_worker_stops() {
     let mut state = state_for_task_tests();
     let profile_id = Uuid::new_v4();
 
-    assert!(state.start_pending_operation(profile_id, None));
-    let (cancelled_attempt, _) =
-        state.start_task_for_profile(TaskKind::Connect, "connecting", Some(profile_id));
+    let attempt = state
+        .try_start_task(connect_request(profile_id))
+        .expect("first attempt starts");
+    let stage = state.start_task_handle(
+        TaskRequest::new(TaskKind::Connect, "stage")
+            .parent(attempt.id())
+            .policy(CancelPolicy::WorkerAcknowledged),
+    );
+
     assert_eq!(
         state.cancel_running_connect_tasks_for_profile(profile_id),
-        1
+        1,
+        "stages are not counted as attempts"
     );
-    assert!(!state.is_operation_pending(profile_id, None));
-
-    assert!(state.start_pending_operation(profile_id, None));
-    let (retry_attempt, _) =
-        state.start_task_for_profile(TaskKind::Connect, "connecting", Some(profile_id));
-
-    state.release_connect_pending_operation(cancelled_attempt, profile_id);
     assert!(
-        state.is_operation_pending(profile_id, None),
-        "the cancelled attempt released the retry's pending entry"
+        state.try_start_task(connect_request(profile_id)).is_err(),
+        "a retry must wait for the cancelled attempt to stop"
     );
 
-    state.release_connect_pending_operation(retry_attempt, profile_id);
-    assert!(!state.is_operation_pending(profile_id, None));
+    assert!(state.acknowledge_task_cancelled(stage.id()));
+    assert!(state.acknowledge_task_cancelled(attempt.id()));
+
+    let status = state.tasks().get(attempt.id()).map(|task| task.status);
+    assert_eq!(status, Some(TaskStatus::Cancelled));
+    assert!(state.try_start_task(connect_request(profile_id)).is_ok());
 }

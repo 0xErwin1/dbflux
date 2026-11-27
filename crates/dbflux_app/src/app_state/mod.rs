@@ -617,30 +617,6 @@ impl AppState {
             .finish_pending_operation(profile_id, database);
     }
 
-    /// Releases the profile-level pending entry on behalf of a connect
-    /// attempt, unless that attempt's task was cancelled.
-    ///
-    /// [`Self::cancel_running_connect_tasks_for_profile`] already released the
-    /// entry when it cancelled the task, so the user may have started a retry
-    /// by the time the cancelled attempt unwinds; releasing again would drop
-    /// the retry's entry.
-    ///
-    /// Returns whether the entry was released.
-    pub fn release_connect_pending_operation(&mut self, task_id: TaskId, profile_id: Uuid) -> bool {
-        let cancelled = self
-            .facade
-            .tasks
-            .get(task_id)
-            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
-
-        if cancelled {
-            return false;
-        }
-
-        self.finish_pending_operation(profile_id, None);
-        true
-    }
-
     // --- Connect failures ---
 
     pub fn record_connect_failure(&mut self, profile_id: Uuid, message: impl Into<String>) {
@@ -2583,33 +2559,32 @@ impl AppState {
         cancelled
     }
 
+    /// Asks every in-flight connect attempt of the profile to cancel.
+    ///
+    /// The attempt owns its stages and detached hooks as child tasks, so the
+    /// request reaches them through the task hierarchy. The attempt turns
+    /// `Cancelled` once its worker stops, and only then is the profile free
+    /// for a retry, so nothing is released here.
+    ///
+    /// Returns how many attempts accepted the request.
     pub fn cancel_running_connect_tasks_for_profile(&mut self, profile_id: Uuid) -> usize {
-        let connect_task_ids: Vec<TaskId> = self
+        let attempts: Vec<TaskId> = self
             .facade
             .tasks
             .running_tasks()
             .into_iter()
-            .filter(|task| task.kind == TaskKind::Connect && task.profile_id == Some(profile_id))
+            .filter(|task| {
+                task.kind == TaskKind::Connect
+                    && task.parent_id.is_none()
+                    && task.profile_id == Some(profile_id)
+            })
             .map(|task| task.id)
             .collect();
 
-        let cancelled = connect_task_ids
+        attempts
             .into_iter()
             .filter(|task_id| self.facade.tasks.cancel(*task_id))
-            .count();
-
-        // Clear the profile-level pending-operation entry so the sidebar can
-        // reflect the cancelled state and the user can retry without waiting
-        // for the (potentially long-running) async connect task to unwind.
-        // `finish_pending_operation` is a HashSet remove, so the eventual
-        // duplicate call from the async task's own cancellation path is a no-op.
-        if cancelled > 0 {
-            self.facade
-                .connections
-                .finish_pending_operation(profile_id, None);
-        }
-
-        cancelled
+            .count()
     }
 
     pub fn connections_mut(&mut self) -> &mut HashMap<Uuid, ConnectedProfile> {
@@ -3274,6 +3249,11 @@ impl AppState {
 
     pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
         &self.auth_provider_registry
+    }
+
+    /// Makes `provider` available to connections and auth profiles.
+    pub fn register_auth_provider(&mut self, provider: Arc<dyn dbflux_core::DynAuthProvider>) {
+        self.auth_provider_registry.register(provider);
     }
 
     pub fn auth_provider_by_id(

@@ -3,8 +3,8 @@ use dbflux_app::hook_executor::CompositeExecutor;
 use dbflux_core::observability::actions::{HOOK_EXECUTE, HOOK_EXECUTE_FAILED};
 use dbflux_core::{
     CancelToken, ConnectionHook, DetachedProcessHandle, HookContext, HookExecutor, HookKind,
-    HookPhase, HookResult, OutputReceiver, ProcessExecutionError, TaskId, TaskKind,
-    detached_process_channel, execute_streaming_process, output_channel,
+    HookPhase, HookResult, OutputReceiver, ProcessExecutionError, TaskId, TaskKind, TaskRequest,
+    TaskTarget, detached_process_channel, execute_streaming_process, output_channel,
 };
 use gpui::{AsyncApp, Entity};
 use std::collections::BTreeSet;
@@ -52,9 +52,19 @@ impl DetachedHookCleanupError {
 #[derive(Clone, Default)]
 pub struct DetachedHookScope {
     task_ids: Arc<Mutex<BTreeSet<TaskId>>>,
+    parent: Option<TaskId>,
 }
 
 impl DetachedHookScope {
+    /// A scope whose detached hook tasks start as children of `parent`, so
+    /// cancelling the parent cancels them.
+    pub fn for_parent(parent: TaskId) -> Self {
+        Self {
+            task_ids: Arc::default(),
+            parent: Some(parent),
+        }
+    }
+
     fn register(&self, task_id: TaskId) {
         #[expect(
             clippy::expect_used,
@@ -411,6 +421,35 @@ async fn drain_task_output(
     }
 }
 
+/// The task of a detached hook process: a child of the scope's parent
+/// task when it has one, so cancelling that task cancels the hook.
+fn detached_hook_task_request(
+    scope: &DetachedHookScope,
+    phase: HookPhase,
+    profile_id: Uuid,
+    profile_name: &str,
+    description: &str,
+) -> TaskRequest {
+    let request = TaskRequest::new(
+        TaskKind::Hook { phase },
+        format!(
+            "Hook Process: {} — {} — {}",
+            phase.label(),
+            profile_name,
+            description
+        ),
+    )
+    .target(TaskTarget {
+        profile_id,
+        database: None,
+    });
+
+    match scope.parent {
+        Some(parent) => request.parent(parent),
+        None => request,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn start_detached_hook_task(
     app_state: Entity<AppStateEntity>,
@@ -427,16 +466,10 @@ fn start_detached_hook_task(
 
     let (task_id, cancel_token) = cx.update(|cx| {
         app_state.update(cx, |state, cx| {
-            let task = state.start_task_for_profile(
-                TaskKind::Hook { phase },
-                format!(
-                    "Hook Process: {} — {} — {}",
-                    phase.label(),
-                    profile_name,
-                    description
-                ),
-                Some(profile_id),
-            );
+            let request =
+                detached_hook_task_request(&scope, phase, profile_id, profile_name, &description);
+            let handle = state.start_task_handle(request);
+            let task = (handle.id(), handle.token().clone());
             state.register_detached_hook_task(profile_id, task.0);
             cx.emit(AppStateChanged);
             task
@@ -1234,6 +1267,55 @@ mod tests {
             *invocations.lock().expect("test executor poisoned"),
             vec!["fail-disconnect"],
         );
+    }
+
+    #[gpui::test]
+    fn a_detached_hook_of_a_scope_with_a_parent_is_cancelled_with_that_parent(
+        cx: &mut TestAppContext,
+    ) {
+        let app_state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+
+        app_state.update(cx, |state, _| {
+            let (parent, _) =
+                state.start_task_for_profile(TaskKind::Connect, "connect", Some(profile_id));
+            let scope = DetachedHookScope::for_parent(parent);
+            let hook = state
+                .start_task_handle(super::detached_hook_task_request(
+                    &scope,
+                    HookPhase::PreConnect,
+                    profile_id,
+                    "orders",
+                    "ssh -N tunnel",
+                ))
+                .id();
+
+            let snapshot = state.tasks().get(hook).expect("hook task");
+            assert_eq!(snapshot.parent_id, Some(parent));
+            assert_eq!(snapshot.profile_id, Some(profile_id));
+
+            assert!(state.cancel_task(parent));
+            assert_eq!(
+                state.tasks().get(hook).map(|task| task.status),
+                Some(TaskStatus::Cancelled),
+                "cancelling the parent cancels its detached hook"
+            );
+
+            let orphan = state
+                .start_task_handle(super::detached_hook_task_request(
+                    &DetachedHookScope::default(),
+                    HookPhase::PreConnect,
+                    profile_id,
+                    "orders",
+                    "ssh -N tunnel",
+                ))
+                .id();
+            assert_eq!(
+                state.tasks().get(orphan).and_then(|task| task.parent_id),
+                None,
+                "a scope without a parent starts top-level hooks"
+            );
+        });
     }
 
     #[gpui::test]

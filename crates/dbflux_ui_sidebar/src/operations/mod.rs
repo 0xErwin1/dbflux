@@ -1,5 +1,6 @@
 use crate::*;
 
+mod connect_stages;
 mod connection;
 mod dnd;
 mod export_tables;
@@ -10,6 +11,7 @@ mod table_selection;
 mod tree_edit;
 mod tree_ops;
 
+pub(crate) use connect_stages::ConnectStage;
 pub(crate) use dnd::DropOptions;
 
 pub(crate) use connection::{

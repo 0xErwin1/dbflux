@@ -6088,6 +6088,14 @@ sidebar:
         opening_access: "파이프라인: 접근 권한 여는 중 (%{method})"
         connecting: "파이프라인: 드라이버 연결 중 (%{driver})"
         fetching_schema: "파이프라인: 스키마 가져오는 중"
+      step:
+        pre_connect_hooks: "연결 전 훅"
+        authenticating: "%{provider}(으)로 인증하는 중"
+        resolving_values: "값 확인하는 중"
+        opening_access: "터널 여는 중"
+        connecting: "드라이버 연결 중"
+        fetching_schema: "스키마 가져오는 중"
+        post_connect_hooks: "연결 후 훅"
     listing_secret_paths: "시크릿 경로 나열 중: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}'이(가) 업데이트되었습니다"
@@ -6095,7 +6103,6 @@ sidebar:
     edit_reconnect_now: 지금 다시 연결
     edit_reconnect_later: 나중에
     connection_already_pending: 연결이 이미 대기 중입니다
-    operation_started_elsewhere: 다른 스레드에서 시작한 작업입니다
     background_task_limit: 실행 중인 백그라운드 작업이 너무 많습니다. 잠시 기다려 주세요
     connection_cancelled_by_hook: 훅에 의해 연결이 취소되었습니다
     connection_cancelled_by_post_connect_hook: 연결 후 훅에 의해 연결이 취소되었습니다

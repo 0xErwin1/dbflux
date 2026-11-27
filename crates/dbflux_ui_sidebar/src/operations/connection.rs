@@ -1262,7 +1262,7 @@ mod tests {
         condvar.notify_all();
     }
 
-    const CONNECTION_TOAST_KEYS: [&str; 14] = [
+    const CONNECTION_TOAST_KEYS: [&str; 13] = [
         "sidebar.task.connecting",
         "sidebar.task.disconnecting",
         "sidebar.task.connection_hook_cancelled",
@@ -1270,7 +1270,6 @@ mod tests {
         "sidebar.task.disconnect_hook_cancelled",
         "sidebar.task.post_disconnect_hook_cancelled",
         "sidebar.toast.connection_already_pending",
-        "sidebar.toast.operation_started_elsewhere",
         "sidebar.toast.background_task_limit",
         "sidebar.toast.connection_cancelled_by_hook",
         "sidebar.toast.connection_cancelled_by_post_connect_hook",
@@ -1819,5 +1818,371 @@ mod tests {
             last_toast_title(cx),
             Some(crate::labels::connection_already_pending_toast_label())
         );
+    }
+
+    // --- The connect pipeline as a parent task with its stages as children ---
+
+    use dbflux_core::{TaskKind, TaskSnapshot, TaskStatus};
+    use std::future::Future;
+    use std::pin::Pin;
+
+    type AuthFuture<'a, T> =
+        Pin<Box<dyn Future<Output = Result<T, dbflux_core::DbError>> + Send + 'a>>;
+
+    /// An auth provider whose session is either valid or waits for a login
+    /// that never ends, so a connect can be held inside its auth stage.
+    struct ScriptedAuthProvider {
+        login_never_ends: bool,
+    }
+
+    impl dbflux_core::DynAuthProvider for ScriptedAuthProvider {
+        fn provider_id(&self) -> &str {
+            "scripted-auth"
+        }
+
+        fn display_name(&self) -> &str {
+            "Test Auth"
+        }
+
+        fn form_def(&self) -> &dbflux_core::AuthFormDef {
+            static FORM: std::sync::OnceLock<dbflux_core::AuthFormDef> = std::sync::OnceLock::new();
+            FORM.get_or_init(|| dbflux_core::AuthFormDef { tabs: vec![] })
+        }
+
+        fn validate_session<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _profile: &'life1 dbflux_core::AuthProfile,
+        ) -> AuthFuture<'async_trait, dbflux_core::AuthSessionState>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            let state = if self.login_never_ends {
+                dbflux_core::AuthSessionState::LoginRequired
+            } else {
+                dbflux_core::AuthSessionState::Valid { expires_at: None }
+            };
+            Box::pin(async move { Ok(state) })
+        }
+
+        fn login<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _profile: &'life1 dbflux_core::AuthProfile,
+            _url_callback: dbflux_core::auth::UrlCallback,
+        ) -> AuthFuture<'async_trait, dbflux_core::AuthSession>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(std::future::pending())
+        }
+
+        fn resolve_credentials<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _profile: &'life1 dbflux_core::AuthProfile,
+        ) -> AuthFuture<'async_trait, dbflux_core::ResolvedCredentials>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async { Ok(dbflux_core::ResolvedCredentials::default()) })
+        }
+    }
+
+    fn true_hook() -> dbflux_core::ConnectionHook {
+        dbflux_core::ConnectionHook {
+            enabled: true,
+            kind: dbflux_core::HookKind::Command {
+                command: "true".to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: Default::default(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: Default::default(),
+            ready_signal: None,
+            on_failure: Default::default(),
+        }
+    }
+
+    /// A pipeline connect for a profile shaped by `shape`, with the scripted
+    /// auth provider registered.
+    fn pipeline_fixture(
+        login_never_ends: bool,
+        shape: impl FnOnce(&mut dbflux_core::ConnectionProfile),
+        cx: &mut TestAppContext,
+    ) -> (PasswordFixture, &mut VisualTestContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture.state.update(cx, |state, _| {
+            state.register_auth_provider(Arc::new(ScriptedAuthProvider { login_never_ends }));
+            let auth = dbflux_core::AuthProfile::new(
+                "scripted",
+                "scripted-auth",
+                std::collections::HashMap::new(),
+            );
+            let auth_id = auth.id;
+            state.add_auth_profile(auth);
+
+            if let Some(profile) = state.profiles_mut().iter_mut().find(|p| p.id == profile_id) {
+                profile.auth_profile_id = Some(auth_id);
+                shape(profile);
+            }
+        });
+
+        (fixture, cx)
+    }
+
+    fn connect_attempts(state: &AppStateEntity) -> Vec<TaskSnapshot> {
+        state
+            .tasks()
+            .recent_tasks(usize::MAX)
+            .into_iter()
+            .filter(|task| task.kind == TaskKind::Connect && task.parent_id.is_none())
+            .collect()
+    }
+
+    /// The (name, status) of the stages of the only connect attempt.
+    fn stage_rows(
+        fixture: &PasswordFixture,
+        cx: &mut VisualTestContext,
+    ) -> Vec<(String, TaskStatus)> {
+        fixture.state.read_with(cx, |state, _| {
+            let attempts = connect_attempts(state);
+            assert_eq!(attempts.len(), 1, "one connect attempt");
+            state
+                .child_tasks(attempts[0].id)
+                .into_iter()
+                .map(|stage| (stage.description, stage.status))
+                .collect()
+        })
+    }
+
+    fn attempt_status(fixture: &PasswordFixture, cx: &mut VisualTestContext) -> TaskStatus {
+        fixture
+            .state
+            .read_with(cx, |state, _| connect_attempts(state)[0].status.clone())
+    }
+
+    fn statuses(rows: &[(String, TaskStatus)]) -> Vec<TaskStatus> {
+        rows.iter().map(|(_, status)| status.clone()).collect()
+    }
+
+    #[gpui::test]
+    fn a_connect_registers_its_stages_in_order_under_one_task(cx: &mut TestAppContext) {
+        let (fixture, cx) = pipeline_fixture(
+            false,
+            |profile| {
+                profile.value_refs.insert(
+                    "host".to_string(),
+                    dbflux_core::values::ValueRef::literal("db"),
+                );
+                profile.access_kind = Some(dbflux_core::AccessKind::Ssh {
+                    ssh_tunnel_profile_id: Uuid::new_v4(),
+                });
+                profile.hooks = Some(dbflux_core::ConnectionHooks {
+                    pre_connect: vec![true_hook()],
+                    post_connect: vec![true_hook()],
+                    ..Default::default()
+                });
+            },
+            cx,
+        );
+        let profile_id = fixture.profile_id;
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+
+        let rows = stage_rows(&fixture, cx);
+        let names: Vec<&str> = rows.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Pre-connect hooks",
+                "Authenticating via Test Auth",
+                "Resolving values",
+                "Opening tunnel",
+                "Connecting driver",
+                "Fetching schema",
+                "Post-connect hooks",
+            ]
+        );
+        assert_eq!(statuses(&rows), vec![TaskStatus::Pending; 7]);
+        assert_eq!(attempt_status(&fixture, cx), TaskStatus::Running);
+    }
+
+    #[gpui::test]
+    fn a_profile_without_auth_or_hooks_registers_only_the_stages_that_apply(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = pipeline_fixture(
+            false,
+            |profile| {
+                profile.auth_profile_id = None;
+                profile.access_kind = Some(dbflux_core::AccessKind::Direct);
+            },
+            cx,
+        );
+        let profile_id = fixture.profile_id;
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+
+        let names: Vec<String> = stage_rows(&fixture, cx)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, ["Connecting driver", "Fetching schema"]);
+    }
+
+    #[gpui::test]
+    fn a_successful_connect_completes_every_stage_and_registers_the_connection(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = pipeline_fixture(false, |_| {}, cx);
+        let profile_id = fixture.profile_id;
+        let watchers = Arc::new(Mutex::new(Vec::new()));
+        cx.update(|_, cx| {
+            let watchers = watchers.clone();
+            cx.subscribe(
+                &fixture.sidebar,
+                move |_, event: &crate::SidebarEvent, _| {
+                    if let crate::SidebarEvent::PipelineStarted { watcher, .. } = event {
+                        watchers.lock().expect("watchers").push(watcher.clone());
+                    }
+                },
+            )
+            .detach();
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        let rows = stage_rows(&fixture, cx);
+        assert_eq!(
+            rows.iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Authenticating via Test Auth",
+                "Connecting driver",
+                "Fetching schema"
+            ]
+        );
+        assert_eq!(statuses(&rows), vec![TaskStatus::Completed; 3]);
+        assert_eq!(attempt_status(&fixture, cx), TaskStatus::Completed);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id));
+            assert!(!state.is_operation_pending(profile_id, None));
+        });
+        assert_eq!(recorded(&fixture.passwords).len(), 1);
+
+        let watchers = watchers.lock().expect("watchers");
+        assert_eq!(watchers.len(), 1, "one pipeline was announced");
+        assert!(matches!(
+            *watchers[0].borrow(),
+            dbflux_core::PipelineState::Connected
+        ));
+    }
+
+    #[gpui::test]
+    fn cancelling_during_authentication_skips_the_later_stages_and_connects_nothing(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = pipeline_fixture(true, |_| {}, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        assert_eq!(
+            statuses(&stage_rows(&fixture, cx)),
+            [
+                TaskStatus::Running,
+                TaskStatus::Pending,
+                TaskStatus::Pending
+            ],
+            "the pipeline waits for the sign-in"
+        );
+
+        fixture.state.update(cx, |state, _| {
+            assert_eq!(
+                state.cancel_running_connect_tasks_for_profile(profile_id),
+                1
+            );
+        });
+        assert_eq!(
+            statuses(&stage_rows(&fixture, cx)),
+            [
+                TaskStatus::Cancelling,
+                TaskStatus::Skipped,
+                TaskStatus::Skipped
+            ],
+            "the stage waits for the worker; the rest never started"
+        );
+        assert_eq!(attempt_status(&fixture, cx), TaskStatus::Cancelling);
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            statuses(&stage_rows(&fixture, cx)),
+            [
+                TaskStatus::Cancelled,
+                TaskStatus::Skipped,
+                TaskStatus::Skipped
+            ]
+        );
+        assert_eq!(attempt_status(&fixture, cx), TaskStatus::Cancelled);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(!state.connections().contains_key(&profile_id));
+            assert!(!state.is_operation_pending(profile_id, None));
+        });
+        assert!(recorded(&fixture.passwords).is_empty());
+    }
+
+    #[gpui::test]
+    fn a_connect_for_a_profile_that_has_a_connect_task_is_refused_by_the_task_manager(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = pipeline_fixture(false, |_| {}, cx);
+        let profile_id = fixture.profile_id;
+
+        // Only the task is registered; the pending-operation set stays empty,
+        // so a refusal can only come from the task manager.
+        fixture.state.update(cx, |state, _| {
+            state
+                .try_start_task(
+                    dbflux_core::TaskRequest::new(TaskKind::Connect, "connecting").target(
+                        dbflux_core::TaskTarget {
+                            profile_id,
+                            database: None,
+                        },
+                    ),
+                )
+                .expect("first connect task starts");
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        fixture.state.read_with(cx, |state, _| {
+            assert_eq!(connect_attempts(state).len(), 1, "no second attempt");
+            assert!(!state.connections().contains_key(&profile_id));
+        });
+        assert!(recorded(&fixture.passwords).is_empty());
     }
 }

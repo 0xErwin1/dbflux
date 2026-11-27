@@ -552,3 +552,92 @@ fn a_cancelled_parent_reads_its_stopped_stage_and_the_ones_that_never_started(
         )
     ));
 }
+
+#[gpui::test]
+fn cancelling_a_connect_from_the_panel_cancels_its_stages_through_the_hierarchy(
+    cx: &mut TestAppContext,
+) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let profile_id = add_profile(&app_state, "staging", window);
+    let parent = start_request(
+        &app_state,
+        TaskRequest::new(TaskKind::Connect, "Connecting to staging")
+            .target(target_of(profile_id))
+            .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+        window,
+    );
+    let stages: Vec<TaskId> = [false, true]
+        .into_iter()
+        .map(|pending| {
+            let mut request = TaskRequest::new(TaskKind::Connect, "stage")
+                .parent(parent)
+                .policy(dbflux_core::CancelPolicy::WorkerAcknowledged);
+            if pending {
+                request = request.pending();
+            }
+            start_request(&app_state, request, window)
+        })
+        .collect();
+    notify(&app_state, window);
+
+    click_cancel(parent, window);
+
+    assert_eq!(
+        status_of(&app_state, parent, window),
+        TaskStatus::Cancelling
+    );
+    assert_eq!(
+        status_of(&app_state, stages[0], window),
+        TaskStatus::Cancelling
+    );
+    assert_eq!(
+        status_of(&app_state, stages[1], window),
+        TaskStatus::Skipped
+    );
+}
+
+#[gpui::test]
+fn dismissing_a_finished_connect_keeps_a_detached_hook_that_still_runs(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let parent = start_request(
+        &app_state,
+        TaskRequest::new(TaskKind::Connect, "Connecting to staging"),
+        window,
+    );
+    let hook = start_request(
+        &app_state,
+        TaskRequest::new(
+            TaskKind::Hook {
+                phase: dbflux_core::HookPhase::PreConnect,
+            },
+            "ssh tunnel",
+        )
+        .parent(parent),
+        window,
+    );
+    app_state.update(window, |state, cx| {
+        state.fail_task(parent, "driver refused");
+        cx.emit(AppStateChanged);
+    });
+    window.run_until_parked();
+
+    let dismiss_bounds = window
+        .debug_bounds(selector("dismiss-task", parent))
+        .expect("a failed connect renders a dismiss button");
+    window.simulate_click(dismiss_bounds.center(), Modifiers::none());
+    window.run_until_parked();
+
+    assert!(
+        app_state.read_with(window, |state, _| state.tasks().get(parent).is_some()),
+        "the running hook keeps its parent row"
+    );
+    assert_eq!(status_of(&app_state, hook, window), TaskStatus::Running);
+}

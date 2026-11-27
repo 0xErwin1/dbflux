@@ -13,7 +13,6 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use std::collections::HashSet;
 use std::time::Duration;
-use uuid::Uuid;
 
 /// The expanded panel's header was clicked: collapse the panel.
 pub struct CollapseTasksPanel;
@@ -167,7 +166,7 @@ impl TasksPanel {
     pub fn cancel_selected(&mut self, cx: &mut Context<Self>) -> bool {
         match self.selected_task(cx) {
             Some(task) if task.is_cancellable => {
-                self.cancel_task(task.id, task.kind, task.profile_id, cx);
+                self.cancel_task(task.id, cx);
                 true
             }
             _ => false,
@@ -253,23 +252,10 @@ impl TasksPanel {
         }
     }
 
-    fn cancel_task(
-        &mut self,
-        task_id: TaskId,
-        task_kind: TaskKind,
-        profile_id: Option<Uuid>,
-        cx: &mut Context<Self>,
-    ) {
-        if task_kind == TaskKind::Connect
-            && let Some(profile_id) = profile_id
-        {
-            self.app_state.update(cx, |state, cx| {
-                state.cancel_running_connect_tasks_for_profile(profile_id);
-                cx.emit(AppStateChanged);
-            });
-            return;
-        }
-
+    /// Every cancel goes through the task hierarchy: a connect attempt
+    /// cancels its stages and detached hooks with it, and frees its profile
+    /// once its worker stops.
+    fn cancel_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
             state.request_cancel_task(task_id);
             cx.emit(AppStateChanged);
@@ -278,6 +264,12 @@ impl TasksPanel {
 
     fn dismiss_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
+            // A detached hook can outlive the connect that started it; its
+            // row stays until it stops.
+            if state.tasks().has_in_flight_descendants(task_id) {
+                return;
+            }
+
             let stages = state.tasks().children_of(task_id);
 
             for stage in stages {
@@ -296,6 +288,7 @@ impl TasksPanel {
                 .recent_tasks(usize::MAX)
                 .into_iter()
                 .filter(|task| task.status.is_terminal())
+                .filter(|task| !state.tasks().has_in_flight_descendants(task.id))
                 .map(|task| task.id)
                 .collect();
 
@@ -407,8 +400,6 @@ impl TasksPanel {
         let theme = cx.theme();
         let task = &view.task;
         let task_id = task.id;
-        let task_kind = task.kind;
-        let task_profile_id = task.profile_id;
         let is_cancellable = task.is_cancellable;
         let is_running = !task.status.is_terminal();
         let is_cancelling = task.status == TaskStatus::Cancelling;
@@ -544,7 +535,7 @@ impl TasksPanel {
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         cx.stop_propagation();
-                                        this.cancel_task(task_id, task_kind, task_profile_id, cx);
+                                        this.cancel_task(task_id, cx);
                                     },
                                 )),
                             ),
