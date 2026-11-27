@@ -11,6 +11,8 @@
 
 use std::borrow::Cow;
 
+use super::{KeyChord, KeySequence};
+
 /// One context descriptor of the product's context tree.
 ///
 /// `id` is the persisted context name (the string users' keybinding
@@ -28,6 +30,10 @@ pub struct ContextSpec {
     pub default_predicate: &'static str,
     pub inherits_global_chords: bool,
     pub is_element_context: bool,
+    /// The predicate that keeps a printable key out of a text field inside
+    /// the context, when the context holds such fields; `None` leaves every
+    /// binding on `default_predicate`.
+    pub outside_input_predicate: Option<&'static str>,
 }
 
 impl ContextSpec {
@@ -43,7 +49,15 @@ impl ContextSpec {
             default_predicate,
             inherits_global_chords: false,
             is_element_context: false,
+            outside_input_predicate: None,
         }
+    }
+
+    /// Sets the predicate printable keys of the context narrow to, so a
+    /// focused text field inside the context keeps receiving them.
+    pub fn with_outside_input_predicate(mut self, predicate: &'static str) -> Self {
+        self.outside_input_predicate = Some(predicate);
+        self
     }
 
     /// Marks the context as keeping the global chords.
@@ -75,6 +89,13 @@ pub struct KeymapVocabulary {
     global_id: &'static str,
     command_storage_id: fn(Cow<'static, str>) -> Cow<'static, str>,
     unbound_commands: Vec<(&'static str, Cow<'static, str>)>,
+    prints_text: fn(&KeyChord) -> bool,
+}
+
+/// The default printable-key check: no key prints text, so no binding is
+/// narrowed.
+fn never_prints_text(_chord: &KeyChord) -> bool {
+    false
 }
 
 /// The default storage mapping: the action id as it is.
@@ -94,7 +115,29 @@ impl KeymapVocabulary {
             global_id,
             command_storage_id: identity_command_id,
             unbound_commands: Vec::new(),
+            prints_text: never_prints_text,
         }
+    }
+
+    /// Sets the check for a chord a focused text field receives as typed
+    /// text. With [`ContextSpec::outside_input_predicate`] it decides which
+    /// keys a user-assigned binding narrows to outside text fields.
+    pub fn with_printable_key_check(mut self, prints_text: fn(&KeyChord) -> bool) -> Self {
+        self.prints_text = prints_text;
+        self
+    }
+
+    /// The predicate a binding of context `id` on `keys` narrows to so that
+    /// a text field inside the context keeps its typed text: the context's
+    /// outside-input predicate when `keys` start with a printable chord,
+    /// `None` otherwise.
+    pub fn outside_input_predicate_for(
+        &self,
+        id: &str,
+        keys: &KeySequence,
+    ) -> Option<&'static str> {
+        let predicate = self.get(id)?.outside_input_predicate?;
+        (self.prints_text)(keys.first()).then_some(predicate)
     }
 
     /// Lists commands that are bindable in a context although the default
@@ -179,12 +222,15 @@ impl KeymapVocabulary {
         self.global_id
     }
 
-    /// The id of the context whose default predicate is `predicate`, or
-    /// `None` when no context declares it.
+    /// The id of the context whose default predicate, or outside-input
+    /// predicate, is `predicate`, or `None` when no context declares it.
     pub fn context_for_default_predicate(&self, predicate: &str) -> Option<&'static str> {
         self.contexts
             .iter()
-            .find(|spec| spec.default_predicate == predicate)
+            .find(|spec| {
+                spec.default_predicate == predicate
+                    || spec.outside_input_predicate == Some(predicate)
+            })
             .map(|spec| spec.id)
     }
 

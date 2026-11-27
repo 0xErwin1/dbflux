@@ -135,7 +135,7 @@ impl KeymapLayer {
 /// bare printable character or Space, with no Ctrl, Alt or platform modifier.
 /// Those are the keys a binding must not claim while a field has the keyboard;
 /// the arrows, Enter, the function keys and every modified chord are not.
-fn prints_text(chord: &KeyChord) -> bool {
+pub(super) fn prints_text(chord: &KeyChord) -> bool {
     let bare = !chord.modifiers.ctrl && !chord.modifiers.alt && !chord.modifiers.platform;
 
     bare && (chord.key == "space" || chord.key.chars().count() == 1)
