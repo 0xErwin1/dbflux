@@ -7,6 +7,11 @@ use uuid::Uuid;
 
 use crate::HookPhase;
 
+mod dedup;
+mod hierarchy;
+
+pub use dedup::TaskBusy;
+
 const MAX_TASK_DETAILS_BYTES: usize = 4 * 1024 * 1024;
 const TASK_DETAILS_TRUNCATED_NOTICE: &str = "\n[output truncated]\n";
 
@@ -79,6 +84,10 @@ impl TaskKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskStatus {
+    /// Registered ahead of time (a pipeline stage that has not begun). Not
+    /// terminal, but not in flight either: it is not counted as running and
+    /// does nothing until `TaskManager::activate` moves it to `Running`.
+    Pending,
     Running,
     /// A cancel was requested and the work has not confirmed that it
     /// stopped. Not terminal: the worker still decides the final outcome.
@@ -86,11 +95,23 @@ pub enum TaskStatus {
     Completed,
     Failed(String),
     Cancelled,
+    /// A `Pending` task that never started because its parent was cancelled.
+    /// Shown as "Not started".
+    Skipped,
 }
 
 impl TaskStatus {
     pub fn is_terminal(&self) -> bool {
-        !matches!(self, TaskStatus::Running | TaskStatus::Cancelling)
+        !matches!(
+            self,
+            TaskStatus::Pending | TaskStatus::Running | TaskStatus::Cancelling
+        )
+    }
+
+    /// Whether work is being done for the task: `Running` or `Cancelling`.
+    /// `Pending` is not in flight.
+    pub fn is_in_flight(&self) -> bool {
+        matches!(self, TaskStatus::Running | TaskStatus::Cancelling)
     }
 }
 
@@ -152,6 +173,9 @@ pub struct TaskRequest {
     target: Option<TaskTarget>,
     policy: CancelPolicy,
     cancel_hook: Option<CancelHook>,
+    parent: Option<TaskId>,
+    pending: bool,
+    supersede_key: Option<String>,
 }
 
 impl TaskRequest {
@@ -162,6 +186,9 @@ impl TaskRequest {
             target: None,
             policy: CancelPolicy::default(),
             cancel_hook: None,
+            parent: None,
+            pending: false,
+            supersede_key: None,
         }
     }
 
@@ -180,6 +207,26 @@ impl TaskRequest {
         self.cancel_hook = Some(hook);
         self
     }
+
+    /// Makes the task a child of `parent`: cancelling the parent cancels it.
+    pub fn parent(mut self, parent: TaskId) -> Self {
+        self.parent = Some(parent);
+        self
+    }
+
+    /// Registers the task as `TaskStatus::Pending` until a worker calls
+    /// `TaskManager::activate`.
+    pub fn pending(mut self) -> Self {
+        self.pending = true;
+        self
+    }
+
+    /// Starting this task requests cancel on every non-terminal task that
+    /// carries the same key. See `TaskManager::start_handle`.
+    pub fn supersede_key(mut self, key: impl Into<String>) -> Self {
+        self.supersede_key = Some(key.into());
+        self
+    }
 }
 
 /// Identity and cancel token of a started task. The `TaskManager` keeps
@@ -188,9 +235,16 @@ impl TaskRequest {
 pub struct TaskHandle {
     id: TaskId,
     token: CancelToken,
+    superseded: Vec<TaskId>,
 }
 
 impl TaskHandle {
+    /// Older tasks this start asked to cancel because of a matching
+    /// `supersede_key`. Each one's own status says whether it already stopped.
+    pub fn superseded(&self) -> &[TaskId] {
+        &self.superseded
+    }
+
     pub fn id(&self) -> TaskId {
         self.id
     }
@@ -253,6 +307,7 @@ pub struct Task {
     pub details: Option<String>,
     pub profile_id: Option<Uuid>,
     pub target: Option<TaskTarget>,
+    pub parent_id: Option<TaskId>,
     /// Full text of the query a `TaskKind::Query` task runs, when the
     /// description had to shorten it. Shared, so snapshots taken on every
     /// render do not copy a large script.
@@ -267,6 +322,13 @@ pub struct Task {
     accepts_cancel: bool,
     policy: CancelPolicy,
     cancel_hook: Option<CancelHook>,
+    supersede_key: Option<String>,
+    /// Start order, stable where two `Instant`s tie.
+    sequence: u64,
+    /// Set when a cancel request on a parent could not settle it because a
+    /// child was still in flight: the parent turns `Cancelled` on its own
+    /// once every child stopped.
+    settles_with_children: bool,
 }
 
 impl Task {
@@ -291,6 +353,12 @@ impl Task {
     fn finish(&mut self, status: TaskStatus) {
         self.status = status;
         self.completed_at = Some(Instant::now());
+    }
+
+    fn skip(&mut self) -> CancelRequestOutcome {
+        self.cancel_token.cancel();
+        self.finish(TaskStatus::Skipped);
+        CancelRequestOutcome::Cancelled
     }
 
     fn apply_cancel_request(&mut self) -> CancelRequestOutcome {
@@ -348,6 +416,7 @@ pub struct TaskSnapshot {
     pub cancel_unavailable_reason: Option<String>,
     pub profile_id: Option<Uuid>,
     pub target: Option<TaskTarget>,
+    pub parent_id: Option<TaskId>,
     pub query_text: Option<Arc<str>>,
 }
 
@@ -365,6 +434,7 @@ impl From<&Task> for TaskSnapshot {
             cancel_unavailable_reason: task.cancel_unavailable_reason.clone(),
             profile_id: task.profile_id,
             target: task.target.clone(),
+            parent_id: task.parent_id,
             query_text: task.query_text.clone(),
         }
     }
@@ -373,12 +443,14 @@ impl From<&Task> for TaskSnapshot {
 #[derive(Default)]
 pub struct TaskManager {
     tasks: HashMap<TaskId, Task>,
+    next_sequence: u64,
 }
 
 impl TaskManager {
     pub fn new() -> Self {
         Self {
             tasks: HashMap::new(),
+            next_sequence: 0,
         }
     }
 
@@ -404,7 +476,13 @@ impl TaskManager {
     }
 
     /// Starts a task with an explicit cancel policy and optional cancel hook.
+    ///
+    /// When the request carries a `supersede_key`, every non-terminal task
+    /// with the same key gets `request_cancel` first and is listed in
+    /// [`TaskHandle::superseded`]. The new task starts whatever the outcome:
+    /// an older task that cannot stop keeps its honest status.
     pub fn start_handle(&mut self, request: TaskRequest) -> TaskHandle {
+        let superseded = self.supersede_matching(request.supersede_key.as_deref());
         let id = TaskId::new_v4();
         let cancel_token = CancelToken::new();
         let profile_id = request.target.as_ref().map(|target| target.profile_id);
@@ -413,25 +491,35 @@ impl TaskManager {
             id,
             kind: request.kind,
             description: request.description,
-            status: TaskStatus::Running,
+            status: if request.pending {
+                TaskStatus::Pending
+            } else {
+                TaskStatus::Running
+            },
             started_at: Instant::now(),
             completed_at: None,
             progress: None,
             details: None,
             profile_id,
             target: request.target,
+            parent_id: request.parent,
             query_text: None,
             cancel_unavailable_reason: None,
             cancel_token: cancel_token.clone(),
             accepts_cancel: true,
             policy: request.policy,
             cancel_hook: request.cancel_hook,
+            supersede_key: request.supersede_key,
+            sequence: self.next_sequence,
+            settles_with_children: false,
         };
+        self.next_sequence += 1;
 
         self.tasks.insert(id, task);
         TaskHandle {
             id,
             token: cancel_token,
+            superseded,
         }
     }
 
@@ -472,6 +560,7 @@ impl TaskManager {
         {
             task.status = TaskStatus::Completed;
             task.completed_at = Some(Instant::now());
+            self.settle_ancestors(id);
         }
     }
 
@@ -488,6 +577,7 @@ impl TaskManager {
             } else {
                 Some(details)
             };
+            self.settle_ancestors(id);
         }
     }
 
@@ -520,6 +610,7 @@ impl TaskManager {
         {
             task.status = TaskStatus::Failed(error.into());
             task.completed_at = Some(Instant::now());
+            self.settle_ancestors(id);
         }
     }
 
@@ -541,24 +632,41 @@ impl TaskManager {
             } else {
                 Some(details)
             };
+            self.settle_ancestors(id);
         }
     }
 
     /// Asks a task to cancel and reports what actually happened; see
     /// [`CancelRequestOutcome`]. A task never becomes `Cancelled` here unless
     /// its policy is `Immediate` or its hook reports the work stopped.
+    ///
+    /// Cancelling a task cascades depth-first to its non-terminal children
+    /// first; see the `hierarchy` module for how the parent settles.
     pub fn request_cancel(&mut self, id: TaskId) -> CancelRequestOutcome {
+        let Some(task) = self.tasks.get(&id) else {
+            return CancelRequestOutcome::NotRunning;
+        };
+
+        if task.status.is_terminal() {
+            return CancelRequestOutcome::NotRunning;
+        }
+
+        for child in self.child_ids(id) {
+            self.request_cancel(child);
+        }
+
         let Some(task) = self.tasks.get_mut(&id) else {
             return CancelRequestOutcome::NotRunning;
         };
 
-        match task.status {
+        let own = match task.status {
+            TaskStatus::Pending => task.skip(),
             TaskStatus::Running => task.apply_cancel_request(),
             TaskStatus::Cancelling => CancelRequestOutcome::AlreadyCancelling,
-            TaskStatus::Completed | TaskStatus::Failed(_) | TaskStatus::Cancelled => {
-                CancelRequestOutcome::NotRunning
-            }
-        }
+            _ => CancelRequestOutcome::NotRunning,
+        };
+
+        self.reconcile_with_children(id, own)
     }
 
     /// Legacy cancel: `true` when the request was accepted. Prefer
@@ -572,10 +680,17 @@ impl TaskManager {
 
     /// Worker confirmation that a `Cancelling` task really stopped. Returns
     /// `false` and changes nothing when the task is in any other state.
+    /// A parent is also left unchanged while one of its children is still
+    /// in flight.
     pub fn acknowledge_cancelled(&mut self, id: TaskId) -> bool {
+        if self.has_in_flight_children(id) {
+            return false;
+        }
+
         match self.tasks.get_mut(&id) {
             Some(task) if task.status == TaskStatus::Cancelling => {
                 task.finish(TaskStatus::Cancelled);
+                self.settle_ancestors(id);
                 true
             }
             _ => false,
@@ -588,7 +703,7 @@ impl TaskManager {
         let running_ids: Vec<TaskId> = self
             .tasks
             .iter()
-            .filter(|(_, task)| task.status == TaskStatus::Running)
+            .filter(|(_, task)| matches!(task.status, TaskStatus::Running | TaskStatus::Pending))
             .map(|(id, _)| *id)
             .collect();
 
@@ -628,7 +743,7 @@ impl TaskManager {
     pub fn running_tasks(&self) -> Vec<TaskSnapshot> {
         self.tasks
             .values()
-            .filter(|t| !t.status.is_terminal())
+            .filter(|t| t.status.is_in_flight())
             .map(TaskSnapshot::from)
             .collect()
     }
@@ -646,7 +761,7 @@ impl TaskManager {
     pub fn active_count(&self) -> usize {
         self.tasks
             .values()
-            .filter(|t| !t.status.is_terminal())
+            .filter(|t| t.status.is_in_flight())
             .count()
     }
 
@@ -657,7 +772,7 @@ impl TaskManager {
         self.tasks
             .values()
             .filter(|t| {
-                !t.status.is_terminal()
+                t.status.is_in_flight()
                     && matches!(
                         t.kind,
                         TaskKind::Connect
@@ -674,7 +789,7 @@ impl TaskManager {
     }
 
     pub fn has_running_tasks(&self) -> bool {
-        self.tasks.values().any(|t| !t.status.is_terminal())
+        self.tasks.values().any(|t| t.status.is_in_flight())
     }
 
     /// Removes completed and cancelled tasks that finished at least
@@ -706,7 +821,7 @@ impl TaskManager {
         let running: Vec<_> = self
             .tasks
             .values()
-            .filter(|t| !t.status.is_terminal())
+            .filter(|t| t.status.is_in_flight())
             .collect();
 
         match running.len() {

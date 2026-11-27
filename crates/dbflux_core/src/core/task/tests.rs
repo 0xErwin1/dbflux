@@ -451,3 +451,501 @@ fn start_handle_carries_target_and_profile() {
     assert_eq!(snapshot.status, TaskStatus::Running);
     assert!(snapshot.is_cancellable);
 }
+
+// ---------------------------------------------------------------------------
+// Hierarchy, supersede and target dedup
+// ---------------------------------------------------------------------------
+
+fn target(database: Option<&str>) -> TaskTarget {
+    TaskTarget {
+        profile_id: Uuid::from_u128(7),
+        database: database.map(str::to_string),
+    }
+}
+
+fn acknowledged_request(kind: TaskKind) -> TaskRequest {
+    TaskRequest::new(kind, kind.label()).policy(CancelPolicy::WorkerAcknowledged)
+}
+
+fn not_supported_hook() -> CancelHook {
+    Arc::new(|| CancelOutcome::NotSupported {
+        reason: "driver cannot cancel".to_string(),
+    })
+}
+
+fn status_of(manager: &TaskManager, id: TaskId) -> TaskStatus {
+    manager.get(id).expect("task exists").status
+}
+
+#[test]
+fn a_child_records_its_parent_and_children_of_lists_them_in_start_order() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let first = manager.start_handle(
+        TaskRequest::new(
+            TaskKind::Hook {
+                phase: HookPhase::PreConnect,
+            },
+            "a",
+        )
+        .parent(parent.id()),
+    );
+    let second =
+        manager.start_handle(TaskRequest::new(TaskKind::LoadSchema, "b").parent(parent.id()));
+    let unrelated = manager.start_handle(TaskRequest::new(TaskKind::Query, "q"));
+
+    assert_eq!(
+        manager.get(first.id()).unwrap().parent_id,
+        Some(parent.id())
+    );
+    assert_eq!(manager.get(parent.id()).unwrap().parent_id, None);
+    assert_eq!(manager.get(unrelated.id()).unwrap().parent_id, None);
+
+    let children: Vec<TaskId> = manager
+        .children_of(parent.id())
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(children, vec![first.id(), second.id()]);
+    assert!(manager.children_of(unrelated.id()).is_empty());
+}
+
+#[test]
+fn cancelling_a_parent_cascades_to_immediate_children() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let child =
+        manager.start_handle(TaskRequest::new(TaskKind::LoadSchema, "schema").parent(parent.id()));
+    let grandchild =
+        manager.start_handle(TaskRequest::new(TaskKind::Query, "q").parent(child.id()));
+
+    assert_eq!(
+        manager.request_cancel(parent.id()),
+        CancelRequestOutcome::Cancelled
+    );
+
+    for handle in [&parent, &child, &grandchild] {
+        assert_eq!(status_of(&manager, handle.id()), TaskStatus::Cancelled);
+        assert!(handle.is_cancelled());
+    }
+}
+
+#[test]
+fn a_parent_is_cancelled_only_after_every_acknowledged_child_stopped() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let first =
+        manager.start_handle(acknowledged_request(TaskKind::LoadSchema).parent(parent.id()));
+    let second = manager.start_handle(acknowledged_request(TaskKind::Export).parent(parent.id()));
+
+    assert_eq!(
+        manager.request_cancel(parent.id()),
+        CancelRequestOutcome::Cancelling
+    );
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+    assert_eq!(status_of(&manager, first.id()), TaskStatus::Cancelling);
+
+    assert!(manager.acknowledge_cancelled(first.id()));
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+
+    assert!(manager.acknowledge_cancelled(second.id()));
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn a_parent_cannot_be_acknowledged_while_a_child_is_still_stopping() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(acknowledged_request(TaskKind::Connect));
+    let child =
+        manager.start_handle(acknowledged_request(TaskKind::LoadSchema).parent(parent.id()));
+
+    manager.request_cancel(parent.id());
+
+    assert!(!manager.acknowledge_cancelled(parent.id()));
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+
+    assert!(manager.acknowledge_cancelled(child.id()));
+    assert!(manager.acknowledge_cancelled(parent.id()));
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn a_child_that_cannot_stop_keeps_the_parent_from_reading_cancelled() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let child = manager.start_handle(
+        acknowledged_request(TaskKind::SchemaDrop)
+            .cancel_hook(not_supported_hook())
+            .parent(parent.id()),
+    );
+
+    assert_eq!(
+        manager.request_cancel(parent.id()),
+        CancelRequestOutcome::Cancelling
+    );
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Running);
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+
+    manager.complete(child.id());
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn a_child_past_the_point_of_no_return_keeps_the_parent_from_reading_cancelled() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let child =
+        manager.start_handle(TaskRequest::new(TaskKind::SchemaDrop, "drop").parent(parent.id()));
+    manager.mark_point_of_no_return(child.id(), "DDL already sent");
+
+    assert_eq!(
+        manager.request_cancel(parent.id()),
+        CancelRequestOutcome::Cancelling
+    );
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Running);
+    assert!(!child.is_cancelled());
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+
+    manager.fail(child.id(), "boom");
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn a_parent_past_the_point_of_no_return_is_refused_but_its_children_are_cancelled() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::SchemaDrop, "drop"));
+    let child =
+        manager.start_handle(TaskRequest::new(TaskKind::LoadSchema, "reload").parent(parent.id()));
+    manager.mark_point_of_no_return(parent.id(), "DDL already sent");
+
+    assert_eq!(
+        manager.request_cancel(parent.id()),
+        CancelRequestOutcome::Refused {
+            reason: "DDL already sent".to_string()
+        }
+    );
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Running);
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn pending_children_are_skipped_when_the_parent_is_cancelled() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let pending = manager.start_handle(
+        TaskRequest::new(TaskKind::LoadSchema, "schema")
+            .pending()
+            .parent(parent.id()),
+    );
+
+    assert_eq!(status_of(&manager, pending.id()), TaskStatus::Pending);
+
+    manager.request_cancel(parent.id());
+
+    assert_eq!(status_of(&manager, pending.id()), TaskStatus::Skipped);
+    assert!(TaskStatus::Skipped.is_terminal());
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn activate_moves_a_pending_task_to_running_and_pending_is_not_in_flight() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let pending = manager.start_handle(
+        TaskRequest::new(TaskKind::LoadSchema, "schema")
+            .pending()
+            .parent(parent.id()),
+    );
+
+    assert!(!TaskStatus::Pending.is_terminal());
+    assert_eq!(manager.active_count(), 1);
+    assert_eq!(manager.running_tasks().len(), 1);
+    assert_eq!(
+        manager.background_task_count(),
+        1,
+        "only the running parent counts"
+    );
+    assert!(
+        manager
+            .children_of(parent.id())
+            .iter()
+            .any(|c| c.id == pending.id())
+    );
+
+    assert!(manager.activate(pending.id()));
+    assert_eq!(status_of(&manager, pending.id()), TaskStatus::Running);
+    assert_eq!(manager.active_count(), 2);
+    assert_eq!(manager.background_task_count(), 2);
+
+    assert!(
+        !manager.activate(pending.id()),
+        "only a pending task can be activated"
+    );
+    assert!(!manager.activate(TaskId::new_v4()));
+}
+
+#[test]
+fn a_pending_only_manager_has_no_running_tasks() {
+    let mut manager = TaskManager::new();
+    manager.start_handle(TaskRequest::new(TaskKind::Connect, "x").pending());
+
+    assert!(!manager.has_running_tasks());
+    assert_eq!(manager.current_status_message(), None);
+}
+
+#[test]
+fn completing_a_parent_leaves_its_running_children_untouched() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let child =
+        manager.start_handle(TaskRequest::new(TaskKind::LoadSchema, "schema").parent(parent.id()));
+
+    manager.complete(parent.id());
+
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Completed);
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Running);
+    assert!(!child.is_cancelled());
+
+    assert_eq!(
+        manager.request_cancel(parent.id()),
+        CancelRequestOutcome::NotRunning
+    );
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Running);
+}
+
+#[test]
+fn failing_a_parent_leaves_its_running_children_untouched() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    let child =
+        manager.start_handle(TaskRequest::new(TaskKind::LoadSchema, "schema").parent(parent.id()));
+
+    manager.fail(parent.id(), "boom");
+
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Running);
+}
+
+#[test]
+fn starting_with_the_same_supersede_key_cancels_the_older_task_and_reports_it() {
+    let mut manager = TaskManager::new();
+    let first =
+        manager.start_handle(TaskRequest::new(TaskKind::LoadSchema, "a").supersede_key("schema"));
+    assert!(first.superseded().is_empty());
+
+    let second =
+        manager.start_handle(TaskRequest::new(TaskKind::LoadSchema, "b").supersede_key("schema"));
+
+    assert_eq!(second.superseded(), &[first.id()]);
+    assert_eq!(status_of(&manager, first.id()), TaskStatus::Cancelled);
+    assert_eq!(status_of(&manager, second.id()), TaskStatus::Running);
+}
+
+#[test]
+fn supersede_is_honest_about_an_older_task_that_is_still_stopping() {
+    let mut manager = TaskManager::new();
+    let first = manager.start_handle(acknowledged_request(TaskKind::Query).supersede_key("q"));
+    let other =
+        manager.start_handle(TaskRequest::new(TaskKind::Query, "other").supersede_key("other"));
+
+    let second = manager.start_handle(TaskRequest::new(TaskKind::Query, "b").supersede_key("q"));
+
+    assert_eq!(second.superseded(), &[first.id()]);
+    assert_eq!(status_of(&manager, first.id()), TaskStatus::Cancelling);
+    assert_eq!(status_of(&manager, other.id()), TaskStatus::Running);
+}
+
+#[test]
+fn supersede_ignores_finished_tasks_and_other_keys() {
+    let mut manager = TaskManager::new();
+    let done = manager.start_handle(TaskRequest::new(TaskKind::Query, "a").supersede_key("q"));
+    manager.complete(done.id());
+
+    let next = manager.start_handle(TaskRequest::new(TaskKind::Query, "b").supersede_key("q"));
+
+    assert!(next.superseded().is_empty());
+    assert_eq!(status_of(&manager, done.id()), TaskStatus::Completed);
+}
+
+#[test]
+fn try_start_refuses_a_duplicate_of_the_same_kind_and_target() {
+    let mut manager = TaskManager::new();
+    let first = manager
+        .try_start(TaskRequest::new(TaskKind::SwitchDatabase, "switch").target(target(Some("a"))))
+        .expect("first start succeeds");
+
+    let busy = manager
+        .try_start(
+            TaskRequest::new(TaskKind::SwitchDatabase, "switch again").target(target(Some("a"))),
+        )
+        .err()
+        .expect("duplicate refused");
+
+    assert_eq!(busy.existing, first.id());
+    assert!(manager.is_busy(TaskKind::SwitchDatabase, &target(Some("a"))));
+    assert_eq!(
+        manager.active_count(),
+        1,
+        "a refused start registers nothing"
+    );
+}
+
+#[test]
+fn try_start_allows_a_different_database_kind_or_profile() {
+    let mut manager = TaskManager::new();
+    manager
+        .try_start(TaskRequest::new(TaskKind::SwitchDatabase, "s").target(target(Some("a"))))
+        .expect("first");
+
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::SwitchDatabase, "s").target(target(Some("b"))))
+            .is_ok()
+    );
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::SwitchDatabase, "s").target(target(None)))
+            .is_ok()
+    );
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::LoadSchema, "s").target(target(Some("a"))))
+            .is_ok()
+    );
+
+    let other_profile = TaskTarget {
+        profile_id: Uuid::from_u128(8),
+        database: Some("a".into()),
+    };
+    assert!(!manager.is_busy(TaskKind::SwitchDatabase, &other_profile));
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::SwitchDatabase, "s").target(other_profile))
+            .is_ok()
+    );
+}
+
+#[test]
+fn try_start_allows_a_new_task_once_the_first_finished() {
+    let mut manager = TaskManager::new();
+    let first = manager
+        .try_start(TaskRequest::new(TaskKind::Connect, "c").target(target(None)))
+        .expect("first");
+    manager.complete(first.id());
+
+    assert!(!manager.is_busy(TaskKind::Connect, &target(None)));
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::Connect, "c").target(target(None)))
+            .is_ok()
+    );
+}
+
+#[test]
+fn a_cancelling_task_still_blocks_try_start() {
+    let mut manager = TaskManager::new();
+    let first = manager
+        .try_start(acknowledged_request(TaskKind::SchemaDrop).target(target(Some("a"))))
+        .expect("first");
+    manager.request_cancel(first.id());
+    assert_eq!(status_of(&manager, first.id()), TaskStatus::Cancelling);
+
+    let busy = manager
+        .try_start(TaskRequest::new(TaskKind::SchemaDrop, "again").target(target(Some("a"))))
+        .err()
+        .expect("still busy");
+    assert_eq!(busy.existing, first.id());
+
+    manager.acknowledge_cancelled(first.id());
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::SchemaDrop, "again").target(target(Some("a"))))
+            .is_ok()
+    );
+}
+
+#[test]
+fn pending_tasks_do_not_block_try_start() {
+    let mut manager = TaskManager::new();
+    manager.start_handle(
+        TaskRequest::new(TaskKind::LoadSchema, "stage")
+            .target(target(None))
+            .pending(),
+    );
+
+    assert!(!manager.is_busy(TaskKind::LoadSchema, &target(None)));
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::LoadSchema, "real").target(target(None)))
+            .is_ok()
+    );
+}
+
+#[test]
+fn hook_kinds_share_one_group_whatever_their_phase() {
+    let mut manager = TaskManager::new();
+    manager
+        .try_start(
+            TaskRequest::new(
+                TaskKind::Hook {
+                    phase: HookPhase::PreConnect,
+                },
+                "h",
+            )
+            .target(target(None)),
+        )
+        .expect("first");
+
+    assert!(manager.is_busy(
+        TaskKind::Hook {
+            phase: HookPhase::PostConnect
+        },
+        &target(None)
+    ));
+    assert!(
+        manager
+            .try_start(
+                TaskRequest::new(
+                    TaskKind::Hook {
+                        phase: HookPhase::PostConnect
+                    },
+                    "h"
+                )
+                .target(target(None))
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn try_start_without_a_target_never_dedups() {
+    let mut manager = TaskManager::new();
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::Query, "a"))
+            .is_ok()
+    );
+    assert!(
+        manager
+            .try_start(TaskRequest::new(TaskKind::Query, "a"))
+            .is_ok()
+    );
+}
+
+#[test]
+fn legacy_start_paths_keep_their_behavior() {
+    let mut manager = TaskManager::new();
+    let (first, token) = manager.start_for_target(TaskKind::Query, "q", Some(target(None)));
+    let (second, _) = manager.start_for_target(TaskKind::Query, "q", Some(target(None)));
+
+    assert_eq!(
+        manager.active_count(),
+        2,
+        "legacy start does not dedup or supersede"
+    );
+    assert_eq!(manager.get(first).unwrap().parent_id, None);
+
+    assert!(manager.cancel(first));
+    assert!(token.is_cancelled());
+    assert_eq!(status_of(&manager, first), TaskStatus::Cancelled);
+    assert_eq!(status_of(&manager, second), TaskStatus::Running);
+}
