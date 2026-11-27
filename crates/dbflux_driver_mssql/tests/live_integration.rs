@@ -178,6 +178,116 @@ fn mssql_live_connect_ping_query_and_schema() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn mssql_sql_variant_column_decodes_each_base_type() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT v FROM (VALUES \
+                (1, CAST(42 AS sql_variant)), \
+                (2, CAST(N'text' AS sql_variant)), \
+                (3, CAST(CAST(3.50 AS decimal(5, 2)) AS sql_variant)), \
+                (4, CAST(NULL AS sql_variant)), \
+                (5, CAST(CAST(1 AS bit) AS sql_variant))\
+             ) AS t(ordinal, v) ORDER BY ordinal",
+        ))?;
+
+        let values: Vec<&Value> = result.rows.iter().map(|row| &row[0]).collect();
+        assert_eq!(
+            values,
+            vec![
+                &Value::Int(42),
+                &Value::Text("text".to_string()),
+                &Value::Decimal("3.50".to_string()),
+                &Value::Null,
+                &Value::Bool(true),
+            ]
+        );
+
+        // The connection must stay usable after decoding sql_variant rows.
+        let follow_up = connection.execute(&QueryRequest::new("SELECT 1 AS one"))?;
+        assert_eq!(follow_up.rows, vec![vec![Value::Int(1)]]);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_sql_variant_query_from_issue_1434_returns_rows() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT f.name, f.value \
+             FROM sys.server_event_sessions s \
+             JOIN sys.server_event_session_fields f \
+                 ON s.event_session_id = f.event_session_id \
+             WHERE s.name = 'system_health' \
+             AND f.name IN ('max_file_size', 'max_rollover_files') \
+             ORDER BY f.name",
+        ))?;
+
+        let names: Vec<&Value> = result.rows.iter().map(|row| &row[0]).collect();
+        assert_eq!(
+            names,
+            vec![
+                &Value::Text("max_file_size".to_string()),
+                &Value::Text("max_rollover_files".to_string()),
+            ]
+        );
+        assert!(
+            result.rows.iter().all(|row| row[1] != Value::Null),
+            "sql_variant values should decode, got {:?}",
+            result.rows
+        );
+
+        Ok(())
+    })
+}
+
+/// tiberius 0.13 cuts off any response that takes longer than 30 seconds by
+/// default; the driver has no statement timeout, so a slow query must finish.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_longer_than_thirty_seconds_completes() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        let result = connection.execute(&QueryRequest::new(
+            "WAITFOR DELAY '00:00:32'; SELECT 1 AS done",
+        ))?;
+        assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
+
+        Ok(())
+    })
+}
+
+/// An ADO connection string without `Encrypt=` keeps the session unencrypted
+/// after login, as it did before tiberius 0.13 changed that default from
+/// `Off` to `Required`.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ado_string_without_encrypt_keeps_encryption_off() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (host, port) = parse_host_port_from_uri(&uri);
+        let ado = format!(
+            "Server=tcp:{host},{port};User Id=sa;Password={};TrustServerCertificate=true;",
+            containers::MSSQL_TEST_PASSWORD
+        );
+
+        let (connection, _) = connect_mssql(ado)?;
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID",
+        ))?;
+        assert_eq!(result.rows, vec![vec![Value::Text("FALSE".to_string())]]);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn mssql_fetch_dependents_lists_views_and_foreign_key_children() -> Result<(), DbError> {
     containers::with_mssql_url(|uri| {
         let (connection, _) = connect_mssql(uri)?;
