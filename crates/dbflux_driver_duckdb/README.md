@@ -61,6 +61,7 @@ Embedded analytical database, with optional DuckLake catalogs.
   1 000 000 rows** fills in nulls, approximate distinct counts
   (`approx_count_distinct`) and ranges on request, and is recorded in the
   audit log. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
+- Structured query plan (`Connection::query_plan`): runs `EXPLAIN (FORMAT JSON)` on exactly one statement, never `EXPLAIN ANALYZE`, so the statement is not executed, and maps the physical plan tree (operator, table, estimated cardinality, other attributes) into the driver-agnostic plan model. DuckDB reports no costs. A query with several statements, or an empty one, is refused before anything is sent.
 
 ## Limitations
 

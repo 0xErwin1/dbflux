@@ -531,6 +531,124 @@ fn mysql_explain() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn mysql_query_plan_is_structured_and_never_runs_the_statement() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name VARCHAR(20), KEY idx_name (name))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO plan_test (id, name) VALUES (1, 'kept')",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "SELECT * FROM plan_test WHERE name = 'kept'",
+        ))?;
+        assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Json);
+        assert_eq!(plan.roots.len(), 1);
+        let table = &plan.roots[0].children[0];
+        assert_eq!(table.relation.as_deref(), Some("plan_test"));
+        assert_eq!(table.index.as_deref(), Some("idx_name"));
+        assert!(plan.roots[0].estimated_total_cost.is_some());
+
+        connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "DELETE FROM plan_test WHERE id = 1",
+        ))?;
+        let remaining = connection.execute(&QueryRequest::new("SELECT count(*) FROM plan_test"))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+        let multiple =
+            connection.query_plan(&dbflux_core::QueryPlanRequest::new("SELECT 1; SELECT 2"));
+        assert!(multiple.is_err());
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_plan_never_runs_a_writing_stored_function() -> Result<(), DbError> {
+    // MySQL 5.7 runs a stored function found in a derived table while explaining.
+    containers::with_mysql_57_url(|uri| {
+        let (connection, _) = connect_mysql(uri.clone())?;
+        connection.set_active_database(Some("testdb"))?;
+
+        connection.execute(&QueryRequest::new("CREATE TABLE fn_t1 (a INT)"))?;
+        connection.execute(&QueryRequest::new("CREATE TABLE fn_t2 (b INT)"))?;
+        connection.execute(&QueryRequest::new("INSERT INTO fn_t1 VALUES (1)"))?;
+
+        // The driver's statement splitter cannot create a function with a body.
+        let setup_opts = mysql::Opts::from_url(&uri)
+            .map_err(|e| DbError::query_failed(format!("setup options invalid: {e}")))?;
+        let mut setup = mysql::Conn::new(setup_opts)
+            .map_err(|e| DbError::query_failed(format!("setup connect failed: {e}")))?;
+        setup
+            .query_drop("SET GLOBAL log_bin_trust_function_creators = 1")
+            .map_err(|e| DbError::query_failed(format!("setup failed: {e}")))?;
+        setup
+            .query_drop("USE testdb")
+            .map_err(|e| DbError::query_failed(format!("setup failed: {e}")))?;
+        setup
+            .query_drop(
+                "CREATE FUNCTION fn_writer(i INT) RETURNS INT DETERMINISTIC MODIFIES SQL DATA \
+                 BEGIN INSERT INTO fn_t2 VALUES (i); RETURN i; END",
+            )
+            .map_err(|e| DbError::query_failed(format!("function setup failed: {e}")))?;
+
+        let outcome = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "SELECT * FROM fn_t1 AS a1, (SELECT fn_writer(5)) AS a2",
+        ));
+        let written = connection.execute(&QueryRequest::new("SELECT COUNT(*) FROM fn_t2"))?;
+        assert_eq!(written.rows[0][0], Value::Int(0), "the function ran");
+        assert!(
+            outcome.is_err(),
+            "a plan that would run a writing function must be refused, got {outcome:?}"
+        );
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "INSERT INTO fn_t1 VALUES (2)",
+        ))?;
+        assert!(!plan.roots.is_empty());
+        let rows = connection.execute(&QueryRequest::new("SELECT COUNT(*) FROM fn_t1"))?;
+        assert_eq!(rows.rows[0][0], Value::Int(1));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_plan_works_when_the_session_uses_json_format_version_2() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_v2 (id INT PRIMARY KEY, name VARCHAR(20))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "SET SESSION explain_json_format_version = 2",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "SELECT * FROM plan_v2 WHERE id = 1",
+        ))?;
+        assert!(!plan.roots.is_empty());
+        assert!(plan.raw.contains("query_block"), "{}", plan.raw);
+
+        let version = connection.execute(&QueryRequest::new(
+            "SELECT CAST(@@session.explain_json_format_version AS CHAR)",
+        ))?;
+        assert_eq!(version.rows[0][0], Value::Int(2));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn mysql_describe_table() -> Result<(), DbError> {
     containers::with_mysql_url(|uri| {
         let (connection, _) = connect_mysql(uri)?;

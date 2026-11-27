@@ -2946,7 +2946,16 @@ impl Connection for MysqlConnection {
         };
 
         let sql = format!("EXPLAIN FORMAT=JSON {}", query);
-        self.execute(&QueryRequest::new(sql))
+        self.execute_plan_statement(&sql, &query)
+    }
+
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        let sql = crate::plan::explain_statement(&request.query)?;
+        let result = self.execute_plan_statement(&sql, &request.query)?;
+        crate::plan::parse_explain_json(&dbflux_core::plan_text_from_result(&result)?)
     }
 
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
@@ -3345,13 +3354,68 @@ fn mysql_execute_read_only(
     cancelled: &AtomicBool,
     limit: Option<u32>,
 ) -> Result<QueryResult, DbError> {
+    mysql_execute_rolled_back(
+        conn,
+        sql,
+        statements,
+        TransactionAccess::ReadOnly,
+        start,
+        cancelled,
+        limit,
+    )
+}
+
+/// Sets the session's `explain_json_format_version` to 1 when it is something
+/// else, returning the value to restore. Servers without the variable (MariaDB,
+/// MySQL before 8.3) already return version 1 and yield `None`.
+fn pin_json_format_version(conn: &mut Conn) -> Option<String> {
+    let current: Option<String> = conn
+        .query_first("SELECT CAST(@@session.explain_json_format_version AS CHAR)")
+        .ok()
+        .flatten();
+    let current = current.filter(|version| version != "1")?;
+
+    match conn.query_drop("SET SESSION explain_json_format_version = 1") {
+        Ok(()) => Some(current),
+        Err(error) => {
+            log::warn!("[PLAN] could not set explain_json_format_version: {error}");
+            None
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TransactionAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
+/// Runs a request inside a transaction that is always rolled back: a read-only
+/// one, which the server refuses to write in, or a read-write one for an
+/// `EXPLAIN` of a write, which the server refuses in a read-only transaction.
+/// The probes are those of [`mysql_execute_read_only`].
+fn mysql_execute_rolled_back(
+    conn: &mut Conn,
+    sql: &str,
+    statements: &[String],
+    access: TransactionAccess,
+    start: Instant,
+    cancelled: &AtomicBool,
+    limit: Option<u32>,
+) -> Result<QueryResult, DbError> {
     if matches!(read_in_transaction_variable(conn), Ok(true)) {
         return Err(open_transaction_refusal());
     }
 
-    set_transaction_probe_verdict(conn.query_drop("SET TRANSACTION READ ONLY"))?;
+    let (probe, begin) = match access {
+        TransactionAccess::ReadOnly => ("SET TRANSACTION READ ONLY", "START TRANSACTION READ ONLY"),
+        TransactionAccess::ReadWrite => {
+            ("SET TRANSACTION READ WRITE", "START TRANSACTION READ WRITE")
+        }
+    };
+    set_transaction_probe_verdict(conn.query_drop(probe))?;
 
-    conn.query_drop("START TRANSACTION READ ONLY")
+    conn.query_drop(begin)
         .map_err(|error| format_mysql_query_error(&error))?;
 
     let outcome = if statements.len() > 1 {
@@ -3363,7 +3427,7 @@ fn mysql_execute_read_only(
     match conn.query_drop("ROLLBACK") {
         Ok(()) => outcome,
         Err(error) => {
-            log::warn!("[TRANSACTION] ROLLBACK of a read-only request failed: {error}");
+            log::warn!("[TRANSACTION] ROLLBACK of a rolled-back request failed: {error}");
             outcome.and(Err(format_mysql_query_error(&error)))
         }
     }
@@ -4402,6 +4466,64 @@ fn index_key_part_label(column_name: Option<String>, expression: Option<String>)
 // Code generators
 
 impl MysqlConnection {
+    /// Runs an `EXPLAIN` of `explained` inside a transaction that is rolled back.
+    ///
+    /// Some servers (MySQL 5.7, for one) run a stored function that appears
+    /// in a derived table while explaining, so a plain `EXPLAIN` of a query
+    /// that calls a writing function would write and commit. An explained read
+    /// runs in a read-only transaction, so the server refuses that write. An
+    /// explained write cannot, because the server refuses to explain a write in
+    /// a read-only transaction; it runs in a read-write transaction that is
+    /// rolled back, which undoes the writes of transactional tables.
+    fn execute_plan_statement(&self, sql: &str, explained: &str) -> Result<QueryResult, DbError> {
+        self.cancelled.store(false, Ordering::SeqCst);
+        let start = Instant::now();
+
+        let mut state = match self.query_conn.lock() {
+            Ok(guard) => guard,
+            Err(poison_err) => poison_err.into_inner(),
+        };
+
+        if state.table_locks_possible {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: a query plan cannot run while this session may hold LOCK TABLES locks, which START TRANSACTION would release; run UNLOCK TABLES first. The request was rejected before execution".to_string(),
+            ));
+        }
+
+        let statements = QueryLanguage::Sql.split_statements(sql);
+        let access = if ensure_read_only_statements(&QueryLanguage::Sql.split_statements(explained))
+            .is_ok()
+        {
+            TransactionAccess::ReadOnly
+        } else {
+            TransactionAccess::ReadWrite
+        };
+
+        // MySQL 8.3+ can return a different JSON shape when the session asks
+        // for `explain_json_format_version = 2`; the plan parser reads version 1.
+        let restore_version = pin_json_format_version(&mut state.conn);
+
+        let result = mysql_execute_rolled_back(
+            &mut state.conn,
+            sql,
+            &statements,
+            access,
+            start,
+            &self.cancelled,
+            None,
+        );
+
+        if let Some(previous) = restore_version
+            && let Err(error) = state.conn.query_drop(format!(
+                "SET SESSION explain_json_format_version = {previous}"
+            ))
+        {
+            log::warn!("[PLAN] could not restore explain_json_format_version: {error}");
+        }
+
+        result
+    }
+
     fn mysql_generate_create_table(&self, table: &TableInfo) -> Result<String, DbError> {
         let mut conn = self
             .catalog_conn

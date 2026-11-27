@@ -1380,6 +1380,15 @@ impl Connection for SqliteConnection {
         self.execute(&QueryRequest::new(sql))
     }
 
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        let sql = crate::plan::explain_statement(&request.query)?;
+        let result = self.execute(&QueryRequest::new(sql))?;
+        dbflux_core::parse_sqlite_query_plan(&result)
+    }
+
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
         let sql = format!(
             "PRAGMA table_info({})",

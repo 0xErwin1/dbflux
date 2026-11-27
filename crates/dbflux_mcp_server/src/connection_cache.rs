@@ -184,6 +184,13 @@ impl Connection for CachedConnection {
         self.connection.explain(request)
     }
 
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        self.connection.query_plan(request)
+    }
+
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
         self.connection.describe_table(request)
     }

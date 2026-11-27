@@ -18,6 +18,7 @@
 - 인증, SSL, SSH 터널링, URI/수동 연결 모드를 지원합니다. libpq와 마찬가지로 `verify-ca`는 인증서 체인만 검증하고, `verify-full`은 호스트 이름도 확인합니다.
 - TLS 인증서 파일: Connection Manager의 루트 인증서, 클라이언트 인증서, 클라이언트 키 필드 또는 libpq URI 매개변수 `sslrootcert`, `sslcert`, `sslkey`(예: `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). `verify-ca`와 `verify-full`에서는 루트 인증서가 신뢰할 수 있는 루트에 추가되며, 체인을 검증하지 않는 다른 모드에서는 무시됩니다. 클라이언트 인증서와 키는 `disable`을 제외한 모든 모드에서 상호 TLS용으로 제시됩니다. 파일은 PEM 형식이며 클라이언트 키는 PKCS#8이어야 합니다. 파일이 없거나 읽을 수 없거나 유효하지 않은 경우, 또는 키 없이 클라이언트 인증서만 있는 경우(또는 그 반대)에는 연결을 시도하기 전에 해당 파일을 명시한 오류로 연결이 실패합니다. `sslmode=disable`에서는 파일이 무시됩니다.
 - PostgreSQL 취소 토큰을 통한 쿼리 취소를 지원합니다.
+- 구조화된 쿼리 계획(`Connection::query_plan`): 정확히 하나의 문에 `EXPLAIN (FORMAT JSON)`을 실행하며 `ANALYZE`는 절대 사용하지 않으므로 문은 실행되지 않습니다. 계획 트리(작업, 릴레이션, 인덱스, 예상 비용과 행 수, 기타 속성)를 드라이버에 독립적인 계획 모델로 매핑합니다. 여러 문으로 된 쿼리나 빈 쿼리는 아무것도 전송하기 전에 거부됩니다.
 - CRUD, 인덱스, reindex, 외래 키, 타입 작업을 위한 PostgreSQL 전용 SQL/코드 생성을 포함합니다.
 - 다중 문 스크립트(여러 개의 `;`로 구분된 문)는 단순 쿼리 프로토콜을 통해 배치로 실행되며 문마다 하나의 결과 집합을 반환합니다.
 - 쿼리가 발생시킨 서버 알림과 경고(예: 단독 `COMMIT`의 `WARNING: there is no transaction in progress` 또는 `RAISE NOTICE`)는 그 결과와 함께 반환됩니다. 배치는 모든 알림을 기본 결과에 붙이며, 실패한 쿼리는 알림을 버립니다. 쿼리는 처음 100개의 알림을 유지하고, 나머지 개수를 알려 주는 알림 하나를 덧붙입니다.

@@ -10,6 +10,7 @@
 )]
 
 pub mod driver;
+mod plan;
 mod table_rebuild;
 
 pub use driver::{METADATA, SQLITE_FORM, SqliteDriver};

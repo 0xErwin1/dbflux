@@ -1879,6 +1879,17 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Structured execution plan for a single query, without running it.
+    ///
+    /// Drivers run their native EXPLAIN and map the output into the
+    /// driver-agnostic [`QueryPlan`](crate::QueryPlan). Unlike [`Self::explain`],
+    /// this returns a tree rather than a raw result set.
+    fn query_plan(&self, _request: &crate::QueryPlanRequest) -> Result<crate::QueryPlan, DbError> {
+        Err(DbError::NotSupported(
+            "Query plans are not supported by this driver".to_string(),
+        ))
+    }
+
     /// Describe a table's structure (columns, types, constraints).
     ///
     /// Returns the result as a query result set, similar to what `DESCRIBE table`
@@ -2396,6 +2407,20 @@ mod tests {
             StubConnection.collection_facets(&crate::CollectionRef::new("app", "events")),
             vec![crate::ObjectFacet::Tabular]
         );
+    }
+
+    #[test]
+    fn query_plan_defaults_to_not_supported_with_a_clear_message() {
+        let error = StubConnection
+            .query_plan(&crate::QueryPlanRequest::new("SELECT 1"))
+            .expect_err("the default must refuse");
+
+        match error {
+            DbError::NotSupported(message) => {
+                assert_eq!(message, "Query plans are not supported by this driver");
+            }
+            other => panic!("expected NotSupported, got {other:?}"),
+        }
     }
 
     /// Minimal Connection stub that only implements the required methods and

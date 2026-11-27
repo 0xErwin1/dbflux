@@ -47,6 +47,7 @@ Remote Turso / libSQL database over HTTP.
   any other SQL driver.
 - Error classification for auth failures, constraint violations, syntax errors,
   missing objects, and busy servers, without leaking response bodies.
+- Structured query plan (`Connection::query_plan`): runs `EXPLAIN QUERY PLAN` on exactly one statement, so the statement is not executed, and builds the plan tree from the `id`/`parent` rows with the parser shared with SQLite (operation, relation, index, access condition). No costs or row estimates are reported. A query with several statements, or an empty one, is refused before anything is sent.
 
 ## Limitations
 

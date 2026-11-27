@@ -194,7 +194,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_case_expressions: true,
         supports_window_functions: true,
         supports_ctes: true,
-        supports_explain: false,
+        supports_explain: true,
         max_query_parameters: 2100,
         max_order_by_columns: 0,
         max_group_by_columns: 0,
@@ -1641,6 +1641,72 @@ impl MssqlConnection {
         }
     }
 
+    /// Capture the estimated plan of one statement with `SHOWPLAN_XML`.
+    ///
+    /// `SHOWPLAN_XML` is session state, so ON, the statement and OFF run in a
+    /// single `block_on` while this method holds the `inner` lock. No other
+    /// request can interleave on the shared client, and OFF is issued on every
+    /// path by `capture_showplan`. When OFF cannot be confirmed the client is
+    /// dropped and the connection poisoned, so the next use opens a fresh
+    /// session instead of returning plans where rows were expected.
+    fn run_showplan(&self, statement: &str) -> Result<Vec<String>, DbError> {
+        self.recover_session()?;
+
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poison_err) => poison_err.into_inner(),
+        };
+        let inner = &mut *guard;
+        // The client is taken out of the shared slot for the ON..OFF window and
+        // only put back once OFF succeeded. If anything unwinds in between, the
+        // client is dropped with the stack and the guard marks the connection
+        // poisoned, so a poisoned mutex can never hand out a client that is
+        // still in plan mode.
+        let mut client = inner.client.take().ok_or_else(|| {
+            DbError::ConnectionFailed("SQL Server connection has been closed".to_string().into())
+        })?;
+        let mut unwind_guard = crate::plan::RestoreGuard::new(|| {
+            self.poisoned.store(true, Ordering::SeqCst);
+        });
+
+        let mut session = ShowplanClient {
+            client: &mut client,
+            transport_lost: false,
+        };
+        let run = inner
+            .runtime
+            .block_on(crate::plan::capture_showplan(&mut session, statement));
+        let transport_lost = session.transport_lost;
+
+        if run.restore.is_ok() && !transport_lost {
+            inner.client = Some(client);
+            unwind_guard.disarm();
+        } else {
+            self.poisoned.store(true, Ordering::SeqCst);
+            unwind_guard.disarm();
+        }
+        drop(guard);
+
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(DbError::Cancelled);
+        }
+
+        match run.restore {
+            Err(restore_error) => {
+                if let Err(plan_error) = &run.plan {
+                    log::warn!("[PLAN] Plan request failed before SHOWPLAN reset: {plan_error}");
+                }
+                log::error!(
+                    "[PLAN] SET SHOWPLAN_XML OFF failed, dropping the session: {restore_error}"
+                );
+                Err(DbError::query_failed(format!(
+                    "SET SHOWPLAN_XML OFF failed, so the connection was reset: {restore_error}"
+                )))
+            }
+            Ok(()) => run.plan,
+        }
+    }
+
     /// Re-establish the session if a cancel or a lost transport left it dead.
     fn recover_session(&self) -> Result<(), DbError> {
         if self.poisoned.load(Ordering::SeqCst) {
@@ -1825,6 +1891,43 @@ impl MssqlConnection {
                     error.with_transaction_note(TransactionStateNote::StillOpen)
                 }
             },
+        }
+    }
+}
+
+/// Runs the batches of one SHOWPLAN capture on the locked client, noting a
+/// lost transport so the caller can drop the dead session.
+struct ShowplanClient<'client> {
+    client: &'client mut TiberiusClient,
+    transport_lost: bool,
+}
+
+impl crate::plan::ShowplanSession for ShowplanClient<'_> {
+    async fn batch(&mut self, sql: &str) -> Result<Vec<String>, DbError> {
+        let outcome = async {
+            let results = self
+                .client
+                .simple_query(sql.to_string())
+                .await?
+                .into_results()
+                .await?;
+            Ok::<_, tiberius::error::Error>(results)
+        }
+        .await;
+
+        match outcome {
+            Ok(results) => Ok(results
+                .iter()
+                .filter_map(|set| set.first())
+                .filter_map(|row| match tiberius_value_to_value(row, 0) {
+                    Value::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect()),
+            Err(error) => {
+                self.transport_lost |= is_transport_lost(&error);
+                Err(format_mssql_query_error(&error))
+            }
         }
     }
 }
@@ -3332,20 +3435,11 @@ impl Connection for MssqlConnection {
 
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
         // SQL Server requires SET SHOWPLAN_XML to be the only statement in
-        // its batch, so we run three separate batches: turn it on, run the
-        // query (which compiles but does not execute, returning the plan
-        // as a single nvarchar(max) row), then turn it off. We unset
-        // SHOWPLAN even if the middle batch fails so the session state
-        // does not leak.
-
-        // Mirror `execute()`'s poison/cleanup pattern: a prior cancel may
-        // have left the underlying tiberius client dead. Without this an
-        // EXPLAIN issued after a cancel would hit a closed socket and
-        // surface a protocol-level error instead of triggering reconnect.
-        if self.poisoned.load(Ordering::SeqCst) {
-            self.cleanup_after_cancel()?;
-        }
-
+        // its batch. `run_showplan` issues ON, the query (which compiles but
+        // does not execute, returning the plan as one nvarchar(max) row) and
+        // OFF while holding the client lock, so no other request can
+        // interleave and make the query really run or the session keep
+        // returning plans.
         let query = match &request.query {
             Some(q) => q.clone(),
             None => format!(
@@ -3354,21 +3448,53 @@ impl Connection for MssqlConnection {
             ),
         };
 
-        self.execute_simple("SET SHOWPLAN_XML ON")?;
-        let plan_result = self.execute_simple(&query);
-        // If the cleanup batch fails, every subsequent query on this session
-        // keeps returning XML plan rows instead of real data (SHOWPLAN is
-        // session-scoped). Mark the connection poisoned so the next
-        // `execute()` rebuilds the tiberius client via `cleanup_after_cancel`,
-        // which starts a fresh session with SHOWPLAN off.
-        if let Err(off_err) = self.execute_simple("SET SHOWPLAN_XML OFF") {
-            log::error!(
-                "[EXPLAIN] SET SHOWPLAN_XML OFF failed, poisoning session: {}",
-                off_err
-            );
-            self.poisoned.store(true, Ordering::SeqCst);
+        let start = Instant::now();
+        let mut plans = self.run_showplan(&query)?;
+        let Some(primary) = plans.pop() else {
+            return Err(DbError::query_failed("SHOWPLAN_XML returned no plan"));
+        };
+
+        let column = ColumnMeta {
+            name: "Microsoft SQL Server 2005 XML Showplan".to_string(),
+            type_name: "NVarChar".to_string(),
+            kind: dbflux_core::ColumnKind::Text,
+            nullable: true,
+            is_primary_key: false,
+        };
+
+        let elapsed = start.elapsed();
+        let plan_set = |plan: String| {
+            QueryResult::table(
+                vec![column.clone()],
+                vec![vec![Value::Text(plan)]],
+                None,
+                elapsed,
+            )
+        };
+
+        // Same shape as a batch run through `execute`: the last set is the
+        // primary result and the earlier ones follow in `additional_results`.
+        let mut result = plan_set(primary);
+        for plan in plans {
+            result.push_additional_result(plan_set(plan));
         }
-        plan_result
+        Ok(result)
+    }
+
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        let statement = crate::plan::plan_statement(&request.query)?;
+
+        match self.run_showplan(&statement) {
+            Ok(plans) => match plans.first() {
+                Some(raw) => crate::plan::parse_showplan_xml(raw),
+                None => Err(DbError::query_failed("SHOWPLAN_XML returned no plan")),
+            },
+            Err(error) if is_kill_error(&error) => Err(DbError::Cancelled),
+            Err(error) => Err(error),
+        }
     }
 
     fn dialect(&self) -> &dyn SqlDialect {

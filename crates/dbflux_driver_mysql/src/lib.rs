@@ -12,6 +12,7 @@
 pub mod driver;
 pub mod instance_catalog;
 pub mod language_service;
+mod plan;
 
 pub use driver::{MARIADB_METADATA, MYSQL_FORM, MYSQL_METADATA, MysqlDriver};
 pub use language_service::MySqlLanguageService;

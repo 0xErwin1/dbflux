@@ -1077,6 +1077,14 @@ impl Connection for TursoConnection {
         self.run_sql(&format!("EXPLAIN QUERY PLAN {query}"))
     }
 
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        let result = self.run_sql(&crate::plan::explain_statement(&request.query)?)?;
+        dbflux_core::parse_sqlite_query_plan(&result)
+    }
+
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
         self.pragma("table_info", &request.table.name)
     }

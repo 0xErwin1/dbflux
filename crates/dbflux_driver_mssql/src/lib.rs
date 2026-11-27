@@ -12,6 +12,7 @@
 pub mod driver;
 pub mod instance_catalog;
 pub mod language_service;
+mod plan;
 
 pub use driver::{METADATA, MssqlDialect, MssqlDriver, SQLSERVER_FORM};
 pub use language_service::TSqlLanguageService;
