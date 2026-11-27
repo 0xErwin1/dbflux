@@ -2971,8 +2971,7 @@ impl Connection for MysqlConnection {
                 // The statement runs, so it always runs in a read-only
                 // transaction that is rolled back; the server refuses any
                 // write that got past the classifier.
-                let result =
-                    self.execute_plan_in_transaction(&sql, TransactionAccess::ReadOnly)?;
+                let result = self.execute_plan_in_transaction(&sql, TransactionAccess::ReadOnly)?;
                 let raw = dbflux_core::plan_text_from_result(&result)?;
 
                 match self.kind {

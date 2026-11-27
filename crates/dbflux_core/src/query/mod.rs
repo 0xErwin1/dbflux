@@ -53,8 +53,7 @@ pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, sugge
 pub use plan::{
     ESTIMATE_GAP_THRESHOLD, EstimateGap, PlanCondition, PlanFormat, PlanNode, QueryPlan,
     QueryPlanMode, QueryPlanRequest, analyze_allowed, analyze_statement, analyze_unsupported,
-    parse_sqlite_query_plan, plan_text_from_result, single_plan_statement,
-    sqlite_plan_statement,
+    parse_sqlite_query_plan, plan_text_from_result, single_plan_statement, sqlite_plan_statement,
 };
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{
