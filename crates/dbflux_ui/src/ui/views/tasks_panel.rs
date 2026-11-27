@@ -148,7 +148,7 @@ impl TasksPanel {
             has_output: has_output(&task),
             output_shown: self.expanded_task_ids.contains(&task.id),
             cancellable: task.is_cancellable,
-            finished: task.status != TaskStatus::Running,
+            finished: task.status.is_terminal(),
         })
     }
 
@@ -180,7 +180,7 @@ impl TasksPanel {
     /// the dismiss button of a failed task. Returns `false` while it runs.
     pub fn dismiss_selected(&mut self, cx: &mut Context<Self>) -> bool {
         match self.selected_task(cx) {
-            Some(task) if task.status != TaskStatus::Running => {
+            Some(task) if task.status.is_terminal() => {
                 self.dismiss_task(task.id, cx);
                 true
             }
@@ -192,7 +192,7 @@ impl TasksPanel {
     pub fn has_finished_tasks(&self, cx: &App) -> bool {
         self.visible_tasks(cx)
             .iter()
-            .any(|task| task.status != TaskStatus::Running)
+            .any(|task| task.status.is_terminal())
     }
 
     pub fn set_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
@@ -300,7 +300,7 @@ impl TasksPanel {
                 .tasks()
                 .recent_tasks(usize::MAX)
                 .into_iter()
-                .filter(|task| task.status != TaskStatus::Running)
+                .filter(|task| task.status.is_terminal())
                 .map(|task| task.id)
                 .collect();
 
@@ -331,7 +331,9 @@ impl TasksPanel {
 
     fn status_icon(status: &TaskStatus, theme: &gpui_component::Theme) -> (AppIcon, Hsla) {
         match status {
-            TaskStatus::Running => (AppIcon::Loader, ChromeColors::tint(theme)),
+            TaskStatus::Running | TaskStatus::Cancelling => {
+                (AppIcon::Loader, ChromeColors::tint(theme))
+            }
             TaskStatus::Completed => (AppIcon::CircleCheck, theme.success),
             TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger),
             TaskStatus::Cancelled => (AppIcon::CircleX, theme.muted_foreground),
@@ -420,7 +422,7 @@ impl TasksPanel {
         let task_kind = task.kind;
         let task_profile_id = task.profile_id;
         let is_cancellable = task.is_cancellable;
-        let is_running = task.status == TaskStatus::Running;
+        let is_running = !task.status.is_terminal();
         let failure = match &task.status {
             TaskStatus::Failed(error) => Some(error.clone()),
             _ => None,
@@ -647,7 +649,7 @@ fn visible_finished_tasks(recent_tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> 
     recent_tasks
         .into_iter()
         .filter(|task| match task.status {
-            TaskStatus::Running => false,
+            TaskStatus::Running | TaskStatus::Cancelling => false,
             TaskStatus::Failed(_) => true,
             TaskStatus::Completed | TaskStatus::Cancelled => {
                 other_finished_count += 1;

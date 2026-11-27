@@ -2220,6 +2220,25 @@ impl AppState {
         self.facade.tasks.fail_with_details(id, error, details);
     }
 
+    pub fn start_task_handle(
+        &mut self,
+        request: dbflux_core::TaskRequest,
+    ) -> dbflux_core::TaskHandle {
+        self.facade.tasks.start_handle(request)
+    }
+
+    pub fn request_cancel_task(&mut self, id: TaskId) -> dbflux_core::CancelRequestOutcome {
+        self.facade.tasks.request_cancel(id)
+    }
+
+    pub fn acknowledge_task_cancelled(&mut self, id: TaskId) -> bool {
+        self.facade.tasks.acknowledge_cancelled(id)
+    }
+
+    pub fn mark_task_point_of_no_return(&mut self, id: TaskId, reason: impl Into<String>) {
+        self.facade.tasks.mark_point_of_no_return(id, reason);
+    }
+
     #[allow(dead_code)]
     pub fn cancel_task(&mut self, id: TaskId) -> bool {
         self.facade.tasks.cancel(id)
