@@ -1280,19 +1280,24 @@ impl MssqlDriver {
         let config = if is_mssql_url {
             parse_mssql_url(&uri).map_err(|e| format_mssql_uri_error(&e, base_uri))?
         } else {
-            let mut config = Config::from_ado_string(&uri)
-                .or_else(|_| Config::from_jdbc_string(&uri))
-                .map_err(|e| format_mssql_uri_error(&e, base_uri))?;
+            let (mut config, dialect) = match Config::from_ado_string(&uri) {
+                Ok(config) => (config, ConnectionStringDialect::Ado),
+                Err(_) => (
+                    Config::from_jdbc_string(&uri)
+                        .map_err(|e| format_mssql_uri_error(&e, base_uri))?,
+                    ConnectionStringDialect::Jdbc,
+                ),
+            };
 
             // tiberius parses `Application Name=` / `ApplicationName=` out of
             // the raw string but exposes no getter on `Config`, so we scan
             // the same raw string ourselves to decide whether the caller
             // already set one before applying our default.
-            if !ado_sets_application_name(&uri) {
+            if !ado_sets_application_name(&uri, dialect) {
                 config.application_name(dbflux_core::client_identity());
             }
 
-            if !ado_sets_encrypt(&uri) {
+            if !ado_sets_encrypt(&uri, dialect) {
                 config.encryption(EncryptionLevel::Off);
             }
 
@@ -4776,8 +4781,8 @@ fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Err
 ///
 /// `Config` parses this out internally but exposes no getter, so we scan the
 /// same raw string tiberius parsed rather than re-deriving it from a `Config`.
-fn ado_sets_application_name(s: &str) -> bool {
-    ado_declares_key(s, &["application name", "applicationname"])
+fn ado_sets_application_name(s: &str, dialect: ConnectionStringDialect) -> bool {
+    ado_declares_key(s, dialect, &["application name", "applicationname"])
 }
 
 /// Detects whether a raw ADO/JDBC connection string declares `Encrypt`.
@@ -4785,21 +4790,34 @@ fn ado_sets_application_name(s: &str) -> bool {
 /// tiberius 0.13 defaults a missing `Encrypt` to `Required` (it was `Off`
 /// before), which validates the server certificate and would break existing
 /// connection strings that never asked for encryption.
-fn ado_sets_encrypt(s: &str) -> bool {
-    ado_declares_key(s, &["encrypt"])
+fn ado_sets_encrypt(s: &str, dialect: ConnectionStringDialect) -> bool {
+    ado_declares_key(s, dialect, &["encrypt"])
 }
 
-fn ado_declares_key(s: &str, keys: &[&str]) -> bool {
-    ado_property_keys(s).any(|key| keys.contains(&key.as_str()))
+/// The connection-string syntax tiberius accepted, which decides how a value
+/// may be quoted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectionStringDialect {
+    /// ADO.NET: single quotes, double quotes and braces delimit a value.
+    Ado,
+    /// JDBC: only braces delimit a value; quotes are ordinary characters.
+    Jdbc,
+}
+
+fn ado_declares_key(s: &str, dialect: ConnectionStringDialect, keys: &[&str]) -> bool {
+    ado_property_keys(s, dialect).any(|key| keys.contains(&key.as_str()))
 }
 
 /// Yields the lowercased top-level property keys of an ADO/JDBC connection
-/// string. Values wrapped in single quotes, double quotes or braces may hold
-/// `;` and `=` (tiberius accepts all three), so a key-looking text inside a
-/// quoted password is not a property. A doubled quote inside a quoted value
-/// is an escaped quote. A segment without `=`, such as the
+/// string. A quoted value may hold `;` and `=`, so a key-looking text inside
+/// a quoted password is not a property. ADO quotes with single quotes, double
+/// quotes or braces, and a doubled quote is an escaped quote; JDBC quotes only
+/// with braces, so an unclosed apostrophe cannot hide a later key. A segment without `=`, such as the
 /// `jdbc:sqlserver://host:1433` prefix, yields nothing.
-fn ado_property_keys(s: &str) -> impl Iterator<Item = String> + '_ {
+fn ado_property_keys(
+    s: &str,
+    dialect: ConnectionStringDialect,
+) -> impl Iterator<Item = String> + '_ {
     let mut chars = s.chars().peekable();
 
     std::iter::from_fn(move || {
@@ -4823,7 +4841,7 @@ fn ado_property_keys(s: &str) -> impl Iterator<Item = String> + '_ {
                 continue;
             }
 
-            skip_ado_value(&mut chars);
+            skip_ado_value(&mut chars, dialect);
 
             let normalized = key.trim().to_ascii_lowercase();
             if !normalized.is_empty() {
@@ -4834,13 +4852,16 @@ fn ado_property_keys(s: &str) -> impl Iterator<Item = String> + '_ {
 }
 
 /// Consumes one property value and the `;` that ends it.
-fn skip_ado_value(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+fn skip_ado_value(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    dialect: ConnectionStringDialect,
+) {
     while chars.next_if_eq(&' ').is_some() {}
 
-    let closing = match chars.peek() {
-        Some('\'') => Some('\''),
-        Some('"') => Some('"'),
-        Some('{') => Some('}'),
+    let closing = match (dialect, chars.peek()) {
+        (_, Some('{')) => Some('}'),
+        (ConnectionStringDialect::Ado, Some('\'')) => Some('\''),
+        (ConnectionStringDialect::Ado, Some('"')) => Some('"'),
         _ => None,
     };
 
@@ -6625,65 +6646,109 @@ mod tests {
     #[test]
     fn ado_sets_application_name_detects_space_and_no_space_keys() {
         assert!(ado_sets_application_name(
-            "Server=host;Application Name=Foo;User Id=sa"
+            "Server=host;Application Name=Foo;User Id=sa",
+            ConnectionStringDialect::Ado
         ));
-        assert!(ado_sets_application_name("Server=host;ApplicationName=Foo"));
+        assert!(ado_sets_application_name(
+            "Server=host;ApplicationName=Foo",
+            ConnectionStringDialect::Ado
+        ));
         // Case-insensitive and tolerant of surrounding whitespace.
         assert!(ado_sets_application_name(
-            "Server=host; APPLICATION NAME = Foo "
+            "Server=host; APPLICATION NAME = Foo ",
+            ConnectionStringDialect::Ado
         ));
     }
 
     #[test]
     fn ado_sets_encrypt_detects_key_case_insensitively() {
-        assert!(ado_sets_encrypt("Server=host;Encrypt=true;User Id=sa"));
-        assert!(ado_sets_encrypt("Server=host; ENCRYPT = false"));
-        assert!(ado_sets_encrypt("jdbc:sqlserver://host:1433;encrypt=true"));
+        assert!(ado_sets_encrypt(
+            "Server=host;Encrypt=true;User Id=sa",
+            ConnectionStringDialect::Ado
+        ));
+        assert!(ado_sets_encrypt(
+            "Server=host; ENCRYPT = false",
+            ConnectionStringDialect::Ado
+        ));
+        assert!(ado_sets_encrypt(
+            "jdbc:sqlserver://host:1433;encrypt=true",
+            ConnectionStringDialect::Jdbc
+        ));
     }
 
     #[test]
     fn ado_sets_encrypt_ignores_absent_key_and_value_substring() {
-        assert!(!ado_sets_encrypt("Server=host;User Id=sa"));
         assert!(!ado_sets_encrypt(
-            "Server=host;Description=Encrypt lookalike"
+            "Server=host;User Id=sa",
+            ConnectionStringDialect::Ado
+        ));
+        assert!(!ado_sets_encrypt(
+            "Server=host;Description=Encrypt lookalike",
+            ConnectionStringDialect::Ado
         ));
     }
 
     #[test]
     fn ado_sets_encrypt_ignores_key_text_inside_quoted_values() {
         assert!(!ado_sets_encrypt(
-            "Server=host;User Id=sa;Password='a;Encrypt=true'"
+            "Server=host;User Id=sa;Password='a;Encrypt=true'",
+            ConnectionStringDialect::Ado
         ));
         assert!(!ado_sets_encrypt(
-            "Server=host;User Id=sa;Password=\"a;Encrypt=true\""
+            "Server=host;User Id=sa;Password=\"a;Encrypt=true\"",
+            ConnectionStringDialect::Ado
         ));
         assert!(!ado_sets_encrypt(
-            "jdbc:sqlserver://host:1433;user=sa;password={a;Encrypt=true}"
+            "jdbc:sqlserver://host:1433;user=sa;password={a;Encrypt=true}",
+            ConnectionStringDialect::Jdbc
         ));
         // A doubled quote is an escaped quote, not the end of the value.
         assert!(!ado_sets_encrypt(
-            "Server=host;Password='it''s;Encrypt=true'"
+            "Server=host;Password='it''s;Encrypt=true'",
+            ConnectionStringDialect::Ado
         ));
     }
 
     #[test]
     fn ado_sets_encrypt_detects_key_after_quoted_value() {
-        assert!(ado_sets_encrypt("Server=host;Password='a;b';Encrypt=true"));
         assert!(ado_sets_encrypt(
-            "jdbc:sqlserver://host:1433;password={a;b};encrypt=false"
+            "Server=host;Password='a;b';Encrypt=true",
+            ConnectionStringDialect::Ado
+        ));
+        assert!(ado_sets_encrypt(
+            "jdbc:sqlserver://host:1433;password={a;b};encrypt=false",
+            ConnectionStringDialect::Jdbc
+        ));
+    }
+
+    #[test]
+    fn jdbc_quotes_do_not_hide_a_later_encrypt_key() {
+        // JDBC treats quotes as ordinary characters, so an unclosed
+        // apostrophe must not swallow the explicit encryption request.
+        assert!(ado_sets_encrypt(
+            "jdbc:sqlserver://host:1433;user=sa;password='demo;encrypt=true",
+            ConnectionStringDialect::Jdbc
+        ));
+        assert!(ado_sets_encrypt(
+            "jdbc:sqlserver://host:1433;password=\"demo;encrypt=true",
+            ConnectionStringDialect::Jdbc
         ));
     }
 
     #[test]
     fn ado_sets_application_name_ignores_key_text_inside_quoted_values() {
         assert!(!ado_sets_application_name(
-            "Server=host;Password='x;Application Name=y'"
+            "Server=host;Password='x;Application Name=y'",
+            ConnectionStringDialect::Ado
         ));
     }
 
     #[test]
     fn ado_sets_application_name_ignores_absent_key() {
-        assert!(!ado_sets_application_name("Server=host;User Id=sa"));
+        assert!(!ado_sets_application_name(
+            "Server=host;User Id=sa",
+            ConnectionStringDialect::Ado
+        ));
     }
 
     #[test]
@@ -6691,7 +6756,8 @@ mod tests {
         // A value that merely contains the text must not be mistaken for the
         // key itself.
         assert!(!ado_sets_application_name(
-            "Server=host;Description=Application Name lookalike"
+            "Server=host;Description=Application Name lookalike",
+            ConnectionStringDialect::Ado
         ));
     }
 
