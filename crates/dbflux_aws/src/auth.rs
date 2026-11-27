@@ -2481,13 +2481,13 @@ async fn sso_login_with_url(
             }
         };
 
-        // The future may have been dropped right after the scan finished.
-        if AbandonLoginGuard::is_abandoned(&abort_slot) {
+        // Register the abort sender so the UI can cancel this login
+        // mid-flight, unless the future was dropped right after the scan.
+        let Some(login_id) =
+            AbandonLoginGuard::register_unless_abandoned(&abort_slot, profile_id, &handle.abort_tx)
+        else {
             return;
-        }
-
-        // Register the abort sender so the UI can cancel this login mid-flight.
-        let login_id = register_login_abort(profile_id, handle.abort_tx.clone());
+        };
 
         // Fire the callback now — the URL is known, the user may still be
         // completing the browser flow.
@@ -2559,6 +2559,22 @@ impl AbandonLoginGuard {
 
     fn is_abandoned(slot: &Mutex<AbandonLoginSlot>) -> bool {
         slot.lock().unwrap_or_else(|e| e.into_inner()).abandoned
+    }
+
+    /// Registers the login's abort sender unless its waiting future is gone.
+    /// The check and the registration share the slot lock, so the guard's
+    /// drop cannot land between them and leave a stale login registered in
+    /// place of a retry's.
+    fn register_unless_abandoned(
+        slot: &Mutex<AbandonLoginSlot>,
+        profile_id: uuid::Uuid,
+        abort_tx: &std::sync::mpsc::SyncSender<()>,
+    ) -> Option<u64> {
+        let slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.abandoned {
+            return None;
+        }
+        Some(register_login_abort(profile_id, abort_tx.clone()))
     }
 
     fn disarm(&mut self) {
@@ -2718,6 +2734,35 @@ mod tests {
     use super::*;
     use dbflux_core::DynAuthProvider;
     use std::io::Write;
+
+    /// An abandoned login never registers, so it cannot replace a retry's
+    /// entry; a login still awaited registers as before.
+    #[test]
+    fn an_abandoned_login_does_not_register_its_abort_sender() {
+        let profile_id = uuid::Uuid::new_v4();
+        let (abandoned_tx, _abandoned_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let guard = AbandonLoginGuard::default();
+        let slot = Arc::clone(&guard.slot);
+        drop(guard);
+
+        assert_eq!(
+            AbandonLoginGuard::register_unless_abandoned(&slot, profile_id, &abandoned_tx),
+            None
+        );
+        assert!(
+            !abort_registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&profile_id)
+        );
+
+        let (live_tx, _live_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let live_guard = AbandonLoginGuard::default();
+        let login_id =
+            AbandonLoginGuard::register_unless_abandoned(&live_guard.slot, profile_id, &live_tx)
+                .expect("a login still awaited registers");
+        deregister_login_abort(profile_id, login_id);
+    }
 
     /// A dropped login whose wait returns after a retry registered must not
     /// remove the retry's entry, or the retry could no longer be cancelled.
