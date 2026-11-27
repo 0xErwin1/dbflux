@@ -196,7 +196,7 @@ impl FakeSession {
 }
 
 impl ShowplanSession for FakeSession {
-    async fn batch(&mut self, sql: &str) -> Result<Option<String>, DbError> {
+    async fn batch(&mut self, sql: &str) -> Result<Vec<String>, DbError> {
         self.batches.push(sql.to_string());
 
         if self.fail_on == Some(sql) {
@@ -204,9 +204,9 @@ impl ShowplanSession for FakeSession {
         }
 
         Ok(if sql == "SELECT 1" {
-            self.xml.clone()
+            self.xml.clone().into_iter().collect()
         } else {
-            None
+            Vec::new()
         })
     }
 }
@@ -227,7 +227,7 @@ fn capture_runs_on_statement_off_in_order() {
     let run = run(&mut session);
 
     assert_eq!(session.batches, [ON, "SELECT 1", OFF]);
-    assert_eq!(run.plan.unwrap(), "<ShowPlanXML/>");
+    assert_eq!(run.plan.unwrap(), ["<ShowPlanXML/>"]);
     assert!(run.restore.is_ok());
 }
 
@@ -267,7 +267,7 @@ fn capture_reports_a_failed_off_separately_from_the_plan() {
     let mut session = FakeSession::new(Some(OFF));
     let run = run(&mut session);
 
-    assert_eq!(run.plan.unwrap(), "<ShowPlanXML/>");
+    assert_eq!(run.plan.unwrap(), ["<ShowPlanXML/>"]);
     assert!(message(run.restore.unwrap_err()).contains(OFF));
 }
 
@@ -297,11 +297,11 @@ fn an_if_block_with_nested_statements_counts_as_one() {
 struct PanickingSession;
 
 impl ShowplanSession for PanickingSession {
-    async fn batch(&mut self, sql: &str) -> Result<Option<String>, DbError> {
+    async fn batch(&mut self, sql: &str) -> Result<Vec<String>, DbError> {
         if sql == "SELECT 1" {
             panic!("boom");
         }
-        Ok(None)
+        Ok(Vec::new())
     }
 }
 

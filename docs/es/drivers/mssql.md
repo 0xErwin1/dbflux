@@ -18,7 +18,7 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
   descubrimiento de schema.
 - Planes de query estructurados (`Connection::query_plan`): el plan estimado
   proviene de `SET SHOWPLAN_XML`, así que el statement se compila y nunca se
-  ejecuta, y se muestra como un árbol de operadores con costos, estimaciones de
+  ejecuta, y se devuelve como un árbol de operadores con costos, estimaciones de
   filas, uso de índices y advertencias. `SHOWPLAN_XML` es estado de la sesión,
   por lo que se activa y desactiva mientras se retiene la conexión, y una sesión
   que no puede revertirse se reemplaza.

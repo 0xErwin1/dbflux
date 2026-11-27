@@ -924,22 +924,23 @@ fn mssql_explain_never_interleaves_with_a_concurrent_plan() -> Result<(), DbErro
 
         let shared: Arc<dyn Connection> = Arc::from(connection);
         let planner = Arc::clone(&shared);
-        let planning = thread::spawn(move || {
+        let planning = thread::spawn(move || -> Result<(), DbError> {
             for _ in 0..150 {
-                let _outcome = planner.query_plan(&dbflux_core::QueryPlanRequest::new(
+                planner.query_plan(&dbflux_core::QueryPlanRequest::new(
                     "SELECT * FROM plan_test",
-                ));
+                ))?;
             }
+            Ok(())
         });
 
         let table_ref = TableRef::with_schema("dbo", "plan_test");
         for _ in 0..150 {
-            let _outcome = shared.explain(
+            shared.explain(
                 &ExplainRequest::new(table_ref.clone())
                     .with_query("DELETE FROM plan_test WHERE id = 1"),
-            );
+            )?;
         }
-        planning.join().expect("planner thread panicked");
+        planning.join().expect("planner thread panicked")?;
 
         let remaining = shared.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
         assert_eq!(
@@ -949,6 +950,43 @@ fn mssql_explain_never_interleaves_with_a_concurrent_plan() -> Result<(), DbErro
         );
 
         cleanup_test_tables(&*shared);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_explain_keeps_the_plan_of_every_statement_in_a_batch() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50));
+             INSERT INTO plan_test VALUES (1, 'kept')",
+        ))?;
+
+        let table_ref = TableRef::with_schema("dbo", "plan_test");
+        let result = connection.explain(
+            &ExplainRequest::new(table_ref.clone())
+                .with_query("SELECT * FROM plan_test; DELETE FROM plan_test WHERE id = 1"),
+        )?;
+        // SQL Server returns one XML document per batch, holding the plan of
+        // every statement in it.
+        assert_eq!(result.result_set_count(), 1);
+        let Value::Text(xml) = &result.rows[0][0] else {
+            panic!("the plan is text");
+        };
+        assert_eq!(xml.matches("<StmtSimple").count(), 2, "{xml}");
+        assert!(xml.contains("DELETE"), "{xml}");
+
+        let single = connection.explain(&ExplainRequest::new(table_ref))?;
+        assert_eq!(single.result_set_count(), 1);
+
+        let remaining = connection.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1), "nothing ran");
+
+        cleanup_test_tables(&*connection);
         Ok(())
     })
 }

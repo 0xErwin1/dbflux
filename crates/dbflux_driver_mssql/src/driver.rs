@@ -1649,7 +1649,7 @@ impl MssqlConnection {
     /// path by `capture_showplan`. When OFF cannot be confirmed the client is
     /// dropped and the connection poisoned, so the next use opens a fresh
     /// session instead of returning plans where rows were expected.
-    fn run_showplan(&self, statement: &str) -> Result<String, DbError> {
+    fn run_showplan(&self, statement: &str) -> Result<Vec<String>, DbError> {
         self.recover_session()?;
 
         let mut guard = match self.inner.lock() {
@@ -1903,7 +1903,7 @@ struct ShowplanClient<'client> {
 }
 
 impl crate::plan::ShowplanSession for ShowplanClient<'_> {
-    async fn batch(&mut self, sql: &str) -> Result<Option<String>, DbError> {
+    async fn batch(&mut self, sql: &str) -> Result<Vec<String>, DbError> {
         let outcome = async {
             let results = self
                 .client
@@ -1916,12 +1916,14 @@ impl crate::plan::ShowplanSession for ShowplanClient<'_> {
         .await;
 
         match outcome {
-            Ok(results) => Ok(results.iter().flatten().next().and_then(|row| {
-                match tiberius_value_to_value(row, 0) {
+            Ok(results) => Ok(results
+                .iter()
+                .filter_map(|set| set.first())
+                .filter_map(|row| match tiberius_value_to_value(row, 0) {
                     Value::Text(text) => Some(text),
                     _ => None,
-                }
-            })),
+                })
+                .collect()),
             Err(error) => {
                 self.transport_lost |= is_transport_lost(&error);
                 Err(format_mssql_query_error(&error))
@@ -3447,7 +3449,10 @@ impl Connection for MssqlConnection {
         };
 
         let start = Instant::now();
-        let plan = self.run_showplan(&query)?;
+        let mut plans = self.run_showplan(&query)?;
+        let Some(primary) = plans.pop() else {
+            return Err(DbError::query_failed("SHOWPLAN_XML returned no plan"));
+        };
 
         let column = ColumnMeta {
             name: "Microsoft SQL Server 2005 XML Showplan".to_string(),
@@ -3457,12 +3462,23 @@ impl Connection for MssqlConnection {
             is_primary_key: false,
         };
 
-        Ok(QueryResult::table(
-            vec![column],
-            vec![vec![Value::Text(plan)]],
-            None,
-            start.elapsed(),
-        ))
+        let elapsed = start.elapsed();
+        let plan_set = |plan: String| {
+            QueryResult::table(
+                vec![column.clone()],
+                vec![vec![Value::Text(plan)]],
+                None,
+                elapsed,
+            )
+        };
+
+        // Same shape as a batch run through `execute`: the last set is the
+        // primary result and the earlier ones follow in `additional_results`.
+        let mut result = plan_set(primary);
+        for plan in plans {
+            result.push_additional_result(plan_set(plan));
+        }
+        Ok(result)
     }
 
     fn query_plan(
@@ -3472,7 +3488,10 @@ impl Connection for MssqlConnection {
         let statement = crate::plan::plan_statement(&request.query)?;
 
         match self.run_showplan(&statement) {
-            Ok(raw) => crate::plan::parse_showplan_xml(&raw),
+            Ok(plans) => match plans.first() {
+                Some(raw) => crate::plan::parse_showplan_xml(raw),
+                None => Err(DbError::query_failed("SHOWPLAN_XML returned no plan")),
+            },
             Err(error) if is_kill_error(&error) => Err(DbError::Cancelled),
             Err(error) => Err(error),
         }

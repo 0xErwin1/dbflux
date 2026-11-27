@@ -18,16 +18,16 @@ const SHOWPLAN_ON: &str = "SET SHOWPLAN_XML ON";
 const SHOWPLAN_OFF: &str = "SET SHOWPLAN_XML OFF";
 
 /// One session able to run T-SQL batches, returning the first cell of the
-/// first row when there is one.
+/// first row of every result set the batch produced, in order.
 pub(crate) trait ShowplanSession {
-    async fn batch(&mut self, sql: &str) -> Result<Option<String>, DbError>;
+    async fn batch(&mut self, sql: &str) -> Result<Vec<String>, DbError>;
 }
 
 /// Outcome of [`capture_showplan`]. `restore` is the result of turning
 /// `SHOWPLAN_XML` off; when it is an error the session may still be in plan
 /// mode and the caller must not reuse it.
 pub(crate) struct ShowplanRun {
-    pub plan: Result<String, DbError>,
+    pub plan: Result<Vec<String>, DbError>,
     pub restore: Result<(), DbError>,
 }
 
@@ -39,8 +39,12 @@ pub(crate) async fn capture_showplan(
     statement: &str,
 ) -> ShowplanRun {
     let plan = match session.batch(SHOWPLAN_ON).await {
-        Ok(_) => session.batch(statement).await.and_then(|cell| {
-            cell.ok_or_else(|| DbError::query_failed("SHOWPLAN_XML returned no plan"))
+        Ok(_) => session.batch(statement).await.and_then(|plans| {
+            if plans.is_empty() {
+                Err(DbError::query_failed("SHOWPLAN_XML returned no plan"))
+            } else {
+                Ok(plans)
+            }
         }),
         Err(error) => Err(error),
     };
