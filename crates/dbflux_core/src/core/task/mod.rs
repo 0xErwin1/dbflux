@@ -214,7 +214,14 @@ impl TaskRequest {
         self
     }
 
-    /// Makes the task a child of `parent`: cancelling the parent cancels it.
+    /// Makes the task a child of `parent`: cancelling the parent cancels it,
+    /// even through a parent that already finished.
+    ///
+    /// A child registered under a parent that is `Cancelling`, `Cancelled` or
+    /// `Skipped` inherits that cancellation: a `Pending` child is created
+    /// `Skipped` and can never be activated, and a `Running` child goes
+    /// through `request_cancel` right away, so its status is the honest
+    /// outcome of its own policy. Under a running parent nothing changes.
     pub fn parent(mut self, parent: TaskId) -> Self {
         self.parent = Some(parent);
         self
@@ -503,8 +510,18 @@ impl TaskManager {
         let id = TaskId::new_v4();
         let cancel_token = CancelToken::new();
         let profile_id = request.target.as_ref().map(|target| target.profile_id);
+        let parent_cancelled = request
+            .parent
+            .and_then(|parent| self.tasks.get(&parent))
+            .is_some_and(|parent| {
+                matches!(
+                    parent.status,
+                    TaskStatus::Cancelling | TaskStatus::Cancelled | TaskStatus::Skipped
+                )
+            });
+        let skipped = parent_cancelled && request.pending;
 
-        let task = Task {
+        let mut task = Task {
             id,
             kind: request.kind,
             description: request.description,
@@ -533,7 +550,14 @@ impl TaskManager {
         };
         self.next_sequence += 1;
 
+        if skipped {
+            task.skip();
+        }
+
         self.tasks.insert(id, task);
+        if parent_cancelled && !skipped {
+            self.request_cancel(id);
+        }
         TaskHandle {
             id,
             token: cancel_token,
@@ -686,8 +710,14 @@ impl TaskManager {
             return CancelRequestOutcome::NotRunning;
         }
 
+        self.cancel_subtree(id)
+    }
+
+    /// Cancels the children first, passing through terminal ones so their
+    /// in-flight descendants are reached, then the task itself.
+    fn cancel_subtree(&mut self, id: TaskId) -> CancelRequestOutcome {
         for child in self.child_ids(id) {
-            self.request_cancel(child);
+            self.cancel_subtree(child);
         }
 
         let Some(task) = self.tasks.get_mut(&id) else {
@@ -718,7 +748,7 @@ impl TaskManager {
     /// A parent is also left unchanged while one of its children is still
     /// in flight.
     pub fn acknowledge_cancelled(&mut self, id: TaskId) -> bool {
-        if self.has_in_flight_children(id) {
+        if self.has_in_flight_descendants(id) {
             return false;
         }
 

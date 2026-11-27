@@ -44,6 +44,15 @@ pub const TITLE_BAR_HEIGHT: gpui::Pixels = px(32.0);
 /// title bars instead of server-side decorations.
 #[cfg(target_os = "linux")]
 fn prefers_client_side_decorations() -> bool {
+    // CSD is the native path on Wayland. On X11 the transparent shadow margin
+    // of a client-decorated ARGB window shows the desktop or the window behind
+    // it, and Mutter re-centers the frame by its extents when focus changes,
+    // which makes the content jump. X11 keeps server-side decorations instead.
+    let on_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty());
+    if !on_wayland {
+        return false;
+    }
+
     [
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_DESKTOP",
@@ -64,9 +73,8 @@ fn prefers_client_side_decorations() -> bool {
 
 /// Returns the `WindowDecorations` value to request when creating a top-level window.
 ///
-/// On Linux, only GNOME-like desktop sessions request `Client` (CSD). Other Linux
-/// environments keep `Server` decorations so the window manager/compositor remains in
-/// control of the title bar.
+/// On Linux, only GNOME-like Wayland sessions request `Client` (CSD). X11 keeps
+/// `Server` decorations so the window manager owns the frame and its extents.
 #[cfg(target_os = "linux")]
 pub fn decoration_request() -> Option<WindowDecorations> {
     Some(if prefers_client_side_decorations() {

@@ -20,6 +20,10 @@ Microsoft SQL Server driver for DBFlux, built on the
 - Native console (`NATIVE_CONSOLE`): tables dock a console, and a database's sidebar menu opens one in its own tab, that runs one SQL statement line at a time through `Connection::execute` with the editor's validation, dangerous-query confirmation, audit rows and query history. The driver enforces `QueryRequest::limit` (`REQUEST_ROW_LIMIT`), so console commands carry the editor row limit.
 - Authentication via SQL Server logins (username + password); URI mode accepts
   ADO, JDBC, and `sqlserver://user:pass@host:port/db` connection strings.
+  An ADO or JDBC string without an `Encrypt` key connects with encryption
+  `off`; set `Encrypt=true` to encrypt the session.
+- `sql_variant` columns decode to the value of each row's base type: an `int`
+  shows as an integer, an `nvarchar` as text, a `NULL` as null.
 - Reports `Application Name` as `dbflux/<version>` unless the connection
   string or URI already sets one, in which case the user-supplied value
   always wins; the `sqlserver://`/`mssql://` URL scheme accepts an
@@ -35,7 +39,8 @@ Microsoft SQL Server driver for DBFlux, built on the
     `required` reveals the **CA certificate** path; when set, the chain
     is validated against that CA (tiberius `trust_cert_ca`), so servers
     signed by a private or corporate CA connect without trusting every
-    certificate. Left empty, the system trust store is used. The `on`
+    certificate; the CA is trusted alongside the system trust store. Left
+    empty, only the system trust store is used. The `on`
     mode ignores the path.
   In URI mode, `?trust=true|false` explicitly overrides the derived
   value if you need an unusual combination (e.g. `?encrypt=required&trust=true`).
@@ -286,13 +291,17 @@ Requires the `VIEW SERVER STATE` permission.
 ## Limitations
 
 - Analyzed query plans (actual rows and timings) are not supported yet; only the estimated plan from `SHOWPLAN_XML` is available.
-- The `required` mode's CA certificate replaces the system trust store
-  rather than extending it, must hold exactly one certificate, and must
-  use a `.pem`, `.crt` or `.der` extension (tiberius with rustls).
-  `sqlserver://` URLs have no CA certificate parameter; ADO and JDBC
-  connection strings accept tiberius's `TrustServerCertificateCA=<path>`
-  key instead. Do not combine it with `TrustServerCertificate=true` —
-  tiberius panics when both trust settings are set.
+- The `required` mode's CA certificate is trusted in addition to the system
+  trust store, not instead of it, so a certificate a public CA issued for
+  the same hostname also validates; tiberius offers no way to trust only the
+  given CA. The file must use a `.pem`, `.crt` or `.der` extension, and a PEM
+  file may hold several certificates (tiberius with rustls). `sqlserver://`
+  URLs have no CA certificate parameter; ADO and JDBC connection strings
+  accept tiberius's `TrustServerCertificateCA=<path>` key instead, and
+  combining it with `TrustServerCertificate=true` fails with an error.
+- Connecting gives up after 15 seconds without completing the login
+  handshake (prelogin, TLS and login), tiberius's default. Queries have no
+  time limit.
 - Through an SSH tunnel the driver connects to `127.0.0.1`, so that is the
   server name verified in `required` mode: a private-CA certificate issued
   for the real hostname fails hostname verification.
