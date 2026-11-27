@@ -1,10 +1,8 @@
 //! Keyboard selection between nodes.
 //!
 //! Selection moves to the nearest node in the direction pressed, and wraps to the
-//! opposite end of the reading order when there is none, so repeated presses
-//! always reach every node.
-
-use std::cmp::Ordering;
+//! opposite end of the reading order when there is none. A press only reaches a
+//! node past the direction threshold, so repeated presses do not visit every node.
 
 use crate::routing::NodeBounds;
 
@@ -24,11 +22,7 @@ pub enum Direction {
 /// Node keys in reading order: top to bottom, left to right within a row.
 pub fn spatial_order<K: Copy>(nodes: &[(K, NodeBounds)]) -> Vec<K> {
     let mut sorted: Vec<&(K, NodeBounds)> = nodes.iter().collect();
-    sorted.sort_by(|(_, a), (_, b)| {
-        a.y.partial_cmp(&b.y)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| a.x.partial_cmp(&b.x).unwrap_or(Ordering::Equal))
-    });
+    sorted.sort_by(|(_, a), (_, b)| a.y.total_cmp(&b.y).then_with(|| a.x.total_cmp(&b.x)));
     sorted.into_iter().map(|(key, _)| *key).collect()
 }
 
@@ -73,7 +67,7 @@ pub fn next_in_direction<K: Copy + PartialEq>(
         let b = bounds_of(*b)
             .map(|bounds| coordinate(&bounds))
             .unwrap_or_default();
-        a.partial_cmp(&b).unwrap_or(Ordering::Equal)
+        a.total_cmp(&b)
     };
 
     let nearest = if towards_lower {

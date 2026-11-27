@@ -133,6 +133,21 @@ const SEGMENT_HEIGHT: Rems = SchemaMetrics::TOGGLE_HEIGHT;
 /// characters already identify them.
 const TYPE_NAME_CHARS: usize = 8;
 
+/// Height of a foreign key's anchor inside its table card: the centre of the
+/// column's row, or the top of the body when the column is not listed.
+fn row_anchor_y(
+    columns: &[dbflux_schema_viz::graph::ColumnSummary],
+    column_name: Option<&String>,
+) -> f32 {
+    let body_top = NODE_HEADER_PX + NODE_BODY_TOP_PX;
+
+    column_name
+        .and_then(|name| columns.iter().position(|column| &column.name == name))
+        .map_or(body_top, |index| {
+            body_top + index as f32 * NODE_ROW_PX + NODE_ROW_PX / 2.0
+        })
+}
+
 /// Shortens a column type to fit its row slot, keeping the tail visible.
 fn truncate_type_name(type_name: &str) -> String {
     if type_name.chars().count() <= TYPE_NAME_CHARS {
@@ -3324,7 +3339,6 @@ impl SchemaVizDocument {
         let graph = self.graph.as_ref()?;
 
         let mut edges: Vec<CanvasEdge> = Vec::new();
-        let row_center = NODE_ROW_PX / 2.0;
         let mut lane_counts: HashMap<(NodeIndex, NodeIndex), usize> = HashMap::new();
         for edge_idx in graph.edge_indices() {
             if let Some(endpoints) = graph.edge_endpoints(edge_idx) {
@@ -3384,33 +3398,9 @@ impl SchemaVizDocument {
                 continue;
             };
 
-            let from_col_y = edge_weight
-                .from_columns
-                .first()
-                .and_then(|col_name| {
-                    from_node_weight
-                        .columns
-                        .iter()
-                        .position(|c| &c.name == col_name)
-                })
-                .map(|col_idx| {
-                    NODE_HEADER_PX + NODE_BODY_TOP_PX + col_idx as f32 * NODE_ROW_PX + row_center
-                })
-                .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
-
-            let to_col_y = edge_weight
-                .to_columns
-                .first()
-                .and_then(|col_name| {
-                    to_node_weight
-                        .columns
-                        .iter()
-                        .position(|c| &c.name == col_name)
-                })
-                .map(|col_idx| {
-                    NODE_HEADER_PX + NODE_BODY_TOP_PX + col_idx as f32 * NODE_ROW_PX + row_center
-                })
-                .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
+            let from_col_y =
+                row_anchor_y(&from_node_weight.columns, edge_weight.from_columns.first());
+            let to_col_y = row_anchor_y(&to_node_weight.columns, edge_weight.to_columns.first());
 
             let route = routing::route_foreign_key(
                 source_bounds,

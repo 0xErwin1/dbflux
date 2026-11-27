@@ -266,3 +266,28 @@ fn equal_sort_keys_keep_input_order_in_a_layer() {
         assert!(placed.nodes[1].y < placed.nodes[2].y);
     }
 }
+
+#[test]
+fn parallel_edges_to_one_neighbour_take_one_radial_slot() {
+    let nodes = vec![
+        node("hub", 100.0, 40.0),
+        node("a", 50.0, 20.0),
+        node("b", 50.0, 20.0),
+    ];
+    let single = radial(&nodes, &[edge(0, 1), edge(0, 2)], 0);
+    let parallel = radial(&nodes, &[edge(0, 1), edge(0, 1), edge(0, 2)], 0);
+
+    assert_eq!(parallel.nodes, single.nodes);
+    assert_eq!(parallel.edges.len(), 3);
+}
+
+#[test]
+fn a_self_edge_on_the_focal_node_leaves_it_at_the_centre() {
+    let nodes = vec![node("hub", 100.0, 40.0), node("a", 50.0, 20.0)];
+    let with_loop = radial(&nodes, &[edge(0, 1), edge(0, 0)], 0);
+    let without = radial(&nodes, &[edge(0, 1)], 0);
+
+    assert_eq!((with_loop.nodes[0].x, with_loop.nodes[0].y), (450.0, 380.0));
+    assert_eq!(with_loop.nodes, without.nodes);
+    assert_eq!(with_loop.edges.len(), 2);
+}

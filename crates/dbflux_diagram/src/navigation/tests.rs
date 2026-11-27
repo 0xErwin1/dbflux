@@ -49,10 +49,23 @@ fn the_nearest_candidate_wins_over_a_farther_one() {
 
 #[test]
 fn nodes_within_the_threshold_are_not_in_that_direction() {
-    let nodes = vec![(0, at(0.0, 0.0)), (1, at(10.0, 100.0))];
+    let nodes = vec![(0, at(0.0, 0.0)), (1, at(0.0, 100.0)), (2, at(10.0, 100.0))];
 
-    // 1 is 10 px to the right, inside the threshold, so Right wraps to the first.
+    // 2 is 10 px to the right of 1, inside the threshold, so Right wraps to the
+    // first node instead of picking it.
     assert_eq!(next_in_direction(&nodes, 1, Direction::Right), Some(0));
+}
+
+#[test]
+fn non_finite_coordinates_do_not_break_the_ordering() {
+    let nodes = vec![
+        (0, at(30.0, 0.0)),
+        (1, at(20.0, f32::NAN)),
+        (2, at(10.0, 1.0)),
+    ];
+
+    assert_eq!(spatial_order(&nodes).len(), 3);
+    assert!(next_in_direction(&nodes, 0, Direction::Down).is_some());
 }
 
 #[test]

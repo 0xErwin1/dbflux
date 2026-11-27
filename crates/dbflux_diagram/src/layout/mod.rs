@@ -269,10 +269,11 @@ fn assign_layers(graph: &Graph<'_>) -> BTreeMap<usize, Vec<NodeIndex>> {
 
 /// Reorders the nodes inside each layer to reduce edge crossings.
 ///
-/// This is the barycenter pass of a Sugiyama layout: repeatedly place every node
-/// next to the average position of the neighbours it connects to in the layer
-/// before it (then after it, sweeping back up). Ties break on the sort key, so
-/// the same input always produces the same diagram.
+/// This is the barycenter pass of a Sugiyama layout: each layer is ordered by the
+/// average position of its nodes' incoming neighbours in the layer with the next
+/// lower key. The top-down and bottom-up passes both use that lower layer; the
+/// bottom-up pass only reverses the iteration order. Ties break on the sort key,
+/// so the same input always produces the same diagram.
 fn reduce_crossings(graph: &Graph<'_>, layers: &mut BTreeMap<usize, Vec<NodeIndex>>) {
     const SWEEPS: usize = 4;
     if layers.len() < 2 {
@@ -291,7 +292,13 @@ fn reduce_crossings(graph: &Graph<'_>, layers: &mut BTreeMap<usize, Vec<NodeInde
                 let Some(current) = layers.get(key).cloned() else {
                     continue;
                 };
-                let Some(&previous_key) = keys.iter().filter(|k| *k < key).max() else {
+                // `keys` is ascending, so the next lower key sits just before it.
+                let Some(&previous_key) = keys
+                    .binary_search(key)
+                    .ok()
+                    .and_then(|at| at.checked_sub(1))
+                    .and_then(|at| keys.get(at))
+                else {
                     continue;
                 };
                 let positions = positions_of(layers.get(&previous_key).map(Vec::as_slice));
@@ -469,6 +476,10 @@ pub fn radial(nodes: &[LayoutNode], edges: &[LayoutEdge], focal: usize) -> Diagr
     {
         neighbor_indices.push(edge.source());
     }
+    // A neighbour takes one slot however many edges join it to the focal node, and
+    // the focal node never rings itself; every edge is still handed back.
+    let mut seen: HashSet<NodeIndex> = HashSet::from([focal_idx]);
+    neighbor_indices.retain(|&idx| seen.insert(idx));
     graph.sort_by_key(&mut neighbor_indices);
 
     let neighbor_count = neighbor_indices.len();
