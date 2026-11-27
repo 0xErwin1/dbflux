@@ -419,13 +419,14 @@ impl Sidebar {
         };
 
         Some(self.app_state.update(cx, |state, cx| {
-            let task = state.start_task_for_target(
+            let handle = crate::table_loading::start_schema_task(
+                state,
                 TaskKind::SchemaRefresh,
                 crate::labels::refreshing_database_task_label(database),
-                Some(task_target),
+                task_target,
             );
             cx.emit(AppStateChanged);
-            task
+            (handle.id(), handle.token().clone())
         }))
     }
 
@@ -449,7 +450,7 @@ impl Sidebar {
             .database_refresh_guard_is_current(refresh_guard)
         {
             app_state.update(cx, |state, cx| {
-                state.tasks_mut().cancel(task_id);
+                state.settle_task_discarded(task_id);
                 // The pending marker is unique per profile/target in one
                 // session: until this operation releases it, a second
                 // same-session refresh cannot acquire it. A replacement
@@ -538,7 +539,7 @@ impl Sidebar {
                 let subtree_overrides = held_state.subtree_expansion_overrides.clone();
 
                 app_state.update(cx, |state, cx| {
-                    state.tasks_mut().cancel(task_id);
+                    state.settle_task_discarded(task_id);
                     state.finish_pending_operation(profile_id, Some(database));
                     Self::restore_database_refresh_state(state, profile_id, held_state);
                     cx.emit(AppStateChanged);
@@ -1170,13 +1171,14 @@ impl Sidebar {
             database: parts.database.clone().or_else(|| Some(cache_db.clone())),
         };
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let task = state.start_task_for_target(
+            let handle = crate::table_loading::start_schema_task(
+                state,
                 TaskKind::SchemaRefresh,
                 crate::labels::refreshing_schema_object_task_label(&parts.object_name),
-                Some(target),
+                target,
             );
             cx.emit(AppStateChanged);
-            task
+            (handle.id(), handle.token().clone())
         });
         self.loading_items.insert(item_id.to_string());
         self.view_refresh_tasks.insert(
@@ -1216,7 +1218,7 @@ impl Sidebar {
                             .refresh_views_request_is_current(&request)
                     {
                         app_state.update(cx, |state, cx| {
-                            state.tasks_mut().cancel(task_id);
+                            state.settle_task_discarded(task_id);
                             cx.emit(AppStateChanged);
                         });
                         sidebar.refresh_tree(cx);
@@ -1230,7 +1232,7 @@ impl Sidebar {
                                         state.complete_task(task_id)
                                     }
                                     dbflux_core::ApplyFetchOutcome::Rejected(_) => {
-                                        state.tasks_mut().cancel(task_id);
+                                        state.settle_task_discarded(task_id);
                                     }
                                 }
                                 cx.emit(AppStateChanged);
