@@ -1,4 +1,7 @@
-use dbflux_core::{CancelToken, TaskId, TaskKind, TaskSlot, TaskTarget};
+use dbflux_core::{
+    CancelHook, CancelPolicy, CancelRequestOutcome, CancelToken, DbError, TaskId, TaskKind,
+    TaskRequest, TaskSlot, TaskTarget,
+};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::*;
 use uuid::Uuid;
@@ -40,6 +43,31 @@ impl MutationCancelHandle {
     pub fn cancel(&self) {
         self.token.cancel();
     }
+}
+
+/// Settles a query whose result is discarded because its token was
+/// cancelled: `Cancelled` only when the driver reported a cancellation,
+/// otherwise the statement's own outcome.
+pub(crate) fn settle_task_after_cancel<T>(
+    app_state: &Entity<AppStateEntity>,
+    task_id: TaskId,
+    result: &Result<T, DbError>,
+    cx: &mut App,
+) {
+    app_state.update(cx, |state, cx| {
+        match result {
+            Err(DbError::Cancelled) => {
+                state.acknowledge_task_cancelled(task_id);
+            }
+            Ok(_) => state.complete_task(task_id),
+            Err(error) => state.fail_task(task_id, error.to_string()),
+        }
+        cx.emit(AppStateChanged);
+    });
+}
+
+fn query_cancel_unsupported_reason(driver: &str) -> String {
+    dbflux_i18n::t!("tasks_panel.query_cancel_unsupported", driver = driver)
 }
 
 pub struct DocumentTaskRunner {
@@ -90,47 +118,144 @@ impl DocumentTaskRunner {
         target: Option<TaskTarget>,
         cx: &mut App,
     ) -> (TaskId, CancelToken) {
-        let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
-            state.start_task_for_target(kind, description, target)
-        });
+        self.start_primary_with_request(TaskRequest::new(kind, description), target, cx)
+    }
 
-        if let Some(old_id) = self.primary.start(task_id, cancel_token.clone()) {
+    /// Starts a primary query whose cancel goes through the driver.
+    ///
+    /// The task stays `Cancelling` until the worker calls
+    /// [`Self::settle_after_cancel`], and a driver that cannot cancel keeps it
+    /// `Running` with the reason. `cancels_connection` is `false` when the
+    /// query runs on its own session, so cancelling must not interrupt the
+    /// shared connection.
+    pub fn start_primary_query_for_target(
+        &mut self,
+        description: impl Into<String>,
+        target: TaskTarget,
+        cancels_connection: bool,
+        cx: &mut App,
+    ) -> (TaskId, CancelToken) {
+        let hook = self.app_state.read(cx).query_cancel_hook(
+            &target,
+            cancels_connection,
+            query_cancel_unsupported_reason,
+        );
+
+        self.start_primary_with_hook(TaskKind::Query, description, Some(target), hook, cx)
+    }
+
+    fn start_primary_with_hook(
+        &mut self,
+        kind: TaskKind,
+        description: impl Into<String>,
+        target: Option<TaskTarget>,
+        hook: CancelHook,
+        cx: &mut App,
+    ) -> (TaskId, CancelToken) {
+        let request = TaskRequest::new(kind, description)
+            .policy(CancelPolicy::WorkerAcknowledged)
+            .cancel_hook(hook);
+
+        self.start_primary_with_request(request, target, cx)
+    }
+
+    fn start_primary_with_request(
+        &mut self,
+        request: TaskRequest,
+        target: Option<TaskTarget>,
+        cx: &mut App,
+    ) -> (TaskId, CancelToken) {
+        let request = match target {
+            Some(target) => request.target(target),
+            None => request,
+        };
+
+        let handle = self
+            .app_state
+            .update(cx, |state, _cx| state.start_task_handle(request));
+        let (task_id, cancel_token) = (handle.id(), handle.token().clone());
+
+        if let Some((old_id, _)) = self.primary.take() {
             self.app_state.update(cx, |state, cx| {
-                state.tasks_mut().cancel(old_id);
+                state.request_cancel_task(old_id);
                 cx.emit(AppStateChanged);
             });
         }
+        self.primary.start(task_id, cancel_token.clone());
 
         (task_id, cancel_token)
     }
 
     pub fn complete_primary(&mut self, task_id: TaskId, cx: &mut App) {
-        if self.primary.take_if(task_id).is_some() {
-            self.app_state.update(cx, |state, cx| {
-                state.complete_task(task_id);
-                cx.emit(AppStateChanged);
-            });
-        }
+        self.primary.take_if(task_id);
+        self.app_state.update(cx, |state, cx| {
+            state.complete_task(task_id);
+            cx.emit(AppStateChanged);
+        });
     }
 
     pub fn fail_primary(&mut self, task_id: TaskId, error: impl Into<String>, cx: &mut App) {
-        if self.primary.take_if(task_id).is_some() {
-            self.app_state.update(cx, |state, cx| {
-                state.fail_task(task_id, error);
-                cx.emit(AppStateChanged);
-            });
+        self.primary.take_if(task_id);
+        self.app_state.update(cx, |state, cx| {
+            state.fail_task(task_id, error);
+            cx.emit(AppStateChanged);
+        });
+    }
+
+    /// Asks the active primary task to cancel and reports whether the
+    /// request was accepted. A task that cannot be stopped stays in the slot,
+    /// running, with the reason on its snapshot.
+    pub fn cancel_primary(&mut self, cx: &mut App) -> bool {
+        self.request_cancel_primary(cx).is_some()
+    }
+
+    /// Like [`Self::cancel_primary`], returning how the task settled:
+    /// `Cancelled` for a task without a driver hook (already final),
+    /// `Cancelling` or `AlreadyCancelling` while the worker still has to
+    /// confirm. `None` when nothing was cancelled.
+    pub fn request_cancel_primary(&mut self, cx: &mut App) -> Option<CancelRequestOutcome> {
+        let task_id = self.primary.active_id()?;
+
+        let outcome = self.app_state.update(cx, |state, cx| {
+            let outcome = state.request_cancel_task(task_id);
+            cx.emit(AppStateChanged);
+            outcome
+        });
+
+        match outcome {
+            CancelRequestOutcome::Cancelled
+            | CancelRequestOutcome::Cancelling
+            | CancelRequestOutcome::AlreadyCancelling => {
+                self.primary.take_if(task_id);
+                Some(outcome)
+            }
+            CancelRequestOutcome::Refused { .. } => None,
+            CancelRequestOutcome::NotRunning => {
+                self.primary.take_if(task_id);
+                None
+            }
         }
     }
 
-    pub fn cancel_primary(&mut self, cx: &mut App) -> bool {
-        if let Some(old_id) = self.primary.cancel() {
-            self.app_state.update(cx, |state, cx| {
-                state.tasks_mut().cancel(old_id);
-                cx.emit(AppStateChanged);
-            });
-            return true;
-        }
-        false
+    /// Worker confirmation that a cancelled query really stopped.
+    pub fn acknowledge_cancelled(&mut self, task_id: TaskId, cx: &mut App) -> bool {
+        self.app_state.update(cx, |state, cx| {
+            let acknowledged = state.acknowledge_task_cancelled(task_id);
+            cx.emit(AppStateChanged);
+            acknowledged
+        })
+    }
+
+    /// Settles a query whose result the document discards because its token
+    /// was cancelled; see [`settle_task_after_cancel`].
+    pub fn settle_after_cancel<T>(
+        &mut self,
+        task_id: TaskId,
+        result: &Result<T, DbError>,
+        cx: &mut App,
+    ) {
+        self.primary.take_if(task_id);
+        settle_task_after_cancel(&self.app_state, task_id, result, cx);
     }
 
     pub fn clear_primary(&mut self, task_id: TaskId) {
@@ -183,7 +308,7 @@ impl DocumentTaskRunner {
 
     pub fn cancel_mutation(&mut self, task_id: TaskId, cx: &mut App) {
         self.app_state.update(cx, |state, cx| {
-            state.tasks_mut().cancel(task_id);
+            state.request_cancel_task(task_id);
             cx.emit(AppStateChanged);
         });
     }
@@ -317,6 +442,152 @@ mod tests {
         });
 
         assert!(is_cancellable(&app_state, task_id, cx));
+    }
+
+    fn status_of(
+        app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        task_id: dbflux_core::TaskId,
+        cx: &mut gpui::TestAppContext,
+    ) -> dbflux_core::TaskStatus {
+        cx.read(|cx| {
+            app_state
+                .read(cx)
+                .tasks()
+                .get(task_id)
+                .expect("task exists")
+                .status
+        })
+    }
+
+    fn hook_returning(outcome: dbflux_core::CancelOutcome) -> dbflux_core::CancelHook {
+        std::sync::Arc::new(move || outcome.clone())
+    }
+
+    #[gpui::test]
+    fn cancel_primary_with_a_requested_hook_waits_for_the_worker(cx: &mut gpui::TestAppContext) {
+        let (app_state, mut runner) = runner_with_state(cx);
+        let (task_id, token) = cx.update(|cx| {
+            runner.start_primary_with_hook(
+                dbflux_core::TaskKind::Query,
+                "select 1",
+                None,
+                hook_returning(dbflux_core::CancelOutcome::Requested),
+                cx,
+            )
+        });
+
+        assert!(cx.update(|cx| runner.cancel_primary(cx)));
+        assert_eq!(
+            status_of(&app_state, task_id, cx),
+            dbflux_core::TaskStatus::Cancelling
+        );
+        assert!(token.is_cancelled());
+
+        assert!(cx.update(|cx| runner.acknowledge_cancelled(task_id, cx)));
+        assert_eq!(
+            status_of(&app_state, task_id, cx),
+            dbflux_core::TaskStatus::Cancelled
+        );
+    }
+
+    #[gpui::test]
+    fn cancel_primary_on_a_driver_without_cancel_keeps_the_query_running(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (app_state, mut runner) = runner_with_state(cx);
+        let reason = "Engine does not support cancelling a running command.".to_string();
+        let (task_id, token) = cx.update(|cx| {
+            runner.start_primary_with_hook(
+                dbflux_core::TaskKind::Query,
+                "select 1",
+                None,
+                hook_returning(dbflux_core::CancelOutcome::NotSupported {
+                    reason: reason.clone(),
+                }),
+                cx,
+            )
+        });
+
+        assert!(!cx.update(|cx| runner.cancel_primary(cx)));
+        assert_eq!(
+            status_of(&app_state, task_id, cx),
+            dbflux_core::TaskStatus::Running
+        );
+        assert!(!token.is_cancelled(), "the worker must not see a cancel");
+        assert!(runner.is_primary_active());
+        let snapshot = cx.read(|cx| app_state.read(cx).tasks().get(task_id).expect("task"));
+        assert_eq!(snapshot.cancel_unavailable_reason, Some(reason));
+    }
+
+    #[gpui::test]
+    fn cancel_primary_still_cancels_an_immediate_task(cx: &mut gpui::TestAppContext) {
+        let (app_state, mut runner) = runner_with_state(cx);
+        let (task_id, _token) = cx.update(|cx| {
+            runner.start_primary_for_target(dbflux_core::TaskKind::KeyScan, "scan", None, cx)
+        });
+
+        assert!(cx.update(|cx| runner.cancel_primary(cx)));
+        assert_eq!(
+            status_of(&app_state, task_id, cx),
+            dbflux_core::TaskStatus::Cancelled
+        );
+    }
+
+    #[gpui::test]
+    fn a_rerun_asks_the_older_acknowledged_query_to_cancel(cx: &mut gpui::TestAppContext) {
+        let (app_state, mut runner) = runner_with_state(cx);
+        let (older, _token) = cx.update(|cx| {
+            runner.start_primary_with_hook(
+                dbflux_core::TaskKind::Query,
+                "older",
+                None,
+                hook_returning(dbflux_core::CancelOutcome::Requested),
+                cx,
+            )
+        });
+        let (newer, _token) = cx.update(|cx| {
+            runner.start_primary_for_target(dbflux_core::TaskKind::Query, "newer", None, cx)
+        });
+
+        assert_eq!(
+            status_of(&app_state, older, cx),
+            dbflux_core::TaskStatus::Cancelling
+        );
+        assert_eq!(
+            status_of(&app_state, newer, cx),
+            dbflux_core::TaskStatus::Running
+        );
+    }
+
+    #[gpui::test]
+    fn settling_a_cancelled_query_reports_what_the_worker_saw(cx: &mut gpui::TestAppContext) {
+        let (app_state, mut runner) = runner_with_state(cx);
+
+        let mut cancelled_by =
+            |cx: &mut gpui::TestAppContext, result: Result<(), dbflux_core::DbError>| {
+                let (task_id, _token) = cx.update(|cx| {
+                    runner.start_primary_with_hook(
+                        dbflux_core::TaskKind::Query,
+                        "select 1",
+                        None,
+                        hook_returning(dbflux_core::CancelOutcome::Requested),
+                        cx,
+                    )
+                });
+                cx.update(|cx| runner.cancel_primary(cx));
+                cx.update(|cx| runner.settle_after_cancel(task_id, &result, cx));
+                status_of(&app_state, task_id, cx)
+            };
+
+        assert_eq!(
+            cancelled_by(cx, Err(dbflux_core::DbError::Cancelled)),
+            dbflux_core::TaskStatus::Cancelled
+        );
+        assert_eq!(
+            cancelled_by(cx, Ok(())),
+            dbflux_core::TaskStatus::Completed,
+            "a statement that finished anyway is not reported as cancelled"
+        );
     }
 
     // Inverse: cancelling the handle must also flip the shared token.

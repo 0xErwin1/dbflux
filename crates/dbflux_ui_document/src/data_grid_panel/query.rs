@@ -420,10 +420,10 @@ impl DataGridPanel {
             browse_request.columns.join(", ")
         };
 
-        let (task_id, cancel_token) = self.runner.start_primary_for_target(
-            TaskKind::Query,
+        let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
             format!("SELECT {select_list} FROM {}", table.qualified_name()),
-            Some(task_target),
+            task_target,
+            true,
             cx,
         );
 
@@ -453,6 +453,9 @@ impl DataGridPanel {
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Query was cancelled, discarding result");
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.settle_after_cancel(task_id, &result, cx);
+                    });
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
@@ -566,12 +569,9 @@ impl DataGridPanel {
             database: database.clone(),
         };
 
-        let (task_id, cancel_token) = self.runner.start_primary_for_target(
-            TaskKind::Query,
-            select.sql.clone(),
-            Some(task_target),
-            cx,
-        );
+        let (task_id, cancel_token) =
+            self.runner
+                .start_primary_query_for_target(select.sql.clone(), task_target, true, cx);
 
         self.refresh.state = GridState::Loading;
         cx.notify();
@@ -609,10 +609,12 @@ impl DataGridPanel {
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Visual query was cancelled, discarding result");
-                    task_tracker.update(cx, |state, cx| {
-                        state.tasks_mut().cancel(task_id);
-                        cx.emit(dbflux_ui_base::AppStateChanged);
-                    });
+                    crate::task_runner::settle_task_after_cancel(
+                        &task_tracker,
+                        task_id,
+                        &result,
+                        cx,
+                    );
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
@@ -863,12 +865,9 @@ impl DataGridPanel {
             None => format!("find {}.{}", collection.database, collection.name),
         };
 
-        let (task_id, cancel_token) = self.runner.start_primary_for_target(
-            TaskKind::Query,
-            task_description,
-            Some(task_target),
-            cx,
-        );
+        let (task_id, cancel_token) =
+            self.runner
+                .start_primary_query_for_target(task_description, task_target, true, cx);
 
         if let Some(query) = &browse_query {
             self.app_state.update(cx, |state, _cx| {
@@ -901,6 +900,9 @@ impl DataGridPanel {
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Query was cancelled, discarding result");
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.settle_after_cancel(task_id, &result, cx);
+                    });
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }

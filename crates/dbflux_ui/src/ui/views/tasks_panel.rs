@@ -3,7 +3,7 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics};
-use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
+use dbflux_core::{CancelRequestOutcome, TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -262,26 +262,25 @@ impl TasksPanel {
         profile_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
-        match task_kind {
-            TaskKind::Query => {
-                self.app_state.read(cx).cancel_query_for_task(task_id);
-            }
-
-            TaskKind::Connect => {
-                if let Some(profile_id) = profile_id {
-                    self.app_state.update(cx, |state, cx| {
-                        state.cancel_running_connect_tasks_for_profile(profile_id);
-                        cx.emit(AppStateChanged);
-                    });
-                    return;
-                }
-            }
-
-            _ => {}
+        if task_kind == TaskKind::Connect
+            && let Some(profile_id) = profile_id
+        {
+            self.app_state.update(cx, |state, cx| {
+                state.cancel_running_connect_tasks_for_profile(profile_id);
+                cx.emit(AppStateChanged);
+            });
+            return;
         }
 
         self.app_state.update(cx, |state, cx| {
-            state.tasks_mut().cancel(task_id);
+            let outcome = state.request_cancel_task(task_id);
+
+            // Tasks not yet started with a driver cancel hook finish as
+            // `Cancelled` on the spot and still need the driver told.
+            if task_kind == TaskKind::Query && outcome == CancelRequestOutcome::Cancelled {
+                state.cancel_query_for_task(task_id);
+            }
+
             cx.emit(AppStateChanged);
         });
     }
@@ -797,6 +796,109 @@ mod tests {
                 "a key read or write must not render a cancel button"
             );
         }
+    }
+
+    fn start_acknowledged_query(
+        app_state: &Entity<AppStateEntity>,
+        outcome: dbflux_core::CancelOutcome,
+        cx: &mut VisualTestContext,
+    ) -> TaskId {
+        app_state.update(cx, |state, cx| {
+            let request = dbflux_core::TaskRequest::new(TaskKind::Query, "select 1")
+                .policy(dbflux_core::CancelPolicy::WorkerAcknowledged)
+                .cancel_hook(std::sync::Arc::new(move || outcome.clone()));
+            let task_id = state.start_task_handle(request).id();
+            cx.emit(AppStateChanged);
+            task_id
+        })
+    }
+
+    fn click_cancel(task_id: TaskId, window: &mut VisualTestContext) {
+        let bounds = window
+            .debug_bounds(selector("cancel-task", task_id))
+            .expect("a running query renders its cancel button");
+        window.simulate_click(bounds.center(), Modifiers::none());
+        window.run_until_parked();
+    }
+
+    fn status_of(
+        app_state: &Entity<AppStateEntity>,
+        task_id: TaskId,
+        cx: &mut VisualTestContext,
+    ) -> TaskStatus {
+        app_state.read_with(cx, |state, _| {
+            state.tasks().get(task_id).expect("task exists").status
+        })
+    }
+
+    #[gpui::test]
+    fn cancelling_a_query_the_driver_cannot_stop_does_not_mark_it_cancelled(
+        cx: &mut TestAppContext,
+    ) {
+        let app_state = test_app_state(cx);
+        let (_, window) = cx.add_window_view({
+            let app_state = app_state.clone();
+            move |window, cx| TasksPanel::new(app_state, window, cx)
+        });
+        let task_id = start_acknowledged_query(
+            &app_state,
+            dbflux_core::CancelOutcome::NotSupported {
+                reason: "Engine does not support cancelling a running command.".to_string(),
+            },
+            window,
+        );
+        window.run_until_parked();
+
+        click_cancel(task_id, window);
+
+        assert_eq!(status_of(&app_state, task_id, window), TaskStatus::Running);
+        let reason = app_state.read_with(window, |state, _| {
+            state
+                .tasks()
+                .get(task_id)
+                .and_then(|task| task.cancel_unavailable_reason)
+        });
+        assert_eq!(
+            reason.as_deref(),
+            Some("Engine does not support cancelling a running command.")
+        );
+    }
+
+    #[gpui::test]
+    fn cancelling_a_query_with_a_requested_hook_waits_for_the_worker(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let (_, window) = cx.add_window_view({
+            let app_state = app_state.clone();
+            move |window, cx| TasksPanel::new(app_state, window, cx)
+        });
+        let task_id =
+            start_acknowledged_query(&app_state, dbflux_core::CancelOutcome::Requested, window);
+        window.run_until_parked();
+
+        click_cancel(task_id, window);
+
+        assert_eq!(
+            status_of(&app_state, task_id, window),
+            TaskStatus::Cancelling
+        );
+    }
+
+    #[gpui::test]
+    fn cancelling_an_immediate_task_still_marks_it_cancelled(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let (_, window) = cx.add_window_view({
+            let app_state = app_state.clone();
+            move |window, cx| TasksPanel::new(app_state, window, cx)
+        });
+        let task_id = start_task(&app_state, TaskKind::KeyScan, window);
+        window.run_until_parked();
+
+        click_cancel(task_id, window);
+
+        assert_eq!(
+            status_of(&app_state, task_id, window),
+            TaskStatus::Cancelled
+        );
     }
 
     #[gpui::test]

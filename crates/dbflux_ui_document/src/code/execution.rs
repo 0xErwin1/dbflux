@@ -747,10 +747,11 @@ impl CodeDocument {
         self.result_tabs.run_in_new_tab = in_new_tab;
 
         let description = dbflux_core::truncate_string_safe(query.trim(), 80);
-        let (task_id, cancel_token) = self.runner.start_primary_for_target(
-            dbflux_core::TaskKind::Query,
+        let uses_isolated_session = on_session && connection.execution_session_factory().is_some();
+        let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
             description,
-            Some(task_target.clone()),
+            task_target.clone(),
+            !uses_isolated_session,
             cx,
         );
         self.app_state.update(cx, |state, _cx| {
@@ -772,7 +773,7 @@ impl CodeDocument {
         self.execution.active_query_task = Some(ActiveQueryTask {
             task_id,
             target: task_target.clone(),
-            uses_isolated_session: on_session && connection.execution_session_factory().is_some(),
+            uses_isolated_session,
         });
 
         self.state = DocumentState::Executing;
@@ -942,6 +943,15 @@ impl CodeDocument {
                 if dispatched && let Err(error) = connection.cleanup_after_cancel() {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
+
+                cx.update(|cx| {
+                    crate::task_runner::settle_task_after_cancel(
+                        &invalidation_app_state,
+                        task_id,
+                        &result,
+                        cx,
+                    );
+                });
 
                 let inner_result = this.update(cx, |doc, cx| {
                     doc.complete_cancelled_query(
@@ -2333,7 +2343,12 @@ impl CodeDocument {
             .read(cx)
             .tasks()
             .get(task.task_id)
-            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+            .is_some_and(|task| {
+                matches!(
+                    task.status,
+                    dbflux_core::TaskStatus::Cancelled | dbflux_core::TaskStatus::Cancelling
+                )
+            });
 
         if cancelled {
             self.plan_cancelled(cx);
@@ -2355,30 +2370,40 @@ impl CodeDocument {
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
-        if self.runner.cancel_primary(cx) {
-            if let Some(task) = self.execution.active_query_task.as_ref() {
-                if !task.uses_isolated_session {
-                    self.app_state
-                        .read(cx)
-                        .cancel_query_for_target(&task.target);
-                }
-            } else if let Some(conn_id) = self.connection_id
-                && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
-            {
-                let active_database = self
-                    .source
-                    .exec_ctx
-                    .database
-                    .clone()
-                    .or_else(|| connected.active_database.clone());
-                let target =
-                    task_target_for_execution(conn_id, connected, active_database.as_deref());
+        let Some(outcome) = self.runner.request_cancel_primary(cx) else {
+            return;
+        };
 
-                self.app_state.read(cx).cancel_query_for_target(&target);
+        // A task started through a driver hook already sent the cancel; only a
+        // task that finished cancelling on the spot (a plan or script run)
+        // still needs the connection told here.
+        if outcome == dbflux_core::CancelRequestOutcome::Cancelled {
+            self.cancel_connection_query(cx);
+        }
+
+        self.plan_cancelled(cx);
+        self.release_cancelled_execution(cx);
+    }
+
+    fn cancel_connection_query(&mut self, cx: &mut Context<Self>) {
+        if let Some(task) = self.execution.active_query_task.as_ref() {
+            if !task.uses_isolated_session {
+                self.app_state
+                    .read(cx)
+                    .cancel_query_for_target(&task.target);
             }
+        } else if let Some(conn_id) = self.connection_id
+            && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
+        {
+            let active_database = self
+                .source
+                .exec_ctx
+                .database
+                .clone()
+                .or_else(|| connected.active_database.clone());
+            let target = task_target_for_execution(conn_id, connected, active_database.as_deref());
 
-            self.plan_cancelled(cx);
-            self.release_cancelled_execution(cx);
+            self.app_state.read(cx).cancel_query_for_target(&target);
         }
     }
 

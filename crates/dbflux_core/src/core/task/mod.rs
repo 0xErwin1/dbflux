@@ -947,6 +947,11 @@ impl TaskSlot {
             .is_some_and(|(_, token)| !token.is_cancelled())
     }
 
+    /// Identity of the current occupant, without touching its token.
+    pub fn active_id(&self) -> Option<TaskId> {
+        self.active.as_ref().map(|(id, _)| *id)
+    }
+
     pub fn active_token(&self) -> Option<&CancelToken> {
         self.active.as_ref().map(|(_, token)| token)
     }

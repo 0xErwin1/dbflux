@@ -378,8 +378,9 @@ mod tests {
             metadata.get_or_init(|| {
                 let capabilities = if enforces_row_limit {
                     dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT
+                        | dbflux_core::DriverCapabilities::QUERY_CANCELLATION
                 } else {
-                    dbflux_core::DriverCapabilities::empty()
+                    dbflux_core::DriverCapabilities::QUERY_CANCELLATION
                 };
 
                 DriverMetadataBuilder::new(

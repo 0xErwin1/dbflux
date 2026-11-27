@@ -1,6 +1,9 @@
 use super::{HeldDatabaseConnection, try_close_held_database_connection};
 use crate::*;
-use dbflux_core::{Connection, SchemaDropTarget, SchemaObjectKind, TaskKind, TaskTarget};
+use dbflux_core::{
+    CancelPolicy, CancelToken, Connection, SchemaDropTarget, SchemaObjectKind, TaskKind,
+    TaskRequest, TaskTarget,
+};
 use dbflux_ui_base::toast::PendingToast;
 use std::sync::Arc;
 
@@ -56,6 +59,87 @@ enum DatabaseDropReleasePlan {
         database: String,
         connection: Arc<dyn Connection>,
     },
+}
+
+/// What the release step before the `DROP` left to do.
+enum DropPreparation {
+    /// The drop ended before the statement was reached.
+    Finished(Box<DropExecutionOutcome>),
+    /// The statement may be sent once the task passes its point of no return.
+    Ready { database_release_applied: bool },
+}
+
+/// Releases the connection resources the drop needs, honoring a cancel that
+/// arrives before the statement is sent.
+fn prepare_drop_release(
+    release_plan: DatabaseDropReleasePlan,
+    cancel_token: &CancelToken,
+) -> DropPreparation {
+    if cancel_token.is_cancelled() {
+        let held_connection = match release_plan {
+            DatabaseDropReleasePlan::ConnectionPerDatabase(held_connection) => {
+                Some(*held_connection)
+            }
+            DatabaseDropReleasePlan::None | DatabaseDropReleasePlan::ActiveDatabase { .. } => None,
+        };
+
+        return DropPreparation::Finished(Box::new(DropExecutionOutcome::Cancelled {
+            held_connection,
+        }));
+    }
+
+    match release_plan {
+        DatabaseDropReleasePlan::ConnectionPerDatabase(mut held_connection) => {
+            if let Err(error) = try_close_held_database_connection(&mut held_connection) {
+                return DropPreparation::Finished(Box::new(DropExecutionOutcome::Failed {
+                    error,
+                    held_connection: Some(*held_connection),
+                }));
+            }
+
+            DropPreparation::Ready {
+                database_release_applied: true,
+            }
+        }
+        DatabaseDropReleasePlan::ActiveDatabase {
+            database,
+            connection,
+        } => {
+            if let Err(error) = connection.set_active_database(None) {
+                return DropPreparation::Finished(Box::new(DropExecutionOutcome::Failed {
+                    error: format!(
+                        "Failed to release active database '{}': {}",
+                        database, error
+                    ),
+                    held_connection: None,
+                }));
+            }
+
+            DropPreparation::Ready {
+                database_release_applied: true,
+            }
+        }
+        DatabaseDropReleasePlan::None => DropPreparation::Ready {
+            database_release_applied: false,
+        },
+    }
+}
+
+/// Runs on the foreground, where no cancel request can interleave: a cancel
+/// that already reached the task stops the drop, otherwise the task is marked
+/// as past its point of no return and the statement may be sent.
+fn enter_drop_point_of_no_return(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    task_id: dbflux_core::TaskId,
+    cancel_token: &CancelToken,
+    reason: String,
+) -> bool {
+    if cancel_token.is_cancelled() {
+        return false;
+    }
+
+    state.mark_task_point_of_no_return(task_id, reason);
+    true
 }
 
 enum DropExecutionOutcome {
@@ -369,13 +453,13 @@ impl Sidebar {
         }
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let task = state.start_task_for_target(
-                TaskKind::SchemaDrop,
-                operation.task_description.clone(),
-                Some(operation.task_target.clone()),
+            let handle = state.start_task_handle(
+                TaskRequest::new(TaskKind::SchemaDrop, operation.task_description.clone())
+                    .target(operation.task_target.clone())
+                    .policy(CancelPolicy::WorkerAcknowledged),
             );
             cx.emit(AppStateChanged);
-            task
+            (handle.id(), handle.token().clone())
         });
 
         self.refresh_tree(cx);
@@ -422,76 +506,60 @@ impl Sidebar {
                 DatabaseDropReleasePlan::None
             };
 
-            let drop_result = cx
+            let preparation = cx
                 .background_executor()
                 .spawn({
-                    let operation = operation.clone();
                     let cancel_token = cancel_token.clone();
-                    async move {
-                        let mut database_release_applied = false;
-
-                        if cancel_token.is_cancelled() {
-                            let held_connection = match release_plan {
-                                DatabaseDropReleasePlan::ConnectionPerDatabase(held_connection) => {
-                                    Some(*held_connection)
-                                }
-                                DatabaseDropReleasePlan::None
-                                | DatabaseDropReleasePlan::ActiveDatabase { .. } => None,
-                            };
-
-                            return DropExecutionOutcome::Cancelled { held_connection };
-                        }
-
-                        match release_plan {
-                            DatabaseDropReleasePlan::ConnectionPerDatabase(mut held_connection) => {
-                                if let Err(error) =
-                                    try_close_held_database_connection(&mut held_connection)
-                                {
-                                    return DropExecutionOutcome::Failed {
-                                        error,
-                                        held_connection: Some(*held_connection),
-                                    };
-                                }
-
-                                database_release_applied = true;
-                            }
-                            DatabaseDropReleasePlan::ActiveDatabase {
-                                database,
-                                connection,
-                            } => {
-                                if let Err(error) = connection.set_active_database(None) {
-                                    return DropExecutionOutcome::Failed {
-                                        error: format!(
-                                            "Failed to release active database '{}': {}",
-                                            database, error
-                                        ),
-                                        held_connection: None,
-                                    };
-                                }
-
-                                database_release_applied = true;
-                            }
-                            DatabaseDropReleasePlan::None => {}
-                        }
-
-                        if cancel_token.is_cancelled() {
-                            return DropExecutionOutcome::Cancelled {
-                                held_connection: None,
-                            };
-                        }
-
-                        match run_drop(operation.connection.as_ref(), &operation.target, options) {
-                            Ok(()) => DropExecutionOutcome::Dropped {
-                                database_release_applied,
-                            },
-                            Err(error) => DropExecutionOutcome::Failed {
-                                error,
-                                held_connection: None,
-                            },
-                        }
-                    }
+                    async move { prepare_drop_release(release_plan, &cancel_token) }
                 })
                 .await;
+
+            let drop_result = match preparation {
+                DropPreparation::Finished(outcome) => *outcome,
+                DropPreparation::Ready {
+                    database_release_applied,
+                } => {
+                    let may_send = cx.update(|cx| {
+                        app_state.update(cx, |state, cx| {
+                            let may_send = enter_drop_point_of_no_return(
+                                state,
+                                task_id,
+                                &cancel_token,
+                                dbflux_i18n::t!("tasks_panel.drop_point_of_no_return"),
+                            );
+                            cx.emit(AppStateChanged);
+                            may_send
+                        })
+                    });
+
+                    if may_send {
+                        cx.background_executor()
+                            .spawn({
+                                let operation = operation.clone();
+                                async move {
+                                    match run_drop(
+                                        operation.connection.as_ref(),
+                                        &operation.target,
+                                        options,
+                                    ) {
+                                        Ok(()) => DropExecutionOutcome::Dropped {
+                                            database_release_applied,
+                                        },
+                                        Err(error) => DropExecutionOutcome::Failed {
+                                            error,
+                                            held_connection: None,
+                                        },
+                                    }
+                                }
+                            })
+                            .await
+                    } else {
+                        DropExecutionOutcome::Cancelled {
+                            held_connection: None,
+                        }
+                    }
+                }
+            };
 
             cx.update(|cx| match drop_result {
                 DropExecutionOutcome::Dropped {
@@ -589,6 +657,10 @@ impl Sidebar {
                     }
 
                     if cancel_token.is_cancelled() {
+                        app_state.update(cx, |state, cx| {
+                            state.acknowledge_task_cancelled(task_id);
+                            cx.emit(AppStateChanged);
+                        });
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.refresh_tree(cx);
                         });
@@ -788,6 +860,93 @@ mod tests {
             Some("analytics".to_string()),
             "restore reinstates the previous active database"
         );
+    }
+
+    fn app_state_with_drop_task() -> (
+        AppStateEntity,
+        dbflux_core::TaskId,
+        dbflux_core::CancelToken,
+    ) {
+        use dbflux_storage::bootstrap::StorageRuntime;
+
+        let rt = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let mut state = AppStateEntity::new_with_storage_runtime(rt).expect("test app state");
+        let handle = state.start_task_handle(
+            dbflux_core::TaskRequest::new(dbflux_core::TaskKind::SchemaDrop, "DROP TABLE users")
+                .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+        );
+
+        (state, handle.id(), handle.token().clone())
+    }
+
+    #[test]
+    fn a_cancel_before_the_ddl_stops_the_drop_and_ends_cancelled() {
+        let (mut state, task_id, token) = app_state_with_drop_task();
+
+        assert_eq!(
+            state.request_cancel_task(task_id),
+            dbflux_core::CancelRequestOutcome::Cancelling
+        );
+
+        assert!(
+            !super::enter_drop_point_of_no_return(&mut state, task_id, &token, "late".to_string()),
+            "the statement must not be sent after a cancel"
+        );
+        assert!(state.acknowledge_task_cancelled(task_id));
+        assert_eq!(
+            state.tasks().get(task_id).expect("task").status,
+            dbflux_core::TaskStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn a_cancel_after_the_point_of_no_return_is_refused_and_the_drop_completes() {
+        let (mut state, task_id, token) = app_state_with_drop_task();
+        let reason = "The statement was already sent to the server and can no longer be cancelled.";
+
+        assert!(super::enter_drop_point_of_no_return(
+            &mut state,
+            task_id,
+            &token,
+            reason.to_string()
+        ));
+
+        assert_eq!(
+            state.request_cancel_task(task_id),
+            dbflux_core::CancelRequestOutcome::Refused {
+                reason: reason.to_string()
+            }
+        );
+        assert!(
+            !token.is_cancelled(),
+            "the running drop must not see a cancel"
+        );
+        let snapshot = state.tasks().get(task_id).expect("task");
+        assert!(!snapshot.is_cancellable);
+        assert_eq!(snapshot.cancel_unavailable_reason.as_deref(), Some(reason));
+
+        state.complete_task(task_id);
+        assert_eq!(
+            state.tasks().get(task_id).expect("task").status,
+            dbflux_core::TaskStatus::Completed,
+            "a drop that committed never shows as cancelled"
+        );
+    }
+
+    #[test]
+    fn a_cancel_before_the_release_step_skips_the_ddl() {
+        let token = dbflux_core::CancelToken::new();
+        token.cancel();
+
+        let preparation = super::prepare_drop_release(DatabaseDropReleasePlan::None, &token);
+
+        let super::DropPreparation::Finished(outcome) = preparation else {
+            panic!("a cancelled drop finishes before the statement");
+        };
+        assert!(matches!(
+            *outcome,
+            super::DropExecutionOutcome::Cancelled { .. }
+        ));
     }
 
     /// Records the statements `drop_schema_object` runs, through a dialect

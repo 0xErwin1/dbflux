@@ -6331,6 +6331,8 @@ tasks_panel:
   collapse: "Hide the tasks panel"
   empty: No background tasks
   output_truncated: "… output truncated in panel"
+  query_cancel_unsupported: "%{driver} does not support cancelling a running command."
+  drop_point_of_no_return: "The statement was already sent to the server and can no longer be cancelled."
 toast:
   action:
     copy: Copy

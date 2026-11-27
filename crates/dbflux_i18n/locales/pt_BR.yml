@@ -6324,6 +6324,8 @@ tasks_panel:
   collapse: "Ocultar o painel de tarefas"
   empty: Nenhuma tarefa em segundo plano
   output_truncated: "… saída truncada no painel"
+  query_cancel_unsupported: "%{driver} não permite cancelar um comando em execução."
+  drop_point_of_no_return: "A instrução já foi enviada ao servidor e não pode mais ser cancelada."
 toast:
   action:
     copy: Copiar
