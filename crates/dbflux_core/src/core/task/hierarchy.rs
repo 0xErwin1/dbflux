@@ -1,13 +1,17 @@
 //! Parent/child tasks: cascade cancel and how a parent settles.
 //!
 //! Rules:
-//! - Cancelling a task first cancels every non-terminal child, depth-first.
-//!   `Pending` children become `Skipped`.
-//! - A parent whose own cancel would read `Cancelled` while a child is still
-//!   `Running` or `Cancelling` (a child that cannot stop, or is waiting for
+//! - Cancelling a task first cancels every non-terminal descendant,
+//!   depth-first, passing through terminal intermediates. `Pending`
+//!   descendants become `Skipped`. A direct cancel of a terminal task is a
+//!   no-op that leaves its subtree alone.
+//! - A child registered under a cancelling or cancelled parent inherits the
+//!   cancellation (see `TaskRequest::parent`).
+//! - A parent whose own cancel would read `Cancelled` while a descendant is still
+//!   `Running` or `Cancelling` (a descendant that cannot stop, or is waiting for
 //!   its worker) becomes `Cancelling` instead, and turns `Cancelled` by
-//!   itself once every child is terminal.
-//! - `acknowledge_cancelled` on a parent is refused while a child is in
+//!   itself once every descendant is terminal.
+//! - `acknowledge_cancelled` on a parent is refused while a descendant is in
 //!   flight.
 //! - Completing or failing a parent never touches its children: they finish
 //!   on their own.
@@ -48,10 +52,25 @@ impl TaskManager {
         children.into_iter().map(|(_, child)| child).collect()
     }
 
-    pub(super) fn has_in_flight_children(&self, id: TaskId) -> bool {
-        self.tasks
-            .values()
-            .any(|task| task.parent_id == Some(id) && task.status.is_in_flight())
+    /// Whether any task below `id` is in flight, however many terminal
+    /// intermediates lie between them.
+    pub(super) fn has_in_flight_descendants(&self, id: TaskId) -> bool {
+        let mut pending = vec![id];
+
+        while let Some(current) = pending.pop() {
+            for task in self.tasks.values() {
+                if task.parent_id != Some(current) {
+                    continue;
+                }
+
+                if task.status.is_in_flight() {
+                    return true;
+                }
+                pending.push(task.id);
+            }
+        }
+
+        false
     }
 
     /// Applies the honest-parent rule after the parent's own cancel request.
@@ -60,7 +79,7 @@ impl TaskManager {
         id: TaskId,
         own: CancelRequestOutcome,
     ) -> CancelRequestOutcome {
-        if own != CancelRequestOutcome::Cancelled || !self.has_in_flight_children(id) {
+        if own != CancelRequestOutcome::Cancelled || !self.has_in_flight_descendants(id) {
             return own;
         }
 
@@ -78,7 +97,7 @@ impl TaskManager {
         let mut current = self.tasks.get(&id).and_then(|task| task.parent_id);
 
         while let Some(parent_id) = current {
-            if self.has_in_flight_children(parent_id) {
+            if self.has_in_flight_descendants(parent_id) {
                 return;
             }
 
@@ -86,11 +105,12 @@ impl TaskManager {
                 return;
             };
 
-            if parent.status != TaskStatus::Cancelling || !parent.settles_with_children {
+            if parent.status == TaskStatus::Cancelling && parent.settles_with_children {
+                parent.finish(TaskStatus::Cancelled);
+            } else if !parent.status.is_terminal() {
                 return;
             }
 
-            parent.finish(TaskStatus::Cancelled);
             current = parent.parent_id;
         }
     }

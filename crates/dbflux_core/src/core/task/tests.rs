@@ -949,3 +949,114 @@ fn legacy_start_paths_keep_their_behavior() {
     assert_eq!(status_of(&manager, first), TaskStatus::Cancelled);
     assert_eq!(status_of(&manager, second), TaskStatus::Running);
 }
+
+// ---------------------------------------------------------------------------
+// Cascade through terminal intermediates and registration under a cancelled parent
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cancelling_a_root_reaches_a_running_leaf_under_a_completed_intermediate() {
+    let mut manager = TaskManager::new();
+    let root = manager.start_handle(TaskRequest::new(TaskKind::Connect, "root"));
+    let middle =
+        manager.start_handle(TaskRequest::new(TaskKind::Connect, "middle").parent(root.id()));
+    let leaf = manager.start_handle(acknowledged_request(TaskKind::Query).parent(middle.id()));
+    manager.complete(middle.id());
+
+    assert_eq!(
+        manager.request_cancel(root.id()),
+        CancelRequestOutcome::Cancelling
+    );
+
+    assert_eq!(status_of(&manager, leaf.id()), TaskStatus::Cancelling);
+    assert!(leaf.is_cancelled());
+    assert_eq!(status_of(&manager, middle.id()), TaskStatus::Completed);
+    assert_eq!(status_of(&manager, root.id()), TaskStatus::Cancelling);
+
+    assert!(manager.acknowledge_cancelled(leaf.id()));
+
+    assert_eq!(status_of(&manager, leaf.id()), TaskStatus::Cancelled);
+    assert_eq!(status_of(&manager, root.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn a_direct_cancel_of_a_completed_task_is_a_no_op_and_spares_its_children() {
+    let mut manager = TaskManager::new();
+    let middle = manager.start_handle(TaskRequest::new(TaskKind::Connect, "middle"));
+    let leaf = manager.start_handle(acknowledged_request(TaskKind::Query).parent(middle.id()));
+    manager.complete(middle.id());
+
+    assert_eq!(
+        manager.request_cancel(middle.id()),
+        CancelRequestOutcome::NotRunning
+    );
+
+    assert_eq!(status_of(&manager, middle.id()), TaskStatus::Completed);
+    assert_eq!(status_of(&manager, leaf.id()), TaskStatus::Running);
+    assert!(!leaf.is_cancelled());
+}
+
+#[test]
+fn completing_an_intermediate_leaves_its_running_leaf_untouched() {
+    let mut manager = TaskManager::new();
+    let root = manager.start_handle(TaskRequest::new(TaskKind::Connect, "root"));
+    let middle =
+        manager.start_handle(TaskRequest::new(TaskKind::Connect, "middle").parent(root.id()));
+    let leaf = manager.start_handle(acknowledged_request(TaskKind::Query).parent(middle.id()));
+
+    manager.complete(middle.id());
+
+    assert_eq!(status_of(&manager, leaf.id()), TaskStatus::Running);
+    assert!(!leaf.is_cancelled());
+    assert_eq!(status_of(&manager, root.id()), TaskStatus::Running);
+}
+
+#[test]
+fn a_pending_child_under_a_cancelled_parent_is_skipped_and_never_activates() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    manager.request_cancel(parent.id());
+
+    let child = manager.start_handle(
+        TaskRequest::new(TaskKind::LoadSchema, "schema")
+            .pending()
+            .parent(parent.id()),
+    );
+
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Skipped);
+    assert!(child.is_cancelled());
+    assert!(!manager.activate(child.id()));
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Skipped);
+    assert_eq!(manager.active_count(), 0);
+}
+
+#[test]
+fn a_running_child_under_a_cancelling_parent_is_cancelled_at_registration() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(acknowledged_request(TaskKind::Connect));
+    manager.request_cancel(parent.id());
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+
+    let child = manager.start_handle(acknowledged_request(TaskKind::Query).parent(parent.id()));
+
+    assert!(child.is_cancelled());
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Cancelling);
+}
+
+#[test]
+fn a_child_under_a_running_parent_starts_normally() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+
+    let running = manager.start_handle(TaskRequest::new(TaskKind::Query, "q").parent(parent.id()));
+    let pending = manager.start_handle(
+        TaskRequest::new(TaskKind::LoadSchema, "s")
+            .pending()
+            .parent(parent.id()),
+    );
+
+    assert_eq!(status_of(&manager, running.id()), TaskStatus::Running);
+    assert!(!running.is_cancelled());
+    assert_eq!(status_of(&manager, pending.id()), TaskStatus::Pending);
+    assert!(manager.activate(pending.id()));
+}

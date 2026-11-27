@@ -31,7 +31,12 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
   consola llevan el límite de filas del editor.
 - Autenticación mediante logins de SQL Server (usuario + contraseña); el modo
   URI acepta connection strings ADO, JDBC y
-  `sqlserver://user:pass@host:port/db`.
+  `sqlserver://user:pass@host:port/db`. Una cadena ADO o JDBC sin la clave
+  `Encrypt` se conecta con el cifrado en `off`; usa `Encrypt=true` para cifrar
+  la sesión.
+- Las columnas `sql_variant` se decodifican al valor del tipo base de cada
+  fila: un `int` se muestra como entero, un `nvarchar` como texto y un `NULL`
+  como nulo.
 - Reporta `Application Name` como `dbflux/<version>` salvo que la connection
   string o URI ya definan uno, en cuyo caso el valor del usuario siempre gana;
   el esquema de URL `sqlserver://`/`mssql://` acepta un parámetro de query
@@ -47,8 +52,9 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
     Seleccionar `required` muestra la ruta de **CA certificate**; cuando se
     define, la cadena se valida contra esa CA (`trust_cert_ca` de tiberius),
     por lo que los servidores firmados por una CA privada o corporativa
-    conectan sin confiar en cualquier certificado. Si se deja vacía, se usa
-    el almacén de confianza del sistema. El modo `on` ignora la ruta.
+    conectan sin confiar en cualquier certificado; la CA se confía junto con
+    el almacén de confianza del sistema. Si se deja vacía, se usa solo el
+    almacén de confianza del sistema. El modo `on` ignora la ruta.
   En modo URI, `?trust=true|false` sobrescribe explícitamente el valor derivado
     si necesitas una combinación inusual (p. ej.
     `?encrypt=required&trust=true`).
@@ -317,14 +323,18 @@ Requiere el permiso `VIEW SERVER STATE`.
 
 ## Limitaciones
 
-- El certificado de CA del modo `required` reemplaza el almacén de confianza
-  del sistema en lugar de ampliarlo, debe contener exactamente un certificado
-  y debe usar la extensión `.pem`, `.crt` o `.der` (tiberius con rustls).
-  Las URL `sqlserver://` no tienen parámetro de certificado de CA; las cadenas
-  de conexión ADO y JDBC aceptan en su lugar la clave
-  `TrustServerCertificateCA=<ruta>` de tiberius. No la combines con
-  `TrustServerCertificate=true`: tiberius entra en pánico cuando ambos
-  ajustes de confianza están presentes.
+- El certificado de CA del modo `required` se suma al almacén de confianza
+  del sistema en lugar de reemplazarlo, así que un certificado que una CA
+  pública emitió para el mismo hostname también se valida; tiberius no ofrece
+  forma de confiar solo en la CA indicada. El archivo debe usar la extensión
+  `.pem`, `.crt` o `.der`, y un archivo PEM puede contener varios
+  certificados (tiberius con rustls). Las URL `sqlserver://` no tienen
+  parámetro de certificado de CA; las cadenas de conexión ADO y JDBC aceptan
+  en su lugar la clave `TrustServerCertificateCA=<ruta>` de tiberius, y
+  combinarla con `TrustServerCertificate=true` falla con un error.
+- La conexión se abandona si el handshake de login (prelogin, TLS y login)
+  no termina en 15 segundos, el valor por defecto de tiberius. Las consultas
+  no tienen límite de tiempo.
 - A través de un túnel SSH el driver se conecta a `127.0.0.1`, por lo que ese
   es el nombre de servidor que se verifica en el modo `required`: un
   certificado de CA privada emitido para el hostname real falla la
