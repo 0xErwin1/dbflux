@@ -506,7 +506,7 @@ fn the_inspector_shows_the_key_condition_once_even_when_details_omit_or_repeat_i
         value: "(id = 1)".into(),
     });
 
-    let count_after = |plan: &mut Harness<'_>, details: Vec<(String, String)>| {
+    let rendered = |plan: &mut Harness<'_>, details: Vec<(String, String)>| {
         let mut node = node.clone();
         node.details = details;
         let inspector = plan
@@ -519,28 +519,39 @@ fn the_inspector_shows_the_key_condition_once_even_when_details_omit_or_repeat_i
             }
         }
         let (_mount, rail) = plan.window.add_window_view(|_, _| Mount(inspector));
+        let capture = FrameCapture::observe(rail);
         rail.run_until_parked();
-        let key_condition = rail
-            .debug_bounds("plan-inspector-field-key-condition")
-            .is_some();
-        let duplicate = rail.debug_bounds("plan-inspector-detail-0").is_some();
-        (key_condition, duplicate)
+        let frame = capture.frame(rail);
+        frame
+            .nodes()
+            .map(|(_, node)| node.content_text().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     };
+    // Containers repeat their children's text, so a row is counted by the
+    // node that holds exactly that row.
+    let rows = |text: &str, row: &str| text.lines().filter(|line| line.trim() == row).count();
 
+    let omitted = rendered(&mut plan, Vec::new());
     assert_eq!(
-        count_after(&mut plan, Vec::new()),
-        (true, false),
-        "a driver that keeps the condition out of details still shows it"
+        rows(&omitted, "Index Cond (id = 1)"),
+        1,
+        "a driver that keeps the condition out of details still shows it: {omitted}"
     );
+
+    let repeated = rendered(&mut plan, vec![("Index Cond".into(), "(id = 1)".into())]);
     assert_eq!(
-        count_after(&mut plan, vec![("Index Cond".into(), "(id = 1)".into())]),
-        (true, false),
-        "a detail that repeats the condition is not listed twice"
+        rows(&repeated, "Index Cond (id = 1)"),
+        1,
+        "a detail that repeats the condition is not listed twice: {repeated}"
     );
+
+    let unrelated = rendered(&mut plan, vec![("Output".into(), "id".into())]);
+    assert_eq!(rows(&unrelated, "Index Cond (id = 1)"), 1, "{unrelated}");
     assert_eq!(
-        count_after(&mut plan, vec![("Output".into(), "id".into())]),
-        (true, true),
-        "other details stay"
+        rows(&unrelated, "Output id"),
+        1,
+        "other details stay: {unrelated}"
     );
 }
 

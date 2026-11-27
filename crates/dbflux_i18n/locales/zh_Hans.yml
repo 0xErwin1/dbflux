@@ -1331,6 +1331,7 @@ document:
         title: 计划失败
       origin_gone: "生成此结果的连接已断开。请重新连接并再次运行该查询，然后再解释它。"
       origin_database_changed: "生成此结果的数据库（%{origin}）已不是此连接当前使用的数据库（%{current}）。请切回 %{origin} 后再次解释该查询；现在获取的计划会描述另一个数据库。"
+      editor_database_changed: "此编辑器所用的数据库（%{origin}）已不是此连接当前使用的数据库（%{current}）。请切回 %{origin} 后再次解释该查询；现在获取的计划会描述另一个数据库。"
       cancelled:
         title: 计划已取消
     explain:

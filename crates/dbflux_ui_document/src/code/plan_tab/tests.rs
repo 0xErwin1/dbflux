@@ -1194,6 +1194,7 @@ fn the_translations_keep_the_placeholders_of_the_english_text() {
         "document.query_plan.inspector.node",
         "document.query_plan.state.unsupported.body",
         "document.query_plan.explain.unavailable",
+        "document.query_plan.state.editor_database_changed",
     ] {
         let english = dbflux_i18n::t!(key, locale = "en");
         let mut placeholders: Vec<&str> = english.matches("%{").collect();
@@ -1323,6 +1324,156 @@ fn a_result_is_planned_on_a_shared_session_still_on_its_database(cx: &mut TestAp
 
     assert_eq!(doc.requests(), ["SELECT 1"]);
     assert!(doc.plan_state(ready));
+}
+
+fn set_editor_database(doc: &mut Doc<'_>, database: &str) {
+    doc.window.update(|_, cx| {
+        doc.document.update(cx, |document, _| {
+            document.source.exec_ctx.database = Some(database.to_string());
+        });
+    });
+}
+
+#[gpui::test]
+fn the_editor_explain_is_refused_on_a_shared_session_that_moved_to_another_database(
+    cx: &mut TestAppContext,
+) {
+    let driver = FakeDriver::new(DbKind::MySQL).with_query_plan(sample_plan());
+    let mut doc = open(cx, driver, "SELECT 2");
+    set_editor_database(&mut doc, "shop");
+    set_active_database(&mut doc, "reporting");
+
+    doc.explain_and_settle();
+
+    assert!(doc.requests().is_empty(), "nothing is planned");
+    let message = doc
+        .plan_state(|state| match state {
+            PlanState::Failed(failure) => Some(failure.summary.clone()),
+            _ => None,
+        })
+        .expect("the tab says why");
+    assert!(
+        message.contains("shop") && message.contains("reporting"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("result"),
+        "the editor wording does not talk about a result: {message}"
+    );
+}
+
+#[gpui::test]
+fn the_editor_explain_runs_on_a_shared_session_still_on_the_editors_database(
+    cx: &mut TestAppContext,
+) {
+    let driver = FakeDriver::new(DbKind::MySQL).with_query_plan(sample_plan());
+    let mut doc = open(cx, driver, "SELECT 2");
+    set_editor_database(&mut doc, "shop");
+    set_active_database(&mut doc, "shop");
+
+    doc.explain_and_settle();
+
+    assert_eq!(doc.requests(), ["SELECT 2"]);
+    assert!(doc.plan_state(ready));
+}
+
+/// Starts a query after the Plan, the way running one does: it takes the
+/// document's primary task (cancelling the Plan's) and becomes the active
+/// query.
+fn start_newer_query(doc: &mut Doc<'_>) -> uuid::Uuid {
+    doc.window.update(|_, cx| {
+        doc.document.update(cx, |document, cx| {
+            let target = document
+                .execution
+                .active_query_task
+                .as_ref()
+                .expect("the plan is the active task")
+                .target
+                .clone();
+            let (task_id, _token) = document.runner.start_primary_for_target(
+                dbflux_core::TaskKind::Query,
+                "SELECT newer",
+                Some(target.clone()),
+                cx,
+            );
+            document.execution.active_query_task = Some(crate::code::ActiveQueryTask {
+                task_id,
+                target,
+                uses_isolated_session: false,
+            });
+            document.state = crate::types::DocumentState::Executing;
+            task_id
+        })
+    })
+}
+
+fn assert_newer_query_still_running(doc: &mut Doc<'_>, newer: uuid::Uuid) {
+    doc.window.update(|_, cx| {
+        let document = doc.document.read(cx);
+        assert!(
+            document.runner.is_primary_active(),
+            "the newer query's task is not cancelled"
+        );
+        assert_eq!(
+            document
+                .execution
+                .active_query_task
+                .as_ref()
+                .map(|task| task.task_id),
+            Some(newer),
+            "the newer query is still the active one"
+        );
+        assert_eq!(document.state, crate::types::DocumentState::Executing);
+    });
+}
+
+#[gpui::test]
+fn closing_a_loading_plan_leaves_a_newer_query_running(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.explain();
+    let newer = start_newer_query(&mut doc);
+
+    doc.window.update(|_, cx| {
+        doc.document
+            .update(cx, |document, cx| document.close_plan_tab(cx))
+    });
+
+    assert!(!doc.has_plan_tab());
+    assert_newer_query_still_running(&mut doc, newer);
+}
+
+#[gpui::test]
+fn refusing_a_plan_while_one_loads_leaves_a_newer_query_running(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.explain();
+    let newer = start_newer_query(&mut doc);
+
+    doc.window.update(|_, cx| {
+        doc.document.update(cx, |document, cx| {
+            let target = document.plan.tab.as_ref().expect("the tab").target.clone();
+            document.show_plan_refused(target, "refused".into(), cx);
+        })
+    });
+
+    assert!(doc.plan_state(|state| matches!(state, PlanState::Failed(_))));
+    assert_newer_query_still_running(&mut doc, newer);
+}
+
+#[gpui::test]
+fn cancelling_a_loading_plan_leaves_a_newer_query_running(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.explain();
+    let newer = start_newer_query(&mut doc);
+
+    doc.window.update(|_, cx| {
+        let view = doc.document.read(cx).plan.view().expect("the Plan tab");
+        view.update(cx, |_, cx| {
+            cx.emit(crate::query_plan::PlanViewEvent::CancelRequested)
+        });
+    });
+
+    assert!(doc.plan_state(|state| matches!(state, PlanState::Cancelled)));
+    assert_newer_query_still_running(&mut doc, newer);
 }
 
 #[gpui::test]

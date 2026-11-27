@@ -1328,6 +1328,7 @@ document:
         title: Falha no plano
       origin_gone: "A conexão da qual este resultado veio não está mais conectada. Reconecte-a e execute a consulta novamente para explicá-la."
       origin_database_changed: "O banco de dados em que este resultado foi executado (%{origin}) não é mais o que esta conexão está usando (%{current}). Volte para %{origin} e explique a consulta novamente; um plano obtido agora descreveria outro banco de dados."
+      editor_database_changed: "O banco de dados deste editor (%{origin}) não é mais o que esta conexão está usando (%{current}). Volte para %{origin} e explique a consulta novamente; um plano obtido agora descreveria outro banco de dados."
       cancelled:
         title: Plano cancelado
     explain:

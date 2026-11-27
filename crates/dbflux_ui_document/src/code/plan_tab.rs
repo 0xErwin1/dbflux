@@ -298,21 +298,31 @@ impl CodeDocument {
         }
     }
 
-    /// Why a result cannot be explained on its origin database: its driver
+    /// Why a plan cannot be asked of the database it is meant for: its driver
     /// keeps one session for every database and the session is no longer on
-    /// the database the result ran on, so the plan request (which carries no
-    /// database) would be planned against the wrong one.
-    fn origin_database_changed(&self, route: &PlanRoute, cx: &App) -> Option<String> {
-        let PlanRoute::Origin {
-            connection_id,
-            database: Some(origin),
-        } = route
-        else {
-            return None;
+    /// that database, so the plan request (which carries no database) would
+    /// be planned against the wrong one. The database is the one a result ran
+    /// on, or the one the editor shows.
+    fn plan_database_changed(&self, route: &PlanRoute, cx: &App) -> Option<String> {
+        let (connection_id, expected, key) = match route {
+            PlanRoute::Origin {
+                connection_id,
+                database: Some(origin),
+            } => (
+                *connection_id,
+                origin,
+                "document.query_plan.state.origin_database_changed",
+            ),
+            PlanRoute::Current => (
+                self.connection_id?,
+                self.source.exec_ctx.database.as_ref()?,
+                "document.query_plan.state.editor_database_changed",
+            ),
+            PlanRoute::Origin { database: None, .. } => return None,
         };
 
         let connections = self.app_state.read(cx).connections();
-        let connected = connections.get(connection_id)?;
+        let connected = connections.get(&connection_id)?;
         if connected.connection.schema_loading_strategy()
             == dbflux_core::SchemaLoadingStrategy::ConnectionPerDatabase
         {
@@ -320,13 +330,7 @@ impl CodeDocument {
         }
 
         let current = connected.active_database.as_deref()?;
-        (current != origin).then(|| {
-            dbflux_i18n::t!(
-                "document.query_plan.state.origin_database_changed",
-                origin = origin,
-                current = current
-            )
-        })
+        (current != expected).then(|| dbflux_i18n::t!(key, origin = expected, current = current))
     }
 
     /// Asks the driver for the plan of `target` and shows the Plan tab,
@@ -344,7 +348,7 @@ impl CodeDocument {
             return;
         }
 
-        if let Some(message) = self.origin_database_changed(&target.route, cx) {
+        if let Some(message) = self.plan_database_changed(&target.route, cx) {
             self.show_plan_refused(target, message, cx);
             return;
         }
@@ -424,14 +428,7 @@ impl CodeDocument {
     /// The plan is refused before the driver is asked: the Plan tab shows
     /// `message` in its error state.
     fn show_plan_refused(&mut self, target: PlanTarget, message: String, cx: &mut Context<Self>) {
-        if self
-            .plan
-            .tab
-            .as_ref()
-            .is_some_and(|tab| tab.running.is_some())
-        {
-            self.cancel_query(cx);
-        }
+        self.cancel_running_plan(cx);
 
         let mode = self
             .plan
@@ -592,6 +589,28 @@ impl CodeDocument {
         view.update(cx, |view, cx| view.set_cancelled(cx));
     }
 
+    /// Stops the plan that is still loading, if there is one. The document's
+    /// cancellation reaches whatever query is active, so it is only used while
+    /// the plan's task is that query; once a newer query has taken over, only
+    /// the plan's own loading state is dropped and the query keeps running.
+    fn cancel_running_plan(&mut self, cx: &mut Context<Self>) {
+        let Some(task_id) = self.plan.tab.as_ref().and_then(|tab| tab.running) else {
+            return;
+        };
+
+        let owns_active_task = self
+            .execution
+            .active_query_task
+            .as_ref()
+            .is_some_and(|task| task.task_id == task_id);
+
+        if owns_active_task {
+            self.cancel_query(cx);
+        } else {
+            self.plan_cancelled(cx);
+        }
+    }
+
     fn on_plan_event(
         &mut self,
         _view: Entity<PlanView>,
@@ -617,7 +636,7 @@ impl CodeDocument {
                     self.start_plan(target, cx);
                 }
             }
-            PlanViewEvent::CancelRequested => self.cancel_query(cx),
+            PlanViewEvent::CancelRequested => self.cancel_running_plan(cx),
         }
     }
 
@@ -654,13 +673,11 @@ impl CodeDocument {
 
     /// Closes the Plan tab, cancelling the plan if it is still loading.
     pub(super) fn close_plan_tab(&mut self, cx: &mut Context<Self>) {
+        self.cancel_running_plan(cx);
+
         let Some(tab) = self.plan.tab.take() else {
             return;
         };
-
-        if tab.running.is_some() {
-            self.cancel_query(cx);
-        }
         tab.view.update(cx, |view, cx| view.close_inspector(cx));
 
         self.plan.shown = false;
