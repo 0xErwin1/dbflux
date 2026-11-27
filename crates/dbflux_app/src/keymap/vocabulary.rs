@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 
 use bolt_keys::{ContextSpec, KeymapVocabulary};
 
+use super::keymap_layer::prints_text;
 use super::{Command, ContextId};
 
 static CONTEXT_VOCABULARY: LazyLock<KeymapVocabulary> = LazyLock::new(|| {
@@ -24,6 +25,7 @@ static CONTEXT_VOCABULARY: LazyLock<KeymapVocabulary> = LazyLock::new(|| {
             default_predicate: context.default_predicate(),
             inherits_global_chords: context.inherits_global_chords(),
             is_element_context: context.is_element_context(),
+            outside_input_predicate: context.predicate_outside_input(),
         })
         .collect();
 
@@ -35,6 +37,7 @@ static CONTEXT_VOCABULARY: LazyLock<KeymapVocabulary> = LazyLock::new(|| {
     KeymapVocabulary::new(contexts, ContextId::Global.id())
         .with_command_storage_id(storage_command_id)
         .with_unbound_commands(unbound_commands)
+        .with_printable_key_check(prints_text)
 });
 
 /// The command id a stored row names for the binding carrying `action_id`:

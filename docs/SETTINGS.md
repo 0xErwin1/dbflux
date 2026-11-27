@@ -398,12 +398,19 @@ to see whether the longer one follows), and "takes typed text" when a plain
 letter is bound where text is typed, such as a text field or the code editor
 outside Vim's Normal and Visual modes.
 
-**Commands without a default shortcut.** A command that ships with no key,
-such as **Copy as Markdown** under Results, is listed in the context that owns
-it with **No shortcut**. Press the pencil to give it keys, like any other row:
+**Commands without a default shortcut.** Settings lists the commands that
+declare a home context and ship with no key there, such as **Copy as Markdown**
+under Results, in that context with **No shortcut**. A command with no home
+context, such as **Go to query error**, is not listed. Press the pencil to give it keys, like any other row:
 the shortcut works at once, is checked for conflicts, and counts as overridden.
 Its reset arrow, or **Remove shortcut**, returns it to no binding. DBFlux builds
 that predate this feature ignore the stored row.
+
+A bare printable key (a letter, digit, symbol or Space) that you assign, to such a
+command or by moving a default binding, applies in Results, Audit and Inspector
+only while no text field has focus, so the letter is still typed into a filter
+or search field. Other keys, such as chords with Ctrl, Alt or Cmd, function keys and arrows, keep the binding's own condition,
+and a context condition you set yourself is used as written.
 
 **Resetting.** An overridden binding shows a reset arrow that restores its
 default keys and context (`r` on a selected binding does the same, and `Delete`

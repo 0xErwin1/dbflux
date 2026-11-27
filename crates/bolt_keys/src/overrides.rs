@@ -217,15 +217,61 @@ impl KeymapOverrides {
     }
 
     /// The context predicate the binding has once overrides apply.
-    pub fn effective_predicate<'a>(&'a self, slot: &BindingSlot) -> Cow<'a, str> {
-        match self
-            .entries
-            .get(slot)
-            .and_then(|binding_override| binding_override.predicate.as_deref())
-        {
-            Some(predicate) => Cow::Borrowed(predicate),
-            None => Cow::Borrowed(slot.default_predicate),
+    pub fn effective_predicate<'a>(
+        &'a self,
+        vocabulary: &KeymapVocabulary,
+        slot: &BindingSlot,
+    ) -> Cow<'a, str> {
+        match self.effective_keys(slot) {
+            Some(keys) => self.effective_predicate_for(vocabulary, slot, &keys),
+            None => match self.custom_predicate(slot) {
+                Some(predicate) => Cow::Borrowed(predicate),
+                None => Cow::Borrowed(slot.default_predicate),
+            },
         }
+    }
+
+    /// The context predicate `slot` would have on `keys`.
+    ///
+    /// A predicate the user set wins. Otherwise keys the user assigned that
+    /// print text in a context with an outside-input predicate narrow to it,
+    /// as the default layer narrows its own printable keys, so the command
+    /// does not take the character from a text field inside the context.
+    /// Other keys, and a binding that keeps its default keys, keep the
+    /// slot's default predicate. A slot whose default predicate is already
+    /// narrower than its context's is left as it is.
+    pub fn effective_predicate_for<'a>(
+        &'a self,
+        vocabulary: &KeymapVocabulary,
+        slot: &BindingSlot,
+        keys: &KeySequence,
+    ) -> Cow<'a, str> {
+        match self.custom_predicate(slot) {
+            Some(predicate) => Cow::Borrowed(predicate),
+            None => Cow::Borrowed(Self::default_predicate_for(vocabulary, slot, keys)),
+        }
+    }
+
+    /// The predicate `slot` has with `keys` when the user set none: the
+    /// outside-input predicate for assigned printable keys, otherwise the
+    /// slot's default predicate.
+    fn default_predicate_for(
+        vocabulary: &KeymapVocabulary,
+        slot: &BindingSlot,
+        keys: &KeySequence,
+    ) -> &'static str {
+        let keeps_default_keys = slot.default_keys.as_ref() == Some(keys);
+        let has_context_predicate =
+            vocabulary.default_predicate(slot.context) == Some(slot.default_predicate);
+
+        if !keeps_default_keys
+            && has_context_predicate
+            && let Some(predicate) = vocabulary.outside_input_predicate_for(slot.context, keys)
+        {
+            return predicate;
+        }
+
+        slot.default_predicate
     }
 
     /// The predicate the user gave the binding, `None` when it keeps the
@@ -262,6 +308,26 @@ impl KeymapOverrides {
         self.store(slot, BindingOverride { keys, predicate });
     }
 
+    /// [`KeymapOverrides::set_predicate`] that also treats the predicate the
+    /// binding already has for its current keys (the outside-input one for
+    /// an assigned printable key) as no custom predicate, so saving the
+    /// predicate editor unchanged does not pin the narrowing.
+    pub fn set_predicate_for(
+        &mut self,
+        vocabulary: &KeymapVocabulary,
+        slot: BindingSlot,
+        predicate: Option<String>,
+    ) {
+        let keys = self.effective_keys(&slot);
+        let implied = keys
+            .as_ref()
+            .map(|keys| Self::default_predicate_for(vocabulary, &slot, keys));
+        let predicate = predicate.filter(|predicate| {
+            predicate != slot.default_predicate && Some(predicate.as_str()) != implied
+        });
+        self.store(slot, BindingOverride { keys, predicate });
+    }
+
     /// Moves `slot` to `keys` and removes the shortcut of every binding in
     /// `replaced`, the bindings that held the keys before. Each of them gets
     /// its keys back with [`KeymapOverrides::reset`].
@@ -291,10 +357,11 @@ impl KeymapOverrides {
     /// wins over a default that uses the same keys.
     pub fn apply(&self, vocabulary: &KeymapVocabulary, defaults: &KeymapStack) -> KeymapStack {
         let mut stack = KeymapStack::new();
+        let mut user_unbound = self.user_keys_on_unbound(vocabulary, defaults);
 
         for context in vocabulary.context_ids() {
             let default_layer = defaults.layer(context);
-            let user_unbound = self.user_keys_on_unbound(vocabulary, defaults, context);
+            let user_unbound = user_unbound.remove(context).unwrap_or_default();
 
             if default_layer.is_none() && user_unbound.is_empty() {
                 continue;
@@ -331,22 +398,41 @@ impl KeymapOverrides {
         stack
     }
 
-    /// The keys the user gave to the unbound slots of `context`, with the
-    /// command each one runs.
+    /// The keys the user gave to the unbound slots, grouped by context, with
+    /// the command each one runs, in declaration order. Walks the default
+    /// slots once for the whole keymap.
     fn user_keys_on_unbound(
         &self,
         vocabulary: &KeymapVocabulary,
         defaults: &KeymapStack,
-        context: &'static str,
-    ) -> Vec<(KeySequence, Cow<'static, str>)> {
-        default_slots(vocabulary, defaults)
-            .into_iter()
-            .filter(|slot| slot.context == context && slot.default_keys.is_none())
-            .filter_map(|slot| {
-                let keys = self.entries.get(&slot)?.keys.clone()?;
-                Some((keys, slot.command))
-            })
-            .collect()
+    ) -> HashMap<&'static str, Vec<(KeySequence, Cow<'static, str>)>> {
+        let mut grouped: HashMap<&'static str, Vec<(KeySequence, Cow<'static, str>)>> =
+            HashMap::new();
+
+        if self.entries.is_empty() {
+            return grouped;
+        }
+
+        for slot in default_slots(vocabulary, defaults) {
+            if slot.default_keys.is_some() {
+                continue;
+            }
+
+            let Some(keys) = self
+                .entries
+                .get(&slot)
+                .and_then(|binding_override| binding_override.keys.clone())
+            else {
+                continue;
+            };
+
+            grouped
+                .entry(slot.context)
+                .or_default()
+                .push((keys, slot.command));
+        }
+
+        grouped
     }
 
     /// Every bound binding of the keymap in force, in registration order:
@@ -375,7 +461,7 @@ impl KeymapOverrides {
             .chain(user)
             .filter_map(|slot| {
                 let keys = self.effective_keys(&slot)?;
-                let predicate = self.effective_predicate(&slot).into_owned();
+                let predicate = self.effective_predicate(vocabulary, &slot).into_owned();
                 let is_user = self.is_overridden(&slot);
 
                 Some(EffectiveBinding {
@@ -404,7 +490,9 @@ impl KeymapOverrides {
             .into_iter()
             .filter(|other| other != slot && other.command != slot.command)
             .filter(|other| self.effective_keys(other).as_ref() == Some(keys))
-            .filter(|other| overlap.overlaps(predicate, &self.effective_predicate(other)))
+            .filter(|other| {
+                overlap.overlaps(predicate, &self.effective_predicate(vocabulary, other))
+            })
             .collect()
     }
 
@@ -428,7 +516,9 @@ impl KeymapOverrides {
                     keys.is_prefix_of(&other_keys) || other_keys.is_prefix_of(keys)
                 })
             })
-            .filter(|other| overlap.overlaps(predicate, &self.effective_predicate(other)))
+            .filter(|other| {
+                overlap.overlaps(predicate, &self.effective_predicate(vocabulary, other))
+            })
             .collect()
     }
 
@@ -449,7 +539,7 @@ impl KeymapOverrides {
             .iter()
             .filter_map(|slot| {
                 let keys = self.effective_keys(slot)?;
-                let predicate = self.effective_predicate(slot);
+                let predicate = self.effective_predicate(vocabulary, slot);
 
                 let others: Vec<BindingSlot> = slots
                     .iter()
@@ -458,7 +548,8 @@ impl KeymapOverrides {
                             && other.command != slot.command
                             && (self.is_overridden(slot) || self.is_overridden(other))
                             && self.effective_keys(other).as_ref() == Some(&keys)
-                            && overlap.overlaps(&predicate, &self.effective_predicate(other))
+                            && overlap
+                                .overlaps(&predicate, &self.effective_predicate(vocabulary, other))
                     })
                     .cloned()
                     .collect();
@@ -735,14 +826,17 @@ mod tests {
         let mut overrides = KeymapOverrides::new();
         let slot = save_query();
 
-        assert_eq!(overrides.effective_predicate(&slot), "Editor");
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary(), &slot),
+            "Editor"
+        );
 
         overrides.set_predicate(
             slot.clone(),
             Some("Editor && vim_mode == normal".to_string()),
         );
         assert_eq!(
-            overrides.effective_predicate(&slot),
+            overrides.effective_predicate(&vocabulary(), &slot),
             "Editor && vim_mode == normal"
         );
         assert_eq!(
@@ -753,7 +847,7 @@ mod tests {
 
         overrides.set(slot.clone(), Some(keys(chord("r", Modifiers::ctrl()))));
         assert_eq!(
-            overrides.effective_predicate(&slot),
+            overrides.effective_predicate(&vocabulary(), &slot),
             "Editor && vim_mode == normal",
             "changing the keys keeps the predicate"
         );
@@ -1252,5 +1346,360 @@ mod tests {
         );
         assert_eq!(clashes.len(), 1);
         assert_eq!(clashes[0].command, "new_query_tab");
+    }
+
+    fn prints_bare_letters(chord: &KeyChord) -> bool {
+        !chord.modifiers.ctrl && !chord.modifiers.alt && chord.key.chars().count() == 1
+    }
+
+    const RESULTS: &str = "Results && !Modal";
+    const RESULTS_OUTSIDE_INPUT: &str = "Results && !Modal && !Input";
+
+    fn narrowing_vocabulary() -> KeymapVocabulary {
+        KeymapVocabulary::new(
+            vec![
+                ContextSpec::new("global", None, "Global"),
+                ContextSpec::new("results", Some("global"), RESULTS)
+                    .with_outside_input_predicate(RESULTS_OUTSIDE_INPUT),
+            ],
+            "global",
+        )
+        .with_printable_key_check(prints_bare_letters)
+        .with_unbound_commands(vec![("results", Cow::Borrowed("copy_markdown"))])
+    }
+
+    fn narrowing_defaults() -> KeymapStack {
+        let vocabulary = narrowing_vocabulary();
+        let mut global = KeymapLayer::new("global");
+        global.bind(chord("g", Modifiers::none()), "global_letter");
+
+        let mut results = KeymapLayer::new("results");
+        results.bind(chord("c", Modifiers::ctrl()), "copy_cell");
+        results.bind_with_predicate(
+            chord("y", Modifiers::none()),
+            "copy_row",
+            "Results && !Modal && !Input",
+        );
+        assert_eq!(
+            results.predicate_for(&vocabulary, &keys(chord("y", Modifiers::none()))),
+            RESULTS_OUTSIDE_INPUT
+        );
+
+        let mut stack = KeymapStack::new();
+        stack.add_layer(global);
+        stack.add_layer(results);
+        stack
+    }
+
+    fn markdown_slot() -> BindingSlot {
+        BindingSlot::unbound(&narrowing_vocabulary(), "results", "copy_markdown")
+    }
+
+    fn copy_cell() -> BindingSlot {
+        BindingSlot::new(
+            &narrowing_vocabulary(),
+            "results",
+            "copy_cell",
+            chord("c", Modifiers::ctrl()),
+        )
+    }
+
+    fn copy_row() -> BindingSlot {
+        BindingSlot::new(
+            &narrowing_vocabulary(),
+            "results",
+            "copy_row",
+            chord("y", Modifiers::none()),
+        )
+        .with_predicate(RESULTS_OUTSIDE_INPUT)
+    }
+
+    #[test]
+    fn a_printable_key_on_an_unbound_slot_narrows_to_outside_input() {
+        let vocabulary = narrowing_vocabulary();
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(markdown_slot(), Some(keys(chord("m", Modifiers::none()))));
+
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary, &markdown_slot()),
+            RESULTS_OUTSIDE_INPUT
+        );
+        let bindings = overrides.effective_bindings(&vocabulary, &narrowing_defaults());
+        let binding = bindings
+            .iter()
+            .find(|binding| binding.slot == markdown_slot())
+            .expect("the user key is an effective binding");
+        assert_eq!(binding.predicate, RESULTS_OUTSIDE_INPUT);
+        assert_eq!(overrides.custom_predicate(&markdown_slot()), None);
+    }
+
+    #[test]
+    fn a_non_printing_chord_on_an_unbound_slot_keeps_the_context_predicate() {
+        let vocabulary = narrowing_vocabulary();
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(markdown_slot(), Some(keys(chord("m", Modifiers::ctrl()))));
+
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary, &markdown_slot()),
+            RESULTS
+        );
+    }
+
+    #[test]
+    fn a_custom_predicate_wins_over_the_narrowing() {
+        let vocabulary = narrowing_vocabulary();
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(markdown_slot(), Some(keys(chord("m", Modifiers::none()))));
+        overrides.set_predicate(markdown_slot(), Some("Results".to_string()));
+
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary, &markdown_slot()),
+            "Results"
+        );
+        let bindings = overrides.effective_bindings(&vocabulary, &narrowing_defaults());
+        assert_eq!(bindings[bindings.len() - 1].predicate, "Results");
+    }
+
+    #[test]
+    fn a_context_without_an_outside_input_predicate_is_not_narrowed() {
+        let vocabulary = narrowing_vocabulary();
+        let slot = BindingSlot::unbound(&vocabulary, "global", "rename");
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(slot.clone(), Some(keys(chord("m", Modifiers::none()))));
+
+        assert_eq!(overrides.effective_predicate(&vocabulary, &slot), "Global");
+    }
+
+    #[test]
+    fn a_default_moved_to_a_printable_key_narrows_and_other_defaults_are_untouched() {
+        let vocabulary = narrowing_vocabulary();
+        let mut overrides = KeymapOverrides::new();
+
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary, &copy_cell()),
+            RESULTS,
+            "a default the user left alone keeps its predicate"
+        );
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary, &copy_row()),
+            RESULTS_OUTSIDE_INPUT
+        );
+
+        overrides.set(copy_cell(), Some(keys(chord("m", Modifiers::none()))));
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary, &copy_cell()),
+            RESULTS_OUTSIDE_INPUT,
+            "a ctrl default moved to a bare letter no longer takes it from a field"
+        );
+
+        overrides.set(copy_cell(), Some(keys(chord("m", Modifiers::ctrl()))));
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary, &copy_cell()),
+            RESULTS
+        );
+
+        overrides.set(copy_row(), Some(keys(chord("m", Modifiers::none()))));
+        assert_eq!(
+            overrides.effective_predicate(&vocabulary, &copy_row()),
+            RESULTS_OUTSIDE_INPUT,
+            "a default already narrowed stays narrowed on another letter"
+        );
+    }
+
+    #[test]
+    fn conflicts_use_the_narrowed_predicate() {
+        let vocabulary = narrowing_vocabulary();
+        let defaults = narrowing_defaults();
+        let overlap = ContextTreeOverlap::new(&vocabulary);
+        let mut overrides = KeymapOverrides::new();
+
+        overrides.set(markdown_slot(), Some(keys(chord("y", Modifiers::none()))));
+        let existing = overrides.existing_conflicts(&vocabulary, &defaults, &overlap);
+        assert!(
+            existing
+                .iter()
+                .any(|(slot, others)| *slot == markdown_slot() && others == &vec![copy_row()]),
+            "the narrowed user key collides with the narrowed default on the same letter"
+        );
+
+        overrides.set(markdown_slot(), Some(keys(chord("g", Modifiers::none()))));
+        let existing = overrides.existing_conflicts(&vocabulary, &defaults, &overlap);
+        assert!(
+            existing.iter().any(|(slot, _)| *slot == markdown_slot()),
+            "the narrowed predicate still overlaps the parent context's binding"
+        );
+    }
+
+    /// Records the predicate it is asked about for the new keys.
+    struct RecordingOverlap<'a> {
+        inner: ContextTreeOverlap<'a>,
+        asked: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl PredicateOverlap for RecordingOverlap<'_> {
+        fn overlaps(&self, first: &str, second: &str) -> bool {
+            self.asked.borrow_mut().push(first.to_string());
+            self.inner.overlaps(first, second)
+        }
+    }
+
+    #[test]
+    fn the_recorder_checks_conflicts_under_the_narrowed_predicate() {
+        let vocabulary = narrowing_vocabulary();
+        let defaults = narrowing_defaults();
+        let overlap = RecordingOverlap {
+            inner: ContextTreeOverlap::new(&vocabulary),
+            asked: Default::default(),
+        };
+        let overrides = KeymapOverrides::new();
+        let mut recorder = crate::KeybindingRecorder::new();
+        recorder.start(markdown_slot(), RESULTS);
+
+        recorder.handle_chord(
+            chord("y", Modifiers::none()),
+            &vocabulary,
+            &defaults,
+            &overrides,
+            &overlap,
+        );
+        let outcome = recorder.finish(&vocabulary, &defaults, &overrides, &overlap);
+
+        assert_eq!(outcome, crate::RecordingOutcome::ConflictFound);
+        assert!(
+            overlap
+                .asked
+                .borrow()
+                .iter()
+                .all(|asked| asked == RESULTS_OUTSIDE_INPUT),
+            "the new keys are checked under the narrowed predicate"
+        );
+        assert!(!overlap.asked.borrow().is_empty());
+        assert_eq!(
+            recorder
+                .confirm_replace()
+                .map(|replacement| replacement.replaced),
+            Some(vec![copy_row()])
+        );
+    }
+
+    #[test]
+    fn a_predicate_chosen_by_the_caller_is_kept_while_recording() {
+        let vocabulary = narrowing_vocabulary();
+        let defaults = narrowing_defaults();
+        let overlap = RecordingOverlap {
+            inner: ContextTreeOverlap::new(&vocabulary),
+            asked: Default::default(),
+        };
+        let overrides = KeymapOverrides::new();
+        let mut recorder = crate::KeybindingRecorder::new();
+        recorder.start(markdown_slot(), "Results");
+
+        recorder.handle_chord(
+            chord("y", Modifiers::none()),
+            &vocabulary,
+            &defaults,
+            &overrides,
+            &overlap,
+        );
+        recorder.finish(&vocabulary, &defaults, &overrides, &overlap);
+
+        assert!(
+            overlap
+                .asked
+                .borrow()
+                .iter()
+                .all(|asked| asked == "Results")
+        );
+    }
+
+    #[test]
+    fn apply_binds_user_keys_of_several_unbound_slots_in_declaration_order() {
+        let vocabulary = narrowing_vocabulary().with_unbound_commands(vec![
+            ("results", Cow::Borrowed("copy_markdown")),
+            ("results", Cow::Borrowed("copy_json")),
+            ("global", Cow::Borrowed("rename")),
+        ]);
+        let first = BindingSlot::unbound(&vocabulary, "results", "copy_markdown");
+        let second = BindingSlot::unbound(&vocabulary, "results", "copy_json");
+        let third = BindingSlot::unbound(&vocabulary, "global", "rename");
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(second, Some(keys(chord("j", Modifiers::none()))));
+        overrides.set(first, Some(keys(chord("m", Modifiers::none()))));
+        overrides.set(third, Some(keys(chord("f2", Modifiers::none()))));
+
+        let effective = overrides.apply(&vocabulary, &narrowing_defaults());
+        let layer = effective.layer("results").expect("results layer");
+        let commands: Vec<&str> = layer
+            .ordered_bindings()
+            .map(|(_, command)| command.as_ref())
+            .collect();
+
+        assert_eq!(
+            commands,
+            vec!["copy_cell", "copy_row", "copy_markdown", "copy_json"]
+        );
+        assert_eq!(
+            effective.resolve(&vocabulary, "global", &chord("f2", Modifiers::none())),
+            Some(Cow::Borrowed("rename"))
+        );
+    }
+
+    struct SecondRecorder<'a>(ContextTreeOverlap<'a>, std::cell::RefCell<Vec<String>>);
+
+    impl PredicateOverlap for SecondRecorder<'_> {
+        fn overlaps(&self, first: &str, second: &str) -> bool {
+            self.1.borrow_mut().push(second.to_string());
+            self.0.overlaps(first, second)
+        }
+    }
+
+    #[test]
+    fn conflict_checks_compare_against_the_other_bindings_narrowed_predicate() {
+        let vocabulary = narrowing_vocabulary();
+        let mut results = KeymapLayer::new("results");
+        results.bind(chord("c", Modifiers::ctrl()), "copy_cell");
+        let mut defaults = KeymapStack::new();
+        defaults.add_layer(KeymapLayer::new("global"));
+        defaults.add_layer(results);
+        let m = keys(chord("m", Modifiers::none()));
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(markdown_slot(), Some(m.clone()));
+
+        let overlap = SecondRecorder(ContextTreeOverlap::new(&vocabulary), Default::default());
+        let conflicts = overrides.conflicts_for(
+            &vocabulary,
+            &defaults,
+            &copy_cell(),
+            &m,
+            RESULTS_OUTSIDE_INPUT,
+            &overlap,
+        );
+        assert_eq!(conflicts, vec![markdown_slot()]);
+        assert_eq!(*overlap.1.borrow(), vec![RESULTS_OUTSIDE_INPUT.to_string()]);
+
+        let fresh = KeymapOverrides::new();
+        let overlap = SecondRecorder(ContextTreeOverlap::new(&vocabulary), Default::default());
+        fresh.conflicts_for(
+            &vocabulary,
+            &defaults,
+            &markdown_slot(),
+            &keys(chord("c", Modifiers::ctrl())),
+            RESULTS,
+            &overlap,
+        );
+        assert_eq!(
+            *overlap.1.borrow(),
+            vec![RESULTS.to_string()],
+            "an untouched default keeps its shipped predicate"
+        );
+        assert!(
+            fresh
+                .existing_conflicts(
+                    &vocabulary,
+                    &defaults,
+                    &ContextTreeOverlap::new(&vocabulary)
+                )
+                .is_empty()
+        );
     }
 }

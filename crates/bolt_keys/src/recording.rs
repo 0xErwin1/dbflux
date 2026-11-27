@@ -184,8 +184,17 @@ impl KeybindingRecorder {
         };
 
         let slot = slot.clone();
+        // A predicate other than the slot's own was chosen by the caller and
+        // stays; the slot's own follows the keys being recorded.
+        let predicate = if *predicate == *overrides.effective_predicate(vocabulary, &slot) {
+            overrides
+                .effective_predicate_for(vocabulary, &slot, &keys)
+                .into_owned()
+        } else {
+            predicate.clone()
+        };
         let conflicts =
-            overrides.conflicts_for(vocabulary, defaults, &slot, &keys, predicate, overlap);
+            overrides.conflicts_for(vocabulary, defaults, &slot, &keys, &predicate, overlap);
 
         if conflicts.is_empty() {
             self.cancel();

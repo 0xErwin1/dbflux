@@ -3177,6 +3177,151 @@ fn a_user_key_on_an_unbound_command_dispatches_and_reset_unbinds(cx: &mut gpui::
     assert!(run_command_for(ContextId::Results, Command::ResultsCopyAsMarkdown).is_none());
 }
 
+/// The native keymap the user's overrides produce.
+fn native_keymap_with(overrides: &KeymapOverrides) -> gpui::Keymap {
+    let mut keymap = gpui::Keymap::default();
+    keymap.add_bindings(native_bindings(
+        &overrides.effective_bindings(default_keymap()),
+        false,
+    ));
+    keymap
+}
+
+/// Whether `keys` runs `command` in the results grid and in a focused results
+/// text field, in that order.
+fn results_dispatch(keymap: &gpui::Keymap, keys: &str, command: Command) -> (bool, bool) {
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    let runs_in = |stack: &[KeyContext]| {
+        top_action(keymap, keys, stack).is_some_and(|action| runs_command(action.as_ref(), command))
+    };
+
+    (runs_in(&grid), runs_in(&field))
+}
+
+fn unbound_markdown_slot() -> BindingSlot {
+    BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown)
+}
+
+/// A printable key the user gives an unbound Results command is typed text in
+/// a focused field, as the default Results letters are.
+#[test]
+fn a_printable_user_key_on_an_unbound_command_is_typed_text_in_a_results_field() {
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        unbound_markdown_slot(),
+        Some(KeySequence::from(KeyChord::new("m", Modifiers::none()))),
+    );
+    let keymap = native_keymap_with(&overrides);
+
+    assert_eq!(
+        results_dispatch(&keymap, "m", Command::ResultsCopyAsMarkdown),
+        (true, false),
+        "fires in the grid, does not reach a focused field"
+    );
+    assert_eq!(
+        overrides.effective_predicate(&unbound_markdown_slot()),
+        "Results && !Modal && !Input"
+    );
+}
+
+/// A chord that does not print keeps the context default, so it still runs
+/// from a focused field like the shipped Results chords.
+#[test]
+fn a_non_printing_user_key_on_an_unbound_command_keeps_the_context_predicate() {
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        unbound_markdown_slot(),
+        Some(KeySequence::from(KeyChord::new(
+            "f19",
+            Modifiers::ctrl_shift(),
+        ))),
+    );
+    let keymap = native_keymap_with(&overrides);
+
+    assert_eq!(
+        results_dispatch(&keymap, "ctrl-shift-f19", Command::ResultsCopyAsMarkdown),
+        (true, true)
+    );
+    assert_eq!(
+        overrides.effective_predicate(&unbound_markdown_slot()),
+        "Results && !Modal"
+    );
+}
+
+/// A predicate the user set wins over the narrowing.
+#[test]
+fn a_custom_predicate_wins_over_the_printable_key_narrowing() {
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        unbound_markdown_slot(),
+        Some(KeySequence::from(KeyChord::new("m", Modifiers::none()))),
+    );
+    overrides.set_predicate(unbound_markdown_slot(), Some("Results".to_string()));
+    let keymap = native_keymap_with(&overrides);
+
+    assert_eq!(
+        results_dispatch(&keymap, "m", Command::ResultsCopyAsMarkdown),
+        (true, true),
+        "the user's own predicate is kept as typed"
+    );
+}
+
+/// A shipped Results binding moved to a bare letter takes the same path.
+/// Before the narrowing it kept its own default predicate, which for a
+/// non-printing default (`Results && !Modal`) held inside a text field and
+/// took the letter from it.
+#[test]
+fn a_default_moved_to_a_printable_key_is_typed_text_in_a_results_field() {
+    let slots = dbflux_app::keymap::default_slots(default_keymap());
+    let slot_of = |command: Command| {
+        slots
+            .iter()
+            .find(|slot| {
+                slot.context == ContextId::Results
+                    && slot.command == command
+                    && slot.default_keys.is_some()
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("{command:?} has a default Results binding"))
+    };
+    let letter = || Some(KeySequence::from(KeyChord::new("m", Modifiers::none())));
+
+    let copy_cell = slot_of(Command::ResultsCopyCell);
+    assert!(
+        copy_cell
+            .default_keys
+            .as_ref()
+            .is_some_and(|keys| keys.first().modifiers != Modifiers::none()),
+        "the default copy chord is a modified, non-printing one"
+    );
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(copy_cell, letter());
+    assert_eq!(
+        results_dispatch(
+            &native_keymap_with(&overrides),
+            "m",
+            Command::ResultsCopyCell
+        ),
+        (true, false)
+    );
+
+    let copy_row = slot_of(Command::ResultsCopyRow);
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(copy_row, letter());
+    assert_eq!(
+        results_dispatch(
+            &native_keymap_with(&overrides),
+            "m",
+            Command::ResultsCopyRow
+        ),
+        (true, false),
+        "a default that was already narrowed behaves as before"
+    );
+}
+
 #[test]
 fn test_sidebar_tab_switch_bindings() {
     let keymap = default_keymap();

@@ -171,7 +171,7 @@ impl KeymapOverrides {
 
     /// The context predicate the binding has once overrides apply.
     pub fn effective_predicate<'a>(&'a self, slot: &BindingSlot) -> Cow<'a, str> {
-        self.0.effective_predicate(&slot.engine())
+        self.0.effective_predicate(vocabulary(), &slot.engine())
     }
 
     /// The predicate the user gave the binding, `None` when it keeps the
@@ -189,7 +189,8 @@ impl KeymapOverrides {
     /// Moves `slot` to the context predicate `predicate`, keeping its keys.
     /// The default predicate, or `None`, restores the default context.
     pub fn set_predicate(&mut self, slot: BindingSlot, predicate: Option<String>) {
-        self.0.set_predicate(slot.engine(), predicate);
+        self.0
+            .set_predicate_for(vocabulary(), slot.engine(), predicate);
     }
 
     /// Moves `slot` to `keys` and removes the shortcut of every binding in
@@ -622,5 +623,39 @@ mod tests {
             .expect("should save");
 
         assert!(load_keymap_overrides(&runtime, &KeymapStack::new()).is_empty());
+    }
+
+    #[test]
+    fn saving_the_narrowed_predicate_unchanged_keeps_no_custom_predicate() {
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(
+            copy_as_markdown(),
+            Some(keys(chord("m", Modifiers::none()))),
+        );
+        let narrowed = overrides
+            .effective_predicate(&copy_as_markdown())
+            .into_owned();
+        assert!(
+            narrowed.contains("!Input"),
+            "a bare letter narrows: {narrowed}"
+        );
+
+        overrides.set_predicate(copy_as_markdown(), Some(narrowed));
+        assert_eq!(
+            overrides.custom_predicate(&copy_as_markdown()),
+            None,
+            "the predicate the binding already had is not a custom one"
+        );
+
+        overrides.set(
+            copy_as_markdown(),
+            Some(keys(chord("m", Modifiers::ctrl_shift()))),
+        );
+        assert!(
+            !overrides
+                .effective_predicate(&copy_as_markdown())
+                .contains("!Input"),
+            "moving the keys to a chord drops the narrowing again"
+        );
     }
 }
