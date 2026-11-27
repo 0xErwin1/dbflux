@@ -80,7 +80,16 @@ pub struct SsoLoginHandle {
 /// (not on the GPUI background executor, which has no Tokio runtime).
 /// After getting the handle, the caller must separately wait for the
 /// SSO session to appear in the token cache via `wait_for_sso_session_blocking`.
-pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, DbError> {
+///
+/// `on_abort_ready` receives the abort sender as soon as it exists, before the
+/// stdout scan that can last up to 30 seconds, so a caller can cancel the CLI
+/// during that scan. Returning `false` aborts the login at once and makes this
+/// function return a cancellation error. The same error is returned when the
+/// login is aborted during the scan.
+pub fn start_sso_login_blocking(
+    profile_name: &str,
+    on_abort_ready: impl FnOnce(&std::sync::mpsc::SyncSender<()>) -> bool,
+) -> Result<SsoLoginHandle, DbError> {
     use std::process::{Command, Stdio};
 
     log::debug!(
@@ -160,6 +169,8 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
             }
         }
     });
+
+    notify_abort_ready(on_abort_ready, &abort_tx)?;
 
     // Drain stderr in a background thread so the process does not block on
     // its stderr buffer.
@@ -290,6 +301,12 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
         found_url.or(fallback_url)
     };
 
+    // An abort during the scan kills the CLI, which closes its stdout and
+    // ends the scan early; the login must not be reported as started.
+    if abort_flag_for_poll.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(sso_login_cancelled_error());
+    }
+
     log::debug!("AWS SSO login verification URL: {:?}", verification_url);
 
     // Release our copy of the child handle. The drain thread holds the other
@@ -302,6 +319,24 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
         abort_tx,
         abort_flag: abort_flag_for_poll,
     })
+}
+
+fn sso_login_cancelled_error() -> DbError {
+    DbError::ValueResolutionFailed("AWS SSO login was cancelled".to_string())
+}
+
+/// Hands the abort sender to its owner. When the owner declines, the login is
+/// aborted right away, so the CLI is stopped before anything waits on it.
+fn notify_abort_ready(
+    on_abort_ready: impl FnOnce(&std::sync::mpsc::SyncSender<()>) -> bool,
+    abort_tx: &std::sync::mpsc::SyncSender<()>,
+) -> Result<(), DbError> {
+    if on_abort_ready(abort_tx) {
+        return Ok(());
+    }
+
+    send_abort(abort_tx);
+    Err(sso_login_cancelled_error())
 }
 
 /// Polls the SSO token cache until a valid session appears for `sso_start_url`,
@@ -322,9 +357,7 @@ pub fn wait_for_sso_session_blocking(
         std::thread::sleep(SSO_LOGIN_POLL_INTERVAL);
 
         if abort_flag.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(DbError::ValueResolutionFailed(
-                "AWS SSO login was cancelled".to_string(),
-            ));
+            return Err(sso_login_cancelled_error());
         }
 
         match validate_sso_session(sso_start_url) {
@@ -2403,18 +2436,25 @@ async fn sso_login_with_url(
     // verification URL is known, so the state channel receives the URL update
     // without any blocking on the async side.
     std::thread::spawn(move || {
-        let handle = match start_sso_login_blocking(&profile_name) {
+        // The abort sender is handed over before the stdout scan, so dropping
+        // the waiting future stops the CLI even while the URL is still unknown.
+        let handle = match start_sso_login_blocking(&profile_name, |abort_tx| {
+            AbandonLoginGuard::attach(&abort_slot, abort_tx)
+        }) {
             Ok(h) => h,
             Err(err) => {
-                url_callback(None);
-                let _ = result_tx.send(Err(err));
+                // An abandoned login has no observer: nobody reads the URL
+                // callback or the result.
+                if !AbandonLoginGuard::is_abandoned(&abort_slot) {
+                    url_callback(None);
+                    let _ = result_tx.send(Err(err));
+                }
                 return;
             }
         };
 
-        if !AbandonLoginGuard::attach(&abort_slot, &handle.abort_tx) {
-            // The waiting future is gone, so nobody reads this result.
-            drop(result_tx);
+        // The future may have been dropped right after the scan finished.
+        if AbandonLoginGuard::is_abandoned(&abort_slot) {
             return;
         }
 
@@ -2493,6 +2533,10 @@ impl AbandonLoginGuard {
         }
         slot.abort_tx = Some(abort_tx.clone());
         true
+    }
+
+    fn is_abandoned(slot: &Mutex<AbandonLoginSlot>) -> bool {
+        slot.lock().unwrap_or_else(|e| e.into_inner()).abandoned
     }
 
     fn disarm(&mut self) {
@@ -2600,7 +2644,7 @@ pub fn login_sso_blocking(
     profile_name: &str,
     sso_start_url: &str,
 ) -> Result<AuthSession, DbError> {
-    let handle = start_sso_login_blocking(profile_name)?;
+    let handle = start_sso_login_blocking(profile_name, |_| true)?;
     log::debug!(
         "AWS SSO login started for profile '{}', verification URL: {:?}",
         profile_name,
@@ -2672,6 +2716,32 @@ mod tests {
             late_rx.try_recv().is_ok(),
             "a login attached late is aborted"
         );
+    }
+
+    /// The abort sender is offered to its owner before the CLI is waited on;
+    /// an owner that declines aborts the login and gets a cancellation error.
+    #[test]
+    fn a_declined_abort_hand_over_aborts_the_login() {
+        let (abort_tx, abort_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let mut offered = false;
+
+        let accepted = notify_abort_ready(
+            |_| {
+                offered = true;
+                true
+            },
+            &abort_tx,
+        );
+        assert!(accepted.is_ok());
+        assert!(offered);
+        assert!(
+            abort_rx.try_recv().is_err(),
+            "an accepted hand-over is left running"
+        );
+
+        let error = notify_abort_ready(|_| false, &abort_tx).expect_err("declined hand-over");
+        assert!(error.to_string().contains("cancelled"), "{error}");
+        assert!(abort_rx.try_recv().is_ok(), "a declined hand-over aborts");
     }
 
     /// A login that finished is left alone when its future goes away.

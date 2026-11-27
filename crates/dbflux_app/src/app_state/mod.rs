@@ -617,6 +617,30 @@ impl AppState {
             .finish_pending_operation(profile_id, database);
     }
 
+    /// Releases the profile-level pending entry on behalf of a connect
+    /// attempt, unless that attempt's task was cancelled.
+    ///
+    /// [`Self::cancel_running_connect_tasks_for_profile`] already released the
+    /// entry when it cancelled the task, so the user may have started a retry
+    /// by the time the cancelled attempt unwinds; releasing again would drop
+    /// the retry's entry.
+    ///
+    /// Returns whether the entry was released.
+    pub fn release_connect_pending_operation(&mut self, task_id: TaskId, profile_id: Uuid) -> bool {
+        let cancelled = self
+            .facade
+            .tasks
+            .get(task_id)
+            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+
+        if cancelled {
+            return false;
+        }
+
+        self.finish_pending_operation(profile_id, None);
+        true
+    }
+
     // --- Connect failures ---
 
     pub fn record_connect_failure(&mut self, profile_id: Uuid, message: impl Into<String>) {
@@ -4851,5 +4875,36 @@ mod tests {
 
         assert_eq!(state.cancel_running_query_tasks(None), 1);
         assert!(state.running_query_tasks(None).is_empty());
+    }
+
+    /// Cancelling a Connect task releases the profile's pending entry at once
+    /// so the user can retry. The cancelled attempt unwinding later must not
+    /// release the retry's entry; a task that was not cancelled still does.
+    #[test]
+    fn a_cancelled_connect_attempt_does_not_release_a_retrys_pending_entry() {
+        let mut state = state_for_task_tests();
+        let profile_id = Uuid::new_v4();
+
+        assert!(state.start_pending_operation(profile_id, None));
+        let (cancelled_attempt, _) =
+            state.start_task_for_profile(TaskKind::Connect, "connecting", Some(profile_id));
+        assert_eq!(
+            state.cancel_running_connect_tasks_for_profile(profile_id),
+            1
+        );
+        assert!(!state.is_operation_pending(profile_id, None));
+
+        assert!(state.start_pending_operation(profile_id, None));
+        let (retry_attempt, _) =
+            state.start_task_for_profile(TaskKind::Connect, "connecting", Some(profile_id));
+
+        state.release_connect_pending_operation(cancelled_attempt, profile_id);
+        assert!(
+            state.is_operation_pending(profile_id, None),
+            "the cancelled attempt released the retry's pending entry"
+        );
+
+        state.release_connect_pending_operation(retry_attempt, profile_id);
+        assert!(!state.is_operation_pending(profile_id, None));
     }
 }
