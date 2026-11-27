@@ -1011,6 +1011,7 @@ fn a_finished_worker_that_discards_its_result_settles_cancelled_whatever_the_pol
         status_of(&manager, past_the_point.id()),
         TaskStatus::Running
     );
+}
 
 // ---------------------------------------------------------------------------
 // Cascade through terminal intermediates and registration under a cancelled parent
