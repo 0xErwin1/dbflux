@@ -136,7 +136,8 @@ impl CodeDocument {
                         document.update(cx, |document, cx| document.run_explain(window, cx));
                     },
                 )
-                .icon(AppIcon::Info),
+                .icon(AppIcon::Info)
+                .enabled(self.explain_unavailable_reason(cx).is_none()),
             );
         }
 
@@ -152,7 +153,7 @@ impl CodeDocument {
             .icon(AppIcon::ChartColumnBig),
         );
 
-        actions.extend(self.results_pane_actions());
+        actions.extend(self.results_pane_actions(cx));
 
         actions
     }
@@ -160,11 +161,11 @@ impl CodeDocument {
     /// The results header as pane actions, while there are results to show:
     /// Refresh and the auto-refresh interval, the result tabs (switch, close)
     /// and the maximize and hide buttons.
-    fn results_pane_actions(&self) -> Vec<crate::pane::PaneAction> {
+    fn results_pane_actions(&self, cx: &App) -> Vec<crate::pane::PaneAction> {
         use crate::pane::PaneAction;
 
         let mut actions = Vec::new();
-        let tab_count = self.result_tabs.result_tabs.len();
+        let tab_count = self.result_tab_total();
 
         // The interval dropdown lives in the results header, so it can only
         // take focus while the header is drawn.
@@ -228,6 +229,10 @@ impl CodeDocument {
                 )
                 .icon(AppIcon::CircleX),
             );
+        }
+
+        if self.plan_shown() {
+            actions.extend(self.plan_pane_actions(cx));
         }
 
         if tab_count == 0 && self.execution.live_output.is_none() {
@@ -444,6 +449,9 @@ impl CodeDocument {
                     .icon_only()
                     .inline()
                     .ghost()
+                    .when_some(self.explain_unavailable_reason(cx), |button, reason| {
+                        button.disabled(true).tooltip(reason)
+                    })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.run_explain(window, cx);
                     })),
@@ -598,7 +606,7 @@ impl CodeDocument {
             .is_some_and(|record| record.error.is_some());
         let has_live_output = self.execution.live_output.is_some() && !has_error;
 
-        !has_live_output && !self.result_tabs.result_tabs.is_empty()
+        !has_live_output && self.has_result_content()
     }
 
     /// Whether the results header is on screen: it exists and the results
@@ -615,12 +623,14 @@ impl CodeDocument {
             .execution
             .active_execution_index
             .and_then(|i| self.execution.execution_history.get(i))
-            .and_then(|r| r.error.clone());
+            .and_then(|r| r.error.clone())
+            .filter(|_| !self.plan_shown());
 
         let has_error = error.is_some();
         let has_live_output = self.execution.live_output.is_some() && !has_error;
-        let active_panel = self.active_result_panel();
-        let has_panel = active_panel.is_some();
+        let plan_view = self.plan.view().filter(|_| self.plan_shown());
+        let active_panel = self.active_result_panel().filter(|_| plan_view.is_none());
+        let has_panel = active_panel.is_some() || plan_view.is_some();
         let has_tabs = self.has_results_header();
 
         // The results show focus through their own grid cursor and tabs.
@@ -642,6 +652,7 @@ impl CodeDocument {
                     .when(has_live_output, |el| el.child(self.render_live_output(cx)))
                     .when(!has_live_output, |el| {
                         el.when_some(active_panel, |el, panel| el.child(panel))
+                            .when_some(plan_view, |el, plan| el.child(plan))
                     })
                     .when(
                         !has_live_output && !has_panel && !has_error && is_executing,
@@ -715,7 +726,8 @@ impl CodeDocument {
     /// Result tabs strip (IslEditor): one tab per result with its row count
     /// and a close button, then Refresh and the maximize and hide controls.
     fn render_results_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_index = self.result_tabs.active_result_index;
+        let plan_shown = self.plan_shown();
+        let active_index = self.result_tabs.active_result_index.filter(|_| !plan_shown);
         let muted = cx.theme().muted_foreground;
         let refresh = (!self.read_only && self.supports_connection_context())
             .then(|| self.render_results_refresh(window, cx));
@@ -762,6 +774,37 @@ impl CodeDocument {
             })
             .collect();
 
+        let plan_tab = self.plan.tab.is_some().then(|| {
+            result_tab(
+                ElementId::Name("result-tab-plan".into()),
+                dbflux_i18n::t!("document.query_plan.tab.title"),
+                None,
+                plan_shown,
+                cx,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.activate_plan_tab(cx);
+            }))
+            .child(
+                div()
+                    .debug_selector(|| "close-result-tab-plan".to_string())
+                    .id("close-result-tab-plan")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_plan_tab(cx);
+                    }))
+                    .child(
+                        Icon::new(AppIcon::CircleX)
+                            .size(Fields::CHEVRON)
+                            .color(muted),
+                    ),
+            )
+            .into_any_element()
+        });
+
         result_tab_bar(cx)
             .id("results-header")
             .child(
@@ -771,7 +814,8 @@ impl CodeDocument {
                     .h_full()
                     .overflow_x_hidden()
                     .flex_1()
-                    .children(tabs),
+                    .children(tabs)
+                    .children(plan_tab),
             )
             .child(
                 div()
@@ -854,7 +898,7 @@ impl CodeDocument {
 
     fn render_collapsed_results_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let tab_count = self.result_tabs.result_tabs.len();
+        let tab_count = self.result_tab_total();
 
         div()
             .id("collapsed-results-bar")
@@ -905,14 +949,19 @@ impl CodeDocument {
 
     fn render_error_state(&self, error: &str, _cx: &mut Context<Self>) -> impl IntoElement {
         let icon = Icon::new(AppIcon::CircleX).size(Heights::ICON_SM);
-        div().p(Spacing::MD).size_full().overflow_y_hidden().child(
-            BannerBlock::new(
-                BannerVariant::Danger,
-                dbflux_i18n::t!("document.code.result.error.title"),
+        div()
+            .p(Spacing::MD)
+            .size_full()
+            .overflow_y_hidden()
+            .debug_selector(|| "code-result-error".to_string())
+            .child(
+                BannerBlock::new(
+                    BannerVariant::Danger,
+                    dbflux_i18n::t!("document.code.result.error.title"),
+                )
+                .with_icon(icon)
+                .with_pre(error.to_string()),
             )
-            .with_icon(icon)
-            .with_pre(error.to_string()),
-        )
     }
 
     fn render_empty_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -1267,7 +1316,7 @@ impl Render for CodeDocument {
 
         let bg = cx.theme().background;
         let has_collapsed_results =
-            self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.result_tabs.is_empty();
+            self.layout == SqlQueryLayout::EditorOnly && self.has_result_content();
         let results_split = super::results_split::current(&self.app_state, cx);
 
         div()

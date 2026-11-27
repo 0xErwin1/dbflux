@@ -32,12 +32,14 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::time::Instant;
 
+mod explain;
 mod items;
 mod sections;
 mod selection_copy;
 mod set_value;
 mod tree;
 
+pub(crate) use explain::ExplainHost;
 pub(super) use set_value::SetValueEntry;
 pub(super) use tree::build_menu_tree;
 
@@ -892,6 +894,11 @@ impl DataGridPanel {
             if let Some(entry) = entry {
                 self.handle_context_menu_action(entry.action, window, cx);
             }
+            return;
+        }
+
+        if id == explain::EXPLAIN_THIS_QUERY_ID {
+            self.explain_this_query(window, cx);
             return;
         }
 

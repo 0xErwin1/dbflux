@@ -1259,6 +1259,105 @@ document:
         empty: "차원 조합이 없습니다"
         connection_not_found: "연결을 찾을 수 없거나 활성 상태가 아닙니다"
         catalog_unsupported: "이 연결은 메트릭 카탈로그를 지원하지 않습니다"
+  query_plan:
+    tab:
+      title: 실행 계획
+    view:
+      switch: 계획 보기
+      diagram: 다이어그램
+      tree: 트리
+      raw: 원본
+    scope:
+      selection: "선택 영역 L%{start}–%{end}"
+      script: "전체 스크립트 · 문 %{count}개"
+    totals:
+      cost: 총 비용
+      rows: 행
+    controls:
+      zoom_out: 축소
+      zoom_in: 확대
+      zoom_reset: 확대/축소 재설정
+      fit: 맞춤
+    warnings:
+      one: 경고 1개.
+      many: "경고 %{count}개."
+    node:
+      costliest: 최고 비용
+      table: 테이블
+      index: 인덱스
+      cost: 비용
+      rows: 행
+      self: 자체
+    tree:
+      node: 노드
+      index: 인덱스
+      cost: 비용
+      self_cost: 자체 비용
+      rows: 행
+      on_relation: "대상:"
+    raw:
+      copy: 복사
+    footer:
+      nodes:
+        one: "노드 %{count}개"
+        many: "노드 %{count}개"
+      not_run: 쿼리 실행 안 함
+      format:
+        json: JSON 계획
+        xml: XML 계획
+        text: 텍스트 계획
+    inspector:
+      node: "노드 %{id}"
+      estimate: 추정치
+      reads: 읽기 대상
+      details: 세부 정보
+      startup_cost: 시작 비용
+      total_cost: 총 비용
+      self_cost: 자체 비용
+      rows: 행
+      relation: 관계
+      index: 인덱스
+    loading:
+      running: 쿼리 계획을 만드는 중…
+      cancel: 취소
+    state:
+      retry: 다시 시도
+      unsupported:
+        title: 이 드라이버는 쿼리 실행 계획을 지원하지 않습니다
+        body: "%{connection}에는 명령에 대해 표시할 계획이 없습니다."
+      multi_statement:
+        title: 문이 둘 이상입니다
+      failed:
+        title: 계획 생성 실패
+      origin_gone: "이 결과를 만든 연결이 더 이상 연결되어 있지 않습니다. 다시 연결한 뒤 쿼리를 다시 실행해 설명하세요."
+      origin_database_changed: "이 결과가 실행된 데이터베이스(%{origin})가 더 이상 이 연결이 사용 중인 데이터베이스(%{current})가 아닙니다. %{origin}(으)로 다시 전환한 뒤 쿼리를 다시 설명하세요. 지금 계획을 얻으면 다른 데이터베이스를 설명하게 됩니다."
+      editor_database_changed: "이 편집기의 데이터베이스(%{origin})가 더 이상 이 연결이 사용 중인 데이터베이스(%{current})가 아닙니다. %{origin}(으)로 다시 전환한 뒤 쿼리를 다시 설명하세요. 지금 계획을 얻으면 다른 데이터베이스를 설명하게 됩니다."
+      cancelled:
+        title: 계획 생성이 취소되었습니다
+    explain:
+      unavailable: "%{connection}은(는) 쿼리 실행 계획을 제공하지 않습니다"
+    tooltip:
+      diagram_body: 계획을 그래프로 표시합니다. 단계마다 상자 하나이며 왼쪽부터 읽어 최종 결과로 끝납니다.
+      tree_body: 계획을 들여쓴 목록으로 표시하고 수치는 열로 보여 줍니다.
+      raw_body: 엔진이 반환한 계획 그대로입니다.
+      totals_title: 계획 합계
+      totals_body: 계획 전체의 총 비용(플래너 단위)과 반환할 것으로 예상하는 행 수입니다.
+      cost_title: 추정 비용
+      cost_body: 플래너 고유 단위이며 하위 노드를 포함합니다. 이 계획 안에서만 비교하세요.
+      startup_cost_title: 시작 비용
+      startup_cost_body: 첫 번째 행을 반환하기 전까지의 추정 비용입니다.
+      self_cost_title: 자체 비용
+      self_cost_node_body: 하위 노드를 제외하고 이 노드 하나가 쓰는 계획 전체 대비 비율입니다.
+      self_cost_column_body: 노드 비용에서 하위 노드 비용을 뺀 값이 계획 전체에서 차지하는 비율입니다. 막대도 같은 비율을 보여 줍니다.
+      rows_title: 추정 행 수
+      rows_body: 이 단계가 다음 단계로 넘기는 행 수입니다. 선이 굵을수록 행이 많습니다.
+      costliest_title: 최고 비용
+      costliest_body: 이 계획에서 자체 비용이 가장 높은 노드입니다.
+      index_title: 인덱스
+      index_body: 이 단계가 행을 찾는 데 사용하는 인덱스입니다.
+      relation_title: 관계
+      relation_body: 이 단계가 읽는 테이블 또는 뷰입니다.
+      condition_body: "엔진이 보고한, 이 단계를 가장 잘 설명하는 조건입니다."
   code:
     gutter:
       run_statement: 이 문 실행
@@ -1658,6 +1757,7 @@ document:
         duplicate_row: 행 복제
         delete_row: 행 삭제
         chart_this_query: 이 쿼리로 차트 만들기
+        explain_this_query: 이 쿼리 설명하기
       submenu:
         copy_query:
           sql: SQL로 복사

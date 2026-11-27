@@ -72,6 +72,7 @@ mod focus;
 mod format;
 mod live_output;
 pub(crate) mod pane;
+mod plan_tab;
 mod query_error;
 mod render;
 mod results_split;
@@ -108,7 +109,7 @@ pub(super) struct ResultTab {
 }
 
 /// Internal layout of the document.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum SqlQueryLayout {
     #[default]
     Split,
@@ -590,6 +591,8 @@ pub struct CodeDocument {
     execution_session: Arc<ExecutionSessionBinding>,
     execution_session_context: Option<ExecutionSessionContext>,
     result_tabs: ResultTabs,
+    /// The Plan tab Explain opens beside the result tabs.
+    plan: plan_tab::PlanSlot,
 
     // History modal and refresh timer.
     history: HistoryState,
@@ -1248,6 +1251,7 @@ impl CodeDocument {
                 result_tab_counter: 0,
                 run_in_new_tab: false,
             },
+            plan: plan_tab::PlanSlot::default(),
             history: HistoryState {
                 history_panel,
                 _history_subscriptions: vec![query_selected_sub, history_closed_sub],
@@ -1343,7 +1347,9 @@ impl CodeDocument {
     pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
         self.is_active_tab = active;
 
-        if active && let Some(grid) = self.active_result_grid() {
+        if active && self.plan_shown() {
+            self.restore_plan_inspector(cx);
+        } else if active && let Some(grid) = self.active_result_grid() {
             grid.update(cx, |grid, cx| grid.set_active_tab(true, cx));
         }
     }
@@ -1351,6 +1357,7 @@ impl CodeDocument {
     /// Drops every result grid's inspector state after the user dismissed the
     /// workspace rail, so no grid re-opens it on the next activation.
     pub fn mark_inspector_closed(&mut self, cx: &mut Context<Self>) {
+        self.mark_plan_inspector_closed(cx);
         for tab in &self.result_tabs.result_tabs {
             tab.grid
                 .update(cx, |grid, cx| grid.clear_inspector_state(cx));
@@ -1956,8 +1963,23 @@ impl CodeDocument {
             };
         }
 
-        // When focused on results, delegate to active DataGridPanel
-        if self.focus_mode == SqlQueryFocus::Results
+        // The Plan tab takes the commands that mean something there; the
+        // rest go on to the document like any other.
+        if self.focus_mode == SqlQueryFocus::Results && self.plan_shown() {
+            if cmd == Command::FocusUp {
+                self.reveal_editor(cx);
+                self.focus_mode = SqlQueryFocus::Editor;
+                self.editor
+                    .input_state
+                    .update(cx, |state, cx| state.focus(window, cx));
+                cx.notify();
+                return true;
+            }
+
+            if self.dispatch_plan_command(cmd, window, cx) {
+                return true;
+            }
+        } else if self.focus_mode == SqlQueryFocus::Results
             && let Some(grid) = self.active_result_grid()
         {
             // Special handling for FocusUp to exit results
@@ -2013,11 +2035,12 @@ impl CodeDocument {
             }
 
             Command::FocusDown
-                if self.focus_mode == SqlQueryFocus::Editor
-                    && !self.result_tabs.result_tabs.is_empty() =>
+                if self.focus_mode == SqlQueryFocus::Editor && self.has_result_content() =>
             {
                 self.focus_mode = SqlQueryFocus::Results;
-                if let Some(grid) = self.active_result_grid() {
+                if self.plan_shown() {
+                    self.focus_plan(window, cx);
+                } else if let Some(grid) = self.active_result_grid() {
                     grid.update(cx, |g, cx| g.focus_active_view(window, cx));
                 }
                 cx.notify();

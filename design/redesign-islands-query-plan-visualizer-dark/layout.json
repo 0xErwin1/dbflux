@@ -1,0 +1,41 @@
+{
+  "arrangement": "grid",
+  "positions": {
+    "01-isl-query-plan-entry.html": {
+      "x": 0,
+      "y": 0
+    },
+    "02-isl-query-plan-diagram.html": {
+      "x": 2000,
+      "y": 0
+    },
+    "03-isl-query-plan-diagram-expanded.html": {
+      "x": 4000,
+      "y": 0
+    },
+    "04-isl-query-plan-tree.html": {
+      "x": 0,
+      "y": 1165
+    },
+    "05-isl-query-plan-raw.html": {
+      "x": 2000,
+      "y": 1165
+    },
+    "06-isl-query-plan-no-costs.html": {
+      "x": 4000,
+      "y": 1165
+    },
+    "07-isl-query-plan-analyze.html": {
+      "x": 0,
+      "y": 2330
+    },
+    "08-isl-query-plan-analyze-write.html": {
+      "x": 2000,
+      "y": 2330
+    },
+    "09-isl-query-plan-states.html": {
+      "x": 4000,
+      "y": 2330
+    }
+  }
+}

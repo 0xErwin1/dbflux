@@ -4416,6 +4416,7 @@ mod tests {
             "document.data.context_menu.item.duplicate_row",
             "document.data.context_menu.item.delete_row",
             "document.data.context_menu.item.chart_this_query",
+            "document.data.context_menu.item.explain_this_query",
             "document.data.context_menu.submenu.copy_query.sql",
             "document.data.context_menu.submenu.copy_query.query",
             "document.data.context_menu.submenu.copy_query.command",

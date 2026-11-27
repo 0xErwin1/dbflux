@@ -111,7 +111,7 @@ fn show_read_only_profile_toast(cx: &mut App) {
         .push(cx);
 }
 
-fn task_target_for_execution(
+pub(super) fn task_target_for_execution(
     profile_id: Uuid,
     connected: &dbflux_core::ConnectedProfile,
     target_db: Option<&str>,
@@ -143,7 +143,7 @@ impl CodeDocument {
         self.selected_query_text(cx)
     }
 
-    fn selected_query_text(&self, cx: &App) -> Option<String> {
+    pub(super) fn selected_query_text(&self, cx: &App) -> Option<String> {
         let state = self.editor.input_state.read(cx);
         let ranges = state.selected_nonempty_ranges();
         if ranges.is_empty() {
@@ -168,13 +168,7 @@ impl CodeDocument {
         }
     }
 
-    /// Returns the selected text if a selection exists, otherwise the full editor content.
-    fn selected_or_full_query(&self, window: &mut Window, cx: &mut Context<Self>) -> String {
-        self.selected_query(window, cx)
-            .unwrap_or_else(|| self.editor.input_state.read(cx).value().to_string())
-    }
-
-    fn clear_live_output(&mut self) {
+    pub(super) fn clear_live_output(&mut self) {
         self.execution.live_output = None;
         self.execution._live_output_drain = None;
     }
@@ -1820,7 +1814,7 @@ impl CodeDocument {
     /// Shows `result` in a new tab, or in place of the tab holding
     /// `result_grid` when set, else of the active tab. A `result_grid` whose
     /// tab was closed meanwhile drops the result.
-    fn setup_data_grid(
+    pub(super) fn setup_data_grid(
         &mut self,
         result: Arc<QueryResult>,
         query: String,
@@ -1847,6 +1841,7 @@ impl CodeDocument {
         // each its own tab so every statement's output is visible, rather than
         // surfacing only the primary set.
         if result.has_additional_results() {
+            self.leave_plan_tab(cx);
             self.create_result_tabs_for_batch(result, query, captions, origin, window, cx);
             return;
         }
@@ -1872,6 +1867,9 @@ impl CodeDocument {
         };
 
         self.result_tabs.run_in_new_tab = false;
+        // A result takes the results area from the Plan tab, which stays in
+        // the header for the user to come back to.
+        self.leave_plan_tab(cx);
 
         let profile_id = origin
             .as_ref()
@@ -1966,6 +1964,19 @@ impl CodeDocument {
             grid.set_result_caption(caption, cx);
         });
 
+        if self.supports_connection_context() {
+            let document = cx.entity().downgrade();
+            grid.update(cx, |grid, _| {
+                grid.set_explain_host(Some(std::rc::Rc::new(move |query, cx| {
+                    if let Err(error) = document.update(cx, |document, cx| {
+                        document.explain_result_query(tab_id, query, cx);
+                    }) {
+                        log::debug!("document closed before its result was explained: {error}");
+                    }
+                })));
+            });
+        }
+
         if let Some(panel) = self.source.source_time_range_panel.clone() {
             grid.update(cx, |g, cx| {
                 g.set_chart_time_range_panel(Some(panel), cx);
@@ -2009,9 +2020,9 @@ impl CodeDocument {
                     cx.emit(DocumentEvent::CloseInspector);
                 }
                 DataGridEvent::ChartThisQuery { .. } => {
-                    // CodeDocument result tabs use QueryResult sources created without an
-                    // original_query, so can_chart_from_context_menu is always false for them.
-                    // This arm exists only for exhaustiveness.
+                    // Result tabs carry their `original_query`, so the menu offers
+                    // Chart this query, but the code document does not act on
+                    // this event; it charts from its own toolbar.
                 }
                 DataGridEvent::RefreshPolicyReset(_) => {
                     // ResultPanel for result tabs has no refresh dropdown
@@ -2325,6 +2336,7 @@ impl CodeDocument {
             .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
 
         if cancelled {
+            self.plan_cancelled(cx);
             self.release_cancelled_execution(cx);
         }
     }
@@ -2365,6 +2377,7 @@ impl CodeDocument {
                 self.app_state.read(cx).cancel_query_for_target(&target);
             }
 
+            self.plan_cancelled(cx);
             self.release_cancelled_execution(cx);
         }
     }
@@ -2421,34 +2434,6 @@ impl CodeDocument {
         self.run_query_impl(ExecutionOrigin::User, true, window, cx);
     }
 
-    /// Prepends `EXPLAIN ` to the active query and executes it.
-    ///
-    /// Uses the selected text when a selection exists, otherwise the full buffer.
-    /// The result appears in the same Results panel as a regular query.
-    pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.supports_connection_context() {
-            Toast::warning(dbflux_i18n::t!(
-                "document.code.execution.toast.explain_unavailable"
-            ))
-            .meta_right(now_hms())
-            .push(cx);
-            return;
-        }
-
-        let base_query = self.selected_or_full_query(window, cx);
-        if base_query.trim().is_empty() {
-            Toast::warning(dbflux_i18n::t!(
-                "document.code.execution.toast.enter_query_to_explain"
-            ))
-            .meta_right(now_hms())
-            .push(cx);
-            return;
-        }
-
-        let explain_query = format!("EXPLAIN {}", base_query);
-        self.run_query_text(ExecutionOrigin::Automatic, explain_query, false, window, cx);
-    }
-
     pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
         let Some(index) = self
             .result_tabs
@@ -2463,8 +2448,12 @@ impl CodeDocument {
 
         if self.result_tabs.result_tabs.is_empty() {
             self.result_tabs.active_result_index = None;
-            self.layout = SqlQueryLayout::EditorOnly;
-            self.focus_mode = SqlQueryFocus::Editor;
+            if self.plan.tab.is_some() {
+                self.activate_plan_tab(cx);
+            } else {
+                self.layout = SqlQueryLayout::EditorOnly;
+                self.focus_mode = SqlQueryFocus::Editor;
+            }
         } else if let Some(active) = self.result_tabs.active_result_index {
             if active >= self.result_tabs.result_tabs.len() {
                 self.result_tabs.active_result_index = Some(self.result_tabs.result_tabs.len() - 1);
@@ -2478,6 +2467,7 @@ impl CodeDocument {
 
     pub fn activate_result_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.result_tabs.result_tabs.len() {
+            self.leave_plan_tab(cx);
             self.result_tabs.active_result_index = Some(index);
             cx.notify();
         }
@@ -2492,19 +2482,29 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let count = self.result_tabs.result_tabs.len();
+        // The Plan tab, when there is one, comes after the result tabs.
+        let count = self.result_tab_total();
         if count == 0 {
             return false;
         }
 
-        let current = self.result_tabs.active_result_index.unwrap_or(0);
+        let results = self.result_tabs.result_tabs.len();
+        let current = if self.plan_shown() {
+            results
+        } else {
+            self.result_tabs.active_result_index.unwrap_or(0)
+        };
         let next = if forward {
             (current + 1) % count
         } else {
             (current + count - 1) % count
         };
 
-        self.activate_result_tab(next, cx);
+        if next == results {
+            self.activate_plan_tab(cx);
+        } else {
+            self.activate_result_tab(next, cx);
+        }
         self.focus_results_if_they_had_it(window, cx);
         true
     }
@@ -2517,6 +2517,16 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.plan_shown() {
+            self.close_plan_tab(cx);
+            if !self.has_result_content() {
+                self.focus_editor_input(window, cx);
+            } else {
+                self.focus_results_if_they_had_it(window, cx);
+            }
+            return true;
+        }
+
         let Some(tab_id) = self
             .result_tabs
             .active_result_index
@@ -2528,7 +2538,7 @@ impl CodeDocument {
 
         self.close_result_tab(tab_id, cx);
 
-        if self.result_tabs.result_tabs.is_empty() {
+        if !self.has_result_content() {
             self.focus_editor_input(window, cx);
         } else {
             self.focus_results_if_they_had_it(window, cx);
@@ -2549,9 +2559,13 @@ impl CodeDocument {
     }
 
     fn focus_results_if_they_had_it(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.focus_mode == SqlQueryFocus::Results
-            && let Some(grid) = self.active_result_grid()
-        {
+        if self.focus_mode != SqlQueryFocus::Results {
+            return;
+        }
+
+        if self.plan_shown() {
+            self.focus_plan(window, cx);
+        } else if let Some(grid) = self.active_result_grid() {
             grid.update(cx, |grid, cx| grid.focus_active_view(window, cx));
         }
     }

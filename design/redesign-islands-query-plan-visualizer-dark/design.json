@@ -1,0 +1,70 @@
+{
+  "title": "DBFlux redesign: Query plan visualizer (#1409) · dark",
+  "brief": "Issue #1409: show the plan of a query as a result tab in the code document, with a Diagram / Tree / Raw view switch (Diagram first and default, drawn after the schema diagram), node detail in the inspector, an opt-in Analyze and clear states. Diagram nodes and edges carry the explanations the maintainer asked for: edge width by rows, self cost share with a bar, a key condition line, and tooltips (plus the operation text in the inspector). Redrawn from copies of the island editor artboard after the first set was rejected for not fitting the other screens.",
+  "feature": "odd/tasks/1409-query-plan-visualizer.md",
+  "artboards": [
+    {
+      "file": "01-isl-query-plan-entry.html",
+      "title": "Explain entry: gutter action and result menu",
+      "tradeoff": "Explain stays where it is and one menu item joins Chart this query; the plan itself only appears after the user asks for it.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-query-plan-diagram.html",
+      "title": "Plan tab, Diagram view fit to view with node inspector",
+      "tradeoff": "The default view, drawn like the schema diagram: edge width follows the rows, each node shows its self cost as a % of the plan total with a bar, and one key condition when the engine gives one. Tooltips explain the operation name and an inspector field, and the inspector repeats the operation text. Fit scales it to 72%, so the text is small until the panel is expanded.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-query-plan-diagram-expanded.html",
+      "title": "Plan tab, Diagram view with the results expanded",
+      "tradeoff": "The same diagram at 87% (fit to the wider canvas) once the existing expand button gives the panel the editor area. Tooltips on the cost field and on the self-cost share.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "04-isl-query-plan-tree.html",
+      "title": "Plan tab, Tree view with results expanded",
+      "tradeoff": "The plain list for scanning costs in a column, now with a Self cost column and the key condition under the node. The condition line makes rows taller, so it is drawn with the results expanded. Tooltips on the Self cost header and on the costliest marker.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "05-isl-query-plan-raw.html",
+      "title": "Plan tab, Raw view",
+      "tradeoff": "The engine's own text next to the tree for anyone who needs it; it is long and scrolls inside the panel. Tooltip on the Raw switch.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "06-isl-query-plan-no-costs.html",
+      "title": "Plan without costs (SQLite), Diagram view",
+      "tradeoff": "Nodes carry no cost, rows or self share and every edge has the same thickness, so the diagram never shows made-up numbers; the key condition still shows where the engine gives one. Tooltip shows the driver's own explanation of SEARCH.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "07-isl-query-plan-analyze.html",
+      "title": "Analyze opt-in gate, Diagram view",
+      "tradeoff": "Analyze needs a deliberate second click on a production connection; it adds one step for users who want real timings. Diagram is the active view. Tooltip on the Analyze switch.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "08-isl-query-plan-analyze-write.html",
+      "title": "Analyze refused for a write statement, Diagram view",
+      "tradeoff": "The estimate still shows as a diagram and Analyze is dimmed with the reason in place, so the refusal explains itself without a dialog. Tooltips on the plan totals and on an edge row count.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "09-isl-query-plan-states.html",
+      "title": "Plan tab states",
+      "tradeoff": "Unsupported driver, several statements, server error and loading keep the Plan tab chrome; the way out is always visible.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

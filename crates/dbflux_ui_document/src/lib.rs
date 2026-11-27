@@ -22,6 +22,7 @@ pub(crate) mod document_builder;
 pub mod dump_analysis;
 pub mod parquet;
 pub mod query_builder;
+mod query_plan;
 pub mod schema_diff;
 pub mod spreadsheet;
 mod style_guardrails;

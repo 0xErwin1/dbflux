@@ -1259,6 +1259,105 @@ document:
         empty: No hay combinaciones de dimensiones
         connection_not_found: Conexión no encontrada o inactiva
         catalog_unsupported: La conexión no admite el catálogo de métricas
+  query_plan:
+    tab:
+      title: Plan
+    view:
+      switch: Vista del plan
+      diagram: Diagrama
+      tree: Árbol
+      raw: Sin procesar
+    scope:
+      selection: "Selección L%{start}–%{end}"
+      script: "Script completo · %{count} sentencias"
+    totals:
+      cost: costo total
+      rows: filas
+    controls:
+      zoom_out: Alejar
+      zoom_in: Acercar
+      zoom_reset: Restablecer zoom
+      fit: Ajustar
+    warnings:
+      one: 1 advertencia.
+      many: "%{count} advertencias."
+    node:
+      costliest: MÁS COSTOSO
+      table: tabla
+      index: índice
+      cost: costo
+      rows: filas
+      self: propio
+    tree:
+      node: Nodo
+      index: Índice
+      cost: Costo
+      self_cost: Costo propio
+      rows: Filas
+      on_relation: en
+    raw:
+      copy: Copiar
+    footer:
+      nodes:
+        one: "%{count} nodo"
+        many: "%{count} nodos"
+      not_run: consulta no ejecutada
+      format:
+        json: Plan en JSON
+        xml: Plan en XML
+        text: Plan en texto
+    inspector:
+      node: "nodo %{id}"
+      estimate: Estimación
+      reads: Lee
+      details: Detalles
+      startup_cost: Costo de arranque
+      total_cost: Costo total
+      self_cost: Costo propio
+      rows: Filas
+      relation: Relación
+      index: Índice
+    loading:
+      running: Calculando el plan de la consulta…
+      cancel: Cancelar
+    state:
+      retry: Reintentar
+      unsupported:
+        title: Este controlador no admite planes de consulta
+        body: "%{connection} no tiene un plan que mostrar para sus comandos."
+      multi_statement:
+        title: Más de una sentencia
+      failed:
+        title: Falló el plan
+      origin_gone: "La conexión de la que salió este resultado ya no está conectada. Vuelve a conectarla y ejecuta la consulta de nuevo para explicarla."
+      origin_database_changed: "La base de datos en la que se ejecutó este resultado (%{origin}) ya no es la que usa esta conexión (%{current}). Vuelve a %{origin} y explica la consulta de nuevo; un plan obtenido ahora describiría otra base de datos."
+      editor_database_changed: "La base de datos de este editor (%{origin}) ya no es la que usa esta conexión (%{current}). Vuelve a %{origin} y explica la consulta de nuevo; un plan obtenido ahora describiría otra base de datos."
+      cancelled:
+        title: Plan cancelado
+    explain:
+      unavailable: "%{connection} no ofrece planes de consulta"
+    tooltip:
+      diagram_body: "El plan como grafo: una caja por paso, se lee desde la izquierda y termina en el resultado final."
+      tree_body: "El plan como lista con sangría, con los números en columnas."
+      raw_body: El plan tal como lo devolvió el motor.
+      totals_title: Totales del plan
+      totals_body: "Costo total de todo el plan, en unidades del planificador, y las filas que espera devolver."
+      cost_title: Costo estimado
+      cost_body: "En las unidades propias del planificador, con los hijos incluidos. Compárelo solo dentro de este plan."
+      startup_cost_title: Costo de arranque
+      startup_cost_body: Costo estimado antes de poder devolver la primera fila.
+      self_cost_title: Costo propio
+      self_cost_node_body: "Parte del total del plan que gasta solo este nodo, sin sus hijos."
+      self_cost_column_body: "Costo del nodo menos el de sus hijos, como parte del total del plan. La barra muestra la misma proporción."
+      rows_title: Filas estimadas
+      rows_body: Filas que este paso entrega al siguiente. Una línea más gruesa significa más filas.
+      costliest_title: Más costoso
+      costliest_body: El nodo con el costo propio más alto de este plan.
+      index_title: Índice
+      index_body: El índice que usa este paso para encontrar filas.
+      relation_title: Relación
+      relation_body: La tabla o vista que lee este paso.
+      condition_body: "La condición que mejor explica este paso, tal como la informa el motor."
   code:
     gutter:
       run_statement: Ejecutar esta sentencia
@@ -1658,6 +1757,7 @@ document:
         duplicate_row: Duplicar fila
         delete_row: Eliminar fila
         chart_this_query: Graficar esta consulta
+        explain_this_query: Explicar esta consulta
       submenu:
         copy_query:
           sql: Copiar como SQL

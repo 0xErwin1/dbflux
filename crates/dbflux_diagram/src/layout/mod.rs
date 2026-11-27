@@ -551,5 +551,163 @@ pub fn radial(nodes: &[LayoutNode], edges: &[LayoutEdge], focal: usize) -> Diagr
     graph.into_layout(&positions, max_x - min_x + 100.0, max_y - min_y + 100.0)
 }
 
+/// Tree layout, left to right, for a diagram that is a forest.
+///
+/// `parents[i]` is the parent of node `i`, `None` for a root. The column of a
+/// node comes from its depth alone: roots sit in the rightmost column and every
+/// child exactly one column to the left of its parent, so no edge skips a column
+/// or passes under a node (unlike [`layered_left_right`], which pulls every leaf
+/// to the first column). Siblings keep their input order from top to bottom and
+/// a parent is centred on its first and last child. A subtree owns a vertical
+/// band at least as tall as its root, so nodes in the same column never overlap.
+///
+/// Edges run from each child to its parent, in node order, with weight 0.0; a
+/// consumer that wants a width keeps its own table by node index.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "every index is a node index below `count` (parents are filtered to that range) or a column below `max_depth + 1`, and every per-node vector has `count` entries"
+)]
+pub fn layered_tree_right(nodes: &[LayoutNode], parents: &[Option<usize>]) -> DiagramLayout {
+    let count = nodes.len();
+    if count == 0 {
+        return DiagramLayout::empty();
+    }
+
+    let parent_of = |index: usize| parents.get(index).copied().flatten().filter(|p| *p < count);
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); count];
+    let mut roots = Vec::new();
+    for index in 0..count {
+        match parent_of(index) {
+            Some(parent) if parent != index => children[parent].push(index),
+            _ => roots.push(index),
+        }
+    }
+
+    let mut depth = vec![0_usize; count];
+    let mut order = Vec::with_capacity(count);
+    let mut stack: Vec<usize> = roots.iter().rev().copied().collect();
+    while let Some(index) = stack.pop() {
+        order.push(index);
+        for &child in children[index].iter().rev() {
+            depth[child] = depth[index] + 1;
+            stack.push(child);
+        }
+    }
+
+    let max_depth = depth.iter().copied().max().unwrap_or(0);
+    let mut column_width = vec![0.0_f32; max_depth + 1];
+    for &index in &order {
+        let column = max_depth - depth[index];
+        column_width[column] = column_width[column].max(nodes[index].width);
+    }
+    let mut column_x = vec![0.0_f32; max_depth + 1];
+    for column in 1..=max_depth {
+        column_x[column] = column_x[column - 1] + column_width[column - 1] + LAYER_GUTTER_X;
+    }
+
+    let (y, total_height) = place_tree_vertically(nodes, &children, &roots, &order);
+
+    let placed: Vec<PlacedNode> = (0..count)
+        .map(|index| PlacedNode {
+            x: column_x[max_depth - depth[index]],
+            y: y[index],
+            width: nodes[index].width,
+            height: nodes[index].height,
+        })
+        .collect();
+    let edges = (0..count)
+        .filter_map(|index| {
+            let parent = parent_of(index).filter(|p| *p != index)?;
+            let (from, to) = (placed.get(index)?, placed.get(parent)?);
+            Some(PlacedEdge {
+                from: index,
+                to: parent,
+                from_anchor: (from.x + from.width, from.y + from.height / 2.0),
+                to_anchor: (to.x, to.y + to.height / 2.0),
+                weight: 0.0,
+            })
+        })
+        .collect();
+
+    let total_width = column_x[max_depth] + column_width[max_depth];
+
+    DiagramLayout {
+        nodes: placed,
+        edges,
+        total_width,
+        total_height,
+    }
+}
+
+/// Vertical placement of a forest: returns the top of every node and the total
+/// height.
+///
+/// Each subtree is measured around its root's centre (how far it reaches above
+/// and below it), children are stacked in input order with `NODE_SPACING_Y`
+/// between them, and the parent's centre is the middle of its first and last
+/// child centres, whatever their heights. A subtree is then moved as a whole,
+/// so no node is ever shifted off its place relative to its parent.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "`children`, `roots` and `order` hold node indices below `nodes.len()`, and every per-node vector has that many entries"
+)]
+fn place_tree_vertically(
+    nodes: &[LayoutNode],
+    children: &[Vec<usize>],
+    roots: &[usize],
+    order: &[usize],
+) -> (Vec<f32>, f32) {
+    let count = nodes.len();
+    // How far the subtree reaches above (negative) and below its root's centre.
+    let mut reach = vec![(0.0_f32, 0.0_f32); count];
+    // The centre of each child relative to its parent's centre.
+    let mut offset = vec![0.0_f32; count];
+
+    for &index in order.iter().rev() {
+        let half = nodes[index].height / 2.0;
+        let kids = &children[index];
+        if kids.is_empty() {
+            reach[index] = (-half, half);
+            continue;
+        }
+
+        let mut cursor = 0.0_f32;
+        let mut centre_in_block = Vec::with_capacity(kids.len());
+        for &kid in kids {
+            let (above, below) = reach[kid];
+            centre_in_block.push(cursor - above);
+            cursor += below - above + NODE_SPACING_Y;
+        }
+        let parent_centre = (centre_in_block[0] + centre_in_block[kids.len() - 1]) / 2.0;
+
+        let mut top = -half;
+        let mut bottom = half;
+        for (&kid, centre) in kids.iter().zip(centre_in_block) {
+            offset[kid] = centre - parent_centre;
+            top = top.min(offset[kid] + reach[kid].0);
+            bottom = bottom.max(offset[kid] + reach[kid].1);
+        }
+        reach[index] = (top, bottom);
+    }
+
+    let mut centre = vec![0.0_f32; count];
+    let mut cursor = 0.0_f32;
+    for &root in roots {
+        let (above, below) = reach[root];
+        centre[root] = cursor - above;
+        cursor += below - above + NODE_SPACING_Y;
+    }
+    for &index in order {
+        for &kid in &children[index] {
+            centre[kid] = centre[index] + offset[kid];
+        }
+    }
+
+    let top = (0..count)
+        .map(|index| centre[index] - nodes[index].height / 2.0)
+        .collect();
+    (top, (cursor - NODE_SPACING_Y).max(0.0))
+}
+
 #[cfg(test)]
 mod tests;
