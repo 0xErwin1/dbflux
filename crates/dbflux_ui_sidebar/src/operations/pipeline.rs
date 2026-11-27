@@ -219,7 +219,7 @@ impl Sidebar {
     ) {
         let session_password = password.clone();
         let (
-            input,
+            mut input,
             profile_name,
             driver,
             keyring_password,
@@ -336,6 +336,11 @@ impl Sidebar {
             cx.emit(dbflux_ui_base::AppStateChanged);
             result
         });
+
+        // The pipeline must stop when its task is cancelled, from the
+        // background tasks panel or from the sign-in dialog, so it runs on the
+        // task's token rather than the placeholder it was prepared with.
+        input.cancel = cancel_token.clone();
 
         self.refresh_tree(cx);
 
@@ -456,6 +461,7 @@ impl Sidebar {
         .detach();
 
         cx.emit(SidebarEvent::PipelineStarted {
+            profile_id,
             profile_name: profile_name.clone(),
             watcher: state_rx,
         });
@@ -737,6 +743,15 @@ impl Sidebar {
                 }
             };
 
+            // A cancel that arrived while the driver was connecting must not
+            // leave the connection open: drop it, with its tunnel, instead of
+            // registering a connection the user already cancelled.
+            if cancel_token.is_cancelled() {
+                drop((connection, tunnel_handle));
+                abandon_cancelled_connect(&app_state, &sidebar, profile_id, &state_tx, cx);
+                return;
+            }
+
             match run_hook_phase(
                 app_state.clone(),
                 profile_id,
@@ -855,6 +870,16 @@ impl Sidebar {
                 }
             });
 
+
+            // A cancel that arrived while the post-connect hooks ran must not
+            // leave the connection open: drop it, with its tunnel, instead of
+            // registering a connection the user already cancelled.
+            if cancel_token.is_cancelled() {
+                drop((connection, tunnel_handle));
+                abandon_cancelled_connect(&app_state, &sidebar, profile_id, &state_tx, cx);
+                return;
+            }
+
             let connection: Arc<dyn Connection> = connection.into();
             let capture_witness = Arc::clone(&connection);
             let capture_category = connection.metadata().category;
@@ -951,6 +976,33 @@ impl Sidebar {
         })
         .detach();
     }
+}
+
+/// Settles a connect whose task was cancelled after the connection opened:
+/// the pending operation is released and the progress shows the cancel, so
+/// the sidebar never reports a connection the user cancelled as connected.
+fn abandon_cancelled_connect(
+    app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
+    sidebar: &gpui::Entity<Sidebar>,
+    profile_id: uuid::Uuid,
+    state_tx: &dbflux_core::StateSender,
+    cx: &mut gpui::AsyncApp,
+) {
+    if state_tx.send(PipelineState::Cancelled).is_err() {
+        log::debug!("Pipeline: no observer left for the cancelled connect");
+    }
+
+    cx.update(|cx| {
+        app_state.update(cx, |state, cx| {
+            state.cancel_detached_hook_tasks(profile_id);
+            state.finish_pending_operation(profile_id, None);
+            cx.emit(dbflux_ui_base::AppStateChanged);
+        });
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.refresh_tree(cx);
+        });
+    });
 }
 
 #[cfg(test)]

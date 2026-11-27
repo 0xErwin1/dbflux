@@ -141,10 +141,23 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
     let child_handle = Arc::new(std::sync::Mutex::new(Some(child)));
     let child_for_drain = Arc::clone(&child_handle);
 
-    // Forward abort channel signals to the shared flag.
+    // Forward abort channel signals to the shared flag, and stop the CLI
+    // right away: after printing the URL it writes nothing more, so the
+    // stdout reader would not notice the abort until the CLI exits on its own.
+    let child_for_abort = Arc::clone(&child_handle);
     std::thread::spawn(move || {
         if abort_rx.recv().is_ok() {
             abort_flag.store(true, std::sync::atomic::Ordering::Release);
+            if let Ok(mut guard) = child_for_abort.lock()
+                && let Some(mut child) = guard.take()
+            {
+                if let Err(error) = child.kill() {
+                    log::warn!("[aws sso login] could not stop the CLI on abort: {}", error);
+                }
+                if let Err(error) = child.wait() {
+                    log::warn!("[aws sso login] could not reap the CLI on abort: {}", error);
+                }
+            }
         }
     });
 
@@ -2380,6 +2393,11 @@ async fn sso_login_with_url(
 
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<Result<AuthSession, DbError>>(1);
 
+    // Dropping this future (the connection was cancelled) aborts the login
+    // thread and stops the CLI, so nothing keeps running unseen.
+    let mut abandon_guard = AbandonLoginGuard::default();
+    let abort_slot = Arc::clone(&abandon_guard.slot);
+
     // Spawn a dedicated OS thread for all blocking work.
     // The `url_callback` is passed into the thread and called as soon as the
     // verification URL is known, so the state channel receives the URL update
@@ -2393,6 +2411,12 @@ async fn sso_login_with_url(
                 return;
             }
         };
+
+        if !AbandonLoginGuard::attach(&abort_slot, &handle.abort_tx) {
+            // The waiting future is gone, so nobody reads this result.
+            drop(result_tx);
+            return;
+        }
 
         // Register the abort sender so the UI can cancel this login mid-flight.
         {
@@ -2428,7 +2452,10 @@ async fn sso_login_with_url(
     // signals completion through a oneshot so the executor is not blocked.
     loop {
         match result_rx.try_recv() {
-            Ok(result) => return result,
+            Ok(result) => {
+                abandon_guard.disarm();
+                return result;
+            }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 async_sleep(std::time::Duration::from_millis(200)).await;
             }
@@ -2438,6 +2465,61 @@ async fn sso_login_with_url(
                 ));
             }
         }
+    }
+}
+
+/// Aborts an in-flight `aws sso login` when the future waiting on it is
+/// dropped before the login finished.
+#[derive(Default)]
+struct AbandonLoginGuard {
+    slot: Arc<Mutex<AbandonLoginSlot>>,
+    disarmed: bool,
+}
+
+#[derive(Default)]
+struct AbandonLoginSlot {
+    abandoned: bool,
+    abort_tx: Option<std::sync::mpsc::SyncSender<()>>,
+}
+
+impl AbandonLoginGuard {
+    /// Hands the login thread's abort sender to the guard. Returns `false`
+    /// when the waiting future was already dropped, after aborting the login.
+    fn attach(slot: &Mutex<AbandonLoginSlot>, abort_tx: &std::sync::mpsc::SyncSender<()>) -> bool {
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.abandoned {
+            send_abort(abort_tx);
+            return false;
+        }
+        slot.abort_tx = Some(abort_tx.clone());
+        true
+    }
+
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for AbandonLoginGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+
+        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+        slot.abandoned = true;
+        if let Some(abort_tx) = slot.abort_tx.take() {
+            log::debug!("[aws sso login] waiting future dropped, aborting the login");
+            send_abort(&abort_tx);
+        }
+    }
+}
+
+/// Signals an abort. A full channel already holds an abort and a closed one
+/// means the login already ended, so neither needs reporting.
+fn send_abort(abort_tx: &std::sync::mpsc::SyncSender<()>) {
+    if let Err(std::sync::mpsc::TrySendError::Full(())) = abort_tx.try_send(()) {
+        log::debug!("[aws sso login] abort already pending");
     }
 }
 
@@ -2570,6 +2652,38 @@ mod tests {
     use super::*;
     use dbflux_core::DynAuthProvider;
     use std::io::Write;
+
+    /// Dropping the future that waits on a login aborts that login, whether
+    /// the login thread registered its abort sender before or after the drop.
+    #[test]
+    fn abandoning_a_login_aborts_it() {
+        let (abort_tx, abort_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let guard = AbandonLoginGuard::default();
+        assert!(AbandonLoginGuard::attach(&guard.slot, &abort_tx));
+        drop(guard);
+        assert!(abort_rx.try_recv().is_ok(), "dropping the guard aborts");
+
+        let (late_tx, late_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let guard = AbandonLoginGuard::default();
+        let slot = Arc::clone(&guard.slot);
+        drop(guard);
+        assert!(!AbandonLoginGuard::attach(&slot, &late_tx));
+        assert!(
+            late_rx.try_recv().is_ok(),
+            "a login attached late is aborted"
+        );
+    }
+
+    /// A login that finished is left alone when its future goes away.
+    #[test]
+    fn a_finished_login_is_not_aborted() {
+        let (abort_tx, abort_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let mut guard = AbandonLoginGuard::default();
+        assert!(AbandonLoginGuard::attach(&guard.slot, &abort_tx));
+        guard.disarm();
+        drop(guard);
+        assert!(abort_rx.try_recv().is_err());
+    }
 
     fn write_sso_cache(dir: &std::path::Path, start_url: &str, json: &str) {
         let hash = Sha1::digest(start_url.as_bytes());

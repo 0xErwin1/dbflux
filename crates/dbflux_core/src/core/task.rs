@@ -1,6 +1,8 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 use std::time::Instant;
 
 use uuid::Uuid;
@@ -93,22 +95,71 @@ impl TaskStatus {
 
 #[derive(Clone)]
 pub struct CancelToken {
-    cancelled: Arc<AtomicBool>,
+    inner: Arc<CancelTokenInner>,
+}
+
+struct CancelTokenInner {
+    cancelled: AtomicBool,
+    wakers: Mutex<Vec<Waker>>,
 }
 
 impl CancelToken {
     pub fn new() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            inner: Arc::new(CancelTokenInner {
+                cancelled: AtomicBool::new(false),
+                wakers: Mutex::new(Vec::new()),
+            }),
         }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
+        self.inner.cancelled.load(Ordering::SeqCst)
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        self.inner.cancelled.store(true, Ordering::SeqCst);
+
+        let wakers = std::mem::take(
+            &mut *self
+                .inner
+                .wakers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+
+    /// Resolves once cancellation is requested. Runtime-agnostic, so it can
+    /// be raced against work running on the GPUI background executor.
+    pub fn cancelled(&self) -> impl Future<Output = ()> + Send + 'static {
+        let token = self.clone();
+        std::future::poll_fn(move |context| {
+            if token.is_cancelled() {
+                return Poll::Ready(());
+            }
+
+            {
+                let mut wakers = token
+                    .inner
+                    .wakers
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if !wakers.iter().any(|waker| waker.will_wake(context.waker())) {
+                    wakers.push(context.waker().clone());
+                }
+            }
+
+            // `cancel` may have run between the first check and registering
+            // the waker; checking again keeps that wake-up from being lost.
+            if token.is_cancelled() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
     }
 
     /// Returns `Err(PipelineError::cancelled())` if cancellation was requested.
@@ -607,6 +658,26 @@ impl TaskSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_future_wakes_when_cancelled_from_another_thread() {
+        let token = CancelToken::new();
+        let waiter = tokio::spawn({
+            let token = token.clone();
+            async move { token.cancelled().await }
+        });
+        tokio::task::yield_now().await;
+
+        let canceller = token.clone();
+        std::thread::spawn(move || canceller.cancel())
+            .join()
+            .expect("cancel thread");
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("cancelled() resolves after cancel")
+            .expect("join");
+    }
 
     #[test]
     fn import_and_migrate_labels() {
