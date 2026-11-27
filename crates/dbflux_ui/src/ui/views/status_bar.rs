@@ -173,7 +173,7 @@ impl StatusBar {
         tasks
             .iter()
             .fold(TaskCounts::default(), |counts, task| match task.status {
-                TaskStatus::Running => TaskCounts {
+                TaskStatus::Running | TaskStatus::Cancelling => TaskCounts {
                     running: counts.running + 1,
                     ..counts
                 },
@@ -290,7 +290,7 @@ impl StatusBar {
             StatementSummary::Finished { status, text } => match status {
                 TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger, text),
                 TaskStatus::Cancelled => (AppIcon::CircleX, theme.muted_foreground, text),
-                TaskStatus::Completed | TaskStatus::Running => {
+                TaskStatus::Completed | TaskStatus::Running | TaskStatus::Cancelling => {
                     (AppIcon::Check, theme.success, text)
                 }
             },

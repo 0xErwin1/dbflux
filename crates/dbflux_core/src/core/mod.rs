@@ -21,7 +21,9 @@ pub use execution_session::ExecutionSessionScope;
 pub use log_err::LogErr;
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use task::{
-    CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
+    CancelAllSummary, CancelHook, CancelOutcome, CancelPolicy, CancelRequestOutcome, CancelToken,
+    TaskHandle, TaskId, TaskKind, TaskManager, TaskRequest, TaskSlot, TaskSnapshot, TaskStatus,
+    TaskTarget,
 };
 pub use traits::{
     BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketEncryption, BucketInfo,

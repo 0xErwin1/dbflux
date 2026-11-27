@@ -80,6 +80,9 @@ impl TaskKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskStatus {
     Running,
+    /// A cancel was requested and the work has not confirmed that it
+    /// stopped. Not terminal: the worker still decides the final outcome.
+    Cancelling,
     Completed,
     Failed(String),
     Cancelled,
@@ -87,7 +90,117 @@ pub enum TaskStatus {
 
 impl TaskStatus {
     pub fn is_terminal(&self) -> bool {
-        !matches!(self, TaskStatus::Running)
+        !matches!(self, TaskStatus::Running | TaskStatus::Cancelling)
+    }
+}
+
+/// How a cancel request settles the task status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CancelPolicy {
+    /// The task becomes `Cancelled` the moment cancel is requested.
+    #[default]
+    Immediate,
+    /// The task becomes `Cancelling` and turns `Cancelled` only when the
+    /// worker confirms with `TaskManager::acknowledge_cancelled`, or when its
+    /// cancel hook reports that the work stopped.
+    WorkerAcknowledged,
+}
+
+/// What a task's cancel hook achieved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CancelOutcome {
+    /// The work is already stopped.
+    Stopped,
+    /// A stop was asked for; the worker will confirm.
+    Requested,
+    /// The work cannot be stopped.
+    NotSupported { reason: String },
+}
+
+/// Cancel action of a task, run by `TaskManager::request_cancel` while the
+/// manager is borrowed: it must return without blocking.
+pub type CancelHook = Arc<dyn Fn() -> CancelOutcome + Send + Sync>;
+
+/// Result of asking a task to cancel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CancelRequestOutcome {
+    /// The work stopped; the task is `Cancelled`.
+    Cancelled,
+    /// The request was delivered; the task is `Cancelling` until the worker
+    /// confirms.
+    Cancelling,
+    /// An earlier request is still waiting for the worker.
+    AlreadyCancelling,
+    /// The task cannot be cancelled and kept its status.
+    Refused { reason: String },
+    /// The task is unknown or already finished.
+    NotRunning,
+}
+
+/// Counts of how `TaskManager::cancel_all_detailed` settled each running task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CancelAllSummary {
+    pub cancelled: usize,
+    pub cancelling: usize,
+    pub refused: usize,
+}
+
+/// Parameters of a task started with `TaskManager::start_handle`.
+pub struct TaskRequest {
+    kind: TaskKind,
+    description: String,
+    target: Option<TaskTarget>,
+    policy: CancelPolicy,
+    cancel_hook: Option<CancelHook>,
+}
+
+impl TaskRequest {
+    pub fn new(kind: TaskKind, description: impl Into<String>) -> Self {
+        Self {
+            kind,
+            description: description.into(),
+            target: None,
+            policy: CancelPolicy::default(),
+            cancel_hook: None,
+        }
+    }
+
+    pub fn target(mut self, target: TaskTarget) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    pub fn policy(mut self, policy: CancelPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Only consulted for `CancelPolicy::WorkerAcknowledged` tasks.
+    pub fn cancel_hook(mut self, hook: CancelHook) -> Self {
+        self.cancel_hook = Some(hook);
+        self
+    }
+}
+
+/// Identity and cancel token of a started task. The `TaskManager` keeps
+/// owning the task state.
+#[derive(Clone)]
+pub struct TaskHandle {
+    id: TaskId,
+    token: CancelToken,
+}
+
+impl TaskHandle {
+    pub fn id(&self) -> TaskId {
+        self.id
+    }
+
+    pub fn token(&self) -> &CancelToken {
+        &self.token
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.token.is_cancelled()
     }
 }
 
@@ -144,10 +257,16 @@ pub struct Task {
     /// description had to shorten it. Shared, so snapshots taken on every
     /// render do not copy a large script.
     pub query_text: Option<Arc<str>>,
+    /// Why the task cannot be cancelled, shown next to the disabled cancel
+    /// control. Set by a point of no return or a hook reporting
+    /// `CancelOutcome::NotSupported`.
+    pub cancel_unavailable_reason: Option<String>,
     cancel_token: CancelToken,
     /// Cleared by `TaskManager::mark_uncancellable` for work that never polls
     /// its token, such as a write already sent to the server.
     accepts_cancel: bool,
+    policy: CancelPolicy,
+    cancel_hook: Option<CancelHook>,
 }
 
 impl Task {
@@ -165,7 +284,54 @@ impl Task {
     pub fn is_cancellable(&self) -> bool {
         self.status == TaskStatus::Running
             && self.accepts_cancel
+            && self.cancel_unavailable_reason.is_none()
             && self.kind.supports_cancellation()
+    }
+
+    fn finish(&mut self, status: TaskStatus) {
+        self.status = status;
+        self.completed_at = Some(Instant::now());
+    }
+
+    fn apply_cancel_request(&mut self) -> CancelRequestOutcome {
+        if let Some(reason) = &self.cancel_unavailable_reason {
+            return CancelRequestOutcome::Refused {
+                reason: reason.clone(),
+            };
+        }
+
+        match self.policy {
+            CancelPolicy::Immediate => {
+                self.cancel_token.cancel();
+                self.finish(TaskStatus::Cancelled);
+                CancelRequestOutcome::Cancelled
+            }
+            CancelPolicy::WorkerAcknowledged => self.apply_acknowledged_cancel(),
+        }
+    }
+
+    fn apply_acknowledged_cancel(&mut self) -> CancelRequestOutcome {
+        let outcome = match &self.cancel_hook {
+            Some(hook) => hook(),
+            None => CancelOutcome::Requested,
+        };
+
+        match outcome {
+            CancelOutcome::Stopped => {
+                self.cancel_token.cancel();
+                self.finish(TaskStatus::Cancelled);
+                CancelRequestOutcome::Cancelled
+            }
+            CancelOutcome::Requested => {
+                self.cancel_token.cancel();
+                self.status = TaskStatus::Cancelling;
+                CancelRequestOutcome::Cancelling
+            }
+            CancelOutcome::NotSupported { reason } => {
+                self.cancel_unavailable_reason = Some(reason.clone());
+                CancelRequestOutcome::Refused { reason }
+            }
+        }
     }
 }
 
@@ -179,6 +345,7 @@ pub struct TaskSnapshot {
     pub progress: Option<f32>,
     pub details: Option<String>,
     pub is_cancellable: bool,
+    pub cancel_unavailable_reason: Option<String>,
     pub profile_id: Option<Uuid>,
     pub target: Option<TaskTarget>,
     pub query_text: Option<Arc<str>>,
@@ -195,6 +362,7 @@ impl From<&Task> for TaskSnapshot {
             progress: task.progress,
             details: task.details.clone(),
             is_cancellable: task.is_cancellable(),
+            cancel_unavailable_reason: task.cancel_unavailable_reason.clone(),
             profile_id: task.profile_id,
             target: task.target.clone(),
             query_text: task.query_text.clone(),
@@ -228,28 +396,43 @@ impl TaskManager {
         description: impl Into<String>,
         target: Option<TaskTarget>,
     ) -> (TaskId, CancelToken) {
+        let mut request = TaskRequest::new(kind, description);
+        request.target = target;
+
+        let handle = self.start_handle(request);
+        (handle.id, handle.token)
+    }
+
+    /// Starts a task with an explicit cancel policy and optional cancel hook.
+    pub fn start_handle(&mut self, request: TaskRequest) -> TaskHandle {
         let id = TaskId::new_v4();
         let cancel_token = CancelToken::new();
-        let profile_id = target.as_ref().map(|target| target.profile_id);
+        let profile_id = request.target.as_ref().map(|target| target.profile_id);
 
         let task = Task {
             id,
-            kind,
-            description: description.into(),
+            kind: request.kind,
+            description: request.description,
             status: TaskStatus::Running,
             started_at: Instant::now(),
             completed_at: None,
             progress: None,
             details: None,
             profile_id,
-            target,
+            target: request.target,
             query_text: None,
+            cancel_unavailable_reason: None,
             cancel_token: cancel_token.clone(),
             accepts_cancel: true,
+            policy: request.policy,
+            cancel_hook: request.cancel_hook,
         };
 
         self.tasks.insert(id, task);
-        (id, cancel_token)
+        TaskHandle {
+            id,
+            token: cancel_token,
+        }
     }
 
     /// Hides the cancel control of a task whose work does not observe its
@@ -259,6 +442,19 @@ impl TaskManager {
     pub fn mark_uncancellable(&mut self, id: TaskId) {
         if let Some(task) = self.tasks.get_mut(&id) {
             task.accepts_cancel = false;
+        }
+    }
+
+    /// Declares that the work can no longer be stopped (for example a DDL
+    /// statement already sent) and records why, so the UI can show the reason
+    /// next to the disabled cancel control. Later cancel requests are refused
+    /// and leave the task and its token untouched.
+    pub fn mark_point_of_no_return(&mut self, id: TaskId, reason: impl Into<String>) {
+        if let Some(task) = self.tasks.get_mut(&id)
+            && !task.status.is_terminal()
+        {
+            task.accepts_cancel = false;
+            task.cancel_unavailable_reason = Some(reason.into());
         }
     }
 
@@ -272,7 +468,7 @@ impl TaskManager {
 
     pub fn complete(&mut self, id: TaskId) {
         if let Some(task) = self.tasks.get_mut(&id)
-            && task.status == TaskStatus::Running
+            && !task.status.is_terminal()
         {
             task.status = TaskStatus::Completed;
             task.completed_at = Some(Instant::now());
@@ -281,7 +477,7 @@ impl TaskManager {
 
     pub fn complete_with_details(&mut self, id: TaskId, details: impl Into<String>) {
         if let Some(task) = self.tasks.get_mut(&id)
-            && task.status == TaskStatus::Running
+            && !task.status.is_terminal()
         {
             task.status = TaskStatus::Completed;
             task.completed_at = Some(Instant::now());
@@ -320,7 +516,7 @@ impl TaskManager {
 
     pub fn fail(&mut self, id: TaskId, error: impl Into<String>) {
         if let Some(task) = self.tasks.get_mut(&id)
-            && task.status == TaskStatus::Running
+            && !task.status.is_terminal()
         {
             task.status = TaskStatus::Failed(error.into());
             task.completed_at = Some(Instant::now());
@@ -334,7 +530,7 @@ impl TaskManager {
         details: impl Into<String>,
     ) {
         if let Some(task) = self.tasks.get_mut(&id)
-            && task.status == TaskStatus::Running
+            && !task.status.is_terminal()
         {
             task.status = TaskStatus::Failed(error.into());
             task.completed_at = Some(Instant::now());
@@ -348,41 +544,78 @@ impl TaskManager {
         }
     }
 
-    pub fn cancel(&mut self, id: TaskId) -> bool {
-        if let Some(task) = self.tasks.get_mut(&id)
-            && task.status == TaskStatus::Running
-        {
-            task.cancel_token.cancel();
-            task.status = TaskStatus::Cancelled;
-            task.completed_at = Some(Instant::now());
-            return true;
+    /// Asks a task to cancel and reports what actually happened; see
+    /// [`CancelRequestOutcome`]. A task never becomes `Cancelled` here unless
+    /// its policy is `Immediate` or its hook reports the work stopped.
+    pub fn request_cancel(&mut self, id: TaskId) -> CancelRequestOutcome {
+        let Some(task) = self.tasks.get_mut(&id) else {
+            return CancelRequestOutcome::NotRunning;
+        };
+
+        match task.status {
+            TaskStatus::Running => task.apply_cancel_request(),
+            TaskStatus::Cancelling => CancelRequestOutcome::AlreadyCancelling,
+            TaskStatus::Completed | TaskStatus::Failed(_) | TaskStatus::Cancelled => {
+                CancelRequestOutcome::NotRunning
+            }
         }
-        false
+    }
+
+    /// Legacy cancel: `true` when the request was accepted. Prefer
+    /// [`TaskManager::request_cancel`], which says whether the work stopped.
+    pub fn cancel(&mut self, id: TaskId) -> bool {
+        matches!(
+            self.request_cancel(id),
+            CancelRequestOutcome::Cancelled | CancelRequestOutcome::Cancelling
+        )
+    }
+
+    /// Worker confirmation that a `Cancelling` task really stopped. Returns
+    /// `false` and changes nothing when the task is in any other state.
+    pub fn acknowledge_cancelled(&mut self, id: TaskId) -> bool {
+        match self.tasks.get_mut(&id) {
+            Some(task) if task.status == TaskStatus::Cancelling => {
+                task.finish(TaskStatus::Cancelled);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Requests cancellation of every running task and reports how each
+    /// request settled.
+    pub fn cancel_all_detailed(&mut self) -> CancelAllSummary {
+        let running_ids: Vec<TaskId> = self
+            .tasks
+            .iter()
+            .filter(|(_, task)| task.status == TaskStatus::Running)
+            .map(|(id, _)| *id)
+            .collect();
+
+        let mut summary = CancelAllSummary::default();
+        for id in running_ids {
+            match self.request_cancel(id) {
+                CancelRequestOutcome::Cancelled => summary.cancelled += 1,
+                CancelRequestOutcome::Cancelling => summary.cancelling += 1,
+                CancelRequestOutcome::Refused { .. } => summary.refused += 1,
+                CancelRequestOutcome::AlreadyCancelling | CancelRequestOutcome::NotRunning => {}
+            }
+        }
+        summary
     }
 
     /// Cancel all running tasks.
     ///
-    /// Returns the number of tasks that were actually cancelled.
+    /// Returns the number of cancel requests that were accepted, whether the
+    /// task stopped or is now waiting for its worker.
     pub fn cancel_all(&mut self) -> usize {
-        let running_ids: Vec<TaskId> = self
-            .tasks
-            .iter()
-            .filter(|(_, t)| t.status == TaskStatus::Running)
-            .map(|(id, _)| *id)
-            .collect();
-
-        let mut cancelled_count = 0;
-        for id in running_ids {
-            if self.cancel(id) {
-                cancelled_count += 1;
-            }
-        }
-        cancelled_count
+        let summary = self.cancel_all_detailed();
+        summary.cancelled + summary.cancelling
     }
 
     pub fn update_progress(&mut self, id: TaskId, progress: f32) {
         if let Some(task) = self.tasks.get_mut(&id)
-            && task.status == TaskStatus::Running
+            && !task.status.is_terminal()
         {
             task.progress = Some(progress.clamp(0.0, 1.0));
         }
@@ -395,7 +628,7 @@ impl TaskManager {
     pub fn running_tasks(&self) -> Vec<TaskSnapshot> {
         self.tasks
             .values()
-            .filter(|t| t.status == TaskStatus::Running)
+            .filter(|t| !t.status.is_terminal())
             .map(TaskSnapshot::from)
             .collect()
     }
@@ -413,7 +646,7 @@ impl TaskManager {
     pub fn active_count(&self) -> usize {
         self.tasks
             .values()
-            .filter(|t| t.status == TaskStatus::Running)
+            .filter(|t| !t.status.is_terminal())
             .count()
     }
 
@@ -424,7 +657,7 @@ impl TaskManager {
         self.tasks
             .values()
             .filter(|t| {
-                t.status == TaskStatus::Running
+                !t.status.is_terminal()
                     && matches!(
                         t.kind,
                         TaskKind::Connect
@@ -441,7 +674,7 @@ impl TaskManager {
     }
 
     pub fn has_running_tasks(&self) -> bool {
-        self.tasks.values().any(|t| t.status == TaskStatus::Running)
+        self.tasks.values().any(|t| !t.status.is_terminal())
     }
 
     /// Removes completed and cancelled tasks that finished at least
@@ -473,7 +706,7 @@ impl TaskManager {
         let running: Vec<_> = self
             .tasks
             .values()
-            .filter(|t| t.status == TaskStatus::Running)
+            .filter(|t| !t.status.is_terminal())
             .collect();
 
         match running.len() {
@@ -605,143 +838,4 @@ impl TaskSlot {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn import_and_migrate_labels() {
-        assert_eq!(TaskKind::Import.label(), "Import");
-        assert_eq!(TaskKind::Migrate.label(), "Migrate");
-    }
-
-    #[test]
-    fn every_task_kind_has_a_non_empty_label() {
-        let kinds = [
-            TaskKind::Query,
-            TaskKind::Connect,
-            TaskKind::Disconnect,
-            TaskKind::SwitchDatabase,
-            TaskKind::LoadSchema,
-            TaskKind::SchemaRefresh,
-            TaskKind::SchemaDrop,
-            TaskKind::Export,
-            TaskKind::Import,
-            TaskKind::Migrate,
-            TaskKind::KeyScan,
-            TaskKind::KeyGet,
-            TaskKind::KeyMutation,
-            TaskKind::DumpAnalysis,
-        ];
-
-        for kind in kinds {
-            assert!(!kind.label().is_empty());
-        }
-    }
-
-    #[test]
-    fn running_key_scan_task_is_cancellable() {
-        let mut manager = TaskManager::new();
-        let (id, _token) = manager.start(TaskKind::KeyScan, "SCAN 0");
-
-        assert!(manager.get(id).expect("task exists").is_cancellable);
-    }
-
-    #[test]
-    fn key_reads_and_writes_are_not_cancellable_while_running() {
-        let mut manager = TaskManager::new();
-
-        for kind in [TaskKind::KeyGet, TaskKind::KeyMutation] {
-            let (id, _token) = manager.start(kind, kind.label());
-            let snapshot = manager.get(id).expect("task exists");
-
-            assert_eq!(snapshot.status, TaskStatus::Running);
-            assert!(
-                !snapshot.is_cancellable,
-                "{} must not offer a cancel that cannot stop the driver call",
-                kind.label()
-            );
-        }
-    }
-
-    #[test]
-    fn a_task_marked_uncancellable_offers_no_cancel_while_running() {
-        let mut manager = TaskManager::new();
-        let (id, _token) = manager.start(TaskKind::Query, "UPDATE users SET name = 'a'");
-
-        manager.mark_uncancellable(id);
-
-        let snapshot = manager.get(id).expect("task exists");
-        assert_eq!(snapshot.status, TaskStatus::Running);
-        assert!(!snapshot.is_cancellable);
-    }
-
-    #[test]
-    fn running_query_task_is_cancellable_and_finished_one_is_not() {
-        let mut manager = TaskManager::new();
-        let (id, _token) = manager.start(TaskKind::Query, "SELECT 1");
-
-        assert!(manager.get(id).expect("task exists").is_cancellable);
-
-        manager.complete(id);
-
-        assert!(!manager.get(id).expect("task exists").is_cancellable);
-    }
-
-    #[test]
-    fn query_text_reaches_the_snapshot_and_leaves_the_description_alone() {
-        let mut manager = TaskManager::new();
-        let full_query =
-            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c;";
-        let (id, _token) = manager.start(TaskKind::Query, "WITH RECURSIVE c(x) AS ...");
-
-        assert!(manager.get(id).expect("task exists").query_text.is_none());
-
-        manager.set_query_text(id, full_query);
-
-        let snapshot = manager.get(id).expect("task exists");
-        assert_eq!(snapshot.query_text.as_deref(), Some(full_query));
-        assert_eq!(snapshot.description, "WITH RECURSIVE c(x) AS ...");
-    }
-
-    #[test]
-    fn cleanup_keeps_failed_tasks_until_they_are_removed() {
-        let mut manager = TaskManager::new();
-        let (failed_id, _token) = manager.start(TaskKind::KeyScan, "SCAN 0");
-        manager.fail(failed_id, "connection reset");
-
-        manager.cleanup_completed(0);
-
-        let failed = manager
-            .get(failed_id)
-            .expect("failed task survives cleanup");
-        assert_eq!(
-            failed.status,
-            TaskStatus::Failed("connection reset".to_string())
-        );
-
-        manager.remove(failed_id);
-
-        assert!(manager.get(failed_id).is_none());
-    }
-
-    #[test]
-    fn cleanup_removes_completed_and_cancelled_tasks_past_the_retention_window() {
-        let mut manager = TaskManager::new();
-        let (completed_id, _token) = manager.start(TaskKind::Query, "SELECT 1");
-        let (cancelled_id, _token) = manager.start(TaskKind::Export, "Export");
-        let (running_id, _token) = manager.start(TaskKind::LoadSchema, "Load");
-        manager.complete(completed_id);
-        manager.cancel(cancelled_id);
-
-        manager.cleanup_completed(60);
-
-        assert!(manager.get(completed_id).is_some());
-        assert!(manager.get(cancelled_id).is_some());
-
-        manager.cleanup_completed(0);
-
-        assert!(manager.get(completed_id).is_none());
-        assert!(manager.get(cancelled_id).is_none());
-        assert!(manager.get(running_id).is_some());
-    }
-}
+mod tests;

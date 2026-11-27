@@ -121,7 +121,8 @@ pub use connection::{
 
 pub use core::{
     BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketEncryption, BucketInfo,
-    BucketSizeEstimate, CancelToken, CodeGenScope, CodeGeneratorInfo, Connection,
+    BucketSizeEstimate, CancelAllSummary, CancelHook, CancelOutcome, CancelPolicy,
+    CancelRequestOutcome, CancelToken, CodeGenScope, CodeGeneratorInfo, Connection,
     ConnectionErrorFormatter, ConnectionExt, ConnectionOverrides, DbDriver, DbError,
     DefaultErrorFormatter, DeletePrefixOutcome, DocumentConnection, ErrorLocation,
     EventStreamTarget, ExecutionSession, ExecutionSessionFactory, ExecutionSessionScope,
@@ -130,8 +131,8 @@ pub use core::{
     PublicAccessStatus, QueryCancelHandle, QueryErrorFormatter, RelationalConnection,
     SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind,
     SchemaSnapshotAuthority, ShutdownCoordinator, ShutdownPhase, SourceContextSpec,
-    SourceQueryMode, StatementLocator, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot,
-    TaskStatus, TaskTarget, TransactionStateNote, Value, VersioningStatus,
+    SourceQueryMode, StatementLocator, TaskHandle, TaskId, TaskKind, TaskManager, TaskRequest,
+    TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, TransactionStateNote, Value, VersioningStatus,
     byte_offset_to_line_column, char_position_to_byte_offset, redact_uri_credentials, sanitize_uri,
 };
 
