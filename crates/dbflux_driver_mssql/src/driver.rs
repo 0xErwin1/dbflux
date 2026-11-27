@@ -4790,13 +4790,77 @@ fn ado_sets_encrypt(s: &str) -> bool {
 }
 
 fn ado_declares_key(s: &str, keys: &[&str]) -> bool {
-    s.split(';').any(|pair| {
-        let Some((key, _)) = pair.split_once('=') else {
-            return false;
-        };
-        let normalized = key.trim().to_ascii_lowercase();
-        keys.contains(&normalized.as_str())
+    ado_property_keys(s).any(|key| keys.contains(&key.as_str()))
+}
+
+/// Yields the lowercased top-level property keys of an ADO/JDBC connection
+/// string. Values wrapped in single quotes, double quotes or braces may hold
+/// `;` and `=` (tiberius accepts all three), so a key-looking text inside a
+/// quoted password is not a property. A doubled quote inside a quoted value
+/// is an escaped quote. A segment without `=`, such as the
+/// `jdbc:sqlserver://host:1433` prefix, yields nothing.
+fn ado_property_keys(s: &str) -> impl Iterator<Item = String> + '_ {
+    let mut chars = s.chars().peekable();
+
+    std::iter::from_fn(move || {
+        loop {
+            chars.peek()?;
+
+            let mut key = String::new();
+            let mut has_value = false;
+            for character in chars.by_ref() {
+                match character {
+                    '=' => {
+                        has_value = true;
+                        break;
+                    }
+                    ';' => break,
+                    _ => key.push(character),
+                }
+            }
+
+            if !has_value {
+                continue;
+            }
+
+            skip_ado_value(&mut chars);
+
+            let normalized = key.trim().to_ascii_lowercase();
+            if !normalized.is_empty() {
+                return Some(normalized);
+            }
+        }
     })
+}
+
+/// Consumes one property value and the `;` that ends it.
+fn skip_ado_value(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while chars.next_if_eq(&' ').is_some() {}
+
+    let closing = match chars.peek() {
+        Some('\'') => Some('\''),
+        Some('"') => Some('"'),
+        Some('{') => Some('}'),
+        _ => None,
+    };
+
+    if let Some(closing) = closing {
+        chars.next();
+        while let Some(character) = chars.next() {
+            if character == closing {
+                let escaped = closing != '}' && chars.next_if_eq(&closing).is_some();
+                if !escaped {
+                    break;
+                }
+            }
+        }
+    }
+
+    for character in chars.by_ref() {
+        if character == ';' {
+            break;
+        }
+    }
 }
 
 fn parse_uri_query_params(params: &str) -> UriQueryParams {
@@ -6582,6 +6646,38 @@ mod tests {
         assert!(!ado_sets_encrypt("Server=host;User Id=sa"));
         assert!(!ado_sets_encrypt(
             "Server=host;Description=Encrypt lookalike"
+        ));
+    }
+
+    #[test]
+    fn ado_sets_encrypt_ignores_key_text_inside_quoted_values() {
+        assert!(!ado_sets_encrypt(
+            "Server=host;User Id=sa;Password='a;Encrypt=true'"
+        ));
+        assert!(!ado_sets_encrypt(
+            "Server=host;User Id=sa;Password=\"a;Encrypt=true\""
+        ));
+        assert!(!ado_sets_encrypt(
+            "jdbc:sqlserver://host:1433;user=sa;password={a;Encrypt=true}"
+        ));
+        // A doubled quote is an escaped quote, not the end of the value.
+        assert!(!ado_sets_encrypt(
+            "Server=host;Password='it''s;Encrypt=true'"
+        ));
+    }
+
+    #[test]
+    fn ado_sets_encrypt_detects_key_after_quoted_value() {
+        assert!(ado_sets_encrypt("Server=host;Password='a;b';Encrypt=true"));
+        assert!(ado_sets_encrypt(
+            "jdbc:sqlserver://host:1433;password={a;b};encrypt=false"
+        ));
+    }
+
+    #[test]
+    fn ado_sets_application_name_ignores_key_text_inside_quoted_values() {
+        assert!(!ado_sets_application_name(
+            "Server=host;Password='x;Application Name=y'"
         ));
     }
 
