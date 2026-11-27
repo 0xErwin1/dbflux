@@ -50,7 +50,7 @@
 
 - `mysql.processlist` — `information_schema.PROCESSLIST`의 활성 세션(user, host, db, command, time, state, info)
 - 구조화된 쿼리 계획(`Connection::query_plan`): 정확히 하나의 문에 `EXPLAIN FORMAT=JSON`을 실행하며 분석된 계획을 요청하지 않는 한 `ANALYZE` 없이 실행하므로 문은 실행되지 않습니다. MySQL 8과 MariaDB의 계획 트리(테이블, 접근 유형, 키, 검사했거나 예상한 행 수, 비용, 기타 속성)를 드라이버에 독립적인 계획 모델로 매핑합니다. 여러 문으로 된 쿼리나 빈 쿼리는 아무것도 전송하기 전에 거부됩니다.
-- 분석된 계획(`QueryPlanRequest::analyzed`, `supports_explain_analyze`): MariaDB는 `ANALYZE FORMAT=JSON`을 실행하며, 이는 `r_rows`, `r_loops`, `r_*_time_ms` 실측값과 옵티마이저 시간이 포함된 동일한 JSON을 반환합니다(MariaDB는 시간을 모든 반복에 걸친 합으로 보고하며, 계획은 반복당 값으로 보관합니다). MySQL 8.0.18+는 `EXPLAIN ANALYZE`를 실행하는데, 실측값을 TREE 텍스트로만 보고하므로 드라이버가 트리 줄(`cost`, `rows`, `actual time=startup..total rows=N loops=L`, `never executed`)을 파싱하고 텍스트를 원본 계획으로 보관하며, MySQL은 계획 수립 시간을 보고하지 않습니다. 공유 분류기가 `Read` 또는 `Metadata`로 분류한 문만 허용되고, 쓰기 문은 아무것도 전송하기 전에 거부되며, 문은 `START TRANSACTION READ ONLY`에서 실행된 뒤 롤백되므로 분류기가 놓친 쓰기(예: 삽입하는 저장 함수)도 서버가 거부합니다. 단, 읽기 전용 트랜잭션이 여전히 허용하는 `TEMPORARY` 테이블에 대한 쓰기는 예외이며, 트랜잭션은 이후 롤백됩니다.
+- 분석된 계획(`QueryPlanRequest::analyzed`, `supports_explain_analyze`): MariaDB는 `ANALYZE FORMAT=JSON`을 실행하며, 이는 `r_rows`, `r_loops`, `r_*_time_ms` 실측값과 옵티마이저 시간이 포함된 동일한 JSON을 반환합니다(MariaDB는 시간을 모든 반복에 걸친 합으로 보고하며, 계획은 반복당 값으로 보관합니다). MySQL 8.0.18+는 `EXPLAIN ANALYZE`를 실행하는데, 실측값을 TREE 텍스트로만 보고하므로 드라이버가 트리 줄(`cost`, `rows`, `actual time=startup..total rows=N loops=L`, `never executed`)을 파싱하고 텍스트를 원본 계획으로 보관하며, MySQL은 계획 수립 시간을 보고하지 않습니다. 공유 분류기가 `Read` 또는 `Metadata`로 분류한 문만 허용되고, 쓰기 문은 아무것도 전송하기 전에 거부되며, 문은 `START TRANSACTION READ ONLY`에서 실행된 뒤 롤백되므로 분류기가 놓친 쓰기(예: 삽입하는 저장 함수)도 서버가 거부합니다. 단, 읽기 전용 트랜잭션이 여전히 허용하는 `TEMPORARY` 테이블에 대한 쓰기는 예외이며, 트랜잭션은 이후 롤백되지만 MyISAM 같은 비트랜잭션 임시 테이블에 대한 쓰기는 롤백으로 되돌릴 수 없습니다.
 
 ## 제한 사항
 
