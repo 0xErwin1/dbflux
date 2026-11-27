@@ -1143,7 +1143,16 @@ fn password_fingerprint(password: &str) -> String {
     hex::encode(digest.get(..8).unwrap_or_default())
 }
 
+/// Removes tiberius's per-response deadline (30 seconds by default since
+/// 0.13). The driver cannot honor a statement timeout safely, so a slow query
+/// runs until it finishes or the user cancels it, as it did before.
+fn without_command_timeout(mut config: Config) -> Config {
+    config.command_timeout(None);
+    config
+}
+
 async fn establish_tiberius(config: Config) -> Result<TiberiusClient, tiberius::error::Error> {
+    let config = without_command_timeout(config);
     // `connect_named` falls back to a direct `host:port` connect when no
     // instance is set, and performs a SQL Browser (UDP 1434) lookup when
     // one is. Using it unconditionally keeps the two paths in one place.
@@ -1281,6 +1290,10 @@ impl MssqlDriver {
             // already set one before applying our default.
             if !ado_sets_application_name(&uri) {
                 config.application_name(dbflux_core::client_identity());
+            }
+
+            if !ado_sets_encrypt(&uri) {
+                config.encryption(EncryptionLevel::Off);
             }
 
             config
@@ -4764,12 +4777,25 @@ fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Err
 /// `Config` parses this out internally but exposes no getter, so we scan the
 /// same raw string tiberius parsed rather than re-deriving it from a `Config`.
 fn ado_sets_application_name(s: &str) -> bool {
+    ado_declares_key(s, &["application name", "applicationname"])
+}
+
+/// Detects whether a raw ADO/JDBC connection string declares `Encrypt`.
+///
+/// tiberius 0.13 defaults a missing `Encrypt` to `Required` (it was `Off`
+/// before), which validates the server certificate and would break existing
+/// connection strings that never asked for encryption.
+fn ado_sets_encrypt(s: &str) -> bool {
+    ado_declares_key(s, &["encrypt"])
+}
+
+fn ado_declares_key(s: &str, keys: &[&str]) -> bool {
     s.split(';').any(|pair| {
         let Some((key, _)) = pair.split_once('=') else {
             return false;
         };
         let normalized = key.trim().to_ascii_lowercase();
-        normalized == "application name" || normalized == "applicationname"
+        keys.contains(&normalized.as_str())
     })
 }
 
@@ -6403,9 +6429,19 @@ mod tests {
     }
 
     #[test]
+    fn without_command_timeout_clears_the_tiberius_default() {
+        let config = Config::new();
+        assert!(config.get_command_timeout().is_some());
+        assert_eq!(without_command_timeout(config).get_command_timeout(), None);
+    }
+
+    #[test]
     fn tiberius_off_mode_never_uses_ca() {
         let debug = tiberius_debug("off", true, Some("/etc/ssl/corp-ca.pem"));
-        assert!(debug.contains("trust: TrustAll"), "{debug}");
+        assert!(
+            debug.contains("trust: TrustConfig { source: Native, extra_cas: [], bypass: true }"),
+            "{debug}"
+        );
     }
 
     #[test]
@@ -6436,20 +6472,28 @@ mod tests {
     #[test]
     fn tiberius_on_mode_trusts_any_cert_even_with_ca() {
         let debug = tiberius_debug("on", true, Some("/etc/ssl/corp-ca.pem"));
-        assert!(debug.contains("trust: TrustAll"), "{debug}");
+        assert!(
+            debug.contains("trust: TrustConfig { source: Native, extra_cas: [], bypass: true }"),
+            "{debug}"
+        );
     }
 
     #[test]
     fn tiberius_required_without_ca_validates_against_system_roots() {
         let debug = tiberius_debug("required", false, None);
-        assert!(debug.contains("trust: Default"), "{debug}");
+        assert!(
+            debug.contains("trust: TrustConfig { source: Native, extra_cas: [], bypass: false }"),
+            "{debug}"
+        );
     }
 
     #[test]
     fn tiberius_required_with_ca_trusts_the_given_ca() {
         let debug = tiberius_debug("required", false, Some("/etc/ssl/corp-ca.pem"));
         assert!(
-            debug.contains("trust: CaCertificateLocation(\"/etc/ssl/corp-ca.pem\")"),
+            debug.contains(
+                "trust: TrustConfig { source: Native, extra_cas: [File(\"/etc/ssl/corp-ca.pem\")], bypass: false }"
+            ),
             "{debug}"
         );
     }
@@ -6523,6 +6567,21 @@ mod tests {
         // Case-insensitive and tolerant of surrounding whitespace.
         assert!(ado_sets_application_name(
             "Server=host; APPLICATION NAME = Foo "
+        ));
+    }
+
+    #[test]
+    fn ado_sets_encrypt_detects_key_case_insensitively() {
+        assert!(ado_sets_encrypt("Server=host;Encrypt=true;User Id=sa"));
+        assert!(ado_sets_encrypt("Server=host; ENCRYPT = false"));
+        assert!(ado_sets_encrypt("jdbc:sqlserver://host:1433;encrypt=true"));
+    }
+
+    #[test]
+    fn ado_sets_encrypt_ignores_absent_key_and_value_substring() {
+        assert!(!ado_sets_encrypt("Server=host;User Id=sa"));
+        assert!(!ado_sets_encrypt(
+            "Server=host;Description=Encrypt lookalike"
         ));
     }
 
