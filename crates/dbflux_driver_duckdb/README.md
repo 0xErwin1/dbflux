@@ -61,7 +61,8 @@ Embedded analytical database, with optional DuckLake catalogs.
   1 000 000 rows** fills in nulls, approximate distinct counts
   (`approx_count_distinct`) and ranges on request, and is recorded in the
   audit log. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
-- Structured query plan (`Connection::query_plan`): runs `EXPLAIN (FORMAT JSON)` on exactly one statement, never `EXPLAIN ANALYZE`, so the statement is not executed, and maps the physical plan tree (operator, table, estimated cardinality, other attributes) into the driver-agnostic plan model. DuckDB reports no costs. A query with several statements, or an empty one, is refused before anything is sent.
+- Structured query plan (`Connection::query_plan`): runs `EXPLAIN (FORMAT JSON)` on exactly one statement, without `ANALYZE` unless an analyzed plan is requested, so the statement is not executed, and maps the physical plan tree (operator, table, estimated cardinality, other attributes) into the driver-agnostic plan model. DuckDB reports no costs. A query with several statements, or an empty one, is refused before anything is sent.
+- Analyzed plans (`QueryPlanRequest::analyzed`, `supports_explain_analyze`): runs `EXPLAIN (ANALYZE, FORMAT JSON)` and maps each operator's `timing` and `intermediate_rows`, plus the planning and execution time of the query. DuckDB reports the time spent in the operator alone, so the plan keeps an inclusive total per operator and the node's self time is that time. Only a statement the shared classifier marks `Read` or `Metadata` is accepted, a write is refused before anything is sent, and DuckDB's own parser must accept it as a `SELECT`; it runs in a `READ ONLY` transaction that is rolled back.
 
 ## Limitations
 

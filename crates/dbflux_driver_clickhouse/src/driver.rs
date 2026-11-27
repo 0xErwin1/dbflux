@@ -88,6 +88,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_window_functions: true,
         supports_ctes: true,
         supports_explain: true,
+        supports_explain_analyze: false,
         max_query_parameters: 0,
         max_order_by_columns: 0,
         max_group_by_columns: 0,

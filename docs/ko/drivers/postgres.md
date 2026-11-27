@@ -18,7 +18,8 @@
 - 인증, SSL, SSH 터널링, URI/수동 연결 모드를 지원합니다. libpq와 마찬가지로 `verify-ca`는 인증서 체인만 검증하고, `verify-full`은 호스트 이름도 확인합니다.
 - TLS 인증서 파일: Connection Manager의 루트 인증서, 클라이언트 인증서, 클라이언트 키 필드 또는 libpq URI 매개변수 `sslrootcert`, `sslcert`, `sslkey`(예: `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). `verify-ca`와 `verify-full`에서는 루트 인증서가 신뢰할 수 있는 루트에 추가되며, 체인을 검증하지 않는 다른 모드에서는 무시됩니다. 클라이언트 인증서와 키는 `disable`을 제외한 모든 모드에서 상호 TLS용으로 제시됩니다. 파일은 PEM 형식이며 클라이언트 키는 PKCS#8이어야 합니다. 파일이 없거나 읽을 수 없거나 유효하지 않은 경우, 또는 키 없이 클라이언트 인증서만 있는 경우(또는 그 반대)에는 연결을 시도하기 전에 해당 파일을 명시한 오류로 연결이 실패합니다. `sslmode=disable`에서는 파일이 무시됩니다.
 - PostgreSQL 취소 토큰을 통한 쿼리 취소를 지원합니다.
-- 구조화된 쿼리 계획(`Connection::query_plan`): 정확히 하나의 문에 `EXPLAIN (FORMAT JSON)`을 실행하며 `ANALYZE`는 절대 사용하지 않으므로 문은 실행되지 않습니다. 계획 트리(작업, 릴레이션, 인덱스, 예상 비용과 행 수, 기타 속성)를 드라이버에 독립적인 계획 모델로 매핑합니다. 여러 문으로 된 쿼리나 빈 쿼리는 아무것도 전송하기 전에 거부됩니다.
+- 구조화된 쿼리 계획(`Connection::query_plan`): 정확히 하나의 문에 `EXPLAIN (FORMAT JSON)`을 실행하며 분석된 계획을 요청하지 않는 한 `ANALYZE` 없이 실행하므로 문은 실행되지 않습니다. 계획 트리(작업, 릴레이션, 인덱스, 예상 비용과 행 수, 기타 속성)를 드라이버에 독립적인 계획 모델로 매핑합니다. 여러 문으로 된 쿼리나 빈 쿼리는 아무것도 전송하기 전에 거부됩니다.
+- 분석된 계획(`QueryPlanRequest::analyzed`, `supports_explain_analyze`): `EXPLAIN (ANALYZE, FORMAT JSON)`을 실행하고 `Actual Startup Time`, `Actual Total Time`, `Actual Rows`, `Actual Loops`, `Planning Time`, `Execution Time`을 매핑하며, `Rows Removed by Filter` 같은 엔진 세부 정보는 노드의 세부 정보에 남습니다. 공유 분류기가 `Read` 또는 `Metadata`로 분류한 문만 허용되고, 쓰기 문은 아무것도 전송하기 전에 거부되며, 문은 `BEGIN READ ONLY`에서 실행된 뒤 롤백되므로 분류기가 놓친 쓰기(예: 삽입하는 volatile 함수)도 서버가 거부합니다. 단, 읽기 전용 트랜잭션이 여전히 허용하는 `TEMPORARY` 테이블에 대한 쓰기는 예외이며, 트랜잭션은 이후 롤백됩니다.
 - CRUD, 인덱스, reindex, 외래 키, 타입 작업을 위한 PostgreSQL 전용 SQL/코드 생성을 포함합니다.
 - 다중 문 스크립트(여러 개의 `;`로 구분된 문)는 단순 쿼리 프로토콜을 통해 배치로 실행되며 문마다 하나의 결과 집합을 반환합니다.
 - 쿼리가 발생시킨 서버 알림과 경고(예: 단독 `COMMIT`의 `WARNING: there is no transaction in progress` 또는 `RAISE NOTICE`)는 그 결과와 함께 반환됩니다. 배치는 모든 알림을 기본 결과에 붙이며, 실패한 쿼리는 알림을 버립니다. 쿼리는 처음 100개의 알림을 유지하고, 나머지 개수를 알려 주는 알림 하나를 덧붙입니다.
@@ -81,6 +82,7 @@ PostgreSQL 시스템 뷰에서 가져온 엄선된 실시간 서버 지표 집�
 - 취소는 최선 노력이며 취소 시점의 서버/세션 상태에 따라 달라집니다.
 - 코드 생성은 지원되는 PostgreSQL 구문만 대상으로 합니다. 지원되지 않는 생성기 ID는 `NotSupported`를 반환합니다.
 - 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `BEGIN READ ONLY` 안에서 실행된 뒤 롤백되며, 열린 트랜잭션 안에서는 거부됩니다. PostgreSQL은 세션의 데이터 변경을 거부하지만, 읽기 전용 트랜잭션에서도 변경할 수 있는 `TEMPORARY` 테이블은 예외이며 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다. 열린 트랜잭션을 감지하기 위해 드라이버는 먼저 `SAVEPOINT` 프로브를 실행하며, 이 프로브는 트랜잭션 밖에서는 SQLSTATE `25P01`(활성 트랜잭션 없음)로 실패합니다. 따라서 트랜잭션 밖에서 실행되는 읽기 전용 요청마다, 편집기 자동 새로 고침의 각 주기를 포함해, 서버 로그에 `ERROR`가 한 줄씩 기록됩니다.
+- 분석된 계획은 문을 실제로 실행합니다. `SELECT`는 그 비용만큼 들고, 읽기 전용 트랜잭션이 막지 못하는 부작용(`TEMPORARY` 테이블, `dblink_exec`, `pg_terminate_backend`, advisory lock)은 그대로 발생합니다. 분석된 계획은 열린 트랜잭션 안에서는 다른 읽기 전용 요청처럼 거부됩니다.
 
 ## DDL 지원 범위
 

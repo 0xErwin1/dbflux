@@ -649,6 +649,216 @@ fn mysql_query_plan_works_when_the_session_uses_json_format_version_2() -> Resul
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn mysql_analyzed_plan_reports_actuals() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE analyze_test (id INT PRIMARY KEY, name VARCHAR(20), KEY idx_name (name))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO analyze_test VALUES (1, 'a'), (2, 'b'), (3, 'b'), (4, 'c')",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::analyzed(
+            "SELECT * FROM analyze_test WHERE name = 'b'",
+        ))?;
+
+        assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Text);
+        assert!(plan.execution_time.is_some());
+
+        let lookup = plan
+            .roots
+            .iter()
+            .find_map(|root| find_node(root, "analyze_test"))
+            .expect("a node reads analyze_test");
+        assert_eq!(lookup.actual_rows, Some(2.0));
+        assert_eq!(lookup.actual_loops, Some(1));
+        assert!(lookup.actual_startup_time.is_some());
+        assert!(lookup.actual_total_time.is_some());
+        assert!(lookup.estimated_rows.is_some());
+        assert_eq!(lookup.index.as_deref(), Some("idx_name"));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_analyze_ignores_a_json_session_explain_format() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE analyze_format (id INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO analyze_format VALUES (1), (2)",
+        ))?;
+        connection.execute(&QueryRequest::new("SET SESSION explain_format = JSON"))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::analyzed(
+            "SELECT * FROM analyze_format",
+        ))?;
+
+        let scan = plan
+            .roots
+            .iter()
+            .find_map(|root| find_node(root, "analyze_format"))
+            .expect("a node reads analyze_format");
+        assert_eq!(scan.actual_rows, Some(2.0));
+        assert!(scan.estimated_total_cost.is_some());
+
+        Ok(())
+    })
+}
+
+fn find_node<'plan>(
+    node: &'plan dbflux_core::PlanNode,
+    relation: &str,
+) -> Option<&'plan dbflux_core::PlanNode> {
+    if node.relation.as_deref() == Some(relation) {
+        return Some(node);
+    }
+
+    node.children
+        .iter()
+        .find_map(|child| find_node(child, relation))
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_analyze_refuses_a_write_and_leaves_the_row_unchanged() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE analyze_guard (id INT PRIMARY KEY, name VARCHAR(20))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO analyze_guard VALUES (1, 'kept')",
+        ))?;
+
+        for statement in [
+            "UPDATE analyze_guard SET name = 'changed' WHERE id = 1",
+            "DELETE FROM analyze_guard",
+            "WITH gone AS (SELECT 1) DELETE FROM analyze_guard",
+        ] {
+            let error = connection
+                .query_plan(&dbflux_core::QueryPlanRequest::analyzed(statement))
+                .expect_err("a write is refused");
+            assert_eq!(
+                error.to_string(),
+                "Analyze is only available for read statements; this statement is not a plain read, so only the estimate can run.",
+                "{statement}"
+            );
+        }
+
+        let rows = connection.execute(&QueryRequest::new("SELECT name FROM analyze_guard"))?;
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.rows[0][0], Value::Text("kept".to_string()));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_analyze_cannot_leave_a_write_behind_through_a_stored_function() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri.clone())?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE side_effects (n INT) ENGINE=InnoDB",
+        ))?;
+        // The driver's statement splitter cannot create a compound-body
+        // function, so setup uses the text protocol.
+        let setup_opts = mysql::Opts::from_url(&uri)
+            .map_err(|e| DbError::query_failed(format!("setup options invalid: {e}")))?;
+        let mut setup = mysql::Conn::new(setup_opts)
+            .map_err(|e| DbError::query_failed(format!("setup connect failed: {e}")))?;
+        setup
+            .query_drop("SET GLOBAL log_bin_trust_function_creators = 1")
+            .map_err(|e| DbError::query_failed(format!("setup failed: {e}")))?;
+        setup
+            .query_drop(
+                "CREATE FUNCTION write_side_effect() RETURNS INT NOT DETERMINISTIC MODIFIES SQL DATA \
+                 BEGIN INSERT INTO side_effects VALUES (1); RETURN 1; END",
+            )
+            .map_err(|e| DbError::query_failed(format!("function setup failed: {e}")))?;
+
+        // Control: the classifier sees a plain SELECT, and without the
+        // read-only transaction the function does write.
+        connection.execute(&QueryRequest::new("SELECT write_side_effect()"))?;
+        let control =
+            connection.execute(&QueryRequest::new("SELECT count(*) FROM side_effects"))?;
+        assert_eq!(control.rows[0][0], Value::Int(1));
+        connection.execute(&QueryRequest::new("DELETE FROM side_effects"))?;
+
+        let outcome = connection.query_plan(&dbflux_core::QueryPlanRequest::analyzed(
+            "SELECT write_side_effect()",
+        ));
+        let error = outcome.expect_err("the server refuses the write");
+        assert!(
+            error.to_string().to_lowercase().contains("read only"),
+            "refused by the read-only transaction: {error}"
+        );
+
+        let after = connection.execute(&QueryRequest::new("SELECT count(*) FROM side_effects"))?;
+        assert_eq!(after.rows[0][0], Value::Int(0));
+
+        connection.execute(&QueryRequest::new("INSERT INTO side_effects VALUES (2)"))?;
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_analyze_inside_an_open_transaction_is_refused_and_keeps_it() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE analyze_tx (n INT) ENGINE=InnoDB",
+        ))?;
+        connection.execute(&QueryRequest::new("START TRANSACTION"))?;
+        connection.execute(&QueryRequest::new("INSERT INTO analyze_tx VALUES (1)"))?;
+
+        let error = connection
+            .query_plan(&dbflux_core::QueryPlanRequest::analyzed(
+                "SELECT * FROM analyze_tx",
+            ))
+            .expect_err("analyze is refused inside an open transaction");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot run inside an open transaction"),
+            "{error}"
+        );
+
+        let own = connection.execute(&QueryRequest::new("SELECT count(*) FROM analyze_tx"))?;
+        assert_eq!(
+            own.rows[0][0],
+            Value::Int(1),
+            "the open transaction survived"
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        let after = connection.execute(&QueryRequest::new("SELECT count(*) FROM analyze_tx"))?;
+        assert_eq!(after.rows[0][0], Value::Int(0));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn mysql_describe_table() -> Result<(), DbError> {
     containers::with_mysql_url(|uri| {
         let (connection, _) = connect_mysql(uri)?;

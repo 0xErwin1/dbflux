@@ -1262,17 +1262,38 @@ document:
   query_plan:
     tab:
       title: Plan
+      analyzed: "analizado"
     view:
       switch: Vista del plan
       diagram: Diagrama
       tree: Árbol
       raw: Sin procesar
+    rows:
+      one: "%{count} fila"
+      many: "%{count} filas"
+    run_mode:
+      switch: "Modo del plan"
+      estimate: "Estimar"
+      analyze: "Analizar"
+    analyze:
+      refusal:
+        title: "Analizar no está disponible para esta sentencia."
+        changes_data: "Modifica datos, así que solo se ejecuta la estimación."
+        several: "Analizar ejecuta una sola sentencia a la vez."
+      gate:
+        title: "Analizar ejecuta esta consulta en %{connection}"
+        body: "La sentencia se ejecuta de verdad para medir el tiempo y las filas reales. Lo que haga fuera de la transacción, como bloqueos o llamadas remotas, sigue ocurriendo."
+        production: "%{connection} es una conexión de producción."
+        cancel: "Cancelar"
+        run: "Ejecutar análisis"
     scope:
       selection: "Selección L%{start}–%{end}"
       script: "Script completo · %{count} sentencias"
     totals:
       cost: costo total
       rows: filas
+      planning: "planificación"
+      execution: "ejecución"
     controls:
       zoom_out: Alejar
       zoom_in: Acercar
@@ -1281,6 +1302,7 @@ document:
     warnings:
       one: 1 advertencia.
       many: "%{count} advertencias."
+      estimate_gap: "%{node} devolvió %{actual} frente a una estimación de %{estimated} (%{ratio})."
     node:
       costliest: MÁS COSTOSO
       table: tabla
@@ -1288,6 +1310,9 @@ document:
       cost: costo
       rows: filas
       self: propio
+      slowest: "MÁS LENTO"
+      est: "est."
+      actual: "real"
     tree:
       node: Nodo
       index: Índice
@@ -1295,6 +1320,11 @@ document:
       self_cost: Costo propio
       rows: Filas
       on_relation: en
+      est_rows: "Filas est."
+      actual_rows: "Filas reales"
+      time: "Tiempo"
+      loops: "Bucles"
+      self_time: "Tiempo propio"
     raw:
       copy: Copiar
     footer:
@@ -1302,10 +1332,13 @@ document:
         one: "%{count} nodo"
         many: "%{count} nodos"
       not_run: consulta no ejecutada
+      analyze_cancelled: "Análisis cancelado"
+      analyze_failed: "Análisis fallido"
       format:
         json: Plan en JSON
         xml: Plan en XML
         text: Plan en texto
+      analyzed: "Analizado · la consulta se ejecutó"
     inspector:
       node: "nodo %{id}"
       estimate: Estimación
@@ -1317,9 +1350,20 @@ document:
       rows: Filas
       relation: Relación
       index: Índice
+      actual: "Real"
+      rows_per_loop: "Filas por bucle"
+      startup_time: "Tiempo de arranque"
+      total_time: "Tiempo total"
+      self_time: "Tiempo propio"
+      loops: "Bucles"
+      versus: "Frente a la estimación"
+      versus_more: "%{ratio} más filas"
+      versus_fewer: "%{ratio} menos filas"
+      versus_same: "Como se estimó"
     loading:
       running: Calculando el plan de la consulta…
       cancel: Cancelar
+      analyzing: "Ejecutando la consulta para medirla…"
     state:
       retry: Reintentar
       unsupported:
@@ -1332,6 +1376,9 @@ document:
       origin_gone: "La conexión de la que salió este resultado ya no está conectada. Vuelve a conectarla y ejecuta la consulta de nuevo para explicarla."
       origin_database_changed: "La base de datos en la que se ejecutó este resultado (%{origin}) ya no es la que usa esta conexión (%{current}). Vuelve a %{origin} y explica la consulta de nuevo; un plan obtenido ahora describiría otra base de datos."
       editor_database_changed: "La base de datos de este editor (%{origin}) ya no es la que usa esta conexión (%{current}). Vuelve a %{origin} y explica la consulta de nuevo; un plan obtenido ahora describiría otra base de datos."
+      analyze_connection_changed: "El editor ahora apunta a una conexión distinta de aquella en la que se hizo este plan. Vuelve a ejecutar Explain en la nueva conexión antes de analizar."
+      analyze_database_changed: "El editor está en una base de datos distinta de aquella en la que se hizo este plan. Vuelve a ejecutar Explain antes de analizar."
+      analyze_query_running: "Todavía hay una consulta en ejecución en este editor. Espera a que termine o cancélala, y luego ejecuta el análisis."
       cancelled:
         title: Plan cancelado
     explain:
@@ -1358,6 +1405,23 @@ document:
       relation_title: Relación
       relation_body: La tabla o vista que lee este paso.
       condition_body: "La condición que mejor explica este paso, tal como la informa el motor."
+      estimate_body: "Calcula el plan de la consulta sin ejecutarla."
+      analyze_body: "Ejecuta la consulta y mide el tiempo y las filas reales. Estimar solo calcula el plan."
+      totals_analyzed_body: "La planificación es el tiempo que se tarda en construir el plan. La ejecución es el tiempo que se tarda en ejecutarlo. Ambos se miden en el servidor."
+      edge_actual_title: "Filas reales"
+      edge_actual_body: "Filas que este paso entregó al siguiente, sumando todas sus ejecuciones. Una línea más gruesa significa más filas."
+      gap_title: "Filas fuera de la estimación"
+      gap_body: "Se devolvieron %{actual} frente a una estimación de %{estimated}, la mayor diferencia de este plan."
+      slowest_title: "Más lento"
+      slowest_body: "El nodo con el mayor tiempo propio de este plan."
+      actual_rows_title: "Filas reales"
+      actual_rows_body: "Filas que este paso devolvió en cada ejecución, para compararlas con la estimación de al lado."
+      time_title: "Tiempo"
+      time_body: "Tiempo que pasa este paso y sus hijos, sumado en todas sus ejecuciones."
+      self_time_title: "Tiempo propio"
+      self_time_body: "Tiempo que pasa solo este nodo, sin sus hijos, como parte del tiempo de ejecución. La barra muestra la misma proporción."
+      loops_title: "Bucles"
+      loops_body: "Cuántas veces ejecutó el motor este paso. El tiempo es el total de todos los bucles; las filas son por bucle, como la estimación."
   code:
     gutter:
       run_statement: Ejecutar esta sentencia

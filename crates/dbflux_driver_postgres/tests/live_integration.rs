@@ -1016,6 +1016,158 @@ fn postgres_query_plan_is_structured_and_never_runs_the_statement() -> Result<()
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn postgres_analyzed_plan_reports_actuals_and_timings() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE analyze_test (id SERIAL PRIMARY KEY, name TEXT)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO analyze_test (name) SELECT 'row' || g FROM generate_series(1, 50) g",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::analyzed(
+            "SELECT * FROM analyze_test WHERE name <> 'row1'",
+        ))?;
+
+        assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Json);
+        assert!(plan.planning_time.is_some());
+        assert!(plan.execution_time.is_some());
+
+        let scan = &plan.roots[0];
+        assert_eq!(scan.relation.as_deref(), Some("analyze_test"));
+        assert_eq!(scan.actual_rows, Some(49.0));
+        assert_eq!(scan.actual_loops, Some(1));
+        assert!(scan.actual_startup_time.is_some());
+        assert!(scan.actual_total_time.is_some());
+        assert!(
+            scan.details
+                .iter()
+                .any(|(name, value)| name == "Rows Removed by Filter" && value == "1"),
+            "details: {:?}",
+            scan.details
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_analyze_refuses_a_write_and_leaves_the_row_unchanged() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE analyze_guard (id INT PRIMARY KEY, name TEXT)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO analyze_guard VALUES (1, 'kept')",
+        ))?;
+
+        for statement in [
+            "UPDATE analyze_guard SET name = 'changed' WHERE id = 1",
+            "DELETE FROM analyze_guard",
+            "WITH gone AS (DELETE FROM analyze_guard RETURNING *) SELECT * FROM gone",
+        ] {
+            let error = connection
+                .query_plan(&dbflux_core::QueryPlanRequest::analyzed(statement))
+                .expect_err("a write is refused");
+            assert_eq!(
+                error.to_string(),
+                "Analyze is only available for read statements; this statement is not a plain read, so only the estimate can run.",
+                "{statement}"
+            );
+        }
+
+        let rows = connection.execute(&QueryRequest::new("SELECT name FROM analyze_guard"))?;
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.rows[0][0], Value::Text("kept".to_string()));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_analyze_cannot_leave_a_write_behind_through_a_volatile_function() -> Result<(), DbError>
+{
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new("CREATE TABLE side_effects (n INT)"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE FUNCTION write_side_effect() RETURNS INT VOLATILE LANGUAGE sql \
+             AS 'INSERT INTO side_effects VALUES (1) RETURNING n'",
+        ))?;
+
+        // Control: the classifier sees a plain SELECT, and without the
+        // read-only transaction the function does write.
+        connection.execute(&QueryRequest::new("SELECT write_side_effect()"))?;
+        let control =
+            connection.execute(&QueryRequest::new("SELECT count(*) FROM side_effects"))?;
+        assert_eq!(control.rows[0][0], Value::Int(1));
+        connection.execute(&QueryRequest::new("DELETE FROM side_effects"))?;
+
+        let outcome = connection.query_plan(&dbflux_core::QueryPlanRequest::analyzed(
+            "SELECT write_side_effect()",
+        ));
+        let error = outcome.expect_err("the server refuses the write");
+        assert!(
+            error.to_string().contains("read-only transaction"),
+            "refused by the read-only transaction: {error}"
+        );
+
+        let after = connection.execute(&QueryRequest::new("SELECT count(*) FROM side_effects"))?;
+        assert_eq!(after.rows[0][0], Value::Int(0));
+
+        // The session is usable and writable again afterwards.
+        connection.execute(&QueryRequest::new("INSERT INTO side_effects VALUES (2)"))?;
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_analyze_inside_an_open_transaction_is_refused_and_keeps_it() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new("CREATE TABLE analyze_tx (n INT)"))?;
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(&QueryRequest::new("INSERT INTO analyze_tx VALUES (1)"))?;
+
+        let error = connection
+            .query_plan(&dbflux_core::QueryPlanRequest::analyzed(
+                "SELECT * FROM analyze_tx",
+            ))
+            .expect_err("analyze is refused inside an open transaction");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot run inside an open transaction"),
+            "{error}"
+        );
+
+        let own = connection.execute(&QueryRequest::new("SELECT count(*) FROM analyze_tx"))?;
+        assert_eq!(
+            own.rows[0][0],
+            Value::Int(1),
+            "the open transaction survived"
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        let after = connection.execute(&QueryRequest::new("SELECT count(*) FROM analyze_tx"))?;
+        assert_eq!(after.rows[0][0], Value::Int(0));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn postgres_describe_table() -> Result<(), DbError> {
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;

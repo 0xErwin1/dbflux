@@ -225,6 +225,11 @@ pub use query::{
     UnrepresentableClause,
 };
 pub use query::{
+    ESTIMATE_GAP_THRESHOLD, EstimateGap, PlanCondition, PlanFormat, PlanNode, QueryPlan,
+    QueryPlanMode, QueryPlanRequest, analyze_allowed, analyze_statement, analyze_unsupported,
+    parse_sqlite_query_plan, plan_text_from_result, single_plan_statement, sqlite_plan_statement,
+};
+pub use query::{
     JOIN_CONDITION_FORM, JoinColumnRef, JoinComparison, JoinConditionError,
     is_plain_sql_identifier, join_on_conditions, parse_join_condition,
     semantic_filter_to_filter_node,
@@ -233,10 +238,6 @@ pub use query::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
 pub use query::{
     ParsedSnippet, PlaceholderSpan, SnippetParseError, SnippetParseErrorKind, Tabstop,
     parse_snippet, snippet_placeholder_spans,
-};
-pub use query::{
-    PlanCondition, PlanFormat, PlanNode, QueryPlan, QueryPlanRequest, parse_sqlite_query_plan,
-    plan_text_from_result, single_plan_statement, sqlite_plan_statement,
 };
 pub use query::{normalize_relaxed_json, parse_relaxed_json};
 

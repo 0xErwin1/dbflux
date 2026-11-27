@@ -313,13 +313,27 @@ impl DuckDbConnection {
         params: &[Value],
         limit: Option<u32>,
     ) -> Result<QueryResult, DbError> {
+        self.run_read_only_as(sql, sql, params, limit)
+    }
+
+    /// Like [`Self::run_read_only`], but runs `run_sql` after DuckDB's parser
+    /// accepted `checked_sql` as SELECT statements only. An analyzed plan
+    /// wraps the statement in `EXPLAIN (ANALYZE ...)`, which is not a SELECT,
+    /// so the wrapped statement is the one checked.
+    fn run_read_only_as(
+        &self,
+        checked_sql: &str,
+        run_sql: &str,
+        params: &[Value],
+        limit: Option<u32>,
+    ) -> Result<QueryResult, DbError> {
         let started = Instant::now();
         let connection = self.begin_request()?;
 
         let serialized: String = connection
             .query_row(
                 "SELECT json_serialize_sql(?::VARCHAR)::VARCHAR",
-                [sql],
+                [checked_sql],
                 |row| row.get(0),
             )
             .map_err(|error| self.query_error(error))?;
@@ -328,20 +342,38 @@ impl DuckDbConnection {
                 "DuckDB: read-only enforcement {reason}; the request was rejected before execution"
             )));
         }
-        // duckdb-rs always reports autocommit, so let DuckDB refuse the BEGIN
-        // when the session is already inside a transaction.
+        // A nested BEGIN fails inside the caller's transaction and can poison
+        // it, so the refusal has to come before any BEGIN is sent.
+        if self.in_open_transaction(&connection)? {
+            return Err(DbError::NotSupported(
+                "DuckDB: read-only enforcement needs its own transaction, but one is already open; the request was rejected before execution".to_string(),
+            ));
+        }
         if let Err(error) = connection.execute_batch("BEGIN TRANSACTION READ ONLY") {
             return Err(DbError::NotSupported(format!(
                 "DuckDB: read-only enforcement could not start a read-only transaction ({}); the request was rejected before execution",
                 format_duckdb_error(&error)
             )));
         }
-        let result = run_query(&connection, sql, params, limit, started);
+        let result = run_query(&connection, run_sql, params, limit, started);
         let rollback = connection.execute_batch("ROLLBACK");
 
         let result = result.map_err(|error| self.query_error(error))?;
         rollback.map_err(|error| self.query_error(error))?;
         Ok(result)
+    }
+
+    /// duckdb-rs always reports autocommit, so the state is read from the
+    /// engine: outside a transaction every statement runs in a fresh one with
+    /// a new identifier, and inside one the identifier stays the same. Neither
+    /// probe changes the session.
+    fn in_open_transaction(&self, connection: &duckdb::Connection) -> Result<bool, DbError> {
+        let identifier = || -> Result<i64, DbError> {
+            connection
+                .query_row("SELECT txid_current()", [], |row| row.get(0))
+                .map_err(|error| self.query_error(error))
+        };
+        Ok(identifier()? == identifier()?)
     }
 
     /// Rolls back the open transaction, if any, and reports whether there
@@ -1048,9 +1080,24 @@ impl Connection for DuckDbConnection {
         &self,
         request: &dbflux_core::QueryPlanRequest,
     ) -> Result<dbflux_core::QueryPlan, DbError> {
-        let sql = crate::plan::explain_statement(&request.query)?;
-        let result = self.run(&sql, &[], None)?;
-        crate::plan::parse_explain_json(&crate::plan::plan_text_from_result(&result)?)
+        match request.mode {
+            dbflux_core::QueryPlanMode::Estimate => {
+                let sql = crate::plan::explain_statement(&request.query)?;
+                let result = self.run(&sql, &[], None)?;
+                crate::plan::parse_explain_json(&crate::plan::plan_text_from_result(&result)?)
+            }
+            dbflux_core::QueryPlanMode::Analyze => {
+                let sql = crate::plan::analyze_explain_statement(&request.query)?;
+                let statement = dbflux_core::analyze_statement(
+                    &dbflux_core::QueryLanguage::Sql,
+                    &request.query,
+                )?;
+                // The statement runs: DuckDB's parser must accept it as a
+                // SELECT, and it runs inside a read-only transaction.
+                let result = self.run_read_only_as(&statement, &sql, &[], None)?;
+                crate::plan::parse_analyzed_json(&crate::plan::plan_text_from_result(&result)?)
+            }
+        }
     }
 
     fn dialect(&self) -> &dyn SqlDialect {

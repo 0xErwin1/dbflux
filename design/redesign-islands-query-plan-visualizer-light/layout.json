@@ -1,0 +1,49 @@
+{
+  "arrangement": "grid",
+  "positions": {
+    "01-isl-light-query-plan-entry.html": {
+      "x": 0,
+      "y": 0
+    },
+    "02-isl-light-query-plan-diagram.html": {
+      "x": 2000,
+      "y": 0
+    },
+    "03-isl-light-query-plan-diagram-expanded.html": {
+      "x": 4000,
+      "y": 0
+    },
+    "04-isl-light-query-plan-tree.html": {
+      "x": 6000,
+      "y": 0
+    },
+    "05-isl-light-query-plan-raw.html": {
+      "x": 0,
+      "y": 1181
+    },
+    "06-isl-light-query-plan-no-costs.html": {
+      "x": 2000,
+      "y": 1181
+    },
+    "07-isl-light-query-plan-analyze.html": {
+      "x": 4000,
+      "y": 1181
+    },
+    "08-isl-light-query-plan-analyze-write.html": {
+      "x": 6000,
+      "y": 1181
+    },
+    "09-isl-light-query-plan-states.html": {
+      "x": 0,
+      "y": 2346
+    },
+    "10-isl-light-query-plan-analyzed-diagram.html": {
+      "x": 2000,
+      "y": 2346
+    },
+    "11-isl-light-query-plan-analyzed-tree.html": {
+      "x": 4000,
+      "y": 2346
+    }
+  }
+}

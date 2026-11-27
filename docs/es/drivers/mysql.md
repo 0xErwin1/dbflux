@@ -90,11 +90,24 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 - `mysql.processlist` — sesiones activas de `information_schema.PROCESSLIST`
   (user, host, db, command, time, state, info)
 - Plan de query estructurado (`Connection::query_plan`): ejecuta `EXPLAIN
-  FORMAT=JSON` sobre exactamente un statement, nunca `ANALYZE`, así que el
+  FORMAT=JSON` sobre exactamente un statement, sin `ANALYZE` salvo que se pida un plan analizado, así que el
   statement no se ejecuta, y mapea los árboles de plan de MySQL 8 y MariaDB
   (tabla, tipo de acceso, clave, filas examinadas o estimadas, costos, otros
   atributos) al modelo de plan independiente del driver. Un query con varios
   statements, o uno vacío, se rechaza antes de enviar nada.
+- Planes analizados (`QueryPlanRequest::analyzed`, `supports_explain_analyze`):
+  MariaDB ejecuta `ANALYZE FORMAT=JSON`, que devuelve el mismo JSON con los
+  valores reales `r_rows`, `r_loops` y `r_*_time_ms` y el tiempo del optimizador
+  (MariaDB reporta los tiempos sobre todas las iteraciones; el plan los guarda
+  por iteración). MySQL 8.0.18+ ejecuta `EXPLAIN ANALYZE`, que solo reporta
+  valores reales en texto TREE, así que el driver parsea las líneas del árbol
+  (`cost`, `rows`, `actual time=startup..total rows=N loops=L`,
+  `never executed`) y guarda el texto como plan sin procesar; MySQL no reporta
+  tiempo de planificación. Solo se acepta un statement que el clasificador
+  compartido marca como `Read` o `Metadata`, un write se rechaza antes de enviar
+  nada, y el statement se ejecuta en `START TRANSACTION READ ONLY` y se revierte,
+  así que el servidor también rechaza un write que el clasificador no detectó,
+  como una función almacenada que inserta, salvo en tablas `TEMPORARY`, que una transacción de solo lectura todavía permite (la transacción se revierte después, pero el rollback no deshace escrituras en una tabla temporal no transaccional, como una MyISAM).
 
 ## Limitaciones
 
@@ -147,6 +160,11 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   suficientes la columna de definición devuelve `NULL` y el visor muestra un
   aviso en vez del código fuente.
 - Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se ejecuta en `START TRANSACTION READ ONLY` y se revierte. Solo puede contener sentencias `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `TABLE` y `VALUES` sin comentarios ejecutables (`/*! */`, `/*M! */`) ni la palabra `INTO`, y se rechaza salvo que el servidor demuestre que no hay una transacción abierta y que la sesión no puede tener bloqueos de `LOCK TABLES`. MySQL rechaza entonces la modificación de datos en la sesión, salvo en las tablas `TEMPORARY`, que una transacción de solo lectura todavía puede modificar, y no impide las funciones con efectos externos como `GET_LOCK` o las funciones definidas por el usuario; las credenciales de base de datos con privilegios mínimos siguen siendo el límite real.
+- Los planes analizados ejecutan el statement y requieren MySQL 8.0.18 o
+  posterior (MySQL 5.7 responde con un error de sintaxis). Una transacción de
+  solo lectura no detiene efectos como `GET_LOCK` o las tablas `TEMPORARY`.
+  `ANALYZE FORMAT=JSON` de MariaDB se acepta en una petición de solo lectura;
+  `ANALYZE TABLE` no.
 
 ## Capacidades de DDL
 

@@ -403,3 +403,457 @@ fn every_listed_access_type_has_a_description() {
         );
     }
 }
+
+const MYSQL_ANALYZE_TREE: &str = "\
+-> Sort: `count(*)` DESC  (actual time=0.142..0.142 rows=1 loops=1)
+    -> Table scan on <temporary>  (actual time=0.136..0.136 rows=1 loops=1)
+        -> Aggregate using temporary table  (actual time=0.135..0.135 rows=1 loops=1)
+            -> Nested loop inner join  (cost=45.2 rows=5) (actual time=0.0283..0.124 rows=2 loops=1)
+                -> Filter: (b.a_id is not null)  (cost=10.2 rows=100) (actual time=0.0183..0.0302 rows=100 loops=1)
+                    -> Covering index scan on b using a_id  (cost=10.2 rows=100) (actual time=0.0177..0.0259 rows=100 loops=1)
+                -> Filter: (a.k = 3)  (cost=0.25 rows=0.05) (actual time=878e-6..879e-6 rows=0.02 loops=100)
+                    -> Single-row index lookup on a using PRIMARY (id=b.a_id)  (cost=0.25 rows=1) (actual time=767e-6..780e-6 rows=1 loops=100)
+";
+
+#[test]
+fn the_analyze_tree_is_nested_by_indentation() {
+    let plan = parse_analyze_tree(MYSQL_ANALYZE_TREE).unwrap();
+
+    assert_eq!(plan.raw_format, PlanFormat::Text);
+    assert_eq!(plan.raw, MYSQL_ANALYZE_TREE);
+    assert_eq!(plan.roots.len(), 1);
+
+    let sort = &plan.roots[0];
+    assert_eq!(sort.operation, "Sort");
+    let scan = &sort.children[0];
+    assert_eq!(scan.operation, "Table scan");
+    assert_eq!(scan.relation.as_deref(), Some("<temporary>"));
+    let aggregate = &scan.children[0];
+    assert_eq!(aggregate.operation, "Aggregate using temporary table");
+    let join = &aggregate.children[0];
+    assert_eq!(join.operation, "Nested loop inner join");
+    assert_eq!(join.children.len(), 2);
+    assert_eq!(join.children[0].operation, "Filter");
+    assert_eq!(
+        join.children[0].children[0].operation,
+        "Covering index scan"
+    );
+}
+
+#[test]
+fn the_analyze_tree_maps_estimates_and_actuals_per_loop() {
+    let plan = parse_analyze_tree(MYSQL_ANALYZE_TREE).unwrap();
+    let join = &plan.roots[0].children[0].children[0].children[0];
+
+    assert_eq!(join.estimated_total_cost, Some(45.2));
+    assert_eq!(join.estimated_rows, Some(5.0));
+    assert_eq!(join.actual_startup_time, Some(0.0283));
+    assert_eq!(join.actual_total_time, Some(0.124));
+    assert_eq!(join.actual_rows, Some(2.0));
+    assert_eq!(join.actual_loops, Some(1));
+
+    let lookup = &join.children[1].children[0];
+    assert_eq!(lookup.actual_loops, Some(100));
+    assert_eq!(lookup.actual_total_time, Some(780e-6));
+    assert_eq!(lookup.actual_rows, Some(1.0));
+
+    let sort = &plan.roots[0];
+    assert_eq!(sort.estimated_total_cost, None);
+    assert_eq!(sort.actual_total_time, Some(0.142));
+}
+
+#[test]
+fn the_analyze_tree_reads_relation_index_and_conditions() {
+    let plan = parse_analyze_tree(MYSQL_ANALYZE_TREE).unwrap();
+    let join = &plan.roots[0].children[0].children[0].children[0];
+
+    let covering = &join.children[0].children[0];
+    assert_eq!(covering.relation.as_deref(), Some("b"));
+    assert_eq!(covering.index.as_deref(), Some("a_id"));
+
+    let filter = &join.children[0];
+    let condition = filter.key_condition.as_ref().unwrap();
+    assert_eq!(condition.label, "Filter");
+    assert_eq!(condition.value, "(b.a_id is not null)");
+
+    let lookup = &join.children[1].children[0];
+    assert_eq!(lookup.operation, "Single-row index lookup");
+    assert_eq!(lookup.relation.as_deref(), Some("a"));
+    assert_eq!(lookup.index.as_deref(), Some("PRIMARY"));
+    assert_eq!(lookup.key_condition.as_ref().unwrap().value, "(id=b.a_id)");
+
+    let sort = &plan.roots[0];
+    let sort_key = sort.key_condition.as_ref().unwrap();
+    assert_eq!(sort_key.label, "Sort Key");
+    assert_eq!(sort_key.value, "`count(*)` DESC");
+}
+
+#[test]
+fn a_range_scan_keeps_its_range_and_index_condition() {
+    let tree = "-> Limit: 3 row(s)  (cost=32.7 rows=3) (actual time=0.06..0.0606 rows=3 loops=1)\n    -> Index range scan on a using k over (40 < k), with index condition: (a.k > 40)  (cost=32.7 rows=72) (actual time=0.0597..0.0601 rows=3 loops=1)\n";
+    let plan = parse_analyze_tree(tree).unwrap();
+
+    let limit = &plan.roots[0];
+    assert_eq!(limit.operation, "Limit");
+    assert_eq!(limit.estimated_rows, Some(3.0));
+
+    let scan = &limit.children[0];
+    assert_eq!(scan.operation, "Index range scan");
+    assert_eq!(scan.relation.as_deref(), Some("a"));
+    assert_eq!(scan.index.as_deref(), Some("k"));
+    let condition = scan.key_condition.as_ref().unwrap();
+    assert_eq!(condition.label, "Index Cond");
+    assert_eq!(condition.value, "(a.k > 40)");
+    assert!(
+        scan.details
+            .iter()
+            .any(|(name, value)| name == "Range" && value == "over (40 < k)"),
+        "{:?}",
+        scan.details
+    );
+}
+
+#[test]
+fn a_join_condition_is_the_key_condition() {
+    let tree = "-> Inner hash join (b.a_id = a.id)  (cost=10 rows=5) (actual time=0.1..0.2 rows=5 loops=1)\n    -> Table scan on a  (cost=1 rows=5) (actual time=0.01..0.02 rows=5 loops=1)\n    -> Hash\n        -> Table scan on b  (cost=1 rows=5) (actual time=0.01..0.02 rows=5 loops=1)\n";
+    let plan = parse_analyze_tree(tree).unwrap();
+
+    let join = &plan.roots[0];
+    assert_eq!(join.operation, "Inner hash join");
+    let condition = join.key_condition.as_ref().unwrap();
+    assert_eq!(condition.label, "Join Cond");
+    assert_eq!(condition.value, "(b.a_id = a.id)");
+    assert_eq!(join.children.len(), 2);
+    assert_eq!(join.children[1].operation, "Hash");
+    assert_eq!(join.children[1].children[0].relation.as_deref(), Some("b"));
+}
+
+#[test]
+fn a_node_that_never_ran_has_zero_loops_and_no_gap() {
+    let tree = "-> Nested loop left join  (cost=2 rows=1) (actual time=0.1..0.1 rows=1 loops=1)\n    -> Table scan on a  (cost=1 rows=1) (actual time=0.01..0.01 rows=1 loops=1)\n    -> Index lookup on b using a_id (a_id=a.id)  (cost=1 rows=900) (never executed)\n";
+    let plan = parse_analyze_tree(tree).unwrap();
+
+    let skipped = &plan.roots[0].children[1];
+    assert_eq!(skipped.actual_loops, Some(0));
+    assert_eq!(skipped.actual_total_time, Some(0.0));
+    assert!(plan.largest_estimate_gap().is_none());
+}
+
+#[test]
+fn the_tree_execution_time_is_the_roots_total_time() {
+    let plan = parse_analyze_tree(MYSQL_ANALYZE_TREE).unwrap();
+
+    assert_eq!(plan.execution_time, Some(0.142));
+    assert_eq!(plan.planning_time, None);
+}
+
+#[test]
+fn the_tree_self_time_and_gap_come_out_of_the_parsed_plan() {
+    let plan = parse_analyze_tree(MYSQL_ANALYZE_TREE).unwrap();
+
+    // Filter a.k = 3: estimated 0.05 rows per loop, 0.02 actual: no gap.
+    // Index scan on b: 5 estimated, 2 actual: no gap. No node reaches 10x.
+    assert!(plan.largest_estimate_gap().is_none());
+
+    let join = &plan.roots[0].children[0].children[0].children[0];
+    // 0.124 - (0.0302 + 0.000879 * 100) = 0.0059
+    let self_time = join.actual_self_time().unwrap();
+    assert!((self_time - 0.0059).abs() < 1e-9, "{self_time}");
+}
+
+#[test]
+fn text_that_is_not_an_analyze_tree_is_an_error() {
+    assert!(parse_analyze_tree("").is_err());
+    assert!(parse_analyze_tree("just some words").is_err());
+}
+
+#[test]
+fn the_analyze_statements_use_each_flavours_syntax_for_one_read_statement() {
+    assert_eq!(
+        analyze_statement(
+            dbflux_core::DbKind::MySQL,
+            Some("8.0.20"),
+            "SELECT * FROM t;"
+        )
+        .unwrap(),
+        "EXPLAIN ANALYZE SELECT * FROM t"
+    );
+    assert_eq!(
+        analyze_statement(dbflux_core::DbKind::MySQL, None, "SELECT * FROM t;").unwrap(),
+        "EXPLAIN ANALYZE SELECT * FROM t"
+    );
+    assert_eq!(
+        analyze_statement(
+            dbflux_core::DbKind::MySQL,
+            Some("8.0.36"),
+            "SELECT * FROM t;"
+        )
+        .unwrap(),
+        "EXPLAIN ANALYZE FORMAT=TREE SELECT * FROM t"
+    );
+    assert_eq!(
+        analyze_statement(
+            dbflux_core::DbKind::MariaDB,
+            Some("11.4.2-MariaDB"),
+            "SELECT * FROM t;"
+        )
+        .unwrap(),
+        "ANALYZE FORMAT=JSON SELECT * FROM t"
+    );
+}
+
+#[test]
+fn the_analyze_statements_refuse_writes_and_batches() {
+    for kind in [dbflux_core::DbKind::MySQL, dbflux_core::DbKind::MariaDB] {
+        for query in [
+            "UPDATE t SET a = 1",
+            "DELETE FROM t",
+            "INSERT INTO t VALUES (1)",
+            "TRUNCATE t",
+            "SELECT * INTO OUTFILE '/tmp/x' FROM t",
+        ] {
+            let error = analyze_statement(kind, None, query).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Analyze is only available for read statements; this statement is not a plain read, so only the estimate can run.",
+                "{kind:?} {query}"
+            );
+        }
+
+        assert!(analyze_statement(kind, None, "SELECT 1; SELECT 2").is_err());
+    }
+}
+
+const MARIADB_ANALYZE: &str = r#"{
+  "query_optimization": {"r_total_time_ms": 0.107},
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.019,
+    "r_loops": 1,
+    "r_total_time_ms": 0.062,
+    "filesort": {
+      "sort_key": "count(0) desc",
+      "r_loops": 1,
+      "r_total_time_ms": 0.005,
+      "r_output_rows": 1,
+      "temporary_table": {
+        "nested_loop": [
+          {
+            "table": {
+              "table_name": "a",
+              "access_type": "ref",
+              "key": "k",
+              "used_key_parts": ["k"],
+              "loops": 1,
+              "r_loops": 1,
+              "rows": 8,
+              "r_rows": 80,
+              "cost": 0.01,
+              "r_table_time_ms": 0.012,
+              "r_other_time_ms": 0.004,
+              "r_engine_stats": {"pages_accessed": 10},
+              "filtered": 100,
+              "attached_condition": "a.k <=> 3"
+            }
+          },
+          {
+            "table": {
+              "table_name": "b",
+              "access_type": "ref",
+              "key": "a_id",
+              "loops": 8,
+              "r_loops": 8,
+              "rows": 1,
+              "r_rows": 0.25,
+              "r_table_time_ms": 0.016,
+              "r_other_time_ms": 0.024
+            }
+          }
+        ]
+      }
+    }
+  }
+}"#;
+
+#[test]
+fn a_mariadb_analyze_maps_actual_rows_loops_and_per_loop_times() {
+    let plan = parse_explain_json(MARIADB_ANALYZE).unwrap();
+
+    assert_eq!(plan.planning_time, Some(0.107));
+    assert_eq!(plan.execution_time, Some(0.062));
+
+    let block = &plan.roots[0];
+    assert_eq!(block.actual_loops, Some(1));
+    assert_eq!(block.actual_total_time, Some(0.062));
+
+    let sort = &block.children[0];
+    assert_eq!(sort.actual_rows, Some(1.0));
+
+    let nested = &sort.children[0].children[0];
+    let outer = &nested.children[0];
+    assert_eq!(outer.relation.as_deref(), Some("a"));
+    assert_eq!(outer.estimated_rows, Some(8.0));
+    assert_eq!(outer.actual_rows, Some(80.0));
+    assert_eq!(outer.actual_loops, Some(1));
+    assert!((outer.actual_total_time.unwrap() - 0.016).abs() < 1e-12);
+
+    // MariaDB reports a total over all loops; the model keeps it per loop.
+    let inner = &nested.children[1];
+    assert_eq!(inner.actual_loops, Some(8));
+    assert!((inner.actual_total_time.unwrap() - 0.005).abs() < 1e-12);
+    assert!((inner.actual_total_time.unwrap() * 8.0 - 0.040).abs() < 1e-12);
+}
+
+#[test]
+fn mariadb_actual_keys_are_fields_and_engine_stats_stay_details() {
+    let plan = parse_explain_json(MARIADB_ANALYZE).unwrap();
+    let outer = &plan.roots[0].children[0].children[0].children[0].children[0];
+
+    for key in [
+        "r_rows",
+        "r_loops",
+        "r_table_time_ms",
+        "r_other_time_ms",
+        "r_total_time_ms",
+    ] {
+        assert!(
+            !outer.details.iter().any(|(name, _)| name == key),
+            "{key} is a field"
+        );
+    }
+    assert!(outer.children.is_empty(), "engine stats are not a node");
+    assert!(
+        outer
+            .details
+            .iter()
+            .any(|(name, value)| name == "r_engine_stats" && value.contains("pages_accessed")),
+        "{:?}",
+        outer.details
+    );
+}
+
+#[test]
+fn a_mariadb_analyze_finds_the_estimate_gap() {
+    let plan = parse_explain_json(MARIADB_ANALYZE).unwrap();
+    let gap = plan.largest_estimate_gap().unwrap();
+
+    assert_eq!(gap.node.relation.as_deref(), Some("a"));
+    assert_eq!(gap.ratio, 10.0);
+}
+
+#[test]
+fn an_estimate_json_still_has_no_actuals() {
+    let plan = parse_explain_json(MYSQL_8_JOIN).unwrap();
+
+    assert_eq!(plan.planning_time, None);
+    assert_eq!(plan.execution_time, None);
+    assert!(plan.roots[0].actual_total_time.is_none());
+}
+
+#[test]
+fn analyze_needs_mysql_8_0_18_or_later() {
+    for version in ["8.0.18", "8.0.36", "8.4.8", "9.1.0", "10.0.0"] {
+        assert!(
+            analyze_version_gate(DbKind::MySQL, version).is_ok(),
+            "{version}"
+        );
+    }
+
+    for version in ["5.7.44", "8.0.17", "8.0.0", "5.6.51"] {
+        match analyze_version_gate(DbKind::MySQL, version) {
+            Err(DbError::NotSupported(message)) => {
+                assert_eq!(
+                    message, "Analyzed plans need MySQL 8.0.18 or later",
+                    "{version}"
+                );
+            }
+            other => panic!("{version}: expected NotSupported, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn analyze_needs_mariadb_10_1_or_later() {
+    for version in [
+        "10.1.0-MariaDB",
+        "11.8.9-MariaDB-ubu2404",
+        "5.5.5-10.11.6-MariaDB",
+    ] {
+        assert!(
+            analyze_version_gate(DbKind::MariaDB, version).is_ok(),
+            "{version}"
+        );
+    }
+
+    for version in ["10.0.38-MariaDB", "5.5.68-MariaDB", "5.5.5-10.0.1-MariaDB"] {
+        match analyze_version_gate(DbKind::MariaDB, version) {
+            Err(DbError::NotSupported(message)) => {
+                assert_eq!(
+                    message, "Analyzed plans need MariaDB 10.1 or later",
+                    "{version}"
+                );
+            }
+            other => panic!("{version}: expected NotSupported, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn an_unreadable_version_does_not_block_analyze() {
+    assert!(analyze_version_gate(DbKind::MySQL, "").is_ok());
+    assert!(analyze_version_gate(DbKind::MySQL, "unknown").is_ok());
+    assert!(analyze_version_gate(DbKind::MariaDB, "x").is_ok());
+}
+
+#[test]
+fn a_mariadb_scan_reports_the_rows_that_pass_its_attached_condition() {
+    let plan = parse_explain_json(
+        r#"{"query_block":{"select_id":1,"nested_loop":[{"table":{"table_name":"x","access_type":"ALL","r_loops":1,"rows":1000,"r_rows":1000,"filtered":50,"r_filtered":1,"attached_condition":"x.v = 1"}}]}}"#,
+    )
+    .unwrap();
+
+    let scan = &plan.roots[0].children[0];
+    assert_eq!(scan.actual_rows, Some(10.0));
+    assert_eq!(scan.estimated_rows, Some(500.0));
+}
+
+#[test]
+fn a_mariadb_scan_that_filters_nothing_keeps_its_rows() {
+    let plan = parse_explain_json(
+        r#"{"query_block":{"select_id":1,"nested_loop":[{"table":{"table_name":"x","access_type":"ALL","r_loops":1,"rows":8,"r_rows":80,"filtered":100,"r_filtered":100}}]}}"#,
+    )
+    .unwrap();
+
+    let scan = &plan.roots[0].children[0];
+    assert_eq!(scan.actual_rows, Some(80.0));
+    assert_eq!(scan.estimated_rows, Some(8.0));
+}
+
+#[test]
+fn a_cost_range_maps_startup_and_total_and_a_scalar_cost_stays_total() {
+    let tree =
+        "-> Table scan on t  (cost=0.05..4.12 rows=10) (actual time=0.01..0.02 rows=10 loops=1)\n";
+    let node = &parse_analyze_tree(tree).unwrap().roots[0];
+    assert_eq!(node.estimated_startup_cost, Some(0.05));
+    assert_eq!(node.estimated_total_cost, Some(4.12));
+
+    let tree = "-> Table scan on t  (cost=4.12 rows=10) (actual time=0.01..0.02 rows=10 loops=1)\n";
+    let node = &parse_analyze_tree(tree).unwrap().roots[0];
+    assert_eq!(node.estimated_startup_cost, None);
+    assert_eq!(node.estimated_total_cost, Some(4.12));
+}
+
+#[test]
+fn a_loop_count_in_engineering_notation_is_read() {
+    let tree = "-> Table scan on t  (cost=1 rows=1) (actual time=0.001..0.002 rows=1 loops=1e+6)\n";
+    let node = &parse_analyze_tree(tree).unwrap().roots[0];
+    assert_eq!(node.actual_loops, Some(1_000_000));
+
+    for bad in ["1.5", "-2", "inf", "NaN", "1e30"] {
+        let tree = format!(
+            "-> Table scan on t  (cost=1 rows=1) (actual time=0.001..0.002 rows=1 loops={bad})\n"
+        );
+        let node = &parse_analyze_tree(&tree).unwrap().roots[0];
+        assert_eq!(node.actual_loops, None, "{bad}");
+    }
+}

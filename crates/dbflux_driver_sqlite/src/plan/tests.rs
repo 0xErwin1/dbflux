@@ -39,3 +39,48 @@ fn a_pragma_is_refused_before_anything_is_sent() {
         "{error}"
     );
 }
+
+#[test]
+fn an_analyze_request_is_refused_before_anything_runs() {
+    use dbflux_core::{
+        ConnectionProfile, DbConfig, DbDriver, DbError, QueryPlanRequest, QueryRequest, Value,
+    };
+
+    let connection = crate::SqliteDriver::new()
+        .connect(&ConnectionProfile::new(
+            "memory",
+            DbConfig::SQLite {
+                path: ":memory:".into(),
+                connection_id: None,
+            },
+        ))
+        .unwrap();
+    connection
+        .execute(&QueryRequest::new("CREATE TABLE t (id INTEGER)"))
+        .unwrap();
+    connection
+        .execute(&QueryRequest::new("INSERT INTO t VALUES (1)"))
+        .unwrap();
+
+    for statement in ["SELECT * FROM t", "DELETE FROM t"] {
+        match connection.query_plan(&QueryPlanRequest::analyzed(statement)) {
+            Err(DbError::NotSupported(message)) => {
+                assert_eq!(message, "Analyzed plans are not supported by this driver");
+            }
+            other => panic!("{statement}: expected NotSupported, got {other:?}"),
+        }
+    }
+
+    let rows = connection
+        .execute(&QueryRequest::new("SELECT count(*) FROM t"))
+        .unwrap();
+    assert_eq!(rows.rows[0][0], Value::Int(1));
+    assert!(
+        !connection
+            .metadata()
+            .query
+            .as_ref()
+            .unwrap()
+            .supports_explain_analyze
+    );
+}

@@ -285,6 +285,7 @@ Requires the `VIEW SERVER STATE` permission.
 
 ## Limitations
 
+- Analyzed query plans (actual rows and timings) are not supported yet; only the estimated plan from `SHOWPLAN_XML` is available.
 - The `required` mode's CA certificate replaces the system trust store
   rather than extending it, must hold exactly one certificate, and must
   use a `.pem`, `.crt` or `.der` extension (tiberius with rustls).

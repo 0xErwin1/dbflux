@@ -26,6 +26,7 @@ Embedded file-based database.
 
 ## Limitations
 
+- Analyzed query plans (actual rows and timings) are not supported; SQLite has no `EXPLAIN ANALYZE`, so the plan view offers only the estimate.
 - Local file driver only; no network transport, SSH tunneling, or TLS/SSL mode.
 - A requested row limit is a retention cap, not an engine bound: the statement still runs to completion inside the embedded engine, all rows past the cap are observed and discarded, and no byte, memory, or time budget is enforced — sorter and `RETURNING` allocations are not bounded by the cap. A mutation under a row limit completes all of its effects.
 - Splitting a row-limited batch prepares nothing, but probes the statement text with SQLite's lexer at every `;`, which is quadratic in the length of a statement that holds many semicolons inside literals, comments, or trigger bodies. Unbounded batches keep the legacy split-and-run behavior.

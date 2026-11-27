@@ -1259,17 +1259,38 @@ document:
   query_plan:
     tab:
       title: Plano
+      analyzed: "analisado"
     view:
       switch: Visualização do plano
       diagram: Diagrama
       tree: Árvore
       raw: Bruto
+    rows:
+      one: "%{count} linha"
+      many: "%{count} linhas"
+    run_mode:
+      switch: "Modo do plano"
+      estimate: "Estimar"
+      analyze: "Analisar"
+    analyze:
+      refusal:
+        title: "Analisar não está disponível para esta instrução."
+        changes_data: "Ela altera dados, então apenas a estimativa é executada."
+        several: "Analisar executa uma instrução por vez."
+      gate:
+        title: "Analisar executa esta consulta em %{connection}"
+        body: "A instrução é executada de verdade para medir o tempo e as linhas reais. O que ela fizer fora da transação, como bloqueios ou chamadas remotas, continua acontecendo."
+        production: "%{connection} é uma conexão de produção."
+        cancel: "Cancelar"
+        run: "Executar análise"
     scope:
       selection: "Seleção L%{start}–%{end}"
       script: "Script inteiro · %{count} instruções"
     totals:
       cost: custo total
       rows: linhas
+      planning: "planejamento"
+      execution: "execução"
     controls:
       zoom_out: Diminuir zoom
       zoom_in: Aumentar zoom
@@ -1278,6 +1299,7 @@ document:
     warnings:
       one: 1 aviso.
       many: "%{count} avisos."
+      estimate_gap: "%{node} retornou %{actual} contra uma estimativa de %{estimated} (%{ratio})."
     node:
       costliest: MAIS CARO
       table: tabela
@@ -1285,6 +1307,9 @@ document:
       cost: custo
       rows: linhas
       self: próprio
+      slowest: "MAIS LENTO"
+      est: "est."
+      actual: "real"
     tree:
       node: Nó
       index: Índice
@@ -1292,6 +1317,11 @@ document:
       self_cost: Custo próprio
       rows: Linhas
       on_relation: em
+      est_rows: "Linhas est."
+      actual_rows: "Linhas reais"
+      time: "Tempo"
+      loops: "Laços"
+      self_time: "Tempo próprio"
     raw:
       copy: Copiar
     footer:
@@ -1299,10 +1329,13 @@ document:
         one: "%{count} nó"
         many: "%{count} nós"
       not_run: consulta não executada
+      analyze_cancelled: "Análise cancelada"
+      analyze_failed: "Análise falhou"
       format:
         json: Plano em JSON
         xml: Plano em XML
         text: Plano em texto
+      analyzed: "Analisado · a consulta foi executada"
     inspector:
       node: "nó %{id}"
       estimate: Estimativa
@@ -1314,9 +1347,20 @@ document:
       rows: Linhas
       relation: Relação
       index: Índice
+      actual: "Real"
+      rows_per_loop: "Linhas por laço"
+      startup_time: "Tempo de início"
+      total_time: "Tempo total"
+      self_time: "Tempo próprio"
+      loops: "Laços"
+      versus: "Em relação à estimativa"
+      versus_more: "%{ratio} mais linhas"
+      versus_fewer: "%{ratio} menos linhas"
+      versus_same: "Como estimado"
     loading:
       running: Calculando o plano da consulta…
       cancel: Cancelar
+      analyzing: "Executando a consulta para medi-la…"
     state:
       retry: Tentar novamente
       unsupported:
@@ -1329,6 +1373,9 @@ document:
       origin_gone: "A conexão da qual este resultado veio não está mais conectada. Reconecte-a e execute a consulta novamente para explicá-la."
       origin_database_changed: "O banco de dados em que este resultado foi executado (%{origin}) não é mais o que esta conexão está usando (%{current}). Volte para %{origin} e explique a consulta novamente; um plano obtido agora descreveria outro banco de dados."
       editor_database_changed: "O banco de dados deste editor (%{origin}) não é mais o que esta conexão está usando (%{current}). Volte para %{origin} e explique a consulta novamente; um plano obtido agora descreveria outro banco de dados."
+      analyze_connection_changed: "O editor agora aponta para uma conexão diferente daquela em que este plano foi feito. Execute Explain novamente na nova conexão antes de analisar."
+      analyze_database_changed: "O editor está em um banco de dados diferente daquele em que este plano foi feito. Execute Explain novamente antes de analisar."
+      analyze_query_running: "Ainda há uma consulta em execução neste editor. Aguarde o término ou cancele-a e execute a análise."
       cancelled:
         title: Plano cancelado
     explain:
@@ -1355,6 +1402,23 @@ document:
       relation_title: Relação
       relation_body: A tabela ou visão que esta etapa lê.
       condition_body: "A condição que melhor explica esta etapa, como o motor a informa."
+      estimate_body: "Calcula o plano da consulta sem executá-la."
+      analyze_body: "Executa a consulta e mede o tempo e as linhas reais. Estimar apenas calcula o plano."
+      totals_analyzed_body: "Planejamento é o tempo gasto construindo o plano. Execução é o tempo gasto executando-o. Ambos são medidos no servidor."
+      edge_actual_title: "Linhas reais"
+      edge_actual_body: "Linhas que esta etapa passou para a seguinte, somando todas as suas execuções. Uma linha mais grossa significa mais linhas."
+      gap_title: "Linhas fora da estimativa"
+      gap_body: "Voltaram %{actual} contra uma estimativa de %{estimated}, a maior diferença deste plano."
+      slowest_title: "Mais lento"
+      slowest_body: "O nó com o maior tempo próprio deste plano."
+      actual_rows_title: "Linhas reais"
+      actual_rows_body: "Linhas que esta etapa retornou em cada execução, para comparar com a estimativa ao lado."
+      time_title: "Tempo"
+      time_body: "Tempo gasto nesta etapa e em seus filhos, somado em todas as suas execuções."
+      self_time_title: "Tempo próprio"
+      self_time_body: "Tempo gasto apenas neste nó, sem seus filhos, como parte do tempo de execução. A barra mostra a mesma proporção."
+      loops_title: "Laços"
+      loops_body: "Quantas vezes o motor executou esta etapa. O tempo é o total de todos os laços; as linhas são por laço, como a estimativa."
   code:
     gutter:
       run_statement: Executar esta instrução

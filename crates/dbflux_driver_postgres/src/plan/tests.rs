@@ -393,3 +393,139 @@ fn an_unknown_node_type_has_no_description_and_no_condition() {
     assert_eq!(plan.roots[0].description, None);
     assert_eq!(plan.roots[0].key_condition, None);
 }
+
+const ANALYZED_JOIN: &str = r#"[{
+  "Plan": {
+    "Node Type": "Nested Loop",
+    "Join Type": "Inner",
+    "Startup Cost": 0.29,
+    "Total Cost": 16.34,
+    "Plan Rows": 5,
+    "Plan Width": 72,
+    "Actual Startup Time": 0.041,
+    "Actual Total Time": 0.912,
+    "Actual Rows": 120,
+    "Actual Loops": 1,
+    "Plans": [
+      {
+        "Node Type": "Seq Scan",
+        "Parent Relationship": "Outer",
+        "Relation Name": "orders",
+        "Startup Cost": 0.00,
+        "Total Cost": 1.05,
+        "Plan Rows": 5,
+        "Actual Startup Time": 0.010,
+        "Actual Total Time": 0.120,
+        "Actual Rows": 120,
+        "Actual Loops": 1,
+        "Filter": "(status = 'open'::text)",
+        "Rows Removed by Filter": 880
+      },
+      {
+        "Node Type": "Index Scan",
+        "Parent Relationship": "Inner",
+        "Index Name": "customers_pkey",
+        "Relation Name": "customers",
+        "Startup Cost": 0.29,
+        "Total Cost": 3.05,
+        "Plan Rows": 1,
+        "Actual Startup Time": 0.004,
+        "Actual Total Time": 0.006,
+        "Actual Rows": 1,
+        "Actual Loops": 120,
+        "Index Cond": "(id = o.customer_id)"
+      }
+    ]
+  },
+  "Planning Time": 0.215,
+  "Triggers": [],
+  "Execution Time": 1.034
+}]"#;
+
+#[test]
+fn an_analyzed_plan_maps_actuals_loops_and_timings() {
+    let plan = parse_explain_json(ANALYZED_JOIN).unwrap();
+
+    assert_eq!(plan.planning_time, Some(0.215));
+    assert_eq!(plan.execution_time, Some(1.034));
+
+    let join = &plan.roots[0];
+    assert_eq!(join.actual_startup_time, Some(0.041));
+    assert_eq!(join.actual_total_time, Some(0.912));
+    assert_eq!(join.actual_rows, Some(120.0));
+    assert_eq!(join.actual_loops, Some(1));
+
+    let lookup = &join.children[1];
+    assert_eq!(lookup.actual_rows, Some(1.0));
+    assert_eq!(lookup.actual_loops, Some(120));
+    // 0.006 ms per loop over 120 loops.
+    assert!((lookup.actual_total_time.unwrap() * 120.0 - 0.72).abs() < 1e-9);
+}
+
+#[test]
+fn actual_keys_are_fields_not_details_and_engine_extras_stay_details() {
+    let plan = parse_explain_json(ANALYZED_JOIN).unwrap();
+    let scan = &plan.roots[0].children[0];
+
+    assert_eq!(detail(scan, "Rows Removed by Filter"), Some("880"));
+    for key in [
+        "Actual Startup Time",
+        "Actual Total Time",
+        "Actual Rows",
+        "Actual Loops",
+    ] {
+        assert_eq!(detail(scan, key), None, "{key} is a field");
+    }
+}
+
+#[test]
+fn an_estimate_plan_has_no_actuals() {
+    let plan = parse_explain_json(NESTED_JOIN).unwrap();
+
+    assert_eq!(plan.planning_time, None);
+    assert_eq!(plan.execution_time, None);
+    assert_eq!(plan.roots[0].actual_total_time, None);
+    assert_eq!(plan.roots[0].actual_loops, None);
+}
+
+#[test]
+fn the_analyzed_gap_and_self_time_come_out_of_the_parsed_plan() {
+    let plan = parse_explain_json(ANALYZED_JOIN).unwrap();
+
+    // orders: estimated 5, actual 120 -> 24x.
+    let gap = plan.largest_estimate_gap().unwrap();
+    assert_eq!(gap.node.relation.as_deref(), Some("orders"));
+    assert_eq!(gap.ratio, 24.0);
+
+    // 0.912 - (0.120 + 0.006 * 120)
+    let self_time = plan.roots[0].actual_self_time().unwrap();
+    assert!((self_time - 0.072).abs() < 1e-9);
+}
+
+#[test]
+fn the_analyze_statement_runs_the_one_read_statement_with_analyze() {
+    assert_eq!(
+        analyze_explain_statement("SELECT * FROM t;").unwrap(),
+        "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM t"
+    );
+}
+
+#[test]
+fn the_analyze_statement_refuses_writes_and_batches_before_anything_is_built() {
+    for query in [
+        "UPDATE t SET a = 1",
+        "DELETE FROM t",
+        "INSERT INTO t VALUES (1)",
+        "DROP TABLE t",
+        "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d",
+    ] {
+        let error = analyze_explain_statement(query).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Analyze is only available for read statements; this statement is not a plain read, so only the estimate can run.",
+            "{query}"
+        );
+    }
+
+    assert!(analyze_explain_statement("SELECT 1; SELECT 2").is_err());
+}

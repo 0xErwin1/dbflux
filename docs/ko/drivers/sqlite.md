@@ -35,6 +35,7 @@
 - `TRUNCATE TABLE` 문이 없습니다. 데이터 전송 엔진의 Truncate 적재 옵션은 SQLite 대상에 대해 사용할 수 없습니다(`DriverCapabilities::TRUNCATE_TABLE`이 설정되지 않음).
 - 스키마 탐색은 인덱스의 이름 있는 열만 나열합니다. `CREATE INDEX ... ON t (lower(name), id)`의 `lower(name)`과 같은 표현식 열은 인덱스의 열 목록에서 제외됩니다.
 - 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `PRAGMA query_only` 아래에서 실행되며, 이 설정은 모든 문 앞에서 확인되고 끝나면 복원됩니다. 열린 트랜잭션 안에서는 거부됩니다. SQLite는 데이터베이스 쓰기를 거부하지만 로드된 확장이나 애플리케이션 정의 함수의 부수 효과는 막지 못합니다. 실제 경계는 여전히 파일 권한입니다.
+- 분석된 쿼리 계획(실측 행 수와 시간)은 지원되지 않습니다. SQLite에는 `EXPLAIN ANALYZE`가 없으므로 계획 보기는 예상 계획만 제공합니다.
 
 ## DDL 지원 범위
 

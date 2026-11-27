@@ -1698,6 +1698,16 @@ pub struct QueryCapabilities {
 
     /// Whether the driver supports EXPLAIN (query planning).
     pub supports_explain: bool,
+
+    /// Whether the driver can run a read statement and report an analyzed
+    /// plan with actual rows and timings.
+    ///
+    /// Not carried over the driver RPC: `DriverMetadata` crosses it as a
+    /// positional postcard payload, so a field here would shift every later
+    /// byte for a peer built before it existed. No RPC operation returns an
+    /// analyzed plan, so a remote driver never claims it.
+    #[serde(skip)]
+    pub supports_explain_analyze: bool,
 }
 
 impl Default for QueryCapabilities {
@@ -1736,6 +1746,7 @@ impl Default for QueryCapabilities {
             supports_window_functions: true,
             supports_ctes: true,
             supports_explain: true,
+            supports_explain_analyze: false,
         }
     }
 }
@@ -3006,6 +3017,25 @@ mod tests {
         let limits = DriverLimits::default();
         assert_eq!(limits.max_identifier_length, 63);
         assert_eq!(limits.max_nested_subqueries, 16);
+    }
+
+    /// `DriverMetadata` crosses the driver RPC as a positional postcard
+    /// payload, so a field that serializes shifts every later byte for a peer
+    /// built before it existed. The list of serialized fields is what a
+    /// positional format encodes.
+    #[test]
+    fn the_analyze_capability_is_not_serialized() {
+        let capabilities = QueryCapabilities {
+            supports_explain_analyze: true,
+            ..QueryCapabilities::default()
+        };
+
+        let value = serde_json::to_value(&capabilities).expect("serialize");
+        let object = value.as_object().expect("a struct is an object");
+        assert!(!object.contains_key("supports_explain_analyze"));
+
+        let decoded: QueryCapabilities = serde_json::from_value(value).expect("deserialize");
+        assert!(!decoded.supports_explain_analyze);
     }
 
     #[test]

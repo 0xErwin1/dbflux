@@ -124,3 +124,53 @@ pub(super) fn hash_join() -> QueryPlan {
     }
     QueryPlan::new(vec![top], "{}", PlanFormat::Json)
 }
+
+fn ran(node: &mut PlanNode, rows: f64, loops: u64, total_time: f64, startup_time: f64) {
+    node.actual_rows = Some(rows);
+    node.actual_loops = Some(loops);
+    node.actual_total_time = Some(total_time);
+    node.actual_startup_time = Some(startup_time);
+}
+
+/// The weekly revenue plan after it ran: the Seq Scan returned 48,200 rows
+/// where 3,100 were estimated (15.5x), the Index Scan ran 48,200 times and
+/// spent the most time, and the Sort is 12.2x off, which is not the largest
+/// gap. Times are milliseconds; an Index Scan loop is 169.1 / 48,200.
+pub(super) fn analyzed_weekly_revenue() -> QueryPlan {
+    let mut plan = weekly_revenue();
+
+    {
+        let limit = &mut plan.roots[0];
+        ran(limit, 50.0, 1, 412.6, 412.0);
+        let sort = &mut limit.children[0];
+        ran(sort, 50.0, 1, 412.5, 412.0);
+        let aggregate = &mut sort.children[0];
+        ran(aggregate, 604.0, 1, 408.2, 408.0);
+        let nested_loop = &mut aggregate.children[0];
+        ran(nested_loop, 48_200.0, 1, 360.3, 1.0);
+        ran(&mut nested_loop.children[0], 48_200.0, 1, 96.2, 0.041);
+        ran(
+            &mut nested_loop.children[1],
+            1.0,
+            48_200,
+            169.1 / 48_200.0,
+            0.003,
+        );
+    }
+
+    plan.planning_time = Some(0.9);
+    plan.execution_time = Some(412.6);
+    plan
+}
+
+/// One node estimated at `estimated` rows that returned `actual`.
+pub(super) fn off_by(estimated: f64, actual: f64) -> QueryPlan {
+    let mut scan = PlanNode::new("Seq Scan");
+    scan.relation = Some("orders".into());
+    scan.estimated_rows = Some(estimated);
+    ran(&mut scan, actual, 1, 2.0, 0.1);
+
+    let mut plan = QueryPlan::new(vec![scan], "{}", PlanFormat::Json);
+    plan.execution_time = Some(2.0);
+    plan
+}

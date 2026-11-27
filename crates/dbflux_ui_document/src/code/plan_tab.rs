@@ -11,8 +11,8 @@
 //! header, the keyboard and the inspector rail.
 
 use super::*;
-use crate::query_plan::{self, PlanFailure, PlanView, PlanViewEvent, PlanViewMode};
-use dbflux_core::{DbError, QueryPlan, QueryPlanRequest};
+use crate::query_plan::{self, PlanFailure, PlanRunMode, PlanView, PlanViewEvent, PlanViewMode};
+use dbflux_core::{DbError, QueryLanguage, QueryPlan, QueryPlanMode, QueryPlanRequest};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, record_error, report_error};
 
 /// The connection a plan is asked of.
@@ -43,6 +43,9 @@ pub(super) struct PlanTarget {
     /// Where the plan is asked.
     pub(super) route: PlanRoute,
     pub(super) text: String,
+    /// The language `text` is written in, for the guard that decides whether
+    /// the statement may be analyzed.
+    pub(super) language: QueryLanguage,
     /// "Statement L7–16", "Selection L3–5" or "Whole script · 3 statements".
     pub(super) scope: String,
     /// Statements in `text`, when the language can count them.
@@ -57,6 +60,8 @@ pub(super) struct PlanTab {
     running: Option<dbflux_core::TaskId>,
     /// The connection the plan was asked of, for the messages that name it.
     connection_id: Option<Uuid>,
+    /// The database the plan was asked on, which an analysis must still match.
+    database: Option<String>,
     _view_subscription: Subscription,
     _task: Option<Task<()>>,
 }
@@ -126,6 +131,7 @@ impl CodeDocument {
             return Some(PlanTarget {
                 route: PlanRoute::Current,
                 statement_count: language.statement_count(&text),
+                language: language.clone(),
                 text,
                 scope: dbflux_i18n::t!(
                     "document.query_plan.scope.selection",
@@ -148,6 +154,7 @@ impl CodeDocument {
                 route: PlanRoute::Current,
                 text: statement.to_string(),
                 statement_count: 1,
+                language: language.clone(),
                 scope: dbflux_i18n::t!(
                     "document.code.result.statement_lines",
                     start = start,
@@ -167,6 +174,7 @@ impl CodeDocument {
         Some(PlanTarget {
             route: PlanRoute::Current,
             text: buffer,
+            language: language.clone(),
             scope,
             statement_count,
         })
@@ -234,6 +242,7 @@ impl CodeDocument {
                 statement_count: language.statement_count(&query),
                 scope: tab.title.clone(),
                 text: query,
+                language,
             },
             cx,
         );
@@ -333,9 +342,19 @@ impl CodeDocument {
         (current != expected).then(|| dbflux_i18n::t!(key, origin = expected, current = current))
     }
 
-    /// Asks the driver for the plan of `target` and shows the Plan tab,
-    /// loading, replacing the one a previous Explain left.
-    pub(super) fn start_plan(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
+    /// The database a plan on `route` is asked on.
+    fn plan_database(&self, route: &PlanRoute) -> Option<String> {
+        match route {
+            PlanRoute::Current => self.source.exec_ctx.database.clone(),
+            PlanRoute::Origin { database, .. } => database.clone(),
+        }
+    }
+
+    /// Why a plan cannot be asked at all, checked before the driver is
+    /// reached. An analyzed plan runs the statement, so it is also refused
+    /// when it would run on another connection than the one its confirmation
+    /// was shown for, or while another query owns the document.
+    fn plan_refusal(&self, target: &PlanTarget, mode: QueryPlanMode, cx: &App) -> Option<String> {
         if let PlanRoute::Origin { connection_id, .. } = &target.route
             && self
                 .app_state
@@ -344,12 +363,61 @@ impl CodeDocument {
                 .get(connection_id)
                 .is_none()
         {
-            self.show_plan_origin_gone(target, cx);
-            return;
+            return Some(dbflux_i18n::t!("document.query_plan.state.origin_gone"));
         }
 
-        if let Some(message) = self.plan_database_changed(&target.route, cx) {
-            self.show_plan_refused(target, message, cx);
+        if mode == QueryPlanMode::Analyze {
+            let planned_on = self.plan.tab.as_ref().and_then(|tab| tab.connection_id);
+            if target.route.connection_id(self.connection_id) != planned_on {
+                return Some(dbflux_i18n::t!(
+                    "document.query_plan.state.analyze_connection_changed"
+                ));
+            }
+
+            let planned_database = self.plan.tab.as_ref().and_then(|tab| tab.database.as_ref());
+            if self.plan_database(&target.route) != planned_database.cloned() {
+                return Some(dbflux_i18n::t!(
+                    "document.query_plan.state.analyze_database_changed"
+                ));
+            }
+
+            let another_query_runs =
+                self.execution
+                    .active_query_task
+                    .as_ref()
+                    .is_some_and(|task| {
+                        self.plan.tab.as_ref().and_then(|tab| tab.running) != Some(task.task_id)
+                    });
+            if another_query_runs {
+                return Some(dbflux_i18n::t!(
+                    "document.query_plan.state.analyze_query_running"
+                ));
+            }
+        }
+
+        self.plan_database_changed(&target.route, cx)
+    }
+
+    /// Asks the driver for the plan of `target` and shows the Plan tab,
+    /// loading, replacing the one a previous Explain left.
+    pub(super) fn start_plan(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
+        self.launch_plan(target, QueryPlanMode::Estimate, cx);
+    }
+
+    /// Run analyze: asks for the analyzed plan of the statement the tab
+    /// covers, on the connection it was planned on, in the same tab. The
+    /// estimate stays in it, one click away.
+    fn start_analysis(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.plan.tab.as_ref().map(|tab| tab.target.clone()) else {
+            return;
+        };
+
+        self.launch_plan(target, QueryPlanMode::Analyze, cx);
+    }
+
+    fn launch_plan(&mut self, target: PlanTarget, mode: QueryPlanMode, cx: &mut Context<Self>) {
+        if let Some(message) = self.plan_refusal(&target, mode, cx) {
+            self.show_plan_refused(target, message, mode, cx);
             return;
         }
 
@@ -358,6 +426,7 @@ impl CodeDocument {
             return;
         };
         let connection_id = target.route.connection_id(self.connection_id);
+        let planned_database = self.plan_database(&target.route);
 
         self.clear_query_error(cx);
         self.clear_live_output();
@@ -376,16 +445,30 @@ impl CodeDocument {
         });
         self.state = DocumentState::Executing;
 
-        let mode = self
+        let view_mode = self
             .plan
             .view()
             .map_or(PlanViewMode::default(), |view| view.read(cx).mode());
         self.hide_plan_inspector(cx);
 
-        let view = cx.new(|cx| PlanView::new(target.scope.clone(), mode, cx));
+        let view = match (mode, self.plan.view()) {
+            (QueryPlanMode::Analyze, Some(view)) => {
+                view.update(cx, |view, cx| view.begin_analysis(cx));
+                view
+            }
+            _ => {
+                let offer = self.analyze_offer(&target, cx);
+                let view = cx.new(|cx| PlanView::new(target.scope.clone(), view_mode, cx));
+                view.update(cx, |view, cx| view.set_analyze_offer(offer, cx));
+                view
+            }
+        };
         let subscription = cx.subscribe(&view, Self::on_plan_event);
 
-        let request = QueryPlanRequest::new(target.text.clone());
+        let request = match mode {
+            QueryPlanMode::Estimate => QueryPlanRequest::new(target.text.clone()),
+            QueryPlanMode::Analyze => QueryPlanRequest::analyzed(target.text.clone()),
+        };
         let started = Instant::now();
         let work = cx.background_executor().spawn(async move {
             let result = connection.query_plan(&request);
@@ -395,7 +478,14 @@ impl CodeDocument {
             let (result, elapsed) = work.await;
 
             if let Err(error) = this.update(cx, |document, cx| {
-                document.finish_plan(task_id, cancel_token.is_cancelled(), result, elapsed, cx);
+                document.finish_plan(
+                    task_id,
+                    mode,
+                    cancel_token.is_cancelled(),
+                    result,
+                    elapsed,
+                    cx,
+                );
             }) {
                 log::debug!("document closed before its plan arrived: {error}");
             }
@@ -406,6 +496,7 @@ impl CodeDocument {
             target,
             running: Some(task_id),
             connection_id,
+            database: planned_database,
             _view_subscription: subscription,
             _task: Some(task),
         });
@@ -418,19 +509,43 @@ impl CodeDocument {
         cx.notify();
     }
 
-    /// The connection a result came from is gone: the Plan tab says so in
-    /// its error state. Nothing is asked of any other connection.
-    fn show_plan_origin_gone(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
-        let message = dbflux_i18n::t!("document.query_plan.state.origin_gone");
-        self.show_plan_refused(target, message, cx);
+    /// What the Estimate | Analyze switch offers for `target`: nothing when
+    /// the connection's driver cannot analyze, so no driver is named here.
+    fn analyze_offer(&self, target: &PlanTarget, cx: &App) -> Option<query_plan::AnalyzeOffer> {
+        // Analyze runs the statement, which a read-only document never does.
+        if self.read_only {
+            return None;
+        }
+
+        let connection_id = target.route.connection_id(self.connection_id)?;
+        let connected = self.app_state.read(cx).connections().get(&connection_id)?;
+
+        query_plan::offer_for(connected, &target.language, &target.text)
     }
 
-    /// The plan is refused before the driver is asked: the Plan tab shows
-    /// `message` in its error state.
-    fn show_plan_refused(&mut self, target: PlanTarget, message: String, cx: &mut Context<Self>) {
-        self.cancel_running_plan(cx);
+    /// The label after the Plan tab's name: `analyzed` once the query ran.
+    pub(super) fn plan_tab_meta(&self, cx: &App) -> Option<SharedString> {
+        self.plan
+            .view()
+            .filter(|view| view.read(cx).is_analyzed())
+            .map(|_| dbflux_i18n::t!("document.query_plan.tab.analyzed").into())
+    }
 
-        let mode = self
+    /// The plan is refused before the driver is asked. A new Estimate
+    /// replaces the Plan tab with `message` in its error state, since the
+    /// failure belongs to the new target. A refused Analyze shows it in the
+    /// Analyze slot and leaves the estimate in the tab, one click away.
+    fn show_plan_refused(
+        &mut self,
+        target: PlanTarget,
+        message: String,
+        mode: QueryPlanMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_running_plan(cx);
+        let keeps_estimate = mode == QueryPlanMode::Analyze && self.plan.view().is_some();
+
+        let view_mode = self
             .plan
             .view()
             .map_or(PlanViewMode::default(), |view| view.read(cx).mode());
@@ -439,13 +554,24 @@ impl CodeDocument {
         let failure =
             self.record_plan_failure(&DbError::connection_failed(message.clone()), message, cx);
 
-        let view = cx.new(|cx| PlanView::new(target.scope.clone(), mode, cx));
+        if keeps_estimate && let Some(view) = self.plan.view() {
+            view.update(cx, |view, cx| {
+                view.begin_analysis(cx);
+                view.set_failed(failure, cx);
+            });
+            self.plan.shown = true;
+            cx.notify();
+            return;
+        }
+
+        let view = cx.new(|cx| PlanView::new(target.scope.clone(), view_mode, cx));
         view.update(cx, |view, cx| view.set_failed(failure, cx));
         let subscription = cx.subscribe(&view, Self::on_plan_event);
 
         self.plan.tab = Some(PlanTab {
             view,
             connection_id: target.route.connection_id(self.connection_id),
+            database: self.plan_database(&target.route),
             target,
             running: None,
             _view_subscription: subscription,
@@ -464,6 +590,7 @@ impl CodeDocument {
     fn finish_plan(
         &mut self,
         task_id: dbflux_core::TaskId,
+        mode: QueryPlanMode,
         cancelled: bool,
         result: Result<QueryPlan, DbError>,
         elapsed: std::time::Duration,
@@ -512,7 +639,7 @@ impl CodeDocument {
                 self.runner.complete_primary(task_id, cx);
                 view.update(cx, |view, cx| view.set_ready(&plan, elapsed, cx));
             }
-            Err(DbError::NotSupported(_)) => {
+            Err(DbError::NotSupported(_)) if mode == QueryPlanMode::Estimate => {
                 self.runner.complete_primary(task_id, cx);
                 view.update(cx, |view, cx| view.set_unsupported(connection_name, cx));
             }
@@ -632,10 +759,18 @@ impl CodeDocument {
             }
             PlanViewEvent::CloseInspector => cx.emit(DocumentEvent::CloseInspector),
             PlanViewEvent::RetryRequested => {
-                if let Some(target) = self.plan.tab.as_ref().map(|tab| tab.target.clone()) {
+                let analyzing = self
+                    .plan
+                    .view()
+                    .is_some_and(|view| view.read(cx).run_mode() == PlanRunMode::Analyze);
+
+                if analyzing {
+                    self.start_analysis(cx);
+                } else if let Some(target) = self.plan.tab.as_ref().map(|tab| tab.target.clone()) {
                     self.start_plan(target, cx);
                 }
             }
+            PlanViewEvent::AnalyzeRequested => self.start_analysis(cx),
             PlanViewEvent::CancelRequested => self.cancel_running_plan(cx),
         }
     }
