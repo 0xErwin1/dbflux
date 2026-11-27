@@ -409,7 +409,7 @@ that predate this feature ignore the stored row.
 A bare printable key (a letter, digit, symbol or Space) that you assign, to such a
 command or by moving a default binding, applies in Results, Audit and Inspector
 only while no text field has focus, so the letter is still typed into a filter
-or search field. Chords with Ctrl, Alt or Cmd keep the context's own condition,
+or search field. Other keys, such as chords with Ctrl, Alt or Cmd, function keys and arrows, keep the binding's own condition,
 and a context condition you set yourself is used as written.
 
 **Resetting.** An overridden binding shows a reset arrow that restores its

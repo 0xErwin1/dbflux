@@ -439,7 +439,7 @@ Una tecla imprimible sola (letra, dígito, símbolo o Espacio) que asignes a un
 comando así, o a la que muevas un binding por defecto, se aplica en Results,
 Audit e Inspector solo mientras ningún campo de texto tiene el foco, así que la
 letra se sigue escribiendo en un filtro o un campo de búsqueda. Los acordes con
-Ctrl, Alt o Cmd mantienen la condición propia del contexto, y una condición de
+Ctrl, Alt o Cmd, las teclas de función y las flechas mantienen la condición propia del atajo, y una condición de
 contexto que fijes tú se usa tal cual.
 
 **Restablecer.** Un binding modificado muestra una flecha que restablece sus
