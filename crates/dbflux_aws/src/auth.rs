@@ -2475,7 +2475,7 @@ async fn sso_login_with_url(
                 // callback or the result.
                 if !AbandonLoginGuard::is_abandoned(&abort_slot) {
                     url_callback(None);
-                    let _ = result_tx.send(Err(err));
+                    send_login_result(&result_tx, Err(err));
                 }
                 return;
             }
@@ -2500,7 +2500,7 @@ async fn sso_login_with_url(
         // Deregister on exit regardless of outcome.
         deregister_login_abort(profile_id, login_id);
 
-        let _ = result_tx.send(session);
+        send_login_result(&result_tx, session);
     });
 
     // Poll the result channel without blocking the async executor.
@@ -2527,6 +2527,18 @@ async fn sso_login_with_url(
                 ));
             }
         }
+    }
+}
+
+/// Hands the login result to the waiting future. The future may have been
+/// dropped after the last abandonment check; nobody is left to report to
+/// then, so the closed channel is only logged.
+fn send_login_result(
+    result_tx: &std::sync::mpsc::SyncSender<Result<AuthSession, DbError>>,
+    result: Result<AuthSession, DbError>,
+) {
+    if result_tx.send(result).is_err() {
+        log::debug!("[aws sso login] the waiting future is gone; dropping the login result");
     }
 }
 
