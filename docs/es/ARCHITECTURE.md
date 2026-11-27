@@ -1323,6 +1323,34 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   `crates/dbflux_ui_windows/src/connection_manager/hooks_tab.rs` para los
   bindings de fase por profile.
 
+### Background Tasks
+
+`TaskManager` (`crates/dbflux_core/src/core/task/`) es el único dueño de toda operación cancelable o de larga duración: queries, etapas y hooks de conexión, cargas de esquema, drops, exports y pruebas de conexión. El panel de tareas y la barra de estado solo leen sus snapshots; no agregues un conjunto paralelo de "esto está corriendo" ni un token de cancelación aparte.
+
+- **Inicio**: se arma un `TaskRequest` (tipo, descripción, `TaskTarget` opcional y `target_label` para una conexión aún no guardada) y se inicia. `start_handle` devuelve un `TaskHandle` con el id de la tarea y el `CancelToken` que consulta el worker.
+- **Dedup y reemplazo**: `try_start` rechaza con `TaskBusy` cuando hay en curso una tarea del mismo grupo de tipo (todas las fases de hook son un grupo) para el mismo target, de forma atómica con el registro. Un `supersede_key` en cambio cancela la tarea anterior con esa clave. Una tarea `TestConnection` es interactiva y, como las queries y los exports, no cuenta para el tope de tareas en segundo plano.
+- **Política de cancelación**: `CancelPolicy::Immediate` deja la tarea en `Cancelled` en cuanto se pide cancelar. `CancelPolicy::WorkerAcknowledged` la pasa a `Cancelling`, y solo el `acknowledge_cancelled` del worker la deja en `Cancelled`.
+- **Cancel hook**: un `CancelHook` opcional se ejecuta dentro de `request_cancel` (no debe bloquear) y devuelve un `CancelOutcome`: `Stopped` (el trabajo ya se detuvo), `Requested` (se pidió detenerlo; el worker confirma) o `NotSupported { reason }` (la tarea sigue `Running` y el panel muestra el motivo, como con un driver que no puede cancelar un comando en ejecución).
+- **Punto de no retorno**: un worker llama a `enter_point_of_no_return(id, reason)` justo antes de un paso que no puede deshacer, como enviar DDL. Desde ahí se rechaza la cancelación, y el panel la deshabilita y muestra el motivo.
+- **Etapas**: un `TaskRequest` con `parent` registra una tarea hija; `pending()` la registra como `Pending` hasta `activate`. Cancelar el padre cancela a sus hijas, y las que nunca empezaron terminan como `Skipped`, que se muestra como "No iniciada".
+- **Regla**: una tarea figura como `Cancelled` solo cuando su trabajo se detuvo. Si el trabajo puede seguir corriendo, el estado es `Cancelling` o `Running` con un motivo, nunca `Cancelled`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: stage registered with pending()
+    [*] --> Running: start / try_start
+    Pending --> Running: activate
+    Pending --> Skipped: parent cancelled
+    Running --> Completed
+    Running --> Failed
+    Running --> Cancelled: Immediate, or hook reports Stopped
+    Running --> Cancelling: WorkerAcknowledged, or hook reports Requested
+    Running --> Running: NotSupported or point of no return (cancel refused with a reason)
+    Cancelling --> Cancelled: worker acknowledges
+    Cancelling --> Completed: work finished anyway
+    Cancelling --> Failed
+```
+
 ### Ventana de Settings
 
 - Settings se organiza en las siguientes secciones: General, Appearance, Keybindings, Auth

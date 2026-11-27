@@ -768,6 +768,34 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - 失败策略：`Disconnect`（中止流程）、`Warn`（继续但给出警告）、`Ignore`（仅记日志）。
 - 设置界面：全局定义在 `crates/dbflux_ui_windows/src/settings/hooks.rs`；按配置文件的阶段绑定在 `crates/dbflux_ui_windows/src/connection_manager/hooks_tab.rs`。
 
+### Background Tasks
+
+`TaskManager`（`crates/dbflux_core/src/core/task/`）是所有可取消或长时间运行操作的唯一所有者：查询、连接阶段与钩子、架构加载、删除、导出和连接测试。任务面板和状态栏只读取它的快照；不要在旁边再加一个“是否在运行”的集合或单独的取消令牌。
+
+- **启动**：构造 `TaskRequest`（类型、描述、可选的 `TaskTarget`，以及尚未保存的连接使用的 `target_label`）并启动。`start_handle` 返回 `TaskHandle`，其中包含任务 id 和工作线程轮询的 `CancelToken`。
+- **去重与替换**：当同一类型组（所有钩子阶段算一组）的任务已在同一目标上进行时，`try_start` 以 `TaskBusy` 拒绝，且与注册原子完成。`supersede_key` 则会取消带有相同键的较早任务。`TestConnection` 任务与查询、导出一样是交互式的，不计入后台任务上限。
+- **取消策略**：`CancelPolicy::Immediate` 在请求取消时立即把任务置为 `Cancelled`。`CancelPolicy::WorkerAcknowledged` 把任务转为 `Cancelling`，只有工作线程的 `acknowledge_cancelled` 才会把它置为 `Cancelled`。
+- **取消钩子**：可选的 `CancelHook` 在 `request_cancel` 内运行（不得阻塞），返回 `CancelOutcome`：`Stopped`（工作已停止）、`Requested`（已请求停止，由工作线程确认）或 `NotSupported { reason }`（任务保持 `Running`，面板显示原因，例如驱动无法取消正在运行的命令）。
+- **不可回退点**：工作线程在执行无法撤销的步骤（如发送 DDL）之前调用 `enter_point_of_no_return(id, reason)`。此后取消被拒绝，面板会禁用取消并显示原因。
+- **阶段**：带有 `parent` 的 `TaskRequest` 会注册子任务；`pending()` 将其注册为 `Pending`，直到 `activate`。取消父任务会取消其子任务，从未开始的子任务以 `Skipped` 结束，显示为“未开始”。
+- **规则**：只有当工作确实停止时，任务才显示为 `Cancelled`。如果工作可能仍在运行，状态是 `Cancelling`，或带原因的 `Running`，绝不是 `Cancelled`。
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: stage registered with pending()
+    [*] --> Running: start / try_start
+    Pending --> Running: activate
+    Pending --> Skipped: parent cancelled
+    Running --> Completed
+    Running --> Failed
+    Running --> Cancelled: Immediate, or hook reports Stopped
+    Running --> Cancelling: WorkerAcknowledged, or hook reports Requested
+    Running --> Running: NotSupported or point of no return (cancel refused with a reason)
+    Cancelling --> Cancelled: worker acknowledges
+    Cancelling --> Completed: work finished anyway
+    Cancelling --> Failed
+```
+
 ### 设置窗口
 
 - 设置划分为以下各节：常规、外观、键盘快捷键、认证配置文件、代理、SSH 隧道、服务、Hooks、驱动程序、审计与关于。MCP 各节（受信客户端、角色、策略）在 `mcp` feature 下按 feature 门控。

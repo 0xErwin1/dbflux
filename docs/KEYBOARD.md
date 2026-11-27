@@ -572,6 +572,16 @@ The selected task is highlighted while the panel has focus; clicking a row selec
 
 **Cancel task** is offered only for work that stops when cancelled, such as a query, an export or a key scan. A write already sent to the server, a key read, or a single metadata request runs to the end and shows no cancel.
 
+Each row reads "target · kind": the connection the task runs for and what it does, for example `prod-pg · Connect` or `staging · Switch database: analytics`. A drop names its object instead (`prod-pg · DROP TABLE users`), and a connection tested before it is saved shows the name typed in the form. A task with no connection keeps its own description.
+
+**Cancelling.** Cancelling a task does not mean it has stopped. A task whose worker has to confirm shows **Cancelling…** with the reason "Cancel requested. Waiting for the work to confirm it stopped.", its cancel button is disabled, and it turns **Cancelled** only when the work really stopped; if it finishes or fails first, it shows that instead. A cancelling task still counts as running work.
+
+**When cancel is disabled.** A task that cannot be stopped keeps running and says why under its row: a statement already sent to the server ("The statement was already sent to the server and can no longer be cancelled."), changes applied without a transaction ("Changes are applied without a transaction and can no longer be cancelled."), or a driver that does not support cancelling a running command ("<driver> does not support cancelling a running command."). Pressing `c` on such a task does nothing.
+
+**Stages.** A task made of steps, such as a connection with its hooks, shows them under the parent row as **Waiting**, running, **Failed** or **Cancelled**. Cancelling the parent cancels every stage; the ones that had not begun show **Not started**.
+
+The status bar shows a **N cancelling** chip next to the running and failed counts while any task is cancelling; the panel header counts them too.
+
 ## Notifications center
 
 The bell at the right end of the title bar opens the notifications center, a
