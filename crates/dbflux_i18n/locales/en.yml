@@ -4358,6 +4358,9 @@ form:
     detached_hook_cleanup_failed: "Failed to release detached test hook tasks for profile '%{profile_name}' (%{profile_id}); scoped task IDs [%{task_ids}]: %{error}"
     aws_credentials_missing: "AWS credentials for profile '%{name}' could not be resolved. Add the credentials to ~/.aws/credentials (or use environment variables / IAM role) and retry. DBFlux does not store AWS access keys — credentials are read directly by the AWS SDK."
     pipeline_stage_failed: "Pipeline stage '%{stage}': %{source}"
+  task:
+    test_connection: "Test connection — %{name}"
+    test_connection_point_of_no_return: "The connection attempt is already in progress and can no longer be interrupted."
 hooks:
   kind:
     lua: "Lua"

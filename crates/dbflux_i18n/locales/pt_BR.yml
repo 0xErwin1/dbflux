@@ -4355,6 +4355,9 @@ form:
     detached_hook_cleanup_failed: "Falha ao liberar as tarefas de hook de teste desacopladas do perfil '%{profile_name}' (%{profile_id}); IDs de tarefa no escopo [%{task_ids}]: %{error}"
     aws_credentials_missing: "Não foi possível resolver as credenciais da AWS do perfil '%{name}'. Adicione as credenciais a ~/.aws/credentials (ou use variáveis de ambiente / função IAM) e tente novamente. O DBFlux não armazena chaves de acesso da AWS — as credenciais são lidas diretamente pelo SDK da AWS."
     pipeline_stage_failed: "Etapa do pipeline '%{stage}': %{source}"
+  task:
+    test_connection: "Testar conexão — %{name}"
+    test_connection_point_of_no_return: "A tentativa de conexão já está em andamento e não pode mais ser interrompida."
 hooks:
   kind:
     lua: "Lua"

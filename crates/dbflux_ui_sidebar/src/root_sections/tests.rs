@@ -758,6 +758,81 @@ async fn load_more_appends_the_next_page(cx: &mut TestAppContext) {
     );
 }
 
+fn load_more_buckets(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) {
+    let load_more = SchemaNodeId::RootSectionLoadMore {
+        profile_id: PROFILE_ID,
+        section_id: "buckets".to_string(),
+    }
+    .to_string();
+    sidebar.update(cx, |sidebar, cx| sidebar.execute_item(&load_more, cx));
+}
+
+fn listing_task(
+    sidebar: &Entity<Sidebar>,
+    cx: &mut VisualTestContext,
+) -> dbflux_core::TaskSnapshot {
+    let state = app_state(sidebar, cx);
+    cx.read(|cx| {
+        state
+            .read(cx)
+            .tasks()
+            .recent_tasks(10)
+            .into_iter()
+            .find(|task| task.kind == dbflux_core::TaskKind::LoadSchema)
+            .expect("the page listing is a task")
+    })
+}
+
+#[gpui::test]
+async fn a_finished_page_listing_task_completes(cx: &mut TestAppContext) {
+    let log = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
+    load_more_buckets(&sidebar, cx);
+    cx.run_until_parked();
+
+    assert_eq!(
+        listing_task(&sidebar, cx).status,
+        dbflux_core::TaskStatus::Completed
+    );
+}
+
+#[gpui::test]
+async fn a_cancelled_page_listing_ends_cancelled_only_once_the_worker_stopped(
+    cx: &mut TestAppContext,
+) {
+    let log = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
+    load_more_buckets(&sidebar, cx);
+
+    let running = listing_task(&sidebar, cx);
+    assert!(running.is_cancellable, "the listing offers a cancel");
+    let state = app_state(&sidebar, cx);
+    let outcome = state.update(cx, |state, _| state.request_cancel_task(running.id));
+    assert_eq!(outcome, dbflux_core::CancelRequestOutcome::Cancelling);
+    assert_eq!(
+        listing_task(&sidebar, cx).status,
+        dbflux_core::TaskStatus::Cancelling,
+        "the worker has not confirmed yet"
+    );
+
+    cx.run_until_parked();
+
+    assert_eq!(
+        listing_task(&sidebar, cx).status,
+        dbflux_core::TaskStatus::Cancelled
+    );
+    assert_eq!(
+        cached_ids(&sidebar, cx),
+        vec!["alpha"],
+        "a cancelled page is discarded"
+    );
+    assert_eq!(
+        log.lock().expect("source log").listings.len(),
+        1,
+        "the stopped worker never asked the driver for the page"
+    );
+}
+
 #[gpui::test]
 async fn the_item_menu_lists_open_and_every_declared_action(cx: &mut TestAppContext) {
     let log = Arc::default();

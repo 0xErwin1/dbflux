@@ -10,8 +10,8 @@
 
 use crate::Sidebar;
 use dbflux_core::{
-    DbError, SchemaNodeId, SecretListRequest, SecretStoreCapabilities, SecretStoreDescriptor,
-    SecretStoreSource, TaskKind,
+    CancelPolicy, CancelToken, DbError, SchemaNodeId, SecretListRequest, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretStoreSource, TaskKind, TaskRequest, TaskTarget,
 };
 use gpui::{Context, Task};
 use gpui_component::tree::TreeItem;
@@ -109,15 +109,20 @@ fn path_label(path: &str) -> String {
 
 /// Lists every page of one level and returns its sub-paths, each once, in
 /// the order they first appeared. Entries are dropped: the sidebar only
-/// shows the path tree.
+/// shows the path tree. A cancel stops the listing before the next request.
 fn list_child_paths(
     store: &dyn SecretStoreSource,
     path: Option<&str>,
+    cancel_token: &CancelToken,
 ) -> Result<Vec<String>, String> {
     let mut child_paths: Vec<String> = Vec::new();
     let mut page_token = None;
 
     loop {
+        if cancel_token.is_cancelled() {
+            return Err(DbError::Cancelled.to_string());
+        }
+
         let request = SecretListRequest {
             path: path.map(str::to_string),
             page_token: page_token.take(),
@@ -160,15 +165,21 @@ impl Sidebar {
         };
 
         let app_state = self.app_state.clone();
-        let load_task_id = app_state.update(cx, |state, _| {
-            let (task_id, _) = state.start_task_for_profile(
-                TaskKind::LoadSchema,
-                crate::labels::listing_secret_paths_task_label(&profile_name),
-                Some(key.profile_id),
-            );
-            state.tasks_mut().mark_uncancellable(task_id);
-            task_id
+        let load_task = app_state.update(cx, |state, _| {
+            state.start_task_handle(
+                TaskRequest::new(
+                    TaskKind::LoadSchema,
+                    crate::labels::listing_secret_paths_task_label(&profile_name),
+                )
+                .target(TaskTarget {
+                    profile_id: key.profile_id,
+                    database: None,
+                })
+                .policy(CancelPolicy::WorkerAcknowledged),
+            )
         });
+        let load_task_id = load_task.id();
+        let cancel_token = load_task.token().clone();
 
         let sidebar = cx.entity().clone();
 
@@ -179,7 +190,7 @@ impl Sidebar {
                     DbError::NotSupported(format!("secret store {}", key.store_id)).to_string()
                 })?;
 
-                list_child_paths(store, key.path.as_deref())
+                list_child_paths(store, key.path.as_deref(), &cancel_token)
             }
         });
 
@@ -189,24 +200,33 @@ impl Sidebar {
                 let result = background_task.await;
 
                 cx.update(|cx| {
-                    match &result {
-                        Ok(_) => {
-                            app_state.update(cx, |state, _| state.complete_task(load_task_id));
+                    let cancelled = app_state.update(cx, |state, _| {
+                        if state.acknowledge_task_cancelled(load_task_id) {
+                            return true;
                         }
-                        Err(message) => {
-                            let details = crate::labels::list_secret_paths_failed_label(message);
-                            app_state.update(cx, |state, _| {
+
+                        match &result {
+                            Ok(_) => state.complete_task(load_task_id),
+                            Err(message) => {
+                                let details =
+                                    crate::labels::list_secret_paths_failed_label(message);
                                 state.fail_task_with_details(
                                     load_task_id,
                                     message.clone(),
                                     details,
                                 );
-                            });
+                            }
                         }
-                    }
+                        false
+                    });
 
                     sidebar.update(cx, |sidebar, cx| {
                         sidebar.pending_secret_path_fetches.remove(&key);
+
+                        if cancelled {
+                            sidebar.rebuild_tree_with_overrides(cx);
+                            return;
+                        }
 
                         match result {
                             Ok(child_paths) => {

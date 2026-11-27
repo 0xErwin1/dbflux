@@ -45,6 +45,9 @@ pub enum TaskKind {
     /// Offline analysis of a driver's native dump/export format (e.g. a Redis
     /// RDB file), run without a live connection.
     DumpAnalysis,
+    /// A connection probe run from the connection form. Interactive like a
+    /// query, so it does not count toward the background task cap.
+    TestConnection,
 }
 
 impl TaskKind {
@@ -65,6 +68,7 @@ impl TaskKind {
             TaskKind::KeyGet => "Key Get",
             TaskKind::KeyMutation => "Key Mutation",
             TaskKind::DumpAnalysis => "Dump Analysis",
+            TaskKind::TestConnection => "Test Connection",
         }
     }
 
@@ -546,6 +550,23 @@ impl TaskManager {
         }
     }
 
+    /// Gate for the step after which a task can no longer be stopped: marks
+    /// the point of no return and returns `true` only while no cancel request
+    /// has reached the task. On `false` the caller must not start the step
+    /// and acknowledges the cancel instead. The check and the mark happen in
+    /// one `&mut self` call, so no cancel can interleave.
+    pub fn enter_point_of_no_return(&mut self, id: TaskId, reason: impl Into<String>) -> bool {
+        let open = self.tasks.get(&id).is_some_and(|task| {
+            task.status == TaskStatus::Running && !task.cancel_token.is_cancelled()
+        });
+
+        if open {
+            self.mark_point_of_no_return(id, reason);
+        }
+
+        open
+    }
+
     /// Records the full query text of a task whose description is a
     /// shortened label, so prompts about the running query can show all of it.
     pub fn set_query_text(&mut self, id: TaskId, query_text: impl Into<Arc<str>>) {
@@ -694,6 +715,21 @@ impl TaskManager {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Settles a task whose worker already finished and whose result is
+    /// dropped (a stale session, a rejected install): the task ends
+    /// `Cancelled` whatever its policy, because nothing is left running.
+    /// Returns `false` and changes nothing for a task past its point of no
+    /// return or one that already finished.
+    pub fn settle_discarded(&mut self, id: TaskId) -> bool {
+        match self.request_cancel(id) {
+            CancelRequestOutcome::Cancelled => true,
+            CancelRequestOutcome::Cancelling | CancelRequestOutcome::AlreadyCancelling => {
+                self.acknowledge_cancelled(id)
+            }
+            CancelRequestOutcome::Refused { .. } | CancelRequestOutcome::NotRunning => false,
         }
     }
 

@@ -3,8 +3,8 @@ use dbflux_components::components::form_renderer;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::values::ValueRef;
 use dbflux_core::{
-    AccessKind, CancelToken, ConnectionMcpGovernance, ConnectionOverrides, ConnectionProfile,
-    DbConfig, FormFieldKind, HookPhase, SshTunnelConfig,
+    AccessKind, CancelPolicy, ConnectionMcpGovernance, ConnectionOverrides, ConnectionProfile,
+    DbConfig, FormFieldKind, HookPhase, SshTunnelConfig, TaskKind, TaskRequest, TaskTarget,
 };
 use dbflux_ui_base::hook_phase_runner::{DetachedHookScope, HookPhaseState, run_hook_phase};
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -754,7 +754,23 @@ impl ConnectionManagerWindow {
         let app_state = self.app_state.clone();
         let hook_context = self.app_state.read(cx).build_hook_context(&profile);
         let hooks = self.app_state.read(cx).resolve_profile_hooks(&profile);
-        let hook_cancel_token = CancelToken::new();
+        let test_task = app_state.update(cx, |state, cx| {
+            let handle = state.start_task_handle(
+                TaskRequest::new(
+                    TaskKind::TestConnection,
+                    dbflux_i18n::t!("form.task.test_connection", name = profile_name.as_str()),
+                )
+                .target(TaskTarget {
+                    profile_id: profile.id,
+                    database: None,
+                })
+                .policy(CancelPolicy::WorkerAcknowledged),
+            );
+            cx.emit(dbflux_ui_base::AppStateChanged);
+            handle
+        });
+        let task_id = test_task.id();
+        let hook_cancel_token = test_task.token().clone();
         let detached_hook_scope = DetachedHookScope::default();
         let cleanup_cancel_token = hook_cancel_token.clone();
         let cleanup_detached_hook_scope = detached_hook_scope.clone();
@@ -769,6 +785,10 @@ impl ConnectionManagerWindow {
             {
                 Ok(input) => Some(input),
                 Err(error) => {
+                    app_state.update(cx, |state, cx| {
+                        state.fail_task(task_id, error.clone());
+                        cx.emit(dbflux_ui_base::AppStateChanged);
+                    });
                     self.test_status = TestStatus::Failed;
                     self.test_error = Some(error);
                     cx.notify();
@@ -788,6 +808,9 @@ impl ConnectionManagerWindow {
             let profile_name_for_hooks = profile_name.clone();
             let profile_name_for_cleanup = profile_name.clone();
             let phase_cx = cx.clone();
+            let probe_cx = cx.clone();
+            let probe_app_state = app_state.clone();
+            let settle_app_state = app_state.clone();
             let cleanup_cx = cx.clone();
             let background_executor = cx.background_executor().clone();
 
@@ -821,24 +844,35 @@ impl ConnectionManagerWindow {
                     let password = password.clone();
                     let ssh_secret = ssh_secret.clone();
                     let background_executor = background_executor.clone();
+                    let mut probe_cx = probe_cx.clone();
+                    let probe_app_state = probe_app_state.clone();
 
                     Box::pin(async move {
                         if let Some(pipeline_input) = pipeline_input {
-                            background_executor
+                            let pipeline_output = background_executor
                                 .spawn(async move {
                                     let (state_tx, _state_rx) =
                                         dbflux_core::pipeline_state_channel();
-                                    let pipeline_output =
-                                        dbflux_core::run_pipeline(pipeline_input, &state_tx)
-                                            .await
-                                            .map_err(|error| {
-                                                dbflux_i18n::t!(
-                                                    "form.error.pipeline_stage_failed",
-                                                    stage = error.stage,
-                                                    source = error.source.to_string()
-                                                )
-                                            })?;
+                                    dbflux_core::run_pipeline(pipeline_input, &state_tx)
+                                        .await
+                                        .map_err(|error| {
+                                            dbflux_i18n::t!(
+                                                "form.error.pipeline_stage_failed",
+                                                stage = error.stage,
+                                                source = error.source.to_string()
+                                            )
+                                        })
+                                })
+                                .await?;
 
+                            enter_probe_point_of_no_return(
+                                &probe_app_state,
+                                task_id,
+                                &mut probe_cx,
+                            )?;
+
+                            background_executor
+                                .spawn(async move {
                                     let mut profile = pipeline_output.resolved_profile;
                                     if pipeline_output.access_handle.is_tunneled() {
                                         profile.config.redirect_to_tunnel(
@@ -875,6 +909,12 @@ impl ConnectionManagerWindow {
                                 })
                                 .await
                         } else {
+                            enter_probe_point_of_no_return(
+                                &probe_app_state,
+                                task_id,
+                                &mut probe_cx,
+                            )?;
+
                             background_executor
                                 .spawn(async move {
                                     let start = std::time::Instant::now();
@@ -922,7 +962,28 @@ impl ConnectionManagerWindow {
             .await;
 
             cx.update(|cx| {
+                let cancelled = settle_app_state.update(cx, |state, cx| {
+                    let cancelled = state.acknowledge_task_cancelled(task_id);
+                    if !cancelled {
+                        match &result {
+                            Ok(_) => state.complete_task(task_id),
+                            Err(error) => state.fail_task(task_id, error.clone()),
+                        }
+                    }
+                    cx.emit(dbflux_ui_base::AppStateChanged);
+                    cancelled
+                });
+
                 this.update(cx, |this, cx| {
+                    if cancelled {
+                        info!("Test connection cancelled for {}", profile_name);
+                        this.test_status = TestStatus::None;
+                        this.test_error = None;
+                        this.test_result = None;
+                        cx.notify();
+                        return;
+                    }
+
                     match result {
                         Ok(result) => {
                             info!("Test connection successful for {}", profile_name);
@@ -948,6 +1009,32 @@ impl ConnectionManagerWindow {
             });
         })
         .detach();
+    }
+}
+
+/// Runs on the foreground right before the blocking driver connect, which
+/// cannot be interrupted. A cancel that already reached the task stops the
+/// probe here; otherwise the task is marked as past its point of no return.
+fn enter_probe_point_of_no_return(
+    app_state: &Entity<dbflux_ui_base::AppStateEntity>,
+    task_id: dbflux_core::TaskId,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    let entered = cx.update(|cx| {
+        app_state.update(cx, |state, cx| {
+            let entered = state.enter_task_point_of_no_return(
+                task_id,
+                dbflux_i18n::t!("form.task.test_connection_point_of_no_return"),
+            );
+            cx.emit(dbflux_ui_base::AppStateChanged);
+            entered
+        })
+    });
+
+    if entered {
+        Ok(())
+    } else {
+        Err(dbflux_core::DbError::Cancelled.to_string())
     }
 }
 
@@ -2917,6 +3004,105 @@ mod tests {
             })
             .expect("edit window stays available");
 
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    fn test_connection_task(
+        app_state: &Entity<AppStateEntity>,
+        cx: &mut TestAppContext,
+    ) -> Option<dbflux_core::TaskSnapshot> {
+        cx.read(|cx| {
+            app_state
+                .read(cx)
+                .tasks()
+                .recent_tasks(10)
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::TestConnection)
+        })
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_test_connection_shows_in_the_task_panel_and_completes() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let app_state_ok = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::Success),
+        );
+        let window = open_new_profile_window(app_state_ok.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.test_connection(window, cx)
+            })
+            .expect("test connection starts");
+
+        let started = test_connection_task(&app_state_ok, &mut cx).expect("a visible task");
+        assert_eq!(started.status, dbflux_core::TaskStatus::Running);
+        assert!(started.target.is_some(), "the task names its connection");
+
+        cx.run_until_parked();
+
+        let settled = test_connection_task(&app_state_ok, &mut cx).expect("the task");
+        assert_eq!(settled.status, dbflux_core::TaskStatus::Completed);
+        window
+            .update(&mut cx, |manager, _, _| {
+                assert!(matches!(manager.test_status, TestStatus::Success));
+            })
+            .expect("window available");
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn cancelling_a_test_connection_reads_cancelling_until_the_worker_stops() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let app_state = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::Success),
+        );
+        let window = open_new_profile_window(app_state.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.test_connection(window, cx)
+            })
+            .expect("test connection starts");
+        let task_id = test_connection_task(&app_state, &mut cx)
+            .expect("a visible task")
+            .id;
+
+        let outcome = app_state.update(&mut cx, |state, _| state.request_cancel_task(task_id));
+        assert_eq!(outcome, dbflux_core::CancelRequestOutcome::Cancelling);
+        assert_eq!(
+            test_connection_task(&app_state, &mut cx)
+                .expect("task")
+                .status,
+            dbflux_core::TaskStatus::Cancelling,
+            "the worker has not confirmed that it stopped"
+        );
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            test_connection_task(&app_state, &mut cx)
+                .expect("task")
+                .status,
+            dbflux_core::TaskStatus::Cancelled
+        );
+        window
+            .update(&mut cx, |manager, _, _| {
+                assert!(matches!(manager.test_status, TestStatus::None));
+                assert!(
+                    manager.test_error.is_none(),
+                    "a cancelled test is not an error"
+                );
+            })
+            .expect("window available");
         window
             .update(&mut cx, |_, window, _| window.remove_window())
             .expect("close the test window");

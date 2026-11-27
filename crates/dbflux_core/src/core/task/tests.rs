@@ -23,6 +23,7 @@ fn every_task_kind_has_a_non_empty_label() {
         TaskKind::KeyGet,
         TaskKind::KeyMutation,
         TaskKind::DumpAnalysis,
+        TaskKind::TestConnection,
     ];
 
     for kind in kinds {
@@ -948,4 +949,66 @@ fn legacy_start_paths_keep_their_behavior() {
     assert!(token.is_cancelled());
     assert_eq!(status_of(&manager, first), TaskStatus::Cancelled);
     assert_eq!(status_of(&manager, second), TaskStatus::Running);
+}
+
+#[test]
+fn a_test_connection_task_is_cancellable_but_outside_the_background_cap() {
+    let mut manager = TaskManager::new();
+    let handle = manager.start_handle(acknowledged_request(TaskKind::TestConnection));
+
+    assert_eq!(TaskKind::TestConnection.label(), "Test Connection");
+    assert!(TaskKind::TestConnection.supports_cancellation());
+    assert!(manager.get(handle.id()).expect("task").is_cancellable);
+    assert_eq!(
+        manager.background_task_count(),
+        0,
+        "a test run from a form is never refused by the background cap"
+    );
+}
+
+#[test]
+fn entering_the_point_of_no_return_succeeds_only_before_a_cancel_request() {
+    let mut manager = TaskManager::new();
+    let late = manager.start_handle(acknowledged_request(TaskKind::TestConnection));
+    let early = manager.start_handle(acknowledged_request(TaskKind::TestConnection));
+
+    manager.request_cancel(late.id());
+    assert!(!manager.enter_point_of_no_return(late.id(), "too late"));
+    assert_eq!(status_of(&manager, late.id()), TaskStatus::Cancelling);
+    assert!(manager.acknowledge_cancelled(late.id()));
+
+    assert!(manager.enter_point_of_no_return(early.id(), "already connecting"));
+    assert_eq!(
+        manager.request_cancel(early.id()),
+        CancelRequestOutcome::Refused {
+            reason: "already connecting".into()
+        }
+    );
+    assert!(!early.token().is_cancelled());
+}
+
+#[test]
+fn a_finished_worker_that_discards_its_result_settles_cancelled_whatever_the_policy() {
+    let mut manager = TaskManager::new();
+    let acknowledged = manager.start_handle(acknowledged_request(TaskKind::SwitchDatabase));
+    let immediate = manager.start_handle(TaskRequest::new(TaskKind::SwitchDatabase, "switch"));
+    let past_the_point = manager.start_handle(acknowledged_request(TaskKind::SwitchDatabase));
+    manager.mark_point_of_no_return(past_the_point.id(), "already sent");
+
+    assert!(manager.settle_discarded(acknowledged.id()));
+    assert!(manager.settle_discarded(immediate.id()));
+    assert_eq!(
+        status_of(&manager, acknowledged.id()),
+        TaskStatus::Cancelled
+    );
+    assert_eq!(status_of(&manager, immediate.id()), TaskStatus::Cancelled);
+
+    assert!(
+        !manager.settle_discarded(past_the_point.id()),
+        "a task past its point of no return is not discarded"
+    );
+    assert_eq!(
+        status_of(&manager, past_the_point.id()),
+        TaskStatus::Running
+    );
 }

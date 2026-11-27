@@ -1,5 +1,6 @@
 use dbflux_core::{
-    Connection, DbError, DriverCapabilities, RootSectionDef, RootSectionPage, TaskKind,
+    CancelPolicy, Connection, DbError, DriverCapabilities, RootSectionDef, RootSectionPage,
+    TaskKind, TaskRequest, TaskTarget,
 };
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::{App, Context};
@@ -259,20 +260,29 @@ impl Sidebar {
 
         let section_label = super::resolve_text(&section.label);
         let app_state = self.app_state.clone();
-        let load_task_id = app_state.update(cx, |state, _| {
-            let (task_id, _) = state.start_task_for_profile(
-                TaskKind::LoadSchema,
-                crate::labels::listing_root_section_task_label(&section_label, &profile_name),
-                Some(profile_id),
-            );
-            state.tasks_mut().mark_uncancellable(task_id);
-            task_id
+        let load_task = app_state.update(cx, |state, _| {
+            state.start_task_handle(
+                TaskRequest::new(
+                    TaskKind::LoadSchema,
+                    crate::labels::listing_root_section_task_label(&section_label, &profile_name),
+                )
+                .target(TaskTarget {
+                    profile_id,
+                    database: None,
+                })
+                .policy(CancelPolicy::WorkerAcknowledged),
+            )
         });
+        let load_task_id = load_task.id();
+        let cancel_token = load_task.token().clone();
 
         let background_task = cx.background_executor().spawn({
             let section_id = section_id.to_string();
             let page_token = page_token.clone();
             async move {
+                if cancel_token.is_cancelled() {
+                    return Err(DbError::Cancelled);
+                }
                 let source = connection.root_section_source().ok_or_else(|| {
                     DbError::NotSupported("connection declares no root sections".to_string())
                 })?;
@@ -285,21 +295,35 @@ impl Sidebar {
             async move |this, cx| {
                 let result = background_task.await.map_err(|error| error.to_string());
 
-                cx.update(|cx| match &result {
-                    Ok(_) => {
-                        app_state.update(cx, |state, _| state.complete_task(load_task_id));
-                    }
-                    Err(message) => {
-                        let details =
-                            crate::labels::list_root_section_failed_label(&section_label, message);
-                        app_state.update(cx, |state, _| {
-                            state.fail_task_with_details(load_task_id, message.clone(), details);
-                        });
-                    }
+                let cancelled = cx.update(|cx| {
+                    app_state.update(cx, |state, _| {
+                        if state.acknowledge_task_cancelled(load_task_id) {
+                            return true;
+                        }
+
+                        match &result {
+                            Ok(_) => state.complete_task(load_task_id),
+                            Err(message) => {
+                                let details = crate::labels::list_root_section_failed_label(
+                                    &section_label,
+                                    message,
+                                );
+                                state.fail_task_with_details(
+                                    load_task_id,
+                                    message.clone(),
+                                    details,
+                                );
+                            }
+                        }
+                        false
+                    })
                 });
 
                 if let Err(error) = this.update(cx, |sidebar, cx| {
                     sidebar.pending_root_section_fetches.remove(&key);
+                    if cancelled {
+                        return;
+                    }
                     sidebar.apply_root_section_page(&key, page_token.is_some(), result);
                     sidebar.rebuild_tree_with_overrides(cx);
                 }) {
@@ -403,17 +427,21 @@ impl Sidebar {
         self.spawn_fetch_root_section_page(profile_id, section_id, None, cx);
     }
 
-    /// Cancels the tasks panel entry of a fetch whose completion was dropped.
-    /// The blocking driver call may still run to its end in the background;
-    /// its result is discarded.
+    /// Settles the tasks panel entry of a fetch whose completion was dropped,
+    /// so nobody is left to acknowledge a cancel. The listing is read-only:
+    /// a blocking driver call that already started runs to its end with no
+    /// effect and its result is discarded, so the entry is acknowledged here
+    /// instead of staying `Cancelling` for good.
     fn settle_abandoned_root_section_fetch(
         &mut self,
         abandoned: PendingRootSectionFetch,
         cx: &mut Context<Self>,
     ) {
         if let Some(task_id) = abandoned.load_task_id {
-            self.app_state
-                .update(cx, |state, _| state.cancel_task(task_id));
+            self.app_state.update(cx, |state, _| {
+                state.request_cancel_task(task_id);
+                state.acknowledge_task_cancelled(task_id);
+            });
         }
     }
 

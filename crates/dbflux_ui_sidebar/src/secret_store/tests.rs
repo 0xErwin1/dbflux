@@ -415,6 +415,89 @@ async fn expanding_a_store_lists_its_path_tree(cx: &mut TestAppContext) {
     );
 }
 
+fn level_listing_task(
+    state: &Entity<AppStateEntity>,
+    cx: &mut VisualTestContext,
+) -> dbflux_core::TaskSnapshot {
+    cx.read(|cx| {
+        state
+            .read(cx)
+            .tasks()
+            .recent_tasks(10)
+            .into_iter()
+            .find(|task| task.kind == dbflux_core::TaskKind::LoadSchema)
+            .expect("the level listing is a task")
+    })
+}
+
+#[gpui::test]
+async fn a_listed_level_task_completes(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    let requests: Arc<Mutex<Vec<SecretListRequest>>> = Arc::default();
+    connect(
+        &state,
+        store_connection(DatabaseCategory::SecretStore, &requests),
+        cx,
+    );
+    let (sidebar, cx) = cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.set_expanded(&store_id("parameter-store"), true, cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        level_listing_task(&state, cx).status,
+        dbflux_core::TaskStatus::Completed
+    );
+}
+
+/// A cancel stops the page loop before the next request, the task reads
+/// Cancelling until then, and the partial level is not cached.
+#[gpui::test]
+async fn a_cancelled_level_listing_ends_cancelled_only_once_the_worker_stopped(
+    cx: &mut TestAppContext,
+) {
+    let state = test_app_state(cx);
+    let requests: Arc<Mutex<Vec<SecretListRequest>>> = Arc::default();
+    connect(
+        &state,
+        store_connection(DatabaseCategory::SecretStore, &requests),
+        cx,
+    );
+    let (sidebar, cx) = cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.set_expanded(&store_id("parameter-store"), true, cx)
+    });
+
+    let running = level_listing_task(&state, cx);
+    assert!(running.is_cancellable, "the listing offers a cancel");
+    let outcome = state.update(cx, |state, _| state.request_cancel_task(running.id));
+    assert_eq!(outcome, dbflux_core::CancelRequestOutcome::Cancelling);
+    assert_eq!(
+        level_listing_task(&state, cx).status,
+        dbflux_core::TaskStatus::Cancelling
+    );
+
+    cx.run_until_parked();
+
+    assert_eq!(
+        level_listing_task(&state, cx).status,
+        dbflux_core::TaskStatus::Cancelled
+    );
+    assert!(
+        requests.lock().expect("request log").is_empty(),
+        "the stopped worker sent no listing request"
+    );
+    let items = tree_items(&sidebar, cx);
+    let store = find(&items, &store_id("parameter-store")).expect("store node");
+    assert!(
+        child_ids(store).iter().all(|id| !id.contains("/app/")),
+        "a cancelled level is not cached"
+    );
+}
+
 /// Activating a store opens its document, and activating a path opens the
 /// store's document at that path.
 #[gpui::test]
