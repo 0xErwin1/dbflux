@@ -98,7 +98,8 @@ even when its content is right.
   example `design/redesign-islands-every-pane-floats-on-the-desk-*/03-isl-editor.html`
   for the editor and its result panel), and change only what the feature adds.
   Keep the window chrome, rail, sidebar, tabs, toolbars, result panel and
-  status bar exactly as they are.
+  status bar as they are, except for controls and layout that the approved
+  artboard moves or changes.
 - Build every new element from a component that already exists in
   `design/redesign-design-system/` (`04-ds-app.html`, `06-ds-states.html`),
   with its markup, tokens and cut. Use the Bolt Byzantium accent; do not
