@@ -8,7 +8,7 @@ mod shell_path;
 use dbflux_app::mcp_command::run_mcp_command;
 use dbflux_audit::AuditService;
 use dbflux_core::ShutdownPhase;
-use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP};
+use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP, SYSTEM_STARTUP_FAILED};
 use dbflux_core::observability::tracing_bridge::{
     BridgeConfig, BridgeHandle, FmtWriter, ShutdownError,
 };
@@ -224,6 +224,52 @@ fn emit_system_startup(audit_service: &AuditService) {
     }
 }
 
+/// Reports a storage error that stops startup on stderr, in the audit log
+/// when it is still reachable, and in a native error dialog, so the user
+/// learns why the window never opened.
+fn report_startup_failure(error: &dbflux_storage::error::StorageError) {
+    let message = format!("DBFlux could not start: {error}");
+    eprintln!("{message}\nCheck that the DBFlux data directory is accessible and not corrupted.");
+    record_startup_failure(&message);
+
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("DBFlux could not start")
+        .set_description(&message)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
+/// Records the startup failure in the audit log. An audit store that cannot
+/// be opened is reported on stderr and skipped, so it never replaces the
+/// original error.
+fn record_startup_failure(message: &str) {
+    let audit_service = match dbflux_storage::paths::dbflux_db_path()
+        .map_err(|error| error.to_string())
+        .and_then(|path| AuditService::new_sqlite(path).map_err(|error| error.to_string()))
+    {
+        Ok(service) => service,
+        Err(error) => {
+            eprintln!("DBFlux: the startup failure was not written to the audit log: {error}");
+            return;
+        }
+    };
+
+    let event = EventRecord::new(
+        dbflux_core::chrono::Utc::now().timestamp_millis(),
+        EventSeverity::Error,
+        EventCategory::System,
+        EventOutcome::Failure,
+    )
+    .with_typed_action(SYSTEM_STARTUP_FAILED)
+    .with_summary(message)
+    .with_actor_id("system");
+
+    if let Err(error) = audit_service.record(event) {
+        eprintln!("DBFlux: the startup failure was not written to the audit log: {error}");
+    }
+}
+
 /// Emits a system shutdown audit event via the provided audit service.
 fn emit_system_shutdown(audit_service: &AuditService) {
     let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
@@ -414,11 +460,8 @@ fn run_gui() {
 
         let app_state_inner = match AppStateEntity::new() {
             Ok(state) => state,
-            Err(e) => {
-                eprintln!(
-                    "DBFlux: failed to initialize storage — cannot open database: {e}\n\
-                     Check that ~/.local/share/dbflux is accessible and not corrupted."
-                );
+            Err(error) => {
+                report_startup_failure(&error);
                 cx.quit();
                 return;
             }
