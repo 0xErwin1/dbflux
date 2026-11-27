@@ -225,18 +225,15 @@ fn abbreviate_sql_type(type_name: &str) -> String {
 }
 
 fn infer_column_kind(type_name: &str) -> ColumnKind {
+    match dbflux_core::infer_column_kind(type_name) {
+        dbflux_core::ColumnKind::Integer => return ColumnKind::Integer,
+        dbflux_core::ColumnKind::Float => return ColumnKind::Float,
+        _ => {}
+    }
+
     let lower = type_name.to_lowercase();
 
-    if lower.contains("int") || lower.contains("serial") {
-        ColumnKind::Integer
-    } else if lower.contains("float")
-        || lower.contains("double")
-        || lower.contains("real")
-        || lower.contains("numeric")
-        || lower.contains("decimal")
-    {
-        ColumnKind::Float
-    } else if lower.contains("bool") {
+    if lower.contains("bool") {
         ColumnKind::Bool
     } else if lower.contains("bytea") || lower.contains("blob") || lower.contains("binary") {
         ColumnKind::Bytes
@@ -2617,5 +2614,6 @@ mod tests {
         );
     }
 
+    mod column_kind;
     mod expressions;
 }

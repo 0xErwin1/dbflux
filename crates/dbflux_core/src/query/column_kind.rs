@@ -27,7 +27,24 @@ pub fn infer_column_kind(type_name: &str) -> ColumnKind {
         return ColumnKind::Unknown;
     };
 
-    match token.as_str() {
+    match classify_token(&token) {
+        ColumnKind::Unknown => {}
+        kind => return kind,
+    }
+
+    // SQLite and others accept multi-word numeric spellings such as
+    // `big int` or `long double`: a name whose last word is a numeric type
+    // keeps that kind. Only numeric kinds are taken from the last word, so
+    // `interval day to second` and similar stay unknown.
+    match token.rsplit_once(' ').map(|(_, last)| classify_token(last)) {
+        Some(kind @ (ColumnKind::Integer | ColumnKind::Float)) => kind,
+        _ => ColumnKind::Unknown,
+    }
+}
+
+/// Classifies one normalized type token by exact match.
+fn classify_token(token: &str) -> ColumnKind {
+    match token {
         "timestamp"
         | "timestamptz"
         | "timestamp with time zone"
@@ -417,6 +434,19 @@ mod tests {
             "float(53)",
         ] {
             assert_eq!(infer_column_kind(name), ColumnKind::Float, "{name}");
+        }
+    }
+
+    #[test]
+    fn multi_word_numeric_declarations_keep_their_kind() {
+        for name in ["UNSIGNED BIG INT", "big int", "long integer", "BIG INT(11)"] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Integer, "{name}");
+        }
+        for name in ["long double", "LONG DOUBLE"] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Float, "{name}");
+        }
+        for name in ["interval day to second", "point", "big int[]", "int4range"] {
+            assert_eq!(infer_column_kind(name), ColumnKind::Unknown, "{name}");
         }
     }
 }
