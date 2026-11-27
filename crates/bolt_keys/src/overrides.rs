@@ -20,13 +20,17 @@ use super::{KeySequence, KeymapLayer, KeymapStack};
 /// the command it runs, the keys it has by default and the context predicate
 /// it applies in by default.
 ///
+/// An unbound slot has no default keys (`default_keys` is `None`): it is a
+/// command the product listed as bindable in a context without shipping a
+/// shortcut for it, so a user can still give it one.
+///
 /// `context` and `command` are the persisted id strings the product
 /// assigned; the engine never interprets them.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BindingSlot {
     pub context: &'static str,
     pub command: Cow<'static, str>,
-    pub default_keys: KeySequence,
+    pub default_keys: Option<KeySequence>,
     pub default_predicate: &'static str,
 }
 
@@ -41,7 +45,22 @@ impl BindingSlot {
         Self {
             context,
             command: command.into(),
-            default_keys: default_keys.into(),
+            default_keys: Some(default_keys.into()),
+            default_predicate: vocabulary.default_predicate(context).unwrap_or_default(),
+        }
+    }
+
+    /// A command with no default keys, under its context's default
+    /// predicate.
+    pub fn unbound(
+        vocabulary: &KeymapVocabulary,
+        context: &'static str,
+        command: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        Self {
+            context,
+            command: command.into(),
+            default_keys: None,
             default_predicate: vocabulary.default_predicate(context).unwrap_or_default(),
         }
     }
@@ -53,14 +72,17 @@ impl BindingSlot {
     }
 
     /// The row key: context id, command id and default keys in their stored
-    /// text forms.
+    /// text forms. An unbound slot stores empty default keys.
     pub(super) fn storage_key(&self, vocabulary: &KeymapVocabulary) -> (String, String, String) {
         (
             self.context.to_string(),
             vocabulary
                 .storage_command_id(self.command.clone())
                 .into_owned(),
-            self.default_keys.to_storage_string(),
+            self.default_keys
+                .as_ref()
+                .map(KeySequence::to_storage_string)
+                .unwrap_or_default(),
         )
     }
 }
@@ -114,20 +136,31 @@ pub fn contexts_overlap(vocabulary: &KeymapVocabulary, first: &str, second: &str
 }
 
 /// Every binding of `defaults`, layer by layer in the vocabulary's canonical
-/// order and, inside a layer, in declaration order.
+/// order and, inside a layer, in declaration order. The unbound commands the
+/// vocabulary lists for a context follow its bound slots, except those the
+/// layer already binds.
 pub fn default_slots(vocabulary: &KeymapVocabulary, defaults: &KeymapStack) -> Vec<BindingSlot> {
     let mut slots = Vec::new();
 
     for context in vocabulary.context_ids() {
-        let Some(layer) = defaults.layer(context) else {
-            continue;
-        };
+        let layer = defaults.layer(context);
 
-        for (keys, command) in layer.ordered_bindings() {
-            slots.push(
-                BindingSlot::new(vocabulary, layer.context(), command.clone(), keys.clone())
-                    .with_predicate(layer.predicate_for(vocabulary, keys)),
-            );
+        if let Some(layer) = layer {
+            for (keys, command) in layer.ordered_bindings() {
+                slots.push(
+                    BindingSlot::new(vocabulary, layer.context(), command.clone(), keys.clone())
+                        .with_predicate(layer.predicate_for(vocabulary, keys)),
+                );
+            }
+        }
+
+        for command in vocabulary.unbound_commands(context) {
+            let is_bound = layer
+                .is_some_and(|layer| layer.ordered_bindings().any(|(_, bound)| bound == command));
+
+            if !is_bound {
+                slots.push(BindingSlot::unbound(vocabulary, context, command.clone()));
+            }
         }
     }
 
@@ -179,7 +212,7 @@ impl KeymapOverrides {
     pub fn effective_keys(&self, slot: &BindingSlot) -> Option<KeySequence> {
         match self.entries.get(slot) {
             Some(binding_override) => binding_override.keys.clone(),
-            None => Some(slot.default_keys.clone()),
+            None => slot.default_keys.clone(),
         }
     }
 
@@ -204,8 +237,8 @@ impl KeymapOverrides {
     }
 
     pub(super) fn store(&mut self, slot: BindingSlot, binding_override: BindingOverride) {
-        let is_default = binding_override.keys.as_ref() == Some(&slot.default_keys)
-            && binding_override.predicate.is_none();
+        let is_default =
+            binding_override.keys == slot.default_keys && binding_override.predicate.is_none();
 
         if is_default {
             self.entries.remove(&slot);
@@ -260,35 +293,60 @@ impl KeymapOverrides {
         let mut stack = KeymapStack::new();
 
         for context in vocabulary.context_ids() {
-            let Some(default_layer) = defaults.layer(context) else {
+            let default_layer = defaults.layer(context);
+            let user_unbound = self.user_keys_on_unbound(vocabulary, defaults, context);
+
+            if default_layer.is_none() && user_unbound.is_empty() {
                 continue;
-            };
+            }
 
             let mut layer = KeymapLayer::new(context);
             let mut moved = Vec::new();
 
-            for (keys, command) in default_layer.ordered_bindings() {
-                let slot = BindingSlot::new(vocabulary, context, command.clone(), keys.clone())
-                    .with_predicate(default_layer.predicate_for(vocabulary, keys));
+            if let Some(default_layer) = default_layer {
+                for (keys, command) in default_layer.ordered_bindings() {
+                    let slot = BindingSlot::new(vocabulary, context, command.clone(), keys.clone())
+                        .with_predicate(default_layer.predicate_for(vocabulary, keys));
 
-                match self.entries.get(&slot) {
-                    None => layer.bind(keys.clone(), command.clone()),
-                    Some(binding_override) => {
-                        if let Some(new_keys) = &binding_override.keys {
-                            moved.push((new_keys.clone(), command));
+                    match self.entries.get(&slot) {
+                        None => layer.bind(keys.clone(), command.clone()),
+                        Some(binding_override) => {
+                            if let Some(new_keys) = &binding_override.keys {
+                                moved.push((new_keys.clone(), command.clone()));
+                            }
                         }
                     }
                 }
             }
 
+            moved.extend(user_unbound);
+
             for (keys, command) in moved {
-                layer.bind(keys, command.clone());
+                layer.bind(keys, command);
             }
 
             stack.add_layer(layer);
         }
 
         stack
+    }
+
+    /// The keys the user gave to the unbound slots of `context`, with the
+    /// command each one runs.
+    fn user_keys_on_unbound(
+        &self,
+        vocabulary: &KeymapVocabulary,
+        defaults: &KeymapStack,
+        context: &'static str,
+    ) -> Vec<(KeySequence, Cow<'static, str>)> {
+        default_slots(vocabulary, defaults)
+            .into_iter()
+            .filter(|slot| slot.context == context && slot.default_keys.is_none())
+            .filter_map(|slot| {
+                let keys = self.entries.get(&slot)?.keys.clone()?;
+                Some((keys, slot.command))
+            })
+            .collect()
     }
 
     /// Every bound binding of the keymap in force, in registration order:
@@ -602,7 +660,10 @@ mod tests {
         assert_eq!(slots[0].command, "toggle_command_palette");
         assert_eq!(slots[1].command, "new_query_tab");
         assert_eq!(slots[2].context, "sidebar");
-        assert_eq!(slots[2].default_keys, keys(chord("j", Modifiers::none())));
+        assert_eq!(
+            slots[2].default_keys,
+            Some(keys(chord("j", Modifiers::none())))
+        );
         assert_eq!(slots[4].context, "editor");
         assert_eq!(slots[6].context, "document_tree");
     }
@@ -686,7 +747,7 @@ mod tests {
         );
         assert_eq!(
             overrides.effective_keys(&slot),
-            Some(slot.default_keys.clone()),
+            slot.default_keys.clone(),
             "moving the predicate keeps the keys"
         );
 
@@ -697,7 +758,7 @@ mod tests {
             "changing the keys keeps the predicate"
         );
 
-        overrides.set(slot.clone(), Some(slot.default_keys.clone()));
+        overrides.set(slot.clone(), slot.default_keys.clone());
         overrides.set_predicate(slot.clone(), Some("Editor".to_string()));
         assert!(overrides.is_empty(), "the defaults are not an override");
     }
@@ -971,5 +1032,225 @@ mod tests {
             Some(KeySequence::parse("ctrl+k ctrl+t").expect("valid sequence")),
             "key sequences are kept"
         );
+    }
+
+    fn unbound_vocabulary() -> KeymapVocabulary {
+        vocabulary().with_unbound_commands(vec![
+            ("sidebar", Cow::Borrowed("rename")),
+            ("sidebar", Cow::Borrowed("select_next")),
+            ("document_tree", Cow::Borrowed("copy_markdown")),
+        ])
+    }
+
+    fn rename() -> BindingSlot {
+        BindingSlot::unbound(&unbound_vocabulary(), "sidebar", "rename")
+    }
+
+    fn copy_markdown() -> BindingSlot {
+        BindingSlot::unbound(&unbound_vocabulary(), "document_tree", "copy_markdown")
+    }
+
+    #[test]
+    fn unbound_slots_follow_the_bound_ones_of_their_context() {
+        let slots = default_slots(&unbound_vocabulary(), &defaults());
+
+        assert_eq!(slots.len(), 9);
+        assert_eq!(slots[4], rename());
+        assert_eq!(slots[4].default_keys, None);
+        assert_eq!(slots[8], copy_markdown());
+        assert!(
+            !slots
+                .iter()
+                .any(|slot| slot.command == "select_next" && slot.default_keys.is_none()),
+            "a command the layer already binds is not listed as unbound"
+        );
+    }
+
+    #[test]
+    fn an_unbound_slot_with_keys_is_overridden_and_bound_in_its_context() {
+        let vocabulary = unbound_vocabulary();
+        let mut overrides = KeymapOverrides::new();
+        assert_eq!(overrides.effective_keys(&rename()), None);
+        assert!(!overrides.is_overridden(&rename()));
+
+        overrides.set(rename(), Some(keys(chord("f2", Modifiers::none()))));
+        assert!(overrides.is_overridden(&rename()));
+        assert_eq!(overrides.len(), 1);
+
+        let effective = overrides.apply(&vocabulary, &defaults());
+        assert_eq!(
+            effective.resolve(&vocabulary, "sidebar", &chord("f2", Modifiers::none())),
+            Some(Cow::Borrowed("rename"))
+        );
+
+        let bindings = overrides.effective_bindings(&vocabulary, &defaults());
+        let binding = bindings
+            .iter()
+            .find(|binding| binding.slot == rename())
+            .expect("the user key is an effective binding");
+        assert!(binding.is_user);
+        assert_eq!(binding.predicate, "Sidebar");
+        assert_eq!(
+            bindings
+                .iter()
+                .filter(|binding| binding.slot.default_keys.is_none())
+                .count(),
+            1,
+            "unbound slots without a user key are not bindings"
+        );
+    }
+
+    #[test]
+    fn an_unbound_slot_in_a_context_without_a_default_layer_still_binds() {
+        let vocabulary =
+            KeymapVocabulary::new(vec![ContextSpec::new("global", None, "Global")], "global")
+                .with_unbound_commands(vec![("global", Cow::Borrowed("rename"))]);
+        let slot = BindingSlot::unbound(&vocabulary, "global", "rename");
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(slot, Some(keys(chord("f2", Modifiers::none()))));
+
+        let effective = overrides.apply(&vocabulary, &KeymapStack::new());
+
+        assert_eq!(
+            effective.resolve(&vocabulary, "global", &chord("f2", Modifiers::none())),
+            Some(Cow::Borrowed("rename"))
+        );
+    }
+
+    #[test]
+    fn resetting_or_clearing_an_unbound_slot_removes_the_override() {
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(rename(), Some(keys(chord("f2", Modifiers::none()))));
+        overrides.reset(&rename());
+        assert!(overrides.is_empty());
+        assert_eq!(overrides.effective_keys(&rename()), None);
+
+        overrides.set(rename(), Some(keys(chord("f2", Modifiers::none()))));
+        overrides.set(rename(), None);
+        assert!(
+            overrides.is_empty(),
+            "no keys is the default of an unbound slot"
+        );
+    }
+
+    #[test]
+    fn unbound_slots_take_part_in_conflicts() {
+        let vocabulary = unbound_vocabulary();
+        let defaults = defaults();
+        let overlap = ContextTreeOverlap::new(&vocabulary);
+        let mut overrides = KeymapOverrides::new();
+
+        let clashes = overrides.conflicts_for(
+            &vocabulary,
+            &defaults,
+            &rename(),
+            &keys(chord("down", Modifiers::none())),
+            "Sidebar",
+            &overlap,
+        );
+        assert_eq!(clashes.len(), 1);
+        assert_eq!(clashes[0].command, "select_next");
+
+        overrides.set(rename(), Some(keys(chord("down", Modifiers::none()))));
+        let existing = overrides.existing_conflicts(&vocabulary, &defaults, &overlap);
+        assert!(
+            existing.iter().any(|(slot, _)| *slot == rename()),
+            "the unbound slot's key clashes with the default binding"
+        );
+
+        let against_unbound = KeymapOverrides::new().conflicts_for(
+            &vocabulary,
+            &defaults,
+            &select_next_j(),
+            &keys(chord("f2", Modifiers::none())),
+            "Sidebar",
+            &overlap,
+        );
+        assert!(against_unbound.is_empty());
+        overrides.set(rename(), Some(keys(chord("f2", Modifiers::none()))));
+        let against_unbound = overrides.conflicts_for(
+            &vocabulary,
+            &defaults,
+            &select_next_j(),
+            &keys(chord("f2", Modifiers::none())),
+            "Sidebar",
+            &overlap,
+        );
+        assert_eq!(against_unbound, vec![rename()]);
+    }
+
+    #[test]
+    fn unbound_rows_round_trip_with_empty_default_keys() {
+        let vocabulary = unbound_vocabulary();
+        let defaults = defaults();
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(rename(), Some(keys(chord("f2", Modifiers::none()))));
+
+        let rows = overrides.to_rows(&vocabulary);
+        assert_eq!(
+            rows,
+            vec![OverrideRow {
+                context: "sidebar".to_string(),
+                command_id: "rename".to_string(),
+                default_keys: String::new(),
+                keys: Some("f2".to_string()),
+                predicate: None,
+            }]
+        );
+        assert_eq!(
+            KeymapOverrides::from_rows(&vocabulary, &defaults, &rows),
+            overrides
+        );
+    }
+
+    #[test]
+    fn a_row_with_empty_default_keys_for_an_unlisted_command_is_skipped() {
+        let row = OverrideRow {
+            context: "sidebar".to_string(),
+            command_id: "rename".to_string(),
+            default_keys: String::new(),
+            keys: Some("f2".to_string()),
+            predicate: None,
+        };
+
+        assert!(KeymapOverrides::from_rows(&vocabulary(), &defaults(), &[row]).is_empty());
+    }
+
+    #[test]
+    fn an_unbound_command_that_gains_a_default_keeps_one_slot_and_skips_its_old_row() {
+        let vocabulary =
+            vocabulary().with_unbound_commands(vec![("sidebar", Cow::Borrowed("select_next"))]);
+        let slots = default_slots(&vocabulary, &defaults());
+        assert!(
+            slots
+                .iter()
+                .all(|slot| !(slot.command == "select_next" && slot.default_keys.is_none())),
+            "a command bound in its context gets no unbound slot"
+        );
+
+        let row = OverrideRow {
+            context: "sidebar".into(),
+            command_id: "select_next".into(),
+            default_keys: String::new(),
+            keys: Some("f2".into()),
+            predicate: None,
+        };
+        assert!(KeymapOverrides::from_rows(&vocabulary, &defaults(), &[row]).is_empty());
+    }
+
+    #[test]
+    fn an_unbound_slot_conflicts_with_an_inherited_global_binding() {
+        let vocabulary = unbound_vocabulary();
+        let overlap = ContextTreeOverlap::new(&vocabulary);
+        let clashes = KeymapOverrides::new().conflicts_for(
+            &vocabulary,
+            &defaults(),
+            &rename(),
+            &keys(chord("n", Modifiers::ctrl())),
+            "Sidebar",
+            &overlap,
+        );
+        assert_eq!(clashes.len(), 1);
+        assert_eq!(clashes[0].command, "new_query_tab");
     }
 }

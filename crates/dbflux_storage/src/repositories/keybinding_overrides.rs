@@ -102,7 +102,8 @@ impl KeybindingOverridesRepository {
 /// keymap's storage form, chords separated by single spaces. `keys` is
 /// `None` when the user removed the shortcut of the binding. `predicate` is
 /// the context predicate the binding applies in, `None` for the default
-/// binding's own context.
+/// binding's own context. `default_keys` is empty for a command that has no
+/// default binding in its context: the row gives it keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeybindingOverrideDto {
     pub context: String,
@@ -160,6 +161,17 @@ mod tests {
             with_predicate,
             dto("global", "ctrl+enter", Some("ctrl+shift+r")),
         ];
+        repository.replace_all(&written).expect("should write");
+
+        assert_eq!(repository.list().expect("should list"), written);
+    }
+
+    #[test]
+    fn replace_all_round_trips_a_row_with_empty_default_keys() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let repository = migrated_repository(&directory);
+
+        let written = vec![dto("results", "", Some("ctrl+shift+m"))];
         repository.replace_all(&written).expect("should write");
 
         assert_eq!(repository.list().expect("should list"), written);

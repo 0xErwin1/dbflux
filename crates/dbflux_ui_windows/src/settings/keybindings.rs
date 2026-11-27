@@ -1485,6 +1485,44 @@ mod tests {
     }
 
     #[test]
+    fn results_lists_the_unbound_copy_as_markdown_row_with_no_keys() {
+        let overrides = KeymapOverrides::new();
+        let entries = entries_for_context(&super::DEFAULT_SLOTS, &overrides, ContextId::Results);
+
+        let row = entries
+            .iter()
+            .find(|entry| entry.slot.command == Command::ResultsCopyAsMarkdown)
+            .expect("Copy as Markdown is listed under Results");
+
+        assert_eq!(row.keys, None, "the row shows No shortcut");
+        assert!(!row.is_inherited);
+        assert!(!overrides.is_overridden(&row.slot));
+    }
+
+    #[test]
+    fn assigning_keys_to_the_unbound_row_overrides_it_and_reset_empties_it_again() {
+        let slot = BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown);
+        let keys = KeySequence::from(KeyChord::new("f19", Modifiers::ctrl_shift()));
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(slot.clone(), Some(keys.clone()));
+
+        let find = |overrides: &KeymapOverrides| {
+            entries_for_context(&super::DEFAULT_SLOTS, overrides, ContextId::Results)
+                .into_iter()
+                .find(|entry| entry.slot == slot)
+                .expect("the row stays listed")
+        };
+
+        assert_eq!(find(&overrides).keys, Some(keys));
+        assert!(overrides.is_overridden(&slot));
+        assert_eq!(overrides.len(), 1, "counted as overridden");
+
+        overrides.reset(&slot);
+        assert_eq!(find(&overrides).keys, None);
+        assert_eq!(overrides.len(), 0);
+    }
+
+    #[test]
     fn filter_matches_chord_or_command_name() {
         let entry = BindingEntry {
             slot: test_slots()[0].clone(),

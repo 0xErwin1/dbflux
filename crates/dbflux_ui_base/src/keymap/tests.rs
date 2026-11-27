@@ -3110,6 +3110,73 @@ fn run_command_for_returns_the_bound_action(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// A command declares a home context only while the default keymap leaves it
+/// unbound there: a default binding would list it through that binding, and
+/// the declaration would be stale.
+#[test]
+fn commands_with_a_home_context_have_no_default_binding_in_it() {
+    let slots = dbflux_app::keymap::default_slots(default_keymap());
+    let mut declared = 0;
+
+    for command in Command::all_variants() {
+        let Some(context) = command.home_context() else {
+            continue;
+        };
+        declared += 1;
+
+        assert!(
+            !slots.iter().any(|slot| slot.context == context
+                && slot.command == command
+                && slot.default_keys.is_some()),
+            "{command:?} has a default binding in {context:?}: drop its home_context"
+        );
+        assert!(
+            slots.iter().any(|slot| slot.context == context
+                && slot.command == command
+                && slot.default_keys.is_none()),
+            "{command:?} is listed as an unbound slot of {context:?}"
+        );
+    }
+
+    assert!(declared > 0);
+}
+
+/// Keys the user gives an unbound command work like any other binding, and
+/// resetting the slot unbinds them again.
+#[gpui::test]
+fn a_user_key_on_an_unbound_command_dispatches_and_reset_unbinds(cx: &mut gpui::TestAppContext) {
+    let _keymap_state = keymap_state_test_guard();
+    cx.update(init_keymap);
+
+    let slot = BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown);
+    let keys = KeyChord::new("f19", Modifiers::ctrl_shift());
+
+    assert!(
+        run_command_for(ContextId::Results, Command::ResultsCopyAsMarkdown).is_none(),
+        "no default binding"
+    );
+    assert_eq!(effective_keymap().resolve(ContextId::Results, &keys), None);
+
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(slot.clone(), Some(KeySequence::from(keys.clone())));
+    cx.update(|cx| apply_keymap_overrides(overrides.clone(), cx));
+
+    assert_eq!(
+        effective_keymap().resolve(ContextId::Results, &keys),
+        Some(Command::ResultsCopyAsMarkdown)
+    );
+    let bound = run_command_for(ContextId::Results, Command::ResultsCopyAsMarkdown)
+        .expect("the user key binds the command");
+    assert!(runs_command(&bound, Command::ResultsCopyAsMarkdown));
+    assert!(bound.from_user_binding);
+
+    overrides.reset(&slot);
+    cx.update(|cx| apply_keymap_overrides(overrides, cx));
+
+    assert_eq!(effective_keymap().resolve(ContextId::Results, &keys), None);
+    assert!(run_command_for(ContextId::Results, Command::ResultsCopyAsMarkdown).is_none());
+}
+
 #[test]
 fn test_sidebar_tab_switch_bindings() {
     let keymap = default_keymap();
@@ -3138,13 +3205,24 @@ fn persisted_identifiers_round_trip_through_their_storage_forms() {
     for slot in &slots {
         let context_id = slot.context.id();
         let command_id = slot.command.id();
-        let default_keys = slot.default_keys.to_storage_string();
+        let default_keys = slot
+            .default_keys
+            .as_ref()
+            .map(KeySequence::to_storage_string)
+            .unwrap_or_default();
 
         assert_eq!(
-            KeySequence::from_storage_string(&default_keys),
-            Ok(slot.default_keys.clone()),
-            "{context_id}/{command_id}: the stored keys parse back unchanged"
+            slot.default_keys.is_none(),
+            default_keys.is_empty(),
+            "{context_id}/{command_id}: only an unbound slot stores empty default keys"
         );
+        if let Some(keys) = &slot.default_keys {
+            assert_eq!(
+                KeySequence::from_storage_string(&default_keys).as_ref(),
+                Ok(keys),
+                "{context_id}/{command_id}: the stored keys parse back unchanged"
+            );
+        }
         assert!(
             ContextId::all_variants()
                 .iter()

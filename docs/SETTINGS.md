@@ -398,6 +398,13 @@ to see whether the longer one follows), and "takes typed text" when a plain
 letter is bound where text is typed, such as a text field or the code editor
 outside Vim's Normal and Visual modes.
 
+**Commands without a default shortcut.** A command that ships with no key,
+such as **Copy as Markdown** under Results, is listed in the context that owns
+it with **No shortcut**. Press the pencil to give it keys, like any other row:
+the shortcut works at once, is checked for conflicts, and counts as overridden.
+Its reset arrow, or **Remove shortcut**, returns it to no binding. DBFlux builds
+that predate this feature ignore the stored row.
+
 **Resetting.** An overridden binding shows a reset arrow that restores its
 default keys and context (`r` on a selected binding does the same, and `Delete`
 removes its shortcut). **Reset to defaults** in the footer drops every override,

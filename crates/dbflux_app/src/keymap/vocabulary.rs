@@ -27,8 +27,14 @@ static CONTEXT_VOCABULARY: LazyLock<KeymapVocabulary> = LazyLock::new(|| {
         })
         .collect();
 
+    let unbound_commands = Command::all_variants()
+        .into_iter()
+        .filter_map(|command| Some((command.home_context()?.id(), command.action_id())))
+        .collect();
+
     KeymapVocabulary::new(contexts, ContextId::Global.id())
         .with_command_storage_id(storage_command_id)
+        .with_unbound_commands(unbound_commands)
 });
 
 /// The command id a stored row names for the binding carrying `action_id`:
