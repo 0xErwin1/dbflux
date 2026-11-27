@@ -179,6 +179,7 @@ pub enum SidebarEvent {
     },
     /// Pipeline connect started.
     PipelineStarted {
+        profile_id: uuid::Uuid,
         profile_name: String,
         watcher: dbflux_core::StateWatcher,
     },
