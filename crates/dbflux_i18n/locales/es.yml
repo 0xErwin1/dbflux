@@ -1332,6 +1332,8 @@ document:
         one: "%{count} nodo"
         many: "%{count} nodos"
       not_run: consulta no ejecutada
+      analyze_cancelled: "Análisis cancelado"
+      analyze_failed: "Análisis fallido"
       format:
         json: Plan en JSON
         xml: Plan en XML
@@ -1374,6 +1376,8 @@ document:
       origin_gone: "La conexión de la que salió este resultado ya no está conectada. Vuelve a conectarla y ejecuta la consulta de nuevo para explicarla."
       origin_database_changed: "La base de datos en la que se ejecutó este resultado (%{origin}) ya no es la que usa esta conexión (%{current}). Vuelve a %{origin} y explica la consulta de nuevo; un plan obtenido ahora describiría otra base de datos."
       editor_database_changed: "La base de datos de este editor (%{origin}) ya no es la que usa esta conexión (%{current}). Vuelve a %{origin} y explica la consulta de nuevo; un plan obtenido ahora describiría otra base de datos."
+      analyze_connection_changed: "El editor ahora apunta a una conexión distinta de aquella en la que se hizo este plan. Vuelve a ejecutar Explain en la nueva conexión antes de analizar."
+      analyze_query_running: "Todavía hay una consulta en ejecución en este editor. Espera a que termine o cancélala, y luego ejecuta el análisis."
       cancelled:
         title: Plan cancelado
     explain:

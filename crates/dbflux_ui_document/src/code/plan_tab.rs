@@ -340,6 +340,47 @@ impl CodeDocument {
         (current != expected).then(|| dbflux_i18n::t!(key, origin = expected, current = current))
     }
 
+    /// Why a plan cannot be asked at all, checked before the driver is
+    /// reached. An analyzed plan runs the statement, so it is also refused
+    /// when it would run on another connection than the one its confirmation
+    /// was shown for, or while another query owns the document.
+    fn plan_refusal(&self, target: &PlanTarget, mode: QueryPlanMode, cx: &App) -> Option<String> {
+        if let PlanRoute::Origin { connection_id, .. } = &target.route
+            && self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(connection_id)
+                .is_none()
+        {
+            return Some(dbflux_i18n::t!("document.query_plan.state.origin_gone"));
+        }
+
+        if mode == QueryPlanMode::Analyze {
+            let planned_on = self.plan.tab.as_ref().and_then(|tab| tab.connection_id);
+            if target.route.connection_id(self.connection_id) != planned_on {
+                return Some(dbflux_i18n::t!(
+                    "document.query_plan.state.analyze_connection_changed"
+                ));
+            }
+
+            let another_query_runs =
+                self.execution
+                    .active_query_task
+                    .as_ref()
+                    .is_some_and(|task| {
+                        self.plan.tab.as_ref().and_then(|tab| tab.running) != Some(task.task_id)
+                    });
+            if another_query_runs {
+                return Some(dbflux_i18n::t!(
+                    "document.query_plan.state.analyze_query_running"
+                ));
+            }
+        }
+
+        self.plan_database_changed(&target.route, cx)
+    }
+
     /// Asks the driver for the plan of `target` and shows the Plan tab,
     /// loading, replacing the one a previous Explain left.
     pub(super) fn start_plan(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
@@ -358,20 +399,8 @@ impl CodeDocument {
     }
 
     fn launch_plan(&mut self, target: PlanTarget, mode: QueryPlanMode, cx: &mut Context<Self>) {
-        if let PlanRoute::Origin { connection_id, .. } = &target.route
-            && self
-                .app_state
-                .read(cx)
-                .connections()
-                .get(connection_id)
-                .is_none()
-        {
-            self.show_plan_origin_gone(target, cx);
-            return;
-        }
-
-        if let Some(message) = self.plan_database_changed(&target.route, cx) {
-            self.show_plan_refused(target, message, cx);
+        if let Some(message) = self.plan_refusal(&target, mode, cx) {
+            self.show_plan_refused(target, message, mode, cx);
             return;
         }
 
@@ -464,6 +493,11 @@ impl CodeDocument {
     /// What the Estimate | Analyze switch offers for `target`: nothing when
     /// the connection's driver cannot analyze, so no driver is named here.
     fn analyze_offer(&self, target: &PlanTarget, cx: &App) -> Option<query_plan::AnalyzeOffer> {
+        // Analyze runs the statement, which a read-only document never does.
+        if self.read_only {
+            return None;
+        }
+
         let connection_id = target.route.connection_id(self.connection_id)?;
         let connected = self.app_state.read(cx).connections().get(&connection_id)?;
 
@@ -478,19 +512,21 @@ impl CodeDocument {
             .map(|_| dbflux_i18n::t!("document.query_plan.tab.analyzed").into())
     }
 
-    /// The connection a result came from is gone: the Plan tab says so in
-    /// its error state. Nothing is asked of any other connection.
-    fn show_plan_origin_gone(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
-        let message = dbflux_i18n::t!("document.query_plan.state.origin_gone");
-        self.show_plan_refused(target, message, cx);
-    }
-
-    /// The plan is refused before the driver is asked: the Plan tab shows
-    /// `message` in its error state.
-    fn show_plan_refused(&mut self, target: PlanTarget, message: String, cx: &mut Context<Self>) {
+    /// The plan is refused before the driver is asked. A new Estimate
+    /// replaces the Plan tab with `message` in its error state, since the
+    /// failure belongs to the new target. A refused Analyze shows it in the
+    /// Analyze slot and leaves the estimate in the tab, one click away.
+    fn show_plan_refused(
+        &mut self,
+        target: PlanTarget,
+        message: String,
+        mode: QueryPlanMode,
+        cx: &mut Context<Self>,
+    ) {
         self.cancel_running_plan(cx);
+        let keeps_estimate = mode == QueryPlanMode::Analyze && self.plan.view().is_some();
 
-        let mode = self
+        let view_mode = self
             .plan
             .view()
             .map_or(PlanViewMode::default(), |view| view.read(cx).mode());
@@ -499,7 +535,17 @@ impl CodeDocument {
         let failure =
             self.record_plan_failure(&DbError::connection_failed(message.clone()), message, cx);
 
-        let view = cx.new(|cx| PlanView::new(target.scope.clone(), mode, cx));
+        if keeps_estimate && let Some(view) = self.plan.view() {
+            view.update(cx, |view, cx| {
+                view.begin_analysis(cx);
+                view.set_failed(failure, cx);
+            });
+            self.plan.shown = true;
+            cx.notify();
+            return;
+        }
+
+        let view = cx.new(|cx| PlanView::new(target.scope.clone(), view_mode, cx));
         view.update(cx, |view, cx| view.set_failed(failure, cx));
         let subscription = cx.subscribe(&view, Self::on_plan_event);
 

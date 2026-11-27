@@ -647,3 +647,40 @@ fn the_gap_warning_and_tooltip_use_the_row_phrase_and_the_short_ratio() {
         "{body}"
     );
 }
+
+#[test]
+fn an_edge_knows_whether_its_rows_are_actual_or_an_estimate() {
+    let mut plan = analyzed_weekly_revenue();
+    // The engine gave no actual rows for this node, so its edge keeps the
+    // estimate.
+    plan.roots[0].children[0].children[0].children[0].children[1].actual_rows = None;
+    let geometry = DiagramGeometry::build(&PlanModel::from_plan(&plan));
+
+    let edge = |from| {
+        geometry
+            .edges
+            .iter()
+            .find(|edge| edge.from == from)
+            .expect("an edge")
+    };
+    assert!(edge(4).rows_are_actual);
+    assert!(!edge(5).rows_are_actual);
+    assert_eq!(edge(5).rows, Some(1.0));
+
+    let estimate = DiagramGeometry::build(&model());
+    assert!(estimate.edges.iter().all(|edge| !edge.rows_are_actual));
+}
+
+#[test]
+fn the_analyzed_tree_is_wider_than_a_narrow_surface_so_it_scrolls_sideways() {
+    use crate::query_plan::tree::table_min_width;
+
+    let analyzed = PlanModel::from_plan(&analyzed_weekly_revenue());
+    let estimate = model();
+
+    // Rems against the default 16 px rem: the columns alone are 850 px.
+    let analyzed_px = table_min_width(analyzed.columns).0 * 16.0;
+    let estimate_px = table_min_width(estimate.columns).0 * 16.0;
+    assert!(analyzed_px > 850.0, "{analyzed_px}");
+    assert!(analyzed_px > estimate_px);
+}

@@ -422,11 +422,32 @@ impl PlanView {
                 };
                 vec![footer_item(AppIcon::Rows3, summary, cx), run_state]
             }
-            _ => vec![footer_item(
-                AppIcon::Lock,
-                dbflux_i18n::t!("document.query_plan.footer.not_run"),
-                cx,
-            )],
+            _ => {
+                // An analyzed run executes the statement, so a cancel or an
+                // error after dispatch cannot claim that nothing ran.
+                let (id, icon, text) = match (&self.state, self.run_mode) {
+                    (PlanState::Cancelled, PlanRunMode::Analyze) => (
+                        "plan-footer-analyze-cancelled",
+                        AppIcon::X,
+                        dbflux_i18n::t!("document.query_plan.footer.analyze_cancelled"),
+                    ),
+                    (PlanState::Failed(_), PlanRunMode::Analyze) => (
+                        "plan-footer-analyze-failed",
+                        AppIcon::TriangleAlert,
+                        dbflux_i18n::t!("document.query_plan.footer.analyze_failed"),
+                    ),
+                    _ => (
+                        "plan-footer-not-run",
+                        AppIcon::Lock,
+                        dbflux_i18n::t!("document.query_plan.footer.not_run"),
+                    ),
+                };
+                vec![
+                    tagged(id)
+                        .child(footer_item(icon, text, cx))
+                        .into_any_element(),
+                ]
+            }
         };
 
         tagged("plan-footer")

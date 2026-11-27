@@ -6,6 +6,7 @@
 //! document to send the request. A statement the shared classifier does not
 //! mark as a read cannot be analyzed at all; the switch says why.
 
+use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Icon;
@@ -166,7 +167,10 @@ impl PlanView {
                     "plan-analyze-cancel",
                     dbflux_i18n::t!("document.query_plan.analyze.gate.cancel"),
                 )
-                .kbd("Esc")
+                .when_some(
+                    dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::Cancel),
+                    Button::kbd,
+                )
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| this.cancel_gate(cx))),
             )

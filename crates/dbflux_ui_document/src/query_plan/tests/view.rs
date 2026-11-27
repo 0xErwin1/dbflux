@@ -1453,3 +1453,47 @@ fn the_refusal_band_is_covered(cx: &mut TestAppContext) {
 
     covered(&mut plan);
 }
+
+#[gpui::test]
+fn the_footer_of_a_failed_or_cancelled_analyze_does_not_say_the_query_did_not_run(
+    cx: &mut TestAppContext,
+) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.offer(Some(offer(false, None)));
+    plan.window.update(|_, cx| {
+        plan.view.update(cx, |view, cx| {
+            view.begin_analysis(cx);
+            view.set_cancelled(cx);
+        })
+    });
+    plan.settle();
+    assert!(plan.has("plan-footer-analyze-cancelled"));
+    assert!(!plan.has("plan-footer-not-run"));
+
+    plan.window.update(|_, cx| {
+        plan.view.update(cx, |view, cx| {
+            view.set_failed(
+                PlanFailure {
+                    summary: "boom".into(),
+                    correlation_id: uuid::Uuid::nil(),
+                    clipboard: "boom".into(),
+                },
+                cx,
+            )
+        })
+    });
+    plan.settle();
+    assert!(plan.has("plan-footer-analyze-failed"));
+    assert!(!plan.has("plan-footer-not-run"));
+}
+
+#[gpui::test]
+fn the_footer_of_a_failed_estimate_still_says_the_query_did_not_run(cx: &mut TestAppContext) {
+    let mut plan = open(cx);
+    plan.window
+        .update(|_, cx| plan.view.update(cx, |view, cx| view.set_cancelled(cx)));
+    plan.settle();
+
+    assert!(plan.has("plan-footer-not-run"));
+}

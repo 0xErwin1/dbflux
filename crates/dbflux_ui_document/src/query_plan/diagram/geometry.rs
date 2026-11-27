@@ -81,6 +81,9 @@ pub(crate) struct DiagramEdge {
     pub from: NodeId,
     pub to: NodeId,
     pub rows: Option<f64>,
+    /// Whether `rows` were counted by running the query; otherwise they are
+    /// the engine's estimate, even in an analyzed plan.
+    pub rows_are_actual: bool,
     pub width: f32,
     pub route: OrthogonalRoute,
     /// Where the row-count label sits, in graph space.
@@ -145,6 +148,7 @@ impl DiagramGeometry {
                     from: node.id,
                     to: parent,
                     rows: node.edge_rows,
+                    rows_are_actual: node.actual_rows.is_some(),
                     width: edge_width(node.edge_rows, max_rows),
                     label_at: label_anchor(&route),
                     route,

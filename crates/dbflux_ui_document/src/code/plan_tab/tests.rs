@@ -1461,7 +1461,7 @@ fn refusing_a_plan_while_one_loads_leaves_a_newer_query_running(cx: &mut TestApp
     doc.window.update(|_, cx| {
         doc.document.update(cx, |document, cx| {
             let target = document.plan.tab.as_ref().expect("the tab").target.clone();
-            document.show_plan_refused(target, "refused".into(), cx);
+            document.show_plan_refused(target, "refused".into(), QueryPlanMode::Estimate, cx);
         })
     });
 
@@ -1713,10 +1713,30 @@ fn cancelling_while_analyzing_stops_the_task_and_keeps_the_estimate(cx: &mut Tes
         .update(|_, cx| doc.document.read(cx).runner.is_primary_active());
     assert!(running, "analyzing is a task Cancel can stop");
 
-    assert!(doc.press(Command::Cancel));
+    // Cancel without settling, so the driver call has not run yet.
+    let handled = doc.window.update(|window, cx| {
+        doc.document.update(cx, |document, cx| {
+            document.dispatch_command(Command::Cancel, window, cx)
+        })
+    });
+    assert!(handled);
     assert!(doc.plan_state(|state| matches!(state, PlanState::Cancelled)));
+    let running = doc
+        .window
+        .update(|_, cx| doc.document.read(cx).runner.is_primary_active());
+    assert!(!running, "Cancel released the task");
+    assert_eq!(
+        doc.modes(),
+        [QueryPlanMode::Estimate],
+        "the analyzed request is still on its way"
+    );
 
     doc.settle();
+    assert_eq!(
+        doc.modes(),
+        [QueryPlanMode::Estimate, QueryPlanMode::Analyze],
+        "the late answer did arrive"
+    );
     assert!(
         doc.plan_state(|state| matches!(state, PlanState::Cancelled)),
         "the late answer is dropped"
@@ -1759,4 +1779,118 @@ fn the_gate_and_the_run_mode_entries_are_in_the_pane_actions(cx: &mut TestAppCon
     doc.click("segmented-plan-run-mode-analyze");
     let menu = doc.menu();
     assert!(menu.iter().any(|id| id == "plan-analyze-run"), "{menu:?}");
+}
+
+fn failure_summary(doc: &mut Doc<'_>) -> Option<String> {
+    doc.plan_state(|state| match state {
+        PlanState::Failed(failure) => Some(failure.summary.clone()),
+        _ => None,
+    })
+}
+
+#[gpui::test]
+fn analyze_is_refused_when_the_editor_moved_to_another_connection_and_keeps_the_estimate(
+    cx: &mut TestAppContext,
+) {
+    let mut doc = open(cx, analyzing(sample_plan()), "SELECT 1");
+    doc.explain_and_settle();
+    doc.click("segmented-plan-run-mode-analyze");
+    let other_driver = analyzing(sample_plan());
+    let other = doc.connect_other(&other_driver, "production");
+    doc.window.update(|_, cx| {
+        doc.document
+            .update(cx, |document, _| document.connection_id = Some(other));
+    });
+
+    doc.click("plan-analyze-run");
+
+    assert_eq!(
+        doc.modes(),
+        [QueryPlanMode::Estimate],
+        "nothing was analyzed"
+    );
+    assert!(other_driver.stats().query_plan_requests.is_empty());
+    assert!(
+        failure_summary(&mut doc).is_some_and(|summary| summary.contains("different connection")),
+    );
+
+    doc.click("segmented-plan-run-mode-estimate");
+    assert!(doc.plan_state(ready), "the estimate is still there");
+}
+
+#[gpui::test]
+fn analyze_does_not_take_over_a_query_that_is_still_running(cx: &mut TestAppContext) {
+    let mut doc = open(cx, analyzing(sample_plan()), "SELECT 1");
+    doc.explain_and_settle();
+    doc.click("segmented-plan-run-mode-analyze");
+    let newer = doc.window.update(|_, cx| {
+        doc.document.update(cx, |document, cx| {
+            let target = dbflux_core::TaskTarget {
+                profile_id: document.connection_id.expect("a connection"),
+                database: None,
+            };
+            let (task_id, _token) = document.runner.start_primary_for_target(
+                dbflux_core::TaskKind::Query,
+                "SELECT newer",
+                Some(target.clone()),
+                cx,
+            );
+            document.execution.active_query_task = Some(crate::code::ActiveQueryTask {
+                task_id,
+                target,
+                uses_isolated_session: false,
+            });
+            document.state = crate::types::DocumentState::Executing;
+            task_id
+        })
+    });
+
+    doc.click("plan-analyze-run");
+
+    assert_eq!(
+        doc.modes(),
+        [QueryPlanMode::Estimate],
+        "nothing was analyzed"
+    );
+    assert!(failure_summary(&mut doc).is_some_and(|summary| summary.contains("still running")),);
+    assert_newer_query_still_running(&mut doc, newer);
+
+    doc.click("segmented-plan-run-mode-estimate");
+    assert!(doc.plan_state(ready));
+}
+
+#[gpui::test]
+fn analyze_from_a_result_whose_connection_went_away_keeps_the_estimate(cx: &mut TestAppContext) {
+    let mut doc = open(cx, analyzing(sample_plan()), SCRIPT);
+    let other_driver = analyzing(sample_plan());
+    let other = doc.connect_other(&other_driver, "reporting");
+    doc.result_from_origin_then_switch_to(other);
+    doc.explain_from_result_menu();
+    doc.click("segmented-plan-run-mode-analyze");
+    let origin = doc.profile_id;
+    doc.disconnect(origin);
+
+    doc.click("plan-analyze-run");
+
+    assert_eq!(doc.modes(), [QueryPlanMode::Estimate]);
+    assert!(
+        failure_summary(&mut doc).is_some_and(|summary| summary.contains("no longer connected")),
+    );
+    doc.click("segmented-plan-run-mode-estimate");
+    assert!(doc.plan_state(ready), "the estimate is still there");
+}
+
+#[gpui::test]
+fn a_read_only_document_does_not_offer_analyze(cx: &mut TestAppContext) {
+    let mut doc = open(cx, analyzing(sample_plan()), "SELECT 1");
+    doc.window.update(|_, cx| {
+        doc.document
+            .update(cx, |document, _| document.read_only = true);
+    });
+
+    doc.explain_and_settle();
+
+    assert!(doc.plan_state(ready), "the estimate still plans");
+    assert!(!doc.has("segmented-plan-run-mode-analyze"));
+    assert!(!doc.has("plan-analyze-gate"));
 }

@@ -165,18 +165,14 @@ impl PlanView {
         let (background, border, strong) =
             (theme.background, theme.border, ChromeColors::strong(theme));
         let font = dbflux_components::fonts::editor_family(cx);
-        let analyzed = self.model().is_some_and(|model| model.analyzed);
-        let (rows_title, rows_body) = if analyzed {
-            (
-                dbflux_i18n::t!("document.query_plan.tooltip.edge_actual_title"),
-                dbflux_i18n::t!("document.query_plan.tooltip.edge_actual_body"),
-            )
-        } else {
-            (
-                dbflux_i18n::t!("document.query_plan.tooltip.rows_title"),
-                dbflux_i18n::t!("document.query_plan.tooltip.rows_body"),
-            )
-        };
+        let actual_text = (
+            dbflux_i18n::t!("document.query_plan.tooltip.edge_actual_title"),
+            dbflux_i18n::t!("document.query_plan.tooltip.edge_actual_body"),
+        );
+        let estimate_text = (
+            dbflux_i18n::t!("document.query_plan.tooltip.rows_title"),
+            dbflux_i18n::t!("document.query_plan.tooltip.rows_body"),
+        );
 
         geometry
             .edges
@@ -184,6 +180,11 @@ impl PlanView {
             .filter_map(|edge| {
                 let rows = edge.rows?;
                 let (x, y) = edge.label_at;
+                let (rows_title, rows_body) = if edge.rows_are_actual {
+                    &actual_text
+                } else {
+                    &estimate_text
+                };
 
                 Some(
                     div()

@@ -12,6 +12,7 @@ use dbflux_components::tokens::{ChromeColors, Radii, Spacing, ui};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, ElementId, FontWeight, Rems, Role, SharedString, div, px, relative,
+    rems,
 };
 use gpui_component::ActiveTheme;
 
@@ -37,6 +38,31 @@ const INDENT: Rems = ui(16.0);
 const ROW_HEIGHT: Rems = ui(30.0);
 const FONT: Rems = ui(12.5);
 const CONDITION_FONT: Rems = ui(11.0);
+
+/// The narrowest the table may get before it scrolls sideways: room for the
+/// operation name, every column the plan has and the gaps between them.
+pub(super) fn table_min_width(columns: PlanColumns) -> Rems {
+    const NODE_COLUMN: Rems = ui(260.0);
+    const GAP_AND_PADDING: Rems = ui(16.0);
+
+    let widths = [
+        (columns.index, INDEX_WIDTH),
+        (columns.cost, COST_WIDTH),
+        (columns.self_cost, SELF_COST_WIDTH),
+        (columns.rows, ROWS_WIDTH),
+        (columns.actual_rows, ACTUAL_ROWS_WIDTH),
+        (columns.time, TIME_WIDTH),
+        (columns.loops, LOOPS_WIDTH),
+        (columns.self_time, SELF_COST_WIDTH),
+    ];
+    let columns_width: f32 = widths
+        .into_iter()
+        .filter(|(shown, _)| *shown)
+        .map(|(_, width)| width.0 + GAP_AND_PADDING.0)
+        .sum();
+
+    rems(NODE_COLUMN.0 + GAP_AND_PADDING.0 * 2.0 + columns_width)
+}
 
 /// Left padding of a row `levels` deep.
 fn indent(levels: usize) -> Rems {
@@ -119,19 +145,28 @@ impl PlanView {
             .map(|node| self.render_tree_row(node, model.columns, cx))
             .collect();
 
+        // The columns of an analyzed plan do not fit a narrow surface, so the
+        // header and the rows share one horizontally scrolling table.
         tagged("plan-tree")
             .size_full()
-            .flex()
-            .flex_col()
-            .child(self.render_tree_header(model.columns, model.analyzed, cx))
+            .overflow_x_scroll()
             .child(
-                tagged("plan-tree-rows")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.tree_scroll)
-                    .border_color(border)
-                    .children(rows),
+                tagged("plan-tree-table")
+                    .h_full()
+                    .w_full()
+                    .min_w(table_min_width(model.columns))
+                    .flex()
+                    .flex_col()
+                    .child(self.render_tree_header(model.columns, model.analyzed, cx))
+                    .child(
+                        tagged("plan-tree-rows")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.tree_scroll)
+                            .border_color(border)
+                            .children(rows),
+                    ),
             )
             .into_any_element()
     }
