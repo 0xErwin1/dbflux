@@ -50,7 +50,8 @@
 以表格形式呈现运行中服务器状态的快照：
 
 - `mysql.processlist` —— 来自 `information_schema.PROCESSLIST` 的活动会话（用户、主机、数据库、命令、时间、状态、信息）
-- 结构化查询计划（`Connection::query_plan`）：对恰好一条语句运行 `EXPLAIN FORMAT=JSON`，绝不使用 `ANALYZE`，因此该语句不会被执行，并把 MySQL 8 与 MariaDB 的计划树（表、访问类型、键、检查或预估的行数、成本、其他属性）映射到与驱动程序无关的计划模型。包含多条语句的查询或空查询会在发送任何内容之前被拒绝。
+- 结构化查询计划（`Connection::query_plan`）：对恰好一条语句运行 `EXPLAIN FORMAT=JSON`，除非请求分析计划，否则不使用 `ANALYZE`，因此该语句不会被执行，并把 MySQL 8 与 MariaDB 的计划树（表、访问类型、键、检查或预估的行数、成本、其他属性）映射到与驱动程序无关的计划模型。包含多条语句的查询或空查询会在发送任何内容之前被拒绝。
+- 分析计划（`QueryPlanRequest::analyzed`、`supports_explain_analyze`）：MariaDB 运行 `ANALYZE FORMAT=JSON`，返回同样的 JSON，并带有 `r_rows`、`r_loops`、`r_*_time_ms` 实测值与优化器耗时（MariaDB 报告的是所有循环的总时间，计划按每次循环保存）。MySQL 8.0.18+ 运行 `EXPLAIN ANALYZE`，它只以 TREE 文本报告实测值，因此驱动会解析树的各行（`cost`、`rows`、`actual time=startup..total rows=N loops=L`、`never executed`），并把该文本保留为原始计划；MySQL 不报告规划耗时。只接受共享分类器标记为 `Read` 或 `Metadata` 的语句，写入语句会在发送任何内容之前被拒绝，语句在 `START TRANSACTION READ ONLY` 中运行并被回滚，因此即便分类器漏掉了某个写入（例如会插入数据的存储函数），服务器也会拒绝它。
 
 ## 限制
 
@@ -71,6 +72,7 @@
 - 例程列表仅涵盖 FUNCTION 与 PROCEDURE 类型。MySQL 的聚合函数（通过 `CREATE AGGREGATE FUNCTION` UDF 插件注册）与窗口函数不会出现在 `information_schema.ROUTINES` 中，因此也不会被列出。
 - `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` 需要 `SHOW_ROUTINE` 权限（MySQL 8.0+）或该例程的所有权；权限不足时，定义列会返回 `NULL`，查看器会显示一条提示，而不是源码。
 - 只读强制：DBFlux 作为读取无人值守执行的请求（MCP `execute_script` 中分类为 `Read` 或 `Metadata` 的脚本、编辑器自动刷新）在 `START TRANSACTION READ ONLY` 中运行并回滚。请求只能包含不带可执行注释（`/*! */`、`/*M! */`）且不含 `INTO` 一词的 `SELECT`、`WITH`、`SHOW`、`DESCRIBE`、`EXPLAIN`、`TABLE` 和 `VALUES` 语句；除非服务器证明没有打开的事务且会话不可能持有 `LOCK TABLES` 锁，否则会被拒绝。MySQL 会拒绝该会话中的数据修改，但 `TEMPORARY` 表除外，只读事务仍可修改它们；它也不会阻止具有外部效果的函数，例如 `GET_LOCK` 或用户定义函数；真正的边界仍是最小权限的数据库凭据。
+- 分析计划会真正运行该语句，并且需要 MySQL 8.0.18 或更高版本（MySQL 5.7 会返回语法错误）。只读事务拦不住 `GET_LOCK` 或 `TEMPORARY` 表之类的副作用。MariaDB 的 `ANALYZE FORMAT=JSON` 在只读请求中被接受；`ANALYZE TABLE` 不被接受。
 
 ## DDL 能力
 

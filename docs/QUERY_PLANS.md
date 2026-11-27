@@ -224,7 +224,7 @@ the card, **Run analyze**.
 |--------|---------|
 | **Actual rows** | Rows the step returned, per loop |
 | **Loops** | How many times the step ran. A step that never ran has zero loops |
-| **Actual time** | Milliseconds per loop until the first and the last row |
+| **Actual time** | Milliseconds across all loops, until the last row |
 | **Self time** | The step's time over all its loops minus its children's, never below zero. It points at where the time went |
 | **Estimate gap** | Actual rows against estimated rows per loop, in either direction. The largest gap is flagged only when it is 10 times or more, and the deepest step wins a tie |
 

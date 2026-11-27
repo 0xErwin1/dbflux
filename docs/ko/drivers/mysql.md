@@ -49,7 +49,8 @@
 실행 중인 서버 상태의 표 형태 스냅샷을 노출합니다:
 
 - `mysql.processlist` — `information_schema.PROCESSLIST`의 활성 세션(user, host, db, command, time, state, info)
-- 구조화된 쿼리 계획(`Connection::query_plan`): 정확히 하나의 문에 `EXPLAIN FORMAT=JSON`을 실행하며 `ANALYZE`는 절대 사용하지 않으므로 문은 실행되지 않습니다. MySQL 8과 MariaDB의 계획 트리(테이블, 접근 유형, 키, 검사했거나 예상한 행 수, 비용, 기타 속성)를 드라이버에 독립적인 계획 모델로 매핑합니다. 여러 문으로 된 쿼리나 빈 쿼리는 아무것도 전송하기 전에 거부됩니다.
+- 구조화된 쿼리 계획(`Connection::query_plan`): 정확히 하나의 문에 `EXPLAIN FORMAT=JSON`을 실행하며 분석된 계획을 요청하지 않는 한 `ANALYZE` 없이 실행하므로 문은 실행되지 않습니다. MySQL 8과 MariaDB의 계획 트리(테이블, 접근 유형, 키, 검사했거나 예상한 행 수, 비용, 기타 속성)를 드라이버에 독립적인 계획 모델로 매핑합니다. 여러 문으로 된 쿼리나 빈 쿼리는 아무것도 전송하기 전에 거부됩니다.
+- 분석된 계획(`QueryPlanRequest::analyzed`, `supports_explain_analyze`): MariaDB는 `ANALYZE FORMAT=JSON`을 실행하며, 이는 `r_rows`, `r_loops`, `r_*_time_ms` 실측값과 옵티마이저 시간이 포함된 동일한 JSON을 반환합니다(MariaDB는 시간을 모든 반복에 걸친 합으로 보고하며, 계획은 반복당 값으로 보관합니다). MySQL 8.0.18+는 `EXPLAIN ANALYZE`를 실행하는데, 실측값을 TREE 텍스트로만 보고하므로 드라이버가 트리 줄(`cost`, `rows`, `actual time=startup..total rows=N loops=L`, `never executed`)을 파싱하고 텍스트를 원본 계획으로 보관하며, MySQL은 계획 수립 시간을 보고하지 않습니다. 공유 분류기가 `Read` 또는 `Metadata`로 분류한 문만 허용되고, 쓰기 문은 아무것도 전송하기 전에 거부되며, 문은 `START TRANSACTION READ ONLY`에서 실행된 뒤 롤백되므로 분류기가 놓친 쓰기(예: 삽입하는 저장 함수)도 서버가 거부합니다.
 
 ## 제한 사항
 
@@ -70,6 +71,7 @@
 - 루틴 목록은 FUNCTION과 PROCEDURE 타입만 다룹니다. MySQL 집계 함수(`CREATE AGGREGATE FUNCTION` UDF 플러그인으로 등록)와 윈도우 함수는 `information_schema.ROUTINES`에 나타나지 않으므로 목록에 포함되지 않습니다.
 - `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE`는 `SHOW_ROUTINE` 권한(MySQL 8.0+) 또는 해당 루틴의 소유권이 필요합니다. 권한이 충분하지 않으면 정의 열이 `NULL`을 반환하고 뷰어는 소스 대신 알림을 표시합니다.
 - 읽기 전용 강제: DBFlux가 읽기로 무인 실행하는 요청(MCP `execute_script`에서 `Read` 또는 `Metadata`로 분류된 스크립트, 편집기 자동 새로 고침)은 `START TRANSACTION READ ONLY` 안에서 실행된 뒤 롤백됩니다. 요청에는 실행 가능한 주석(`/*! */`, `/*M! */`)과 `INTO`라는 단어가 없는 `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `TABLE`, `VALUES` 문만 들어갈 수 있으며, 서버가 열린 트랜잭션이 없고 세션이 `LOCK TABLES` 잠금을 보유할 수 없음을 증명하지 못하면 거부됩니다. MySQL은 세션의 데이터 변경을 거부하지만, 읽기 전용 트랜잭션에서도 변경할 수 있는 `TEMPORARY` 테이블은 예외이며 `GET_LOCK`이나 사용자 정의 함수 같은 외부 효과가 있는 함수는 막지 못합니다. 실제 경계는 여전히 최소 권한 데이터베이스 자격 증명입니다.
+- 분석된 계획은 문을 실제로 실행하며 MySQL 8.0.18 이상이 필요합니다(MySQL 5.7은 구문 오류로 응답). 읽기 전용 트랜잭션은 `GET_LOCK`이나 `TEMPORARY` 테이블 같은 부작용을 막지 못합니다. MariaDB의 `ANALYZE FORMAT=JSON`은 읽기 전용 요청에서 허용되지만 `ANALYZE TABLE`은 허용되지 않습니다.
 
 ## DDL 지원 범위
 

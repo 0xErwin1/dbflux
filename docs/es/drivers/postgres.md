@@ -28,11 +28,20 @@ Base de datos relacional open-source avanzada.
 - Archivos de certificado TLS: los campos de certificado raíz, certificado de cliente y clave de cliente del Connection Manager, o los parámetros URI de libpq `sslrootcert`, `sslcert` y `sslkey` (por ejemplo `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). Con `verify-ca` y `verify-full` el certificado raíz se agrega a las raíces de confianza; los demás modos no validan la cadena y lo ignoran. El certificado y la clave de cliente se presentan para TLS mutuo en todos los modos excepto `disable`. Los archivos son PEM; la clave de cliente debe ser PKCS#8. Un archivo inexistente, ilegible o inválido, o un certificado de cliente sin su clave (o al revés), hace fallar la conexión con un error que nombra el archivo, antes de cualquier intento de conexión. Con `sslmode=disable` los archivos se ignoran.
 - Soporta cancelación de queries a través de los cancel tokens de PostgreSQL.
 - Plan de query estructurado (`Connection::query_plan`): ejecuta `EXPLAIN
-  (FORMAT JSON)` sobre exactamente un statement, nunca `ANALYZE`, así que el
+  (FORMAT JSON)` sobre exactamente un statement, sin `ANALYZE` salvo que se pida un plan analizado, así que el
   statement no se ejecuta, y mapea el árbol del plan (operación, relación,
   índice, costos y filas estimados, otros atributos) al modelo de plan
   independiente del driver. Un query con varios statements, o uno vacío, se
   rechaza antes de enviar nada.
+- Planes analizados (`QueryPlanRequest::analyzed`, `supports_explain_analyze`):
+  ejecuta `EXPLAIN (ANALYZE, FORMAT JSON)` y mapea `Actual Startup Time`,
+  `Actual Total Time`, `Actual Rows`, `Actual Loops`, `Planning Time` y
+  `Execution Time`; los detalles del motor como `Rows Removed by Filter` quedan
+  en los detalles del nodo. Solo se acepta un statement que el clasificador
+  compartido marca como `Read` o `Metadata`, un write se rechaza antes de enviar
+  nada, y el statement se ejecuta en `BEGIN READ ONLY` y se revierte, así que el
+  servidor también rechaza un write que el clasificador no detectó, como una
+  función volátil que inserta.
 - Incluye generación de SQL/código específica de PostgreSQL para CRUD, índices,
   reindex, foreign keys, y operaciones de tipos.
 - Los scripts multi-sentencia (varias sentencias separadas por `;`) se ejecutan
@@ -164,6 +173,11 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   el último `ANALYZE`. Una columna sin estadísticas del planificador muestra
   todos sus datos como desconocidos. No tiene tamaños ni codecs por columna,
   vista de particiones, estimación de lectura ni perfil de filas.
+- Los planes analizados ejecutan el statement: un `SELECT` cuesta lo que cuesta,
+  y los efectos que una transacción de solo lectura no detiene (tablas
+  `TEMPORARY`, `dblink_exec`, `pg_terminate_backend`, advisory locks) siguen
+  ocurriendo. Un plan analizado se rechaza dentro de una transacción abierta,
+  como cualquier petición de solo lectura.
 
 ## Capacidades de DDL
 
