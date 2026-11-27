@@ -219,7 +219,7 @@ impl Sidebar {
     ) {
         let session_password = password.clone();
         let (
-            input,
+            mut input,
             profile_name,
             driver,
             keyring_password,
@@ -336,6 +336,11 @@ impl Sidebar {
             cx.emit(dbflux_ui_base::AppStateChanged);
             result
         });
+
+        // The pipeline must stop when its task is cancelled, from the
+        // background tasks panel or from the sign-in dialog, so it runs on the
+        // task's token rather than the placeholder it was prepared with.
+        input.cancel = cancel_token.clone();
 
         self.refresh_tree(cx);
 
@@ -456,6 +461,7 @@ impl Sidebar {
         .detach();
 
         cx.emit(SidebarEvent::PipelineStarted {
+            profile_id,
             profile_name: profile_name.clone(),
             watcher: state_rx,
         });
@@ -489,10 +495,10 @@ impl Sidebar {
 
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
+                            detached_hook_scope.cancel_registered(state, profile_id);
                             state.fail_task(task_id, error.clone());
                             state.record_connect_failure(profile_id, error.clone());
-                            state.finish_pending_operation(profile_id, None);
+                            state.release_connect_pending_operation(task_id, profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
@@ -511,13 +517,13 @@ impl Sidebar {
 
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
+                            detached_hook_scope.cancel_registered(state, profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         if cancel_token.is_cancelled() {
                             app_state.update(cx, |state, cx| {
-                                state.finish_pending_operation(profile_id, None);
+                                state.release_connect_pending_operation(task_id, profile_id);
                                 cx.emit(dbflux_ui_base::AppStateChanged);
                             });
 
@@ -537,7 +543,7 @@ impl Sidebar {
                                 profile_id,
                                 crate::labels::connection_cancelled_by_hook_toast_label(),
                             );
-                            state.finish_pending_operation(profile_id, None);
+                            state.release_connect_pending_operation(task_id, profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
@@ -607,12 +613,12 @@ impl Sidebar {
 
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
+                            detached_hook_scope.cancel_registered(state, profile_id);
                             state.fail_task(task_id, error_msg.clone());
                             if !was_cancelled {
                                 state.record_connect_failure(profile_id, error_msg.clone());
                             }
-                            state.finish_pending_operation(profile_id, None);
+                            state.release_connect_pending_operation(task_id, profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
@@ -715,13 +721,13 @@ impl Sidebar {
 
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
+                            detached_hook_scope.cancel_registered(state, profile_id);
                             // A remembered password may be the reason the
                             // connect failed; ask again next time.
                             state.forget_connection_password(profile_id);
                             state.fail_task(task_id, error.clone());
                             state.record_connect_failure(profile_id, error.clone());
-                            state.finish_pending_operation(profile_id, None);
+                            state.release_connect_pending_operation(task_id, profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
@@ -736,6 +742,23 @@ impl Sidebar {
                     return;
                 }
             };
+
+            // A cancel that arrived while the driver was connecting must not
+            // leave the connection open: drop it, with its tunnel, instead of
+            // registering a connection the user already cancelled.
+            if cancel_token.is_cancelled() {
+                drop((connection, tunnel_handle));
+                abandon_cancelled_connect(
+                    &app_state,
+                    &sidebar,
+                    task_id,
+                    profile_id,
+                    &detached_hook_scope,
+                    &state_tx,
+                    cx,
+                );
+                return;
+            }
 
             match run_hook_phase(
                 app_state.clone(),
@@ -761,10 +784,10 @@ impl Sidebar {
 
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
+                            detached_hook_scope.cancel_registered(state, profile_id);
                             state.fail_task(task_id, error.clone());
                             state.record_connect_failure(profile_id, error.clone());
-                            state.finish_pending_operation(profile_id, None);
+                            state.release_connect_pending_operation(task_id, profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
@@ -783,13 +806,13 @@ impl Sidebar {
 
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
+                            detached_hook_scope.cancel_registered(state, profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         if cancel_token.is_cancelled() {
                             app_state.update(cx, |state, cx| {
-                                state.finish_pending_operation(profile_id, None);
+                                state.release_connect_pending_operation(task_id, profile_id);
                                 cx.emit(dbflux_ui_base::AppStateChanged);
                             });
 
@@ -809,7 +832,7 @@ impl Sidebar {
                                 profile_id,
                                 crate::labels::connection_cancelled_by_post_connect_hook_toast_label(),
                             );
-                            state.finish_pending_operation(profile_id, None);
+                            state.release_connect_pending_operation(task_id, profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
@@ -824,6 +847,23 @@ impl Sidebar {
                     });
                     return;
                 }
+            }
+
+            // A cancel that arrived while the post-connect hooks ran must not
+            // leave the connection open: drop it, with its tunnel, instead of
+            // registering a connection the user already cancelled.
+            if cancel_token.is_cancelled() {
+                drop((connection, tunnel_handle));
+                abandon_cancelled_connect(
+                    &app_state,
+                    &sidebar,
+                    task_id,
+                    profile_id,
+                    &detached_hook_scope,
+                    &state_tx,
+                    cx,
+                );
+                return;
             }
 
             let _ = state_tx.send(dbflux_core::PipelineState::Connected);
@@ -951,6 +991,35 @@ impl Sidebar {
         })
         .detach();
     }
+}
+
+/// Settles a connect whose task was cancelled after the connection opened:
+/// the pending operation is released and the progress shows the cancel, so
+/// the sidebar never reports a connection the user cancelled as connected.
+fn abandon_cancelled_connect(
+    app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
+    sidebar: &gpui::Entity<Sidebar>,
+    task_id: TaskId,
+    profile_id: uuid::Uuid,
+    detached_hook_scope: &DetachedHookScope,
+    state_tx: &dbflux_core::StateSender,
+    cx: &mut gpui::AsyncApp,
+) {
+    if state_tx.send(PipelineState::Cancelled).is_err() {
+        log::debug!("Pipeline: no observer left for the cancelled connect");
+    }
+
+    cx.update(|cx| {
+        app_state.update(cx, |state, cx| {
+            detached_hook_scope.cancel_registered(state, profile_id);
+            state.release_connect_pending_operation(task_id, profile_id);
+            cx.emit(dbflux_ui_base::AppStateChanged);
+        });
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.refresh_tree(cx);
+        });
+    });
 }
 
 #[cfg(test)]

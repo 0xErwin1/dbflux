@@ -80,7 +80,16 @@ pub struct SsoLoginHandle {
 /// (not on the GPUI background executor, which has no Tokio runtime).
 /// After getting the handle, the caller must separately wait for the
 /// SSO session to appear in the token cache via `wait_for_sso_session_blocking`.
-pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, DbError> {
+///
+/// `on_abort_ready` receives the abort sender as soon as it exists, before the
+/// stdout scan that can last up to 30 seconds, so a caller can cancel the CLI
+/// during that scan. Returning `false` aborts the login at once and makes this
+/// function return a cancellation error. The same error is returned when the
+/// login is aborted during the scan.
+pub fn start_sso_login_blocking(
+    profile_name: &str,
+    on_abort_ready: impl FnOnce(&std::sync::mpsc::SyncSender<()>) -> bool,
+) -> Result<SsoLoginHandle, DbError> {
     use std::process::{Command, Stdio};
 
     log::debug!(
@@ -141,12 +150,27 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
     let child_handle = Arc::new(std::sync::Mutex::new(Some(child)));
     let child_for_drain = Arc::clone(&child_handle);
 
-    // Forward abort channel signals to the shared flag.
+    // Forward abort channel signals to the shared flag, and stop the CLI
+    // right away: after printing the URL it writes nothing more, so the
+    // stdout reader would not notice the abort until the CLI exits on its own.
+    let child_for_abort = Arc::clone(&child_handle);
     std::thread::spawn(move || {
         if abort_rx.recv().is_ok() {
             abort_flag.store(true, std::sync::atomic::Ordering::Release);
+            if let Ok(mut guard) = child_for_abort.lock()
+                && let Some(mut child) = guard.take()
+            {
+                if let Err(error) = child.kill() {
+                    log::warn!("[aws sso login] could not stop the CLI on abort: {}", error);
+                }
+                if let Err(error) = child.wait() {
+                    log::warn!("[aws sso login] could not reap the CLI on abort: {}", error);
+                }
+            }
         }
     });
+
+    notify_abort_ready(on_abort_ready, &abort_tx)?;
 
     // Drain stderr in a background thread so the process does not block on
     // its stderr buffer.
@@ -277,6 +301,12 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
         found_url.or(fallback_url)
     };
 
+    // An abort during the scan kills the CLI, which closes its stdout and
+    // ends the scan early; the login must not be reported as started.
+    if abort_flag_for_poll.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(sso_login_cancelled_error());
+    }
+
     log::debug!("AWS SSO login verification URL: {:?}", verification_url);
 
     // Release our copy of the child handle. The drain thread holds the other
@@ -289,6 +319,24 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
         abort_tx,
         abort_flag: abort_flag_for_poll,
     })
+}
+
+fn sso_login_cancelled_error() -> DbError {
+    DbError::ValueResolutionFailed("AWS SSO login was cancelled".to_string())
+}
+
+/// Hands the abort sender to its owner. When the owner declines, the login is
+/// aborted right away, so the CLI is stopped before anything waits on it.
+fn notify_abort_ready(
+    on_abort_ready: impl FnOnce(&std::sync::mpsc::SyncSender<()>) -> bool,
+    abort_tx: &std::sync::mpsc::SyncSender<()>,
+) -> Result<(), DbError> {
+    if on_abort_ready(abort_tx) {
+        return Ok(());
+    }
+
+    send_abort(abort_tx);
+    Err(sso_login_cancelled_error())
 }
 
 /// Polls the SSO token cache until a valid session appears for `sso_start_url`,
@@ -309,9 +357,7 @@ pub fn wait_for_sso_session_blocking(
         std::thread::sleep(SSO_LOGIN_POLL_INTERVAL);
 
         if abort_flag.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(DbError::ValueResolutionFailed(
-                "AWS SSO login was cancelled".to_string(),
-            ));
+            return Err(sso_login_cancelled_error());
         }
 
         match validate_sso_session(sso_start_url) {
@@ -2342,12 +2388,40 @@ fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
 /// login modal) while the user completes the SSO flow in their browser.
 /// Registry of in-flight SSO login abort senders keyed by `AuthProfile.id`.
 /// Allows the UI to cancel a running login (kills the `aws sso login` process
-/// and unblocks the cache-polling loop).
-static ABORT_REGISTRY: OnceLock<Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncSender<()>>>> =
-    OnceLock::new();
+/// and unblocks the cache-polling loop). Each entry carries the id of the
+/// login that registered it, so a login deregisters only its own entry.
+static ABORT_REGISTRY: OnceLock<Mutex<HashMap<uuid::Uuid, RegisteredLogin>>> = OnceLock::new();
 
-fn abort_registry() -> &'static Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncSender<()>>> {
+static NEXT_LOGIN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+struct RegisteredLogin {
+    login_id: u64,
+    abort_tx: std::sync::mpsc::SyncSender<()>,
+}
+
+fn abort_registry() -> &'static Mutex<HashMap<uuid::Uuid, RegisteredLogin>> {
     ABORT_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Registers a login's abort sender for `profile_id`, replacing any earlier
+/// login's entry, and returns the id the login deregisters with.
+fn register_login_abort(profile_id: uuid::Uuid, abort_tx: std::sync::mpsc::SyncSender<()>) -> u64 {
+    let login_id = NEXT_LOGIN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+    map.insert(profile_id, RegisteredLogin { login_id, abort_tx });
+    login_id
+}
+
+/// Removes the entry for `profile_id` only while it still belongs to
+/// `login_id`; a newer login for the same profile keeps its entry.
+fn deregister_login_abort(profile_id: uuid::Uuid, login_id: u64) {
+    let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+    if map
+        .get(&profile_id)
+        .is_some_and(|registered| registered.login_id == login_id)
+    {
+        map.remove(&profile_id);
+    }
 }
 
 /// Signals the in-flight `aws sso login` for `profile_id` to abort.
@@ -2355,13 +2429,13 @@ fn abort_registry() -> &'static Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncS
 /// Returns `true` if an abort was signalled (a login was in flight),
 /// `false` if no login for this profile was tracked.
 pub fn abort_sso_login(profile_id: uuid::Uuid) -> bool {
-    let sender = {
+    let registered = {
         let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&profile_id)
     };
-    match sender {
-        Some(tx) => {
-            let _ = tx.try_send(());
+    match registered {
+        Some(registered) => {
+            send_abort(&registered.abort_tx);
             true
         }
         None => false,
@@ -2380,25 +2454,40 @@ async fn sso_login_with_url(
 
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<Result<AuthSession, DbError>>(1);
 
+    // Dropping this future (the connection was cancelled) aborts the login
+    // thread and stops the CLI, so nothing keeps running unseen.
+    let mut abandon_guard = AbandonLoginGuard::default();
+    let abort_slot = Arc::clone(&abandon_guard.slot);
+
     // Spawn a dedicated OS thread for all blocking work.
     // The `url_callback` is passed into the thread and called as soon as the
     // verification URL is known, so the state channel receives the URL update
     // without any blocking on the async side.
     std::thread::spawn(move || {
-        let handle = match start_sso_login_blocking(&profile_name) {
+        // The abort sender is handed over before the stdout scan, so dropping
+        // the waiting future stops the CLI even while the URL is still unknown.
+        let handle = match start_sso_login_blocking(&profile_name, |abort_tx| {
+            AbandonLoginGuard::attach(&abort_slot, abort_tx)
+        }) {
             Ok(h) => h,
             Err(err) => {
-                url_callback(None);
-                let _ = result_tx.send(Err(err));
+                // An abandoned login has no observer: nobody reads the URL
+                // callback or the result.
+                if !AbandonLoginGuard::is_abandoned(&abort_slot) {
+                    url_callback(None);
+                    send_login_result(&result_tx, Err(err));
+                }
                 return;
             }
         };
 
-        // Register the abort sender so the UI can cancel this login mid-flight.
-        {
-            let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(profile_id, handle.abort_tx.clone());
-        }
+        // Register the abort sender so the UI can cancel this login
+        // mid-flight, unless the future was dropped right after the scan.
+        let Some(login_id) =
+            AbandonLoginGuard::register_unless_abandoned(&abort_slot, profile_id, &handle.abort_tx)
+        else {
+            return;
+        };
 
         // Fire the callback now — the URL is known, the user may still be
         // completing the browser flow.
@@ -2409,12 +2498,9 @@ async fn sso_login_with_url(
             wait_for_sso_session_blocking(profile_id, "aws-sso", &start_url, &handle.abort_flag);
 
         // Deregister on exit regardless of outcome.
-        {
-            let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
-            map.remove(&profile_id);
-        }
+        deregister_login_abort(profile_id, login_id);
 
-        let _ = result_tx.send(session);
+        send_login_result(&result_tx, session);
     });
 
     // Poll the result channel without blocking the async executor.
@@ -2428,7 +2514,10 @@ async fn sso_login_with_url(
     // signals completion through a oneshot so the executor is not blocked.
     loop {
         match result_rx.try_recv() {
-            Ok(result) => return result,
+            Ok(result) => {
+                abandon_guard.disarm();
+                return result;
+            }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 async_sleep(std::time::Duration::from_millis(200)).await;
             }
@@ -2438,6 +2527,93 @@ async fn sso_login_with_url(
                 ));
             }
         }
+    }
+}
+
+/// Hands the login result to the waiting future. The future may have been
+/// dropped after the last abandonment check; nobody is left to report to
+/// then, so the closed channel is only logged.
+fn send_login_result(
+    result_tx: &std::sync::mpsc::SyncSender<Result<AuthSession, DbError>>,
+    result: Result<AuthSession, DbError>,
+) {
+    if result_tx.send(result).is_err() {
+        log::debug!("[aws sso login] the waiting future is gone; dropping the login result");
+    }
+}
+
+/// Aborts an in-flight `aws sso login` when the future waiting on it is
+/// dropped before the login finished.
+#[derive(Default)]
+struct AbandonLoginGuard {
+    slot: Arc<Mutex<AbandonLoginSlot>>,
+    disarmed: bool,
+}
+
+#[derive(Default)]
+struct AbandonLoginSlot {
+    abandoned: bool,
+    abort_tx: Option<std::sync::mpsc::SyncSender<()>>,
+}
+
+impl AbandonLoginGuard {
+    /// Hands the login thread's abort sender to the guard. Returns `false`
+    /// when the waiting future was already dropped, after aborting the login.
+    fn attach(slot: &Mutex<AbandonLoginSlot>, abort_tx: &std::sync::mpsc::SyncSender<()>) -> bool {
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.abandoned {
+            send_abort(abort_tx);
+            return false;
+        }
+        slot.abort_tx = Some(abort_tx.clone());
+        true
+    }
+
+    fn is_abandoned(slot: &Mutex<AbandonLoginSlot>) -> bool {
+        slot.lock().unwrap_or_else(|e| e.into_inner()).abandoned
+    }
+
+    /// Registers the login's abort sender unless its waiting future is gone.
+    /// The check and the registration share the slot lock, so the guard's
+    /// drop cannot land between them and leave a stale login registered in
+    /// place of a retry's.
+    fn register_unless_abandoned(
+        slot: &Mutex<AbandonLoginSlot>,
+        profile_id: uuid::Uuid,
+        abort_tx: &std::sync::mpsc::SyncSender<()>,
+    ) -> Option<u64> {
+        let slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.abandoned {
+            return None;
+        }
+        Some(register_login_abort(profile_id, abort_tx.clone()))
+    }
+
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for AbandonLoginGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+
+        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+        slot.abandoned = true;
+        if let Some(abort_tx) = slot.abort_tx.take() {
+            log::debug!("[aws sso login] waiting future dropped, aborting the login");
+            send_abort(&abort_tx);
+        }
+    }
+}
+
+/// Signals an abort. A full channel already holds an abort and a closed one
+/// means the login already ended, so neither needs reporting.
+fn send_abort(abort_tx: &std::sync::mpsc::SyncSender<()>) {
+    if let Err(std::sync::mpsc::TrySendError::Full(())) = abort_tx.try_send(()) {
+        log::debug!("[aws sso login] abort already pending");
     }
 }
 
@@ -2518,7 +2694,7 @@ pub fn login_sso_blocking(
     profile_name: &str,
     sso_start_url: &str,
 ) -> Result<AuthSession, DbError> {
-    let handle = start_sso_login_blocking(profile_name)?;
+    let handle = start_sso_login_blocking(profile_name, |_| true)?;
     log::debug!(
         "AWS SSO login started for profile '{}', verification URL: {:?}",
         profile_name,
@@ -2570,6 +2746,141 @@ mod tests {
     use super::*;
     use dbflux_core::DynAuthProvider;
     use std::io::Write;
+
+    /// An abandoned login never registers, so it cannot replace a retry's
+    /// entry; a login still awaited registers as before.
+    #[test]
+    fn an_abandoned_login_does_not_register_its_abort_sender() {
+        let profile_id = uuid::Uuid::new_v4();
+        let (abandoned_tx, _abandoned_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let guard = AbandonLoginGuard::default();
+        let slot = Arc::clone(&guard.slot);
+        drop(guard);
+
+        assert_eq!(
+            AbandonLoginGuard::register_unless_abandoned(&slot, profile_id, &abandoned_tx),
+            None
+        );
+        assert!(
+            !abort_registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&profile_id)
+        );
+
+        let (live_tx, _live_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let live_guard = AbandonLoginGuard::default();
+        let login_id =
+            AbandonLoginGuard::register_unless_abandoned(&live_guard.slot, profile_id, &live_tx)
+                .expect("a login still awaited registers");
+        deregister_login_abort(profile_id, login_id);
+    }
+
+    /// A dropped login whose wait returns after a retry registered must not
+    /// remove the retry's entry, or the retry could no longer be cancelled.
+    #[test]
+    fn an_older_logins_deregistration_keeps_the_newer_login_registered() {
+        let profile_id = uuid::Uuid::new_v4();
+        let (older_tx, older_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let (newer_tx, newer_rx) = std::sync::mpsc::sync_channel::<()>(1);
+
+        let older_login = register_login_abort(profile_id, older_tx);
+        let newer_login = register_login_abort(profile_id, newer_tx);
+
+        deregister_login_abort(profile_id, older_login);
+        assert!(
+            abort_registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&profile_id),
+            "the newer login stays registered"
+        );
+
+        deregister_login_abort(profile_id, newer_login);
+        assert!(
+            !abort_registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&profile_id),
+            "the newer login removes its own entry"
+        );
+        assert!(!abort_sso_login(profile_id));
+        assert!(older_rx.try_recv().is_err());
+        assert!(newer_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn aborting_signals_the_current_logins_sender() {
+        let profile_id = uuid::Uuid::new_v4();
+        let (older_tx, older_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let (newer_tx, newer_rx) = std::sync::mpsc::sync_channel::<()>(1);
+
+        register_login_abort(profile_id, older_tx);
+        register_login_abort(profile_id, newer_tx);
+
+        assert!(abort_sso_login(profile_id));
+        assert!(newer_rx.try_recv().is_ok());
+        assert!(older_rx.try_recv().is_err());
+        assert!(!abort_sso_login(profile_id));
+    }
+
+    /// Dropping the future that waits on a login aborts that login, whether
+    /// the login thread registered its abort sender before or after the drop.
+    #[test]
+    fn abandoning_a_login_aborts_it() {
+        let (abort_tx, abort_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let guard = AbandonLoginGuard::default();
+        assert!(AbandonLoginGuard::attach(&guard.slot, &abort_tx));
+        drop(guard);
+        assert!(abort_rx.try_recv().is_ok(), "dropping the guard aborts");
+
+        let (late_tx, late_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let guard = AbandonLoginGuard::default();
+        let slot = Arc::clone(&guard.slot);
+        drop(guard);
+        assert!(!AbandonLoginGuard::attach(&slot, &late_tx));
+        assert!(
+            late_rx.try_recv().is_ok(),
+            "a login attached late is aborted"
+        );
+    }
+
+    /// The abort sender is offered to its owner before the CLI is waited on;
+    /// an owner that declines aborts the login and gets a cancellation error.
+    #[test]
+    fn a_declined_abort_hand_over_aborts_the_login() {
+        let (abort_tx, abort_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let mut offered = false;
+
+        let accepted = notify_abort_ready(
+            |_| {
+                offered = true;
+                true
+            },
+            &abort_tx,
+        );
+        assert!(accepted.is_ok());
+        assert!(offered);
+        assert!(
+            abort_rx.try_recv().is_err(),
+            "an accepted hand-over is left running"
+        );
+
+        let error = notify_abort_ready(|_| false, &abort_tx).expect_err("declined hand-over");
+        assert!(error.to_string().contains("cancelled"), "{error}");
+        assert!(abort_rx.try_recv().is_ok(), "a declined hand-over aborts");
+    }
+
+    /// A login that finished is left alone when its future goes away.
+    #[test]
+    fn a_finished_login_is_not_aborted() {
+        let (abort_tx, abort_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let mut guard = AbandonLoginGuard::default();
+        assert!(AbandonLoginGuard::attach(&guard.slot, &abort_tx));
+        guard.disarm();
+        drop(guard);
+        assert!(abort_rx.try_recv().is_err());
+    }
 
     fn write_sso_cache(dir: &std::path::Path, start_url: &str, json: &str) {
         let hash = Sha1::digest(start_url.as_bytes());
