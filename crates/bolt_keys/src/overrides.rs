@@ -1215,4 +1215,42 @@ mod tests {
 
         assert!(KeymapOverrides::from_rows(&vocabulary(), &defaults(), &[row]).is_empty());
     }
+
+    #[test]
+    fn an_unbound_command_that_gains_a_default_keeps_one_slot_and_skips_its_old_row() {
+        let vocabulary =
+            vocabulary().with_unbound_commands(vec![("sidebar", Cow::Borrowed("select_next"))]);
+        let slots = default_slots(&vocabulary, &defaults());
+        assert!(
+            slots
+                .iter()
+                .all(|slot| !(slot.command == "select_next" && slot.default_keys.is_none())),
+            "a command bound in its context gets no unbound slot"
+        );
+
+        let row = OverrideRow {
+            context: "sidebar".into(),
+            command_id: "select_next".into(),
+            default_keys: String::new(),
+            keys: Some("f2".into()),
+            predicate: None,
+        };
+        assert!(KeymapOverrides::from_rows(&vocabulary, &defaults(), &[row]).is_empty());
+    }
+
+    #[test]
+    fn an_unbound_slot_conflicts_with_an_inherited_global_binding() {
+        let vocabulary = unbound_vocabulary();
+        let overlap = ContextTreeOverlap::new(&vocabulary);
+        let clashes = KeymapOverrides::new().conflicts_for(
+            &vocabulary,
+            &defaults(),
+            &rename(),
+            &keys(chord("n", Modifiers::ctrl())),
+            "Sidebar",
+            &overlap,
+        );
+        assert_eq!(clashes.len(), 1);
+        assert_eq!(clashes[0].command, "new_query_tab");
+    }
 }
