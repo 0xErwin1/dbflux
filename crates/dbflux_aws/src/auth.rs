@@ -2388,12 +2388,40 @@ fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
 /// login modal) while the user completes the SSO flow in their browser.
 /// Registry of in-flight SSO login abort senders keyed by `AuthProfile.id`.
 /// Allows the UI to cancel a running login (kills the `aws sso login` process
-/// and unblocks the cache-polling loop).
-static ABORT_REGISTRY: OnceLock<Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncSender<()>>>> =
-    OnceLock::new();
+/// and unblocks the cache-polling loop). Each entry carries the id of the
+/// login that registered it, so a login deregisters only its own entry.
+static ABORT_REGISTRY: OnceLock<Mutex<HashMap<uuid::Uuid, RegisteredLogin>>> = OnceLock::new();
 
-fn abort_registry() -> &'static Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncSender<()>>> {
+static NEXT_LOGIN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+struct RegisteredLogin {
+    login_id: u64,
+    abort_tx: std::sync::mpsc::SyncSender<()>,
+}
+
+fn abort_registry() -> &'static Mutex<HashMap<uuid::Uuid, RegisteredLogin>> {
     ABORT_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Registers a login's abort sender for `profile_id`, replacing any earlier
+/// login's entry, and returns the id the login deregisters with.
+fn register_login_abort(profile_id: uuid::Uuid, abort_tx: std::sync::mpsc::SyncSender<()>) -> u64 {
+    let login_id = NEXT_LOGIN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+    map.insert(profile_id, RegisteredLogin { login_id, abort_tx });
+    login_id
+}
+
+/// Removes the entry for `profile_id` only while it still belongs to
+/// `login_id`; a newer login for the same profile keeps its entry.
+fn deregister_login_abort(profile_id: uuid::Uuid, login_id: u64) {
+    let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+    if map
+        .get(&profile_id)
+        .is_some_and(|registered| registered.login_id == login_id)
+    {
+        map.remove(&profile_id);
+    }
 }
 
 /// Signals the in-flight `aws sso login` for `profile_id` to abort.
@@ -2401,13 +2429,13 @@ fn abort_registry() -> &'static Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncS
 /// Returns `true` if an abort was signalled (a login was in flight),
 /// `false` if no login for this profile was tracked.
 pub fn abort_sso_login(profile_id: uuid::Uuid) -> bool {
-    let sender = {
+    let registered = {
         let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&profile_id)
     };
-    match sender {
-        Some(tx) => {
-            let _ = tx.try_send(());
+    match registered {
+        Some(registered) => {
+            send_abort(&registered.abort_tx);
             true
         }
         None => false,
@@ -2459,10 +2487,7 @@ async fn sso_login_with_url(
         }
 
         // Register the abort sender so the UI can cancel this login mid-flight.
-        {
-            let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(profile_id, handle.abort_tx.clone());
-        }
+        let login_id = register_login_abort(profile_id, handle.abort_tx.clone());
 
         // Fire the callback now — the URL is known, the user may still be
         // completing the browser flow.
@@ -2473,10 +2498,7 @@ async fn sso_login_with_url(
             wait_for_sso_session_blocking(profile_id, "aws-sso", &start_url, &handle.abort_flag);
 
         // Deregister on exit regardless of outcome.
-        {
-            let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
-            map.remove(&profile_id);
-        }
+        deregister_login_abort(profile_id, login_id);
 
         let _ = result_tx.send(session);
     });
@@ -2696,6 +2718,54 @@ mod tests {
     use super::*;
     use dbflux_core::DynAuthProvider;
     use std::io::Write;
+
+    /// A dropped login whose wait returns after a retry registered must not
+    /// remove the retry's entry, or the retry could no longer be cancelled.
+    #[test]
+    fn an_older_logins_deregistration_keeps_the_newer_login_registered() {
+        let profile_id = uuid::Uuid::new_v4();
+        let (older_tx, older_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let (newer_tx, newer_rx) = std::sync::mpsc::sync_channel::<()>(1);
+
+        let older_login = register_login_abort(profile_id, older_tx);
+        let newer_login = register_login_abort(profile_id, newer_tx);
+
+        deregister_login_abort(profile_id, older_login);
+        assert!(
+            abort_registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&profile_id),
+            "the newer login stays registered"
+        );
+
+        deregister_login_abort(profile_id, newer_login);
+        assert!(
+            !abort_registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&profile_id),
+            "the newer login removes its own entry"
+        );
+        assert!(!abort_sso_login(profile_id));
+        assert!(older_rx.try_recv().is_err());
+        assert!(newer_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn aborting_signals_the_current_logins_sender() {
+        let profile_id = uuid::Uuid::new_v4();
+        let (older_tx, older_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let (newer_tx, newer_rx) = std::sync::mpsc::sync_channel::<()>(1);
+
+        register_login_abort(profile_id, older_tx);
+        register_login_abort(profile_id, newer_tx);
+
+        assert!(abort_sso_login(profile_id));
+        assert!(newer_rx.try_recv().is_ok());
+        assert!(older_rx.try_recv().is_err());
+        assert!(!abort_sso_login(profile_id));
+    }
 
     /// Dropping the future that waits on a login aborts that login, whether
     /// the login thread registered its abort sender before or after the drop.

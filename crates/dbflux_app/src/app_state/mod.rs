@@ -2253,6 +2253,29 @@ impl AppState {
             .count()
     }
 
+    /// Cancels only `task_ids` among the profile's detached hook tasks, so a
+    /// caller that owns some of them leaves the rest (a retry's) running.
+    pub fn cancel_detached_hook_tasks_in(
+        &mut self,
+        profile_id: Uuid,
+        task_ids: &[TaskId],
+    ) -> usize {
+        if let Some(registered) = self.detached_hook_tasks.get_mut(&profile_id) {
+            for task_id in task_ids {
+                registered.remove(task_id);
+            }
+
+            if registered.is_empty() {
+                self.detached_hook_tasks.remove(&profile_id);
+            }
+        }
+
+        task_ids
+            .iter()
+            .filter(|task_id| self.facade.tasks.cancel(**task_id))
+            .count()
+    }
+
     pub fn cancel_all_detached_hook_tasks(&mut self) -> usize {
         let profile_ids: Vec<Uuid> = self.detached_hook_tasks.keys().copied().collect();
 
