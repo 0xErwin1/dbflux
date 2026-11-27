@@ -584,10 +584,14 @@ crates/
       audit.rs              # AuditRepository with AuditEventDto
       *.rs                  # Other domain repositories
     src/legacy.rs           # JSON-to-SQLite import
+  dbflux_diagram/           # Domain-free diagram geometry (no GPUI)
+    src/layout/             # layered_left_right / compact_grid / radial over LayoutNode + LayoutEdge (edge weight)
+    src/routing.rs          # route_edge: axis-aligned edge routes between node rectangles
+    src/navigation/         # next_in_direction / spatial_order: keyboard selection between nodes
   dbflux_schema_viz/        # Schema visualization
     src/lib.rs              # Re-exports: graph, layout, dbml, sql modules, DbmlScope, SqlScope
     src/graph.rs            # SchemaGraph, TableNode, FkEdge
-    src/layout.rs           # Layout algorithms: LeftRight, Snowflake, Compact
+    src/layout.rs           # Table sizing + LeftRight, Snowflake, Compact, placed by dbflux_diagram
     src/dbml.rs             # DBML export (3 scopes: FocalTable, Subgraph, FullSchema)
     src/sql.rs              # SQL DDL export: CREATE TABLE + ALTER TABLE ADD CONSTRAINT (same 3 scopes)
   dbflux_test_support/       # Docker containers and fixtures for integration tests
@@ -961,9 +965,19 @@ consultas de documentos guardadas usan la migración
   `ConsoleDocument` (`console_document/`, `DocumentKey::Console`) la aloja en su
   propia pestaña, que se abre desde el menú de una base de datos en la barra
   lateral.
+- **Diagram canvas**: `crates/dbflux_diagram/` contiene la geometría sin dominio
+  (layouts en capas, en cuadrícula compacta y radial sobre nodos con tamaño y
+  aristas ponderadas, enrutado ortogonal de aristas, navegación espacial con el
+  teclado) y `crates/dbflux_components/src/diagram/` el lienzo GPUI construido
+  sobre ella (matemática de viewport para pan/zoom/ajuste, cuadrícula de puntos y
+  superficie transformada, aristas dibujadas con un grosor, tarjeta de nodo con
+  ranuras de encabezado/cuerpo/pie). El contenido de los nodos y los manejadores
+  de eventos los aporta el consumidor; hoy el consumidor es el diagrama de
+  esquema.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provee `SchemaGraph`
   (nodos de tabla y aristas de clave foránea), algoritmos de layout (LeftRight,
-  Snowflake, Compact), exportación a DBML y
+  Snowflake, Compact) que dimensionan las tablas y delegan la colocación en
+  `dbflux_diagram`, exportación a DBML y
   exportación de DDL SQL. Se accede desde `SchemaVizDocument` en
   `crates/dbflux_ui_document/src/schema_viz/mod.rs`, con menús desplegables en
   la barra (Layout, Export), avisos toast, eventos de auditoría y carga

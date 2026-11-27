@@ -10,6 +10,7 @@
 pub mod accent;
 pub mod actions;
 pub mod density;
+pub mod diagram;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod accessibility;

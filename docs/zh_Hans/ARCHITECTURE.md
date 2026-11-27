@@ -557,10 +557,14 @@ crates/
       audit.rs              # 带 AuditEventDto 的 AuditRepository
       *.rs                  # 其他领域存储库
     src/legacy.rs           # JSON 到 SQLite 的导入
+  dbflux_diagram/           # 与领域无关的图表几何（不含 GPUI）
+    src/layout/             # 基于 LayoutNode + LayoutEdge（边权重）的 layered_left_right / compact_grid / radial
+    src/routing.rs          # route_edge：节点矩形之间沿坐标轴的边路由
+    src/navigation/         # next_in_direction / spatial_order：节点之间的键盘选择
   dbflux_schema_viz/        # Schema 可视化
     src/lib.rs              # 重导出：graph、layout、dbml、sql 模块，DbmlScope、SqlScope
     src/graph.rs            # SchemaGraph、TableNode、FkEdge
-    src/layout.rs           # 布局算法：LeftRight、Snowflake、Compact
+    src/layout.rs           # 表格尺寸计算 + LeftRight、Snowflake、Compact，由 dbflux_diagram 负责摆放
     src/dbml.rs             # DBML 导出（3 种范围：FocalTable、Subgraph、FullSchema）
     src/sql.rs              # SQL DDL 导出：CREATE TABLE + ALTER TABLE ADD CONSTRAINT（同样 3 种范围）
   dbflux_test_support/       # 用于集成测试的 Docker 容器与固件（Fixture）
@@ -670,7 +674,8 @@ crates/
 - **文档树**：`crates/dbflux_components/src/components/document_tree/` 面向文档数据库的层级式 JSON/BSON 查看器，支持键盘导航（j/k/h/l）、搜索（Ctrl+F 或 /）、可折叠节点，以及多种视图模式（仅键、键+预览、完整值）。
 - **键值视图**：`crates/dbflux_ui_document/src/key_value/` Redis 专用的文档标签页，按类型渲染（String、Hash、List、Set、SortedSet、Stream），支持分页、变更与右键菜单。通过 `key_value/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - **原生控制台**：`crates/dbflux_ui_document/src/console/` 是一个命令控制台，供驱动声明了 `DriverCapabilities::NATIVE_CONSOLE` 的连接使用；`DriverMetadata::native_console()` 根据查询语言推导其提示符与示例。命令先经过驱动 `LanguageService` 的校验与危险命令检测，再通过 `Connection::execute` 运行（当驱动提供隔离会话时，经由编辑器的 `ExecutionSessionBinding`）；确认后会携带已确认的上限，产生与编辑器相同的 `query_execute` 审计记录，并进入共享的查询历史。编辑器的行数上限只会发送给声明了 `DriverCapabilities::REQUEST_ROW_LIMIT` 的驱动。输入补全复用编辑器的 `QueryCompletionProvider`。键值文档以及表和集合的 `DataDocument` 会停靠该控制台；`ConsoleDocument`（`console_document/`、`DocumentKey::Console`）则在单独的标签页中承载它，可从数据库在侧边栏中的菜单打开。
-- **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
+- **图表画布**：`crates/dbflux_diagram/` 提供与领域无关的几何能力（基于带尺寸节点与带权重边的分层、紧凑网格和放射状布局，正交边路由，空间键盘导航），`crates/dbflux_components/src/diagram/` 则是构建在其上的 GPUI 画布（用于平移/缩放/适应窗口的视口计算、点阵网格与变换后的表面、带宽度绘制的边、带页眉/主体/页脚插槽的节点卡片）。节点内容与事件处理器由使用方提供；目前的使用方是 Schema 图。
+- **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact，负责计算表格尺寸并将摆放委托给 `dbflux_diagram`）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。
 - 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。
 - 命令面板：`crates/dbflux_ui/src/ui/overlays/command_palette.rs` 面向全部应用动作的模糊搜索命令面板。

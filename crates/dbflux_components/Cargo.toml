@@ -30,6 +30,7 @@ gpui.workspace = true
 gpui-component.workspace = true
 gpui-base = { path = "../../vendor/gpui-base" }
 dbflux_core.workspace = true
+dbflux_diagram.workspace = true
 dbflux_i18n.workspace = true
 tree-sitter-sequel.workspace = true
 tree-sitter-cypher.workspace = true

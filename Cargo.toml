@@ -47,6 +47,7 @@ members = [
     "crates/dbflux_approval",
     "crates/dbflux_audit",
     "crates/dbflux_storage",
+    "crates/dbflux_diagram",
     "crates/dbflux_schema_viz",
     "crates/dbflux_driver_influxdb",
     "crates/dbflux_portability",
@@ -121,6 +122,7 @@ dbflux_policy = { path = "crates/dbflux_policy" }
 dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
+dbflux_diagram = { path = "crates/dbflux_diagram" }
 dbflux_schema_viz = { path = "crates/dbflux_schema_viz" }
 dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
 dbflux_portability = { path = "crates/dbflux_portability" }

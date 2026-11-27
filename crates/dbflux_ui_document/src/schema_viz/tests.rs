@@ -3,7 +3,9 @@ use super::routing::{NodeBounds, RoutePoint, route_foreign_key};
 ///
 /// Imports are kept minimal (no `super::*`) to avoid triggering GPUI proc-macro
 /// expansion across the full parent module during test compilation.
-use super::{LoadedSchemaData, SchemaVizDocument, fit_diagram, pixel_aligned_diagram_pan};
+use super::{
+    LoadedSchemaData, SchemaVizDocument, fit_diagram, pixel_aligned_diagram_pan, row_anchor_y,
+};
 use dbflux_core::{ColumnInfo, ForeignKeyInfo, SchemaForeignKeyInfo, TableInfo};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
@@ -2229,4 +2231,30 @@ fn a_fabricated_relation_is_complete_when_the_bulk_calls_succeeded() {
     assert!(bulk.relation_is_complete(&fabricated));
     bulk.fetched_foreign_keys = None;
     assert!(!bulk.relation_is_complete(&fabricated));
+}
+
+#[test]
+fn a_foreign_key_anchors_on_its_column_row_or_the_body_top() {
+    use dbflux_schema_viz::graph::ColumnSummary;
+    use dbflux_schema_viz::layout::{NODE_BODY_TOP_PX, NODE_HEADER_PX, NODE_ROW_PX};
+
+    let column = |name: &str| ColumnSummary {
+        name: name.to_owned(),
+        type_name: "int".to_owned(),
+        is_pk: false,
+        is_fk: false,
+        nullable: false,
+    };
+    let columns = [column("id"), column("owner_id")];
+    let body_top = NODE_HEADER_PX + NODE_BODY_TOP_PX;
+
+    assert_eq!(
+        row_anchor_y(&columns, Some(&"owner_id".to_owned())),
+        body_top + NODE_ROW_PX + NODE_ROW_PX / 2.0
+    );
+    assert_eq!(
+        row_anchor_y(&columns, Some(&"missing".to_owned())),
+        body_top
+    );
+    assert_eq!(row_anchor_y(&columns, None), body_top);
 }
