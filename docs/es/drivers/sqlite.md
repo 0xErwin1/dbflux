@@ -53,6 +53,12 @@ Base de datos embebida basada en archivos.
   de una tabla origen, y un toggle de integridad referencial por conexión
   (`PRAGMA foreign_keys`) para migraciones seguras con FK.
 - Informa dónde rechazó SQLite un statement, cuando SQLite da una posición: un error de sintaxis con un token ofensor lleva su desplazamiento en bytes (`rusqlite::Error::SqlInputError`), desplazado por el inicio del statement cuando es uno de varios en un script, y el editor marca ese token. El editor marca el token solo mientras el texto enviado siga coincidiendo con el del editor: una edición antes de que vuelva el error, o un cambio del texto antes de enviarlo, no deja marca. Un error sin token, como un `SELECT * FROM` incompleto, no tiene posición ni marca.
+- Plan de query estructurado (`Connection::query_plan`): ejecuta `EXPLAIN QUERY
+  PLAN` sobre exactamente un statement, así que el statement no se ejecuta, y
+  construye el árbol del plan a partir de las filas `id`/`parent` (operación,
+  relación, índice, condición de acceso). SQLite no reporta costos ni
+  estimaciones de filas. Un query con varios statements, o uno vacío, se rechaza
+  antes de enviar nada.
 
 ## Limitaciones
 

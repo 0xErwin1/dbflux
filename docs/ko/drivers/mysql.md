@@ -49,6 +49,7 @@
 실행 중인 서버 상태의 표 형태 스냅샷을 노출합니다:
 
 - `mysql.processlist` — `information_schema.PROCESSLIST`의 활성 세션(user, host, db, command, time, state, info)
+- 구조화된 쿼리 계획(`Connection::query_plan`): 정확히 하나의 문에 `EXPLAIN FORMAT=JSON`을 실행하며 `ANALYZE`는 절대 사용하지 않으므로 문은 실행되지 않습니다. MySQL 8과 MariaDB의 계획 트리(테이블, 접근 유형, 키, 검사했거나 예상한 행 수, 비용, 기타 속성)를 드라이버에 독립적인 계획 모델로 매핑합니다. 여러 문으로 된 쿼리나 빈 쿼리는 아무것도 전송하기 전에 거부됩니다.
 
 ## 제한 사항
 

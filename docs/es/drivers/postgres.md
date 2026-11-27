@@ -27,6 +27,12 @@ Base de datos relacional open-source avanzada.
 - Soporta autenticación, SSL, túnel SSH, y modos de conexión URI/manual. Como en libpq, `verify-ca` valida solo la cadena de certificados y `verify-full` además comprueba el nombre del host.
 - Archivos de certificado TLS: los campos de certificado raíz, certificado de cliente y clave de cliente del Connection Manager, o los parámetros URI de libpq `sslrootcert`, `sslcert` y `sslkey` (por ejemplo `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). Con `verify-ca` y `verify-full` el certificado raíz se agrega a las raíces de confianza; los demás modos no validan la cadena y lo ignoran. El certificado y la clave de cliente se presentan para TLS mutuo en todos los modos excepto `disable`. Los archivos son PEM; la clave de cliente debe ser PKCS#8. Un archivo inexistente, ilegible o inválido, o un certificado de cliente sin su clave (o al revés), hace fallar la conexión con un error que nombra el archivo, antes de cualquier intento de conexión. Con `sslmode=disable` los archivos se ignoran.
 - Soporta cancelación de queries a través de los cancel tokens de PostgreSQL.
+- Plan de query estructurado (`Connection::query_plan`): ejecuta `EXPLAIN
+  (FORMAT JSON)` sobre exactamente un statement, nunca `ANALYZE`, así que el
+  statement no se ejecuta, y mapea el árbol del plan (operación, relación,
+  índice, costos y filas estimados, otros atributos) al modelo de plan
+  independiente del driver. Un query con varios statements, o uno vacío, se
+  rechaza antes de enviar nada.
 - Incluye generación de SQL/código específica de PostgreSQL para CRUD, índices,
   reindex, foreign keys, y operaciones de tipos.
 - Los scripts multi-sentencia (varias sentencias separadas por `;`) se ejecutan

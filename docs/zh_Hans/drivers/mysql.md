@@ -50,6 +50,7 @@
 以表格形式呈现运行中服务器状态的快照：
 
 - `mysql.processlist` —— 来自 `information_schema.PROCESSLIST` 的活动会话（用户、主机、数据库、命令、时间、状态、信息）
+- 结构化查询计划（`Connection::query_plan`）：对恰好一条语句运行 `EXPLAIN FORMAT=JSON`，绝不使用 `ANALYZE`，因此该语句不会被执行，并把 MySQL 8 与 MariaDB 的计划树（表、访问类型、键、检查或预估的行数、成本、其他属性）映射到与驱动程序无关的计划模型。包含多条语句的查询或空查询会在发送任何内容之前被拒绝。
 
 ## 限制
 

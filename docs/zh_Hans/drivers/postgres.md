@@ -18,6 +18,7 @@
 - 支持身份认证、SSL、SSH 隧道，以及 URI/手动两种连接模式。与 libpq 一致，`verify-ca` 只校验证书链，`verify-full` 还会校验主机名。
 - TLS 证书文件：Connection Manager 中的根证书、客户端证书和客户端密钥字段，或 libpq URI 参数 `sslrootcert`、`sslcert` 和 `sslkey`（例如 `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`）。在 `verify-ca` 和 `verify-full` 下，根证书会加入受信任的根；其他模式不校验证书链，会忽略它。除 `disable` 外，所有模式都会出示客户端证书和密钥以进行双向 TLS。文件为 PEM 格式，客户端密钥必须是 PKCS#8。文件不存在、不可读或无效，或只有客户端证书而没有对应密钥（或相反）时，连接会在任何连接尝试之前失败，错误信息会指明该文件。`sslmode=disable` 时这些文件会被忽略。
 - 通过 PostgreSQL 的取消令牌支持查询取消。
+- 结构化查询计划（`Connection::query_plan`）：对恰好一条语句运行 `EXPLAIN (FORMAT JSON)`，绝不使用 `ANALYZE`，因此该语句不会被执行，并把计划树（操作、关系、索引、预估成本与行数、其他属性）映射到与驱动程序无关的计划模型。包含多条语句的查询或空查询会在发送任何内容之前被拒绝。
 - 包含 PostgreSQL 专属的 SQL/代码生成，面向 CRUD、索引、重建索引（reindex）、外键与类型操作。
 - 多语句脚本（若干以 `;` 分隔的语句）通过简单查询协议作为一个批次执行，每个语句返回一个结果集。
 - 查询引发的服务器通知和警告（例如单独的 `COMMIT` 产生的 `WARNING: there is no transaction in progress`，或 `RAISE NOTICE`）会随其结果一并返回；批次会把它们全部附加到主结果上，失败的查询会丢弃它们。每个查询保留前 100 条通知，并附加一条说明其余数量的通知。

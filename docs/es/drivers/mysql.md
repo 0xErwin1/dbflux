@@ -89,6 +89,12 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 
 - `mysql.processlist` — sesiones activas de `information_schema.PROCESSLIST`
   (user, host, db, command, time, state, info)
+- Plan de query estructurado (`Connection::query_plan`): ejecuta `EXPLAIN
+  FORMAT=JSON` sobre exactamente un statement, nunca `ANALYZE`, así que el
+  statement no se ejecuta, y mapea los árboles de plan de MySQL 8 y MariaDB
+  (tabla, tipo de acceso, clave, filas examinadas o estimadas, costos, otros
+  atributos) al modelo de plan independiente del driver. Un query con varios
+  statements, o uno vacío, se rechaza antes de enviar nada.
 
 ## Limitaciones
 
