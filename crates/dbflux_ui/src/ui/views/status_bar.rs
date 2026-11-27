@@ -181,7 +181,10 @@ impl StatusBar {
                     failed: counts.failed + 1,
                     ..counts
                 },
-                TaskStatus::Completed | TaskStatus::Cancelled => counts,
+                TaskStatus::Completed
+                | TaskStatus::Cancelled
+                | TaskStatus::Pending
+                | TaskStatus::Skipped => counts,
             })
     }
 
@@ -289,10 +292,13 @@ impl StatusBar {
             StatementSummary::Running(text) => (AppIcon::Loader, tint, text),
             StatementSummary::Finished { status, text } => match status {
                 TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger, text),
-                TaskStatus::Cancelled => (AppIcon::CircleX, theme.muted_foreground, text),
-                TaskStatus::Completed | TaskStatus::Running | TaskStatus::Cancelling => {
-                    (AppIcon::Check, theme.success, text)
+                TaskStatus::Cancelled | TaskStatus::Skipped => {
+                    (AppIcon::CircleX, theme.muted_foreground, text)
                 }
+                TaskStatus::Completed
+                | TaskStatus::Running
+                | TaskStatus::Cancelling
+                | TaskStatus::Pending => (AppIcon::Check, theme.success, text),
             },
             StatementSummary::Ready => (
                 AppIcon::Check,

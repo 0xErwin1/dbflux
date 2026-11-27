@@ -131,9 +131,10 @@ pub use core::{
     PublicAccessStatus, QueryCancelHandle, QueryErrorFormatter, RelationalConnection,
     SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind,
     SchemaSnapshotAuthority, ShutdownCoordinator, ShutdownPhase, SourceContextSpec,
-    SourceQueryMode, StatementLocator, TaskHandle, TaskId, TaskKind, TaskManager, TaskRequest,
-    TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, TransactionStateNote, Value, VersioningStatus,
-    byte_offset_to_line_column, char_position_to_byte_offset, redact_uri_credentials, sanitize_uri,
+    SourceQueryMode, StatementLocator, TaskBusy, TaskHandle, TaskId, TaskKind, TaskManager,
+    TaskRequest, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, TransactionStateNote, Value,
+    VersioningStatus, byte_offset_to_line_column, char_position_to_byte_offset,
+    redact_uri_credentials, sanitize_uri,
 };
 
 pub use data::{AggregatePipelineError, CollectionAggregateRequest, parse_aggregate_pipeline};

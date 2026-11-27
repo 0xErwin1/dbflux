@@ -2203,6 +2203,31 @@ impl AppState {
         self.facade.tasks.start_handle(request)
     }
 
+    /// Starts the task unless one of the same kind group and target is in
+    /// flight. See [`dbflux_core::TaskManager::try_start`].
+    pub fn try_start_task(
+        &mut self,
+        request: dbflux_core::TaskRequest,
+    ) -> Result<dbflux_core::TaskHandle, dbflux_core::TaskBusy> {
+        self.facade.tasks.try_start(request)
+    }
+
+    pub fn is_task_busy(
+        &self,
+        kind: dbflux_core::TaskKind,
+        target: &dbflux_core::TaskTarget,
+    ) -> bool {
+        self.facade.tasks.is_busy(kind, target)
+    }
+
+    pub fn child_tasks(&self, id: TaskId) -> Vec<TaskSnapshot> {
+        self.facade.tasks.children_of(id)
+    }
+
+    pub fn activate_task(&mut self, id: TaskId) -> bool {
+        self.facade.tasks.activate(id)
+    }
+
     pub fn request_cancel_task(&mut self, id: TaskId) -> dbflux_core::CancelRequestOutcome {
         self.facade.tasks.request_cancel(id)
     }

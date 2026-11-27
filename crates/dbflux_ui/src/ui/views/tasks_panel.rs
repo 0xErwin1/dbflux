@@ -337,6 +337,7 @@ impl TasksPanel {
             TaskStatus::Completed => (AppIcon::CircleCheck, theme.success),
             TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger),
             TaskStatus::Cancelled => (AppIcon::CircleX, theme.muted_foreground),
+            TaskStatus::Pending | TaskStatus::Skipped => (AppIcon::CircleX, theme.muted_foreground),
         }
     }
 
@@ -649,9 +650,9 @@ fn visible_finished_tasks(recent_tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> 
     recent_tasks
         .into_iter()
         .filter(|task| match task.status {
-            TaskStatus::Running | TaskStatus::Cancelling => false,
+            TaskStatus::Running | TaskStatus::Cancelling | TaskStatus::Pending => false,
             TaskStatus::Failed(_) => true,
-            TaskStatus::Completed | TaskStatus::Cancelled => {
+            TaskStatus::Completed | TaskStatus::Cancelled | TaskStatus::Skipped => {
                 other_finished_count += 1;
                 other_finished_count <= RECENT_FINISHED_TASK_LIMIT
             }
