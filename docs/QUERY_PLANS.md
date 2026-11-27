@@ -16,7 +16,9 @@ asks the database for the plan and never runs the statement.
 To plan the query behind a result, right-click a cell (or press `m`) and choose
 **Explain this query**: it explains the query that produced that result tab, not
 the text now in the editor, and is offered only when the connection's driver has
-query plans.
+query plans. On a driver that keeps one session for every database (such as
+MySQL or SQL Server), a result is not planned once the session has moved to
+another database: the Plan tab says so, and you switch back and explain again.
 
 Explaining again replaces the Plan tab. Close it with the button on the tab, or
 with `Alt+W` while it is shown.

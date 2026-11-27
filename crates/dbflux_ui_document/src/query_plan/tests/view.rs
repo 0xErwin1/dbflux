@@ -286,6 +286,31 @@ fn the_plan_warnings_band_shows_only_when_there_are_warnings(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn a_long_warning_wraps_in_a_scrollable_band_instead_of_being_cut(cx: &mut TestAppContext) {
+    let mut short = open(cx);
+    short.ready(&weekly_revenue());
+    let one_line = short
+        .window
+        .debug_bounds("plan-warnings")
+        .expect("the band is drawn")
+        .size
+        .height;
+
+    let mut long = open(cx);
+    let mut plan = weekly_revenue();
+    plan.warnings = vec!["Reads the whole table and sorts it on disk. ".repeat(40)];
+    long.ready(&plan);
+    let tall = long
+        .window
+        .debug_bounds("plan-warnings")
+        .expect("the band is drawn")
+        .size
+        .height;
+
+    assert!(tall > one_line, "{tall:?} against {one_line:?}");
+}
+
+#[gpui::test]
 fn the_zoom_controls_belong_to_the_diagram_only(cx: &mut TestAppContext) {
     let mut plan = open(cx);
     plan.ready(&weekly_revenue());
@@ -456,6 +481,67 @@ fn the_inspector_holds_the_description_then_estimate_reads_and_details(cx: &mut 
             "{field}"
         );
     }
+}
+
+#[gpui::test]
+fn the_inspector_shows_the_key_condition_once_even_when_details_omit_or_repeat_it(
+    cx: &mut TestAppContext,
+) {
+    let mut plan = open(cx);
+    plan.ready(&weekly_revenue());
+    plan.click("plan-node-5");
+    let inspector = plan
+        .inspectors
+        .borrow()
+        .last()
+        .cloned()
+        .and_then(|content| content.downcast::<PlanInspector>().ok())
+        .expect("the rail content is the plan inspector");
+
+    let mut node = plan
+        .window
+        .update(|_, cx| inspector.read(cx).node().clone());
+    node.key_condition = Some(dbflux_core::PlanCondition {
+        label: "Index Cond".into(),
+        value: "(id = 1)".into(),
+    });
+
+    let count_after = |plan: &mut Harness<'_>, details: Vec<(String, String)>| {
+        let mut node = node.clone();
+        node.details = details;
+        let inspector = plan
+            .window
+            .update(|_, cx| cx.new(|cx| PlanInspector::new(node, cx)));
+        struct Mount(Entity<PlanInspector>);
+        impl Render for Mount {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(self.0.clone())
+            }
+        }
+        let (_mount, rail) = plan.window.add_window_view(|_, _| Mount(inspector));
+        rail.run_until_parked();
+        let key_condition = rail
+            .debug_bounds("plan-inspector-field-key-condition")
+            .is_some();
+        let duplicate = rail.debug_bounds("plan-inspector-detail-0").is_some();
+        (key_condition, duplicate)
+    };
+
+    assert_eq!(
+        count_after(&mut plan, Vec::new()),
+        (true, false),
+        "a driver that keeps the condition out of details still shows it"
+    );
+    assert_eq!(
+        count_after(&mut plan, vec![("Index Cond".into(), "(id = 1)".into())]),
+        (true, false),
+        "a detail that repeats the condition is not listed twice"
+    );
+    assert_eq!(
+        count_after(&mut plan, vec![("Output".into(), "id".into())]),
+        (true, true),
+        "other details stay"
+    );
 }
 
 #[gpui::test]

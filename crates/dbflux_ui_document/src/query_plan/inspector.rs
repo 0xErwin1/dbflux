@@ -242,26 +242,42 @@ impl PlanInspector {
         rows
     }
 
+    /// The key condition as its own labelled row, then the driver's details.
+    /// A detail that repeats the key condition is left out so the condition is
+    /// not listed twice; drivers that keep it out of `details` still show it.
     fn detail_rows(&self, cx: &App) -> Vec<AnyElement> {
-        self.node
-            .details
-            .iter()
-            .enumerate()
-            .map(|(position, (key, value))| {
-                let is_key_condition =
-                    self.node.key_condition.as_ref().is_some_and(|condition| {
-                        &condition.label == key && &condition.value == value
-                    });
-                let tooltip = is_key_condition.then(|| {
-                    (
-                        key.clone(),
-                        dbflux_i18n::t!("document.query_plan.tooltip.condition_body"),
-                    )
-                });
+        let condition = self.node.key_condition.as_ref();
+        let mut rows = Vec::new();
 
-                self.field_by_position(position, key.clone(), value.clone(), tooltip, cx)
-            })
-            .collect()
+        if let Some(condition) = condition {
+            rows.push(self.field(
+                "key-condition",
+                condition.label.clone(),
+                condition.value.clone(),
+                Some((
+                    condition.label.clone(),
+                    dbflux_i18n::t!("document.query_plan.tooltip.condition_body"),
+                )),
+                cx,
+            ));
+        }
+
+        rows.extend(
+            self.node
+                .details
+                .iter()
+                .enumerate()
+                .filter(|(_, (key, value))| {
+                    !condition.is_some_and(|condition| {
+                        &condition.label == key && &condition.value == value
+                    })
+                })
+                .map(|(position, (key, value))| {
+                    self.field_by_position(position, key.clone(), value.clone(), None, cx)
+                }),
+        );
+
+        rows
     }
 
     /// A detail row, whose id is its position since engine keys can repeat.

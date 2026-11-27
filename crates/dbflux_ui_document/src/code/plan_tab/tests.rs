@@ -311,6 +311,17 @@ impl Doc<'_> {
     /// A result tab for "SELECT 1" that ran on the connection the document
     /// started with, then points the document at `other`.
     fn result_from_origin_then_switch_to(&mut self, other: uuid::Uuid) {
+        self.result_from_origin_database(None);
+        self.window.update(|_, cx| {
+            self.document
+                .update(cx, |document, _| document.connection_id = Some(other));
+        });
+        self.settle();
+    }
+
+    /// A result tab for "SELECT 1" that ran on the starting connection while
+    /// it was on `database`.
+    fn result_from_origin_database(&mut self, database: Option<&str>) {
         self.window.update(|window, cx| {
             let origin_connection = self
                 .app_state
@@ -330,7 +341,7 @@ impl Doc<'_> {
                         connection_id: self.profile_id,
                         context: ExecutionSessionContext {
                             root: origin_connection,
-                            database: None,
+                            database: database.map(str::to_string),
                         },
                         exec_ctx: Default::default(),
                         language: QueryLanguage::Sql,
@@ -339,7 +350,6 @@ impl Doc<'_> {
                     cx,
                 );
                 document.layout = SqlQueryLayout::Split;
-                document.connection_id = Some(other);
             });
         });
         self.settle();
@@ -1203,4 +1213,186 @@ fn the_translations_keep_the_placeholders_of_the_english_text() {
             }
         }
     }
+}
+
+#[gpui::test]
+fn a_batch_result_takes_the_area_from_the_plan_but_the_tab_stays(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1; SELECT 2");
+    doc.explain_and_settle();
+    assert!(doc.plan_shown());
+
+    doc.window.update(|window, cx| {
+        let mut batch = (*one_row_result()).clone();
+        batch.additional_results.push((*one_row_result()).clone());
+        doc.document.update(cx, |document, cx| {
+            document.setup_data_grid(
+                Arc::new(batch),
+                "SELECT 1; SELECT 2".into(),
+                None,
+                None,
+                window,
+                cx,
+            );
+        });
+    });
+    doc.settle();
+
+    let results = doc
+        .window
+        .update(|_, cx| doc.document.read(cx).result_tabs.result_tabs.len());
+    assert_eq!(results, 2, "one tab per statement");
+    assert!(!doc.plan_shown(), "the results are shown, not the plan");
+    assert!(doc.has_plan_tab());
+}
+
+#[gpui::test]
+fn a_plan_that_cannot_find_its_connection_is_reported_centrally(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.window.update(|_, cx| {
+        cx.set_global(dbflux_ui_base::app_state_entity::AppStateGlobal {
+            entity: doc.app_state.clone(),
+        });
+        doc.document
+            .update(cx, |document, _| document.connection_id = None);
+    });
+
+    doc.window.update(|_, cx| {
+        doc.document.update(cx, |document, cx| {
+            document.start_plan(
+                super::PlanTarget {
+                    route: super::PlanRoute::Current,
+                    text: "SELECT 1".into(),
+                    scope: "Statement L1–1".into(),
+                    statement_count: 1,
+                },
+                cx,
+            );
+        });
+    });
+
+    let unread = doc
+        .window
+        .update(|_, cx| doc.app_state.read(cx).unread_error_count);
+    assert_eq!(unread, 1, "the failure reaches the error badge");
+    assert!(doc.requests().is_empty());
+    assert!(!doc.has_plan_tab());
+}
+
+fn set_active_database(doc: &mut Doc<'_>, database: &str) {
+    let id = doc.profile_id;
+    doc.window.update(|_, cx| {
+        doc.app_state.update(cx, |state, _| {
+            if let Some(connected) = state.connections_mut().get_mut(&id) {
+                connected.active_database = Some(database.to_string());
+            }
+        });
+    });
+}
+
+#[gpui::test]
+fn a_result_is_not_planned_on_a_shared_session_that_moved_to_another_database(
+    cx: &mut TestAppContext,
+) {
+    let driver = FakeDriver::new(DbKind::MySQL).with_query_plan(sample_plan());
+    let mut doc = open(cx, driver, "SELECT 2");
+    doc.result_from_origin_database(Some("shop"));
+    set_active_database(&mut doc, "reporting");
+
+    doc.explain_from_result_menu();
+
+    assert!(doc.requests().is_empty(), "nothing is planned");
+    let message = doc.plan_state(|state| match state {
+        PlanState::Failed(failure) => Some(failure.summary.clone()),
+        _ => None,
+    });
+    let message = message.expect("the tab says why");
+    assert!(
+        message.contains("shop") && message.contains("reporting"),
+        "{message}"
+    );
+}
+
+#[gpui::test]
+fn a_result_is_planned_on_a_shared_session_still_on_its_database(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::MySQL).with_query_plan(sample_plan());
+    let mut doc = open(cx, driver, "SELECT 2");
+    doc.result_from_origin_database(Some("shop"));
+    set_active_database(&mut doc, "shop");
+
+    doc.explain_from_result_menu();
+
+    assert_eq!(doc.requests(), ["SELECT 1"]);
+    assert!(doc.plan_state(ready));
+}
+
+#[gpui::test]
+fn a_plan_that_finishes_after_a_newer_query_started_leaves_the_documents_state_alone(
+    cx: &mut TestAppContext,
+) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.explain();
+    doc.window.update(|_, cx| {
+        doc.document.update(cx, |document, _| {
+            let newer = document
+                .execution
+                .active_query_task
+                .as_mut()
+                .expect("the plan is the active task");
+            newer.task_id = uuid::Uuid::new_v4();
+            document.state = crate::types::DocumentState::Executing;
+        });
+    });
+
+    doc.settle();
+
+    assert!(doc.plan_state(ready), "its own tab still gets the plan");
+    let state = doc.window.update(|_, cx| doc.document.read(cx).state);
+    assert_eq!(state, crate::types::DocumentState::Executing);
+    let active = doc
+        .window
+        .update(|_, cx| doc.document.read(cx).execution.active_query_task.is_some());
+    assert!(active, "the newer query is still the active one");
+    assert_eq!(doc.events(), ["started"], "no completion for the newer one");
+}
+
+#[gpui::test]
+fn the_previous_query_error_does_not_cover_the_plan_but_comes_back_with_the_results(
+    cx: &mut TestAppContext,
+) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.window.update(|_, cx| {
+        doc.document.update(cx, |document, _| {
+            document
+                .execution
+                .execution_history
+                .push(crate::code::ExecutionRecord {
+                    id: uuid::Uuid::new_v4(),
+                    started_at: std::time::Instant::now(),
+                    finished_at: None,
+                    result: None,
+                    error: Some("relation \"missing\" does not exist".into()),
+                    rows_affected: None,
+                    is_script: false,
+                });
+            document.execution.active_execution_index = Some(0);
+            document.layout = SqlQueryLayout::Split;
+        });
+    });
+    doc.settle();
+    assert!(doc.has("code-result-error"), "the error shows on its own");
+
+    doc.explain_and_settle();
+
+    assert!(doc.has("plan-view"));
+    assert!(!doc.has("code-result-error"), "the plan is not covered");
+
+    doc.window.update(|_, cx| {
+        doc.document
+            .update(cx, |document, cx| document.leave_plan_tab(cx));
+    });
+    doc.settle();
+    assert!(
+        doc.has("code-result-error"),
+        "the error is kept for the results"
+    );
 }

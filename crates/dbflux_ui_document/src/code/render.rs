@@ -623,7 +623,8 @@ impl CodeDocument {
             .execution
             .active_execution_index
             .and_then(|i| self.execution.execution_history.get(i))
-            .and_then(|r| r.error.clone());
+            .and_then(|r| r.error.clone())
+            .filter(|_| !self.plan_shown());
 
         let has_error = error.is_some();
         let has_live_output = self.execution.live_output.is_some() && !has_error;
@@ -948,14 +949,19 @@ impl CodeDocument {
 
     fn render_error_state(&self, error: &str, _cx: &mut Context<Self>) -> impl IntoElement {
         let icon = Icon::new(AppIcon::CircleX).size(Heights::ICON_SM);
-        div().p(Spacing::MD).size_full().overflow_y_hidden().child(
-            BannerBlock::new(
-                BannerVariant::Danger,
-                dbflux_i18n::t!("document.code.result.error.title"),
+        div()
+            .p(Spacing::MD)
+            .size_full()
+            .overflow_y_hidden()
+            .debug_selector(|| "code-result-error".to_string())
+            .child(
+                BannerBlock::new(
+                    BannerVariant::Danger,
+                    dbflux_i18n::t!("document.code.result.error.title"),
+                )
+                .with_icon(icon)
+                .with_pre(error.to_string()),
             )
-            .with_icon(icon)
-            .with_pre(error.to_string()),
-        )
     }
 
     fn render_empty_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {

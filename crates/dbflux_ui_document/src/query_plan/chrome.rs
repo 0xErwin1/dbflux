@@ -7,7 +7,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::diagram as canvas;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem};
-use dbflux_components::tokens::{ChromeColors, ResultMetrics, Spacing};
+use dbflux_components::tokens::{ChromeColors, ResultMetrics, Spacing, ui};
 use dbflux_core::PlanFormat;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, FontWeight, Role, SharedString, Window, div};
@@ -243,7 +243,7 @@ impl PlanView {
             tagged("plan-warnings")
                 .flex()
                 .flex_none()
-                .items_center()
+                .items_start()
                 .gap(Spacing::SM)
                 .px(ResultMetrics::FOOTER_PADDING_X)
                 .py(Spacing::SM)
@@ -262,10 +262,11 @@ impl PlanView {
                         .child(heading),
                 )
                 .child(
-                    div()
+                    tagged("plan-warnings-text")
                         .flex_1()
                         .min_w_0()
-                        .truncate()
+                        .max_h(ui(96.0))
+                        .overflow_y_scroll()
                         .text_color(theme.muted_foreground)
                         .child(model.warnings.join(" · ")),
                 )

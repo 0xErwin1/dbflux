@@ -13,7 +13,7 @@
 use super::*;
 use crate::query_plan::{self, PlanFailure, PlanView, PlanViewEvent, PlanViewMode};
 use dbflux_core::{DbError, QueryPlan, QueryPlanRequest};
-use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, record_error};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, record_error, report_error};
 
 /// The connection a plan is asked of.
 #[derive(Clone, Debug, PartialEq)]
@@ -247,11 +247,13 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) -> Option<(Arc<dyn dbflux_core::Connection>, dbflux_core::TaskTarget)> {
         let Some(conn_id) = route.connection_id(self.connection_id) else {
-            let message = dbflux_i18n::t!("document.code.execution.toast.no_active_connection");
-            Toast::error(message.clone())
-                .meta_right(now_hms())
-                .action(copy_action(message))
-                .push(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.code.execution.toast.no_active_connection"),
+                ),
+                cx,
+            );
             return None;
         };
 
@@ -259,10 +261,7 @@ impl CodeDocument {
             let connections = self.app_state.read(cx).connections();
             let Some(connected) = connections.get(&conn_id) else {
                 let message = dbflux_i18n::t!("document.code.execution.toast.connection_not_found");
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                report_error(UserFacingError::new(ErrorKind::User, message), cx);
                 return None;
             };
 
@@ -293,13 +292,41 @@ impl CodeDocument {
                     "document.code.execution.toast.connecting",
                     database = database
                 );
-                Toast::error(message.clone())
-                    .meta_right(now_hms())
-                    .action(copy_action(message))
-                    .push(cx);
+                report_error(UserFacingError::new(ErrorKind::User, message), cx);
                 None
             }
         }
+    }
+
+    /// Why a result cannot be explained on its origin database: its driver
+    /// keeps one session for every database and the session is no longer on
+    /// the database the result ran on, so the plan request (which carries no
+    /// database) would be planned against the wrong one.
+    fn origin_database_changed(&self, route: &PlanRoute, cx: &App) -> Option<String> {
+        let PlanRoute::Origin {
+            connection_id,
+            database: Some(origin),
+        } = route
+        else {
+            return None;
+        };
+
+        let connections = self.app_state.read(cx).connections();
+        let connected = connections.get(connection_id)?;
+        if connected.connection.schema_loading_strategy()
+            == dbflux_core::SchemaLoadingStrategy::ConnectionPerDatabase
+        {
+            return None;
+        }
+
+        let current = connected.active_database.as_deref()?;
+        (current != origin).then(|| {
+            dbflux_i18n::t!(
+                "document.query_plan.state.origin_database_changed",
+                origin = origin,
+                current = current
+            )
+        })
     }
 
     /// Asks the driver for the plan of `target` and shows the Plan tab,
@@ -314,6 +341,11 @@ impl CodeDocument {
                 .is_none()
         {
             self.show_plan_origin_gone(target, cx);
+            return;
+        }
+
+        if let Some(message) = self.origin_database_changed(&target.route, cx) {
+            self.show_plan_refused(target, message, cx);
             return;
         }
 
@@ -385,6 +417,13 @@ impl CodeDocument {
     /// The connection a result came from is gone: the Plan tab says so in
     /// its error state. Nothing is asked of any other connection.
     fn show_plan_origin_gone(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
+        let message = dbflux_i18n::t!("document.query_plan.state.origin_gone");
+        self.show_plan_refused(target, message, cx);
+    }
+
+    /// The plan is refused before the driver is asked: the Plan tab shows
+    /// `message` in its error state.
+    fn show_plan_refused(&mut self, target: PlanTarget, message: String, cx: &mut Context<Self>) {
         if self
             .plan
             .tab
@@ -400,7 +439,6 @@ impl CodeDocument {
             .map_or(PlanViewMode::default(), |view| view.read(cx).mode());
         self.hide_plan_inspector(cx);
 
-        let message = dbflux_i18n::t!("document.query_plan.state.origin_gone");
         let failure =
             self.record_plan_failure(&DbError::connection_failed(message.clone()), message, cx);
 
@@ -450,20 +488,24 @@ impl CodeDocument {
             .map(|connected| connected.profile.name.clone())
             .unwrap_or_default();
 
-        if self
+        // A query started since owns the document's state and its completion
+        // events; this plan only fills its own tab.
+        let owns_document = self
             .execution
             .active_query_task
             .as_ref()
-            .is_some_and(|task| task.task_id == task_id)
-        {
+            .is_none_or(|task| task.task_id == task_id);
+        if owns_document {
             self.execution.active_query_task = None;
+            self.state = DocumentState::Clean;
         }
-        self.state = DocumentState::Clean;
 
         if cancelled {
             view.update(cx, |view, cx| view.set_cancelled(cx));
-            cx.emit(DocumentEvent::ExecutionFinished);
-            cx.emit(DocumentEvent::MetaChanged);
+            if owns_document {
+                cx.emit(DocumentEvent::ExecutionFinished);
+                cx.emit(DocumentEvent::MetaChanged);
+            }
             cx.notify();
             return;
         }
@@ -494,8 +536,10 @@ impl CodeDocument {
             }
         }
 
-        cx.emit(DocumentEvent::ExecutionFinished);
-        cx.emit(DocumentEvent::MetaChanged);
+        if owns_document {
+            cx.emit(DocumentEvent::ExecutionFinished);
+            cx.emit(DocumentEvent::MetaChanged);
+        }
         cx.notify();
     }
 

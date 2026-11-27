@@ -354,6 +354,23 @@ fn a_tree_parent_is_centred_on_its_first_and_last_child() {
 }
 
 #[test]
+fn a_tree_parent_stays_centred_when_its_children_differ_in_height() {
+    let nodes = vec![tree_node(250.0), tree_node(40.0), tree_node(160.0)];
+    let parents = vec![None, Some(0), Some(0)];
+    let layout = layered_tree_right(&nodes, &parents);
+    let centre = |i: usize| layout.nodes[i].y + layout.nodes[i].height / 2.0;
+
+    assert!(
+        (centre(0) - (centre(1) + centre(2)) / 2.0).abs() < 0.01,
+        "parent centre {} against children {} and {}",
+        centre(0),
+        centre(1),
+        centre(2)
+    );
+    assert!(layout.nodes.iter().all(|node| node.y >= 0.0));
+}
+
+#[test]
 fn tree_nodes_in_one_column_never_overlap_even_with_different_heights() {
     let nodes = vec![
         tree_node(200.0),

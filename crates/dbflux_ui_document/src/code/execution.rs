@@ -1841,6 +1841,7 @@ impl CodeDocument {
         // each its own tab so every statement's output is visible, rather than
         // surfacing only the primary set.
         if result.has_additional_results() {
+            self.leave_plan_tab(cx);
             self.create_result_tabs_for_batch(result, query, captions, origin, window, cx);
             return;
         }

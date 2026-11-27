@@ -1330,6 +1330,7 @@ document:
       failed:
         title: 계획 생성 실패
       origin_gone: "이 결과를 만든 연결이 더 이상 연결되어 있지 않습니다. 다시 연결한 뒤 쿼리를 다시 실행해 설명하세요."
+      origin_database_changed: "이 결과가 실행된 데이터베이스(%{origin})가 더 이상 이 연결이 사용 중인 데이터베이스(%{current})가 아닙니다. %{origin}(으)로 다시 전환한 뒤 쿼리를 다시 설명하세요. 지금 계획을 얻으면 다른 데이터베이스를 설명하게 됩니다."
       cancelled:
         title: 계획 생성이 취소되었습니다
     explain:

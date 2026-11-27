@@ -1330,6 +1330,7 @@ document:
       failed:
         title: Plan failed
       origin_gone: "The connection this result came from is no longer connected. Reconnect it and run the query again to explain it."
+      origin_database_changed: "The database this result ran on (%{origin}) is no longer the one this connection is using (%{current}). Switch back to %{origin} and explain the query again; a plan taken now would describe the wrong database."
       cancelled:
         title: Plan cancelled
     explain:
