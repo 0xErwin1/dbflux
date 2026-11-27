@@ -1236,6 +1236,21 @@ impl Command {
         }
     }
 
+    /// The context that lists this command in Settings → Keyboard although
+    /// the default keymap gives it no binding there, so a user can assign it
+    /// a shortcut. `None` for every command that is either bound by default
+    /// or not offered for binding.
+    ///
+    /// Declare a command here only while the default keymap leaves it
+    /// unbound in that context; a command the default keymap binds is listed
+    /// through its binding.
+    pub fn home_context(&self) -> Option<ContextId> {
+        match self {
+            Command::ResultsCopyAsMarkdown => Some(ContextId::Results),
+            _ => None,
+        }
+    }
+
     /// Returns true if this command is globally available (not context-specific).
     #[allow(dead_code)]
     pub fn is_global(&self) -> bool {
@@ -1938,6 +1953,16 @@ mod tests {
             "results_copy_as_markdown"
         );
         assert!(Command::all_variants().contains(&Command::ResultsCopyAsMarkdown));
+    }
+
+    #[test]
+    fn copy_as_markdown_declares_the_results_context_as_its_home() {
+        assert_eq!(
+            Command::ResultsCopyAsMarkdown.home_context(),
+            Some(ContextId::Results)
+        );
+        assert_eq!(Command::ResultsCopyRow.home_context(), None);
+        assert_eq!(Command::ToggleCommandPalette.home_context(), None);
     }
 
     #[test]

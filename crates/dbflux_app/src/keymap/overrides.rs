@@ -27,11 +27,15 @@ pub use bolt_keys::PredicateOverlap;
 /// One binding of the default keymap: the context whose layer declares it,
 /// the command it runs, the keys it has by default and the context predicate
 /// it applies in by default.
+///
+/// A command that declares a [`Command::home_context`] and has no default
+/// binding there has an unbound slot, with `default_keys` of `None`: the
+/// user can still assign it keys.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BindingSlot {
     pub context: ContextId,
     pub command: Command,
-    pub default_keys: KeySequence,
+    pub default_keys: Option<KeySequence>,
     pub default_predicate: &'static str,
 }
 
@@ -41,7 +45,18 @@ impl BindingSlot {
         Self {
             context,
             command,
-            default_keys: default_keys.into(),
+            default_keys: Some(default_keys.into()),
+            default_predicate: context.default_predicate(),
+        }
+    }
+
+    /// A command with no default keys, under its context's default
+    /// predicate.
+    pub fn unbound(context: ContextId, command: Command) -> Self {
+        Self {
+            context,
+            command,
+            default_keys: None,
             default_predicate: context.default_predicate(),
         }
     }
@@ -54,13 +69,21 @@ impl BindingSlot {
 
     /// The engine slot: the same binding with its persisted identifiers.
     pub(super) fn engine(&self) -> bolt_keys::BindingSlot {
-        bolt_keys::BindingSlot::new(
-            vocabulary(),
-            self.context.id(),
-            self.command.action_id(),
-            self.default_keys.clone(),
-        )
-        .with_predicate(self.default_predicate)
+        let slot = match &self.default_keys {
+            Some(keys) => bolt_keys::BindingSlot::new(
+                vocabulary(),
+                self.context.id(),
+                self.command.action_id(),
+                keys.clone(),
+            ),
+            None => bolt_keys::BindingSlot::unbound(
+                vocabulary(),
+                self.context.id(),
+                self.command.action_id(),
+            ),
+        };
+
+        slot.with_predicate(self.default_predicate)
     }
 
     /// The typed slot for an engine slot, or `None` (logged) when an id does
@@ -341,7 +364,8 @@ impl KeymapOverrides {
 }
 
 /// Every binding of `defaults`, layer by layer in [`ContextId::all_variants`]
-/// order and, inside a layer, in declaration order.
+/// order and, inside a layer, in declaration order, with the unbound slots of
+/// a context after its bound ones.
 pub fn default_slots(defaults: &KeymapStack) -> Vec<BindingSlot> {
     bolt_keys::default_slots(vocabulary(), defaults.engine())
         .iter()
@@ -413,7 +437,13 @@ mod tests {
         let engine_slot = slot.engine();
         assert_eq!(engine_slot.context, "editor");
         assert_eq!(engine_slot.command, "save_query");
-        assert_eq!(engine_slot.default_keys.to_storage_string(), "ctrl+s");
+        assert_eq!(
+            engine_slot
+                .default_keys
+                .as_ref()
+                .map(KeySequence::to_storage_string),
+            Some("ctrl+s".to_string())
+        );
         assert_eq!(
             engine_slot.default_predicate,
             "Editor && vim_mode == normal"
@@ -471,5 +501,126 @@ mod tests {
         assert_eq!(dtos[1].command_id, "new_query_tab");
         assert_eq!(dtos[1].default_keys, "ctrl+n");
         assert_eq!(dtos[1].keys.as_deref(), Some("ctrl++"));
+    }
+
+    fn copy_as_markdown() -> BindingSlot {
+        BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown)
+    }
+
+    #[test]
+    fn commands_with_a_home_context_and_no_binding_get_unbound_slots() {
+        let slots = default_slots(&KeymapStack::new());
+
+        assert_eq!(slots, vec![copy_as_markdown()]);
+        assert_eq!(slots[0].default_keys, None);
+        assert_eq!(
+            BindingSlot::from_engine(&slots[0].engine()),
+            Some(slots[0].clone())
+        );
+    }
+
+    #[test]
+    fn a_default_binding_in_the_home_context_replaces_the_unbound_slot() {
+        let mut results = KeymapLayer::new(ContextId::Results);
+        results.bind(
+            chord("m", Modifiers::ctrl()),
+            Command::ResultsCopyAsMarkdown,
+        );
+        let mut defaults = KeymapStack::new();
+        defaults.add_layer(results);
+
+        let slots = default_slots(&defaults);
+
+        assert_eq!(slots.len(), 1);
+        assert!(slots[0].default_keys.is_some());
+    }
+
+    #[test]
+    fn assigning_keys_to_an_unbound_slot_binds_them_and_reset_unbinds() {
+        let defaults = KeymapStack::new();
+        let mut overrides = KeymapOverrides::new();
+        assert_eq!(overrides.effective_keys(&copy_as_markdown()), None);
+
+        overrides.set(
+            copy_as_markdown(),
+            Some(keys(chord("m", Modifiers::ctrl_shift()))),
+        );
+        assert!(overrides.is_overridden(&copy_as_markdown()));
+        assert_eq!(
+            overrides
+                .apply(&defaults)
+                .resolve(ContextId::Results, &chord("m", Modifiers::ctrl_shift())),
+            Some(Command::ResultsCopyAsMarkdown)
+        );
+        let bindings = overrides.effective_bindings(&defaults);
+        assert_eq!(bindings.len(), 1);
+        assert!(bindings[0].is_user);
+
+        overrides.reset(&copy_as_markdown());
+        assert!(overrides.is_empty());
+        assert_eq!(
+            overrides
+                .apply(&defaults)
+                .resolve(ContextId::Results, &chord("m", Modifiers::ctrl_shift())),
+            None
+        );
+        assert!(overrides.effective_bindings(&defaults).is_empty());
+    }
+
+    #[test]
+    fn an_unbound_slot_conflicts_with_an_existing_binding() {
+        let mut results = KeymapLayer::new(ContextId::Results);
+        results.bind(chord("y", Modifiers::ctrl()), Command::ResultsCopyCell);
+        let mut defaults = KeymapStack::new();
+        defaults.add_layer(results);
+
+        let clashes = KeymapOverrides::new().conflicts_for(
+            &defaults,
+            &copy_as_markdown(),
+            &keys(chord("y", Modifiers::ctrl())),
+            copy_as_markdown().default_predicate,
+            &ContextTreeOverlap,
+        );
+
+        assert_eq!(clashes.len(), 1);
+        assert_eq!(clashes[0].command, Command::ResultsCopyCell);
+    }
+
+    #[test]
+    fn an_unbound_override_round_trips_through_storage_with_empty_default_keys() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+        let defaults = KeymapStack::new();
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(
+            copy_as_markdown(),
+            Some(keys(chord("m", Modifiers::ctrl_shift()))),
+        );
+        save_keymap_overrides(&runtime, &overrides).expect("should save");
+
+        let stored = runtime.keybinding_overrides().list().expect("should list");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].context, "results");
+        assert_eq!(stored[0].command_id, "results_copy_as_markdown");
+        assert_eq!(stored[0].default_keys, "");
+        assert_eq!(stored[0].keys.as_deref(), Some("ctrl+shift+m"));
+
+        assert_eq!(load_keymap_overrides(&runtime, &defaults), overrides);
+    }
+
+    #[test]
+    fn a_stored_row_with_empty_default_keys_for_an_unknown_command_is_skipped() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+        runtime
+            .keybinding_overrides()
+            .replace_all(&[KeybindingOverrideDto {
+                context: "results".to_string(),
+                command_id: "no_such_command".to_string(),
+                default_keys: String::new(),
+                keys: Some("ctrl+shift+m".to_string()),
+                predicate: None,
+            }])
+            .expect("should save");
+
+        assert!(load_keymap_overrides(&runtime, &KeymapStack::new()).is_empty());
     }
 }

@@ -289,6 +289,48 @@ fn the_keybindings_editor_records_sequences_and_edits_predicates(cx: &mut TestAp
     assert!(keymap_overrides().is_empty(), "the defaults are back");
 }
 
+/// The unbound Copy as Markdown row takes a recorded shortcut like any other
+/// row: the override is stored and bound in the Results context, and the
+/// row's reset unbinds it again.
+#[gpui::test]
+fn recording_keys_for_an_unbound_row_binds_them_and_reset_unbinds(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, Modifiers};
+    use dbflux_ui_base::keymap::{effective_keymap, keymap_overrides};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    let slot = BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown);
+    let chord = KeyChord::new("m", Modifiers::ctrl_shift());
+
+    window.update(|_, cx| {
+        keybindings.update(cx, |section, cx| {
+            section.start_recording(slot.clone(), ContextId::Results, cx)
+        })
+    });
+    window.simulate_keystrokes("ctrl-shift-m");
+    window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    window.run_until_parked();
+
+    assert!(keymap_overrides().is_overridden(&slot));
+    assert_eq!(
+        effective_keymap().resolve(ContextId::Results, &chord),
+        Some(Command::ResultsCopyAsMarkdown)
+    );
+
+    window.update(|_, cx| keybindings.update(cx, |section, cx| section.reset_binding(&slot, cx)));
+    assert!(!keymap_overrides().is_overridden(&slot));
+    assert_eq!(effective_keymap().resolve(ContextId::Results, &chord), None);
+}
+
 fn proxies_focus(
     settings: &Entity<SettingsCoordinator>,
     window: &mut VisualTestContext,

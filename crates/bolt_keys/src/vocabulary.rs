@@ -74,6 +74,7 @@ pub struct KeymapVocabulary {
     contexts: Vec<ContextSpec>,
     global_id: &'static str,
     command_storage_id: fn(Cow<'static, str>) -> Cow<'static, str>,
+    unbound_commands: Vec<(&'static str, Cow<'static, str>)>,
 }
 
 /// The default storage mapping: the action id as it is.
@@ -92,7 +93,31 @@ impl KeymapVocabulary {
             contexts,
             global_id,
             command_storage_id: identity_command_id,
+            unbound_commands: Vec::new(),
         }
+    }
+
+    /// Lists commands that are bindable in a context although the default
+    /// keymap gives them no keys there, as `(context id, action id)` pairs.
+    /// Each becomes an unbound [`BindingSlot`](crate::BindingSlot) a user can
+    /// assign keys to; a command the default layer does bind is not unbound.
+    pub fn with_unbound_commands(
+        mut self,
+        unbound_commands: Vec<(&'static str, Cow<'static, str>)>,
+    ) -> Self {
+        self.unbound_commands = unbound_commands;
+        self
+    }
+
+    /// The action ids listed as unbound commands of context `id`.
+    pub fn unbound_commands<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> impl Iterator<Item = &'a Cow<'static, str>> + 'a {
+        self.unbound_commands
+            .iter()
+            .filter(move |(context, _)| *context == id)
+            .map(|(_, command)| command)
     }
 
     /// Sets how an action id maps to the command id the product persists.

@@ -426,6 +426,14 @@ tras el más corto para ver si sigue el más largo), y "captura texto escrito"
 cuando una letra sola se asigna donde se escribe texto, como un campo de texto o
 el editor de código fuera de los modos Normal y Visual de Vim.
 
+**Comandos sin atajo por defecto.** Un comando que se distribuye sin tecla,
+como **Copiar como Markdown** en Results, aparece en el contexto al que
+pertenece con **Sin atajo**. Pulsa el lápiz para asignarle teclas, como en
+cualquier otra fila: el atajo funciona al instante, se comprueban sus conflictos
+y cuenta como modificado. Su flecha de restablecer, o **Quitar atajo**, lo
+devuelve a sin binding. Las versiones de DBFlux anteriores a esta función
+ignoran la fila guardada.
+
 **Restablecer.** Un binding modificado muestra una flecha que restablece sus
 teclas y su contexto por defecto (`r` sobre un binding seleccionado hace lo
 mismo, y `Delete` quita su atajo). **Restablecer predeterminados** en el pie
