@@ -881,6 +881,78 @@ fn mssql_query_plan_refuses_statements_without_semicolons() -> Result<(), DbErro
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_keeps_the_terminator_a_merge_needs() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50));
+             CREATE TABLE plan_test_source (id INT PRIMARY KEY);
+             INSERT INTO plan_test VALUES (1, 'kept');
+             INSERT INTO plan_test_source VALUES (1)",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "MERGE dbo.plan_test AS t USING dbo.plan_test_source AS s ON t.id = s.id \
+             WHEN MATCHED THEN DELETE;",
+        ))?;
+        assert!(!plan.roots.is_empty());
+
+        let remaining = connection.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+        connection.execute(&QueryRequest::new("DROP TABLE plan_test_source"))?;
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_explain_never_interleaves_with_a_concurrent_plan() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50));
+             INSERT INTO plan_test VALUES (1, 'kept')",
+        ))?;
+
+        let shared: Arc<dyn Connection> = Arc::from(connection);
+        let planner = Arc::clone(&shared);
+        let planning = thread::spawn(move || {
+            for _ in 0..150 {
+                let _outcome = planner.query_plan(&dbflux_core::QueryPlanRequest::new(
+                    "SELECT * FROM plan_test",
+                ));
+            }
+        });
+
+        let table_ref = TableRef::with_schema("dbo", "plan_test");
+        for _ in 0..150 {
+            let _outcome = shared.explain(
+                &ExplainRequest::new(table_ref.clone())
+                    .with_query("DELETE FROM plan_test WHERE id = 1"),
+            );
+        }
+        planning.join().expect("planner thread panicked");
+
+        let remaining = shared.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
+        assert_eq!(
+            remaining.rows[0][0],
+            Value::Int(1),
+            "an explained DELETE must never run"
+        );
+
+        cleanup_test_tables(&*shared);
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Describe
 // ---------------------------------------------------------------------------

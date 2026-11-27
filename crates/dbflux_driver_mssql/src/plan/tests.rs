@@ -127,7 +127,7 @@ fn malformed_xml_is_a_clear_error() {
 
 #[test]
 fn guard_accepts_one_statement_and_returns_it_trimmed() {
-    assert_eq!(plan_statement("  SELECT 1;  ").unwrap(), "SELECT 1");
+    assert_eq!(plan_statement("  SELECT 1;  ").unwrap(), "SELECT 1;");
     assert_eq!(
         plan_statement("-- note\nSELECT ';' AS [a;b]\nGO\n").unwrap(),
         "-- note\nSELECT ';' AS [a;b]"
@@ -136,6 +136,16 @@ fn guard_accepts_one_statement_and_returns_it_trimmed() {
         plan_statement("SELECT 1 /* ; GO */ -- ; ").unwrap(),
         "SELECT 1 /* ; GO */ -- ;"
     );
+}
+
+#[test]
+fn guard_keeps_the_terminator_a_merge_needs() {
+    let merge =
+        "MERGE dbo.target AS t USING dbo.source AS s ON t.id = s.id WHEN MATCHED THEN DELETE;";
+
+    assert_eq!(plan_statement(merge).unwrap(), merge);
+    assert_eq!(plan_statement(&format!(" {merge} \n")).unwrap(), merge);
+    assert_eq!(plan_statement("SELECT 'a;b';").unwrap(), "SELECT 'a;b';");
 }
 
 #[test]

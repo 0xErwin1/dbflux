@@ -71,7 +71,7 @@ fn container_node(key: &str, value: &Json) -> Result<PlanNode, DbError> {
         node.details.extend(
             costs
                 .iter()
-                .filter(|(name, _)| !matches!(name.as_str(), "prefix_cost" | "query_cost"))
+                .filter(|(name, _)| name.as_str() != "query_cost")
                 .map(|(name, value)| (name.clone(), detail_text(value))),
         );
     }
@@ -240,10 +240,25 @@ fn child_nodes(key: &str, value: &Json) -> Result<Vec<PlanNode>, DbError> {
 fn nested_loop(value: &Json) -> Result<Vec<PlanNode>, DbError> {
     let mut nodes = Vec::new();
 
+    // `prefix_cost` is the cost of every table up to this join position, so a
+    // table's own cost is the step from the previous prefix.
+    let mut previous_prefix = 0.0;
+
     for item in value.as_array().into_iter().flatten() {
         for (name, entry) in item.as_object().into_iter().flatten() {
-            if is_structure(entry) {
-                nodes.extend(child_nodes(name, entry)?);
+            if !is_structure(entry) {
+                continue;
+            }
+
+            let first_new = nodes.len();
+            nodes.extend(child_nodes(name, entry)?);
+
+            let prefix = (name == "table")
+                .then(|| number(entry.get("cost_info")?.get("prefix_cost")))
+                .flatten();
+            if let (Some(prefix), Some(node)) = (prefix, nodes.get_mut(first_new)) {
+                node.estimated_total_cost = Some(round_cost((prefix - previous_prefix).max(0.0)));
+                previous_prefix = prefix;
             }
         }
     }
@@ -255,6 +270,10 @@ fn nested_loop(value: &Json) -> Result<Vec<PlanNode>, DbError> {
     let mut wrapper = PlanNode::new("Nested loop");
     wrapper.children = nodes;
     Ok(vec![wrapper])
+}
+
+fn round_cost(cost: f64) -> f64 {
+    (cost * 1_000_000.0).round() / 1_000_000.0
 }
 
 fn humanize(key: &str) -> String {

@@ -159,6 +159,29 @@ fn json_without_a_plan_is_an_error() {
 }
 
 #[test]
+fn every_rewritten_query_becomes_a_root() {
+    let raw = r#"[
+        {"Plan": {"Node Type": "ModifyTable", "Operation": "Delete"}},
+        {"Plan": {"Node Type": "ModifyTable", "Operation": "Insert"}}
+    ]"#;
+    let plan = parse_explain_json(raw).unwrap();
+
+    assert_eq!(plan.roots.len(), 2);
+    assert_eq!(plan.roots[1].operation, "ModifyTable");
+    assert_eq!(detail(&plan.roots[1], "Operation"), Some("Insert"));
+    assert!(parse_explain_json(r#"[{"Plan": {"Node Type": "Result"}}, {"Other": 1}]"#).is_err());
+}
+
+#[test]
+fn index_only_scan_does_not_promise_to_skip_the_table() {
+    let plan = parse_explain_json(r#"[{"Plan": {"Node Type": "Index Only Scan"}}]"#).unwrap();
+    let description = plan.roots[0].description.as_deref().unwrap();
+
+    assert!(description.contains("can skip"), "{description}");
+    assert!(!description.contains("without visiting"), "{description}");
+}
+
+#[test]
 fn a_plan_node_without_a_node_type_is_an_error() {
     assert!(parse_explain_json(r#"[{"Plan": {"Total Cost": 1.0}}]"#).is_err());
 }

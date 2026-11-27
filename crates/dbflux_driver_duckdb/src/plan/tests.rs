@@ -249,3 +249,56 @@ fn every_listed_operator_has_a_description() {
         );
     }
 }
+
+#[test]
+fn a_standalone_filter_uses_its_expression_as_the_key_condition() {
+    let plan = parse_explain_json(
+        r#"[{"name":"FILTER","children":[],"extra_info":{"Expression":"(r > 0.5)"}}]"#,
+    )
+    .unwrap();
+
+    assert_eq!(condition(&plan.roots[0]), Some(("Expression", "(r > 0.5)")));
+
+    let join = parse_explain_json(
+        r#"[{"name":"HASH_JOIN","children":[],"extra_info":{"Expression":"x","Conditions":"a = b"}}]"#,
+    )
+    .unwrap();
+    assert_eq!(condition(&join.roots[0]), Some(("Conditions", "a = b")));
+
+    let other = parse_explain_json(
+        r#"[{"name":"PROJECTION","children":[],"extra_info":{"Expression":"x"}}]"#,
+    )
+    .unwrap();
+    assert_eq!(condition(&other.roots[0]), None);
+}
+
+#[test]
+fn a_standalone_filter_from_the_engine_gets_a_key_condition() {
+    let plan = connect()
+        .query_plan(&QueryPlanRequest::new(
+            "SELECT * FROM (SELECT range AS a, random() AS r FROM range(10)) WHERE r > 0.5",
+        ))
+        .unwrap();
+
+    assert_eq!(plan.roots[0].operation, "FILTER");
+    assert_eq!(condition(&plan.roots[0]), Some(("Expression", "(r > 0.5)")));
+}
+
+#[test]
+fn a_logical_plan_is_never_returned_as_the_physical_plan() {
+    let mut result = QueryResult::empty();
+    result.rows = vec![vec![
+        Value::Text("logical_opt".into()),
+        Value::Text("[{\"name\":\"X\"}]".into()),
+    ]];
+    assert!(plan_text_from_result(&result).is_err());
+
+    let connection = connect();
+    connection
+        .execute(&QueryRequest::new("SET explain_output = 'optimized_only'"))
+        .unwrap();
+    let error = connection
+        .query_plan(&QueryPlanRequest::new("SELECT 1"))
+        .unwrap_err();
+    assert!(error.to_string().contains("physical plan"), "{error}");
+}

@@ -27,3 +27,15 @@ fn an_empty_query_is_refused() {
         "A query plan needs a statement; the query is empty."
     );
 }
+
+#[test]
+fn a_pragma_is_refused_before_anything_is_sent() {
+    let error = explain_statement("PRAGMA foreign_keys = OFF").unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .starts_with("A query plan covers SELECT, INSERT, UPDATE"),
+        "{error}"
+    );
+}

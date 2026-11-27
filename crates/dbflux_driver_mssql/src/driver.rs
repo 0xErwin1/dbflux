@@ -3433,20 +3433,11 @@ impl Connection for MssqlConnection {
 
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
         // SQL Server requires SET SHOWPLAN_XML to be the only statement in
-        // its batch, so we run three separate batches: turn it on, run the
-        // query (which compiles but does not execute, returning the plan
-        // as a single nvarchar(max) row), then turn it off. We unset
-        // SHOWPLAN even if the middle batch fails so the session state
-        // does not leak.
-
-        // Mirror `execute()`'s poison/cleanup pattern: a prior cancel may
-        // have left the underlying tiberius client dead. Without this an
-        // EXPLAIN issued after a cancel would hit a closed socket and
-        // surface a protocol-level error instead of triggering reconnect.
-        if self.poisoned.load(Ordering::SeqCst) {
-            self.cleanup_after_cancel()?;
-        }
-
+        // its batch. `run_showplan` issues ON, the query (which compiles but
+        // does not execute, returning the plan as one nvarchar(max) row) and
+        // OFF while holding the client lock, so no other request can
+        // interleave and make the query really run or the session keep
+        // returning plans.
         let query = match &request.query {
             Some(q) => q.clone(),
             None => format!(
@@ -3455,21 +3446,23 @@ impl Connection for MssqlConnection {
             ),
         };
 
-        self.execute_simple("SET SHOWPLAN_XML ON")?;
-        let plan_result = self.execute_simple(&query);
-        // If the cleanup batch fails, every subsequent query on this session
-        // keeps returning XML plan rows instead of real data (SHOWPLAN is
-        // session-scoped). Mark the connection poisoned so the next
-        // `execute()` rebuilds the tiberius client via `cleanup_after_cancel`,
-        // which starts a fresh session with SHOWPLAN off.
-        if let Err(off_err) = self.execute_simple("SET SHOWPLAN_XML OFF") {
-            log::error!(
-                "[EXPLAIN] SET SHOWPLAN_XML OFF failed, poisoning session: {}",
-                off_err
-            );
-            self.poisoned.store(true, Ordering::SeqCst);
-        }
-        plan_result
+        let start = Instant::now();
+        let plan = self.run_showplan(&query)?;
+
+        let column = ColumnMeta {
+            name: "Microsoft SQL Server 2005 XML Showplan".to_string(),
+            type_name: "NVarChar".to_string(),
+            kind: dbflux_core::ColumnKind::Text,
+            nullable: true,
+            is_primary_key: false,
+        };
+
+        Ok(QueryResult::table(
+            vec![column],
+            vec![vec![Value::Text(plan)]],
+            None,
+            start.elapsed(),
+        ))
     }
 
     fn query_plan(

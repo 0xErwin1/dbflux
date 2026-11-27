@@ -110,6 +110,7 @@ impl QueryPlan {
 /// added, so a write is planned without running.
 pub fn single_plan_statement(query: &str) -> Result<String, DbError> {
     let mut statements = QueryLanguage::Sql.split_statements(query);
+    statements.retain(|statement| !crate::strip_leading_comments(statement).is_empty());
 
     match statements.len() {
         0 => Err(DbError::query_failed(
@@ -135,7 +136,7 @@ pub fn plan_text_from_result(result: &QueryResult) -> Result<String, DbError> {
 }
 
 mod sqlite;
-pub use sqlite::parse_sqlite_query_plan;
+pub use sqlite::{parse_sqlite_query_plan, sqlite_plan_statement};
 
 #[cfg(test)]
 mod tests;

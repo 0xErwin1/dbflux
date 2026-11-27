@@ -29,6 +29,38 @@ fn multiple_statements_are_refused() {
 }
 
 #[test]
+fn a_trailing_comment_is_not_a_second_statement() {
+    assert_eq!(
+        single_plan_statement("SELECT 1; -- explanation").unwrap(),
+        "SELECT 1"
+    );
+    assert_eq!(
+        single_plan_statement("SELECT 1; /* note */").unwrap(),
+        "SELECT 1"
+    );
+}
+
+#[test]
+fn two_executable_statements_around_a_comment_are_refused() {
+    let error = single_plan_statement("SELECT 1; -- keep\nDELETE FROM t").unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "A query plan covers exactly one statement; the query has 2. Select a single statement."
+    );
+}
+
+#[test]
+fn a_comment_only_query_is_empty() {
+    let error = single_plan_statement("-- nothing").unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "A query plan needs a statement; the query is empty."
+    );
+}
+
+#[test]
 fn empty_queries_are_refused() {
     for query in ["", "   \n\t", " ; "] {
         let error = single_plan_statement(query).unwrap_err();
@@ -96,6 +128,55 @@ fn covering_index_and_alias_and_legacy_table_keyword() {
     let second = &plan.roots[1];
     assert_eq!(second.relation.as_deref(), Some("orders"));
     assert_eq!(second.index, None);
+}
+
+#[test]
+fn a_virtual_table_scan_keeps_only_the_source_as_relation() {
+    let plan =
+        parse_sqlite_query_plan(&eqp_result(&[(2, 0, "SCAN docs VIRTUAL TABLE INDEX 0:M1")]))
+            .unwrap();
+
+    let node = &plan.roots[0];
+    assert_eq!(node.operation, "SCAN");
+    assert_eq!(node.relation.as_deref(), Some("docs"));
+    assert_eq!(node.index, None);
+    assert_eq!(detail(node, "Virtual table index"), Some("0:M1"));
+    assert!(plan.raw.contains("SCAN docs VIRTUAL TABLE INDEX 0:M1"));
+}
+
+#[test]
+fn a_left_join_annotation_is_not_part_of_the_condition_or_index() {
+    let plan = parse_sqlite_query_plan(&eqp_result(&[
+        (
+            2,
+            0,
+            "SEARCH child USING INDEX child_parent (parent_id=?) LEFT-JOIN",
+        ),
+        (3, 0, "SCAN other USING INDEX other_idx LEFT-JOIN"),
+        (4, 0, "SCAN third LEFT-JOIN"),
+    ]))
+    .unwrap();
+
+    let with_condition = &plan.roots[0];
+    assert_eq!(with_condition.index.as_deref(), Some("child_parent"));
+    assert_eq!(detail(with_condition, "Condition"), Some("(parent_id=?)"));
+    assert_eq!(
+        with_condition
+            .key_condition
+            .as_ref()
+            .map(|c| c.value.as_str()),
+        Some("(parent_id=?)")
+    );
+    assert_eq!(detail(with_condition, "Join"), Some("LEFT-JOIN"));
+
+    let without_condition = &plan.roots[1];
+    assert_eq!(without_condition.index.as_deref(), Some("other_idx"));
+    assert_eq!(detail(without_condition, "Join"), Some("LEFT-JOIN"));
+
+    let plain = &plan.roots[2];
+    assert_eq!(plain.relation.as_deref(), Some("third"));
+    assert_eq!(detail(plain, "Join"), Some("LEFT-JOIN"));
+    assert!(plan.raw.contains("(parent_id=?) LEFT-JOIN"));
 }
 
 #[test]
@@ -284,4 +365,51 @@ fn an_unknown_step_has_no_description() {
 
     assert_eq!(plan.roots[0].description, None);
     assert_eq!(plan.roots[0].key_condition, None);
+}
+
+#[test]
+fn sqlite_plans_only_queries_and_writes() {
+    for query in [
+        "SELECT 1",
+        "  select 1;",
+        "WITH x AS (SELECT 1) SELECT * FROM x",
+        "VALUES (1)",
+        "INSERT INTO t VALUES (1)",
+        "REPLACE INTO t VALUES (1)",
+        "UPDATE t SET a = 1",
+        "DELETE FROM t",
+        "-- note\n/* more */ delete from t",
+    ] {
+        assert!(sqlite_plan_statement(query).is_ok(), "{query}");
+    }
+
+    for query in [
+        "PRAGMA foreign_keys = OFF",
+        "-- note\npragma foreign_keys = OFF",
+        "ATTACH 'x.db' AS other",
+        "CREATE TABLE t (a)",
+        "VACUUM",
+    ] {
+        let error = sqlite_plan_statement(query).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("A query plan covers SELECT, INSERT, UPDATE"),
+            "{query}: {error}"
+        );
+    }
+}
+
+#[test]
+fn sqlite_plan_keeps_the_single_statement_guard() {
+    assert_eq!(
+        sqlite_plan_statement("SELECT 1; DELETE FROM t")
+            .unwrap_err()
+            .to_string(),
+        "A query plan covers exactly one statement; the query has 2. Select a single statement."
+    );
+    assert_eq!(
+        sqlite_plan_statement(" ").unwrap_err().to_string(),
+        "A query plan needs a statement; the query is empty."
+    );
 }

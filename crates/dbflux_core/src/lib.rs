@@ -236,7 +236,7 @@ pub use query::{
 };
 pub use query::{
     PlanCondition, PlanFormat, PlanNode, QueryPlan, QueryPlanRequest, parse_sqlite_query_plan,
-    plan_text_from_result, single_plan_statement,
+    plan_text_from_result, single_plan_statement, sqlite_plan_statement,
 };
 pub use query::{normalize_relaxed_json, parse_relaxed_json};
 

@@ -52,7 +52,7 @@ pub use language_service::{
 pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
 pub use plan::{
     PlanCondition, PlanFormat, PlanNode, QueryPlan, QueryPlanRequest, parse_sqlite_query_plan,
-    plan_text_from_result, single_plan_statement,
+    plan_text_from_result, single_plan_statement, sqlite_plan_statement,
 };
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{

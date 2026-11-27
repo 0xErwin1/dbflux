@@ -454,6 +454,45 @@ fn sqlite_query_plan_is_structured_and_never_runs_the_statement() -> Result<(), 
 }
 
 #[test]
+fn sqlite_query_plan_refuses_statements_that_change_the_session() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    connection.set_referential_integrity(true)?;
+
+    let outcome = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+        "PRAGMA foreign_keys = OFF",
+    ));
+
+    let enforced = connection.execute(&QueryRequest::new("PRAGMA foreign_keys"))?;
+    assert_eq!(enforced.rows[0][0], Value::Int(1), "the PRAGMA ran");
+
+    let error = outcome.expect_err("a PRAGMA is not a plannable statement");
+    assert!(
+        error.to_string().contains("SELECT, INSERT, UPDATE"),
+        "{error}"
+    );
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE plan_ok (id INTEGER PRIMARY KEY)",
+    ))?;
+    for query in [
+        "SELECT * FROM plan_ok",
+        "WITH x AS (SELECT 1) SELECT * FROM x",
+        "INSERT INTO plan_ok VALUES (1)",
+        "UPDATE plan_ok SET id = 2",
+        "DELETE FROM plan_ok",
+        "REPLACE INTO plan_ok VALUES (1)",
+        "VALUES (1)",
+        "-- note\nselect 1",
+    ] {
+        connection
+            .query_plan(&dbflux_core::QueryPlanRequest::new(query))
+            .map_err(|error| DbError::query_failed(format!("{query:?}: {error}")))?;
+    }
+
+    Ok(())
+}
+
+#[test]
 fn sqlite_describe_table() -> Result<(), DbError> {
     let connection = connect_sqlite()?;
 

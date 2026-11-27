@@ -154,7 +154,9 @@ fn split_batch_statements(sql: &str) -> Vec<String> {
                 index = skip_delimited(bytes, index, b']');
             }
             b';' => {
-                collector.finish(sql, index, index + 1);
+                // The terminator stays with its statement: T-SQL requires it
+                // after MERGE.
+                collector.finish(sql, index + 1, index + 1);
                 index += 1;
             }
             other => {

@@ -14,6 +14,10 @@ const TABLE_KEY: &str = "Table";
 /// non-empty one wins and keeps DuckDB's own label.
 const KEY_CONDITION_PRIORITY: [&str; 4] = ["Conditions", "Filters", "Order By", "Groups"];
 
+/// A standalone `FILTER` keeps its predicate under `Expression`.
+const FILTER_OPERATOR: &str = "FILTER";
+const FILTER_CONDITION_KEY: &str = "Expression";
+
 /// Builds the plan statement for `query` through the shared single-statement
 /// guard; `ANALYZE` is deliberately never added.
 pub(crate) fn explain_statement(query: &str) -> Result<String, DbError> {
@@ -30,9 +34,11 @@ pub(crate) fn plan_text_from_result(result: &QueryResult) -> Result<String, DbEr
         .iter()
         .find(|row| matches!(row.first(), Some(Value::Text(key)) if key == "physical_plan"));
 
-    match physical.or(result.rows.first()).and_then(|row| row.get(1)) {
+    match physical.and_then(|row| row.get(1)) {
         Some(Value::Text(text) | Value::Json(text)) => Ok(text.clone()),
-        _ => Err(DbError::query_failed("EXPLAIN returned no plan")),
+        _ => Err(DbError::query_failed(
+            "EXPLAIN returned no physical plan; check that `explain_output` is `physical_only` or `all`",
+        )),
     }
 }
 
@@ -79,13 +85,18 @@ fn parse_node(value: &Json) -> Result<PlanNode, DbError> {
     }
 
     if let Some(Json::Object(info)) = value.get("extra_info") {
-        node.key_condition = KEY_CONDITION_PRIORITY.iter().find_map(|label| {
-            let text = detail_text(info.get(*label)?);
-            (!text.is_empty()).then(|| PlanCondition {
-                label: (*label).to_string(),
-                value: text,
-            })
-        });
+        let filter_key = (name == FILTER_OPERATOR).then_some(FILTER_CONDITION_KEY);
+        node.key_condition = KEY_CONDITION_PRIORITY
+            .iter()
+            .copied()
+            .chain(filter_key)
+            .find_map(|label| {
+                let text = detail_text(info.get(label)?);
+                (!text.is_empty()).then(|| PlanCondition {
+                    label: label.to_string(),
+                    value: text,
+                })
+            });
     }
     node.description = describe(name).map(str::to_string);
 

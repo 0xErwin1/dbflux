@@ -5,11 +5,11 @@
 use dbflux_core::DbError;
 
 /// Builds the plan statement for `query` through the shared single-statement
-/// guard. `EXPLAIN QUERY PLAN` never runs the statement.
+/// guard, refusing statements other than queries and writes. `EXPLAIN QUERY PLAN` never runs the statement.
 pub(crate) fn explain_statement(query: &str) -> Result<String, DbError> {
     Ok(format!(
         "EXPLAIN QUERY PLAN {}",
-        dbflux_core::single_plan_statement(query)?
+        dbflux_core::sqlite_plan_statement(query)?
     ))
 }
 

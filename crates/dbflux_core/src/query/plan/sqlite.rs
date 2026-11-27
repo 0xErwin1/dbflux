@@ -5,6 +5,33 @@ use std::collections::HashSet;
 
 use crate::{DbError, PlanCondition, PlanFormat, PlanNode, QueryPlan, QueryResult, Value};
 
+/// Statements SQLite can plan without side effects. Anything else, a `PRAGMA`
+/// above all, may act while the plan statement is prepared, because `EXPLAIN`
+/// does not stop that.
+const PLANNABLE_KEYWORDS: [&str; 7] = [
+    "SELECT", "WITH", "VALUES", "INSERT", "REPLACE", "UPDATE", "DELETE",
+];
+
+/// Returns the one statement a SQLite-dialect plan covers: the shared
+/// single-statement guard, plus a refusal of statements that are not plain
+/// queries or writes.
+pub fn sqlite_plan_statement(query: &str) -> Result<String, DbError> {
+    let statement = crate::single_plan_statement(query)?;
+    let first_word = crate::strip_leading_comments(&statement)
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+
+    if PLANNABLE_KEYWORDS.contains(&first_word.as_str()) {
+        return Ok(statement);
+    }
+
+    Err(DbError::query_failed(
+        "A query plan covers SELECT, INSERT, UPDATE, DELETE, REPLACE, VALUES and WITH statements; any other statement can change the session while its plan is prepared, so it is not planned.",
+    ))
+}
+
 struct PlanRow {
     id: i64,
     parent: i64,
@@ -87,6 +114,14 @@ fn parse_detail_fields(detail: &str) -> PlanNode {
     };
 
     let rest = rest.strip_prefix("TABLE ").unwrap_or(rest);
+    let (rest, left_join) = match rest.strip_suffix(" LEFT-JOIN") {
+        Some(rest) => (rest, true),
+        None => (rest, false),
+    };
+    let (rest, virtual_index) = match rest.split_once(" VIRTUAL TABLE INDEX ") {
+        Some((target, index)) => (target, Some(index)),
+        None => (rest, None),
+    };
     let (target, using) = match rest.split_once(" USING ") {
         Some((target, using)) => (target, Some(using)),
         None => (rest, None),
@@ -105,6 +140,16 @@ fn parse_detail_fields(detail: &str) -> PlanNode {
 
     if let Some(alias) = alias {
         node.details.push(("Alias".to_string(), alias.to_string()));
+    }
+
+    if let Some(index) = virtual_index {
+        node.details
+            .push(("Virtual table index".to_string(), index.to_string()));
+    }
+
+    if left_join {
+        node.details
+            .push(("Join".to_string(), "LEFT-JOIN".to_string()));
     }
 
     if let Some(using) = using {

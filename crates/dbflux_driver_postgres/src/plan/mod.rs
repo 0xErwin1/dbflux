@@ -48,17 +48,23 @@ pub(crate) fn parse_explain_json(raw: &str) -> Result<QueryPlan, DbError> {
         DbError::query_failed(format!("EXPLAIN returned invalid JSON: {error}"))
     })?;
 
-    let root = document
+    let entries = document
         .as_array()
-        .and_then(|entries| entries.first())
-        .and_then(|entry| entry.get("Plan"))
+        .filter(|entries| !entries.is_empty())
         .ok_or_else(|| DbError::query_failed("EXPLAIN JSON has no `Plan` entry"))?;
 
-    Ok(QueryPlan::new(
-        vec![parse_node(root)?],
-        raw,
-        PlanFormat::Json,
-    ))
+    // A statement rewritten by rules is explained once per rewritten query.
+    let roots = entries
+        .iter()
+        .map(|entry| {
+            let root = entry
+                .get("Plan")
+                .ok_or_else(|| DbError::query_failed("EXPLAIN JSON has no `Plan` entry"))?;
+            parse_node(root)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(QueryPlan::new(roots, raw, PlanFormat::Json))
 }
 
 fn parse_node(value: &Json) -> Result<PlanNode, DbError> {
@@ -146,7 +152,7 @@ const GLOSSARY: &[(&str, &str)] = &[
     ),
     (
         "Index Only Scan",
-        "Reads the matching values straight from an index without visiting the table.",
+        "Reads the matching values from an index and can skip visiting the table when row visibility allows.",
     ),
     (
         "Bitmap Heap Scan",

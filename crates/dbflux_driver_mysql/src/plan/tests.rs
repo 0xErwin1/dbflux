@@ -169,7 +169,9 @@ fn mysql_8_nested_loop_maps_tables_access_keys_rows_and_costs() {
     assert_eq!(second.operation, "eq_ref");
     assert_eq!(second.relation.as_deref(), Some("c"));
     assert_eq!(second.index.as_deref(), Some("PRIMARY"));
-    assert_eq!(second.estimated_total_cost, Some(2.35));
+    assert_eq!(second.estimated_total_cost, Some(1.1));
+    assert_eq!(detail(second, "prefix_cost"), Some("2.35"));
+    assert_eq!(detail(first, "prefix_cost"), Some("1.25"));
     assert_eq!(detail(second, "used_key_parts"), Some("id"));
 }
 
