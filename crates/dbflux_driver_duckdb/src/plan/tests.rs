@@ -535,3 +535,38 @@ fn the_estimate_request_still_never_analyzes() {
         .unwrap();
     assert_eq!(rows.rows[0][0], Value::Int(1));
 }
+
+#[test]
+fn an_analyzed_node_without_timing_keeps_its_row_metrics() {
+    let document = ANALYZED_PLAN.replace("\"timing\": 0.0001,\n", "");
+    let plan = parse_analyzed_json(&document).unwrap();
+    let scan = &plan.roots[0].children[0];
+
+    assert_eq!(scan.actual_rows, Some(989.0));
+    assert_eq!(scan.actual_loops, Some(1));
+    assert_eq!(scan.actual_total_time, None);
+    assert_eq!(detail(scan, "rows_scanned"), Some("1000"));
+}
+
+#[test]
+fn an_analyze_inside_an_open_transaction_is_refused_and_the_transaction_survives() {
+    let connection = connect();
+    connection
+        .execute(&QueryRequest::new("CREATE TABLE held (id INTEGER)"))
+        .unwrap();
+    connection.execute(&QueryRequest::new("BEGIN")).unwrap();
+    connection
+        .execute(&QueryRequest::new("INSERT INTO held VALUES (1)"))
+        .unwrap();
+
+    let error = connection
+        .query_plan(&QueryPlanRequest::analyzed("SELECT * FROM held"))
+        .unwrap_err();
+    assert!(error.to_string().contains("transaction"), "{error}");
+
+    connection.execute(&QueryRequest::new("COMMIT")).unwrap();
+    let rows = connection
+        .execute(&QueryRequest::new("SELECT count(*) FROM held"))
+        .unwrap();
+    assert_eq!(rows.rows[0][0], Value::Int(1));
+}

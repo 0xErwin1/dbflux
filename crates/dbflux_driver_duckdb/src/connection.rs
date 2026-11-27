@@ -342,8 +342,13 @@ impl DuckDbConnection {
                 "DuckDB: read-only enforcement {reason}; the request was rejected before execution"
             )));
         }
-        // duckdb-rs always reports autocommit, so let DuckDB refuse the BEGIN
-        // when the session is already inside a transaction.
+        // A nested BEGIN fails inside the caller's transaction and can poison
+        // it, so the refusal has to come before any BEGIN is sent.
+        if self.in_open_transaction(&connection)? {
+            return Err(DbError::NotSupported(
+                "DuckDB: read-only enforcement needs its own transaction, but one is already open; the request was rejected before execution".to_string(),
+            ));
+        }
         if let Err(error) = connection.execute_batch("BEGIN TRANSACTION READ ONLY") {
             return Err(DbError::NotSupported(format!(
                 "DuckDB: read-only enforcement could not start a read-only transaction ({}); the request was rejected before execution",
@@ -356,6 +361,19 @@ impl DuckDbConnection {
         let result = result.map_err(|error| self.query_error(error))?;
         rollback.map_err(|error| self.query_error(error))?;
         Ok(result)
+    }
+
+    /// duckdb-rs always reports autocommit, so the state is read from the
+    /// engine: outside a transaction every statement runs in a fresh one with
+    /// a new identifier, and inside one the identifier stays the same. Neither
+    /// probe changes the session.
+    fn in_open_transaction(&self, connection: &duckdb::Connection) -> Result<bool, DbError> {
+        let identifier = || -> Result<i64, DbError> {
+            connection
+                .query_row("SELECT txid_current()", [], |row| row.get(0))
+                .map_err(|error| self.query_error(error))
+        };
+        Ok(identifier()? == identifier()?)
     }
 
     /// Rolls back the open transaction, if any, and reports whether there

@@ -47,13 +47,42 @@ pub(crate) fn explain_statement(query: &str) -> Result<String, DbError> {
 /// The statement runs, so it must pass the shared read guard and the
 /// single-statement guard first; the driver also runs it inside a read-only
 /// transaction.
-pub(crate) fn analyze_statement(kind: DbKind, query: &str) -> Result<String, DbError> {
+///
+/// MySQL names the TREE format explicitly from 8.0.21, so a session whose
+/// `explain_format` is JSON cannot turn the analyzed plan into an error;
+/// 8.0.18 to 8.0.20 reject the clause and only ever produce TREE.
+pub(crate) fn analyze_statement(
+    kind: DbKind,
+    version: Option<&str>,
+    query: &str,
+) -> Result<String, DbError> {
     let statement = dbflux_core::analyze_statement(&dbflux_core::QueryLanguage::Sql, query)?;
 
     Ok(match kind {
         DbKind::MariaDB => format!("ANALYZE FORMAT=JSON {statement}"),
+        _ if version
+            .and_then(parse_version)
+            .is_some_and(|v| v >= (8, 0, 21)) =>
+        {
+            format!("EXPLAIN ANALYZE FORMAT=TREE {statement}")
+        }
         _ => format!("EXPLAIN ANALYZE {statement}"),
     })
+}
+
+/// `major.minor.patch` of a server version string; a missing patch is zero.
+/// MariaDB may report a replication-compatibility prefix: `5.5.5-10.11.6-MariaDB`.
+fn parse_version(version: &str) -> Option<(u32, u32, u32)> {
+    let numbers = version.strip_prefix("5.5.5-").unwrap_or(version);
+    let mut parts = numbers
+        .split(|character: char| !character.is_ascii_digit())
+        .map(|part| part.parse::<u32>().ok());
+    let (Some(Some(major)), Some(Some(minor))) = (parts.next(), parts.next()) else {
+        return None;
+    };
+    let patch = parts.next().flatten().unwrap_or(0);
+
+    Some((major, minor, patch))
 }
 
 /// Refuses an analyzed plan on a server whose version has no analyze syntax,
@@ -61,24 +90,11 @@ pub(crate) fn analyze_statement(kind: DbKind, query: &str) -> Result<String, DbE
 /// MariaDB has `ANALYZE FORMAT=JSON` since 10.1. A version string that cannot
 /// be read does not block the request; the server answers it.
 pub(crate) fn analyze_version_gate(kind: DbKind, version: &str) -> Result<(), DbError> {
-    let is_mariadb = kind == DbKind::MariaDB;
-
-    // MariaDB may report a replication-compatibility prefix: `5.5.5-10.11.6-MariaDB`.
-    let numbers = if is_mariadb {
-        version.strip_prefix("5.5.5-").unwrap_or(version)
-    } else {
-        version
-    };
-
-    let mut parts = numbers
-        .split(|character: char| !character.is_ascii_digit())
-        .map(|part| part.parse::<u32>().ok());
-    let (Some(Some(major)), Some(Some(minor))) = (parts.next(), parts.next()) else {
+    let Some((major, minor, patch)) = parse_version(version) else {
         return Ok(());
     };
-    let patch = parts.next().flatten().unwrap_or(0);
 
-    if is_mariadb {
+    if kind == DbKind::MariaDB {
         if (major, minor) < (10, 1) {
             return Err(DbError::NotSupported(
                 "Analyzed plans need MariaDB 10.1 or later".to_string(),
@@ -134,6 +150,24 @@ fn apply_actuals(node: &mut PlanNode, object: &Map<String, Json>) {
     });
 }
 
+/// MariaDB counts `r_rows` (and estimates `rows`) before the attached
+/// condition; `r_filtered` and `filtered` are the percentages that pass it.
+/// `PlanNode` rows are the rows the step returns, so both are scaled by their
+/// percentage, which leaves an unfiltered scan (100) unchanged.
+fn apply_attached_filter(node: &mut PlanNode, object: &Map<String, Json>) {
+    let Some(actual_percent) = number(object.get("r_filtered")) else {
+        return;
+    };
+
+    node.actual_rows = node.actual_rows.map(|rows| rows * actual_percent / 100.0);
+
+    if let Some(estimated_percent) = number(object.get("filtered")) {
+        node.estimated_rows = node
+            .estimated_rows
+            .map(|rows| rows * estimated_percent / 100.0);
+    }
+}
+
 fn container_node(key: &str, value: &Json) -> Result<PlanNode, DbError> {
     let object = value
         .as_object()
@@ -154,6 +188,7 @@ fn container_node(key: &str, value: &Json) -> Result<PlanNode, DbError> {
     }
 
     apply_actuals(&mut node, object);
+    apply_attached_filter(&mut node, object);
     node.key_condition = key_condition(object, is_table);
     node.description = describe(&node.operation).map(str::to_string);
 

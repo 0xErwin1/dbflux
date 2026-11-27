@@ -2962,12 +2962,15 @@ impl Connection for MysqlConnection {
                 crate::plan::parse_explain_json(&dbflux_core::plan_text_from_result(&result)?)
             }
             dbflux_core::QueryPlanMode::Analyze => {
-                let sql = crate::plan::analyze_statement(self.kind, &request.query)?;
                 let version = self.execute(&QueryRequest::new("SELECT VERSION()"))?;
-                if let Some(Value::Text(version)) = version.rows.first().and_then(|row| row.first())
-                {
+                let version = match version.rows.first().and_then(|row| row.first()) {
+                    Some(Value::Text(version)) => Some(version.as_str()),
+                    _ => None,
+                };
+                if let Some(version) = version {
                     crate::plan::analyze_version_gate(self.kind, version)?;
                 }
+                let sql = crate::plan::analyze_statement(self.kind, version, &request.query)?;
                 // The statement runs, so it always runs in a read-only
                 // transaction that is rolled back; the server refuses any
                 // write that got past the classifier.

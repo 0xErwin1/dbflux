@@ -193,7 +193,10 @@ fn apply_metrics(node: &mut PlanNode, metrics: &str) {
     }
 
     if let Some(cost) = group(metrics, "(cost=") {
-        node.estimated_total_cost = number_after(cost, "cost=");
+        if let Some((startup, total)) = cost_after(cost) {
+            node.estimated_startup_cost = startup;
+            node.estimated_total_cost = Some(total);
+        }
         node.estimated_rows = number_after(cost, "rows=");
     }
 
@@ -209,7 +212,7 @@ fn apply_metrics(node: &mut PlanNode, metrics: &str) {
         }
 
         node.actual_rows = number_after(actual, "rows=");
-        node.actual_loops = token_after(actual, "loops=").and_then(|loops| loops.parse().ok());
+        node.actual_loops = token_after(actual, "loops=").and_then(count);
     }
 }
 
@@ -225,6 +228,26 @@ fn group<'text>(metrics: &'text str, opening: &str) -> Option<&'text str> {
 fn token_after<'text>(text: &'text str, key: &str) -> Option<&'text str> {
     let start = text.find(key)? + key.len();
     text.get(start..)?.split_whitespace().next()
+}
+
+/// The estimated cost: a scalar (`cost=4.12`) or, from MySQL 8.4, a range
+/// (`cost=0.05..4.12`) whose first value is the startup cost.
+fn cost_after(text: &str) -> Option<(Option<f64>, f64)> {
+    let token = token_after(text, "cost=")?;
+
+    match token.split_once("..") {
+        Some((startup, total)) => Some((startup.parse().ok(), total.parse().ok()?)),
+        None => Some((None, token.parse().ok()?)),
+    }
+}
+
+/// A non-negative whole count, which MySQL may print in engineering notation
+/// (`1e+6`) once it is large.
+fn count(token: &str) -> Option<u64> {
+    let value: f64 = token.parse().ok()?;
+
+    (value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value < u64::MAX as f64)
+        .then_some(value as u64)
 }
 
 fn number_after(text: &str, key: &str) -> Option<f64> {

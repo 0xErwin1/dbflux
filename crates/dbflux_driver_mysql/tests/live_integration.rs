@@ -684,6 +684,37 @@ fn mysql_analyzed_plan_reports_actuals() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_analyze_ignores_a_json_session_explain_format() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE analyze_format (id INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO analyze_format VALUES (1), (2)",
+        ))?;
+        connection.execute(&QueryRequest::new("SET SESSION explain_format = JSON"))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::analyzed(
+            "SELECT * FROM analyze_format",
+        ))?;
+
+        let scan = plan
+            .roots
+            .iter()
+            .find_map(|root| find_node(root, "analyze_format"))
+            .expect("a node reads analyze_format");
+        assert_eq!(scan.actual_rows, Some(2.0));
+        assert!(scan.estimated_total_cost.is_some());
+
+        Ok(())
+    })
+}
+
 fn find_node<'plan>(
     node: &'plan dbflux_core::PlanNode,
     relation: &str,

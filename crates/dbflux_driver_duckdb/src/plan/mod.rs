@@ -194,25 +194,28 @@ fn parse_node(value: &Json) -> Result<PlanNode, DbError> {
     Ok(node)
 }
 
-/// Maps an analyzed operator. DuckDB's `timing` is the seconds spent in the
+/// Maps an analyzed operator. DuckDB's `timing` (when tracked) is the seconds spent in the
 /// operator alone, so the node keeps an inclusive total in milliseconds (its
 /// own time plus its children's), which `actual_self_time` turns back into the
 /// operator's own time. It is CPU time summed over threads, so a parallel
 /// operator can report more than the wall clock.
 fn apply_actuals(node: &mut PlanNode, value: &Json) {
-    let Some(timing) = value.get("timing").and_then(Json::as_f64) else {
-        return;
-    };
+    let timing = value.get("timing").and_then(Json::as_f64);
+    let rows = value.get("intermediate_rows").and_then(Json::as_f64);
 
-    let children = node
-        .children
-        .iter()
-        .map(|child| child.actual_total_time.unwrap_or_default())
-        .sum::<f64>();
+    if let Some(timing) = timing {
+        let children = node
+            .children
+            .iter()
+            .map(|child| child.actual_total_time.unwrap_or_default())
+            .sum::<f64>();
+        node.actual_total_time = Some(timing * 1000.0 + children);
+    }
 
-    node.actual_total_time = Some(timing * 1000.0 + children);
-    node.actual_loops = Some(1);
-    node.actual_rows = value.get("intermediate_rows").and_then(Json::as_f64);
+    if timing.is_some() || rows.is_some() {
+        node.actual_loops = Some(1);
+    }
+    node.actual_rows = rows;
 
     for key in [
         "rows_scanned",

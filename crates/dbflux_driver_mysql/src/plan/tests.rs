@@ -570,11 +570,34 @@ fn text_that_is_not_an_analyze_tree_is_an_error() {
 #[test]
 fn the_analyze_statements_use_each_flavours_syntax_for_one_read_statement() {
     assert_eq!(
-        analyze_statement(dbflux_core::DbKind::MySQL, "SELECT * FROM t;").unwrap(),
+        analyze_statement(
+            dbflux_core::DbKind::MySQL,
+            Some("8.0.20"),
+            "SELECT * FROM t;"
+        )
+        .unwrap(),
         "EXPLAIN ANALYZE SELECT * FROM t"
     );
     assert_eq!(
-        analyze_statement(dbflux_core::DbKind::MariaDB, "SELECT * FROM t;").unwrap(),
+        analyze_statement(dbflux_core::DbKind::MySQL, None, "SELECT * FROM t;").unwrap(),
+        "EXPLAIN ANALYZE SELECT * FROM t"
+    );
+    assert_eq!(
+        analyze_statement(
+            dbflux_core::DbKind::MySQL,
+            Some("8.0.36"),
+            "SELECT * FROM t;"
+        )
+        .unwrap(),
+        "EXPLAIN ANALYZE FORMAT=TREE SELECT * FROM t"
+    );
+    assert_eq!(
+        analyze_statement(
+            dbflux_core::DbKind::MariaDB,
+            Some("11.4.2-MariaDB"),
+            "SELECT * FROM t;"
+        )
+        .unwrap(),
         "ANALYZE FORMAT=JSON SELECT * FROM t"
     );
 }
@@ -589,7 +612,7 @@ fn the_analyze_statements_refuse_writes_and_batches() {
             "TRUNCATE t",
             "SELECT * INTO OUTFILE '/tmp/x' FROM t",
         ] {
-            let error = analyze_statement(kind, query).unwrap_err();
+            let error = analyze_statement(kind, None, query).unwrap_err();
             assert_eq!(
                 error.to_string(),
                 "Analyze is only available for read statements; this statement is not a plain read, so only the estimate can run.",
@@ -597,7 +620,7 @@ fn the_analyze_statements_refuse_writes_and_batches() {
             );
         }
 
-        assert!(analyze_statement(kind, "SELECT 1; SELECT 2").is_err());
+        assert!(analyze_statement(kind, None, "SELECT 1; SELECT 2").is_err());
     }
 }
 
@@ -780,4 +803,57 @@ fn an_unreadable_version_does_not_block_analyze() {
     assert!(analyze_version_gate(DbKind::MySQL, "").is_ok());
     assert!(analyze_version_gate(DbKind::MySQL, "unknown").is_ok());
     assert!(analyze_version_gate(DbKind::MariaDB, "x").is_ok());
+}
+
+#[test]
+fn a_mariadb_scan_reports_the_rows_that_pass_its_attached_condition() {
+    let plan = parse_explain_json(
+        r#"{"query_block":{"select_id":1,"nested_loop":[{"table":{"table_name":"x","access_type":"ALL","r_loops":1,"rows":1000,"r_rows":1000,"filtered":50,"r_filtered":1,"attached_condition":"x.v = 1"}}]}}"#,
+    )
+    .unwrap();
+
+    let scan = &plan.roots[0].children[0];
+    assert_eq!(scan.actual_rows, Some(10.0));
+    assert_eq!(scan.estimated_rows, Some(500.0));
+}
+
+#[test]
+fn a_mariadb_scan_that_filters_nothing_keeps_its_rows() {
+    let plan = parse_explain_json(
+        r#"{"query_block":{"select_id":1,"nested_loop":[{"table":{"table_name":"x","access_type":"ALL","r_loops":1,"rows":8,"r_rows":80,"filtered":100,"r_filtered":100}}]}}"#,
+    )
+    .unwrap();
+
+    let scan = &plan.roots[0].children[0];
+    assert_eq!(scan.actual_rows, Some(80.0));
+    assert_eq!(scan.estimated_rows, Some(8.0));
+}
+
+#[test]
+fn a_cost_range_maps_startup_and_total_and_a_scalar_cost_stays_total() {
+    let tree =
+        "-> Table scan on t  (cost=0.05..4.12 rows=10) (actual time=0.01..0.02 rows=10 loops=1)\n";
+    let node = &parse_analyze_tree(tree).unwrap().roots[0];
+    assert_eq!(node.estimated_startup_cost, Some(0.05));
+    assert_eq!(node.estimated_total_cost, Some(4.12));
+
+    let tree = "-> Table scan on t  (cost=4.12 rows=10) (actual time=0.01..0.02 rows=10 loops=1)\n";
+    let node = &parse_analyze_tree(tree).unwrap().roots[0];
+    assert_eq!(node.estimated_startup_cost, None);
+    assert_eq!(node.estimated_total_cost, Some(4.12));
+}
+
+#[test]
+fn a_loop_count_in_engineering_notation_is_read() {
+    let tree = "-> Table scan on t  (cost=1 rows=1) (actual time=0.001..0.002 rows=1 loops=1e+6)\n";
+    let node = &parse_analyze_tree(tree).unwrap().roots[0];
+    assert_eq!(node.actual_loops, Some(1_000_000));
+
+    for bad in ["1.5", "-2", "inf", "NaN", "1e30"] {
+        let tree = format!(
+            "-> Table scan on t  (cost=1 rows=1) (actual time=0.001..0.002 rows=1 loops={bad})\n"
+        );
+        let node = &parse_analyze_tree(&tree).unwrap().roots[0];
+        assert_eq!(node.actual_loops, None, "{bad}");
+    }
 }
