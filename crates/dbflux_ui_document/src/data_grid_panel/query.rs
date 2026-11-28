@@ -423,7 +423,7 @@ impl DataGridPanel {
         let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
             format!("SELECT {select_list} FROM {}", table.qualified_name()),
             task_target,
-            true,
+            Some(conn.clone()),
             cx,
         );
 
@@ -459,6 +459,14 @@ impl DataGridPanel {
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
+                    return;
+                }
+
+                if !entity.read(cx).runner.owns_primary(task_id) {
+                    log::info!("Superseded query finished, discarding result");
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.settle_after_cancel(task_id, &result, cx);
+                    });
                     return;
                 }
 
@@ -569,9 +577,12 @@ impl DataGridPanel {
             database: database.clone(),
         };
 
-        let (task_id, cancel_token) =
-            self.runner
-                .start_primary_query_for_target(select.sql.clone(), task_target, true, cx);
+        let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
+            select.sql.clone(),
+            task_target,
+            Some(conn.clone()),
+            cx,
+        );
 
         self.refresh.state = GridState::Loading;
         cx.notify();
@@ -587,11 +598,15 @@ impl DataGridPanel {
 
         let committed_spec: Option<VisualQuerySpec> = self.builder.builder_draft_spec.clone();
 
+        #[cfg(all(test, feature = "telemetry"))]
+        let fixture_sequence = super::tests::next_builder_fixture_sequence();
+
         let task = cx.background_executor().spawn(async move {
             #[cfg(all(test, feature = "telemetry"))]
-            return *super::tests::run_builder_fixture_worker(move || {
-                Box::new(conn.execute(&request))
-            })
+            return *super::tests::run_sequenced_builder_fixture_worker(
+                fixture_sequence,
+                move || Box::new(conn.execute(&request)),
+            )
             .await;
             #[cfg(not(all(test, feature = "telemetry")))]
             conn.execute(&request)
@@ -633,6 +648,17 @@ impl DataGridPanel {
                     });
                     return;
                 };
+
+                if !entity.read(cx).runner.owns_primary(task_id) {
+                    log::info!("Superseded visual query finished, discarding result");
+                    crate::task_runner::settle_task_after_cancel(
+                        &task_tracker,
+                        task_id,
+                        &result,
+                        cx,
+                    );
+                    return;
+                }
 
                 match result {
                     Ok(mut query_result) => {
@@ -865,9 +891,12 @@ impl DataGridPanel {
             None => format!("find {}.{}", collection.database, collection.name),
         };
 
-        let (task_id, cancel_token) =
-            self.runner
-                .start_primary_query_for_target(task_description, task_target, true, cx);
+        let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
+            task_description,
+            task_target,
+            Some(conn.clone()),
+            cx,
+        );
 
         if let Some(query) = &browse_query {
             self.app_state.update(cx, |state, _cx| {
@@ -906,6 +935,14 @@ impl DataGridPanel {
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
+                    return;
+                }
+
+                if !entity.read(cx).runner.owns_primary(task_id) {
+                    log::info!("Superseded collection query finished, discarding result");
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.settle_after_cancel(task_id, &result, cx);
+                    });
                     return;
                 }
 

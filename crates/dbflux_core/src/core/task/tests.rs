@@ -308,6 +308,71 @@ fn hook_reporting_not_supported_keeps_the_task_running_with_a_reason() {
 }
 
 #[test]
+fn hook_that_could_not_deliver_the_cancel_refuses_and_allows_a_retry() {
+    let mut manager = TaskManager::new();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hook: CancelHook = {
+        let calls = calls.clone();
+        Arc::new(move || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            CancelOutcome::DeliveryFailed {
+                reason: "could not start the cancel thread".into(),
+            }
+        })
+    };
+    let handle = start_with(&mut manager, CancelPolicy::WorkerAcknowledged, Some(hook));
+
+    let expected = CancelRequestOutcome::Refused {
+        reason: "could not start the cancel thread".into(),
+    };
+    assert_eq!(manager.request_cancel(handle.id()), expected);
+    assert_eq!(manager.request_cancel(handle.id()), expected);
+
+    let snapshot = manager.get(handle.id()).expect("task");
+    assert_eq!(snapshot.status, TaskStatus::Running);
+    assert!(snapshot.is_cancellable, "the user can try again");
+    assert_eq!(snapshot.cancel_unavailable_reason, None);
+    assert!(!handle.token().is_cancelled());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_finished_task_releases_its_cancel_hook() {
+    let mut manager = TaskManager::new();
+    let witness = Arc::new(());
+    let hook_with_witness = || -> CancelHook {
+        let witness = witness.clone();
+        Arc::new(move || {
+            let _held = &witness;
+            CancelOutcome::Requested
+        })
+    };
+    let request =
+        || TaskRequest::new(TaskKind::Query, "q").policy(CancelPolicy::WorkerAcknowledged);
+
+    let completed = manager.start_handle(request().cancel_hook(hook_with_witness()));
+    let failed = manager.start_handle(request().cancel_hook(hook_with_witness()));
+    let cancelled = manager.start_handle(request().cancel_hook(hook_with_witness()));
+    let detailed = manager.start_handle(request().cancel_hook(hook_with_witness()));
+    assert_eq!(Arc::strong_count(&witness), 5);
+
+    manager.complete(completed.id());
+    assert_eq!(Arc::strong_count(&witness), 4, "completed");
+    manager.fail(failed.id(), "boom");
+    assert_eq!(Arc::strong_count(&witness), 3, "failed");
+    manager.request_cancel(cancelled.id());
+    assert_eq!(
+        Arc::strong_count(&witness),
+        3,
+        "kept while the worker stops"
+    );
+    assert!(manager.acknowledge_cancelled(cancelled.id()));
+    assert_eq!(Arc::strong_count(&witness), 2, "cancelled");
+    manager.complete_with_details(detailed.id(), "done");
+    assert_eq!(Arc::strong_count(&witness), 1, "completed with details");
+}
+
+#[test]
 fn point_of_no_return_refuses_cancel_without_touching_the_task() {
     let mut manager = TaskManager::new();
     let handle = start_with(&mut manager, CancelPolicy::WorkerAcknowledged, None);
@@ -585,8 +650,131 @@ fn a_parent_cannot_be_acknowledged_while_a_child_is_still_stopping() {
     assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
 
     assert!(manager.acknowledge_cancelled(child.id()));
-    assert!(manager.acknowledge_cancelled(parent.id()));
     assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn a_parent_acknowledged_before_its_child_settles_when_the_last_child_stops() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(acknowledged_request(TaskKind::Connect));
+    let child =
+        manager.start_handle(acknowledged_request(TaskKind::LoadSchema).parent(parent.id()));
+    manager.request_cancel(parent.id());
+
+    assert!(!manager.acknowledge_cancelled(parent.id()));
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+
+    assert!(manager.acknowledge_cancelled(child.id()));
+
+    assert_eq!(
+        status_of(&manager, parent.id()),
+        TaskStatus::Cancelled,
+        "the parent worker already returned and will not call again"
+    );
+}
+
+#[test]
+fn a_parent_acknowledged_after_its_children_stopped_settles_at_once() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(acknowledged_request(TaskKind::Connect));
+    let child =
+        manager.start_handle(acknowledged_request(TaskKind::LoadSchema).parent(parent.id()));
+    manager.request_cancel(parent.id());
+    assert!(manager.acknowledge_cancelled(child.id()));
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+
+    assert!(manager.acknowledge_cancelled(parent.id()));
+
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn a_pending_parent_waiting_on_a_refusing_child_settles_as_skipped() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect").pending());
+    let child = manager.start_handle(
+        acknowledged_request(TaskKind::SchemaDrop)
+            .cancel_hook(not_supported_hook())
+            .parent(parent.id()),
+    );
+
+    manager.request_cancel(parent.id());
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Cancelling);
+
+    manager.complete(child.id());
+
+    assert_eq!(
+        status_of(&manager, parent.id()),
+        TaskStatus::Skipped,
+        "a stage that never started still reads as not started"
+    );
+}
+
+#[test]
+fn a_pending_parent_without_in_flight_children_is_skipped_at_once() {
+    let mut manager = TaskManager::new();
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect").pending());
+
+    manager.request_cancel(parent.id());
+
+    assert_eq!(status_of(&manager, parent.id()), TaskStatus::Skipped);
+}
+
+#[test]
+fn a_late_pending_leaf_under_a_completed_intermediate_of_a_cancelled_root_is_skipped() {
+    let mut manager = TaskManager::new();
+    let root = manager.start_handle(TaskRequest::new(TaskKind::Connect, "root"));
+    let middle =
+        manager.start_handle(TaskRequest::new(TaskKind::Connect, "middle").parent(root.id()));
+    manager.complete(middle.id());
+    manager.request_cancel(root.id());
+    assert_eq!(status_of(&manager, root.id()), TaskStatus::Cancelled);
+
+    let leaf = manager.start_handle(
+        TaskRequest::new(TaskKind::LoadSchema, "leaf")
+            .pending()
+            .parent(middle.id()),
+    );
+
+    assert_eq!(status_of(&manager, leaf.id()), TaskStatus::Skipped);
+    assert!(leaf.is_cancelled());
+    assert!(!manager.activate(leaf.id()));
+}
+
+#[test]
+fn a_late_running_leaf_under_a_completed_intermediate_of_a_cancelled_root_is_cancelled() {
+    let mut manager = TaskManager::new();
+    let root = manager.start_handle(TaskRequest::new(TaskKind::Connect, "root"));
+    let middle =
+        manager.start_handle(TaskRequest::new(TaskKind::Connect, "middle").parent(root.id()));
+    manager.complete(middle.id());
+    manager.request_cancel(root.id());
+
+    let leaf = manager.start_handle(TaskRequest::new(TaskKind::Query, "leaf").parent(middle.id()));
+
+    assert!(leaf.is_cancelled());
+    assert_eq!(status_of(&manager, leaf.id()), TaskStatus::Cancelled);
+}
+
+#[test]
+fn a_child_that_cannot_start_does_not_supersede_live_work() {
+    let mut manager = TaskManager::new();
+    let live = manager
+        .start_handle(TaskRequest::new(TaskKind::LoadSchema, "live").supersede_key("schema"));
+    let parent = manager.start_handle(TaskRequest::new(TaskKind::Connect, "connect"));
+    manager.request_cancel(parent.id());
+
+    let child = manager.start_handle(
+        TaskRequest::new(TaskKind::LoadSchema, "child")
+            .pending()
+            .supersede_key("schema")
+            .parent(parent.id()),
+    );
+
+    assert!(child.superseded().is_empty());
+    assert_eq!(status_of(&manager, live.id()), TaskStatus::Running);
+    assert!(!live.is_cancelled());
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Skipped);
 }
 
 #[test]

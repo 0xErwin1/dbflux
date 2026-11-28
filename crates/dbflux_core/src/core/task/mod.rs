@@ -138,6 +138,9 @@ pub enum CancelOutcome {
     Requested,
     /// The work cannot be stopped.
     NotSupported { reason: String },
+    /// The stop could not be delivered this time. The task stays as it was,
+    /// cancellable, so the user can try again.
+    DeliveryFailed { reason: String },
 }
 
 /// Cancel action of a task, run by `TaskManager::request_cancel` while the
@@ -387,6 +390,9 @@ pub struct Task {
     /// child was still in flight: the parent turns `Cancelled` on its own
     /// once every child stopped.
     settles_with_children: bool,
+    /// What a task that settles with its children reads once they stopped:
+    /// `Skipped` for a stage that never started, `Cancelled` otherwise.
+    settles_as: TaskStatus,
 }
 
 impl Task {
@@ -411,6 +417,9 @@ impl Task {
     fn finish(&mut self, status: TaskStatus) {
         self.status = status;
         self.completed_at = Some(Instant::now());
+        // The hook can own a connection; a finished task must not keep it
+        // alive until the user dismisses the row.
+        self.cancel_hook = None;
     }
 
     fn skip(&mut self) -> CancelRequestOutcome {
@@ -457,6 +466,7 @@ impl Task {
                 self.cancel_unavailable_reason = Some(reason.clone());
                 CancelRequestOutcome::Refused { reason }
             }
+            CancelOutcome::DeliveryFailed { reason } => CancelRequestOutcome::Refused { reason },
         }
     }
 }
@@ -540,19 +550,16 @@ impl TaskManager {
     /// [`TaskHandle::superseded`]. The new task starts whatever the outcome:
     /// an older task that cannot stop keeps its honest status.
     pub fn start_handle(&mut self, request: TaskRequest) -> TaskHandle {
-        let superseded = self.supersede_matching(request.supersede_key.as_deref());
+        let parent_cancelled = self.has_cancelled_ancestor(request.parent);
+        let superseded = if parent_cancelled {
+            // A child that cannot start must not take down live work.
+            Vec::new()
+        } else {
+            self.supersede_matching(request.supersede_key.as_deref())
+        };
         let id = TaskId::new_v4();
         let cancel_token = CancelToken::new();
         let profile_id = request.target.as_ref().map(|target| target.profile_id);
-        let parent_cancelled = request
-            .parent
-            .and_then(|parent| self.tasks.get(&parent))
-            .is_some_and(|parent| {
-                matches!(
-                    parent.status,
-                    TaskStatus::Cancelling | TaskStatus::Cancelled | TaskStatus::Skipped
-                )
-            });
         let skipped = parent_cancelled && request.pending;
 
         let mut task = Task {
@@ -580,6 +587,7 @@ impl TaskManager {
             supersede_key: request.supersede_key,
             sequence: self.next_sequence,
             settles_with_children: false,
+            settles_as: TaskStatus::Cancelled,
         };
         self.next_sequence += 1;
 
@@ -633,8 +641,7 @@ impl TaskManager {
         if let Some(task) = self.tasks.get_mut(&id)
             && !task.status.is_terminal()
         {
-            task.status = TaskStatus::Completed;
-            task.completed_at = Some(Instant::now());
+            task.finish(TaskStatus::Completed);
             self.settle_ancestors(id);
         }
     }
@@ -643,8 +650,7 @@ impl TaskManager {
         if let Some(task) = self.tasks.get_mut(&id)
             && !task.status.is_terminal()
         {
-            task.status = TaskStatus::Completed;
-            task.completed_at = Some(Instant::now());
+            task.finish(TaskStatus::Completed);
 
             let details = details.into();
             task.details = if details.trim().is_empty() {
@@ -683,8 +689,7 @@ impl TaskManager {
         if let Some(task) = self.tasks.get_mut(&id)
             && !task.status.is_terminal()
         {
-            task.status = TaskStatus::Failed(error.into());
-            task.completed_at = Some(Instant::now());
+            task.finish(TaskStatus::Failed(error.into()));
             self.settle_ancestors(id);
         }
     }
@@ -698,8 +703,7 @@ impl TaskManager {
         if let Some(task) = self.tasks.get_mut(&id)
             && !task.status.is_terminal()
         {
-            task.status = TaskStatus::Failed(error.into());
-            task.completed_at = Some(Instant::now());
+            task.finish(TaskStatus::Failed(error.into()));
 
             let details = details.into();
             task.details = if details.trim().is_empty() {
@@ -740,6 +744,7 @@ impl TaskManager {
             return CancelRequestOutcome::NotRunning;
         };
 
+        let was_pending = task.status == TaskStatus::Pending;
         let own = match task.status {
             TaskStatus::Pending => task.skip(),
             TaskStatus::Running => task.apply_cancel_request(),
@@ -747,7 +752,7 @@ impl TaskManager {
             _ => CancelRequestOutcome::NotRunning,
         };
 
-        self.reconcile_with_children(id, own)
+        self.reconcile_with_children(id, own, was_pending)
     }
 
     /// Legacy cancel: `true` when the request was accepted. Prefer
@@ -760,16 +765,21 @@ impl TaskManager {
     }
 
     /// Worker confirmation that a `Cancelling` task really stopped. Returns
-    /// `false` and changes nothing when the task is in any other state.
-    /// A parent is also left unchanged while one of its children is still
-    /// in flight.
+    /// `true` when the task is now `Cancelled`, and `false` without changing
+    /// its status when it is in any other state.
+    ///
+    /// A parent whose descendants are still in flight stays `Cancelling`, but
+    /// the confirmation is recorded: the last descendant to stop settles it,
+    /// because its own worker already returned and will not call again.
     pub fn acknowledge_cancelled(&mut self, id: TaskId) -> bool {
-        if self.has_in_flight_descendants(id) {
-            return false;
-        }
+        let has_in_flight_descendants = self.has_in_flight_descendants(id);
 
         match self.tasks.get_mut(&id) {
             Some(task) if task.status == TaskStatus::Cancelling => {
+                if has_in_flight_descendants {
+                    task.settles_with_children = true;
+                    return false;
+                }
                 task.finish(TaskStatus::Cancelled);
                 self.settle_ancestors(id);
                 true

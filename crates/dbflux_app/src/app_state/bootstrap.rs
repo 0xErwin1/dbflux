@@ -267,6 +267,7 @@ impl AppState {
             scripts_directory_diagnostics,
             protected_hook_rows,
             detached_hook_tasks: HashMap::new(),
+            cancel_dispatch_failures: Default::default(),
             auth_provider_registry,
             secret_provider_registry,
             history_manager,

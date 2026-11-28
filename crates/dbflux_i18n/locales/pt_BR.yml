@@ -6095,6 +6095,7 @@ sidebar:
     disconnected_hook_error: "Desconectado de %{name}, mas %{error}"
     profile_not_found: Perfil não encontrado
     schema_drop_cancelled: Remoção do schema cancelada
+    schema_drop_cancelled_after_release: "A remoção de \"%{database}\" foi cancelada e nada foi removido, mas o DBFlux já havia liberado a conexão com ele. Selecione o banco de dados na barra lateral para conectar novamente."
     drop_failed: "Falha ao remover: %{error}"
     reveal_failed: "Falha ao mostrar no gerenciador de arquivos: %{error}"
     schema_snapshot_failed: "Falha ao capturar o snapshot do schema: %{error}"
@@ -6325,6 +6326,8 @@ tasks_panel:
   empty: Nenhuma tarefa em segundo plano
   output_truncated: "… saída truncada no painel"
   query_cancel_unsupported: "%{driver} não permite cancelar um comando em execução."
+  query_cancel_not_sent: "Não foi possível enviar o pedido de cancelamento para %{driver}: %{error}. Tente cancelar novamente."
+  query_cancel_rejected: "%{driver} não aceitou o pedido de cancelamento: %{error}. A consulta continua em execução até terminar."
   drop_point_of_no_return: "A instrução já foi enviada ao servidor e não pode mais ser cancelada."
   mutation_point_of_no_return: "As alterações são aplicadas sem transação e não podem mais ser canceladas."
 toast:

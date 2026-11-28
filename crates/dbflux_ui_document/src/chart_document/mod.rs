@@ -1103,9 +1103,11 @@ impl ChartDocument {
         request.sql =
             dbflux_core::substitute_time_macros(&request.sql, macro_window, query_language);
 
-        let (task_id, cancel_token) = self
-            .runner
-            .start_primary_query(dbflux_i18n::t!("document.chart.status.task_label"), cx);
+        let (task_id, cancel_token) = self.runner.start_primary_query(
+            dbflux_i18n::t!("document.chart.status.task_label"),
+            conn.clone(),
+            cx,
+        );
 
         self.exec_state = ExecState::Running;
         self.state = DocumentState::Executing;
