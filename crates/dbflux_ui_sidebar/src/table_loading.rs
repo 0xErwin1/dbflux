@@ -722,7 +722,9 @@ impl Sidebar {
         for item in items {
             self.table_details_requests.remove(&item);
             self.loading_items.remove(&item);
+            let mut consumer_cancelled = false;
             if let Some((task_id, token)) = self.table_refresh_tasks.remove(&item) {
+                consumer_cancelled = token.is_cancelled();
                 self.app_state.update(cx, |state, cx| {
                     match &event.outcome {
                         ObjectTreeOutcome::Applied | ObjectTreeOutcome::Cached
@@ -764,7 +766,11 @@ impl Sidebar {
             } else {
                 self.table_details_retry.borrow_mut().remove(&item);
             }
-            if matches!(
+            if consumer_cancelled {
+                // The shared result stays cached for other consumers; only
+                // this cancelled consumer drops its queued action.
+                self.pending_actions.remove(&item);
+            } else if matches!(
                 event.outcome,
                 ObjectTreeOutcome::Applied | ObjectTreeOutcome::Cached
             ) {
@@ -7244,6 +7250,85 @@ pub(crate) mod object_tree_adapter_tests {
                 assert!(!sidebar.loading_items.contains(&table_id));
             })
             .expect("sidebar alive");
+    }
+
+    #[gpui::test]
+    async fn a_cancelled_table_refresh_does_not_run_its_queued_pending_action(
+        cx: &mut TestAppContext,
+    ) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            AdapterFakeConnection::single_database(),
+            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            }])),
+        );
+        state.update(cx, |state, _| {
+            state.set_table_details(
+                profile_id,
+                "app".into(),
+                Some("public".into()),
+                "users".into(),
+                loaded_details("app", Some("public"), "users"),
+            );
+        });
+        let table_id = SchemaNodeId::Table {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "users".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&table_id, cx);
+                assert!(matches!(
+                    sidebar.ensure_table_details(
+                        &table_id,
+                        PendingAction::ViewSchema {
+                            item_id: table_id.clone(),
+                        },
+                        cx,
+                    ),
+                    TableDetailsStatus::Loading
+                ));
+                assert!(sidebar.pending_actions.contains_key(&table_id));
+            })
+            .expect("sidebar alive");
+        let task_id = running_task_of_kind(&state, cx, dbflux_core::TaskKind::SchemaRefresh);
+
+        assert_cancel_settles_honestly(&state, cx, task_id);
+
+        window
+            .update(cx, |sidebar, _, _| {
+                assert!(
+                    !sidebar.pending_actions.contains_key(&table_id),
+                    "the cancelled consumer must drop its queued action"
+                );
+                assert_ne!(
+                    sidebar.expansion_overrides.get(&table_id),
+                    Some(&true),
+                    "a cancelled refresh must not run the queued ViewSchema action"
+                );
+            })
+            .expect("sidebar alive");
+        let key = ObjectTreeRequestKey::TableDetails {
+            profile_id,
+            database: "app".into(),
+            schema: Some("public".into()),
+            table: "users".into(),
+        };
+        assert_eq!(
+            state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+            Some(ObjectTreeOutcome::Applied),
+            "the shared coordinator result stays available to other consumers"
+        );
     }
 
     fn collection_children_fixture(
