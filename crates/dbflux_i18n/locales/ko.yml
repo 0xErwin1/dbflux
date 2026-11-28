@@ -6345,7 +6345,7 @@ tasks_panel:
   query_cancel_unsupported: "%{driver}은(는) 실행 중인 명령 취소를 지원하지 않습니다."
   query_cancel_not_sent: "%{driver}에 취소 요청을 보내지 못했습니다: %{error}. 다시 취소해 보세요."
   query_cancel_rejected: "%{driver}이(가) 취소 요청을 수락하지 않았습니다: %{error}. 쿼리는 끝날 때까지 계속 실행됩니다."
-  drop_point_of_no_return: "구문이 이미 서버로 전송되어 더 이상 취소할 수 없습니다."
+  drop_point_of_no_return: "DROP이 전송 단계에 도달하여 더 이상 취소할 수 없습니다."
   mutation_point_of_no_return: "변경 사항이 트랜잭션 없이 적용되어 더 이상 취소할 수 없습니다."
   cancelling_count: "%{count}개 취소 중"
   cancelling_badge: "취소 중…"

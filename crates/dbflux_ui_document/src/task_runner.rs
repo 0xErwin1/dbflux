@@ -24,6 +24,61 @@ struct SentSignalState {
     waker: Option<Waker>,
 }
 
+/// Wakes a foreground waiter from the worker's thread.
+///
+/// A gpui executor accepts that in production, but the test scheduler rejects
+/// any activity off the test thread, so a test's own worker thread hands the
+/// waker to the test thread to wake instead.
+fn wake_from_worker(waker: Waker) {
+    #[cfg(test)]
+    if fixture_worker::is_current_thread() {
+        fixture_worker::defer(waker);
+        return;
+    }
+
+    waker.wake();
+}
+
+#[cfg(test)]
+pub(crate) mod fixture_worker {
+    use std::cell::Cell;
+    use std::sync::{Mutex, PoisonError};
+    use std::task::Waker;
+
+    thread_local! {
+        static FIXTURE_WORKER: Cell<bool> = const { Cell::new(false) };
+    }
+
+    static DEFERRED_WAKERS: Mutex<Vec<Waker>> = Mutex::new(Vec::new());
+
+    /// Marks the calling thread as a test worker that must not wake executors.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn mark_current_thread() {
+        FIXTURE_WORKER.with(|flag| flag.set(true));
+    }
+
+    pub(super) fn is_current_thread() -> bool {
+        FIXTURE_WORKER.with(Cell::get)
+    }
+
+    pub(super) fn defer(waker: Waker) {
+        DEFERRED_WAKERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(waker);
+    }
+
+    /// Wakers the test thread has to wake on behalf of its workers.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn take_deferred() -> Vec<Waker> {
+        std::mem::take(
+            &mut *DEFERRED_WAKERS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+}
+
 impl SentSignal {
     fn lock(&self) -> std::sync::MutexGuard<'_, SentSignalState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
@@ -33,7 +88,7 @@ impl SentSignal {
         let mut state = self.lock();
         state.fired = true;
         if let Some(waker) = state.waker.take() {
-            waker.wake();
+            wake_from_worker(waker);
         }
     }
 

@@ -307,6 +307,9 @@ mod tests {
         /// carries one.
         enforces_row_limit: bool,
         show_time_window: AtomicBool,
+        /// `execute` reports the cancellation the driver honored instead of
+        /// a result.
+        driver_cancelled: AtomicBool,
     }
 
     impl FakeConnection {
@@ -322,6 +325,7 @@ mod tests {
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: true,
                 show_time_window: AtomicBool::new(false),
+                driver_cancelled: AtomicBool::new(false),
             })
         }
 
@@ -343,6 +347,7 @@ mod tests {
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: false,
                 show_time_window: AtomicBool::new(false),
+                driver_cancelled: AtomicBool::new(false),
             })
         }
 
@@ -358,6 +363,7 @@ mod tests {
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: true,
                 show_time_window: AtomicBool::new(false),
+                driver_cancelled: AtomicBool::new(false),
             })
         }
     }
@@ -440,6 +446,9 @@ mod tests {
                 .lock()
                 .expect("test request limit collection")
                 .push((request.limit, request.statement_timeout));
+            if self.driver_cancelled.load(Ordering::SeqCst) {
+                return Err(DbError::Cancelled);
+            }
             let mut result = QueryResult::empty();
             result.set_rows_truncated(self.truncate_rows.load(Ordering::SeqCst));
             Ok(result)
@@ -1065,6 +1074,8 @@ mod tests {
 
     enum CompletionInterruption {
         Cancel,
+        /// The driver stopped the statement, so the worker returns `Cancelled`.
+        CancelStoppedByDriver,
         ChangeDatabaseContext,
     }
 
@@ -1080,6 +1091,10 @@ mod tests {
         });
         let isolated = FakeConnection::isolated_with_gate(Some(execute_gate.clone()));
         isolated.truncate_rows.store(true, Ordering::SeqCst);
+        isolated.driver_cancelled.store(
+            matches!(interruption, CompletionInterruption::CancelStoppedByDriver),
+            Ordering::SeqCst,
+        );
         let session = Arc::new(FakeSession {
             connection: isolated.clone(),
             closed: AtomicBool::new(false),
@@ -1141,7 +1156,9 @@ mod tests {
 
         window.update(|_, cx| {
             document.update(cx, |document, cx| match interruption {
-                CompletionInterruption::Cancel => document.cancel_query(cx),
+                CompletionInterruption::Cancel | CompletionInterruption::CancelStoppedByDriver => {
+                    document.cancel_query(cx)
+                }
                 CompletionInterruption::ChangeDatabaseContext => document
                     .on_database_changed(&DropdownItem::with_value("databaseB", "databaseB"), cx),
             });
@@ -1165,7 +1182,8 @@ mod tests {
                     "preserved result must be shown"
                 );
             }
-            CompletionInterruption::ChangeDatabaseContext => {
+            CompletionInterruption::CancelStoppedByDriver
+            | CompletionInterruption::ChangeDatabaseContext => {
                 assert_eq!(
                     published_truncated, None,
                     "discarded result must not be shown"
@@ -1193,6 +1211,11 @@ mod tests {
             match interruption {
                 CompletionInterruption::Cancel => {
                     record.result.is_some()
+                        && record.error.is_none()
+                        && document.execution.active_query_task.is_none()
+                }
+                CompletionInterruption::CancelStoppedByDriver => {
+                    record.result.is_none()
                         && record.error.is_none()
                         && document.execution.active_query_task.is_none()
                 }
@@ -1308,6 +1331,13 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         assert_real_isolated_query_completion(CompletionInterruption::Cancel, cx);
+    }
+
+    #[gpui::test]
+    fn an_isolated_query_stopped_by_the_driver_is_not_recorded_as_a_failure(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        assert_real_isolated_query_completion(CompletionInterruption::CancelStoppedByDriver, cx);
     }
 
     #[gpui::test]

@@ -137,6 +137,7 @@ pub(crate) async fn run_sequenced_builder_fixture_worker<T: Send + 'static>(
         let shared = shared.clone();
         move || {
             BUILDER_WORKER_SEQUENCE.with(|slot| slot.set(sequence));
+            crate::task_runner::fixture_worker::mark_current_thread();
             let result = operation();
             let mut state = shared.lock().expect("fixture result");
             state.0 = Some(result);
@@ -229,7 +230,9 @@ fn pump_builder_until(window: &mut VisualTestContext, mut ready: impl FnMut() ->
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let is_ready = ready();
-        let wakers = std::mem::take(&mut *BUILDER_FIXTURE_WAKERS.lock().expect("fixture wakes"));
+        let mut wakers =
+            std::mem::take(&mut *BUILDER_FIXTURE_WAKERS.lock().expect("fixture wakes"));
+        wakers.extend(crate::task_runner::fixture_worker::take_deferred());
         for waker in wakers {
             waker.wake();
         }
@@ -460,7 +463,8 @@ fn builder_closed_grid_still_terminalizes_actual_select(cx: &mut TestAppContext)
             connection = connection.cancellable();
         }
         connection.gate = Some(gate.clone());
-        let (app_state, profile_id) = register_stub_connection(cx, Arc::new(connection));
+        let connection = Arc::new(connection);
+        let (app_state, profile_id) = register_stub_connection(cx, connection.clone());
         cx.update(|cx| app_state.update(cx, |app, _| enable_builder_usage(app)));
         let window = cx.add_empty_window();
         let (document, grid) = usage_table_document(window, app_state.clone(), profile_id, vec![]);
@@ -520,6 +524,13 @@ fn builder_closed_grid_still_terminalizes_actual_select(cx: &mut TestAppContext)
                 app_state.update(cx, |app, _| {
                     assert!(app.tasks_mut().cancel(task_id));
                 })
+            });
+            // The cancel hook reaches the driver on its own thread: the
+            // worker must not wake before the fixture has seen it.
+            pump_builder_until(window, || {
+                connection
+                    .cancel_requested
+                    .load(std::sync::atomic::Ordering::SeqCst)
             });
         }
         gate.release();
