@@ -257,6 +257,41 @@ fn visible_finished_tasks_keeps_every_failure_and_caps_the_rest() {
     );
 }
 
+/// A finished parent whose stage failed stays listed like a failed task, so
+/// the stage's error is not hidden behind the cap on finished tasks.
+#[test]
+fn a_parent_with_a_failed_stage_stays_outside_the_finished_cap() {
+    let mut manager = TaskManager::new();
+    let parent = manager
+        .start_handle(dbflux_core::TaskRequest::new(TaskKind::Connect, "connect"))
+        .id();
+    let stage = manager
+        .start_handle(dbflux_core::TaskRequest::new(TaskKind::Connect, "stage").parent(parent))
+        .id();
+    manager.fail(stage, "connection reset");
+    manager.complete(parent);
+
+    for _ in 0..(RECENT_FINISHED_TASK_LIMIT + 3) {
+        let (id, _token) = manager.start(TaskKind::Query, "query");
+        manager.complete(id);
+    }
+
+    let visible = visible_finished_tasks(manager.recent_tasks(usize::MAX));
+
+    assert!(
+        visible.iter().any(|task| task.id == parent),
+        "the parent of a failed stage stays listed"
+    );
+    assert_eq!(
+        visible
+            .iter()
+            .filter(|task| task.status == TaskStatus::Completed && task.id != parent)
+            .count(),
+        RECENT_FINISHED_TASK_LIMIT,
+        "other finished tasks keep the ordinary cap"
+    );
+}
+
 fn add_profile(
     app_state: &Entity<AppStateEntity>,
     name: &str,

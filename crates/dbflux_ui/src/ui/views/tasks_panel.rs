@@ -800,9 +800,9 @@ const RECENT_FINISHED_TASK_LIMIT: usize = 5;
 
 /// Picks the finished tasks to list, newest first, from `recent_tasks`.
 ///
-/// Every failed task is kept so its error stays readable until the user
-/// dismisses it. Completed and cancelled tasks are capped at
-/// [`RECENT_FINISHED_TASK_LIMIT`].
+/// Every failed task, and every finished parent with a failed stage, is kept
+/// so the error stays readable until the user dismisses it. Other completed
+/// and cancelled tasks are capped at [`RECENT_FINISHED_TASK_LIMIT`].
 fn visible_finished_tasks(recent_tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     let mut other_finished_count = 0;
     let top_level: Vec<TaskSnapshot> = TaskManager::top_level(&recent_tasks).cloned().collect();
@@ -812,12 +812,23 @@ fn visible_finished_tasks(recent_tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> 
         .filter(|task| match task.status {
             TaskStatus::Running | TaskStatus::Cancelling | TaskStatus::Pending => false,
             TaskStatus::Failed(_) => true,
+            _ if has_failed_descendant(&recent_tasks, task.id) => true,
             TaskStatus::Completed | TaskStatus::Cancelled | TaskStatus::Skipped => {
                 other_finished_count += 1;
                 other_finished_count <= RECENT_FINISHED_TASK_LIMIT
             }
         })
         .collect()
+}
+
+/// Whether any task below `parent` in `tasks` failed.
+fn has_failed_descendant(tasks: &[TaskSnapshot], parent: dbflux_core::TaskId) -> bool {
+    tasks
+        .iter()
+        .filter(|task| task.parent_id == Some(parent))
+        .any(|child| {
+            matches!(child.status, TaskStatus::Failed(_)) || has_failed_descendant(tasks, child.id)
+        })
 }
 
 impl Render for TasksPanel {
