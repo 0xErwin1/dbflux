@@ -148,7 +148,7 @@ impl TasksPanel {
         Some(SelectedTaskActions {
             has_output: has_output(&task),
             output_shown: self.expanded_task_ids.contains(&task.id),
-            cancellable: task.is_cancellable,
+            cancellable: task.is_cancellable || !self.cancellable_stages(&task, cx).is_empty(),
             finished: task.status.is_terminal(),
         })
     }
@@ -165,16 +165,35 @@ impl TasksPanel {
         }
     }
 
-    /// Cancels the selected task, like its cancel button. Returns `false`
-    /// when it cannot be cancelled.
+    /// The stages of `task` that offer their own cancel control: a detached
+    /// hook keeps running after its connect finished, and its row is the only
+    /// place to stop it.
+    fn cancellable_stages(&self, task: &TaskSnapshot, cx: &App) -> Vec<TaskId> {
+        stage_tree(self.app_state.read(cx).tasks(), task.id)
+            .into_iter()
+            .filter(|entry| entry.task.is_cancellable)
+            .map(|entry| entry.task.id)
+            .collect()
+    }
+
+    /// Cancels the selected task, like its cancel button. A task that is
+    /// itself finished cancels the stages it still shows, like their cancel
+    /// buttons. Returns `false` when nothing can be cancelled.
     pub fn cancel_selected(&mut self, cx: &mut Context<Self>) -> bool {
-        match self.selected_task(cx) {
-            Some(task) if task.is_cancellable => {
-                self.cancel_task(task.id, cx);
-                true
-            }
-            _ => false,
+        let Some(task) = self.selected_task(cx) else {
+            return false;
+        };
+
+        if task.is_cancellable {
+            self.cancel_task(task.id, cx);
+            return true;
         }
+
+        let stages = self.cancellable_stages(&task, cx);
+        for stage_id in &stages {
+            self.cancel_task(*stage_id, cx);
+        }
+        !stages.is_empty()
     }
 
     /// Removes the selected task from the list once it has finished, like
@@ -280,10 +299,25 @@ impl TasksPanel {
 
     /// Every cancel goes through the task hierarchy: a connect attempt
     /// cancels its stages and detached hooks with it, and frees its profile
-    /// once its worker stops.
+    /// once its worker stops. A connect attempt is cancelled by profile, which
+    /// also frees the profile of a direct connect, whose task has no worker
+    /// confirmation to wait for.
     fn cancel_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
-            state.request_cancel_task(task_id);
+            let attempt_profile = state
+                .tasks()
+                .get(task_id)
+                .filter(|task| task.kind == TaskKind::Connect && task.parent_id.is_none())
+                .and_then(|task| task.profile_id);
+
+            match attempt_profile {
+                Some(profile_id) => {
+                    state.cancel_running_connect_tasks_for_profile(profile_id);
+                }
+                None => {
+                    state.request_cancel_task(task_id);
+                }
+            }
             cx.emit(AppStateChanged);
         });
     }
@@ -316,7 +350,6 @@ impl TasksPanel {
                 .filter(|task| task.status.is_terminal())
                 .filter(|task| !state.tasks().has_in_flight_descendants(task.id))
                 .map(|task| task.id)
-                .filter(|task_id| !state.tasks().has_in_flight_descendants(*task_id))
                 .collect();
 
             for task_id in finished {
@@ -459,6 +492,7 @@ impl TasksPanel {
                 &view.stages,
                 dbflux_components::fonts::editor_family(cx),
                 theme,
+                cx,
             )
         });
 

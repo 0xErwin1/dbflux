@@ -884,6 +884,12 @@ impl TaskManager {
         self.tasks.get(&id).map(TaskSnapshot::from)
     }
 
+    /// The token the task's worker observes; cancelling it is what a cancel
+    /// request does to a running task.
+    pub fn cancel_token(&self, id: TaskId) -> Option<CancelToken> {
+        self.tasks.get(&id).map(|task| task.cancel_token.clone())
+    }
+
     pub fn running_tasks(&self) -> Vec<TaskSnapshot> {
         self.tasks
             .values()

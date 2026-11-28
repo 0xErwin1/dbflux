@@ -6,13 +6,16 @@
 //! when the next one begins or the attempt ends. Cancelling the parent
 //! cascades through the task hierarchy: the running stage waits for the worker
 //! (`Cancelling`), and the stages that never started read `Skipped`.
+//! Cancelling a stage cancels the attempt: every stage's cancel hook cancels
+//! the attempt's token, which is the one the pipeline watches.
 
 use dbflux_core::{
-    AccessKind, CancelPolicy, ConnectionProfile, PipelineState, TaskId, TaskKind, TaskRequest,
-    TaskStatus,
+    AccessKind, CancelOutcome, CancelPolicy, CancelToken, ConnectionProfile, PipelineState, TaskId,
+    TaskKind, TaskRequest, TaskStatus,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::hook_phase_runner::DetachedHookScope;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// The stages of a connect, in the order the flow reaches them.
@@ -42,6 +45,21 @@ impl ConnectStage {
             | PipelineState::Connected
             | PipelineState::Failed { .. }
             | PipelineState::Cancelled => None,
+        }
+    }
+
+    /// The stage a failure names, by the stage identifier the pipeline and
+    /// the connect flow report it under.
+    pub(super) fn of_failure(stage: &str) -> Option<Self> {
+        match stage {
+            "pre_connect_hook" => Some(Self::PreConnectHooks),
+            "authentication" => Some(Self::Authenticating),
+            "value_resolution" => Some(Self::ResolvingValues),
+            "access" => Some(Self::OpeningAccess),
+            "driver_connect" => Some(Self::ConnectingDriver),
+            "schema_fetch" => Some(Self::FetchingSchema),
+            "post_connect_hook" => Some(Self::PostConnectHooks),
+            _ => None,
         }
     }
 }
@@ -89,7 +107,13 @@ pub(super) fn plan_stages(input: &StagePlanInput<'_>) -> Vec<(ConnectStage, Stri
 /// How a connect attempt ended.
 pub(super) enum ConnectOutcome<'a> {
     Completed,
-    Failed(&'a str),
+    /// `stage` is the stage that failed, when the failure names one: the
+    /// progress loop sees only the latest pipeline state, so it may never
+    /// have entered it.
+    Failed {
+        error: &'a str,
+        stage: Option<ConnectStage>,
+    },
     Cancelled,
 }
 
@@ -105,20 +129,28 @@ pub(super) struct ConnectAttempt {
 
 impl ConnectAttempt {
     /// Registers every planned stage as a pending child of `task_id`.
+    /// `attempt_token` is the token the pipeline watches; a cancel of any
+    /// stage cancels it, so cancelling a part stops everything after it.
     pub(super) fn register(
         state: &mut AppStateEntity,
         task_id: TaskId,
+        attempt_token: &CancelToken,
         profile_id: Uuid,
         plan: Vec<(ConnectStage, String)>,
     ) -> Self {
         let stages = plan
             .into_iter()
             .map(|(stage, label)| {
+                let attempt_token = attempt_token.clone();
                 let handle = state.start_task_handle(
                     TaskRequest::new(TaskKind::Connect, label)
                         .parent(task_id)
                         .pending()
-                        .policy(CancelPolicy::WorkerAcknowledged),
+                        .policy(CancelPolicy::WorkerAcknowledged)
+                        .cancel_hook(Arc::new(move || {
+                            attempt_token.cancel();
+                            CancelOutcome::Requested
+                        })),
                 );
                 (stage, handle.id())
             })
@@ -190,8 +222,10 @@ impl ConnectAttempt {
 
         match outcome {
             ConnectOutcome::Completed => self.complete_all(state),
-            ConnectOutcome::Failed(error) if !cancel_requested => self.fail_all(state, error),
-            ConnectOutcome::Failed(_) | ConnectOutcome::Cancelled => self.cancel_all(state),
+            ConnectOutcome::Failed { error, stage } if !cancel_requested => {
+                self.fail_all(state, error, stage)
+            }
+            ConnectOutcome::Failed { .. } | ConnectOutcome::Cancelled => self.cancel_all(state),
         }
 
         state.finish_pending_operation(self.profile_id, None);
@@ -210,16 +244,33 @@ impl ConnectAttempt {
         state.complete_task(self.task_id);
     }
 
-    fn fail_all(&self, state: &mut AppStateEntity, error: &str) {
+    /// Fails the stage the failure names and leaves the stages after it not
+    /// started. The stages before it ran, even when the progress loop never
+    /// saw them. A failure that names no stage of this attempt fails the
+    /// stage that is running.
+    fn fail_all(&self, state: &mut AppStateEntity, error: &str, failed: Option<ConnectStage>) {
         state.append_task_details(
             self.task_id,
             format!("{}\n", crate::labels::pipeline_failed_detail_label(error)),
         );
 
-        for (_, id) in &self.stages {
-            match Self::status_of(state, *id) {
-                Some(TaskStatus::Running) => state.fail_task(*id, error),
-                Some(TaskStatus::Pending) => {
+        let failed = failed.filter(|stage| self.stage_task(*stage).is_some());
+
+        for (stage, id) in &self.stages {
+            match (Self::status_of(state, *id), failed) {
+                (Some(TaskStatus::Running | TaskStatus::Pending), Some(failed)) => {
+                    if *stage < failed {
+                        state.activate_task(*id);
+                        state.complete_task(*id);
+                    } else if *stage == failed {
+                        state.activate_task(*id);
+                        state.fail_task(*id, error);
+                    } else {
+                        state.request_cancel_task(*id);
+                    }
+                }
+                (Some(TaskStatus::Running), None) => state.fail_task(*id, error),
+                (Some(TaskStatus::Pending), None) => {
                     state.request_cancel_task(*id);
                 }
                 _ => {}
@@ -334,6 +385,18 @@ mod tests {
     fn state_with_attempt(
         plan: Vec<(ConnectStage, String)>,
     ) -> (AppStateEntity, ConnectAttempt, Uuid) {
+        let (state, attempt, profile_id, _) = state_with_attempt_and_token(plan);
+        (state, attempt, profile_id)
+    }
+
+    fn state_with_attempt_and_token(
+        plan: Vec<(ConnectStage, String)>,
+    ) -> (
+        AppStateEntity,
+        ConnectAttempt,
+        Uuid,
+        dbflux_core::CancelToken,
+    ) {
         let mut state =
             AppStateEntity::new_with_storage_runtime(StorageRuntime::in_memory().expect("storage"))
                 .expect("app state");
@@ -348,8 +411,9 @@ mod tests {
                     .policy(CancelPolicy::WorkerAcknowledged),
             )
             .expect("attempt starts");
-        let attempt = ConnectAttempt::register(&mut state, parent.id(), profile_id, plan);
-        (state, attempt, profile_id)
+        let attempt =
+            ConnectAttempt::register(&mut state, parent.id(), parent.token(), profile_id, plan);
+        (state, attempt, profile_id, parent.token().clone())
     }
 
     fn statuses(state: &AppStateEntity, attempt: &ConnectAttempt) -> Vec<TaskStatus> {
@@ -446,7 +510,13 @@ mod tests {
         let (mut state, attempt, _) = state_with_attempt(three_stages());
         attempt.enter(&mut state, ConnectStage::ConnectingDriver);
 
-        attempt.finish(&mut state, ConnectOutcome::Failed("refused"));
+        attempt.finish(
+            &mut state,
+            ConnectOutcome::Failed {
+                error: "refused",
+                stage: Some(ConnectStage::ConnectingDriver),
+            },
+        );
 
         assert_eq!(
             statuses(&state, &attempt),
@@ -468,11 +538,119 @@ mod tests {
         attempt.enter(&mut state, ConnectStage::ConnectingDriver);
         state.cancel_running_connect_tasks_for_profile(profile_id);
 
-        attempt.finish(&mut state, ConnectOutcome::Failed("socket closed"));
+        attempt.finish(
+            &mut state,
+            ConnectOutcome::Failed {
+                error: "socket closed",
+                stage: None,
+            },
+        );
 
         assert_eq!(
             state.tasks().get(attempt.task_id).map(|task| task.status),
             Some(TaskStatus::Cancelled)
         );
+    }
+
+    #[test]
+    fn cancelling_a_running_stage_cancels_the_whole_attempt() {
+        let (mut state, attempt, _, token) = state_with_attempt_and_token(three_stages());
+        attempt.enter(&mut state, ConnectStage::Authenticating);
+        let stage = attempt
+            .stage_task(ConnectStage::Authenticating)
+            .expect("stage");
+        assert!(!token.is_cancelled());
+
+        state.request_cancel_task(stage);
+
+        assert!(
+            token.is_cancelled(),
+            "the pipeline watches the attempt's token, so a stage cancel must reach it"
+        );
+        assert_eq!(
+            statuses(&state, &attempt)[0],
+            TaskStatus::Cancelling,
+            "the stage waits for the worker like the attempt"
+        );
+
+        attempt.finish(&mut state, ConnectOutcome::Cancelled);
+
+        assert_eq!(
+            statuses(&state, &attempt),
+            vec![
+                TaskStatus::Cancelled,
+                TaskStatus::Skipped,
+                TaskStatus::Skipped
+            ]
+        );
+        assert_eq!(
+            state.tasks().get(attempt.task_id).map(|task| task.status),
+            Some(TaskStatus::Cancelled)
+        );
+    }
+
+    #[test]
+    fn a_failure_fails_the_stage_it_names_even_when_it_was_never_entered() {
+        let (mut state, attempt, _) = state_with_attempt(three_stages());
+        // The progress loop saw authentication, then only the failure.
+        attempt.enter(&mut state, ConnectStage::Authenticating);
+
+        attempt.finish(
+            &mut state,
+            ConnectOutcome::Failed {
+                error: "refused",
+                stage: Some(ConnectStage::ConnectingDriver),
+            },
+        );
+
+        assert_eq!(
+            statuses(&state, &attempt),
+            vec![
+                TaskStatus::Completed,
+                TaskStatus::Failed("refused".to_string()),
+                TaskStatus::Skipped
+            ],
+            "the driver stage failed; authentication is not blamed"
+        );
+    }
+
+    #[test]
+    fn a_failure_that_names_no_stage_fails_the_running_one() {
+        let (mut state, attempt, _) = state_with_attempt(three_stages());
+        attempt.enter(&mut state, ConnectStage::Authenticating);
+
+        attempt.finish(
+            &mut state,
+            ConnectOutcome::Failed {
+                error: "boom",
+                stage: None,
+            },
+        );
+
+        assert_eq!(
+            statuses(&state, &attempt),
+            vec![
+                TaskStatus::Failed("boom".to_string()),
+                TaskStatus::Skipped,
+                TaskStatus::Skipped
+            ]
+        );
+    }
+
+    #[test]
+    fn failure_identifiers_map_to_their_stage() {
+        assert_eq!(
+            ConnectStage::of_failure("driver_connect"),
+            Some(ConnectStage::ConnectingDriver)
+        );
+        assert_eq!(
+            ConnectStage::of_failure("authentication"),
+            Some(ConnectStage::Authenticating)
+        );
+        assert_eq!(
+            ConnectStage::of_failure("post_connect_hook"),
+            Some(ConnectStage::PostConnectHooks)
+        );
+        assert_eq!(ConnectStage::of_failure("cancelled"), None);
     }
 }

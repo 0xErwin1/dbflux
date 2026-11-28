@@ -3,6 +3,7 @@
 
 use super::TasksPanel;
 use crate::ui::icons::AppIcon;
+use dbflux_components::controls::Button;
 use dbflux_components::primitives::Icon;
 use dbflux_components::tokens::{ChromeColors, ShellMetrics, ui};
 use dbflux_core::{TaskId, TaskManager, TaskSnapshot, TaskStatus};
@@ -185,6 +186,7 @@ pub(super) fn stage_rows(
     stages: &[StageEntry],
     mono_family: SharedString,
     theme: &gpui_component::Theme,
+    cx: &Context<TasksPanel>,
 ) -> Div {
     let muted = theme.muted_foreground;
 
@@ -199,6 +201,8 @@ pub(super) fn stage_rows(
             let stage = &entry.task;
             let indent = STAGE_INDENT + STAGE_NESTING_STEP * entry.depth as f32;
             let label = stage_status_label(&stage.status, theme);
+            let stage_id = stage.id;
+            let cancel_selector = format!("cancel-task-{stage_id}");
             let timed = !matches!(stage.status, TaskStatus::Pending | TaskStatus::Skipped);
             let name_color = if stage.status.is_in_flight() {
                 ChromeColors::strong(theme)
@@ -245,6 +249,25 @@ pub(super) fn stage_rows(
                             .text_size(ShellMetrics::TASK_META_FONT)
                             .text_color(color)
                             .child(text),
+                    )
+                })
+                .when(stage.is_cancellable, |row| {
+                    row.child(
+                        div().debug_selector(move || cancel_selector).child(
+                            Button::new(
+                                SharedString::from(format!("cancel-task-button-{stage_id}")),
+                                dbflux_i18n::t!("tasks_panel.cancel"),
+                            )
+                            .icon(AppIcon::X)
+                            .icon_size(ShellMetrics::TASK_CHEVRON)
+                            .icon_only()
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.cancel_task(stage_id, cx);
+                                },
+                            )),
+                        ),
                     )
                 });
 

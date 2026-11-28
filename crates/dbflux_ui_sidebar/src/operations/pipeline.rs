@@ -234,6 +234,66 @@ fn prepare_connect_attempt(
     password: Option<dbflux_core::secrecy::SecretString>,
     cx: &mut Context<dbflux_ui_base::AppStateEntity>,
 ) -> Result<PreparedConnect, PrepareStop> {
+    let handle = admit_connect(state, profile_id)?;
+    let task_id = handle.id();
+
+    // A failed preparation leaves no trace in the panel.
+    let abandon = |state: &mut dbflux_ui_base::AppStateEntity| {
+        state.tasks_mut().remove(task_id);
+        state.finish_pending_operation(profile_id, None);
+    };
+
+    let (input, profile_name, driver) =
+        match state.prepare_pipeline_input(profile_id, handle.token().clone()) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                abandon(state);
+                state.record_connect_failure(profile_id, error.clone());
+                return Err(PrepareStop::Failed(error));
+            }
+        };
+
+    let keyring_password = match resolve_connect_password(state, &input, &*driver, password) {
+        Ok(password) => password,
+        Err(error) => {
+            abandon(state);
+            state.record_connect_failure(profile_id, error.clone());
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    "Could not read the connection password from the system keyring",
+                )
+                .with_cause(error),
+                cx,
+            );
+            return Err(PrepareStop::Reported);
+        }
+    };
+
+    let hooks = state.resolve_profile_hooks(&input.profile);
+    let attempt = register_connect_stages(state, &input, &hooks, &handle);
+    let hook_context = HookContext::from_profile(&input.profile);
+    cx.emit(dbflux_ui_base::AppStateChanged);
+
+    Ok(PreparedConnect {
+        input,
+        profile_name,
+        driver,
+        keyring_password,
+        pre_connect_hooks: hooks.pre_connect,
+        post_connect_hooks: hooks.post_connect,
+        hook_context,
+        attempt,
+    })
+}
+
+/// Checks the profile can connect now and starts its Connect task. The
+/// sidebar spinner still reads the pending-operation set, so that is claimed
+/// too.
+fn admit_connect(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    profile_id: Uuid,
+) -> Result<dbflux_core::TaskHandle, PrepareStop> {
     let target = TaskTarget {
         profile_id,
         database: None,
@@ -272,53 +332,39 @@ fn prepare_connect_attempt(
         .map_err(|_| {
             PrepareStop::Skipped(crate::labels::connection_already_pending_toast_label())
         })?;
-    let task_id = handle.id();
 
-    // The sidebar spinner still reads the pending-operation set.
     state.start_pending_operation(profile_id, None);
     state.clear_connect_failure(profile_id);
 
-    // A failed preparation leaves no trace in the panel.
-    let abandon = |state: &mut dbflux_ui_base::AppStateEntity| {
-        state.tasks_mut().remove(task_id);
-        state.finish_pending_operation(profile_id, None);
-    };
+    Ok(handle)
+}
 
-    let (input, profile_name, driver) =
-        match state.prepare_pipeline_input(profile_id, handle.token().clone()) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                abandon(state);
-                state.record_connect_failure(profile_id, error.clone());
-                return Err(PrepareStop::Failed(error));
-            }
-        };
-
-    let keyring_password = match password {
-        Some(password) => Some(password),
-        None => match dbflux_core::keyring_password_for_connect(
+/// The password the connect uses unless the pipeline resolves one: the one
+/// typed into the prompt, else the keyring's.
+fn resolve_connect_password(
+    state: &dbflux_ui_base::AppStateEntity,
+    input: &dbflux_core::PipelineInput,
+    driver: &dyn dbflux_core::DbDriver,
+    typed: Option<dbflux_core::secrecy::SecretString>,
+) -> Result<Option<dbflux_core::secrecy::SecretString>, String> {
+    match typed {
+        Some(password) => Ok(Some(password)),
+        None => dbflux_core::keyring_password_for_connect(
             &input.profile,
             driver.requires_password(),
             state.get_password(&input.profile),
-        ) {
-            Ok(password) => password,
-            Err(error) => {
-                abandon(state);
-                state.record_connect_failure(profile_id, error.clone());
-                report_error(
-                    UserFacingError::new(
-                        ErrorKind::Storage,
-                        "Could not read the connection password from the system keyring",
-                    )
-                    .with_cause(error),
-                    cx,
-                );
-                return Err(PrepareStop::Reported);
-            }
-        },
-    };
+        ),
+    }
+}
 
-    let hooks = state.resolve_profile_hooks(&input.profile);
+/// Registers the stages that apply to the profile as children of the
+/// attempt's task.
+fn register_connect_stages(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    input: &dbflux_core::PipelineInput,
+    hooks: &dbflux_core::ConnectionHooks,
+    attempt_task: &dbflux_core::TaskHandle,
+) -> ConnectAttempt {
     let auth_provider = input
         .auth_profile
         .as_ref()
@@ -330,20 +376,14 @@ fn prepare_connect_attempt(
         has_pre_connect_hooks: hooks.pre_connect.iter().any(|hook| hook.enabled),
         has_post_connect_hooks: hooks.post_connect.iter().any(|hook| hook.enabled),
     });
-    let attempt = ConnectAttempt::register(state, task_id, profile_id, plan);
-    let hook_context = HookContext::from_profile(&input.profile);
-    cx.emit(dbflux_ui_base::AppStateChanged);
 
-    Ok(PreparedConnect {
-        input,
-        profile_name,
-        driver,
-        keyring_password,
-        pre_connect_hooks: hooks.pre_connect,
-        post_connect_hooks: hooks.post_connect,
-        hook_context,
-        attempt,
-    })
+    ConnectAttempt::register(
+        state,
+        attempt_task.id(),
+        attempt_task.token(),
+        input.profile.id,
+        plan,
+    )
 }
 
 /// Follows the pipeline's progress: every state is a detail line of the
@@ -413,26 +453,37 @@ fn finish_stage(
 
 /// Why a connect attempt failed, as the task and the user see it.
 struct ConnectFailure {
-    /// The failure the Connect task and the sidebar record.
+    kind: ErrorKind,
+    /// The failure the Connect task records.
     error: String,
-    /// What the toast says, when it differs from `error`.
-    toast: Option<String>,
+    /// What the user is told and the sidebar records, when it differs from
+    /// `error`.
+    message: Option<String>,
+    /// The stage that failed, when the failure names one.
+    stage: Option<ConnectStage>,
     /// A remembered password may be the reason the connect failed, so the
     /// next attempt asks again.
     forget_password: bool,
 }
 
 impl ConnectFailure {
-    fn new(error: impl Into<String>) -> Self {
+    fn new(kind: ErrorKind, error: impl Into<String>) -> Self {
         Self {
+            kind,
             error: error.into(),
-            toast: None,
+            message: None,
+            stage: None,
             forget_password: false,
         }
     }
 
-    fn toast(mut self, message: impl Into<String>) -> Self {
-        self.toast = Some(message.into());
+    fn message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    fn at(mut self, stage: ConnectStage) -> Self {
+        self.stage = Some(stage);
         self
     }
 
@@ -442,8 +493,26 @@ impl ConnectFailure {
     }
 }
 
+/// The kind of error a pipeline stage failure is reported as.
+fn error_kind_of_stage(stage: &str) -> ErrorKind {
+    match stage {
+        "authentication" => ErrorKind::Auth,
+        "access" => ErrorKind::Network,
+        "pre_connect_hook" | "post_connect_hook" => ErrorKind::Hook,
+        _ => ErrorKind::Driver,
+    }
+}
+
+/// Tells the watchers of the pipeline where it stands. Nobody watching is
+/// not an error: the attempt settles whether or not anyone follows it.
+fn publish_state(state_tx: &dbflux_core::StateSender, state: PipelineState) {
+    if state_tx.send(state).is_err() {
+        log::debug!("Pipeline: no observer left for the connect state");
+    }
+}
+
 /// Records the failure, settles the attempt and its stages, and tells the
-/// user.
+/// user once, through the central error report.
 fn fail_connect(
     app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
     sidebar: &gpui::Entity<Sidebar>,
@@ -452,29 +521,32 @@ fn fail_connect(
     cx: &mut gpui::AsyncApp,
 ) {
     let ConnectFailure {
+        kind,
         error,
-        toast,
+        message,
+        stage,
         forget_password,
     } = failure;
-    let message = toast.unwrap_or_else(|| error.clone());
+    let message = message.unwrap_or_else(|| error.clone());
 
     cx.update(|cx| {
         app_state.update(cx, |state, cx| {
             if forget_password {
                 state.forget_connection_password(attempt.profile_id());
             }
-            attempt.finish(state, ConnectOutcome::Failed(&error));
+            attempt.finish(
+                state,
+                ConnectOutcome::Failed {
+                    error: &error,
+                    stage,
+                },
+            );
             state.record_connect_failure(attempt.profile_id(), message.clone());
             cx.emit(dbflux_ui_base::AppStateChanged);
         });
 
-        sidebar.update(cx, |sidebar, cx| {
-            sidebar.pending_toast = Some(PendingToast {
-                message,
-                is_error: true,
-            });
-            sidebar.refresh_tree(cx);
-        });
+        sidebar.update(cx, |sidebar, cx| sidebar.refresh_tree(cx));
+        report_error(UserFacingError::new(kind, message), cx);
     });
 }
 
@@ -535,6 +607,620 @@ fn record_connect_failure_audit(
     });
 }
 
+/// What the connect worker needs, shared by its phases. A phase that stops
+/// the attempt settles it itself, through `fail_connect`, `cancel_connect` or
+/// the completion in `install_connection`, and returns `None`, so every path
+/// releases the attempt in one place.
+struct ConnectRun {
+    app_state: gpui::Entity<dbflux_ui_base::AppStateEntity>,
+    sidebar: gpui::Entity<Sidebar>,
+    attempt: ConnectAttempt,
+    state_tx: dbflux_core::StateSender,
+    cancel_token: dbflux_core::CancelToken,
+    profile_id: Uuid,
+    profile_name: String,
+    hook_context: HookContext,
+}
+
+/// What differs between the pre- and post-connect hook phases.
+struct HookStage {
+    phase: HookPhase,
+    stage: ConnectStage,
+    /// The stage identifier the pipeline state reports a failure under.
+    failure_stage: &'static str,
+    /// Whether the stage settles when its hooks finish; the post-connect
+    /// stage settles with the attempt.
+    finish_on_success: bool,
+    cancelled_task_label: String,
+    cancelled_toast_label: String,
+}
+
+/// A connection ready to register, with what keeps it alive.
+struct RegisteredConnection {
+    profile: dbflux_core::ConnectionProfile,
+    connection: Arc<dyn Connection>,
+    schema: Option<SchemaSnapshot>,
+    tunnel_handle: Option<Box<dyn std::any::Any + Send + Sync>>,
+}
+
+/// A driver connection opened by the worker, with what it holds.
+struct ConnectedDriver {
+    profile: dbflux_core::ConnectionProfile,
+    connection: Box<dyn Connection>,
+    schema: Option<SchemaSnapshot>,
+    tunnel_handle: Option<Box<dyn std::any::Any + Send + Sync>>,
+}
+
+/// The driver connect and the schema fetch are blocking calls with no way to
+/// interrupt them. A cancel that arrives while the driver connects skips the
+/// schema fetch; the caller drops the connection and its tunnel and the
+/// stage reads `Cancelled` only then.
+fn connect_driver_blocking(
+    driver: &dyn dbflux_core::DbDriver,
+    mut profile: dbflux_core::ConnectionProfile,
+    overrides: &dbflux_core::ConnectionOverrides,
+    access_handle: dbflux_core::AccessHandle,
+    state_tx: &dbflux_core::StateSender,
+    cancel_token: &dbflux_core::CancelToken,
+) -> Result<ConnectedDriver, String> {
+    publish_state(
+        state_tx,
+        PipelineState::Connecting {
+            driver_name: driver.display_name().to_string(),
+        },
+    );
+
+    if access_handle.is_tunneled() {
+        profile
+            .config
+            .redirect_to_tunnel(access_handle.local_port());
+    }
+
+    let connection = driver
+        .connect_with_overrides(&profile, overrides)
+        .map_err(|e| e.to_string())?;
+
+    let schema = if cancel_token.is_cancelled() {
+        None
+    } else {
+        publish_state(state_tx, PipelineState::FetchingSchema);
+
+        match connection.schema() {
+            Ok(schema) => Some(schema),
+            Err(e) => {
+                log::error!("Pipeline: Failed to fetch schema: {:?}", e);
+                None
+            }
+        }
+    };
+
+    let tunnel_handle: Option<Box<dyn std::any::Any + Send + Sync>> = if access_handle.is_tunneled()
+    {
+        Some(Box::new(access_handle))
+    } else {
+        None
+    };
+
+    Ok(ConnectedDriver {
+        profile,
+        connection,
+        schema,
+        tunnel_handle,
+    })
+}
+
+/// Everything the worker consumes while it runs the phases.
+struct ConnectPlan {
+    input: dbflux_core::PipelineInput,
+    driver: Arc<dyn dbflux_core::DbDriver>,
+    keyring_password: Option<dbflux_core::secrecy::SecretString>,
+    session_password: Option<dbflux_core::secrecy::SecretString>,
+    pre_connect_hooks: Vec<dbflux_core::ConnectionHook>,
+    post_connect_hooks: Vec<dbflux_core::ConnectionHook>,
+}
+
+impl ConnectRun {
+    async fn execute(self, plan: ConnectPlan, cx: &mut gpui::AsyncApp) {
+        let ConnectPlan {
+            input,
+            driver,
+            keyring_password,
+            session_password,
+            pre_connect_hooks,
+            post_connect_hooks,
+        } = plan;
+        let driver_name = driver.display_name().to_string();
+        let mut hook_warnings = Vec::new();
+
+        let pre_connect = HookStage {
+            phase: HookPhase::PreConnect,
+            stage: ConnectStage::PreConnectHooks,
+            failure_stage: "pre_connect_hook",
+            finish_on_success: true,
+            cancelled_task_label: crate::labels::connection_hook_cancelled_task_label(),
+            cancelled_toast_label: crate::labels::connection_cancelled_by_hook_toast_label(),
+        };
+        let Some(warnings) = self.run_hooks(pre_connect, pre_connect_hooks, cx).await else {
+            return;
+        };
+        hook_warnings.extend(warnings);
+
+        let Some(output) = self.run_pipeline(input, &driver_name, cx).await else {
+            return;
+        };
+
+        let Some(connected) = self
+            .connect_driver(driver, driver_name, output, keyring_password, cx)
+            .await
+        else {
+            return;
+        };
+
+        let post_connect = HookStage {
+            phase: HookPhase::PostConnect,
+            stage: ConnectStage::PostConnectHooks,
+            failure_stage: "post_connect_hook",
+            finish_on_success: false,
+            cancelled_task_label: crate::labels::post_connect_hook_cancelled_task_label(),
+            cancelled_toast_label:
+                crate::labels::connection_cancelled_by_post_connect_hook_toast_label(),
+        };
+        let Some(warnings) = self.run_hooks(post_connect, post_connect_hooks, cx).await else {
+            return;
+        };
+        hook_warnings.extend(warnings);
+
+        // A cancel that arrived while the post-connect hooks ran must not
+        // leave the connection open either.
+        if self.cancel_token.is_cancelled() {
+            drop((connected.connection, connected.tunnel_handle));
+            abandon_cancelled_connect(
+                &self.app_state,
+                &self.sidebar,
+                &self.attempt,
+                &self.state_tx,
+                cx,
+            );
+            return;
+        }
+
+        self.install_connection(connected, hook_warnings, session_password, cx)
+            .await;
+    }
+
+    /// Runs one hook phase. `None` when the phase stopped the attempt, which
+    /// is settled by then; otherwise the warnings the hooks raised.
+    async fn run_hooks(
+        &self,
+        spec: HookStage,
+        hooks: Vec<dbflux_core::ConnectionHook>,
+        cx: &mut gpui::AsyncApp,
+    ) -> Option<Vec<String>> {
+        start_stage(&self.app_state, &self.attempt, spec.stage, cx);
+
+        let outcome = run_hook_phase(
+            self.app_state.clone(),
+            self.profile_id,
+            self.profile_name.clone(),
+            spec.phase,
+            hooks,
+            self.hook_context.clone(),
+            Some(self.cancel_token.clone()),
+            self.attempt.detached_hooks(),
+            cx,
+        )
+        .await;
+
+        match outcome {
+            HookPhaseState::Continue { warnings } => {
+                if spec.finish_on_success {
+                    finish_stage(&self.app_state, &self.attempt, spec.stage, cx);
+                }
+                Some(warnings)
+            }
+            HookPhaseState::Aborted { error } => {
+                publish_state(
+                    &self.state_tx,
+                    PipelineState::Failed {
+                        stage: spec.failure_stage.to_string(),
+                        error: error.clone(),
+                    },
+                );
+                fail_connect(
+                    &self.app_state,
+                    &self.sidebar,
+                    &self.attempt,
+                    ConnectFailure::new(ErrorKind::Hook, error).at(spec.stage),
+                    cx,
+                );
+                None
+            }
+            HookPhaseState::Cancelled => {
+                publish_state(&self.state_tx, PipelineState::Cancelled);
+
+                if self.cancel_token.is_cancelled() {
+                    cancel_connect(&self.app_state, &self.sidebar, &self.attempt, None, cx);
+                } else {
+                    fail_connect(
+                        &self.app_state,
+                        &self.sidebar,
+                        &self.attempt,
+                        ConnectFailure::new(ErrorKind::Hook, spec.cancelled_task_label)
+                            .message(spec.cancelled_toast_label)
+                            .at(spec.stage),
+                        cx,
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    /// Runs authentication, value resolution and access. `None` when the
+    /// pipeline stopped the attempt, which is settled by then.
+    async fn run_pipeline(
+        &self,
+        input: dbflux_core::PipelineInput,
+        driver_name: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> Option<dbflux_core::PipelineOutput> {
+        let state_tx = self.state_tx.clone();
+        let pipeline_result = cx
+            .background_executor()
+            .spawn(async move { dbflux_core::run_pipeline(input, &state_tx).await })
+            .await;
+
+        let pipeline_error = match pipeline_result {
+            Ok(output) => return Some(output),
+            Err(pipeline_error) => pipeline_error,
+        };
+
+        let error_msg = pipeline_error.to_string();
+
+        if pipeline_error.stage == "cancelled" {
+            publish_state(&self.state_tx, PipelineState::Cancelled);
+            record_connect_failure_audit(
+                &self.app_state,
+                self.profile_id,
+                &self.profile_name,
+                driver_name.to_string(),
+                &error_msg,
+                cx,
+            );
+            cancel_connect(
+                &self.app_state,
+                &self.sidebar,
+                &self.attempt,
+                Some(error_msg),
+                cx,
+            );
+            return None;
+        }
+
+        // An error that raced a cancel the user asked for is that cancel: it
+        // reads Cancelled, with no failure state, audit or toast.
+        if self.cancel_token.is_cancelled() {
+            abandon_cancelled_connect(
+                &self.app_state,
+                &self.sidebar,
+                &self.attempt,
+                &self.state_tx,
+                cx,
+            );
+            return None;
+        }
+
+        publish_state(
+            &self.state_tx,
+            PipelineState::Failed {
+                stage: pipeline_error.stage.clone(),
+                error: pipeline_error.source.to_string(),
+            },
+        );
+        record_connect_failure_audit(
+            &self.app_state,
+            self.profile_id,
+            &self.profile_name,
+            driver_name.to_string(),
+            &error_msg,
+            cx,
+        );
+
+        let mut failure =
+            ConnectFailure::new(error_kind_of_stage(&pipeline_error.stage), error_msg);
+        if let Some(stage) = ConnectStage::of_failure(&pipeline_error.stage) {
+            failure = failure.at(stage);
+        }
+        fail_connect(&self.app_state, &self.sidebar, &self.attempt, failure, cx);
+        None
+    }
+
+    /// Connects the driver and fetches the schema. `None` when the attempt
+    /// stopped here, which is settled by then.
+    async fn connect_driver(
+        &self,
+        driver: Arc<dyn dbflux_core::DbDriver>,
+        driver_name: String,
+        output: dbflux_core::PipelineOutput,
+        keyring_password: Option<dbflux_core::secrecy::SecretString>,
+        cx: &mut gpui::AsyncApp,
+    ) -> Option<ConnectedDriver> {
+        let dbflux_core::PipelineOutput {
+            resolved_profile,
+            resolved_password,
+            access_handle,
+            ..
+        } = output;
+        let overrides =
+            dbflux_core::ConnectionOverrides::new(resolved_password.or(keyring_password));
+        let state_tx = self.state_tx.clone();
+        let cancel_token = self.cancel_token.clone();
+
+        let connect_result = cx
+            .background_executor()
+            .spawn(async move {
+                connect_driver_blocking(
+                    &*driver,
+                    resolved_profile,
+                    &overrides,
+                    access_handle,
+                    &state_tx,
+                    &cancel_token,
+                )
+            })
+            .await;
+
+        let connected = match connect_result {
+            Ok(connected) => connected,
+            Err(error) => {
+                // A driver error after the user cancelled is that cancel, not
+                // a failed password.
+                if self.cancel_token.is_cancelled() {
+                    abandon_cancelled_connect(
+                        &self.app_state,
+                        &self.sidebar,
+                        &self.attempt,
+                        &self.state_tx,
+                        cx,
+                    );
+                    return None;
+                }
+
+                publish_state(
+                    &self.state_tx,
+                    PipelineState::Failed {
+                        stage: "driver_connect".to_string(),
+                        error: error.clone(),
+                    },
+                );
+                record_connect_failure_audit(
+                    &self.app_state,
+                    self.profile_id,
+                    &self.profile_name,
+                    driver_name,
+                    &error,
+                    cx,
+                );
+                fail_connect(
+                    &self.app_state,
+                    &self.sidebar,
+                    &self.attempt,
+                    ConnectFailure::new(ErrorKind::Driver, error)
+                        .at(ConnectStage::ConnectingDriver)
+                        .forgetting_password(),
+                    cx,
+                );
+                return None;
+            }
+        };
+
+        // A cancel that arrived while the driver was connecting must not
+        // leave the connection open: drop it, with its tunnel, instead of
+        // registering a connection the user already cancelled.
+        if self.cancel_token.is_cancelled() {
+            drop((connected.connection, connected.tunnel_handle));
+            abandon_cancelled_connect(
+                &self.app_state,
+                &self.sidebar,
+                &self.attempt,
+                &self.state_tx,
+                cx,
+            );
+            return None;
+        }
+
+        Some(connected)
+    }
+
+    /// Registers the connection with the app state, settles the attempt and
+    /// tells the user. Returns the token of the schema capture it began.
+    fn register_connection(
+        &self,
+        registered: RegisteredConnection,
+        hook_warnings: &[String],
+        session_password: Option<dbflux_core::secrecy::SecretString>,
+        capture_repo: Option<
+            Arc<dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo>,
+        >,
+        cx: &mut gpui::AsyncApp,
+    ) -> Option<dbflux_storage::repositories::sch_schema_snapshots::ConnectCaptureToken> {
+        let RegisteredConnection {
+            profile,
+            connection,
+            schema,
+            tunnel_handle,
+        } = registered;
+        let profile_id = self.profile_id;
+        let connected_name = profile.name.clone();
+        let mut capture_token = None;
+
+        cx.update(|cx| {
+            for warning in hook_warnings {
+                log::warn!("{}", warning);
+            }
+
+            let probe = connection.probe_write_privilege();
+
+            self.app_state.update(cx, |state, cx| {
+                self.attempt.finish(state, ConnectOutcome::Completed);
+                state.apply_connect_profile(
+                    profile,
+                    connection,
+                    schema,
+                    tunnel_handle,
+                    false,
+                    probe,
+                );
+                if let Some(password) = session_password {
+                    state.set_session_password(profile_id, password);
+                }
+                cx.emit(dbflux_ui_base::AppStateChanged);
+                cx.notify();
+            });
+
+            if let Some(repo) = &capture_repo {
+                match repo.begin_connect_capture(profile_id) {
+                    Ok(token) => capture_token = Some(token),
+                    Err(error) => dbflux_ui_base::user_error::report_error(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            crate::labels::schema_snapshot_failed_label(&error.to_string()),
+                        ),
+                        cx,
+                    ),
+                }
+            }
+
+            let message =
+                crate::labels::connected_toast_label(&connected_name, hook_warnings.len());
+
+            self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.pending_toast = Some(PendingToast {
+                    message,
+                    is_error: false,
+                });
+                sidebar.refresh_tree(cx);
+            });
+        });
+
+        capture_token
+    }
+
+    /// Records the success, registers the connection and captures its schema.
+    async fn install_connection(
+        &self,
+        connected: ConnectedDriver,
+        hook_warnings: Vec<String>,
+        session_password: Option<dbflux_core::secrecy::SecretString>,
+        cx: &mut gpui::AsyncApp,
+    ) {
+        let ConnectedDriver {
+            profile,
+            connection,
+            schema,
+            tunnel_handle,
+        } = connected;
+        let profile_id = self.profile_id;
+        let app_state = &self.app_state;
+
+        publish_state(&self.state_tx, PipelineState::Connected);
+
+        let connected_name = profile.name.clone();
+        record_connect_success_audit(
+            app_state,
+            profile_id,
+            &connected_name,
+            profile.driver_id.clone(),
+            cx,
+        );
+
+        let connection: Arc<dyn Connection> = connection.into();
+        let capture_witness = Arc::clone(&connection);
+        let capture_category = connection.metadata().category;
+        let capture_schema = schema.clone();
+        let capture_database = schema
+            .as_ref()
+            .and_then(|s| s.current_database().map(str::to_string));
+
+        let capture_ctx = if capture_category == dbflux_core::DatabaseCategory::Relational {
+            Some(cx.update(|cx| {
+                let state = app_state.read(cx);
+                (
+                    Arc::clone(&state.schema_snapshot_repo),
+                    state.general_settings().schema_snapshot_retention,
+                )
+            }))
+        } else {
+            None
+        };
+
+        let capture_token = self.register_connection(
+            RegisteredConnection {
+                profile,
+                connection,
+                schema,
+                tunnel_handle,
+            },
+            &hook_warnings,
+            session_password,
+            capture_ctx.as_ref().map(|(repo, _)| Arc::clone(repo)),
+            cx,
+        );
+
+        if let (Some((repo, retention)), Some(token)) = (capture_ctx, capture_token) {
+            run_connect_snapshot_capture(
+                ConnectSnapshotCapture {
+                    app_state: app_state.clone(),
+                    profile_id,
+                    witness: capture_witness,
+                    repo,
+                    token,
+                    database: capture_database,
+                    schema: capture_schema,
+                    retention,
+                    #[cfg(test)]
+                    pre_capture_pause: None,
+                    #[cfg(test)]
+                    completion_pause: None,
+                },
+                cx,
+            )
+            .await;
+        }
+    }
+}
+
+fn record_connect_success_audit(
+    app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
+    profile_id: Uuid,
+    profile_name: &str,
+    driver_id: Option<String>,
+    cx: &mut gpui::AsyncApp,
+) {
+    let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+    cx.update(|cx| {
+        let audit_service = app_state.read(cx).audit_service().clone();
+        let mut event = dbflux_core::observability::EventRecord::new(
+            now_ms,
+            dbflux_core::observability::EventSeverity::Info,
+            dbflux_core::observability::EventCategory::Connection,
+            dbflux_core::observability::EventOutcome::Success,
+        );
+        event.action = CONNECTION_CONNECT.as_str().to_string();
+        event.actor_type = dbflux_core::observability::EventActorType::User;
+        event.source_id = dbflux_core::observability::EventSourceId::Local;
+        event.connection_id = Some(profile_id.to_string());
+        event.driver_id = driver_id;
+        event.summary = format!("Connected to '{}'", profile_name);
+        if let Err(e) = audit_service.record(event) {
+            log::warn!(
+                "Failed to record pipeline connect success audit event: {}",
+                e
+            );
+        }
+    });
+}
+
 impl Sidebar {
     /// Connect using the pipeline path (auth, value resolution, access, connect).
     /// `password` is the password typed into the connect prompt; it replaces
@@ -562,48 +1248,17 @@ impl Sidebar {
         } = match prepared {
             Ok(prepared) => prepared,
             Err(stop) => {
-                // Benign concurrency skips stay info-only. A real preparation
-                // failure is actionable (e.g. a missing auth profile) and must
-                // reach the user, not just logs.
-                match stop {
-                    PrepareStop::Failed(message) => {
-                        log::warn!("Pipeline connect failed: {}", message);
-                        self.pending_toast = Some(PendingToast {
-                            message,
-                            is_error: true,
-                        });
-                        self.refresh_tree(cx);
-                        cx.notify();
-                    }
-                    PrepareStop::LimitReached => {
-                        self.pending_toast = Some(PendingToast {
-                            message: crate::labels::background_task_limit_toast_label(),
-                            is_error: true,
-                        });
-                        self.refresh_tree(cx);
-                        cx.notify();
-                    }
-                    PrepareStop::Reported => {
-                        self.refresh_tree(cx);
-                        cx.notify();
-                    }
-                    PrepareStop::Skipped(message) => {
-                        log::info!("Pipeline connect skipped: {}", message);
-                    }
-                }
+                self.settle_prepare_stop(stop, cx);
                 return;
             }
         };
-        let cancel_token = input.cancel.clone();
 
         self.refresh_tree(cx);
 
-        let app_state = self.app_state.clone();
-        let sidebar = cx.entity().clone();
         let (state_tx, state_rx) = dbflux_core::pipeline_state_channel();
 
         cx.spawn({
-            let app_state = app_state.clone();
+            let app_state = self.app_state.clone();
             let attempt = attempt.clone();
             let watcher = state_rx.clone();
             async move |_this, cx| follow_pipeline_stages(app_state, attempt, watcher, cx).await
@@ -616,362 +1271,60 @@ impl Sidebar {
             watcher: state_rx,
         });
 
-        cx.spawn(async move |_this, cx| {
-            let mut hook_warnings = Vec::new();
+        let run = ConnectRun {
+            app_state: self.app_state.clone(),
+            sidebar: cx.entity().clone(),
+            attempt,
+            state_tx,
+            cancel_token: input.cancel.clone(),
+            profile_id,
+            profile_name,
+            hook_context,
+        };
+        let plan = ConnectPlan {
+            input,
+            driver,
+            keyring_password,
+            session_password,
+            pre_connect_hooks,
+            post_connect_hooks,
+        };
 
-            start_stage(&app_state, &attempt, ConnectStage::PreConnectHooks, cx);
-            match run_hook_phase(
-                app_state.clone(),
-                profile_id,
-                profile_name.clone(),
-                HookPhase::PreConnect,
-                pre_connect_hooks,
-                hook_context.clone(),
-                Some(cancel_token.clone()),
-                attempt.detached_hooks(),
-                cx,
-            )
-            .await
-            {
-                HookPhaseState::Continue { warnings } => {
-                    hook_warnings.extend(warnings);
-                    finish_stage(&app_state, &attempt, ConnectStage::PreConnectHooks, cx);
-                }
-                HookPhaseState::Aborted { error } => {
-                    let _ = state_tx.send(PipelineState::Failed {
-                        stage: "pre_connect_hook".to_string(),
-                        error: error.clone(),
-                    });
-                    fail_connect(&app_state, &sidebar, &attempt, ConnectFailure::new(error), cx);
-                    return;
-                }
-                HookPhaseState::Cancelled => {
-                    let _ = state_tx.send(PipelineState::Cancelled);
+        cx.spawn(async move |_this, cx| run.execute(plan, cx).await)
+            .detach();
+    }
 
-                    if cancel_token.is_cancelled() {
-                        cancel_connect(&app_state, &sidebar, &attempt, None, cx);
-                    } else {
-                        fail_connect(
-                            &app_state,
-                            &sidebar,
-                            &attempt,
-                            ConnectFailure::new(crate::labels::connection_hook_cancelled_task_label())
-                                .toast(crate::labels::connection_cancelled_by_hook_toast_label()),
-                            cx,
-                        );
-                    }
-                    return;
-                }
+    /// Tells the user why a connect did not start, when it is theirs to know.
+    fn settle_prepare_stop(&mut self, stop: PrepareStop, cx: &mut Context<Self>) {
+        match stop {
+            // A real preparation failure is actionable (e.g. a missing auth
+            // profile) and must reach the user, not just logs.
+            PrepareStop::Failed(message) => {
+                log::warn!("Pipeline connect failed: {}", message);
+                report_error(UserFacingError::new(ErrorKind::Config, message), cx);
+                self.refresh_tree(cx);
+                cx.notify();
             }
-
-            let state_tx_for_pipeline = state_tx.clone();
-            let driver_name = driver.display_name().to_string();
-
-            let pipeline_result = cx
-                .background_executor()
-                .spawn(
-                    async move { dbflux_core::run_pipeline(input, &state_tx_for_pipeline).await },
-                )
-                .await;
-
-            let output = match pipeline_result {
-                Ok(output) => output,
-                Err(pipeline_error) => {
-                    let was_cancelled = pipeline_error.stage == "cancelled";
-                    let error_msg = pipeline_error.to_string();
-
-                    if was_cancelled {
-                        let _ = state_tx.send(PipelineState::Cancelled);
-                    } else {
-                        let _ = state_tx.send(PipelineState::Failed {
-                            stage: pipeline_error.stage.clone(),
-                            error: pipeline_error.source.to_string(),
-                        });
-                    }
-
-                    record_connect_failure_audit(
-                        &app_state,
-                        profile_id,
-                        &profile_name,
-                        driver_name,
-                        &error_msg,
-                        cx,
-                    );
-
-                    if was_cancelled {
-                        cancel_connect(&app_state, &sidebar, &attempt, Some(error_msg), cx);
-                    } else {
-                        fail_connect(&app_state, &sidebar, &attempt, ConnectFailure::new(error_msg), cx);
-                    }
-                    return;
-                }
-            };
-
-            let resolved_profile = output.resolved_profile;
-            let resolved_password = output.resolved_password;
-            let access_handle = output.access_handle;
-
-            let connect_profile = resolved_profile.clone();
-            let effective_password = resolved_password.or(keyring_password);
-            let overrides = dbflux_core::ConnectionOverrides::new(effective_password);
-            let state_tx_for_connect = state_tx.clone();
-            let driver_name_for_state = driver_name.clone();
-
-            // The driver connect and the schema fetch are blocking calls with
-            // no way to interrupt them. A cancel that arrives meanwhile
-            // leaves the stage `Cancelling`; the connection is dropped below
-            // and the stage reads `Cancelled` only then.
-            let connect_result = cx
-                .background_executor()
-                .spawn(async move {
-                    let _ = state_tx_for_connect.send(PipelineState::Connecting {
-                        driver_name: driver_name_for_state,
-                    });
-
-                    let mut profile = connect_profile;
-                    if access_handle.is_tunneled() {
-                        profile
-                            .config
-                            .redirect_to_tunnel(access_handle.local_port());
-                    }
-
-                    let connection = driver
-                        .connect_with_overrides(&profile, &overrides)
-                        .map_err(|e| e.to_string())?;
-
-                    let _ = state_tx_for_connect.send(PipelineState::FetchingSchema);
-
-                    let schema = match connection.schema() {
-                        Ok(s) => Some(s),
-                        Err(e) => {
-                            log::error!("Pipeline: Failed to fetch schema: {:?}", e);
-                            None
-                        }
-                    };
-
-                    let tunnel_handle: Option<Box<dyn std::any::Any + Send + Sync>> =
-                        if access_handle.is_tunneled() {
-                            Some(Box::new(access_handle))
-                        } else {
-                            None
-                        };
-
-                    Ok::<_, String>((profile, connection, schema, tunnel_handle))
-                })
-                .await;
-
-            let (profile, connection, schema, tunnel_handle) = match connect_result {
-                Ok(values) => values,
-                Err(error) => {
-                    let _ = state_tx.send(PipelineState::Failed {
-                        stage: "driver_connect".to_string(),
-                        error: error.clone(),
-                    });
-                    record_connect_failure_audit(
-                        &app_state,
-                        profile_id,
-                        &profile_name,
-                        driver_name,
-                        &error,
-                        cx,
-                    );
-                    fail_connect(
-                        &app_state,
-                        &sidebar,
-                        &attempt,
-                        ConnectFailure::new(error).forgetting_password(),
-                        cx,
-                    );
-                    return;
-                }
-            };
-
-            // A cancel that arrived while the driver was connecting must not
-            // leave the connection open: drop it, with its tunnel, instead of
-            // registering a connection the user already cancelled.
-            if cancel_token.is_cancelled() {
-                drop((connection, tunnel_handle));
-                abandon_cancelled_connect(&app_state, &sidebar, &attempt, &state_tx, cx);
-                return;
-            }
-
-            start_stage(&app_state, &attempt, ConnectStage::PostConnectHooks, cx);
-            match run_hook_phase(
-                app_state.clone(),
-                profile_id,
-                profile_name.clone(),
-                HookPhase::PostConnect,
-                post_connect_hooks,
-                hook_context,
-                Some(cancel_token.clone()),
-                attempt.detached_hooks(),
-                cx,
-            )
-            .await
-            {
-                HookPhaseState::Continue { warnings } => {
-                    hook_warnings.extend(warnings);
-                }
-                HookPhaseState::Aborted { error } => {
-                    let _ = state_tx.send(PipelineState::Failed {
-                        stage: "post_connect_hook".to_string(),
-                        error: error.clone(),
-                    });
-                    fail_connect(&app_state, &sidebar, &attempt, ConnectFailure::new(error), cx);
-                    return;
-                }
-                HookPhaseState::Cancelled => {
-                    let _ = state_tx.send(PipelineState::Cancelled);
-
-                    if cancel_token.is_cancelled() {
-                        cancel_connect(&app_state, &sidebar, &attempt, None, cx);
-                    } else {
-                        fail_connect(
-                            &app_state,
-                            &sidebar,
-                            &attempt,
-                            ConnectFailure::new(
-                                crate::labels::post_connect_hook_cancelled_task_label(),
-                            )
-                            .toast(crate::labels::connection_cancelled_by_post_connect_hook_toast_label()),
-                            cx,
-                        );
-                    }
-                    return;
-                }
-            }
-
-            // A cancel that arrived while the post-connect hooks ran must not
-            // leave the connection open either.
-            if cancel_token.is_cancelled() {
-                drop((connection, tunnel_handle));
-                abandon_cancelled_connect(&app_state, &sidebar, &attempt, &state_tx, cx);
-                return;
-            }
-
-            let _ = state_tx.send(PipelineState::Connected);
-
-            let connected_name = profile.name.clone();
-            let connected_driver_id = profile.driver_id.clone();
-
-            // Emit pipeline connection success audit event.
-            let connect_success_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
-            cx.update(|cx| {
-                let audit_service = app_state.read(cx).audit_service().clone();
-                let mut event = dbflux_core::observability::EventRecord::new(
-                    connect_success_now_ms,
-                    dbflux_core::observability::EventSeverity::Info,
-                    dbflux_core::observability::EventCategory::Connection,
-                    dbflux_core::observability::EventOutcome::Success,
-                );
-                event.action = CONNECTION_CONNECT.as_str().to_string();
-                event.actor_type = dbflux_core::observability::EventActorType::User;
-                event.source_id = dbflux_core::observability::EventSourceId::Local;
-                event.connection_id = Some(profile_id.to_string());
-                event.driver_id = connected_driver_id;
-                event.summary = format!("Connected to '{}'", connected_name);
-                if let Err(e) = audit_service.record(event) {
-                    log::warn!(
-                        "Failed to record pipeline connect success audit event: {}",
-                        e
-                    );
-                }
-            });
-
-            let connection: Arc<dyn Connection> = connection.into();
-            let capture_witness = Arc::clone(&connection);
-            let capture_category = connection.metadata().category;
-            let capture_schema = schema.clone();
-            let capture_database = schema
-                .as_ref()
-                .and_then(|s| s.current_database().map(str::to_string));
-
-            let capture_ctx = if capture_category == dbflux_core::DatabaseCategory::Relational {
-                Some(cx.update(|cx| {
-                    let state = app_state.read(cx);
-                    (
-                        Arc::clone(&state.schema_snapshot_repo),
-                        state.general_settings().schema_snapshot_retention,
-                    )
-                }))
-            } else {
-                None
-            };
-
-            let mut capture_token = None;
-            cx.update(|cx| {
-                for warning in &hook_warnings {
-                    log::warn!("{}", warning);
-                }
-
-                let probe = connection.probe_write_privilege();
-
-                app_state.update(cx, |state, cx| {
-                    attempt.finish(state, ConnectOutcome::Completed);
-                    state.apply_connect_profile(
-                        profile,
-                        connection,
-                        schema,
-                        tunnel_handle,
-                        false,
-                        probe,
-                    );
-                    if let Some(password) = session_password {
-                        state.set_session_password(profile_id, password);
-                    }
-                    cx.emit(dbflux_ui_base::AppStateChanged);
-                    cx.notify();
-                });
-
-                if let Some((capture_repo, _)) = &capture_ctx {
-                    match capture_repo.begin_connect_capture(profile_id) {
-                        Ok(token) => capture_token = Some(token),
-                        Err(error) => dbflux_ui_base::user_error::report_error(
-                            UserFacingError::new(
-                                ErrorKind::Storage,
-                                crate::labels::schema_snapshot_failed_label(&error.to_string()),
-                            ),
-                            cx,
-                        ),
-                    }
-                }
-
-                let message =
-                    crate::labels::connected_toast_label(&connected_name, hook_warnings.len());
-
-                sidebar.update(cx, |sidebar, cx| {
-                    sidebar.pending_toast = Some(PendingToast {
-                        message,
-                        is_error: false,
-                    });
-                    sidebar.refresh_tree(cx);
-                });
-            });
-
-            if let (Some((capture_repo, capture_retention)), Some(capture_token)) =
-                (capture_ctx, capture_token)
-            {
-                run_connect_snapshot_capture(
-                    ConnectSnapshotCapture {
-                        app_state,
-                        profile_id,
-                        witness: capture_witness,
-                        repo: capture_repo,
-                        token: capture_token,
-                        database: capture_database,
-                        schema: capture_schema,
-                        retention: capture_retention,
-                        #[cfg(test)]
-                        pre_capture_pause: None,
-                        #[cfg(test)]
-                        completion_pause: None,
-                    },
+            PrepareStop::LimitReached => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::User,
+                        crate::labels::background_task_limit_toast_label(),
+                    ),
                     cx,
-                )
-                .await;
+                );
+                self.refresh_tree(cx);
+                cx.notify();
             }
-        })
-        .detach();
+            PrepareStop::Reported => {
+                self.refresh_tree(cx);
+                cx.notify();
+            }
+            // Benign concurrency skips stay info-only.
+            PrepareStop::Skipped(message) => {
+                log::info!("Pipeline connect skipped: {}", message);
+            }
+        }
     }
 }
 
@@ -985,9 +1338,7 @@ fn abandon_cancelled_connect(
     state_tx: &dbflux_core::StateSender,
     cx: &mut gpui::AsyncApp,
 ) {
-    if state_tx.send(PipelineState::Cancelled).is_err() {
-        log::debug!("Pipeline: no observer left for the cancelled connect");
-    }
+    publish_state(state_tx, PipelineState::Cancelled);
 
     cancel_connect(app_state, sidebar, attempt, None, cx);
 }

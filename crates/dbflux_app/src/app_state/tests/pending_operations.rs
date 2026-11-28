@@ -44,3 +44,37 @@ fn a_cancelled_connect_attempt_keeps_the_profile_busy_until_its_worker_stops() {
     assert_eq!(status, Some(TaskStatus::Cancelled));
     assert!(state.try_start_task(connect_request(profile_id)).is_ok());
 }
+
+/// A direct connect has no stages and keeps the immediate cancel policy until
+/// the direct path migrates: its task reads `Cancelled` on the request, so no
+/// worker confirmation will free the profile, and the request frees it.
+#[test]
+fn cancelling_a_direct_connect_frees_the_profile_for_a_retry() {
+    let mut state = state_for_task_tests();
+    let profile_id = Uuid::new_v4();
+
+    let direct = state
+        .try_start_task(
+            TaskRequest::new(TaskKind::Connect, "connecting").target(TaskTarget {
+                profile_id,
+                database: None,
+            }),
+        )
+        .expect("direct attempt starts");
+    assert!(state.start_pending_operation(profile_id, None));
+
+    assert_eq!(
+        state.cancel_running_connect_tasks_for_profile(profile_id),
+        1
+    );
+
+    assert_eq!(
+        state.tasks().get(direct.id()).map(|task| task.status),
+        Some(TaskStatus::Cancelled)
+    );
+    assert!(
+        !state.is_operation_pending(profile_id, None),
+        "the sidebar must not keep showing the cancelled connect as busy"
+    );
+    assert!(state.start_pending_operation(profile_id, None));
+}

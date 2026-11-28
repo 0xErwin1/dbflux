@@ -891,3 +891,108 @@ fn dismissing_a_finished_connect_keeps_a_detached_hook_that_still_runs(cx: &mut 
     );
     assert_eq!(status_of(&app_state, hook, window), TaskStatus::Running);
 }
+
+#[gpui::test]
+fn cancelling_a_direct_connect_from_the_panel_frees_its_profile(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let profile_id = add_profile(&app_state, "local", window);
+    let connect = start_request(
+        &app_state,
+        TaskRequest::new(TaskKind::Connect, "Connecting to local").target(target_of(profile_id)),
+        window,
+    );
+    app_state.update(window, |state, _| {
+        assert!(state.start_pending_operation(profile_id, None));
+    });
+    notify(&app_state, window);
+
+    click_cancel(connect, window);
+
+    assert_eq!(
+        status_of(&app_state, connect, window),
+        TaskStatus::Cancelled
+    );
+    assert!(
+        !app_state.read_with(window, |state, _| state
+            .is_operation_pending(profile_id, None)),
+        "a direct connect has no worker confirmation to wait for, so the profile is free at once"
+    );
+}
+
+/// A finished connect that still has a detached hook running keeps its row,
+/// and the hook row offers its own cancel control.
+fn start_finished_connect_with_running_hook(
+    app_state: &Entity<AppStateEntity>,
+    window: &mut VisualTestContext,
+) -> (TaskId, TaskId) {
+    let parent = start_request(
+        app_state,
+        TaskRequest::new(TaskKind::Connect, "Connecting to staging"),
+        window,
+    );
+    let hook = start_request(
+        app_state,
+        TaskRequest::new(
+            TaskKind::Hook {
+                phase: dbflux_core::HookPhase::PostConnect,
+            },
+            "ssh tunnel",
+        )
+        .parent(parent),
+        window,
+    );
+    app_state.update(window, |state, cx| {
+        state.complete_task(parent);
+        cx.emit(AppStateChanged);
+    });
+    window.run_until_parked();
+    (parent, hook)
+}
+
+#[gpui::test]
+fn a_running_detached_hook_row_has_a_cancel_control_that_stops_it(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let (parent, hook) = start_finished_connect_with_running_hook(&app_state, window);
+
+    assert!(
+        window
+            .debug_bounds(selector("cancel-task", parent))
+            .is_none(),
+        "the finished connect has nothing to cancel"
+    );
+    click_cancel(hook, window);
+
+    assert_eq!(status_of(&app_state, hook, window), TaskStatus::Cancelled);
+    assert_eq!(
+        status_of(&app_state, parent, window),
+        TaskStatus::Completed,
+        "cancelling the hook leaves the finished connect as it was"
+    );
+}
+
+#[gpui::test]
+fn the_keyboard_cancels_the_running_hook_of_the_selected_finished_connect(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (panel, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let (parent, hook) = start_finished_connect_with_running_hook(&app_state, window);
+
+    panel.update(window, |panel, cx| panel.select_first(cx));
+    let actions = panel.read_with(window, |panel, cx| panel.selected_actions(cx));
+    assert_eq!(actions.map(|actions| actions.cancellable), Some(true));
+
+    assert!(panel.update(window, |panel, cx| panel.cancel_selected(cx)));
+
+    assert_eq!(status_of(&app_state, hook, window), TaskStatus::Cancelled);
+    assert_eq!(status_of(&app_state, parent, window), TaskStatus::Completed);
+}

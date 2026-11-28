@@ -2578,7 +2578,12 @@ impl AppState {
     /// The attempt owns its stages and detached hooks as child tasks, so the
     /// request reaches them through the task hierarchy. The attempt turns
     /// `Cancelled` once its worker stops, and only then is the profile free
-    /// for a retry, so nothing is released here.
+    /// for a retry, so nothing is released for it here.
+    ///
+    /// A direct connect has no stages and keeps the immediate cancel policy:
+    /// its task reads `Cancelled` on the request and no worker confirmation
+    /// will follow, so the request releases the profile's pending entry, as
+    /// before the pipeline attempt owned its stages.
     ///
     /// Returns how many attempts accepted the request.
     pub fn cancel_running_connect_tasks_for_profile(&mut self, profile_id: Uuid) -> usize {
@@ -2595,10 +2600,27 @@ impl AppState {
             .map(|task| task.id)
             .collect();
 
-        attempts
-            .into_iter()
-            .filter(|task_id| self.facade.tasks.cancel(*task_id))
-            .count()
+        let mut accepted = 0;
+
+        for task_id in attempts {
+            if !self.facade.tasks.cancel(task_id) {
+                continue;
+            }
+            accepted += 1;
+
+            let settled = self
+                .facade
+                .tasks
+                .get(task_id)
+                .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+            if settled {
+                self.facade
+                    .connections
+                    .finish_pending_operation(profile_id, None);
+            }
+        }
+
+        accepted
     }
 
     pub fn connections_mut(&mut self) -> &mut HashMap<Uuid, ConnectedProfile> {
