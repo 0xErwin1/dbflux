@@ -4,6 +4,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::tokens::{ChromeColors, ShellMetrics};
 use dbflux_core::{CancelRequestOutcome, TaskId, TaskKind, TaskSnapshot, TaskStatus};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -220,6 +221,12 @@ impl TasksPanel {
 
             tick_count = tick_count.wrapping_add(1);
 
+            cx.update(|cx| {
+                if let Some(entity) = this.upgrade() {
+                    Self::report_cancel_dispatch_failures(&entity, cx);
+                }
+            });
+
             let should_notify = cx.update(|cx| {
                 this.upgrade()
                     .map(|entity| {
@@ -252,6 +259,25 @@ impl TasksPanel {
                     }
                 });
             }
+        }
+    }
+
+    /// A driver cancel runs on its own thread, so a failure of the call
+    /// itself reaches the user here, from where the failures are collected.
+    fn report_cancel_dispatch_failures(entity: &Entity<Self>, cx: &mut App) {
+        let failures = entity
+            .read(cx)
+            .app_state
+            .read(cx)
+            .take_cancel_dispatch_failures();
+
+        for failure in failures {
+            let message = dbflux_i18n::t!(
+                "tasks_panel.query_cancel_rejected",
+                driver = failure.driver,
+                error = failure.error
+            );
+            report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
         }
     }
 

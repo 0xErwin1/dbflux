@@ -751,7 +751,7 @@ impl CodeDocument {
         let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
             description,
             task_target.clone(),
-            !uses_isolated_session,
+            (!uses_isolated_session).then(|| connection.clone()),
             cx,
         );
         self.app_state.update(cx, |state, _cx| {
@@ -934,6 +934,17 @@ impl CodeDocument {
                         cx,
                     );
                 }
+
+                // The worker has finished, so the task settles here whether or
+                // not the editor is still open to process the result.
+                cx.update(|cx| {
+                    crate::task_runner::settle_task_after_cancel(
+                        &invalidation_app_state,
+                        task_id,
+                        &result,
+                        cx,
+                    );
+                });
             } else if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
@@ -959,6 +970,7 @@ impl CodeDocument {
                         exec_id,
                         &task_target_for_audit,
                         Some(query_for_cancel),
+                        &result,
                         cx,
                     );
                 });
@@ -969,20 +981,23 @@ impl CodeDocument {
                         .unwrap_or(0);
                     let duration_ms = started_at.elapsed().as_millis() as i64;
                     let details_json = serde_json::json!({ "query": query }).to_string();
-                    let mut event = EventRecord::new(
-                        ts_ms,
-                        EventSeverity::Warn,
-                        EventCategory::Query,
-                        EventOutcome::Cancelled,
-                    )
-                    .with_typed_action(audit_actions::QUERY_CANCEL)
-                    .with_summary("Query cancelled")
-                    .with_connection_context(
-                        fallback_conn_id.clone().unwrap_or_default(),
-                        task_target_for_audit.database.clone().unwrap_or_default(),
-                        fallback_driver_id.clone(),
-                    )
-                    .with_details_json(details_json);
+                    let audit = super::cancel_audit::audit_for_cancelled_run(&result, false);
+                    let severity = match audit.outcome {
+                        EventOutcome::Failure => EventSeverity::Error,
+                        EventOutcome::Success => EventSeverity::Info,
+                        _ => EventSeverity::Warn,
+                    };
+                    let mut event =
+                        EventRecord::new(ts_ms, severity, EventCategory::Query, audit.outcome)
+                            .with_typed_action(audit.action)
+                            .with_summary(&audit.summary)
+                            .with_connection_context(
+                                fallback_conn_id.clone().unwrap_or_default(),
+                                task_target_for_audit.database.clone().unwrap_or_default(),
+                                fallback_driver_id.clone(),
+                            )
+                            .with_details_json(details_json);
+                    event.error_message = audit.error;
                     event.source_id = EventSourceId::Local;
                     event.actor_type = EventActorType::User;
                     event.duration_ms = Some(duration_ms);
@@ -1150,6 +1165,7 @@ impl CodeDocument {
         exec_id: Uuid,
         target: &TaskTarget,
         query: Option<String>,
+        result: &Result<dbflux_core::QueryResult, DbError>,
         cx: &mut Context<Self>,
     ) {
         // Determine if this is a script execution by looking up the record
@@ -1216,11 +1232,7 @@ impl CodeDocument {
             })
             .map(|d| d.as_millis() as i64);
 
-        let summary = if is_script {
-            "Script cancelled"
-        } else {
-            "Query cancelled"
-        };
+        let audit = super::cancel_audit::audit_for_cancelled_run(result, is_script);
 
         self.emit_audit_event(
             cx,
@@ -1229,12 +1241,12 @@ impl CodeDocument {
             } else {
                 EventCategory::Query
             },
-            audit_actions::QUERY_CANCEL,
-            EventOutcome::Cancelled,
-            summary.to_string(),
+            audit.action,
+            audit.outcome,
+            audit.summary,
             query.as_deref(),
             duration_ms,
-            None,
+            audit.error.as_deref(),
             None,
         );
     }
@@ -2839,12 +2851,16 @@ impl CodeDocument {
                     profile_id: Uuid::nil(),
                     database: None,
                 };
+                // A script run is cancelled by dropping it, so the log says
+                // cancelled whatever the discarded script produced.
+                let cancelled: Result<QueryResult, DbError> = Err(DbError::Cancelled);
                 let inner_result = this.update(cx, |doc, cx| {
                     doc.complete_cancelled_query(
                         task_id,
                         exec_id,
                         &dummy_target,
                         Some(content_for_cancel),
+                        &cancelled,
                         cx,
                     );
                 });

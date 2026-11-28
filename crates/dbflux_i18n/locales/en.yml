@@ -6102,6 +6102,7 @@ sidebar:
     disconnected_hook_error: "Disconnected from %{name}, but %{error}"
     profile_not_found: Profile not found
     schema_drop_cancelled: Schema drop cancelled
+    schema_drop_cancelled_after_release: "The drop of \"%{database}\" was cancelled and nothing was dropped, but DBFlux had already released its connection to it. Select the database in the sidebar to connect again."
     drop_failed: "Failed to drop: %{error}"
     reveal_failed: "Failed to reveal in file manager: %{error}"
     schema_snapshot_failed: "Failed to capture schema snapshot: %{error}"
@@ -6332,6 +6333,8 @@ tasks_panel:
   empty: No background tasks
   output_truncated: "… output truncated in panel"
   query_cancel_unsupported: "%{driver} does not support cancelling a running command."
+  query_cancel_not_sent: "Could not send the cancel request to %{driver}: %{error}. Try cancelling again."
+  query_cancel_rejected: "%{driver} did not accept the cancel request: %{error}. The query keeps running until it finishes."
   drop_point_of_no_return: "The statement was already sent to the server and can no longer be cancelled."
 toast:
   action:

@@ -119,6 +119,7 @@ pub struct AppState {
     scripts_directory_diagnostics: Vec<ScriptsDirectoryDiagnostic>,
     protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
+    cancel_dispatch_failures: CancelFailureSink,
     auth_provider_registry: AuthProviderRegistry,
     secret_provider_registry: crate::secret_provider_registry::SecretProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
@@ -2471,30 +2472,43 @@ impl AppState {
     /// the next statement run on the same connection.
     pub fn cancel_query_for_target(&self, target: &dbflux_core::TaskTarget) {
         if let Some(connection) = self.facade.connections.connection_for_task_target(target) {
-            dispatch_driver_cancel(connection);
+            let driver = connection.metadata().display_name.clone();
+
+            if let Err(error) =
+                dispatch_driver_cancel(connection, self.cancel_dispatch_failures.clone())
+            {
+                record_cancel_failure(&self.cancel_dispatch_failures, driver, error);
+            }
         }
     }
 
-    /// Builds the cancel hook of a query task running on `target`.
+    /// Takes the driver cancels that failed after the request had been
+    /// accepted (the driver call runs on its own thread, so the failure
+    /// cannot reach the user at dispatch time). The UI reports each one.
+    pub fn take_cancel_dispatch_failures(&self) -> Vec<CancelDispatchFailure> {
+        std::mem::take(
+            &mut *self
+                .cancel_dispatch_failures
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Builds the cancel hook of a query task that runs on `connection`.
     ///
-    /// The connection is resolved now, because the hook runs while the task
-    /// manager is borrowed and cannot reach the connections. A driver that
-    /// does not declare `QUERY_CANCELLATION` yields
-    /// `CancelOutcome::NotSupported` with `unsupported_reason` applied to its
-    /// display name. `cancels_connection` is `false` for a query on its own
-    /// session, where interrupting the shared connection would hit unrelated
-    /// work; the hook then only requests the stop.
+    /// The hook is bound to the connection that executes the query, not to
+    /// whatever the registry holds for the profile when the user cancels: a
+    /// reconnect in between must not send the cancel to the new connection.
+    /// A driver that does not declare `QUERY_CANCELLATION` yields
+    /// `CancelOutcome::NotSupported` worded by `messages`. `None` is a query
+    /// on its own session, where interrupting the shared connection would hit
+    /// unrelated work; the hook then only requests the stop.
     pub fn query_cancel_hook(
         &self,
-        target: &dbflux_core::TaskTarget,
-        cancels_connection: bool,
-        unsupported_reason: impl Fn(&str) -> String + Send + Sync + 'static,
+        connection: Option<Arc<dyn dbflux_core::Connection>>,
+        messages: CancelMessages,
     ) -> dbflux_core::CancelHook {
-        let connection = cancels_connection
-            .then(|| self.facade.connections.connection_for_task_target(target))
-            .flatten();
-
-        driver_cancel_hook(connection, unsupported_reason)
+        driver_cancel_hook(connection, self.cancel_dispatch_failures.clone(), messages)
     }
 
     /// Sends a driver-level cancel for a running query task.
@@ -3539,45 +3553,96 @@ impl AppState {
     }
 }
 
+/// A driver cancel that failed after it was dispatched, so the task could
+/// not be told: the query keeps running until it finishes on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelDispatchFailure {
+    pub driver: String,
+    pub error: String,
+}
+
+type CancelFailureSink = Arc<std::sync::Mutex<Vec<CancelDispatchFailure>>>;
+
+/// How the UI words a driver cancel that did not happen.
+#[derive(Clone, Copy)]
+pub struct CancelMessages {
+    /// The driver cannot cancel a running command (argument: driver name).
+    pub unsupported: fn(driver: &str) -> String,
+    /// The cancel could not be sent now (arguments: driver name, error).
+    pub not_sent: fn(driver: &str, error: &str) -> String,
+}
+
+fn record_cancel_failure(sink: &CancelFailureSink, driver: String, error: String) {
+    log::warn!("Failed to send cancel to {driver}: {error}");
+
+    sink.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(CancelDispatchFailure { driver, error });
+}
+
 /// Sends the driver-level cancel on its own thread: it may block on a
 /// network round trip or on the lock the running query holds.
+///
+/// Returns an error only when the thread cannot start. A failure of the
+/// driver call itself happens later, on that thread, and lands in `sink`.
 ///
 /// Only `cancel_active` is called. Calling the cancel handle as well sends a
 /// second server cancel request, which the server may apply to the next
 /// statement run on the same connection.
-fn dispatch_driver_cancel(connection: Arc<dyn dbflux_core::Connection>) {
-    let spawned = std::thread::Builder::new()
+fn dispatch_driver_cancel(
+    connection: Arc<dyn dbflux_core::Connection>,
+    sink: CancelFailureSink,
+) -> Result<(), String> {
+    let driver = connection.metadata().display_name.clone();
+
+    std::thread::Builder::new()
         .name("dbflux-query-cancel".to_string())
         .spawn(move || {
             if let Err(error) = connection.cancel_active() {
-                log::warn!("Failed to send cancel to database: {}", error);
+                record_cancel_failure(&sink, driver, error.to_string());
             }
-        });
-
-    if let Err(error) = spawned {
-        log::warn!("Failed to start the query cancel thread: {}", error);
-    }
+        })
+        .map(|_detached| ())
+        .map_err(|error| error.to_string())
 }
 
 /// Cancel hook that asks `connection`'s driver to stop the running query.
 /// Without a connection the hook only requests the stop.
 pub fn driver_cancel_hook(
     connection: Option<Arc<dyn dbflux_core::Connection>>,
-    unsupported_reason: impl Fn(&str) -> String + Send + Sync + 'static,
+    sink: CancelFailureSink,
+    messages: CancelMessages,
+) -> dbflux_core::CancelHook {
+    driver_cancel_hook_with(connection, sink, messages, dispatch_driver_cancel)
+}
+
+fn driver_cancel_hook_with(
+    connection: Option<Arc<dyn dbflux_core::Connection>>,
+    sink: CancelFailureSink,
+    messages: CancelMessages,
+    dispatch: impl Fn(Arc<dyn dbflux_core::Connection>, CancelFailureSink) -> Result<(), String>
+    + Send
+    + Sync
+    + 'static,
 ) -> dbflux_core::CancelHook {
     Arc::new(move || {
         let Some(connection) = connection.clone() else {
             return dbflux_core::CancelOutcome::Requested;
         };
+        let driver = connection.metadata().display_name.clone();
 
         if !connection.supports(dbflux_core::DriverCapabilities::QUERY_CANCELLATION) {
             return dbflux_core::CancelOutcome::NotSupported {
-                reason: unsupported_reason(&connection.metadata().display_name),
+                reason: (messages.unsupported)(&driver),
             };
         }
 
-        dispatch_driver_cancel(connection);
-        dbflux_core::CancelOutcome::Requested
+        match dispatch(connection, sink.clone()) {
+            Ok(()) => dbflux_core::CancelOutcome::Requested,
+            Err(error) => dbflux_core::CancelOutcome::DeliveryFailed {
+                reason: (messages.not_sent)(&driver, &error),
+            },
+        }
     })
 }
 
@@ -3601,6 +3666,8 @@ mod tests {
     mod telemetry;
 
     mod pending_operations;
+
+    mod query_cancel;
 
     #[test]
     fn profile_session_generation_absent_profile_is_none() {
@@ -4996,117 +5063,5 @@ mod tests {
 
         assert_eq!(state.cancel_running_query_tasks(None), 1);
         assert!(state.running_query_tasks(None).is_empty());
-    }
-
-    struct CancelProbeConnection {
-        metadata: dbflux_core::DriverMetadata,
-        cancels: std::sync::mpsc::Sender<()>,
-    }
-
-    impl CancelProbeConnection {
-        fn probe(
-            capabilities: dbflux_core::DriverCapabilities,
-        ) -> (
-            Arc<dyn dbflux_core::Connection>,
-            std::sync::mpsc::Receiver<()>,
-        ) {
-            let (cancels, received) = std::sync::mpsc::channel();
-            let metadata = DriverMetadataBuilder::new(
-                "cancel-probe",
-                "Probe DB",
-                DatabaseCategory::Relational,
-                QueryLanguage::Sql,
-            )
-            .capabilities(capabilities)
-            .build();
-
-            (Arc::new(Self { metadata, cancels }), received)
-        }
-    }
-
-    impl dbflux_core::Connection for CancelProbeConnection {
-        fn metadata(&self) -> &dbflux_core::DriverMetadata {
-            &self.metadata
-        }
-
-        fn ping(&self) -> Result<(), DbError> {
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), DbError> {
-            Ok(())
-        }
-
-        fn execute(
-            &self,
-            _req: &dbflux_core::QueryRequest,
-        ) -> Result<dbflux_core::QueryResult, DbError> {
-            Err(DbError::NotSupported("probe".to_string()))
-        }
-
-        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
-            Ok(())
-        }
-
-        fn cancel_active(&self) -> Result<(), DbError> {
-            self.cancels.send(()).map_err(|_| DbError::Cancelled)
-        }
-
-        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, DbError> {
-            Ok(dbflux_core::SchemaSnapshot::default())
-        }
-
-        fn kind(&self) -> DbKind {
-            DbKind::Postgres
-        }
-
-        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
-            dbflux_core::SchemaLoadingStrategy::SingleDatabase
-        }
-
-        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-            &dbflux_core::DefaultSqlDialect
-        }
-    }
-
-    #[test]
-    fn query_cancel_hook_dispatches_the_driver_cancel_and_requests_the_stop() {
-        let (connection, received) =
-            CancelProbeConnection::probe(dbflux_core::DriverCapabilities::QUERY_CANCELLATION);
-        let hook = super::driver_cancel_hook(Some(connection), |driver| driver.to_string());
-
-        assert_eq!(hook(), dbflux_core::CancelOutcome::Requested);
-        received
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("the driver was asked to cancel");
-    }
-
-    #[test]
-    fn query_cancel_hook_reports_a_driver_without_cancel_support() {
-        let (connection, received) =
-            CancelProbeConnection::probe(dbflux_core::DriverCapabilities::empty());
-        let hook = super::driver_cancel_hook(Some(connection), |driver| {
-            format!("{driver} does not support cancelling a running command.")
-        });
-
-        assert_eq!(
-            hook(),
-            dbflux_core::CancelOutcome::NotSupported {
-                reason: "Probe DB does not support cancelling a running command.".to_string()
-            }
-        );
-        assert!(
-            received
-                .recv_timeout(std::time::Duration::from_millis(200))
-                .is_err(),
-            "no cancel may be sent to a driver that cannot cancel"
-        );
-    }
-
-    #[test]
-    fn query_cancel_hook_without_a_connection_only_requests_the_stop() {
-        let hook = super::driver_cancel_hook(None, |driver| driver.to_string());
-
-        assert_eq!(hook(), dbflux_core::CancelOutcome::Requested);
     }
 }
