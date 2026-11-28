@@ -1125,8 +1125,10 @@ impl ChartDocument {
 
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
-                    crate::task_runner::settle_task_after_cancel(&app_state, task_id, &result, cx);
-                    if let Err(e) = conn_cleanup.cleanup_after_cancel() {
+                    let cancel_accepted = crate::task_runner::settle_task_after_cancel(
+                        &app_state, task_id, &result, cx,
+                    );
+                    if cancel_accepted && let Err(e) = conn_cleanup.cleanup_after_cancel() {
                         log::warn!("[chart-doc] cleanup after cancel failed: {}", e);
                     }
                     return;
