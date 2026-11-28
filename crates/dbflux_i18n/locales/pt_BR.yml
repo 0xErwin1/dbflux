@@ -6082,6 +6082,14 @@ sidebar:
         opening_access: "Pipeline: abrindo o acesso (%{method})"
         connecting: "Pipeline: conectando o driver (%{driver})"
         fetching_schema: "Pipeline: buscando o schema"
+      step:
+        pre_connect_hooks: "Hooks pré-conexão"
+        authenticating: "Autenticando via %{provider}"
+        resolving_values: "Resolvendo valores"
+        opening_access: "Abrindo o túnel"
+        connecting: "Conectando o driver"
+        fetching_schema: "Buscando o schema"
+        post_connect_hooks: "Hooks pós-conexão"
     listing_secret_paths: "Listando caminhos de segredos: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}' atualizada"
@@ -6089,7 +6097,6 @@ sidebar:
     edit_reconnect_now: Reconectar agora
     edit_reconnect_later: Depois
     connection_already_pending: A conexão já está pendente
-    operation_started_elsewhere: Operação iniciada por outra thread
     background_task_limit: Há tarefas em segundo plano demais em execução, aguarde
     connection_cancelled_by_hook: Conexão cancelada pelo hook
     connection_cancelled_by_post_connect_hook: Conexão cancelada pelo hook de pós-conexão

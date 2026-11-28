@@ -284,6 +284,20 @@ impl Harness<'_> {
             state.complete_task_with_details(export, "wrote 10 rows\nwrote 20 rows");
             let (import, _token) = state.start_task(TaskKind::Import, "import");
             state.fail_task(import, "disk full");
+
+            // A finished connect whose detached hook still runs lists the
+            // hook with its own cancel control.
+            let (connect, _token) = state.start_task(TaskKind::Connect, "connect");
+            state.start_task_handle(
+                dbflux_core::TaskRequest::new(
+                    TaskKind::Hook {
+                        phase: dbflux_core::HookPhase::PostConnect,
+                    },
+                    "detached hook",
+                )
+                .parent(connect),
+            );
+            state.complete_task(connect);
             cx.emit(AppStateChanged);
         });
         self.window.run_until_parked();

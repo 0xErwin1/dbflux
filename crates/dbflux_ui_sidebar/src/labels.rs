@@ -388,12 +388,6 @@ pub(crate) fn connection_already_pending_toast_label() -> String {
     dbflux_i18n::t!("sidebar.toast.connection_already_pending")
 }
 
-/// Translated toast shown when a pending-operation slot was claimed by
-/// another thread between the check and the reservation.
-pub(crate) fn operation_started_elsewhere_toast_label() -> String {
-    dbflux_i18n::t!("sidebar.toast.operation_started_elsewhere")
-}
-
 /// Translated toast shown when the background task limit blocks a new
 /// connect or disconnect request.
 pub(crate) fn background_task_limit_toast_label() -> String {
@@ -774,6 +768,40 @@ pub(crate) fn prepare_schema_object_refresh_failed_label() -> String {
 /// Translated toast reported when a schema-object refresh fails.
 pub(crate) fn refresh_schema_object_failed_label(error: &str) -> String {
     dbflux_i18n::t!("sidebar.toast.refresh_schema_object_failed", error = error)
+}
+
+/// Translated name of a connect stage's child task in the tasks panel.
+/// `auth_provider` names the provider of the authentication stage.
+pub(crate) fn connect_stage_label(
+    stage: crate::operations::ConnectStage,
+    auth_provider: Option<&str>,
+) -> String {
+    use crate::operations::ConnectStage;
+
+    match stage {
+        ConnectStage::PreConnectHooks => {
+            dbflux_i18n::t!("sidebar.task.pipeline.step.pre_connect_hooks")
+        }
+        ConnectStage::Authenticating => dbflux_i18n::t!(
+            "sidebar.task.pipeline.step.authenticating",
+            provider = auth_provider.unwrap_or_default()
+        ),
+        ConnectStage::ResolvingValues => {
+            dbflux_i18n::t!("sidebar.task.pipeline.step.resolving_values")
+        }
+        ConnectStage::OpeningAccess => {
+            dbflux_i18n::t!("sidebar.task.pipeline.step.opening_access")
+        }
+        ConnectStage::ConnectingDriver => {
+            dbflux_i18n::t!("sidebar.task.pipeline.step.connecting")
+        }
+        ConnectStage::FetchingSchema => {
+            dbflux_i18n::t!("sidebar.task.pipeline.step.fetching_schema")
+        }
+        ConnectStage::PostConnectHooks => {
+            dbflux_i18n::t!("sidebar.task.pipeline.step.post_connect_hooks")
+        }
+    }
 }
 
 /// Translated task-panel label for the current pipeline stage, shown as a
@@ -1276,7 +1304,7 @@ mod tests {
         );
     }
 
-    const D1A_KEYS: [&str; 18] = [
+    const D1A_KEYS: [&str; 17] = [
         "sidebar.task.connecting",
         "sidebar.task.disconnecting",
         "sidebar.task.connection_hook_cancelled",
@@ -1284,7 +1312,6 @@ mod tests {
         "sidebar.task.disconnect_hook_cancelled",
         "sidebar.task.post_disconnect_hook_cancelled",
         "sidebar.toast.connection_already_pending",
-        "sidebar.toast.operation_started_elsewhere",
         "sidebar.toast.background_task_limit",
         "sidebar.toast.connection_cancelled_by_hook",
         "sidebar.toast.connection_cancelled_by_post_connect_hook",

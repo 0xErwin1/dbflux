@@ -1073,7 +1073,7 @@ pub(crate) mod object_tree_adapter_tests {
         schema_calls: Mutex<Vec<String>>,
         details_calls: AtomicUsize,
         details_failures: AtomicUsize,
-        primary_schema_calls: AtomicUsize,
+        primary_schema_calls: Arc<AtomicUsize>,
         primary_schema_failures: AtomicUsize,
         primary_snapshot: Mutex<Option<dbflux_core::SchemaSnapshot>>,
         authoritative_primary: AtomicBool,
@@ -1092,11 +1092,17 @@ pub(crate) mod object_tree_adapter_tests {
                 schema_calls: Mutex::new(Vec::new()),
                 details_calls: AtomicUsize::new(0),
                 details_failures: AtomicUsize::new(0),
-                primary_schema_calls: AtomicUsize::new(0),
+                primary_schema_calls: Arc::new(AtomicUsize::new(0)),
                 primary_schema_failures: AtomicUsize::new(0),
                 primary_snapshot: Mutex::new(None),
                 authoritative_primary: AtomicBool::new(false),
             })
+        }
+
+        /// How many times `schema()` ran, readable after the connection moved
+        /// into a driver or an app state.
+        pub(crate) fn schema_fetch_counter(&self) -> Arc<AtomicUsize> {
+            Arc::clone(&self.primary_schema_calls)
         }
 
         fn single_database() -> Arc<Self> {

@@ -70,7 +70,8 @@ impl TaskManager {
     }
 
     /// Whether any task below `id` is in flight, however many terminal
-    /// intermediates lie between them.
+    /// intermediates lie between them. A finished parent whose child still
+    /// runs (a detached hook that outlives its connect) must stay listed.
     pub fn has_in_flight_descendants(&self, id: TaskId) -> bool {
         let mut pending = vec![id];
 
