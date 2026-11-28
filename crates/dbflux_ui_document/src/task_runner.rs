@@ -548,6 +548,14 @@ impl DocumentTaskRunner {
         self.primary.active_id() == Some(task_id)
     }
 
+    /// Whether any run holds the primary slot, cancelled or not. A cancelled
+    /// run keeps its slot until its worker settles, so this is the test for
+    /// "a newer run owns the document", where `is_primary_active` reads the
+    /// occupant's token.
+    pub fn has_primary_occupant(&self) -> bool {
+        self.primary.active_id().is_some()
+    }
+
     pub fn is_primary_active(&self) -> bool {
         self.primary.is_active()
     }

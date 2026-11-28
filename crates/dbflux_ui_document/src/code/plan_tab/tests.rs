@@ -14,8 +14,8 @@ use crate::query_plan::{PlanRunMode, PlanState, PlanViewEvent, PlanViewMode};
 use dbflux_app::keymap::Command;
 use dbflux_components::accessibility::FrameCapture;
 use dbflux_core::{
-    ColumnKind, ColumnMeta, DbKind, PlanFormat, PlanNode, QueryLanguage, QueryPlan, QueryPlanMode,
-    QueryResult, Value,
+    ColumnKind, ColumnMeta, DbError, DbKind, PlanFormat, PlanNode, QueryLanguage, QueryPlan,
+    QueryPlanMode, QueryPlanRequest, QueryResult, Value,
 };
 use dbflux_test_support::FakeDriver;
 use dbflux_ui_base::keyboard_coverage::Coverage;
@@ -1999,4 +1999,198 @@ fn an_unsupported_estimate_settles_an_orphaned_plan_as_completed() {
         )
         .is_err()
     );
+}
+
+/// Delegates to the fake connection and counts the cleanups the document asks
+/// for after a cancelled plan.
+struct CleanupCounting {
+    inner: Arc<dyn dbflux_core::Connection>,
+    cleanups: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl dbflux_core::Connection for CleanupCounting {
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        self.inner.metadata()
+    }
+
+    fn ping(&self) -> Result<(), DbError> {
+        self.inner.ping()
+    }
+
+    fn close(&mut self) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    fn execute(&self, request: &dbflux_core::QueryRequest) -> Result<QueryResult, DbError> {
+        self.inner.execute(request)
+    }
+
+    fn cancel(&self, handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+        self.inner.cancel(handle)
+    }
+
+    fn cancel_active(&self) -> Result<(), DbError> {
+        self.inner.cancel_active()
+    }
+
+    fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+        self.cleanups
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn query_plan(&self, request: &QueryPlanRequest) -> Result<QueryPlan, DbError> {
+        self.inner.query_plan(request)
+    }
+
+    fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, DbError> {
+        self.inner.schema()
+    }
+
+    fn kind(&self) -> DbKind {
+        self.inner.kind()
+    }
+
+    fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+        self.inner.schema_loading_strategy()
+    }
+
+    fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+        self.inner.dialect()
+    }
+}
+
+fn count_cleanups(doc: &mut Doc<'_>) -> Arc<std::sync::atomic::AtomicUsize> {
+    let cleanups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    doc.window.update(|_, cx| {
+        let profile_id = doc.profile_id;
+        let counter = cleanups.clone();
+        doc.app_state.update(cx, |state, _| {
+            let connected = state
+                .connections_mut()
+                .get_mut(&profile_id)
+                .expect("the document's connection");
+            connected.connection = Arc::new(CleanupCounting {
+                inner: connected.connection.clone(),
+                cleanups: counter,
+            });
+        });
+    });
+    cleanups
+}
+
+#[gpui::test]
+fn an_accepted_plan_cancel_cleans_up_the_connection(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    let cleanups = count_cleanups(&mut doc);
+    doc.explain();
+
+    let handled = doc.window.update(|window, cx| {
+        doc.document.update(cx, |document, cx| {
+            document.dispatch_command(Command::Cancel, window, cx)
+        })
+    });
+    assert!(handled);
+    doc.settle();
+
+    assert_eq!(
+        cleanups.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the driver's cancelled state is reset once"
+    );
+}
+
+#[gpui::test]
+fn a_refused_plan_cancel_leaves_the_connection_alone(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    let cleanups = count_cleanups(&mut doc);
+    doc.explain();
+    refuse_cancel_of_active_task(&mut doc);
+
+    doc.window.update(|_, cx| {
+        doc.document
+            .update(cx, |document, cx| document.close_plan_tab(cx))
+    });
+    doc.settle();
+
+    assert_eq!(cleanups.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+fn refuse_cancel_of_active_task(doc: &mut Doc<'_>) {
+    doc.window.update(|_, cx| {
+        let task_id = doc
+            .document
+            .read(cx)
+            .execution
+            .active_query_task
+            .as_ref()
+            .expect("the plan is the active task")
+            .task_id;
+        doc.app_state.update(cx, |state, _| {
+            state.mark_task_point_of_no_return(task_id, "cannot be stopped");
+        });
+    });
+}
+
+#[gpui::test]
+fn a_closed_plan_that_settles_late_releases_the_document(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.explain();
+    refuse_cancel_of_active_task(&mut doc);
+    doc.window.update(|_, cx| {
+        doc.document
+            .update(cx, |document, cx| document.close_plan_tab(cx))
+    });
+
+    doc.settle();
+
+    let (active, state) = doc.window.update(|_, cx| {
+        let document = doc.document.read(cx);
+        (
+            document.execution.active_query_task.is_some(),
+            document.state,
+        )
+    });
+    assert!(!active, "the settled plan no longer is the active task");
+    assert_eq!(state, crate::types::DocumentState::Clean);
+}
+
+#[gpui::test]
+fn a_closed_plan_that_settles_late_keeps_a_newer_querys_state(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.explain();
+    refuse_cancel_of_active_task(&mut doc);
+    doc.window.update(|_, cx| {
+        doc.document
+            .update(cx, |document, cx| document.close_plan_tab(cx))
+    });
+    let newer = doc.window.update(|_, cx| {
+        doc.document.update(cx, |document, cx| {
+            let (task_id, _token) = document.runner.start_primary_for_target(
+                dbflux_core::TaskKind::Query,
+                "newer",
+                None,
+                cx,
+            );
+            document.execution.active_query_task = Some(crate::code::ActiveQueryTask { task_id });
+            document.state = crate::types::DocumentState::Executing;
+            task_id
+        })
+    });
+
+    doc.settle();
+
+    let (active, state) = doc.window.update(|_, cx| {
+        let document = doc.document.read(cx);
+        (
+            document
+                .execution
+                .active_query_task
+                .as_ref()
+                .map(|task| task.task_id),
+            document.state,
+        )
+    });
+    assert_eq!(active, Some(newer));
+    assert_eq!(state, crate::types::DocumentState::Executing);
 }
