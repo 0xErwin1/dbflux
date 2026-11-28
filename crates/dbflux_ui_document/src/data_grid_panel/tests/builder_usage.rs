@@ -256,6 +256,7 @@ struct UsageBuilderConnection {
     /// the statement with `DbError::Cancelled` the way a real driver does.
     cancellable: bool,
     cancel_requested: std::sync::atomic::AtomicBool,
+    cleanups: std::sync::atomic::AtomicUsize,
 }
 
 impl UsageBuilderConnection {
@@ -275,6 +276,7 @@ impl UsageBuilderConnection {
             gate: None,
             cancellable: false,
             cancel_requested: std::sync::atomic::AtomicBool::new(false),
+            cleanups: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -302,6 +304,12 @@ impl dbflux_core::Connection for UsageBuilderConnection {
     fn cancel_active(&self) -> Result<(), dbflux_core::DbError> {
         self.cancel_requested
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn cleanup_after_cancel(&self) -> Result<(), dbflux_core::DbError> {
+        self.cleanups
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -538,6 +546,14 @@ fn builder_closed_grid_still_terminalizes_actual_select(cx: &mut TestAppContext)
             BUILDER_FIXTURE_COMPLETIONS.load(std::sync::atomic::Ordering::SeqCst) == 2
         });
         window.run_until_parked();
+        let cleanups = connection
+            .cleanups
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if scenario == "cancel" {
+            assert!(cleanups >= 1, "an accepted cancel still cleans up");
+        } else {
+            assert_eq!(cleanups, 0, "{scenario} never cancels the session");
+        }
         window.update(|_, cx| {
             app_state.update(cx, |app, _| {
                 let status = app.tasks().get(task_id).expect("tracked task").status;
@@ -580,7 +596,8 @@ fn builder_superseded_select_never_replaces_the_newer_result(cx: &mut TestAppCon
         .lock()
         .expect("program")
         .push_back(Ok(keyed_result(&["newer"])));
-    let (app_state, profile_id) = register_stub_connection(cx, Arc::new(connection));
+    let connection = Arc::new(connection);
+    let (app_state, profile_id) = register_stub_connection(cx, connection.clone());
     let window = cx.add_empty_window();
     let (_document, grid) = usage_table_document(window, app_state.clone(), profile_id, vec![]);
     let builder = window.update(|window, cx| {
@@ -625,6 +642,13 @@ fn builder_superseded_select_never_replaces_the_newer_result(cx: &mut TestAppCon
             "the superseded run still settles its task"
         );
     });
+    assert_eq!(
+        connection
+            .cleanups
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the driver could not cancel the older run, so its stale result must not roll back the session"
+    );
 }
 
 #[gpui::test]

@@ -338,9 +338,16 @@ impl InspectorPanel {
 
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
+                    // Read before settling: a refused cancel leaves the task
+                    // running, and the statement was not stopped.
+                    let cancel_accepted =
+                        crate::task_runner::driver_accepted_cancel(&app_state, task_id, cx);
                     crate::task_runner::settle_task_after_cancel(&app_state, task_id, &result, cx);
-                    if let Err(e) = conn_cleanup.cleanup_after_cancel() {
+                    if cancel_accepted && let Err(e) = conn_cleanup.cleanup_after_cancel() {
                         log::warn!("[inspector] cleanup after cancel failed: {}", e);
+                    }
+                    if let Some(entity) = this.upgrade() {
+                        entity.update(cx, |panel, cx| panel.cancelled_run_stopped(task_id, cx));
                     }
                     return;
                 }
@@ -353,6 +360,21 @@ impl InspectorPanel {
             });
         })
         .detach();
+    }
+
+    /// A cancelled run's driver call returned and its result was dropped.
+    /// Leaves `Loading` unless a newer run took over: the grid still holds the
+    /// last result (or the empty message), so `Clean` shows exactly what the
+    /// panel has, where `Error` would pause auto-refresh for a stop the user
+    /// asked for.
+    fn cancelled_run_stopped(&mut self, task_id: dbflux_core::TaskId, cx: &mut Context<Self>) {
+        self.runner.clear_primary(task_id);
+
+        if self.state == DocumentState::Loading && !self.runner.is_primary_active() {
+            self.state = DocumentState::Clean;
+            cx.emit(DocumentEvent::ExecutionFinished);
+            cx.notify();
+        }
     }
 
     fn apply_result(&mut self, pending: PendingResult, cx: &mut Context<Self>) {
@@ -989,6 +1011,84 @@ mod tests {
             !still_pending,
             "pending_initial_exec must be cleared after render"
         );
+    }
+
+    fn panel_with_state(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<AppStateEntity>, Entity<super::InspectorPanel>) {
+        use dbflux_storage::bootstrap::StorageRuntime;
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+        let panel = cx.update(|cx| {
+            cx.new(|cx| {
+                super::InspectorPanel::new(
+                    uuid::Uuid::new_v4(),
+                    "pg.activity".to_string(),
+                    app_state.clone(),
+                    cx,
+                )
+            })
+        });
+        (app_state, panel)
+    }
+
+    #[gpui::test]
+    fn a_cancelled_run_that_stopped_leaves_the_loading_state(cx: &mut gpui::TestAppContext) {
+        let (_app_state, panel) = panel_with_state(cx);
+
+        let state = cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                let (task_id, _token) = panel.runner.start_primary_for_target(
+                    dbflux_core::TaskKind::Query,
+                    "inspector",
+                    None,
+                    cx,
+                );
+                panel.state = DocumentState::Loading;
+
+                panel.cancelled_run_stopped(task_id, cx);
+                panel.state
+            })
+        });
+
+        assert_eq!(
+            state,
+            DocumentState::Clean,
+            "the stop ends the loading state"
+        );
+    }
+
+    #[gpui::test]
+    fn a_cancelled_run_does_not_end_the_loading_of_a_newer_run(cx: &mut gpui::TestAppContext) {
+        let (_app_state, panel) = panel_with_state(cx);
+
+        let state = cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                let (older, _token) = panel.runner.start_primary_for_target(
+                    dbflux_core::TaskKind::Query,
+                    "older",
+                    None,
+                    cx,
+                );
+                let (_newer, _token) = panel.runner.start_primary_for_target(
+                    dbflux_core::TaskKind::Query,
+                    "newer",
+                    None,
+                    cx,
+                );
+                panel.state = DocumentState::Loading;
+
+                panel.cancelled_run_stopped(older, cx);
+                panel.state
+            })
+        });
+
+        assert_eq!(state, DocumentState::Loading, "the newer run still loads");
     }
 
     /// BF4: after `apply_result` is called with a successful `QueryResult`,

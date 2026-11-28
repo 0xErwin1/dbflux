@@ -703,9 +703,13 @@ impl DataGridPanel {
                 // A refresh or another search started since: its answer is
                 // the one the grid shows.
                 if cancel_token.is_cancelled() {
-                    crate::task_runner::settle_task_after_cancel(&app_state, task_id, &result, cx);
+                    let cancel_accepted = crate::task_runner::settle_task_after_cancel(
+                        &app_state, task_id, &result, cx,
+                    );
                     log::info!("Nearest-neighbor search was superseded, discarding result");
-                    if let Err(error) = connection_for_cleanup.cleanup_after_cancel() {
+                    if cancel_accepted
+                        && let Err(error) = connection_for_cleanup.cleanup_after_cancel()
+                    {
                         log::warn!("Cleanup after cancel failed: {}", error);
                     }
                     return None;
