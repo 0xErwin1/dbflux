@@ -706,7 +706,9 @@ mod sources_and_keys;
 mod statement_outcome;
 
 #[cfg(feature = "telemetry")]
-pub(super) use builder_usage::run_builder_fixture_worker;
+pub(super) use builder_usage::{
+    next_builder_fixture_sequence, run_builder_fixture_worker, run_sequenced_builder_fixture_worker,
+};
 
 fn reload_columns(names: &[&str]) -> Vec<ColumnMeta> {
     names

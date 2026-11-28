@@ -57,6 +57,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
+mod cancel_audit;
 mod code_actions;
 mod comment;
 mod completion;

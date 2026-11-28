@@ -307,6 +307,9 @@ mod tests {
         /// carries one.
         enforces_row_limit: bool,
         show_time_window: AtomicBool,
+        /// `execute` reports the cancellation the driver honored instead of
+        /// a result.
+        driver_cancelled: AtomicBool,
     }
 
     impl FakeConnection {
@@ -322,6 +325,7 @@ mod tests {
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: true,
                 show_time_window: AtomicBool::new(false),
+                driver_cancelled: AtomicBool::new(false),
             })
         }
 
@@ -343,6 +347,7 @@ mod tests {
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: false,
                 show_time_window: AtomicBool::new(false),
+                driver_cancelled: AtomicBool::new(false),
             })
         }
 
@@ -358,6 +363,7 @@ mod tests {
                 truncate_rows: AtomicBool::new(false),
                 enforces_row_limit: true,
                 show_time_window: AtomicBool::new(false),
+                driver_cancelled: AtomicBool::new(false),
             })
         }
     }
@@ -378,8 +384,9 @@ mod tests {
             metadata.get_or_init(|| {
                 let capabilities = if enforces_row_limit {
                     dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT
+                        | dbflux_core::DriverCapabilities::QUERY_CANCELLATION
                 } else {
-                    dbflux_core::DriverCapabilities::empty()
+                    dbflux_core::DriverCapabilities::QUERY_CANCELLATION
                 };
 
                 DriverMetadataBuilder::new(
@@ -439,6 +446,9 @@ mod tests {
                 .lock()
                 .expect("test request limit collection")
                 .push((request.limit, request.statement_timeout));
+            if self.driver_cancelled.load(Ordering::SeqCst) {
+                return Err(DbError::Cancelled);
+            }
             let mut result = QueryResult::empty();
             result.set_rows_truncated(self.truncate_rows.load(Ordering::SeqCst));
             Ok(result)
@@ -1064,6 +1074,8 @@ mod tests {
 
     enum CompletionInterruption {
         Cancel,
+        /// The driver stopped the statement, so the worker returns `Cancelled`.
+        CancelStoppedByDriver,
         ChangeDatabaseContext,
     }
 
@@ -1079,6 +1091,10 @@ mod tests {
         });
         let isolated = FakeConnection::isolated_with_gate(Some(execute_gate.clone()));
         isolated.truncate_rows.store(true, Ordering::SeqCst);
+        isolated.driver_cancelled.store(
+            matches!(interruption, CompletionInterruption::CancelStoppedByDriver),
+            Ordering::SeqCst,
+        );
         let session = Arc::new(FakeSession {
             connection: isolated.clone(),
             closed: AtomicBool::new(false),
@@ -1140,7 +1156,9 @@ mod tests {
 
         window.update(|_, cx| {
             document.update(cx, |document, cx| match interruption {
-                CompletionInterruption::Cancel => document.cancel_query(cx),
+                CompletionInterruption::Cancel | CompletionInterruption::CancelStoppedByDriver => {
+                    document.cancel_query(cx)
+                }
                 CompletionInterruption::ChangeDatabaseContext => document
                     .on_database_changed(&DropdownItem::with_value("databaseB", "databaseB"), cx),
             });
@@ -1164,7 +1182,8 @@ mod tests {
                     "preserved result must be shown"
                 );
             }
-            CompletionInterruption::ChangeDatabaseContext => {
+            CompletionInterruption::CancelStoppedByDriver
+            | CompletionInterruption::ChangeDatabaseContext => {
                 assert_eq!(
                     published_truncated, None,
                     "discarded result must not be shown"
@@ -1192,6 +1211,11 @@ mod tests {
             match interruption {
                 CompletionInterruption::Cancel => {
                     record.result.is_some()
+                        && record.error.is_none()
+                        && document.execution.active_query_task.is_none()
+                }
+                CompletionInterruption::CancelStoppedByDriver => {
+                    record.result.is_none()
                         && record.error.is_none()
                         && document.execution.active_query_task.is_none()
                 }
@@ -1307,6 +1331,103 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         assert_real_isolated_query_completion(CompletionInterruption::Cancel, cx);
+    }
+
+    /// A cancelled isolated query that returns a result after a newer query
+    /// started in the same editor must not publish: the result belongs to a
+    /// run the editor already let go of.
+    #[gpui::test]
+    fn a_superseded_cancelled_isolated_result_does_not_publish(cx: &mut gpui::TestAppContext) {
+        let app_state = initialized_app_state(cx);
+        let execute_gate = Arc::new(ExecuteGate {
+            entered: AtomicBool::new(false),
+        });
+        let isolated = FakeConnection::isolated_with_gate(Some(execute_gate.clone()));
+        isolated.truncate_rows.store(true, Ordering::SeqCst);
+        let session = Arc::new(FakeSession {
+            connection: isolated.clone(),
+            closed: AtomicBool::new(false),
+            closes: AtomicUsize::new(0),
+            fail_close: AtomicBool::new(false),
+        });
+        let factory = Arc::new(FakeFactory {
+            session: session.clone(),
+            sessions: Mutex::new(Vec::new()),
+            opens: AtomicUsize::new(0),
+            fail_next_open: AtomicBool::new(false),
+            open_gate: None,
+        });
+        let root = FakeConnection::root(factory);
+        let profile_id = add_test_profile(cx, &app_state, root);
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        for _ in 0..128 {
+            if window.update(|_, cx| document.read(cx).execution.active_query_task.is_some()) {
+                break;
+            }
+            window.dispatcher.tick(false);
+        }
+        assert!(window.dispatcher.tick(true));
+        assert!(execute_gate.entered.load(Ordering::SeqCst));
+
+        window.update(|_, cx| document.update(cx, |document, cx| document.cancel_query(cx)));
+        let first_exec_id = window.update(|_, cx| {
+            document
+                .read(cx)
+                .execution
+                .execution_history
+                .last()
+                .map(|record| record.id)
+                .expect("first record")
+        });
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+
+        let first_result_published = window.update(|_, cx| {
+            document
+                .read(cx)
+                .execution
+                .execution_history
+                .iter()
+                .find(|record| record.id == first_exec_id)
+                .is_some_and(|record| record.result.is_some())
+        });
+        assert!(
+            !first_result_published,
+            "the superseded result must not be recorded"
+        );
+    }
+
+    #[gpui::test]
+    fn an_isolated_query_stopped_by_the_driver_is_not_recorded_as_a_failure(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        assert_real_isolated_query_completion(CompletionInterruption::CancelStoppedByDriver, cx);
     }
 
     #[gpui::test]

@@ -6102,6 +6102,7 @@ sidebar:
     disconnected_hook_error: "Desconectado de %{name}, pero %{error}"
     profile_not_found: Perfil no encontrado
     schema_drop_cancelled: Eliminación de esquema cancelada
+    schema_drop_cancelled_after_release: "Se canceló la eliminación de \"%{database}\" y no se eliminó nada, pero DBFlux ya había liberado su conexión. Selecciona la base de datos en la barra lateral para conectarte de nuevo."
     drop_failed: "Error al eliminar: %{error}"
     reveal_failed: "Error al mostrar en el explorador de archivos: %{error}"
     schema_snapshot_failed: "Error al capturar la instantánea del esquema: %{error}"
@@ -6331,6 +6332,10 @@ tasks_panel:
   collapse: "Ocultar el panel de tareas"
   empty: No hay tareas en segundo plano
   output_truncated: "… salida truncada en el panel"
+  query_cancel_unsupported: "%{driver} no admite cancelar un comando en ejecución."
+  query_cancel_not_sent: "No se pudo enviar la solicitud de cancelación a %{driver}: %{error}. Intenta cancelar de nuevo."
+  query_cancel_rejected: "%{driver} no aceptó la solicitud de cancelación: %{error}. La consulta sigue en ejecución hasta que termine."
+  drop_point_of_no_return: "El DROP llegó a la etapa de envío y ya no se puede cancelar."
 toast:
   action:
     copy: Copiar

@@ -747,10 +747,11 @@ impl CodeDocument {
         self.result_tabs.run_in_new_tab = in_new_tab;
 
         let description = dbflux_core::truncate_string_safe(query.trim(), 80);
-        let (task_id, cancel_token) = self.runner.start_primary_for_target(
-            dbflux_core::TaskKind::Query,
+        let uses_isolated_session = on_session && connection.execution_session_factory().is_some();
+        let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
             description,
-            Some(task_target.clone()),
+            task_target.clone(),
+            (!uses_isolated_session).then(|| connection.clone()),
             cx,
         );
         self.app_state.update(cx, |state, _cx| {
@@ -772,7 +773,7 @@ impl CodeDocument {
         self.execution.active_query_task = Some(ActiveQueryTask {
             task_id,
             target: task_target.clone(),
-            uses_isolated_session: on_session && connection.execution_session_factory().is_some(),
+            uses_isolated_session,
         });
 
         self.state = DocumentState::Executing;
@@ -933,6 +934,17 @@ impl CodeDocument {
                         cx,
                     );
                 }
+
+                // The worker has finished, so the task settles here whether or
+                // not the editor is still open to process the result.
+                cx.update(|cx| {
+                    crate::task_runner::settle_task_after_cancel(
+                        &invalidation_app_state,
+                        task_id,
+                        &result,
+                        cx,
+                    );
+                });
             } else if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
@@ -943,12 +955,28 @@ impl CodeDocument {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
 
+                cx.update(|cx| {
+                    crate::task_runner::settle_task_after_cancel(
+                        &invalidation_app_state,
+                        task_id,
+                        &result,
+                        cx,
+                    );
+                });
+            }
+
+            // A statement the driver did not stop keeps its own result: the
+            // shared path discards it, the isolated one publishes it below.
+            if cancel_token.is_cancelled()
+                && (!session_isolated || matches!(result, Err(DbError::Cancelled)))
+            {
                 let inner_result = this.update(cx, |doc, cx| {
                     doc.complete_cancelled_query(
                         task_id,
                         exec_id,
                         &task_target_for_audit,
                         Some(query_for_cancel),
+                        &result,
                         cx,
                     );
                 });
@@ -959,20 +987,23 @@ impl CodeDocument {
                         .unwrap_or(0);
                     let duration_ms = started_at.elapsed().as_millis() as i64;
                     let details_json = serde_json::json!({ "query": query }).to_string();
-                    let mut event = EventRecord::new(
-                        ts_ms,
-                        EventSeverity::Warn,
-                        EventCategory::Query,
-                        EventOutcome::Cancelled,
-                    )
-                    .with_typed_action(audit_actions::QUERY_CANCEL)
-                    .with_summary("Query cancelled")
-                    .with_connection_context(
-                        fallback_conn_id.clone().unwrap_or_default(),
-                        task_target_for_audit.database.clone().unwrap_or_default(),
-                        fallback_driver_id.clone(),
-                    )
-                    .with_details_json(details_json);
+                    let audit = super::cancel_audit::audit_for_cancelled_run(&result, false);
+                    let severity = match audit.outcome {
+                        EventOutcome::Failure => EventSeverity::Error,
+                        EventOutcome::Success => EventSeverity::Info,
+                        _ => EventSeverity::Warn,
+                    };
+                    let mut event =
+                        EventRecord::new(ts_ms, severity, EventCategory::Query, audit.outcome)
+                            .with_typed_action(audit.action)
+                            .with_summary(&audit.summary)
+                            .with_connection_context(
+                                fallback_conn_id.clone().unwrap_or_default(),
+                                task_target_for_audit.database.clone().unwrap_or_default(),
+                                fallback_driver_id.clone(),
+                            )
+                            .with_details_json(details_json);
+                    event.error_message = audit.error;
                     event.source_id = EventSourceId::Local;
                     event.actor_type = EventActorType::User;
                     event.duration_ms = Some(duration_ms);
@@ -1040,6 +1071,13 @@ impl CodeDocument {
             let query_text = query.clone();
 
             let inner_result = this.update(cx, |doc, cx| {
+                // A cancelled isolated run skipped the generation check above, so
+                // it publishes only while it is still the editor's latest run.
+                if cancel_token.is_cancelled() && !doc.is_latest_execution(exec_id) {
+                    doc.discard_superseded_result(exec_id);
+                    return;
+                }
+
                 doc.pending.result = Some(PendingQueryResult {
                     task_id,
                     exec_id,
@@ -1140,6 +1178,7 @@ impl CodeDocument {
         exec_id: Uuid,
         target: &TaskTarget,
         query: Option<String>,
+        result: &Result<dbflux_core::QueryResult, DbError>,
         cx: &mut Context<Self>,
     ) {
         // Determine if this is a script execution by looking up the record
@@ -1206,11 +1245,7 @@ impl CodeDocument {
             })
             .map(|d| d.as_millis() as i64);
 
-        let summary = if is_script {
-            "Script cancelled"
-        } else {
-            "Query cancelled"
-        };
+        let audit = super::cancel_audit::audit_for_cancelled_run(result, is_script);
 
         self.emit_audit_event(
             cx,
@@ -1219,14 +1254,36 @@ impl CodeDocument {
             } else {
                 EventCategory::Query
             },
-            audit_actions::QUERY_CANCEL,
-            EventOutcome::Cancelled,
-            summary.to_string(),
+            audit.action,
+            audit.outcome,
+            audit.summary,
             query.as_deref(),
             duration_ms,
-            None,
+            audit.error.as_deref(),
             None,
         );
+    }
+
+    fn is_latest_execution(&self, exec_id: Uuid) -> bool {
+        self.execution
+            .execution_history
+            .last()
+            .is_some_and(|record| record.id == exec_id)
+    }
+
+    /// Records that a cancelled run's result was dropped because a newer run
+    /// owns the editor; the document state, grid and pending result are the
+    /// newer run's and stay untouched.
+    fn discard_superseded_result(&mut self, exec_id: Uuid) {
+        if let Some(record) = self
+            .execution
+            .execution_history
+            .iter_mut()
+            .find(|record| record.id == exec_id)
+        {
+            record.finished_at.get_or_insert_with(Instant::now);
+            record.error = Some("Execution result discarded after a newer query started".into());
+        }
     }
 
     fn discard_stale_query(
@@ -2333,7 +2390,12 @@ impl CodeDocument {
             .read(cx)
             .tasks()
             .get(task.task_id)
-            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+            .is_some_and(|task| {
+                matches!(
+                    task.status,
+                    dbflux_core::TaskStatus::Cancelled | dbflux_core::TaskStatus::Cancelling
+                )
+            });
 
         if cancelled {
             self.plan_cancelled(cx);
@@ -2355,30 +2417,40 @@ impl CodeDocument {
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
-        if self.runner.cancel_primary(cx) {
-            if let Some(task) = self.execution.active_query_task.as_ref() {
-                if !task.uses_isolated_session {
-                    self.app_state
-                        .read(cx)
-                        .cancel_query_for_target(&task.target);
-                }
-            } else if let Some(conn_id) = self.connection_id
-                && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
-            {
-                let active_database = self
-                    .source
-                    .exec_ctx
-                    .database
-                    .clone()
-                    .or_else(|| connected.active_database.clone());
-                let target =
-                    task_target_for_execution(conn_id, connected, active_database.as_deref());
+        let Some(outcome) = self.runner.request_cancel_primary(cx) else {
+            return;
+        };
 
-                self.app_state.read(cx).cancel_query_for_target(&target);
+        // A task started through a driver hook already sent the cancel; only a
+        // task that finished cancelling on the spot (a plan or script run)
+        // still needs the connection told here.
+        if outcome == dbflux_core::CancelRequestOutcome::Cancelled {
+            self.cancel_connection_query(cx);
+        }
+
+        self.plan_cancelled(cx);
+        self.release_cancelled_execution(cx);
+    }
+
+    fn cancel_connection_query(&mut self, cx: &mut Context<Self>) {
+        if let Some(task) = self.execution.active_query_task.as_ref() {
+            if !task.uses_isolated_session {
+                self.app_state
+                    .read(cx)
+                    .cancel_query_for_target(&task.target);
             }
+        } else if let Some(conn_id) = self.connection_id
+            && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
+        {
+            let active_database = self
+                .source
+                .exec_ctx
+                .database
+                .clone()
+                .or_else(|| connected.active_database.clone());
+            let target = task_target_for_execution(conn_id, connected, active_database.as_deref());
 
-            self.plan_cancelled(cx);
-            self.release_cancelled_execution(cx);
+            self.app_state.read(cx).cancel_query_for_target(&target);
         }
     }
 
@@ -2814,12 +2886,16 @@ impl CodeDocument {
                     profile_id: Uuid::nil(),
                     database: None,
                 };
+                // A script run is cancelled by dropping it, so the log says
+                // cancelled whatever the discarded script produced.
+                let cancelled: Result<QueryResult, DbError> = Err(DbError::Cancelled);
                 let inner_result = this.update(cx, |doc, cx| {
                     doc.complete_cancelled_query(
                         task_id,
                         exec_id,
                         &dummy_target,
                         Some(content_for_cancel),
+                        &cancelled,
                         cx,
                     );
                 });

@@ -1,7 +1,11 @@
 use super::{HeldDatabaseConnection, try_close_held_database_connection};
 use crate::*;
-use dbflux_core::{Connection, SchemaDropTarget, SchemaObjectKind, TaskKind, TaskTarget};
+use dbflux_core::{
+    CancelPolicy, CancelToken, Connection, SchemaDropTarget, SchemaObjectKind, TaskKind,
+    TaskRequest, TaskTarget,
+};
 use dbflux_ui_base::toast::PendingToast;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -58,6 +62,164 @@ enum DatabaseDropReleasePlan {
     },
 }
 
+/// What the release step before the `DROP` left to do.
+enum DropPreparation {
+    /// The drop ended before the statement was reached.
+    Finished(Box<DropExecutionOutcome>),
+    /// The statement may be sent once the task passes its point of no return.
+    Ready {
+        database_release_applied: bool,
+        /// Set when the release cleared the driver's active database, so a
+        /// cancel that wins before the statement can put it back.
+        active_release: Option<ActiveDatabaseRelease>,
+    },
+}
+
+/// The driver's active database as it stood before the release cleared it.
+struct ActiveDatabaseRelease {
+    database: String,
+    connection: Arc<dyn Connection>,
+}
+
+/// Whether the release still stands after a cancel tried to undo it.
+struct ReleaseRestoration {
+    /// Nothing to restore, or the driver refused.
+    release_applied: bool,
+    /// Why the driver refused, for the foreground to report.
+    error: Option<String>,
+}
+
+/// Puts the driver's active database back after a cancel won once the
+/// release had cleared it.
+fn undo_active_database_release(
+    active_release: Option<ActiveDatabaseRelease>,
+    release_applied: bool,
+) -> ReleaseRestoration {
+    let Some(release) = active_release else {
+        return ReleaseRestoration {
+            release_applied,
+            error: None,
+        };
+    };
+
+    match release
+        .connection
+        .set_active_database(Some(release.database.as_str()))
+    {
+        Ok(()) => ReleaseRestoration {
+            release_applied: false,
+            error: None,
+        },
+        Err(error) => ReleaseRestoration {
+            release_applied,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+/// Releases the connection resources the drop needs, honoring a cancel that
+/// arrives before the statement is sent. A release that fails after the user
+/// cancelled ends as cancelled: no DDL ran, and the cancel was accepted.
+fn prepare_drop_release(
+    release_plan: DatabaseDropReleasePlan,
+    cancel_token: &CancelToken,
+) -> DropPreparation {
+    match release_resources(release_plan, cancel_token) {
+        DropPreparation::Finished(outcome) => match *outcome {
+            DropExecutionOutcome::Failed {
+                held_connection, ..
+            } if cancel_token.is_cancelled() => {
+                DropPreparation::Finished(Box::new(DropExecutionOutcome::Cancelled {
+                    held_connection,
+                    release_applied: false,
+                    restore_error: None,
+                }))
+            }
+            outcome => DropPreparation::Finished(Box::new(outcome)),
+        },
+        ready @ DropPreparation::Ready { .. } => ready,
+    }
+}
+
+fn release_resources(
+    release_plan: DatabaseDropReleasePlan,
+    cancel_token: &CancelToken,
+) -> DropPreparation {
+    if cancel_token.is_cancelled() {
+        let held_connection = match release_plan {
+            DatabaseDropReleasePlan::ConnectionPerDatabase(held_connection) => {
+                Some(*held_connection)
+            }
+            DatabaseDropReleasePlan::None | DatabaseDropReleasePlan::ActiveDatabase { .. } => None,
+        };
+
+        return DropPreparation::Finished(Box::new(DropExecutionOutcome::Cancelled {
+            held_connection,
+            release_applied: false,
+            restore_error: None,
+        }));
+    }
+
+    match release_plan {
+        DatabaseDropReleasePlan::ConnectionPerDatabase(mut held_connection) => {
+            if let Err(error) = try_close_held_database_connection(&mut held_connection) {
+                return DropPreparation::Finished(Box::new(DropExecutionOutcome::Failed {
+                    error,
+                    held_connection: Some(*held_connection),
+                }));
+            }
+
+            DropPreparation::Ready {
+                database_release_applied: true,
+                active_release: None,
+            }
+        }
+        DatabaseDropReleasePlan::ActiveDatabase {
+            database,
+            connection,
+        } => {
+            if let Err(error) = connection.set_active_database(None) {
+                return DropPreparation::Finished(Box::new(DropExecutionOutcome::Failed {
+                    error: format!(
+                        "Failed to release active database '{}': {}",
+                        database, error
+                    ),
+                    held_connection: None,
+                }));
+            }
+
+            DropPreparation::Ready {
+                database_release_applied: true,
+                active_release: Some(ActiveDatabaseRelease {
+                    database,
+                    connection,
+                }),
+            }
+        }
+        DatabaseDropReleasePlan::None => DropPreparation::Ready {
+            database_release_applied: false,
+            active_release: None,
+        },
+    }
+}
+
+/// Runs on the foreground, where no cancel request can interleave: a cancel
+/// that already reached the task stops the drop, otherwise the task is marked
+/// as past its point of no return and the statement may be sent.
+fn enter_drop_point_of_no_return(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    task_id: dbflux_core::TaskId,
+    cancel_token: &CancelToken,
+    reason: String,
+) -> bool {
+    if cancel_token.is_cancelled() {
+        return false;
+    }
+
+    state.mark_task_point_of_no_return(task_id, reason);
+    true
+}
+
 enum DropExecutionOutcome {
     Dropped {
         database_release_applied: bool,
@@ -68,7 +230,25 @@ enum DropExecutionOutcome {
     },
     Cancelled {
         held_connection: Option<HeldDatabaseConnection>,
+        /// The release step already closed the database's connection (or
+        /// cleared its active database) before the cancel won, and that
+        /// cannot be undone from here.
+        release_applied: bool,
+        /// The driver refused to put its active database back.
+        restore_error: Option<String>,
     },
+}
+
+/// Tells the user what a cancel that won after the release step left behind:
+/// nothing was dropped, but DBFlux no longer holds a connection to the
+/// database.
+fn released_connection_notice(release_applied: bool, database: &str) -> Option<String> {
+    release_applied.then(|| {
+        dbflux_i18n::t!(
+            "sidebar.toast.schema_drop_cancelled_after_release",
+            database = database
+        )
+    })
 }
 
 fn describe_drop_target(target: &SchemaDropTarget) -> String {
@@ -369,253 +549,313 @@ impl Sidebar {
         }
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let task = state.start_task_for_target(
-                TaskKind::SchemaDrop,
-                operation.task_description.clone(),
-                Some(operation.task_target.clone()),
+            let handle = state.start_task_handle(
+                TaskRequest::new(TaskKind::SchemaDrop, operation.task_description.clone())
+                    .target(operation.task_target.clone())
+                    .policy(CancelPolicy::WorkerAcknowledged),
             );
             cx.emit(AppStateChanged);
-            task
+            (handle.id(), handle.token().clone())
         });
 
         self.refresh_tree(cx);
 
-        let app_state = self.app_state.clone();
-        let sidebar = cx.entity().clone();
-        let released_database = operation.target.name.clone();
+        let run = DropRun {
+            app_state: self.app_state.clone(),
+            sidebar: cx.entity().clone(),
+            operation,
+            options,
+            task_id,
+            cancel_token,
+        };
+        let operation_task = cx.spawn(async move |_this, cx| run.drive(cx).await);
 
-        let operation_task = cx.spawn(async move |_this, cx| {
-            let release_plan = if operation.is_database {
-                match cx.update(|cx| {
-                    app_state.update(cx, |state, _cx| {
-                        Self::prepare_database_drop_release(
-                            state,
-                            operation.profile_id,
-                            &released_database,
-                        )
-                    })
-                }) {
-                    Ok(plan) => plan,
-                    Err(error) => {
-                        cx.update(|cx| {
-                            sidebar.update(cx, |sidebar, _cx| {
-                                sidebar.clear_tracked_operation_task(task_id);
-                            });
+        self.track_operation_task(task_id, operation_task);
+    }
+}
 
-                            app_state.update(cx, |state, cx| {
-                                state.fail_task(task_id, error.clone());
-                                cx.emit(AppStateChanged);
-                            });
+/// One running `DROP`: the steps that release resources, send the statement
+/// and settle the task, each in its own function so the dispatch sequence in
+/// [`DropRun::drive`] reads top to bottom.
+struct DropRun {
+    app_state: Entity<AppStateEntity>,
+    sidebar: Entity<Sidebar>,
+    operation: SidebarDropOperation,
+    options: DropOptions,
+    task_id: dbflux_core::TaskId,
+    cancel_token: CancelToken,
+}
 
-                            sidebar.update(cx, |sidebar, cx| {
-                                sidebar.pending_toast = Some(PendingToast {
-                                    message: error,
-                                    is_error: true,
-                                });
-                                sidebar.refresh_tree(cx);
-                            });
-                        });
-                        return;
-                    }
+impl DropRun {
+    async fn drive(self, cx: &mut AsyncApp) {
+        let release_plan = if self.operation.is_database {
+            match self.plan_database_release(cx) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    cx.update(|cx| self.fail_before_release(error, cx));
+                    return;
                 }
-            } else {
-                DatabaseDropReleasePlan::None
-            };
+            }
+        } else {
+            DatabaseDropReleasePlan::None
+        };
 
-            let drop_result = cx
+        let preparation = cx
+            .background_executor()
+            .spawn({
+                let cancel_token = self.cancel_token.clone();
+                async move { prepare_drop_release(release_plan, &cancel_token) }
+            })
+            .await;
+
+        let drop_result = match preparation {
+            DropPreparation::Finished(outcome) => *outcome,
+            DropPreparation::Ready {
+                database_release_applied,
+                active_release,
+            } => {
+                self.send_statement(database_release_applied, active_release, cx)
+                    .await
+            }
+        };
+
+        cx.update(|cx| self.settle(drop_result, cx));
+    }
+
+    fn plan_database_release(&self, cx: &mut AsyncApp) -> Result<DatabaseDropReleasePlan, String> {
+        cx.update(|cx| {
+            self.app_state.update(cx, |state, _cx| {
+                Sidebar::prepare_database_drop_release(
+                    state,
+                    self.operation.profile_id,
+                    &self.operation.target.name,
+                )
+            })
+        })
+    }
+
+    fn fail_before_release(&self, error: String, cx: &mut App) {
+        self.sidebar.update(cx, |sidebar, _cx| {
+            sidebar.clear_tracked_operation_task(self.task_id);
+        });
+
+        self.app_state.update(cx, |state, cx| {
+            state.fail_task(self.task_id, error.clone());
+            cx.emit(AppStateChanged);
+        });
+
+        report_error(UserFacingError::new(ErrorKind::User, error), cx);
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.refresh_tree(cx);
+        });
+    }
+
+    /// Passes the point-of-no-return gate on the foreground, then sends the
+    /// statement on a background thread.
+    async fn send_statement(
+        &self,
+        database_release_applied: bool,
+        active_release: Option<ActiveDatabaseRelease>,
+        cx: &mut AsyncApp,
+    ) -> DropExecutionOutcome {
+        let may_send = cx.update(|cx| {
+            self.app_state.update(cx, |state, cx| {
+                let may_send = enter_drop_point_of_no_return(
+                    state,
+                    self.task_id,
+                    &self.cancel_token,
+                    dbflux_i18n::t!("tasks_panel.drop_point_of_no_return"),
+                );
+                cx.emit(AppStateChanged);
+                may_send
+            })
+        });
+
+        if !may_send {
+            let restoration = cx
                 .background_executor()
-                .spawn({
-                    let operation = operation.clone();
-                    let cancel_token = cancel_token.clone();
-                    async move {
-                        let mut database_release_applied = false;
-
-                        if cancel_token.is_cancelled() {
-                            let held_connection = match release_plan {
-                                DatabaseDropReleasePlan::ConnectionPerDatabase(held_connection) => {
-                                    Some(*held_connection)
-                                }
-                                DatabaseDropReleasePlan::None
-                                | DatabaseDropReleasePlan::ActiveDatabase { .. } => None,
-                            };
-
-                            return DropExecutionOutcome::Cancelled { held_connection };
-                        }
-
-                        match release_plan {
-                            DatabaseDropReleasePlan::ConnectionPerDatabase(mut held_connection) => {
-                                if let Err(error) =
-                                    try_close_held_database_connection(&mut held_connection)
-                                {
-                                    return DropExecutionOutcome::Failed {
-                                        error,
-                                        held_connection: Some(*held_connection),
-                                    };
-                                }
-
-                                database_release_applied = true;
-                            }
-                            DatabaseDropReleasePlan::ActiveDatabase {
-                                database,
-                                connection,
-                            } => {
-                                if let Err(error) = connection.set_active_database(None) {
-                                    return DropExecutionOutcome::Failed {
-                                        error: format!(
-                                            "Failed to release active database '{}': {}",
-                                            database, error
-                                        ),
-                                        held_connection: None,
-                                    };
-                                }
-
-                                database_release_applied = true;
-                            }
-                            DatabaseDropReleasePlan::None => {}
-                        }
-
-                        if cancel_token.is_cancelled() {
-                            return DropExecutionOutcome::Cancelled {
-                                held_connection: None,
-                            };
-                        }
-
-                        match run_drop(operation.connection.as_ref(), &operation.target, options) {
-                            Ok(()) => DropExecutionOutcome::Dropped {
-                                database_release_applied,
-                            },
-                            Err(error) => DropExecutionOutcome::Failed {
-                                error,
-                                held_connection: None,
-                            },
-                        }
-                    }
+                .spawn(async move {
+                    undo_active_database_release(active_release, database_release_applied)
                 })
                 .await;
 
-            cx.update(|cx| match drop_result {
-                DropExecutionOutcome::Dropped {
-                    database_release_applied,
-                } => {
-                    sidebar.update(cx, |sidebar, _cx| {
-                        sidebar.clear_tracked_operation_task(task_id);
-                    });
+            return DropExecutionOutcome::Cancelled {
+                held_connection: None,
+                release_applied: restoration.release_applied,
+                restore_error: restoration.error,
+            };
+        }
 
-                    app_state.update(cx, |state, cx| {
-                        if operation.is_database && database_release_applied {
-                            Self::finalize_successful_database_release(
-                                state,
-                                operation.profile_id,
-                                &operation.object_name,
-                            );
-                        }
-
-                        let details = build_drop_task_details(
-                            &operation.target,
-                            operation
-                                .is_database
-                                .then_some(operation.object_name.as_str()),
-                        );
-                        state.complete_task_with_details(task_id, details);
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        if operation.is_database {
-                            sidebar.invalidate_database_cache(
-                                operation.profile_id,
-                                &operation.object_name,
-                                cx,
-                            );
-                        } else if let Some(cache_database) = operation.cache_database.as_deref() {
-                            sidebar.invalidate_object_cache(
-                                operation.profile_id,
-                                cache_database,
-                                &operation.target,
-                                cx,
-                            );
-                        }
-
-                        sidebar.expansion_overrides.remove(&operation.item_id);
-                        sidebar.refresh_tree(cx);
-                    });
+        let operation = self.operation.clone();
+        let options = self.options;
+        cx.background_executor()
+            .spawn(async move {
+                match run_drop(operation.connection.as_ref(), &operation.target, options) {
+                    Ok(()) => DropExecutionOutcome::Dropped {
+                        database_release_applied,
+                    },
+                    Err(error) => DropExecutionOutcome::Failed {
+                        error,
+                        held_connection: None,
+                    },
                 }
-                DropExecutionOutcome::Failed {
-                    error,
-                    held_connection,
-                } => {
-                    sidebar.update(cx, |sidebar, _cx| {
-                        sidebar.clear_tracked_operation_task(task_id);
-                    });
+            })
+            .await
+    }
 
-                    if let Some(held_connection) = held_connection {
-                        app_state.update(cx, |state, _cx| {
-                            Self::restore_database_drop_release(
-                                state,
-                                operation.profile_id,
-                                held_connection,
-                            );
-                        });
-                    }
-
-                    let details = build_drop_task_details(&operation.target, None);
-
-                    app_state.update(cx, |state, cx| {
-                        state.fail_task_with_details(task_id, error.clone(), details);
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.pending_toast = Some(PendingToast {
-                            message: crate::labels::drop_failed_label(&error),
-                            is_error: true,
-                        });
-                        sidebar.refresh_tree(cx);
-                    });
-                }
-                DropExecutionOutcome::Cancelled { held_connection } => {
-                    sidebar.update(cx, |sidebar, _cx| {
-                        sidebar.clear_tracked_operation_task(task_id);
-                    });
-
-                    if let Some(held_connection) = held_connection {
-                        app_state.update(cx, |state, _cx| {
-                            Self::restore_database_drop_release(
-                                state,
-                                operation.profile_id,
-                                held_connection,
-                            );
-                        });
-                    }
-
-                    if cancel_token.is_cancelled() {
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.refresh_tree(cx);
-                        });
-                        return;
-                    }
-
-                    let details = build_drop_task_details(&operation.target, None);
-
-                    let cancelled_label = crate::labels::schema_drop_cancelled_label();
-
-                    app_state.update(cx, |state, cx| {
-                        state.fail_task_with_details(task_id, cancelled_label.clone(), details);
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.pending_toast = Some(PendingToast {
-                            message: cancelled_label,
-                            is_error: true,
-                        });
-                        sidebar.refresh_tree(cx);
-                    });
-                }
-            });
+    fn settle(&self, outcome: DropExecutionOutcome, cx: &mut App) {
+        self.sidebar.update(cx, |sidebar, _cx| {
+            sidebar.clear_tracked_operation_task(self.task_id);
         });
 
-        self.track_operation_task(task_id, operation_task);
+        match outcome {
+            DropExecutionOutcome::Dropped {
+                database_release_applied,
+            } => self.finish_dropped(database_release_applied, cx),
+            DropExecutionOutcome::Failed {
+                error,
+                held_connection,
+            } => self.finish_failed(error, held_connection, cx),
+            DropExecutionOutcome::Cancelled {
+                held_connection,
+                release_applied,
+                restore_error,
+            } => self.finish_cancelled(held_connection, release_applied, restore_error, cx),
+        }
+    }
+
+    fn restore_released_connection(
+        &self,
+        held_connection: Option<HeldDatabaseConnection>,
+        cx: &mut App,
+    ) {
+        if let Some(held_connection) = held_connection {
+            self.app_state.update(cx, |state, _cx| {
+                Sidebar::restore_database_drop_release(
+                    state,
+                    self.operation.profile_id,
+                    held_connection,
+                );
+            });
+        }
+    }
+
+    fn finish_dropped(&self, database_release_applied: bool, cx: &mut App) {
+        let operation = &self.operation;
+
+        self.app_state.update(cx, |state, cx| {
+            if operation.is_database && database_release_applied {
+                Sidebar::finalize_successful_database_release(
+                    state,
+                    operation.profile_id,
+                    &operation.object_name,
+                );
+            }
+
+            let details = build_drop_task_details(
+                &operation.target,
+                operation
+                    .is_database
+                    .then_some(operation.object_name.as_str()),
+            );
+            state.complete_task_with_details(self.task_id, details);
+            cx.emit(AppStateChanged);
+        });
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            if operation.is_database {
+                sidebar.invalidate_database_cache(operation.profile_id, &operation.object_name, cx);
+            } else if let Some(cache_database) = operation.cache_database.as_deref() {
+                sidebar.invalidate_object_cache(
+                    operation.profile_id,
+                    cache_database,
+                    &operation.target,
+                    cx,
+                );
+            }
+
+            sidebar.expansion_overrides.remove(&operation.item_id);
+            sidebar.refresh_tree(cx);
+        });
+    }
+
+    fn finish_failed(
+        &self,
+        error: String,
+        held_connection: Option<HeldDatabaseConnection>,
+        cx: &mut App,
+    ) {
+        self.restore_released_connection(held_connection, cx);
+
+        let details = build_drop_task_details(&self.operation.target, None);
+
+        self.app_state.update(cx, |state, cx| {
+            state.fail_task_with_details(self.task_id, error.clone(), details);
+            cx.emit(AppStateChanged);
+        });
+
+        report_error(
+            UserFacingError::new(ErrorKind::Driver, crate::labels::drop_failed_label(&error)),
+            cx,
+        );
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.refresh_tree(cx);
+        });
+    }
+
+    fn finish_cancelled(
+        &self,
+        held_connection: Option<HeldDatabaseConnection>,
+        release_applied: bool,
+        restore_error: Option<String>,
+        cx: &mut App,
+    ) {
+        self.restore_released_connection(held_connection, cx);
+
+        if self.cancel_token.is_cancelled() {
+            self.app_state.update(cx, |state, cx| {
+                state.acknowledge_task_cancelled(self.task_id);
+                cx.emit(AppStateChanged);
+            });
+            let notice = released_connection_notice(release_applied, &self.operation.target.name);
+            let restore_failed = restore_error.is_some();
+            if let (Some(message), Some(cause)) = (notice.as_ref(), restore_error) {
+                report_error(
+                    UserFacingError::new(ErrorKind::Driver, message.clone()).with_cause(cause),
+                    cx,
+                );
+            }
+            self.sidebar.update(cx, |sidebar, cx| {
+                if let Some(message) = notice
+                    && !restore_failed
+                {
+                    sidebar.pending_toast = Some(PendingToast {
+                        message,
+                        is_error: true,
+                    });
+                }
+                sidebar.refresh_tree(cx);
+            });
+            return;
+        }
+
+        let details = build_drop_task_details(&self.operation.target, None);
+        let cancelled_label = crate::labels::schema_drop_cancelled_label();
+
+        self.app_state.update(cx, |state, cx| {
+            state.fail_task_with_details(self.task_id, cancelled_label.clone(), details);
+            cx.emit(AppStateChanged);
+        });
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.pending_toast = Some(PendingToast {
+                message: cancelled_label,
+                is_error: true,
+            });
+            sidebar.refresh_tree(cx);
+        });
     }
 }
 
@@ -638,11 +878,26 @@ mod tests {
     /// run against a real `AppStateEntity` without a live database.
     struct ReleaseTestConnection {
         metadata: DriverMetadata,
+        /// Cancelled from inside `set_active_database`, so a cancel lands
+        /// while the release step runs.
+        cancel_during_set_active: Option<dbflux_core::CancelToken>,
+        fail_set_active: bool,
+        active_calls: std::sync::Mutex<Vec<Option<String>>>,
     }
 
     impl ReleaseTestConnection {
         fn new() -> Arc<Self> {
+            Self::build(None, false)
+        }
+
+        fn build(
+            cancel_during_set_active: Option<dbflux_core::CancelToken>,
+            fail_set_active: bool,
+        ) -> Arc<Self> {
             Arc::new(Self {
+                cancel_during_set_active,
+                fail_set_active,
+                active_calls: std::sync::Mutex::new(Vec::new()),
                 metadata: DriverMetadata {
                     id: "sidebar-release-test".to_string(),
                     display_name: "ReleaseTest".to_string(),
@@ -703,6 +958,23 @@ mod tests {
 
         fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
             SchemaLoadingStrategy::ConnectionPerDatabase
+        }
+
+        fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
+            self.active_calls
+                .lock()
+                .map_err(|_| DbError::NotSupported("poisoned".to_string()))?
+                .push(database.map(str::to_string));
+
+            if let Some(token) = &self.cancel_during_set_active {
+                token.cancel();
+            }
+
+            if self.fail_set_active {
+                return Err(DbError::NotSupported("set active refused".to_string()));
+            }
+
+            Ok(())
         }
 
         fn dialect(&self) -> &dyn SqlDialect {
@@ -788,6 +1060,377 @@ mod tests {
             Some("analytics".to_string()),
             "restore reinstates the previous active database"
         );
+    }
+
+    fn app_state_with_drop_task() -> (
+        AppStateEntity,
+        dbflux_core::TaskId,
+        dbflux_core::CancelToken,
+    ) {
+        use dbflux_storage::bootstrap::StorageRuntime;
+
+        let rt = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let mut state = AppStateEntity::new_with_storage_runtime(rt).expect("test app state");
+        let handle = state.start_task_handle(
+            dbflux_core::TaskRequest::new(dbflux_core::TaskKind::SchemaDrop, "DROP TABLE users")
+                .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+        );
+
+        (state, handle.id(), handle.token().clone())
+    }
+
+    #[test]
+    fn a_cancel_before_the_ddl_stops_the_drop_and_ends_cancelled() {
+        let (mut state, task_id, token) = app_state_with_drop_task();
+
+        assert_eq!(
+            state.request_cancel_task(task_id),
+            dbflux_core::CancelRequestOutcome::Cancelling
+        );
+
+        assert!(
+            !super::enter_drop_point_of_no_return(&mut state, task_id, &token, "late".to_string()),
+            "the statement must not be sent after a cancel"
+        );
+        assert!(state.acknowledge_task_cancelled(task_id));
+        assert_eq!(
+            state.tasks().get(task_id).expect("task").status,
+            dbflux_core::TaskStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn a_cancel_after_the_point_of_no_return_is_refused_and_the_drop_completes() {
+        let (mut state, task_id, token) = app_state_with_drop_task();
+        let reason = "The DROP reached the dispatch stage and can no longer be cancelled.";
+
+        assert!(super::enter_drop_point_of_no_return(
+            &mut state,
+            task_id,
+            &token,
+            reason.to_string()
+        ));
+
+        assert_eq!(
+            state.request_cancel_task(task_id),
+            dbflux_core::CancelRequestOutcome::Refused {
+                reason: reason.to_string()
+            }
+        );
+        assert!(
+            !token.is_cancelled(),
+            "the running drop must not see a cancel"
+        );
+        let snapshot = state.tasks().get(task_id).expect("task");
+        assert!(!snapshot.is_cancellable);
+        assert_eq!(snapshot.cancel_unavailable_reason.as_deref(), Some(reason));
+
+        state.complete_task(task_id);
+        assert_eq!(
+            state.tasks().get(task_id).expect("task").status,
+            dbflux_core::TaskStatus::Completed,
+            "a drop that committed never shows as cancelled"
+        );
+    }
+
+    #[test]
+    fn a_cancel_before_the_release_step_skips_the_ddl() {
+        let token = dbflux_core::CancelToken::new();
+        token.cancel();
+
+        let preparation = super::prepare_drop_release(DatabaseDropReleasePlan::None, &token);
+
+        let super::DropPreparation::Finished(outcome) = preparation else {
+            panic!("a cancelled drop finishes before the statement");
+        };
+        assert!(matches!(
+            *outcome,
+            super::DropExecutionOutcome::Cancelled { .. }
+        ));
+    }
+
+    #[test]
+    fn a_cancel_during_a_failed_release_ends_cancelled_not_failed() {
+        let token = dbflux_core::CancelToken::new();
+        let connection = ReleaseTestConnection::build(Some(token.clone()), true);
+        let plan = DatabaseDropReleasePlan::ActiveDatabase {
+            database: "analytics".to_string(),
+            connection,
+        };
+
+        let super::DropPreparation::Finished(outcome) = super::prepare_drop_release(plan, &token)
+        else {
+            panic!("a failed release finishes before the statement");
+        };
+
+        assert!(
+            matches!(
+                *outcome,
+                super::DropExecutionOutcome::Cancelled {
+                    release_applied: false,
+                    ..
+                }
+            ),
+            "the user cancelled and no DDL ran"
+        );
+    }
+
+    #[test]
+    fn a_failed_release_without_a_cancel_still_fails() {
+        let token = dbflux_core::CancelToken::new();
+        let connection = ReleaseTestConnection::build(None, true);
+        let plan = DatabaseDropReleasePlan::ActiveDatabase {
+            database: "analytics".to_string(),
+            connection,
+        };
+
+        let super::DropPreparation::Finished(outcome) = super::prepare_drop_release(plan, &token)
+        else {
+            panic!("a failed release finishes before the statement");
+        };
+
+        assert!(matches!(
+            *outcome,
+            super::DropExecutionOutcome::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn a_released_active_database_is_prepared_for_restoration() {
+        let token = dbflux_core::CancelToken::new();
+        let connection = ReleaseTestConnection::build(None, false);
+        let plan = DatabaseDropReleasePlan::ActiveDatabase {
+            database: "analytics".to_string(),
+            connection: connection.clone(),
+        };
+
+        let super::DropPreparation::Ready {
+            database_release_applied,
+            active_release,
+        } = super::prepare_drop_release(plan, &token)
+        else {
+            panic!("a successful release is ready for the statement");
+        };
+
+        assert!(database_release_applied);
+        let release = active_release.expect("the cleared active database is remembered");
+        assert_eq!(release.database, "analytics");
+        assert_eq!(
+            *connection.active_calls.lock().expect("calls"),
+            vec![None::<String>]
+        );
+    }
+
+    #[test]
+    fn a_cancel_after_the_active_database_release_restores_the_driver() {
+        let connection = ReleaseTestConnection::build(None, false);
+        let release = super::ActiveDatabaseRelease {
+            database: "analytics".to_string(),
+            connection: connection.clone(),
+        };
+
+        assert!(
+            !super::undo_active_database_release(Some(release), true).release_applied,
+            "nothing is left released once the driver is restored"
+        );
+        assert_eq!(
+            *connection.active_calls.lock().expect("calls"),
+            vec![Some("analytics".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_driver_that_refuses_the_restore_keeps_the_release_notice() {
+        let connection = ReleaseTestConnection::build(None, true);
+        let release = super::ActiveDatabaseRelease {
+            database: "analytics".to_string(),
+            connection,
+        };
+
+        let refused = super::undo_active_database_release(Some(release), true);
+        assert!(refused.release_applied);
+        assert!(
+            refused.error.is_some(),
+            "the refusal reaches the foreground"
+        );
+        assert!(
+            super::undo_active_database_release(None, true).release_applied,
+            "a release with nothing to restore still stands"
+        );
+        assert!(!super::undo_active_database_release(None, false).release_applied);
+    }
+
+    #[test]
+    fn a_cancel_that_won_after_the_release_tells_the_user_to_reconnect() {
+        let notice = super::released_connection_notice(true, "analytics")
+            .expect("the released connection is reported");
+
+        assert!(notice.contains("analytics"), "{notice}");
+        assert_eq!(super::released_connection_notice(false, "analytics"), None);
+    }
+
+    fn drop_run(
+        state: &gpui::Entity<AppStateEntity>,
+        sidebar: &gpui::Entity<Sidebar>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> super::DropRun {
+        let profile_id = uuid::Uuid::new_v4();
+        let handle = state.update(cx, |state, _| {
+            state.start_task_handle(
+                dbflux_core::TaskRequest::new(
+                    dbflux_core::TaskKind::SchemaDrop,
+                    "DROP TABLE users",
+                )
+                .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+            )
+        });
+
+        super::DropRun {
+            app_state: state.clone(),
+            sidebar: sidebar.clone(),
+            operation: super::SidebarDropOperation {
+                profile_id,
+                item_id: "item".to_string(),
+                object_name: "users".to_string(),
+                cache_database: None,
+                connection: ReleaseTestConnection::new(),
+                target: dbflux_core::SchemaDropTarget::new(
+                    dbflux_core::SchemaObjectKind::Table,
+                    "users",
+                ),
+                task_target: dbflux_core::TaskTarget {
+                    profile_id,
+                    database: None,
+                },
+                task_description: "DROP TABLE users".to_string(),
+                is_database: false,
+            },
+            options: super::DropOptions::default(),
+            task_id: handle.id(),
+            cancel_token: handle.token().clone(),
+        }
+    }
+
+    fn assert_reported_once_without_a_manual_toast(
+        state: &gpui::Entity<AppStateEntity>,
+        sidebar: &gpui::Entity<Sidebar>,
+        task_id: dbflux_core::TaskId,
+        cx: &mut gpui::VisualTestContext,
+    ) {
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.unread_error_count, 1, "reported exactly once");
+            let task = state.tasks().get(task_id).expect("task");
+            assert!(matches!(task.status, dbflux_core::TaskStatus::Failed(_)));
+        });
+        sidebar.read_with(cx, |sidebar, _| {
+            assert!(
+                sidebar.pending_toast.is_none(),
+                "the central reporter owns the toast"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn a_server_rejected_drop_goes_through_the_error_reporter(cx: &mut gpui::TestAppContext) {
+        let state = crate::table_loading::object_tree_adapter_tests::test_app_state(cx);
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let run = drop_run(&state, &sidebar, cx);
+
+        cx.update(|_, cx| run.finish_failed("permission denied".to_string(), None, cx));
+
+        assert_reported_once_without_a_manual_toast(&state, &sidebar, run.task_id, cx);
+    }
+
+    #[gpui::test]
+    async fn a_drop_that_fails_before_the_release_goes_through_the_error_reporter(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = crate::table_loading::object_tree_adapter_tests::test_app_state(cx);
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let run = drop_run(&state, &sidebar, cx);
+
+        cx.update(|_, cx| run.fail_before_release("no connection".to_string(), cx));
+
+        assert_reported_once_without_a_manual_toast(&state, &sidebar, run.task_id, cx);
+    }
+
+    #[gpui::test]
+    async fn a_cancelled_drop_without_a_notice_keeps_the_queued_toast(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = crate::table_loading::object_tree_adapter_tests::test_app_state(cx);
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let run = drop_run(&state, &sidebar, cx);
+        sidebar.update(cx, |sidebar, _| {
+            sidebar.pending_toast = Some(dbflux_ui_base::toast::PendingToast {
+                message: "connection released".to_string(),
+                is_error: true,
+            });
+        });
+        state.update(cx, |state, _| {
+            state.request_cancel_task(run.task_id);
+        });
+
+        // Read inside the same update: the next render takes the slot.
+        cx.update(|_, cx| {
+            run.finish_cancelled(None, false, None, cx);
+
+            assert_eq!(
+                sidebar
+                    .read(cx)
+                    .pending_toast
+                    .as_ref()
+                    .map(|toast| toast.message.as_str()),
+                Some("connection released")
+            );
+        });
+        state.read_with(cx, |state, _| {
+            assert_eq!(
+                state.tasks().get(run.task_id).expect("task").status,
+                dbflux_core::TaskStatus::Cancelled
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn a_failed_active_database_restore_is_reported_once_with_the_guidance(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = crate::table_loading::object_tree_adapter_tests::test_app_state(cx);
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let run = drop_run(&state, &sidebar, cx);
+        state.update(cx, |state, _| {
+            state.request_cancel_task(run.task_id);
+        });
+
+        let ((), events) = dbflux_ui_base::user_error::capture::capture_user_error_events(|| {
+            cx.update(|_, cx| {
+                run.finish_cancelled(None, true, Some("driver refused".to_string()), cx);
+            });
+        });
+
+        assert_eq!(events.len(), 1, "reported exactly once: {events:?}");
+        let event = &events[0];
+        assert!(
+            event
+                .get("message")
+                .is_some_and(|message| message.contains(&run.operation.target.name)),
+            "the reconnection guidance names the database: {event:?}"
+        );
+        assert_eq!(
+            event.get("cause").map(String::as_str),
+            Some("driver refused")
+        );
+        sidebar.read_with(cx, |sidebar, _| {
+            assert!(
+                sidebar.pending_toast.is_none(),
+                "no manual toast next to the reported error"
+            );
+        });
     }
 
     /// Records the statements `drop_schema_object` runs, through a dialect
