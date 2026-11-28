@@ -198,6 +198,48 @@ fn a_cancelled_probe_with_failed_cleanup_surfaces_the_cleanup_failure() {
         .expect("close the test window");
 }
 
+/// A probe that succeeded but left a detached hook it could not clean up is
+/// still a failed test, shown inline and reported once.
+#[::core::prelude::v1::test]
+fn a_successful_probe_with_failed_cleanup_is_reported_once() {
+    let mut cx = TestAppContext::single();
+    let host = init_form_test_runtime(&mut cx);
+    let app_state = test_app_state(
+        &mut cx,
+        SecretStoreFixture::new(PasswordSaveOutcome::Success),
+    );
+    let window = open_new_profile_window(app_state, &mut cx);
+
+    settle_with(
+        &window,
+        &mut cx,
+        TestConnectionOutcome {
+            probe: Ok(super::super::TestConnectionOrchestrationResult {
+                test_result: dbflux_core::TestConnectionResult::default(),
+                warnings: Vec::new(),
+            }),
+            cleanup: Err("detached hook still running".to_string()),
+        },
+        false,
+    );
+
+    window
+        .update(&mut cx, |manager, _, _| {
+            assert!(matches!(manager.test_status, TestStatus::Failed));
+            let error = manager.test_error.as_deref().expect("cleanup error shown");
+            assert!(error.contains("detached hook still running"), "{error}");
+        })
+        .expect("window available");
+    assert_eq!(
+        cx.update(|cx| host.read(cx).toast_count()),
+        1,
+        "the cleanup failure is reported once"
+    );
+    window
+        .update(&mut cx, |_, window, _| window.remove_window())
+        .expect("close the test window");
+}
+
 #[::core::prelude::v1::test]
 fn a_cancelled_probe_with_clean_cleanup_stays_quiet() {
     let mut cx = TestAppContext::single();

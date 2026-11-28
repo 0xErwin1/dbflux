@@ -1084,7 +1084,7 @@ impl ConnectionManagerWindow {
                         UserFacingError::new(ErrorKind::Driver, message).with_cause(probe_error),
                         cx,
                     );
-                } else if hook_failure.is_some() {
+                } else if hook_failure.is_some() || cleanup_failure.is_some() {
                     report_error(UserFacingError::new(ErrorKind::Hook, message), cx);
                 }
             }
