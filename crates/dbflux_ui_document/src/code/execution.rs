@@ -1071,6 +1071,13 @@ impl CodeDocument {
             let query_text = query.clone();
 
             let inner_result = this.update(cx, |doc, cx| {
+                // A cancelled isolated run skipped the generation check above, so
+                // it publishes only while it is still the editor's latest run.
+                if cancel_token.is_cancelled() && !doc.is_latest_execution(exec_id) {
+                    doc.discard_superseded_result(exec_id);
+                    return;
+                }
+
                 doc.pending.result = Some(PendingQueryResult {
                     task_id,
                     exec_id,
@@ -1255,6 +1262,28 @@ impl CodeDocument {
             audit.error.as_deref(),
             None,
         );
+    }
+
+    fn is_latest_execution(&self, exec_id: Uuid) -> bool {
+        self.execution
+            .execution_history
+            .last()
+            .is_some_and(|record| record.id == exec_id)
+    }
+
+    /// Records that a cancelled run's result was dropped because a newer run
+    /// owns the editor; the document state, grid and pending result are the
+    /// newer run's and stay untouched.
+    fn discard_superseded_result(&mut self, exec_id: Uuid) {
+        if let Some(record) = self
+            .execution
+            .execution_history
+            .iter_mut()
+            .find(|record| record.id == exec_id)
+        {
+            record.finished_at.get_or_insert_with(Instant::now);
+            record.error = Some("Execution result discarded after a newer query started".into());
+        }
     }
 
     fn discard_stale_query(
