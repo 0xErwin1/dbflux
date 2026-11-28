@@ -1334,7 +1334,7 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 - **Cancel hook**: un `CancelHook` opcional se ejecuta dentro de `request_cancel` (no debe bloquear) y devuelve un `CancelOutcome`: `Stopped` (el trabajo ya se detuvo), `Requested` (se pidió detenerlo; el worker confirma) o `NotSupported { reason }` (la tarea sigue `Running` y el panel muestra el motivo, como con un driver que no puede cancelar un comando en ejecución).
 - **Punto de no retorno**: un worker llama a `enter_point_of_no_return(id, reason)` justo antes de un paso que no puede deshacer, como enviar DDL. Desde ahí se rechaza la cancelación, y el panel la deshabilita y muestra el motivo.
 - **Etapas**: un `TaskRequest` con `parent` registra una tarea hija; `pending()` la registra como `Pending` hasta `activate`. Cancelar el padre cancela a sus hijas, y las que nunca empezaron terminan como `Skipped`, que se muestra como "No iniciada".
-- **Regla**: una tarea figura como `Cancelled` solo cuando su trabajo se detuvo. Si el trabajo puede seguir corriendo, el estado es `Cancelling` o `Running` con un motivo, nunca `Cancelled`.
+- **Regla**: con `WorkerAcknowledged`, una tarea figura como `Cancelled` solo cuando su trabajo se detuvo; mientras el trabajo pueda seguir corriendo, el estado es `Cancelling` o `Running` con un motivo, nunca `Cancelled`. `Immediate` es la política heredada: figura como `Cancelled` al instante y no confirma que el trabajo se detuvo, así que se usa solo donde el trabajo se descarta o nadie lo observa, o en tareas aún no migradas a `WorkerAcknowledged`.
 
 ```mermaid
 stateDiagram-v2

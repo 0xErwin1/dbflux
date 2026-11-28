@@ -12,7 +12,7 @@ use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
 use crate::linux::file_uri_list::{
-    FileFormat, TEXT_MIME_TYPES, clipboard_item_from_files, file_clipboard_formats,
+    FileFormat, Offer, TEXT_MIME_TYPES, clipboard_item_from_files, clipboard_offers,
 };
 use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
 use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
@@ -265,36 +265,31 @@ impl Clipboard {
     }
 }
 
-/// The mime types an item is offered under. Files are offered as text too, so applications
-/// that only paste text still get the paths.
+/// The mime types an item is offered under (see [`clipboard_offers`]); text when there is none.
 pub(crate) fn offered_mime_types(item: Option<&ClipboardItem>) -> Vec<&'static str> {
-    let mut mime_types = TEXT_MIME_TYPES.to_vec();
-    let formats = item
-        .and_then(|item| Some((item.file_paths()?, item.file_operation()?)))
-        .map(|(paths, operation)| file_clipboard_formats(&paths, operation))
-        .unwrap_or_default();
-    mime_types.extend(
-        formats
-            .into_iter()
-            .map(|(format, _)| format)
-            .filter(|format| *format != FileFormat::Text)
-            .map(FileFormat::mime),
-    );
-    mime_types
+    let Some(item) = item else {
+        return TEXT_MIME_TYPES.to_vec();
+    };
+    clipboard_offers(item)
+        .iter()
+        .flat_map(|offer| match offer {
+            Offer::Text(_) => TEXT_MIME_TYPES.to_vec(),
+            Offer::File(format, _) => vec![format.mime()],
+            Offer::Image(format, _) => vec![format.mime_type()],
+        })
+        .collect()
 }
 
 /// The bytes an item sends for a mime type it offered, or `None` when it has none for it.
 fn bytes_for_mime_type(item: &ClipboardItem, mime_type: &str) -> Option<Vec<u8>> {
-    if let Some((paths, operation)) = item.file_paths().zip(item.file_operation()) {
-        let requested = FileFormat::from_mime(mime_type)?;
-        let formats = file_clipboard_formats(&paths, operation);
-        if !formats.is_empty() {
-            return formats
-                .into_iter()
-                .find_map(|(format, bytes)| (format == requested).then_some(bytes));
-        }
-    }
-    item.text().map(String::into_bytes)
+    clipboard_offers(item)
+        .into_iter()
+        .find_map(|offer| match offer {
+            Offer::Text(bytes) if TEXT_MIME_TYPES.contains(&mime_type) => Some(bytes),
+            Offer::File(format, bytes) if format.mime() == mime_type => Some(bytes),
+            Offer::Image(format, bytes) if format.mime_type() == mime_type => Some(bytes),
+            _ => None,
+        })
 }
 
 /// Writes `bytes` to `fd` and closes it, which the reader sees as the end of the data.
@@ -401,16 +396,14 @@ mod tests {
         assert_eq!(
             offered_mime_types(Some(&item)),
             [
-                "text/plain;charset=utf-8",
-                "UTF8_STRING",
-                "text/plain",
                 "text/uri-list",
                 "x-special/gnome-copied-files",
                 "application/x-kde-cutselection",
             ]
         );
         let sent = |mime_type| bytes_for_mime_type(&item, mime_type);
-        assert_eq!(sent("UTF8_STRING"), Some(b"/tmp/a b".to_vec()));
+        assert_eq!(sent("UTF8_STRING"), None);
+        assert_eq!(sent("text/plain"), None);
         assert_eq!(
             sent("text/uri-list"),
             Some(b"file:///tmp/a%20b\r\n".to_vec())
@@ -439,6 +432,42 @@ mod tests {
         assert_eq!(
             bytes_for_mime_type(&item, "application/x-kde-cutselection"),
             None
+        );
+    }
+
+    #[test]
+    fn a_copied_image_file_is_offered_as_files_and_as_png() {
+        let mut item = ClipboardItem::new_files(
+            [std::path::PathBuf::from("/tmp/a.jpg")],
+            gpui::FileOperation::Copy,
+        );
+        item.entries.push(ClipboardEntry::Image(Image::from_bytes(
+            ImageFormat::Png,
+            b"PNG".to_vec(),
+        )));
+        assert_eq!(
+            offered_mime_types(Some(&item)),
+            ["text/uri-list", "x-special/gnome-copied-files", "image/png"]
+        );
+        assert_eq!(
+            bytes_for_mime_type(&item, "image/png"),
+            Some(b"PNG".to_vec())
+        );
+        assert_eq!(
+            bytes_for_mime_type(&item, "text/uri-list"),
+            Some(b"file:///tmp/a.jpg\r\n".to_vec())
+        );
+        assert_eq!(bytes_for_mime_type(&item, "image/jpeg"), None);
+        assert_eq!(bytes_for_mime_type(&item, "text/plain"), None);
+    }
+
+    #[test]
+    fn an_image_item_is_offered_as_its_image_only() {
+        let item = ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Jpeg, b"JPG".to_vec()));
+        assert_eq!(offered_mime_types(Some(&item)), ["image/jpeg"]);
+        assert_eq!(
+            bytes_for_mime_type(&item, "image/jpeg"),
+            Some(b"JPG".to_vec())
         );
     }
 

@@ -788,7 +788,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - **Cancel hook**: an optional `CancelHook` runs inside `request_cancel` (it must not block) and returns a `CancelOutcome`: `Stopped` (the work is already stopped), `Requested` (a stop was asked for; the worker confirms) or `NotSupported { reason }` (the task stays `Running` and the panel shows the reason, as for a driver that cannot cancel a running command).
 - **Point of no return**: a worker calls `enter_point_of_no_return(id, reason)` just before a step it cannot take back, such as sending DDL. From then on cancel is refused, and the panel disables it and shows the reason.
 - **Stages**: a `TaskRequest` with `parent` registers a child task; `pending()` registers it as `Pending` until `activate`. Cancelling the parent cancels its children, and children that never started end as `Skipped`, shown as "Not started".
-- **Rule**: a task reads `Cancelled` only when its work stopped. If the work may still be running, the status is `Cancelling` or `Running` with a reason, never `Cancelled`.
+- **Rule**: under `WorkerAcknowledged` a task reads `Cancelled` only when its work stopped; while the work may still be running the status is `Cancelling` or `Running` with a reason, never `Cancelled`. `Immediate` is the legacy policy: it reads `Cancelled` at once and does not confirm that the work stopped, so use it only where the work is dropped or unobserved, or for tasks not yet migrated to `WorkerAcknowledged`.
 
 ```mermaid
 stateDiagram-v2
