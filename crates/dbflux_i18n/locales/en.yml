@@ -6336,6 +6336,7 @@ tasks_panel:
   query_cancel_not_sent: "Could not send the cancel request to %{driver}: %{error}. Try cancelling again."
   query_cancel_rejected: "%{driver} did not accept the cancel request: %{error}. The query keeps running until it finishes."
   drop_point_of_no_return: "The DROP reached the dispatch stage and can no longer be cancelled."
+  mutation_point_of_no_return: "Changes are applied without a transaction and can no longer be cancelled."
 toast:
   action:
     copy: Copy

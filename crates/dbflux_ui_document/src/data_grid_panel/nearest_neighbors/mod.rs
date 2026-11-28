@@ -674,13 +674,13 @@ impl DataGridPanel {
             }
         };
 
-        let (task_id, cancel_token) = self.runner.start_primary_for_target(
-            TaskKind::Query,
+        let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
             generated.text.clone(),
-            Some(TaskTarget {
+            TaskTarget {
                 profile_id,
                 database: database.clone(),
-            }),
+            },
+            Some(connection.clone()),
             cx,
         );
 
@@ -695,6 +695,7 @@ impl DataGridPanel {
             .spawn(async move { connection.execute(&query) });
 
         let entity = cx.entity().clone();
+        let app_state = self.app_state.clone();
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
@@ -702,8 +703,13 @@ impl DataGridPanel {
                 // A refresh or another search started since: its answer is
                 // the one the grid shows.
                 if cancel_token.is_cancelled() {
+                    let cancel_accepted = crate::task_runner::settle_task_after_cancel(
+                        &app_state, task_id, &result, cx,
+                    );
                     log::info!("Nearest-neighbor search was superseded, discarding result");
-                    if let Err(error) = connection_for_cleanup.cleanup_after_cancel() {
+                    if cancel_accepted
+                        && let Err(error) = connection_for_cleanup.cleanup_after_cancel()
+                    {
                         log::warn!("Cleanup after cancel failed: {}", error);
                     }
                     return None;

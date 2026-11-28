@@ -63,7 +63,6 @@ pub(super) struct PlanTab {
     /// The database the plan was asked on, which an analysis must still match.
     database: Option<String>,
     _view_subscription: Subscription,
-    _task: Option<Task<()>>,
 }
 
 /// Plan state of a code document: the tab and whether it is the one shown.
@@ -77,6 +76,48 @@ impl PlanSlot {
     pub(super) fn view(&self) -> Option<Entity<PlanView>> {
         self.tab.as_ref().map(|tab| tab.view.clone())
     }
+}
+
+/// How the driver's answer settles a plan's task when the Plan tab no longer
+/// owns it. An Estimate the driver does not support is a completed run.
+fn plan_task_outcome(
+    mode: QueryPlanMode,
+    result: &Result<QueryPlan, DbError>,
+) -> Result<(), String> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(DbError::NotSupported(_)) if mode == QueryPlanMode::Estimate => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Settles a plan task whose token was cancelled, classifying the driver's
+/// answer the way a plan does: a stop acknowledges the cancel, and anything
+/// else follows [`plan_task_outcome`], so an Estimate the driver does not
+/// support still reads as completed. Returns whether the driver had accepted
+/// the cancel, the condition for running the connection cleanup.
+fn settle_cancelled_plan_task(
+    app_state: &Entity<AppStateEntity>,
+    task_id: dbflux_core::TaskId,
+    mode: QueryPlanMode,
+    result: &Result<QueryPlan, DbError>,
+    cx: &mut App,
+) -> bool {
+    let accepted = crate::task_runner::driver_accepted_cancel(app_state, task_id, cx);
+
+    app_state.update(cx, |state, cx| {
+        if let Err(DbError::Cancelled) = result {
+            state.acknowledge_task_cancelled(task_id);
+        } else {
+            match plan_task_outcome(mode, result) {
+                Ok(()) => state.complete_task(task_id),
+                Err(error) => state.fail_task(task_id, error),
+            }
+        }
+        cx.emit(AppStateChanged);
+    });
+
+    accepted
 }
 
 impl CodeDocument {
@@ -432,17 +473,13 @@ impl CodeDocument {
         self.clear_live_output();
 
         let description = dbflux_core::truncate_string_safe(target.text.trim(), 80);
-        let (task_id, cancel_token) = self.runner.start_primary_for_target(
-            dbflux_core::TaskKind::Query,
+        let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
             description,
-            Some(task_target.clone()),
+            task_target.clone(),
+            Some(connection.clone()),
             cx,
         );
-        self.execution.active_query_task = Some(ActiveQueryTask {
-            task_id,
-            target: task_target,
-            uses_isolated_session: false,
-        });
+        self.execution.active_query_task = Some(ActiveQueryTask { task_id });
         self.state = DocumentState::Executing;
 
         let view_mode = self
@@ -470,26 +507,62 @@ impl CodeDocument {
             QueryPlanMode::Analyze => QueryPlanRequest::analyzed(target.text.clone()),
         };
         let started = Instant::now();
+        let connection_for_cleanup = connection.clone();
         let work = cx.background_executor().spawn(async move {
             let result = connection.query_plan(&request);
             (result, started.elapsed())
         });
-        let task = cx.spawn(async move |this, cx| {
+        let app_state = self.app_state.clone();
+        // Detached: the task must still settle after the tab stopped waiting
+        // for it (Cancel, a newer plan), because the server answers later.
+        cx.spawn(async move |this, cx| {
             let (result, elapsed) = work.await;
 
-            if let Err(error) = this.update(cx, |document, cx| {
-                document.finish_plan(
-                    task_id,
-                    mode,
-                    cancel_token.is_cancelled(),
-                    result,
-                    elapsed,
-                    cx,
-                );
-            }) {
-                log::debug!("document closed before its plan arrived: {error}");
+            let cancelled = cancel_token.is_cancelled();
+            if cancelled {
+                cx.update(|cx| {
+                    let cancel_accepted =
+                        settle_cancelled_plan_task(&app_state, task_id, mode, &result, cx);
+                    if cancel_accepted
+                        && let Err(error) = connection_for_cleanup.cleanup_after_cancel()
+                    {
+                        log::warn!("cleanup after cancelled plan failed: {error}");
+                    }
+                });
             }
-        });
+            let outcome = plan_task_outcome(mode, &result);
+
+            let finished = this
+                .update(cx, |document, cx| {
+                    document.finish_plan(task_id, mode, cancelled, result, elapsed, cx)
+                })
+                .unwrap_or_else(|error| {
+                    log::debug!("document closed before its plan arrived: {error}");
+                    false
+                });
+
+            // The tab settles the task when it still owns the plan. A closed
+            // tab or document leaves a task whose cancel was refused running,
+            // so the driver's answer settles it here.
+            if !finished && !cancelled {
+                cx.update(|cx| {
+                    app_state.update(cx, |state, cx| {
+                        match outcome {
+                            Ok(()) => state.complete_task(task_id),
+                            Err(error) => state.fail_task(task_id, error),
+                        }
+                        cx.emit(dbflux_ui_base::AppStateChanged);
+                    });
+                    // The document may still show this plan as its running
+                    // query; a query started since keeps its own state.
+                    this.update(cx, |document, cx| {
+                        document.release_settled_plan(task_id, cx);
+                    })
+                    .ok();
+                });
+            }
+        })
+        .detach();
 
         self.plan.tab = Some(PlanTab {
             view,
@@ -498,7 +571,6 @@ impl CodeDocument {
             connection_id,
             database: planned_database,
             _view_subscription: subscription,
-            _task: Some(task),
         });
         self.plan.shown = true;
         if self.layout == SqlQueryLayout::EditorOnly {
@@ -575,7 +647,6 @@ impl CodeDocument {
             target,
             running: None,
             _view_subscription: subscription,
-            _task: None,
         });
         self.plan.shown = true;
         if self.layout == SqlQueryLayout::EditorOnly {
@@ -587,6 +658,7 @@ impl CodeDocument {
 
     /// The driver answered. A plan that is no longer the one on its way (the
     /// user cancelled, or asked again) is dropped.
+    /// Returns whether the tab still owned the plan and settled its task.
     fn finish_plan(
         &mut self,
         task_id: dbflux_core::TaskId,
@@ -595,12 +667,12 @@ impl CodeDocument {
         result: Result<QueryPlan, DbError>,
         elapsed: std::time::Duration,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(tab) = self.plan.tab.as_mut() else {
-            return;
+            return false;
         };
         if tab.running != Some(task_id) {
-            return;
+            return false;
         }
         tab.running = None;
 
@@ -631,7 +703,7 @@ impl CodeDocument {
                 cx.emit(DocumentEvent::MetaChanged);
             }
             cx.notify();
-            return;
+            return true;
         }
 
         match result {
@@ -664,6 +736,25 @@ impl CodeDocument {
             cx.emit(DocumentEvent::ExecutionFinished);
             cx.emit(DocumentEvent::MetaChanged);
         }
+        cx.notify();
+        true
+    }
+
+    /// A plan whose tab closed before the driver answered settled its task
+    /// without `finish_plan`: the document stops showing it as running.
+    fn release_settled_plan(&mut self, task_id: dbflux_core::TaskId, cx: &mut Context<Self>) {
+        let owns_document = self
+            .execution
+            .active_query_task
+            .as_ref()
+            .is_some_and(|task| task.task_id == task_id);
+        if !owns_document {
+            return;
+        }
+
+        self.execution.active_query_task = None;
+        self.state = DocumentState::Clean;
+        cx.emit(DocumentEvent::ExecutionFinished);
         cx.notify();
     }
 
@@ -711,7 +802,6 @@ impl CodeDocument {
             self.execution.active_query_task = None;
         }
 
-        tab._task = None;
         let view = tab.view.clone();
         view.update(cx, |view, cx| view.set_cancelled(cx));
     }

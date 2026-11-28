@@ -770,11 +770,7 @@ impl CodeDocument {
         };
         self.execution.execution_history.push(record);
         self.execution.active_execution_index = Some(self.execution.execution_history.len() - 1);
-        self.execution.active_query_task = Some(ActiveQueryTask {
-            task_id,
-            target: task_target.clone(),
-            uses_isolated_session,
-        });
+        self.execution.active_query_task = Some(ActiveQueryTask { task_id });
 
         self.state = DocumentState::Executing;
         cx.emit(DocumentEvent::ExecutionStarted);
@@ -949,9 +945,16 @@ impl CodeDocument {
                 log::info!("Query was cancelled, discarding result");
 
                 // The cleanup rolls back the connection's transaction. A query
-                // that never reached the driver left nothing to undo, and
+                // that never reached the driver left nothing to undo, and a
+                // statement whose cancel the driver refused was not stopped:
                 // rolling back would discard a transaction the user opened.
-                if dispatched && let Err(error) = connection.cleanup_after_cancel() {
+                let cancel_accepted = cx.update(|cx| {
+                    crate::task_runner::driver_accepted_cancel(&invalidation_app_state, task_id, cx)
+                });
+                if dispatched
+                    && cancel_accepted
+                    && let Err(error) = connection.cleanup_after_cancel()
+                {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
 
@@ -2417,41 +2420,12 @@ impl CodeDocument {
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
-        let Some(outcome) = self.runner.request_cancel_primary(cx) else {
+        if self.runner.request_cancel_primary(cx).is_none() {
             return;
-        };
-
-        // A task started through a driver hook already sent the cancel; only a
-        // task that finished cancelling on the spot (a plan or script run)
-        // still needs the connection told here.
-        if outcome == dbflux_core::CancelRequestOutcome::Cancelled {
-            self.cancel_connection_query(cx);
         }
 
         self.plan_cancelled(cx);
         self.release_cancelled_execution(cx);
-    }
-
-    fn cancel_connection_query(&mut self, cx: &mut Context<Self>) {
-        if let Some(task) = self.execution.active_query_task.as_ref() {
-            if !task.uses_isolated_session {
-                self.app_state
-                    .read(cx)
-                    .cancel_query_for_target(&task.target);
-            }
-        } else if let Some(conn_id) = self.connection_id
-            && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
-        {
-            let active_database = self
-                .source
-                .exec_ctx
-                .database
-                .clone()
-                .or_else(|| connected.active_database.clone());
-            let target = task_target_for_execution(conn_id, connected, active_database.as_deref());
-
-            self.app_state.read(cx).cancel_query_for_target(&target);
-        }
     }
 
     pub fn hide_results(&mut self, cx: &mut Context<Self>) {
@@ -2741,9 +2715,11 @@ impl CodeDocument {
         let description =
             crate::labels::run_script_task_label(self.effective_language().display_name());
         let (output_sender, output_receiver) = dbflux_core::output_channel();
-        let (task_id, cancel_token) =
-            self.runner
-                .start_primary(dbflux_core::TaskKind::Query, description, cx);
+        let (task_id, cancel_token) = self.runner.start_primary_worker_acknowledged(
+            dbflux_core::TaskKind::Query,
+            description,
+            cx,
+        );
 
         let exec_id = Uuid::new_v4();
         let record = ExecutionRecord {
@@ -2873,6 +2849,7 @@ impl CodeDocument {
         // audit events even if the document is closed before the task runs.
         let audit_service = self.app_state.read(cx).audit_service().clone();
         let content_for_cancel = content.clone();
+        let app_state = self.app_state.clone();
 
         cx.spawn(async move |this, cx| {
             #[cfg(feature = "telemetry")]
@@ -2881,6 +2858,14 @@ impl CodeDocument {
             let result = task.await;
 
             if cancel_token.is_cancelled() {
+                // The executor returned, so the process or runner is stopped.
+                cx.update(|cx| {
+                    app_state.update(cx, |state, cx| {
+                        state.acknowledge_task_cancelled(task_id);
+                        cx.emit(AppStateChanged);
+                    });
+                });
+
                 // Emit cancellation audit event for script (which has no connection context)
                 let dummy_target = TaskTarget {
                     profile_id: Uuid::nil(),

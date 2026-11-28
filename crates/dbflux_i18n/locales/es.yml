@@ -6336,6 +6336,7 @@ tasks_panel:
   query_cancel_not_sent: "No se pudo enviar la solicitud de cancelación a %{driver}: %{error}. Intenta cancelar de nuevo."
   query_cancel_rejected: "%{driver} no aceptó la solicitud de cancelación: %{error}. La consulta sigue en ejecución hasta que termine."
   drop_point_of_no_return: "El DROP llegó a la etapa de envío y ya no se puede cancelar."
+  mutation_point_of_no_return: "Los cambios se aplican sin transacción y ya no se pueden cancelar."
 toast:
   action:
     copy: Copiar

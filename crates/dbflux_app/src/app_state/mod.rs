@@ -2557,9 +2557,10 @@ impl AppState {
     }
 
     /// Cancels the running query tasks selected like [`Self::running_query_tasks`],
-    /// sending the driver-level cancel before marking each task cancelled.
+    /// through each task's own cancel request, so a driver that cannot cancel
+    /// keeps its task running.
     ///
-    /// Returns the number of tasks that were cancelled.
+    /// Returns the number of tasks that accepted the cancel.
     pub fn cancel_running_query_tasks(&mut self, profile_id: Option<Uuid>) -> usize {
         let task_ids: Vec<TaskId> = self
             .running_query_tasks(profile_id)
@@ -2570,10 +2571,16 @@ impl AppState {
         let mut cancelled = 0;
 
         for task_id in task_ids {
-            self.cancel_query_for_task(task_id);
-
-            if self.facade.tasks.cancel(task_id) {
-                cancelled += 1;
+            match self.facade.tasks.request_cancel(task_id) {
+                // A task with a driver hook sent the cancel itself. One
+                // without a hook finished on the spot and still needs the
+                // driver told.
+                dbflux_core::CancelRequestOutcome::Cancelled => {
+                    self.cancel_query_for_task(task_id);
+                    cancelled += 1;
+                }
+                dbflux_core::CancelRequestOutcome::Cancelling => cancelled += 1,
+                _ => {}
             }
         }
 

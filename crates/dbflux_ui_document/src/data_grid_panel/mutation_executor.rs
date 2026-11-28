@@ -525,8 +525,10 @@ impl MutationExecutor {
 
     /// Execute the mutation without a transaction wrapper (autocommit mode).
     ///
-    /// Cancellation is checked once before execute. If cancelled, returns
-    /// `Cancelled { rows_affected: 0 }` without executing any SQL.
+    /// A cancel that arrived before the first statement returns
+    /// `Cancelled { rows_affected: 0 }` without executing any SQL. Otherwise the
+    /// run enters its point of no return before sending anything, and later
+    /// cancels are refused with the reason.
     ///
     /// Used when the driver does not support transactions (`DirectAutocommit` mode).
     /// Emits the same audit events as `run_single_tx` but without BEGIN/COMMIT.
@@ -577,7 +579,9 @@ impl MutationExecutor {
 
         self.emit_event(pending_event);
 
-        if cancel.is_cancelled() {
+        // Autocommit cannot be undone, so the run passes its point of no
+        // return before the first statement, including the lock timeout SET.
+        if !cancel.enter_point_of_no_return() {
             self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
             return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
         }
@@ -1202,6 +1206,7 @@ mod tests {
             calls: Mutex<Vec<String>>,
             failures: Mutex<Vec<String>>,
             cancel_after: Mutex<Option<(String, crate::task_runner::MutationCancelHandle)>>,
+            cancel_outcomes: Mutex<Vec<dbflux_core::CancelOutcome>>,
             pk_batches: Mutex<Vec<Vec<Vec<Value>>>>,
             dml_affected_rows: u64,
         }
@@ -1222,6 +1227,7 @@ mod tests {
                     calls: Mutex::new(Vec::new()),
                     failures: Mutex::new(Vec::new()),
                     cancel_after: Mutex::new(None),
+                    cancel_outcomes: Mutex::new(Vec::new()),
                     pk_batches: Mutex::new(Vec::new()),
                     dml_affected_rows,
                 })
@@ -1233,6 +1239,11 @@ mod tests {
 
             fn fail_on(&self, sql: &str) {
                 self.failures.lock().unwrap().push(sql.to_string());
+            }
+
+            /// What each cancel requested from `execute` achieved, in order.
+            fn cancel_outcomes(&self) -> Vec<dbflux_core::CancelOutcome> {
+                self.cancel_outcomes.lock().unwrap().clone()
             }
 
             fn cancel_after(&self, sql: &str, cancel: crate::task_runner::MutationCancelHandle) {
@@ -1281,7 +1292,8 @@ mod tests {
                 if let Some((sql, cancel)) = self.cancel_after.lock().unwrap().as_ref()
                     && sql == &req.sql
                 {
-                    cancel.cancel();
+                    let outcome = cancel.cancel();
+                    self.cancel_outcomes.lock().unwrap().push(outcome);
                 }
                 let mut result = QueryResult::empty();
                 if req.sql.starts_with("SELECT") {
@@ -2412,6 +2424,41 @@ mod tests {
                 !calls.iter().any(|c| c.eq_ignore_ascii_case("COMMIT")),
                 "COMMIT must NOT be issued when cancelled after DML; calls: {:?}",
                 calls
+            );
+        }
+
+        // Autocommit cannot be undone: a cancel that arrives while the first
+        // statement is running is refused with the reason, and the run reports
+        // what it did.
+        #[test]
+        fn direct_refuses_a_cancel_that_arrives_after_the_first_statement_was_sent() {
+            let conn = RecordingConnection::new(DbKind::Postgres, 5);
+            let conn_ref = Arc::clone(&conn);
+            let opts =
+                MutationExecOptions::new(ExecutionMode::DirectAutocommit, 1_000, None, 3_000);
+            let executor =
+                MutationExecutor::new(make_delete_spec("orders"), opts, make_deps(conn, None));
+            let cancel = crate::task_runner::MutationCancelHandle::new();
+            conn_ref.cancel_after("DELETE FROM orders", cancel.clone());
+
+            let result = executor.run_direct(&cancel);
+
+            assert_eq!(
+                result,
+                Ok(MutationOutcome::Success { rows_affected: 5 }),
+                "the statement ran, so the run says it completed"
+            );
+            assert_eq!(
+                conn_ref.cancel_outcomes(),
+                vec![dbflux_core::CancelOutcome::NotSupported {
+                    reason:
+                        "Changes are applied without a transaction and can no longer be cancelled."
+                            .to_string()
+                }]
+            );
+            assert!(
+                !cancel.is_cancelled(),
+                "a refused cancel never reaches the worker"
             );
         }
 
