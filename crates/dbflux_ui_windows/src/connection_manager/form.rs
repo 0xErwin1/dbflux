@@ -719,6 +719,10 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn test_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.test_status == TestStatus::Testing {
+            return;
+        }
+
         if self.defer_until_secrets_read(DeferredAction::TestConnection) {
             return;
         }
@@ -815,7 +819,7 @@ impl ConnectionManagerWindow {
             let cleanup_cx = cx.clone();
             let background_executor = cx.background_executor().clone();
 
-            let result = run_test_connection_orchestration(
+            let outcome = run_test_connection_outcome(
                 hooks,
                 move |phase, phase_hooks, context| {
                     let app_state = app_state.clone();
@@ -962,11 +966,13 @@ impl ConnectionManagerWindow {
             )
             .await;
 
+            let settlement = TestSettlement::from_outcome(profile_name, outcome);
+
             cx.update(|cx| {
                 let cancelled = settle_app_state.update(cx, |state, cx| {
                     let cancelled = state.acknowledge_task_cancelled(task_id);
                     if !cancelled {
-                        match &result {
+                        match &settlement.result {
                             Ok(_) => state.complete_task(task_id),
                             Err(error) => state.fail_task(task_id, error.clone()),
                         }
@@ -976,40 +982,115 @@ impl ConnectionManagerWindow {
                 });
 
                 this.update(cx, |this, cx| {
-                    if cancelled {
-                        info!("Test connection cancelled for {}", profile_name);
-                        this.test_status = TestStatus::None;
-                        this.test_error = None;
-                        this.test_result = None;
-                        cx.notify();
-                        return;
-                    }
-
-                    match result {
-                        Ok(result) => {
-                            info!("Test connection successful for {}", profile_name);
-                            this.test_status = if result.warnings.is_empty() {
-                                TestStatus::Success
-                            } else {
-                                TestStatus::SuccessWithWarning
-                            };
-                            this.test_error =
-                                (!result.warnings.is_empty()).then(|| result.warnings.join("\n"));
-                            this.test_result = Some(result.test_result);
-                        }
-                        Err(error) => {
-                            info!("Test connection failed: {}", error);
-                            this.test_status = TestStatus::Failed;
-                            this.test_error =
-                                Some(normalize_aws_credentials_error(&profile_name, &error));
-                            this.test_result = None;
-                        }
-                    }
-                    cx.notify();
+                    this.apply_test_settlement(settlement, cancelled, cx);
                 });
             });
         })
         .detach();
+    }
+}
+
+/// What the foreground catch site needs to present a finished test: the
+/// merged result for the inline form, plus the probe and cleanup outcomes kept
+/// apart so each is reported by the one place that owns it.
+struct TestSettlement {
+    profile_name: String,
+    result: Result<TestConnectionOrchestrationResult, String>,
+    probe_failure: Option<String>,
+    hook_failure: Option<String>,
+    cleanup_failure: Option<String>,
+}
+
+impl TestSettlement {
+    fn from_outcome(profile_name: String, outcome: TestConnectionOutcome) -> Self {
+        let probe_failure = match &outcome.probe {
+            Err(TestConnectionFailure::Probe(message)) => Some(message.clone()),
+            _ => None,
+        };
+        let hook_failure = match &outcome.probe {
+            Err(TestConnectionFailure::Hook(message)) => Some(message.clone()),
+            _ => None,
+        };
+        let cleanup_failure = outcome.cleanup.as_ref().err().cloned();
+
+        Self {
+            profile_name,
+            result: outcome.merge(),
+            probe_failure,
+            hook_failure,
+            cleanup_failure,
+        }
+    }
+}
+
+impl ConnectionManagerWindow {
+    /// The foreground catch site of a connection test. Driver probe failures
+    /// and aborting hook failures are reported here once and shown inline; a
+    /// hook's own task row is not a user-facing report, and the hook runner
+    /// does not report.
+    fn apply_test_settlement(
+        &mut self,
+        settlement: TestSettlement,
+        cancelled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let TestSettlement {
+            profile_name,
+            result,
+            probe_failure,
+            hook_failure,
+            cleanup_failure,
+        } = settlement;
+
+        if cancelled {
+            info!("Test connection cancelled for {}", profile_name);
+            self.test_result = None;
+            match cleanup_failure {
+                None => {
+                    self.test_status = TestStatus::None;
+                    self.test_error = None;
+                }
+                Some(cleanup_error) => {
+                    let message =
+                        dbflux_i18n::t!("form.error.test_cleanup_failed", error = cleanup_error);
+                    self.test_status = TestStatus::Failed;
+                    self.test_error = Some(message.clone());
+                    report_error(UserFacingError::new(ErrorKind::Hook, message), cx);
+                }
+            }
+            cx.notify();
+            return;
+        }
+
+        match result {
+            Ok(result) => {
+                info!("Test connection successful for {}", profile_name);
+                self.test_status = if result.warnings.is_empty() {
+                    TestStatus::Success
+                } else {
+                    TestStatus::SuccessWithWarning
+                };
+                self.test_error = (!result.warnings.is_empty()).then(|| result.warnings.join("\n"));
+                self.test_result = Some(result.test_result);
+            }
+            Err(error) => {
+                info!("Test connection failed: {}", error);
+                self.test_status = TestStatus::Failed;
+                let message = normalize_aws_credentials_error(&profile_name, &error);
+                self.test_error = Some(message.clone());
+                self.test_result = None;
+
+                if let Some(probe_error) = probe_failure {
+                    report_error(
+                        UserFacingError::new(ErrorKind::Driver, message).with_cause(probe_error),
+                        cx,
+                    );
+                } else if hook_failure.is_some() || cleanup_failure.is_some() {
+                    report_error(UserFacingError::new(ErrorKind::Hook, message), cx);
+                }
+            }
+        }
+        cx.notify();
     }
 }
 
@@ -1083,6 +1164,47 @@ struct TestConnectionOrchestrationResult {
     warnings: Vec<String>,
 }
 
+/// Why the probe half of a connection test failed; each kind is reported
+/// once by the foreground settlement.
+enum TestConnectionFailure {
+    Hook(String),
+    Probe(String),
+}
+
+impl TestConnectionFailure {
+    fn into_message(self) -> String {
+        match self {
+            Self::Hook(message) | Self::Probe(message) => message,
+        }
+    }
+}
+
+/// The probe and the cleanup of one connection test, kept apart so a cleanup
+/// failure is never lost when the probe was cancelled.
+struct TestConnectionOutcome {
+    probe: Result<TestConnectionOrchestrationResult, TestConnectionFailure>,
+    cleanup: Result<(), String>,
+}
+
+impl TestConnectionOutcome {
+    fn merge(self) -> Result<TestConnectionOrchestrationResult, String> {
+        match (self.probe, self.cleanup) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Ok(_), Err(cleanup_error)) => Err(dbflux_i18n::t!(
+                "form.error.test_cleanup_failed",
+                error = cleanup_error
+            )),
+            (Err(primary_error), Ok(())) => Err(primary_error.into_message()),
+            (Err(primary_error), Err(cleanup_error)) => Err(dbflux_i18n::t!(
+                "form.error.test_cleanup_warning",
+                primary_error = primary_error.into_message(),
+                cleanup_error = cleanup_error
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
 async fn run_test_connection_orchestration<'a, RunPhase, RunProbe, RunCleanup>(
     hooks: dbflux_core::ConnectionHooks,
     run_phase: RunPhase,
@@ -1113,9 +1235,10 @@ where
     .await
 }
 
+#[cfg(test)]
 async fn run_test_connection_orchestration_with_drop_guards<'a, RunPhase, RunProbe, RunCleanup>(
     hooks: dbflux_core::ConnectionHooks,
-    mut run_phase: RunPhase,
+    run_phase: RunPhase,
     run_probe: RunProbe,
     run_cleanup: RunCleanup,
     hook_context: dbflux_core::HookContext,
@@ -1133,24 +1256,74 @@ where
         -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
     RunCleanup: FnOnce() -> TestConnectionFuture<'a, Result<(), String>>,
 {
-    let outcome =
+    run_test_connection_outcome_with_drop_guards(
+        hooks,
+        run_phase,
+        run_probe,
+        run_cleanup,
+        hook_context,
+        drop_guards,
+    )
+    .await
+    .merge()
+}
+
+async fn run_test_connection_outcome<'a, RunPhase, RunProbe, RunCleanup>(
+    hooks: dbflux_core::ConnectionHooks,
+    run_phase: RunPhase,
+    run_probe: RunProbe,
+    run_cleanup: RunCleanup,
+    hook_context: dbflux_core::HookContext,
+) -> TestConnectionOutcome
+where
+    RunPhase: FnMut(
+        HookPhase,
+        Vec<dbflux_core::ConnectionHook>,
+        dbflux_core::HookContext,
+    ) -> TestConnectionFuture<'a, HookPhaseState>,
+    RunProbe: FnOnce(
+        TestConnectionProbeDropGuards,
+    )
+        -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
+    RunCleanup: FnOnce() -> TestConnectionFuture<'a, Result<(), String>>,
+{
+    run_test_connection_outcome_with_drop_guards(
+        hooks,
+        run_phase,
+        run_probe,
+        run_cleanup,
+        hook_context,
+        TestConnectionProbeDropGuards::default(),
+    )
+    .await
+}
+
+async fn run_test_connection_outcome_with_drop_guards<'a, RunPhase, RunProbe, RunCleanup>(
+    hooks: dbflux_core::ConnectionHooks,
+    mut run_phase: RunPhase,
+    run_probe: RunProbe,
+    run_cleanup: RunCleanup,
+    hook_context: dbflux_core::HookContext,
+    drop_guards: TestConnectionProbeDropGuards,
+) -> TestConnectionOutcome
+where
+    RunPhase: FnMut(
+        HookPhase,
+        Vec<dbflux_core::ConnectionHook>,
+        dbflux_core::HookContext,
+    ) -> TestConnectionFuture<'a, HookPhaseState>,
+    RunProbe: FnOnce(
+        TestConnectionProbeDropGuards,
+    )
+        -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
+    RunCleanup: FnOnce() -> TestConnectionFuture<'a, Result<(), String>>,
+{
+    let probe =
         run_test_connection_phases(hooks, &mut run_phase, run_probe, hook_context, drop_guards)
             .await;
     let cleanup = run_cleanup().await;
 
-    match (outcome, cleanup) {
-        (Ok(result), Ok(())) => Ok(result),
-        (Ok(_), Err(cleanup_error)) => Err(dbflux_i18n::t!(
-            "form.error.test_cleanup_failed",
-            error = cleanup_error
-        )),
-        (Err(primary_error), Ok(())) => Err(primary_error),
-        (Err(primary_error), Err(cleanup_error)) => Err(dbflux_i18n::t!(
-            "form.error.test_cleanup_warning",
-            primary_error = primary_error,
-            cleanup_error = cleanup_error
-        )),
-    }
+    TestConnectionOutcome { probe, cleanup }
 }
 
 async fn run_test_connection_phases<'a, RunPhase, RunProbe>(
@@ -1159,7 +1332,7 @@ async fn run_test_connection_phases<'a, RunPhase, RunProbe>(
     run_probe: RunProbe,
     hook_context: dbflux_core::HookContext,
     drop_guards: TestConnectionProbeDropGuards,
-) -> Result<TestConnectionOrchestrationResult, String>
+) -> Result<TestConnectionOrchestrationResult, TestConnectionFailure>
 where
     RunPhase: FnMut(
         HookPhase,
@@ -1179,13 +1352,17 @@ where
     .await;
     let mut warnings = match pre_connect {
         HookPhaseState::Continue { warnings } => warnings,
-        HookPhaseState::Aborted { error } => return Err(error),
+        HookPhaseState::Aborted { error } => return Err(TestConnectionFailure::Hook(error)),
         HookPhaseState::Cancelled => {
-            return Err(dbflux_i18n::t!("form.error.test_cancelled_pre"));
+            return Err(TestConnectionFailure::Hook(dbflux_i18n::t!(
+                "form.error.test_cancelled_pre"
+            )));
         }
     };
 
-    let result = run_probe(drop_guards).await?;
+    let result = run_probe(drop_guards)
+        .await
+        .map_err(TestConnectionFailure::Probe)?;
 
     let post_connect = run_phase(HookPhase::PostConnect, hooks.post_connect, hook_context).await;
     match post_connect {
@@ -1198,8 +1375,10 @@ where
                 warnings,
             })
         }
-        HookPhaseState::Aborted { error } => Err(error),
-        HookPhaseState::Cancelled => Err(dbflux_i18n::t!("form.error.test_cancelled_post")),
+        HookPhaseState::Aborted { error } => Err(TestConnectionFailure::Hook(error)),
+        HookPhaseState::Cancelled => Err(TestConnectionFailure::Hook(dbflux_i18n::t!(
+            "form.error.test_cancelled_post"
+        ))),
     }
 }
 
@@ -1265,6 +1444,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+
+    mod settlement;
 
     const FORM_KEYS: &[&str] = &[
         "form.validation.connection_name_required",

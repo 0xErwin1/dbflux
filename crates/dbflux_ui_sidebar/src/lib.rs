@@ -1086,6 +1086,9 @@ pub struct Sidebar {
     table_refresh_tasks: HashMap<String, (TaskId, dbflux_core::CancelToken)>,
     superseded_details_cancellations: HashSet<SessionRequest>,
     table_details_actions: HashMap<String, PendingAction>,
+    /// Items whose current queued action was requested after their refresh
+    /// task was cancelled, so it must survive that cancellation.
+    table_details_post_cancel_actions: HashSet<String>,
     table_details_retry: std::cell::RefCell<HashMap<String, TableDetailsRetry>>,
     table_details_recovery: HashMap<String, SessionRequest>,
     recovered_table_databases: HashMap<(Uuid, String), (String, u64)>,
@@ -1454,6 +1457,7 @@ impl Sidebar {
             table_refresh_tasks: HashMap::new(),
             superseded_details_cancellations: HashSet::new(),
             table_details_actions: HashMap::new(),
+            table_details_post_cancel_actions: HashSet::new(),
             table_details_retry: std::cell::RefCell::new(HashMap::new()),
             table_details_recovery: HashMap::new(),
             recovered_table_databases: HashMap::new(),
