@@ -680,7 +680,7 @@ impl DataGridPanel {
                 profile_id,
                 database: database.clone(),
             },
-            true,
+            Some(connection.clone()),
             cx,
         );
 

@@ -1,3 +1,5 @@
+use dbflux_app::app_state::CancelMessages;
+use dbflux_core::Connection;
 use dbflux_core::{
     CancelHook, CancelOutcome, CancelPolicy, CancelRequestOutcome, CancelToken, DbError, TaskId,
     TaskKind, TaskRequest, TaskSlot, TaskTarget,
@@ -211,6 +213,21 @@ fn query_cancel_unsupported_reason(driver: &str) -> String {
     dbflux_i18n::t!("tasks_panel.query_cancel_unsupported", driver = driver)
 }
 
+fn query_cancel_not_sent_reason(driver: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "tasks_panel.query_cancel_not_sent",
+        driver = driver,
+        error = error
+    )
+}
+
+fn query_cancel_messages() -> CancelMessages {
+    CancelMessages {
+        unsupported: query_cancel_unsupported_reason,
+        not_sent: query_cancel_not_sent_reason,
+    }
+}
+
 pub struct DocumentTaskRunner {
     primary: TaskSlot,
     app_state: Entity<AppStateEntity>,
@@ -266,21 +283,21 @@ impl DocumentTaskRunner {
     ///
     /// The task stays `Cancelling` until the worker calls
     /// [`Self::settle_after_cancel`], and a driver that cannot cancel keeps it
-    /// `Running` with the reason. `cancels_connection` is `false` when the
-    /// query runs on its own session, so cancelling must not interrupt the
-    /// shared connection.
+    /// `Running` with the reason. `connection` is the one the query executes
+    /// on, so a cancel never reaches a connection that replaced it; it is
+    /// `None` when the query runs on its own session, where cancelling must
+    /// not interrupt the shared connection.
     pub fn start_primary_query_for_target(
         &mut self,
         description: impl Into<String>,
         target: TaskTarget,
-        cancels_connection: bool,
+        connection: Option<Arc<dyn Connection>>,
         cx: &mut App,
     ) -> (TaskId, CancelToken) {
-        let hook = self.app_state.read(cx).query_cancel_hook(
-            &target,
-            cancels_connection,
-            query_cancel_unsupported_reason,
-        );
+        let hook = self
+            .app_state
+            .read(cx)
+            .query_cancel_hook(connection, query_cancel_messages());
 
         self.start_primary_with_hook(TaskKind::Query, description, Some(target), hook, cx)
     }
@@ -291,10 +308,13 @@ impl DocumentTaskRunner {
     pub fn start_primary_query(
         &mut self,
         description: impl Into<String>,
+        connection: Arc<dyn Connection>,
         cx: &mut App,
     ) -> (TaskId, CancelToken) {
         match self.default_target() {
-            Some(target) => self.start_primary_query_for_target(description, target, true, cx),
+            Some(target) => {
+                self.start_primary_query_for_target(description, target, Some(connection), cx)
+            }
             None => self.start_primary_worker_acknowledged(TaskKind::Query, description, cx),
         }
     }
@@ -437,6 +457,13 @@ impl DocumentTaskRunner {
 
     pub fn clear_primary(&mut self, task_id: TaskId) {
         let _ = self.primary.take_if(task_id);
+    }
+
+    /// Whether `task_id` is still the query the document waits for. A
+    /// superseded query whose driver could not cancel it keeps running and
+    /// finishes later; its rows must not replace the newer query's state.
+    pub fn owns_primary(&self, task_id: TaskId) -> bool {
+        self.primary.active_id() == Some(task_id)
     }
 
     pub fn is_primary_active(&self) -> bool {
@@ -975,7 +1002,8 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let (app_state, mut runner) = runner_with_state(cx);
-        let (task_id, _token) = cx.update(|cx| runner.start_primary_query("select 1", cx));
+        let (task_id, _token) =
+            cx.update(|cx| runner.start_primary_query("select 1", cancel_probe().0, cx));
 
         assert!(cx.update(|cx| runner.cancel_primary(cx)));
 
@@ -999,6 +1027,145 @@ mod tests {
             "the foreground may not have marked the task yet"
         );
         assert!(!handle.is_cancelled());
+    }
+
+    struct CancelProbe {
+        metadata: dbflux_core::DriverMetadata,
+        cancels: std::sync::mpsc::Sender<()>,
+    }
+
+    impl dbflux_core::Connection for CancelProbe {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _: &dbflux_core::QueryRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("probe".to_string()))
+        }
+
+        fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn cancel_active(&self) -> Result<(), dbflux_core::DbError> {
+            self.cancels
+                .send(())
+                .map_err(|_| dbflux_core::DbError::Cancelled)
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::Postgres
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+    }
+
+    fn cancel_probe() -> (
+        std::sync::Arc<dyn dbflux_core::Connection>,
+        std::sync::mpsc::Receiver<()>,
+    ) {
+        let (cancels, received) = std::sync::mpsc::channel();
+        let metadata = dbflux_core::DriverMetadataBuilder::new(
+            "probe",
+            "Probe DB",
+            dbflux_core::DatabaseCategory::Relational,
+            dbflux_core::QueryLanguage::Sql,
+        )
+        .capabilities(dbflux_core::DriverCapabilities::QUERY_CANCELLATION)
+        .build();
+
+        (
+            std::sync::Arc::new(CancelProbe { metadata, cancels }),
+            received,
+        )
+    }
+
+    #[gpui::test]
+    fn a_query_cancel_reaches_the_connection_the_query_runs_on(cx: &mut gpui::TestAppContext) {
+        let (app_state, mut runner) = runner_with_state(cx);
+        let (executing, executing_cancels) = cancel_probe();
+        let (replacement, replacement_cancels) = cancel_probe();
+        let target = dbflux_core::TaskTarget {
+            profile_id: uuid::Uuid::new_v4(),
+            database: None,
+        };
+        let (task_id, _token) = cx.update(|cx| {
+            runner.start_primary_query_for_target("select 1", target, Some(executing), cx)
+        });
+
+        assert!(cx.update(|cx| runner.cancel_primary(cx)));
+
+        executing_cancels
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the executing connection was asked to cancel");
+        assert!(
+            replacement_cancels
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err()
+        );
+        drop(replacement);
+        assert_eq!(
+            status_of(&app_state, task_id, cx),
+            dbflux_core::TaskStatus::Cancelling
+        );
+    }
+
+    #[gpui::test]
+    fn a_query_on_its_own_session_never_cancels_the_shared_connection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (app_state, mut runner) = runner_with_state(cx);
+        let target = dbflux_core::TaskTarget {
+            profile_id: uuid::Uuid::new_v4(),
+            database: None,
+        };
+        let (task_id, token) =
+            cx.update(|cx| runner.start_primary_query_for_target("select 1", target, None, cx));
+
+        assert!(cx.update(|cx| runner.cancel_primary(cx)));
+
+        assert!(token.is_cancelled());
+        assert_eq!(
+            status_of(&app_state, task_id, cx),
+            dbflux_core::TaskStatus::Cancelling
+        );
+    }
+
+    #[gpui::test]
+    fn only_the_newest_primary_query_owns_the_slot(cx: &mut gpui::TestAppContext) {
+        let (_app_state, mut runner) = runner_with_state(cx);
+        let (older, _token) = cx.update(|cx| {
+            runner.start_primary_for_target(dbflux_core::TaskKind::Query, "older", None, cx)
+        });
+        assert!(runner.owns_primary(older));
+
+        let (newer, _token) = cx.update(|cx| {
+            runner.start_primary_for_target(dbflux_core::TaskKind::Query, "newer", None, cx)
+        });
+
+        assert!(!runner.owns_primary(older), "superseded");
+        assert!(runner.owns_primary(newer));
     }
 
     // Inverse: cancelling the handle must also flip the shared token.
