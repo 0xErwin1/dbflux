@@ -194,3 +194,15 @@ keeps the modifiers on a keymap change itself, drop that patch; when it keeps dr
 frame callbacks are withheld, drop that one; when it can start an X11 file drag, drop the XDND
 source. With neither left, delete this directory and its
 `[patch.crates-io]` entry.
+
+- `src/linux/file_uri_list.rs`, `src/linux/wayland/clipboard.rs`, `src/linux/x11/clipboard.rs`:
+  a clipboard item of files is offered only as files, and image entries are offered as images.
+  Files used to be offered as text too, and chat applications and browsers then pasted the
+  paths instead of attaching the files; they are now offered as `text/uri-list`,
+  `x-special/gnome-copied-files` and, on cut, `application/x-kde-cutselection`, as GNOME Files
+  offers them. Paths without a file URL are still offered as text. Each image format of the
+  item's `Image` entries is offered under its mime type (the first entry of a format wins),
+  next to the files when the item has both; an item of only images is not offered as text.
+  Upstream never offered image entries when writing on either backend (the unused X11
+  `set_image` also labelled every format `image/png`). `clipboard_offers` decides the list for
+  both backends. Covered by `file_uri_list::tests` and `wayland::clipboard::tests`.

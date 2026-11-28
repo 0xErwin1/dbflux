@@ -1378,3 +1378,58 @@ fn a_child_whose_supersede_cancels_its_parent_is_skipped() {
     assert_eq!(status_of(&manager, child.id()), TaskStatus::Skipped);
     assert!(!manager.activate(child.id()));
 }
+
+fn parent_finished_with_running_child() -> (TaskManager, TaskId, TaskId) {
+    let mut manager = TaskManager::new();
+    let parent = manager
+        .start_handle(TaskRequest::new(TaskKind::Connect, "connect"))
+        .id();
+    let child = manager
+        .start_handle(TaskRequest::new(TaskKind::Connect, "stage").parent(parent))
+        .id();
+    manager.complete(parent);
+    (manager, parent, child)
+}
+
+#[test]
+fn cleanup_keeps_a_finished_parent_while_a_descendant_is_in_flight() {
+    let (mut manager, parent, child) = parent_finished_with_running_child();
+
+    manager.cleanup_completed(0);
+
+    assert!(
+        manager.get(parent).is_some(),
+        "the parent anchors its stage"
+    );
+    assert!(manager.get(child).is_some());
+
+    manager.complete(child);
+    manager.cleanup_completed(0);
+
+    assert!(manager.get(parent).is_none());
+    assert!(manager.get(child).is_none());
+}
+
+#[test]
+fn a_task_whose_parent_was_removed_is_top_level() {
+    let (mut manager, parent, child) = parent_finished_with_running_child();
+    let all = manager.recent_tasks(usize::MAX);
+    let ids: Vec<TaskId> = TaskManager::top_level(&all).map(|task| task.id).collect();
+    assert_eq!(ids, vec![parent]);
+
+    manager.remove(parent);
+
+    let all = manager.recent_tasks(usize::MAX);
+    let ids: Vec<TaskId> = TaskManager::top_level(&all).map(|task| task.id).collect();
+    assert_eq!(ids, vec![child]);
+}
+
+#[test]
+fn in_flight_descendants_are_reported_publicly() {
+    let (mut manager, parent, child) = parent_finished_with_running_child();
+    assert!(manager.has_in_flight_descendants(parent));
+
+    manager.complete(child);
+
+    assert!(!manager.has_in_flight_descendants(parent));
+}

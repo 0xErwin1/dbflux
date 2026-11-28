@@ -778,7 +778,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - **取消钩子**：可选的 `CancelHook` 在 `request_cancel` 内运行（不得阻塞），返回 `CancelOutcome`：`Stopped`（工作已停止）、`Requested`（已请求停止，由工作线程确认）或 `NotSupported { reason }`（任务保持 `Running`，面板显示原因，例如驱动无法取消正在运行的命令）。
 - **不可回退点**：工作线程在执行无法撤销的步骤（如发送 DDL）之前调用 `enter_point_of_no_return(id, reason)`。此后取消被拒绝，面板会禁用取消并显示原因。
 - **阶段**：带有 `parent` 的 `TaskRequest` 会注册子任务；`pending()` 将其注册为 `Pending`，直到 `activate`。取消父任务会取消其子任务，从未开始的子任务以 `Skipped` 结束，显示为“未开始”。
-- **规则**：只有当工作确实停止时，任务才显示为 `Cancelled`。如果工作可能仍在运行，状态是 `Cancelling`，或带原因的 `Running`，绝不是 `Cancelled`。
+- **规则**：在 `WorkerAcknowledged` 下，只有当工作确实停止时，任务才显示为 `Cancelled`；工作可能仍在运行时，状态是 `Cancelling`，或带原因的 `Running`，绝不是 `Cancelled`。`Immediate` 是旧策略：它立即显示为 `Cancelled`，并不确认工作已停止，因此只用于工作会被丢弃或无人观察的场景，或尚未迁移到 `WorkerAcknowledged` 的任务。
 
 ```mermaid
 stateDiagram-v2
