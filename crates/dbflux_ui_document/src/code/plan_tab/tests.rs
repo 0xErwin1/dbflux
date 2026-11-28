@@ -2044,7 +2044,21 @@ fn a_superseded_unsupported_estimate_settles_as_completed(cx: &mut gpui::TestApp
         Some(dbflux_core::TaskStatus::Completed)
     );
 
-    let stopped = start(cx);
+    let stopped = app_state.update(cx, |state, _| {
+        let id = state
+            .start_task_handle(
+                dbflux_core::TaskRequest::new(dbflux_core::TaskKind::Query, "EXPLAIN")
+                    .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+            )
+            .id();
+        state.request_cancel_task(id);
+        id
+    });
+    assert_eq!(
+        status(cx, stopped),
+        Some(dbflux_core::TaskStatus::Cancelling),
+        "the driver took the cancel and the worker has not answered yet"
+    );
     cx.update(|cx| {
         super::settle_cancelled_plan_task(
             &app_state,
@@ -2054,10 +2068,10 @@ fn a_superseded_unsupported_estimate_settles_as_completed(cx: &mut gpui::TestApp
             cx,
         )
     });
-    assert_ne!(
+    assert_eq!(
         status(cx, stopped),
-        Some(dbflux_core::TaskStatus::Completed),
-        "a stopped plan is not reported as completed"
+        Some(dbflux_core::TaskStatus::Cancelled),
+        "a plan the driver stopped acknowledges its cancel"
     );
 
     let failed = start(cx);
