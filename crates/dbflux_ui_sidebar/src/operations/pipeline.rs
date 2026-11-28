@@ -15,7 +15,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use std::sync::Arc;
 
 /// Why a pipeline connect stopped before it started.
-enum PrepareStop {
+pub(super) enum PrepareStop {
     /// A benign concurrency skip, logged only.
     Skipped(String),
     /// A preparation failure the caller still has to show.
@@ -225,29 +225,18 @@ struct PreparedConnect {
     attempt: ConnectAttempt,
 }
 
-/// Starts the attempt's Connect task, which is also the duplicate check:
-/// the task manager refuses a second connect for the same profile. The
-/// pipeline runs on the task's own cancel token.
-fn prepare_connect_attempt(
+/// Starts the Connect parent task of an attempt, which is also the
+/// duplicate check: the task manager refuses a second connect for the same
+/// profile. The sidebar spinner still reads the pending-operation set, so the
+/// profile is claimed there too.
+pub(super) fn begin_connect_attempt(
     state: &mut dbflux_ui_base::AppStateEntity,
     profile_id: Uuid,
-    password: Option<dbflux_core::secrecy::SecretString>,
-    cx: &mut Context<dbflux_ui_base::AppStateEntity>,
-) -> Result<PreparedConnect, PrepareStop> {
+    label: String,
+) -> Result<dbflux_core::TaskHandle, PrepareStop> {
     let target = TaskTarget {
         profile_id,
         database: None,
-    };
-
-    let Some(profile_name) = state
-        .profiles()
-        .iter()
-        .find(|profile| profile.id == profile_id)
-        .map(|profile| profile.name.clone())
-    else {
-        let error = format!("Profile {} not found", profile_id);
-        state.record_connect_failure(profile_id, error.clone());
-        return Err(PrepareStop::Failed(error));
     };
 
     if state.is_task_busy(TaskKind::Connect, &target) {
@@ -262,21 +251,64 @@ fn prepare_connect_attempt(
 
     let handle = state
         .try_start_task(
-            TaskRequest::new(
-                TaskKind::Connect,
-                crate::labels::pipeline_connecting_task_label(&profile_name),
-            )
-            .target(target)
-            .policy(CancelPolicy::WorkerAcknowledged),
+            TaskRequest::new(TaskKind::Connect, label)
+                .target(target)
+                .policy(CancelPolicy::WorkerAcknowledged),
         )
         .map_err(|_| {
             PrepareStop::Skipped(crate::labels::connection_already_pending_toast_label())
         })?;
-    let task_id = handle.id();
 
-    // The sidebar spinner still reads the pending-operation set.
     state.start_pending_operation(profile_id, None);
     state.clear_connect_failure(profile_id);
+
+    Ok(handle)
+}
+
+/// Registers the stages that apply to `profile` as pending children of the
+/// attempt's Connect task.
+pub(super) fn register_attempt(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    task_id: TaskId,
+    profile: &dbflux_core::ConnectionProfile,
+    auth_provider: Option<&str>,
+    hooks: &dbflux_core::ConnectionHooks,
+) -> ConnectAttempt {
+    let plan = plan_stages(&StagePlanInput {
+        profile,
+        auth_provider,
+        has_pre_connect_hooks: hooks.pre_connect.iter().any(|hook| hook.enabled),
+        has_post_connect_hooks: hooks.post_connect.iter().any(|hook| hook.enabled),
+    });
+
+    ConnectAttempt::register(state, task_id, profile.id, plan)
+}
+
+/// Starts the pipeline attempt's Connect task, which runs the pipeline on
+/// its own cancel token, and registers its stages.
+fn prepare_connect_attempt(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    profile_id: Uuid,
+    password: Option<dbflux_core::secrecy::SecretString>,
+    cx: &mut Context<dbflux_ui_base::AppStateEntity>,
+) -> Result<PreparedConnect, PrepareStop> {
+    let Some(profile_name) = state
+        .profiles()
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .map(|profile| profile.name.clone())
+    else {
+        let error = format!("Profile {} not found", profile_id);
+        state.record_connect_failure(profile_id, error.clone());
+        return Err(PrepareStop::Failed(error));
+    };
+
+    let handle = begin_connect_attempt(
+        state,
+        profile_id,
+        crate::labels::pipeline_connecting_task_label(&profile_name),
+    )?;
+    let task_id = handle.id();
 
     // A failed preparation leaves no trace in the panel.
     let abandon = |state: &mut dbflux_ui_base::AppStateEntity| {
@@ -324,13 +356,13 @@ fn prepare_connect_attempt(
         .as_ref()
         .and(input.auth_provider.as_deref())
         .map(|provider| provider.display_name().to_string());
-    let plan = plan_stages(&StagePlanInput {
-        profile: &input.profile,
-        auth_provider: auth_provider.as_deref(),
-        has_pre_connect_hooks: hooks.pre_connect.iter().any(|hook| hook.enabled),
-        has_post_connect_hooks: hooks.post_connect.iter().any(|hook| hook.enabled),
-    });
-    let attempt = ConnectAttempt::register(state, task_id, profile_id, plan);
+    let attempt = register_attempt(
+        state,
+        task_id,
+        &input.profile,
+        auth_provider.as_deref(),
+        &hooks,
+    );
     let hook_context = HookContext::from_profile(&input.profile);
     cx.emit(dbflux_ui_base::AppStateChanged);
 
@@ -383,7 +415,7 @@ async fn follow_pipeline_stages(
     }
 }
 
-fn start_stage(
+pub(super) fn start_stage(
     app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
     attempt: &ConnectAttempt,
     stage: ConnectStage,
@@ -397,7 +429,7 @@ fn start_stage(
     });
 }
 
-fn finish_stage(
+pub(super) fn finish_stage(
     app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
     attempt: &ConnectAttempt,
     stage: ConnectStage,
@@ -412,7 +444,7 @@ fn finish_stage(
 }
 
 /// Why a connect attempt failed, as the task and the user see it.
-struct ConnectFailure {
+pub(super) struct ConnectFailure {
     /// The failure the Connect task and the sidebar record.
     error: String,
     /// What the toast says, when it differs from `error`.
@@ -423,7 +455,7 @@ struct ConnectFailure {
 }
 
 impl ConnectFailure {
-    fn new(error: impl Into<String>) -> Self {
+    pub(super) fn new(error: impl Into<String>) -> Self {
         Self {
             error: error.into(),
             toast: None,
@@ -431,12 +463,12 @@ impl ConnectFailure {
         }
     }
 
-    fn toast(mut self, message: impl Into<String>) -> Self {
+    pub(super) fn toast(mut self, message: impl Into<String>) -> Self {
         self.toast = Some(message.into());
         self
     }
 
-    fn forgetting_password(mut self) -> Self {
+    pub(super) fn forgetting_password(mut self) -> Self {
         self.forget_password = true;
         self
     }
@@ -444,7 +476,7 @@ impl ConnectFailure {
 
 /// Records the failure, settles the attempt and its stages, and tells the
 /// user.
-fn fail_connect(
+pub(super) fn fail_connect(
     app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
     sidebar: &gpui::Entity<Sidebar>,
     attempt: &ConnectAttempt,
@@ -480,7 +512,7 @@ fn fail_connect(
 
 /// Settles an attempt the user cancelled: its worker has stopped, so the
 /// stage and the attempt read `Cancelled` and the profile is free again.
-fn cancel_connect(
+pub(super) fn cancel_connect(
     app_state: &gpui::Entity<dbflux_ui_base::AppStateEntity>,
     sidebar: &gpui::Entity<Sidebar>,
     attempt: &ConnectAttempt,

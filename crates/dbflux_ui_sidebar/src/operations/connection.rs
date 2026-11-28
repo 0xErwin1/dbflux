@@ -1,3 +1,8 @@
+use crate::operations::connect_stages::{ConnectAttempt, ConnectOutcome, ConnectStage};
+use crate::operations::pipeline::{
+    ConnectFailure, PrepareStop, begin_connect_attempt, cancel_connect, fail_connect, finish_stage,
+    register_attempt, start_stage,
+};
 use crate::*;
 use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
 use dbflux_core::observability::actions::{
@@ -153,6 +158,17 @@ async fn wait_for_connection_teardown(
     }
 }
 
+/// Everything the direct connect needs once its task and stages exist.
+struct DirectConnect {
+    params: dbflux_core::ConnectProfileParams,
+    profile_name: String,
+    pre_connect_hooks: Vec<dbflux_core::ConnectionHook>,
+    post_connect_hooks: Vec<dbflux_core::ConnectionHook>,
+    hook_context: dbflux_core::HookContext,
+    attempt: ConnectAttempt,
+    cancel_token: dbflux_core::CancelToken,
+}
+
 /// Why a connect attempt stopped before it started.
 enum ConnectStop {
     /// Another attempt for the same profile is in flight; nothing to report.
@@ -299,104 +315,106 @@ impl Sidebar {
 
         let passphrase_ref: Option<&str> = override_passphrase.as_deref();
 
-        let (params, profile_name, pre_connect_hooks, post_connect_hooks, hook_context) =
-            match self.app_state.update(cx, |state, _cx| {
-                if state.is_operation_pending(profile_id, None) {
-                    return Err(ConnectStop::AlreadyConnecting);
-                }
+        let DirectConnect {
+            params,
+            profile_name,
+            pre_connect_hooks,
+            post_connect_hooks,
+            hook_context,
+            attempt,
+            cancel_token,
+        } = match self.app_state.update(cx, |state, cx| {
+            if state.is_operation_pending(profile_id, None) {
+                return Err(ConnectStop::AlreadyConnecting);
+            }
 
-                let result = state.prepare_connect_profile_with_secrets(
-                    profile_id,
-                    passphrase_ref,
-                    password.clone(),
-                );
-
-                if result.is_ok() && !state.start_pending_operation(profile_id, None) {
-                    return Err(ConnectStop::AlreadyConnecting);
-                }
-
-                let diagnostic = result
-                    .as_ref()
-                    .err()
-                    .and_then(|error| error.socket_id())
-                    .and_then(|socket_id| state.external_driver_diagnostic(socket_id))
-                    .cloned();
-
-                match result {
-                    Ok(p) => {
-                        let name = p.profile.name.clone();
-                        let hook_execution =
-                            p.prepare_hooks(state.resolve_profile_hooks(&p.profile));
-
-                        Ok((
-                            p,
-                            name,
-                            hook_execution.hooks.pre_connect,
-                            hook_execution.hooks.post_connect,
-                            hook_execution.context,
-                        ))
-                    }
-                    Err(error) => {
-                        let toast = connect_prepare_error_toast(&error, diagnostic.as_ref());
-                        state.record_connect_failure(profile_id, toast.message.clone());
-                        Err(ConnectStop::Failed(toast))
-                    }
-                }
-            }) {
-                Ok(p) => p,
-                Err(ConnectStop::AlreadyConnecting) => {
-                    // A second request for a profile that is already
-                    // connecting (double click, repeated Enter, menu) is not
-                    // a failure: the attempt in flight serves it.
-                    log::info!(
-                        "Connect skipped: {}",
-                        crate::labels::connection_already_pending_toast_label()
-                    );
-                    return;
-                }
-                Err(ConnectStop::Failed(toast)) => {
-                    self.pending_toast = Some(toast);
-                    self.refresh_tree(cx);
-                    cx.notify();
-                    return;
-                }
-            };
-
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.app_state.update(cx, |state, _cx| {
-                state.finish_pending_operation(profile_id, None);
-            });
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            cx.notify();
-            return;
-        }
-
-        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            state.clear_connect_failure(profile_id);
-            let result = state.start_task_for_profile(
-                TaskKind::Connect,
-                crate::labels::connecting_task_label(&profile_name),
-                Some(profile_id),
+            let result = state.prepare_connect_profile_with_secrets(
+                profile_id,
+                passphrase_ref,
+                password.clone(),
             );
-            cx.emit(AppStateChanged);
-            result
-        });
+
+            let diagnostic = result
+                .as_ref()
+                .err()
+                .and_then(|error| error.socket_id())
+                .and_then(|socket_id| state.external_driver_diagnostic(socket_id))
+                .cloned();
+
+            match result {
+                Ok(p) => {
+                    let name = p.profile.name.clone();
+                    let handle = match begin_connect_attempt(
+                        state,
+                        profile_id,
+                        crate::labels::connecting_task_label(&name),
+                    ) {
+                        Ok(handle) => handle,
+                        Err(PrepareStop::LimitReached) => {
+                            return Err(ConnectStop::Failed(PendingToast {
+                                message: crate::labels::background_task_limit_toast_label(),
+                                is_error: true,
+                            }));
+                        }
+                        Err(_) => return Err(ConnectStop::AlreadyConnecting),
+                    };
+                    let hook_execution = p.prepare_hooks(state.resolve_profile_hooks(&p.profile));
+                    let attempt = register_attempt(
+                        state,
+                        handle.id(),
+                        &p.profile,
+                        None,
+                        &hook_execution.hooks,
+                    );
+                    cx.emit(AppStateChanged);
+
+                    Ok(DirectConnect {
+                        params: p,
+                        profile_name: name,
+                        pre_connect_hooks: hook_execution.hooks.pre_connect,
+                        post_connect_hooks: hook_execution.hooks.post_connect,
+                        hook_context: hook_execution.context,
+                        attempt,
+                        cancel_token: handle.token().clone(),
+                    })
+                }
+                Err(error) => {
+                    let toast = connect_prepare_error_toast(&error, diagnostic.as_ref());
+                    state.record_connect_failure(profile_id, toast.message.clone());
+                    Err(ConnectStop::Failed(toast))
+                }
+            }
+        }) {
+            Ok(p) => p,
+            Err(ConnectStop::AlreadyConnecting) => {
+                // A second request for a profile that is already
+                // connecting (double click, repeated Enter, menu) is not
+                // a failure: the attempt in flight serves it.
+                log::info!(
+                    "Connect skipped: {}",
+                    crate::labels::connection_already_pending_toast_label()
+                );
+                return;
+            }
+            Err(ConnectStop::Failed(toast)) => {
+                self.pending_toast = Some(toast);
+                self.refresh_tree(cx);
+                cx.notify();
+                return;
+            }
+        };
 
         self.refresh_tree(cx);
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
 
-        let detached_hook_scope = DetachedHookScope::default();
         let session_password = password;
 
         cx.spawn(async move |_this, cx| {
             let mut hook_warnings = Vec::new();
 
+            start_stage(&app_state, &attempt, ConnectStage::PreConnectHooks, cx);
             match run_hook_phase(
                 app_state.clone(),
                 profile_id,
@@ -405,75 +423,32 @@ impl Sidebar {
                 pre_connect_hooks,
                 hook_context.clone(),
                 Some(cancel_token.clone()),
-                &detached_hook_scope,
+                attempt.detached_hooks(),
                 cx,
             )
             .await
             {
                 HookPhaseState::Continue { warnings } => {
                     hook_warnings.extend(warnings);
+                    finish_stage(&app_state, &attempt, ConnectStage::PreConnectHooks, cx);
                 }
                 HookPhaseState::Aborted { error } => {
-                    cx.update(|cx| {
-                        app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
-                            state.fail_task(task_id, error.clone());
-                            state.record_connect_failure(profile_id, error.clone());
-                            state.finish_pending_operation(profile_id, None);
-                            cx.emit(AppStateChanged);
-                        });
-
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_toast = Some(PendingToast {
-                                message: error,
-                                is_error: true,
-                            });
-                            sidebar.refresh_tree(cx);
-                        });
-                    });
+                    fail_connect(&app_state, &sidebar, &attempt, ConnectFailure::new(error), cx);
                     return;
                 }
                 HookPhaseState::Cancelled => {
-                    cx.update(|cx| {
-                        app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
-                            cx.emit(AppStateChanged);
-                        });
-
-                        if cancel_token.is_cancelled() {
-                            app_state.update(cx, |state, cx| {
-                                state.finish_pending_operation(profile_id, None);
-                                cx.emit(AppStateChanged);
-                            });
-
-                            sidebar.update(cx, |sidebar, cx| {
-                                sidebar.refresh_tree(cx);
-                            });
-
-                            return;
-                        }
-
-                        app_state.update(cx, |state, cx| {
-                            state.fail_task(
-                                task_id,
-                                crate::labels::connection_hook_cancelled_task_label(),
-                            );
-                            state.record_connect_failure(
-                                profile_id,
-                                crate::labels::connection_cancelled_by_hook_toast_label(),
-                            );
-                            state.finish_pending_operation(profile_id, None);
-                            cx.emit(AppStateChanged);
-                        });
-
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_toast = Some(PendingToast {
-                                message: crate::labels::connection_cancelled_by_hook_toast_label(),
-                                is_error: true,
-                            });
-                            sidebar.refresh_tree(cx);
-                        });
-                    });
+                    if cancel_token.is_cancelled() {
+                        cancel_connect(&app_state, &sidebar, &attempt, None, cx);
+                    } else {
+                        fail_connect(
+                            &app_state,
+                            &sidebar,
+                            &attempt,
+                            ConnectFailure::new(crate::labels::connection_hook_cancelled_task_label())
+                                .toast(crate::labels::connection_cancelled_by_hook_toast_label()),
+                            cx,
+                        );
+                    }
                     return;
                 }
             }
@@ -508,24 +483,20 @@ impl Sidebar {
                 });
             });
 
+            // The driver connect and the schema fetch are one blocking call
+            // with no way to interrupt it. A cancel that arrives meanwhile
+            // leaves the stage `Cancelling`; the result is dropped below and
+            // the stage reads `Cancelled` only then.
+            start_stage(&app_state, &attempt, ConnectStage::ConnectingDriver, cx);
             let result = cx
                 .background_executor()
                 .spawn(async move { params.execute(Some(dbflux_app::proxy::create_proxy_tunnel)) })
                 .await;
 
             if cancel_token.is_cancelled() {
-                cx.update(|cx| {
-                    log::info!("Connection task was cancelled, discarding result");
-
-                    app_state.update(cx, |state, cx| {
-                        state.finish_pending_operation(profile_id, None);
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.refresh_tree(cx);
-                    });
-                });
+                log::info!("Connection task was cancelled, discarding result");
+                drop(result);
+                cancel_connect(&app_state, &sidebar, &attempt, None, cx);
                 return;
             }
 
@@ -573,15 +544,13 @@ impl Sidebar {
                                 );
                             }
 
-                            state.cancel_detached_hook_tasks(profile_id);
                             if !is_passphrase_error {
                                 // A remembered password may be the reason the
                                 // connect failed; ask again next time.
                                 state.forget_connection_password(profile_id);
                             }
-                            state.record_connect_failure(profile_id, error_clone.clone());
-                            state.fail_task(task_id, error_clone);
-                            state.finish_pending_operation(profile_id, None);
+                            attempt.finish(state, ConnectOutcome::Failed(&error_clone));
+                            state.record_connect_failure(profile_id, error_clone);
                             cx.emit(AppStateChanged);
                             cx.notify();
                         });
@@ -653,6 +622,16 @@ impl Sidebar {
                 }
             };
 
+            // A cancel that arrived while the driver was connecting must not
+            // leave the connection open: drop it instead of registering a
+            // connection the user already cancelled.
+            if cancel_token.is_cancelled() {
+                drop(connected);
+                cancel_connect(&app_state, &sidebar, &attempt, None, cx);
+                return;
+            }
+
+            start_stage(&app_state, &attempt, ConnectStage::PostConnectHooks, cx);
             match run_hook_phase(
                 app_state.clone(),
                 profile_id,
@@ -661,7 +640,7 @@ impl Sidebar {
                 post_connect_hooks,
                 hook_context,
                 Some(cancel_token.clone()),
-                &detached_hook_scope,
+                attempt.detached_hooks(),
                 cx,
             )
             .await
@@ -670,70 +649,37 @@ impl Sidebar {
                     hook_warnings.extend(warnings);
                 }
                 HookPhaseState::Aborted { error } => {
-                    cx.update(|cx| {
-                        app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
-                            state.fail_task(task_id, error.clone());
-                            state.record_connect_failure(profile_id, error.clone());
-                            state.finish_pending_operation(profile_id, None);
-                            cx.emit(AppStateChanged);
-                        });
-
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_toast = Some(PendingToast {
-                                message: error,
-                                is_error: true,
-                            });
-                            sidebar.refresh_tree(cx);
-                        });
-                    });
+                    drop(connected);
+                    fail_connect(&app_state, &sidebar, &attempt, ConnectFailure::new(error), cx);
                     return;
                 }
                 HookPhaseState::Cancelled => {
-                    cx.update(|cx| {
-                        app_state.update(cx, |state, cx| {
-                            state.cancel_detached_hook_tasks(profile_id);
-                            cx.emit(AppStateChanged);
-                        });
+                    drop(connected);
 
-                        if cancel_token.is_cancelled() {
-                            app_state.update(cx, |state, cx| {
-                                state.finish_pending_operation(profile_id, None);
-                                cx.emit(AppStateChanged);
-                            });
-
-                            sidebar.update(cx, |sidebar, cx| {
-                                sidebar.refresh_tree(cx);
-                            });
-
-                            return;
-                        }
-
-                        app_state.update(cx, |state, cx| {
-                            state.fail_task(
-                                task_id,
+                    if cancel_token.is_cancelled() {
+                        cancel_connect(&app_state, &sidebar, &attempt, None, cx);
+                    } else {
+                        fail_connect(
+                            &app_state,
+                            &sidebar,
+                            &attempt,
+                            ConnectFailure::new(
                                 crate::labels::post_connect_hook_cancelled_task_label(),
-                            );
-                            state.record_connect_failure(
-                                profile_id,
-                                crate::labels::connection_cancelled_by_post_connect_hook_toast_label(),
-                            );
-                            state.finish_pending_operation(profile_id, None);
-                            cx.emit(AppStateChanged);
-                        });
-
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_toast = Some(PendingToast {
-                                message:
-                                    crate::labels::connection_cancelled_by_post_connect_hook_toast_label(
-                                    ),
-                                is_error: true,
-                            });
-                            sidebar.refresh_tree(cx);
-                        });
-                    });
+                            )
+                            .toast(crate::labels::connection_cancelled_by_post_connect_hook_toast_label()),
+                            cx,
+                        );
+                    }
                     return;
                 }
+            }
+
+            // A cancel that arrived while the post-connect hooks ran must not
+            // leave the connection open either.
+            if cancel_token.is_cancelled() {
+                drop(connected);
+                cancel_connect(&app_state, &sidebar, &attempt, None, cx);
+                return;
             }
 
             let connected_profile_name = connected.profile.name.clone();
@@ -765,8 +711,7 @@ impl Sidebar {
                         log::warn!("Failed to record connection.success audit event: {}", e);
                     }
 
-                    state.complete_task(task_id);
-                    state.finish_pending_operation(profile_id, None);
+                    attempt.finish(state, ConnectOutcome::Completed);
                     state.apply_connect_profile(
                         connected.profile,
                         connected.connection,
@@ -2184,5 +2129,131 @@ mod tests {
             assert!(!state.connections().contains_key(&profile_id));
         });
         assert!(recorded(&fixture.passwords).is_empty());
+    }
+
+    // --- The direct connect path (no auth provider, value refs or access) ---
+
+    #[gpui::test]
+    fn a_plain_profile_connects_through_a_parent_task_with_driver_stages(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+
+        let rows = stage_rows(&fixture, cx);
+        assert_eq!(
+            rows.iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["Connecting driver", "Fetching schema"]
+        );
+        assert_eq!(statuses(&rows), vec![TaskStatus::Pending; 2]);
+        assert_eq!(attempt_status(&fixture, cx), TaskStatus::Running);
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            statuses(&stage_rows(&fixture, cx)),
+            vec![TaskStatus::Completed; 2]
+        );
+        assert_eq!(attempt_status(&fixture, cx), TaskStatus::Completed);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id));
+            assert!(!state.is_operation_pending(profile_id, None));
+        });
+        assert_eq!(recorded(&fixture.passwords).len(), 1);
+    }
+
+    #[gpui::test]
+    fn a_plain_connect_for_a_profile_that_has_a_connect_task_is_refused(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = fixture.profile_id;
+
+        // Only the task is registered; the pending-operation set stays empty,
+        // so a refusal can only come from the task manager.
+        fixture.state.update(cx, |state, _| {
+            state
+                .try_start_task(
+                    dbflux_core::TaskRequest::new(TaskKind::Connect, "connecting").target(
+                        dbflux_core::TaskTarget {
+                            profile_id,
+                            database: None,
+                        },
+                    ),
+                )
+                .expect("first connect task starts");
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        fixture.state.read_with(cx, |state, _| {
+            assert_eq!(connect_attempts(state).len(), 1, "no second attempt");
+            assert!(!state.connections().contains_key(&profile_id));
+            assert!(!state.is_operation_pending(profile_id, None));
+        });
+        assert!(recorded(&fixture.passwords).is_empty());
+    }
+
+    #[gpui::test]
+    fn cancelling_during_the_driver_connect_drops_the_connection_and_skips_the_schema(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = fixture.profile_id;
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+
+        // Let the foreground reach the blocking driver connect, which the
+        // test scheduler has queued but not run.
+        for _ in 0..50 {
+            let driver_stage_running = fixture.state.read_with(cx, |state, _| {
+                state.tasks().recent_tasks(usize::MAX).iter().any(|task| {
+                    task.description == "Connecting driver" && task.status == TaskStatus::Running
+                })
+            });
+            if driver_stage_running {
+                break;
+            }
+            cx.executor().tick();
+        }
+        assert!(
+            recorded(&fixture.passwords).is_empty(),
+            "the driver connect is still in flight"
+        );
+
+        fixture.state.update(cx, |state, _| {
+            assert_eq!(
+                state.cancel_running_connect_tasks_for_profile(profile_id),
+                1
+            );
+        });
+        assert_eq!(
+            statuses(&stage_rows(&fixture, cx)),
+            [TaskStatus::Cancelling, TaskStatus::Skipped],
+            "the stage waits for the blocking call; the schema never starts"
+        );
+        assert_eq!(attempt_status(&fixture, cx), TaskStatus::Cancelling);
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            statuses(&stage_rows(&fixture, cx)),
+            [TaskStatus::Cancelled, TaskStatus::Skipped]
+        );
+        assert_eq!(attempt_status(&fixture, cx), TaskStatus::Cancelled);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(
+                !state.connections().contains_key(&profile_id),
+                "a cancelled connect registers nothing"
+            );
+            assert!(!state.is_operation_pending(profile_id, None));
+        });
     }
 }
