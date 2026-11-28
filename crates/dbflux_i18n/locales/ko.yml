@@ -6111,6 +6111,7 @@ sidebar:
     disconnected_hook_error: "%{name}에서 연결이 끊어졌지만 %{error}"
     profile_not_found: 프로필을 찾을 수 없습니다
     schema_drop_cancelled: 스키마 삭제가 취소되었습니다
+    schema_drop_cancelled_after_release: "\"%{database}\" 삭제가 취소되어 아무것도 삭제되지 않았지만, DBFlux는 이미 해당 연결을 해제했습니다. 사이드바에서 데이터베이스를 선택해 다시 연결하세요."
     drop_failed: "삭제에 실패했습니다: %{error}"
     reveal_failed: "파일 관리자에서 표시하지 못했습니다: %{error}"
     schema_snapshot_failed: "스키마 스냅샷을 캡처하지 못했습니다: %{error}"
@@ -6342,6 +6343,8 @@ tasks_panel:
   empty: 백그라운드 작업이 없습니다.
   output_truncated: "… 패널에서 출력이 잘렸습니다"
   query_cancel_unsupported: "%{driver}은(는) 실행 중인 명령 취소를 지원하지 않습니다."
+  query_cancel_not_sent: "%{driver}에 취소 요청을 보내지 못했습니다: %{error}. 다시 취소해 보세요."
+  query_cancel_rejected: "%{driver}이(가) 취소 요청을 수락하지 않았습니다: %{error}. 쿼리는 끝날 때까지 계속 실행됩니다."
   drop_point_of_no_return: "구문이 이미 서버로 전송되어 더 이상 취소할 수 없습니다."
   mutation_point_of_no_return: "변경 사항이 트랜잭션 없이 적용되어 더 이상 취소할 수 없습니다."
   cancelling_count: "%{count}개 취소 중"

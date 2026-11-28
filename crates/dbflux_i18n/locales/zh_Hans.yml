@@ -6110,6 +6110,7 @@ sidebar:
     disconnected_hook_error: "已断开与 %{name} 的连接，但 %{error}"
     profile_not_found: 未找到配置文件
     schema_drop_cancelled: Schema 删除已取消
+    schema_drop_cancelled_after_release: "已取消删除“%{database}”，未删除任何内容，但 DBFlux 已释放与它的连接。请在侧边栏中选择该数据库以重新连接。"
     drop_failed: "删除失败：%{error}"
     reveal_failed: "在文件管理器中显示失败：%{error}"
     schema_snapshot_failed: "捕获 Schema 快照失败：%{error}"
@@ -6341,6 +6342,8 @@ tasks_panel:
   empty: 无后台任务
   output_truncated: …面板中输出已截断
   query_cancel_unsupported: "%{driver} 不支持取消正在运行的命令。"
+  query_cancel_not_sent: "无法向 %{driver} 发送取消请求：%{error}。请再次尝试取消。"
+  query_cancel_rejected: "%{driver} 未接受取消请求：%{error}。查询将继续运行直到完成。"
   drop_point_of_no_return: "语句已发送到服务器，无法再取消。"
   mutation_point_of_no_return: "更改在没有事务的情况下应用，无法再取消。"
   cancelling_count: "%{count} 个取消中"

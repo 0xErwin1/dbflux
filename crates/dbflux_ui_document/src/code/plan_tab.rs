@@ -431,9 +431,12 @@ impl CodeDocument {
         self.clear_live_output();
 
         let description = dbflux_core::truncate_string_safe(target.text.trim(), 80);
-        let (task_id, cancel_token) =
-            self.runner
-                .start_primary_query_for_target(description, task_target.clone(), true, cx);
+        let (task_id, cancel_token) = self.runner.start_primary_query_for_target(
+            description,
+            task_target.clone(),
+            Some(connection.clone()),
+            cx,
+        );
         self.execution.active_query_task = Some(ActiveQueryTask { task_id });
         self.state = DocumentState::Executing;
 

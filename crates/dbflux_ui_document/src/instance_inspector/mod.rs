@@ -320,6 +320,7 @@ impl InspectorPanel {
                 "document.instance_inspector.task_label",
                 metric_id = self.metric_id
             ),
+            conn.clone(),
             cx,
         );
 

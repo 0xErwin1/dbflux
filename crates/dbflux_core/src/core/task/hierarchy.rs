@@ -11,8 +11,12 @@
 //!   `Running` or `Cancelling` (a descendant that cannot stop, or is waiting for
 //!   its worker) becomes `Cancelling` instead, and turns `Cancelled` by
 //!   itself once every descendant is terminal.
-//! - `acknowledge_cancelled` on a parent is refused while a descendant is in
-//!   flight.
+//! - A child registered below a completed intermediate of a cancelled ancestor
+//!   inherits the cancellation too: the whole chain is checked.
+//! - `acknowledge_cancelled` on a parent while a descendant is in flight
+//!   records the confirmation and keeps the parent `Cancelling`; the last
+//!   descendant to stop settles it. A parent that never started (`Pending`)
+//!   settles as `Skipped`, not `Cancelled`.
 //! - Completing or failing a parent never touches its children: they finish
 //!   on their own.
 
@@ -74,11 +78,42 @@ impl TaskManager {
         false
     }
 
+    /// Whether `parent` or any task above it was cancelled, however many
+    /// terminal intermediates lie between them.
+    pub(super) fn has_cancelled_ancestor(&self, parent: Option<TaskId>) -> bool {
+        let mut current = parent;
+        let mut remaining = self.tasks.len();
+
+        while let Some(id) = current {
+            let Some(task) = self.tasks.get(&id) else {
+                return false;
+            };
+
+            if matches!(
+                task.status,
+                TaskStatus::Cancelling | TaskStatus::Cancelled | TaskStatus::Skipped
+            ) {
+                return true;
+            }
+
+            if remaining == 0 {
+                return false;
+            }
+            remaining -= 1;
+            current = task.parent_id;
+        }
+
+        false
+    }
+
     /// Applies the honest-parent rule after the parent's own cancel request.
+    /// `was_pending` keeps a stage that never started reading `Skipped` once
+    /// its children stopped.
     pub(super) fn reconcile_with_children(
         &mut self,
         id: TaskId,
         own: CancelRequestOutcome,
+        was_pending: bool,
     ) -> CancelRequestOutcome {
         if own != CancelRequestOutcome::Cancelled || !self.has_in_flight_descendants(id) {
             return own;
@@ -88,6 +123,9 @@ impl TaskManager {
             task.status = TaskStatus::Cancelling;
             task.completed_at = None;
             task.settles_with_children = true;
+            if was_pending {
+                task.settles_as = TaskStatus::Skipped;
+            }
         }
         CancelRequestOutcome::Cancelling
     }
@@ -107,7 +145,8 @@ impl TaskManager {
             };
 
             if parent.status == TaskStatus::Cancelling && parent.settles_with_children {
-                parent.finish(TaskStatus::Cancelled);
+                let settled = parent.settles_as.clone();
+                parent.finish(settled);
             } else if !parent.status.is_terminal() {
                 return;
             }
