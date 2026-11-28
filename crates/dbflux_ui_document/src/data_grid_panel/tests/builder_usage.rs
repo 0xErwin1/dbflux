@@ -137,6 +137,7 @@ pub(crate) async fn run_sequenced_builder_fixture_worker<T: Send + 'static>(
         let shared = shared.clone();
         move || {
             BUILDER_WORKER_SEQUENCE.with(|slot| slot.set(sequence));
+            crate::task_runner::fixture_worker::mark_current_thread();
             let result = operation();
             let mut state = shared.lock().expect("fixture result");
             state.0 = Some(result);
@@ -229,7 +230,9 @@ fn pump_builder_until(window: &mut VisualTestContext, mut ready: impl FnMut() ->
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let is_ready = ready();
-        let wakers = std::mem::take(&mut *BUILDER_FIXTURE_WAKERS.lock().expect("fixture wakes"));
+        let mut wakers =
+            std::mem::take(&mut *BUILDER_FIXTURE_WAKERS.lock().expect("fixture wakes"));
+        wakers.extend(crate::task_runner::fixture_worker::take_deferred());
         for waker in wakers {
             waker.wake();
         }
