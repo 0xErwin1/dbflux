@@ -4358,6 +4358,9 @@ form:
     detached_hook_cleanup_failed: "未能释放配置 %{profile_name}（%{profile_id}）的分离式测试 Hook 任务；作用域任务 ID [%{task_ids}]：%{error}"
     aws_credentials_missing: "无法解析配置文件 %{name} 的 AWS 凭据。请将凭据添加到 ~/.aws/credentials（或使用环境变量 / IAM 角色）后重试。DBFlux 不存储 AWS 访问密钥 — 凭据由 AWS SDK 直接读取。"
     pipeline_stage_failed: "流水线阶段 %{stage}：%{source}"
+  task:
+    test_connection: "测试连接 — %{name}"
+    test_connection_point_of_no_return: "连接尝试已在进行中，无法再中断。"
 hooks:
   kind:
     lua: "Lua"

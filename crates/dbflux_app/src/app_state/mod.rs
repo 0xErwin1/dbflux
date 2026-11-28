@@ -2265,6 +2265,16 @@ impl AppState {
         self.facade.tasks.mark_point_of_no_return(id, reason);
     }
 
+    /// See [`dbflux_core::TaskManager::settle_discarded`].
+    pub fn settle_task_discarded(&mut self, id: TaskId) -> bool {
+        self.facade.tasks.settle_discarded(id)
+    }
+
+    /// See [`dbflux_core::TaskManager::enter_point_of_no_return`].
+    pub fn enter_task_point_of_no_return(&mut self, id: TaskId, reason: impl Into<String>) -> bool {
+        self.facade.tasks.enter_point_of_no_return(id, reason)
+    }
+
     #[allow(dead_code)]
     pub fn cancel_task(&mut self, id: TaskId) -> bool {
         self.facade.tasks.cancel(id)

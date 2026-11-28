@@ -43,6 +43,38 @@ enum DatabaseRefreshExecutionOutcome {
     },
 }
 
+/// Starts the task of a database switch. The blocking connect cannot be
+/// interrupted, so a cancel only asks for the stop: the task reads
+/// `Cancelling` until [`resolve_finished_switch`] acknowledges it.
+fn start_database_switch_task(
+    state: &mut AppStateEntity,
+    profile_id: Uuid,
+    database: &str,
+) -> dbflux_core::TaskHandle {
+    state.start_task_handle(
+        dbflux_core::TaskRequest::new(
+            TaskKind::SwitchDatabase,
+            crate::labels::connecting_to_database_task_label(database),
+        )
+        .target(TaskTarget {
+            profile_id,
+            database: Some(database.to_string()),
+        })
+        .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+    )
+}
+
+/// Runs once the blocking connect returned. Returns `None` when a cancel was
+/// requested: the worker stopped, the task is acknowledged `Cancelled` and
+/// the result must be dropped.
+fn resolve_finished_switch<T>(state: &mut AppStateEntity, task_id: TaskId, result: T) -> Option<T> {
+    if state.acknowledge_task_cancelled(task_id) {
+        None
+    } else {
+        Some(result)
+    }
+}
+
 impl Sidebar {
     pub(crate) fn handle_database_click(&mut self, item_id: &str, cx: &mut Context<Self>) {
         let Some(SchemaNodeId::Database {
@@ -387,13 +419,14 @@ impl Sidebar {
         };
 
         Some(self.app_state.update(cx, |state, cx| {
-            let task = state.start_task_for_target(
+            let handle = crate::table_loading::start_schema_task(
+                state,
                 TaskKind::SchemaRefresh,
                 crate::labels::refreshing_database_task_label(database),
-                Some(task_target),
+                task_target,
             );
             cx.emit(AppStateChanged);
-            task
+            (handle.id(), handle.token().clone())
         }))
     }
 
@@ -417,7 +450,7 @@ impl Sidebar {
             .database_refresh_guard_is_current(refresh_guard)
         {
             app_state.update(cx, |state, cx| {
-                state.tasks_mut().cancel(task_id);
+                state.settle_task_discarded(task_id);
                 // The pending marker is unique per profile/target in one
                 // session: until this operation releases it, a second
                 // same-session refresh cannot acquire it. A replacement
@@ -506,7 +539,7 @@ impl Sidebar {
                 let subtree_overrides = held_state.subtree_expansion_overrides.clone();
 
                 app_state.update(cx, |state, cx| {
-                    state.tasks_mut().cancel(task_id);
+                    state.settle_task_discarded(task_id);
                     state.finish_pending_operation(profile_id, Some(database));
                     Self::restore_database_refresh_state(state, profile_id, held_state);
                     cx.emit(AppStateChanged);
@@ -938,13 +971,10 @@ impl Sidebar {
             return;
         }
 
-        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let result = state.start_task(
-                TaskKind::SwitchDatabase,
-                crate::labels::connecting_to_database_task_label(db_name),
-            );
+        let task_id = self.app_state.update(cx, |state, cx| {
+            let handle = start_database_switch_task(state, profile_id, db_name);
             cx.emit(AppStateChanged);
-            result
+            handle.id()
         });
 
         self.refresh_tree(cx);
@@ -962,7 +992,7 @@ impl Sidebar {
             cx.update(|cx| {
                 if !app_state.read(cx).database_refresh_guard_is_current(&guard) {
                     app_state.update(cx, |state, cx| {
-                        state.tasks_mut().cancel(task_id);
+                        state.settle_task_discarded(task_id);
                         if state.database_refresh_guard_is_same_session(&guard) {
                             state.finish_pending_operation(profile_id, Some(&db_name_owned));
                         }
@@ -971,19 +1001,15 @@ impl Sidebar {
                     sidebar.update(cx, |sidebar, cx| sidebar.refresh_tree(cx));
                     return;
                 }
-                if cancel_token.is_cancelled() {
-                    log::info!("Database connection task was cancelled, discarding result");
-                    app_state.update(cx, |state, cx| {
-                        state.finish_pending_operation(profile_id, Some(&db_name_owned));
-                        cx.emit(AppStateChanged);
-                    });
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.refresh_tree(cx);
-                    });
-                    return;
-                }
 
                 let toast = app_state.update(cx, |state, cx| {
+                    let Some(result) = resolve_finished_switch(state, task_id, result) else {
+                        log::info!("Database connection task was cancelled, discarding result");
+                        state.finish_pending_operation(profile_id, Some(&db_name_owned));
+                        cx.emit(AppStateChanged);
+                        return None;
+                    };
+
                     let toast = match result {
                         Ok(installed) => match state.apply_guarded_database_connection(installed) {
                             dbflux_core::InstallDatabaseConnectionOutcome::Installed => {
@@ -992,7 +1018,7 @@ impl Sidebar {
                                 None
                             }
                             dbflux_core::InstallDatabaseConnectionOutcome::Rejected(_) => {
-                                state.tasks_mut().cancel(task_id);
+                                state.settle_task_discarded(task_id);
                                 None
                             }
                         },
@@ -1145,13 +1171,14 @@ impl Sidebar {
             database: parts.database.clone().or_else(|| Some(cache_db.clone())),
         };
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let task = state.start_task_for_target(
+            let handle = crate::table_loading::start_schema_task(
+                state,
                 TaskKind::SchemaRefresh,
                 crate::labels::refreshing_schema_object_task_label(&parts.object_name),
-                Some(target),
+                target,
             );
             cx.emit(AppStateChanged);
-            task
+            (handle.id(), handle.token().clone())
         });
         self.loading_items.insert(item_id.to_string());
         self.view_refresh_tasks.insert(
@@ -1191,7 +1218,7 @@ impl Sidebar {
                             .refresh_views_request_is_current(&request)
                     {
                         app_state.update(cx, |state, cx| {
-                            state.tasks_mut().cancel(task_id);
+                            state.settle_task_discarded(task_id);
                             cx.emit(AppStateChanged);
                         });
                         sidebar.refresh_tree(cx);
@@ -1205,7 +1232,7 @@ impl Sidebar {
                                         state.complete_task(task_id)
                                     }
                                     dbflux_core::ApplyFetchOutcome::Rejected(_) => {
-                                        state.tasks_mut().cancel(task_id);
+                                        state.settle_task_discarded(task_id);
                                     }
                                 }
                                 cx.emit(AppStateChanged);
@@ -1227,5 +1254,75 @@ impl Sidebar {
             });
         });
         self.track_operation_task(task_id, operation_task);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_finished_switch, start_database_switch_task};
+    use dbflux_core::{CancelRequestOutcome, TaskKind, TaskStatus};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use uuid::Uuid;
+
+    fn app_state() -> AppStateEntity {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        AppStateEntity::new_with_storage_runtime(runtime).expect("test app state")
+    }
+
+    #[test]
+    fn a_database_switch_is_a_cancellable_task_of_its_database() {
+        let mut state = app_state();
+        let profile_id = Uuid::from_u128(1);
+
+        let handle = start_database_switch_task(&mut state, profile_id, "analytics");
+
+        let task = state.tasks().get(handle.id()).expect("task");
+        assert_eq!(task.kind, TaskKind::SwitchDatabase);
+        assert_eq!(task.status, TaskStatus::Running);
+        assert!(task.is_cancellable);
+        assert_eq!(
+            task.target.expect("target").database.as_deref(),
+            Some("analytics")
+        );
+    }
+
+    #[test]
+    fn a_cancelled_switch_reads_cancelling_then_cancelled_and_discards_its_result() {
+        let mut state = app_state();
+        let handle = start_database_switch_task(&mut state, Uuid::from_u128(1), "analytics");
+
+        assert_eq!(
+            state.request_cancel_task(handle.id()),
+            CancelRequestOutcome::Cancelling
+        );
+        assert_eq!(
+            state.tasks().get(handle.id()).expect("task").status,
+            TaskStatus::Cancelling,
+            "the blocking connect has not finished"
+        );
+
+        let applied = resolve_finished_switch(&mut state, handle.id(), "connected");
+
+        assert_eq!(applied, None, "the result of a cancelled switch is dropped");
+        assert_eq!(
+            state.tasks().get(handle.id()).expect("task").status,
+            TaskStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn an_uncancelled_switch_keeps_its_result_and_its_status() {
+        let mut state = app_state();
+        let handle = start_database_switch_task(&mut state, Uuid::from_u128(1), "analytics");
+
+        let applied = resolve_finished_switch(&mut state, handle.id(), "connected");
+
+        assert_eq!(applied, Some("connected"));
+        assert_eq!(
+            state.tasks().get(handle.id()).expect("task").status,
+            TaskStatus::Running,
+            "the caller completes the task once the result is applied"
+        );
     }
 }

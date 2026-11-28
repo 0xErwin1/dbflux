@@ -4358,6 +4358,9 @@ form:
     detached_hook_cleanup_failed: "프로필 '%{profile_name}' (%{profile_id})에 대해 분리된 테스트 훅 작업을 해제하지 못했습니다; 범위 작업 ID [%{task_ids}]: %{error}"
     aws_credentials_missing: "프로필 '%{name}'에 대한 AWS 자격 증명을 확인하지 못했습니다. ~/.aws/credentials에 자격 증명을 추가하거나(또는 환경 변수 / IAM 역할 사용) 다시 시도하세요. DBFlux는 AWS 액세스 키를 저장하지 않습니다 — 자격 증명은 AWS SDK가 직접 읽습니다."
     pipeline_stage_failed: "파이프라인 단계 '%{stage}': %{source}"
+  task:
+    test_connection: "연결 테스트 — %{name}"
+    test_connection_point_of_no_return: "연결 시도가 이미 진행 중이어서 더 이상 중단할 수 없습니다."
 hooks:
   kind:
     lua: "Lua"

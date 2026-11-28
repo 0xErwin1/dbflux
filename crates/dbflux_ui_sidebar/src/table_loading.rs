@@ -8,6 +8,22 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 const COLLECTION_CHILDREN_PAGE_SIZE: u32 = 50;
 
+/// Starts a schema task whose blocking driver call cannot be interrupted: a
+/// cancel only asks for the stop, so the task reads `Cancelling` until the
+/// worker finishes and drops its result.
+pub(crate) fn start_schema_task(
+    state: &mut dbflux_ui_base::app_state_entity::AppStateEntity,
+    kind: TaskKind,
+    description: String,
+    target: TaskTarget,
+) -> dbflux_core::TaskHandle {
+    state.start_task_handle(
+        dbflux_core::TaskRequest::new(kind, description)
+            .target(target)
+            .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+    )
+}
+
 impl Sidebar {
     pub(super) fn reconcile_table_details_retry(
         &self,
@@ -95,6 +111,7 @@ impl Sidebar {
             return;
         }
         self.table_details_requests.remove(item_id);
+        self.table_details_post_cancel_actions.remove(item_id);
         self.loading_items.remove(item_id);
         let original_action = self.table_details_actions.remove(item_id);
         if self.pending_actions.get(item_id) == original_action.as_ref() {
@@ -102,7 +119,7 @@ impl Sidebar {
         }
         if let Some((task_id, _)) = self.table_refresh_tasks.remove(item_id) {
             self.app_state.update(cx, |state, cx| {
-                state.tasks_mut().cancel(task_id);
+                state.settle_task_discarded(task_id);
                 cx.emit(AppStateChanged);
             });
         }
@@ -175,13 +192,14 @@ impl Sidebar {
                     database: parts.database.clone().or(Some(database)),
                 };
                 let task = self.app_state.update(cx, |state, cx| {
-                    let task = state.start_task_for_target(
+                    let handle = start_schema_task(
+                        state,
                         TaskKind::SchemaRefresh,
                         crate::labels::refreshing_schema_object_task_label(&parts.object_name),
-                        Some(target),
+                        target,
                     );
                     cx.emit(AppStateChanged);
-                    task
+                    (handle.id(), handle.token().clone())
                 });
                 self.table_refresh_tasks.insert(item_id.to_string(), task);
                 self.table_details_requests
@@ -231,6 +249,14 @@ impl Sidebar {
                 pending_action,
                 PendingAction::ViewSchema { .. } | PendingAction::GenerateCode { .. }
             ) {
+                let refresh_cancelled = self
+                    .table_refresh_tasks
+                    .get(item_id)
+                    .is_some_and(|(_, token)| token.is_cancelled());
+                if refresh_cancelled {
+                    self.table_details_post_cancel_actions
+                        .insert(item_id.to_string());
+                }
                 self.table_details_actions
                     .insert(item_id.to_string(), pending_action.clone());
                 self.pending_actions
@@ -240,6 +266,7 @@ impl Sidebar {
         }
         if self.table_details_requests.remove(item_id).is_some() {
             self.table_details_actions.remove(item_id);
+            self.table_details_post_cancel_actions.remove(item_id);
             self.pending_actions.remove(item_id);
         }
         let state = self.app_state.read(cx);
@@ -427,13 +454,16 @@ impl Sidebar {
         let database_name = database.to_string();
         let task_description = crate::labels::loading_event_streams_task_label(collection);
         let load_task_id = self.app_state.update(cx, |state, _| {
-            let (task_id, _) = state.start_task_for_profile(
+            start_schema_task(
+                state,
                 TaskKind::LoadSchema,
                 task_description,
-                Some(profile_id),
-            );
-            state.tasks_mut().mark_uncancellable(task_id);
-            task_id
+                TaskTarget {
+                    profile_id,
+                    database: Some(database_name.clone()),
+                },
+            )
+            .id()
         });
 
         let task = cx
@@ -500,7 +530,19 @@ impl Sidebar {
             let result = task.await;
 
             cx.update(|cx| {
+                let cancelled = task_id.is_some_and(|task_id| {
+                    app_state.update(cx, |state, _| state.acknowledge_task_cancelled(task_id))
+                });
+
                 match result {
+                    _ if cancelled => {
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.loading_items.remove(&item_id);
+                            sidebar.pending_actions.remove(&item_id);
+                            sidebar.expansion_overrides.remove(&item_id);
+                            sidebar.rebuild_tree_with_overrides(cx);
+                        });
+                    }
                     Ok(res) => {
                         on_success(&app_state, res, cx);
 
@@ -690,7 +732,10 @@ impl Sidebar {
         for item in items {
             self.table_details_requests.remove(&item);
             self.loading_items.remove(&item);
+            let mut consumer_cancelled = false;
+            let queued_after_cancel = self.table_details_post_cancel_actions.remove(&item);
             if let Some((task_id, token)) = self.table_refresh_tasks.remove(&item) {
+                consumer_cancelled = token.is_cancelled() && !queued_after_cancel;
                 self.app_state.update(cx, |state, cx| {
                     match &event.outcome {
                         ObjectTreeOutcome::Applied | ObjectTreeOutcome::Cached
@@ -702,7 +747,7 @@ impl Sidebar {
                             state.fail_task(task_id, error.clone());
                         }
                         _ => {
-                            state.tasks_mut().cancel(task_id);
+                            state.settle_task_discarded(task_id);
                         }
                     }
                     cx.emit(AppStateChanged);
@@ -732,7 +777,12 @@ impl Sidebar {
             } else {
                 self.table_details_retry.borrow_mut().remove(&item);
             }
-            if matches!(
+            if consumer_cancelled {
+                // The shared result stays cached for other consumers; only
+                // this cancelled consumer drops the action it queued; one
+                // requested after the cancel still runs.
+                self.pending_actions.remove(&item);
+            } else if matches!(
                 event.outcome,
                 ObjectTreeOutcome::Applied | ObjectTreeOutcome::Cached
             ) {
@@ -1261,6 +1311,21 @@ pub(crate) mod object_tree_adapter_tests {
     }
 
     impl dbflux_core::Connection for AdapterFakeConnection {
+        fn collection_children(
+            &self,
+            _request: &dbflux_core::CollectionChildrenRequest,
+        ) -> Result<dbflux_core::CollectionChildrenPage, dbflux_core::DbError> {
+            Ok(dbflux_core::CollectionChildrenPage {
+                items: vec![dbflux_core::CollectionChildInfo {
+                    id: "stream-1".to_string(),
+                    label: "stream-1".to_string(),
+                    last_event_ts_ms: None,
+                    presentation: CollectionPresentation::DataGrid,
+                }],
+                next_page_token: None,
+            })
+        }
+
         fn schema_snapshot_authority(&self) -> dbflux_core::SchemaSnapshotAuthority {
             if self.authoritative_primary.load(Ordering::SeqCst) {
                 dbflux_core::SchemaSnapshotAuthority::Authoritative
@@ -6945,4 +7010,6 @@ pub(crate) mod object_tree_adapter_tests {
             Some(dbflux_core::TaskStatus::Cancelled)
         );
     }
+
+    mod cancellation;
 }
