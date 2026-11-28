@@ -708,6 +708,44 @@ fn cancelling_a_plan_leaves_its_task_cancelling_until_the_driver_answers(cx: &mu
 }
 
 #[gpui::test]
+fn a_plan_whose_cancel_was_refused_still_settles_after_its_tab_closed(cx: &mut TestAppContext) {
+    let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
+    doc.explain();
+
+    // The driver cannot stop this explain: the cancel is refused and the task
+    // keeps running, with nobody waiting for it once the tab is gone.
+    doc.window.update(|_, cx| {
+        let task_id = doc
+            .document
+            .read(cx)
+            .execution
+            .active_query_task
+            .as_ref()
+            .expect("the plan is the active task")
+            .task_id;
+        doc.app_state.update(cx, |state, _| {
+            state.mark_task_point_of_no_return(task_id, "cannot be stopped");
+        });
+    });
+    doc.window.update(|_, cx| {
+        doc.document
+            .update(cx, |document, cx| document.close_plan_tab(cx))
+    });
+    assert_eq!(
+        plan_task_status(&mut doc),
+        dbflux_core::TaskStatus::Running,
+        "the refused cancel leaves the task running until the driver answers"
+    );
+
+    doc.settle();
+    assert_eq!(
+        plan_task_status(&mut doc),
+        dbflux_core::TaskStatus::Completed,
+        "the driver's answer settles the task even though the tab is gone"
+    );
+}
+
+#[gpui::test]
 fn the_loading_cancel_button_stops_the_plan_through_the_document(cx: &mut TestAppContext) {
     let mut doc = open(cx, pg(Some(sample_plan())), "SELECT 1");
     doc.explain();
@@ -1943,4 +1981,22 @@ fn analyze_is_refused_on_another_database_than_the_estimate_planned_on(cx: &mut 
     );
     doc.click("segmented-plan-run-mode-estimate");
     assert!(doc.plan_state(ready), "the estimate is still there");
+}
+
+#[test]
+fn an_unsupported_estimate_settles_an_orphaned_plan_as_completed() {
+    let unsupported = Err(dbflux_core::DbError::NotSupported("no explain".into()));
+
+    assert_eq!(
+        super::plan_task_outcome(QueryPlanMode::Estimate, &unsupported),
+        Ok(())
+    );
+    assert!(super::plan_task_outcome(QueryPlanMode::Analyze, &unsupported).is_err());
+    assert!(
+        super::plan_task_outcome(
+            QueryPlanMode::Estimate,
+            &Err(dbflux_core::DbError::query_failed("boom"))
+        )
+        .is_err()
+    );
 }

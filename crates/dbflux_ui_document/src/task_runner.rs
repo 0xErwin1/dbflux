@@ -2,7 +2,7 @@ use dbflux_app::app_state::CancelMessages;
 use dbflux_core::Connection;
 use dbflux_core::{
     CancelHook, CancelOutcome, CancelPolicy, CancelRequestOutcome, CancelToken, DbError, TaskId,
-    TaskKind, TaskRequest, TaskSlot, TaskTarget,
+    TaskKind, TaskRequest, TaskSlot, TaskStatus, TaskTarget,
 };
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::*;
@@ -246,12 +246,20 @@ impl MutationCancelHandle {
 /// Settles a query whose result is discarded because its token was
 /// cancelled: `Cancelled` only when the driver reported a cancellation,
 /// otherwise the statement's own outcome.
+///
+/// Returns whether the driver had accepted the cancel when the result came
+/// back (see [`driver_accepted_cancel`]). Only then may the caller run the
+/// connection's cleanup after a cancel; a result that is merely dropped
+/// because a newer run took over leaves the statement, and the user's
+/// transaction, alone.
 pub(crate) fn settle_task_after_cancel<T>(
     app_state: &Entity<AppStateEntity>,
     task_id: TaskId,
     result: &Result<T, DbError>,
     cx: &mut App,
-) {
+) -> bool {
+    let accepted = driver_accepted_cancel(app_state, task_id, cx);
+
     app_state.update(cx, |state, cx| {
         match result {
             Err(DbError::Cancelled) => {
@@ -262,6 +270,25 @@ pub(crate) fn settle_task_after_cancel<T>(
         }
         cx.emit(AppStateChanged);
     });
+
+    accepted
+}
+
+/// Whether the driver took the task's cancellation: the task is `Cancelling`
+/// (the request was sent) or already `Cancelled`. A task still `Running` with
+/// a cancelled token was superseded or dropped while its driver refused or
+/// could not deliver the cancel, so its statement was not stopped and its
+/// result is only discarded; connection cleanup after a cancel must not run.
+pub(crate) fn driver_accepted_cancel(
+    app_state: &Entity<AppStateEntity>,
+    task_id: TaskId,
+    cx: &App,
+) -> bool {
+    app_state
+        .read(cx)
+        .tasks()
+        .get(task_id)
+        .is_some_and(|task| matches!(task.status, TaskStatus::Cancelling | TaskStatus::Cancelled))
 }
 
 fn query_cancel_unsupported_reason(driver: &str) -> String {
@@ -505,9 +532,9 @@ impl DocumentTaskRunner {
         task_id: TaskId,
         result: &Result<T, DbError>,
         cx: &mut App,
-    ) {
+    ) -> bool {
         self.primary.take_if(task_id);
-        settle_task_after_cancel(&self.app_state, task_id, result, cx);
+        settle_task_after_cancel(&self.app_state, task_id, result, cx)
     }
 
     pub fn clear_primary(&mut self, task_id: TaskId) {
