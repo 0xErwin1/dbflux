@@ -19,7 +19,6 @@
 // https://freedesktop.org/wiki/ClipboardManager/
 
 use std::{
-    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, hash_map::Entry},
     sync::{
@@ -50,7 +49,7 @@ use x11rb::{
 use gpui::{ClipboardItem, Image, ImageFormat, hash};
 use strum::IntoEnumIterator;
 
-use crate::linux::file_uri_list::{FileFormat, clipboard_item_from_files, file_clipboard_formats};
+use crate::linux::file_uri_list::{FileFormat, Offer, clipboard_item_from_files, clipboard_offers};
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -985,40 +984,29 @@ impl Clipboard {
         Ok(Self { inner: ctx })
     }
 
-    pub(crate) fn set_text(
-        &self,
-        message: Cow<'_, str>,
-        selection: ClipboardKind,
-        wait: WaitConfig,
-    ) -> Result<()> {
-        let data = vec![ClipboardData {
-            bytes: message.into_owned().into_bytes(),
-            format: self.inner.atoms.UTF8_STRING,
-        }];
-        self.inner.write(data, selection, wait)
-    }
-
-    /// Offers `item` to other applications: as files when it holds any with file URLs, as text
-    /// otherwise.
+    /// Offers `item` to other applications as [`clipboard_offers`] lists it: its files, or its
+    /// text when it has no file with a file URL, then its images.
     pub(crate) fn set_item(
         &self,
         item: &ClipboardItem,
         selection: ClipboardKind,
         wait: WaitConfig,
     ) -> Result<()> {
-        let formats = item
-            .file_paths()
-            .zip(item.file_operation())
-            .map(|(paths, operation)| file_clipboard_formats(&paths, operation))
-            .unwrap_or_default();
-        if formats.is_empty() {
-            return self.set_text(Cow::Owned(item.text().unwrap_or_default()), selection, wait);
-        }
-        let data = formats
+        let data = clipboard_offers(item)
             .into_iter()
-            .map(|(format, bytes)| ClipboardData {
-                bytes,
-                format: self.file_format_atom(format),
+            .map(|offer| match offer {
+                Offer::Text(bytes) => ClipboardData {
+                    bytes,
+                    format: self.inner.atoms.UTF8_STRING,
+                },
+                Offer::File(format, bytes) => ClipboardData {
+                    bytes,
+                    format: self.file_format_atom(format),
+                },
+                Offer::Image(format, bytes) => ClipboardData {
+                    bytes,
+                    format: self.image_format_atom(format),
+                },
             })
             .collect();
         self.inner.write(data, selection, wait)
@@ -1026,7 +1014,6 @@ impl Clipboard {
 
     fn file_format_atom(&self, format: FileFormat) -> Atom {
         match format {
-            FileFormat::Text => self.inner.atoms.UTF8_STRING,
             FileFormat::UriList => self.inner.atoms.URI_LIST,
             FileFormat::GnomeCopiedFiles => self.inner.atoms.GNOME_COPIED_FILES,
             FileFormat::KdeCutSelection => self.inner.atoms.KDE_CUT_SELECTION,
@@ -1054,10 +1041,9 @@ impl Clipboard {
         selection: ClipboardKind,
         wait: WaitConfig,
     ) -> Result<()> {
-        let format = self.image_format_atom(image.format);
         let data = vec![ClipboardData {
             bytes: image.bytes,
-            format: self.inner.atoms.PNG__MIME,
+            format: self.image_format_atom(image.format),
         }];
         self.inner.write(data, selection, wait)
     }
