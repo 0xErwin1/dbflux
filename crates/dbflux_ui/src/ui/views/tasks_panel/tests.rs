@@ -552,3 +552,99 @@ fn a_cancelled_parent_reads_its_stopped_stage_and_the_ones_that_never_started(
         )
     ));
 }
+
+#[gpui::test]
+fn nested_stages_render_once_under_their_ancestors(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let capture = FrameCapture::observe(window);
+    let (_, stages) = start_connect_with_stages(&app_state, window);
+    let grandchild = start_request(
+        &app_state,
+        TaskRequest::new(TaskKind::Connect, "Resolving host").parent(stages[0]),
+        window,
+    );
+    notify(&app_state, window);
+
+    let frame = capture.frame(window);
+    assert!(shows_text(&frame, "Opening tunnel"));
+    assert!(
+        shows_text(&frame, "Resolving host"),
+        "a stage of a stage is listed under its parent"
+    );
+    assert!(
+        accessibility_node(&frame, &format!("task-row-{grandchild}")).is_none(),
+        "a nested stage is never a top-level row"
+    );
+}
+
+#[gpui::test]
+fn a_cancelled_parent_does_not_claim_later_stages_never_started_when_they_ran(
+    cx: &mut TestAppContext,
+) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let capture = FrameCapture::observe(window);
+    let profile_id = add_profile(&app_state, "staging", window);
+    let parent = start_request(
+        &app_state,
+        TaskRequest::new(TaskKind::Connect, "Connecting to staging").target(target_of(profile_id)),
+        window,
+    );
+    for description in ["Opening tunnel", "Running hooks"] {
+        start_request(
+            &app_state,
+            TaskRequest::new(TaskKind::Connect, description).parent(parent),
+            window,
+        );
+    }
+    app_state.update(window, |state, cx| {
+        state.tasks_mut().request_cancel(parent);
+        cx.emit(AppStateChanged);
+    });
+    window.run_until_parked();
+
+    let frame = capture.frame(window);
+    assert!(shows_text(
+        &frame,
+        &dbflux_i18n::t!("tasks_panel.cancelled_with_stages")
+    ));
+    assert!(
+        !shows_text(
+            &frame,
+            &dbflux_i18n::t!(
+                "tasks_panel.cancelled_with_stages_stopped",
+                stage = "Opening tunnel"
+            )
+        ),
+        "two stages that both ran must not read as 'the stages after it did not start'"
+    );
+}
+
+#[gpui::test]
+fn a_failed_stage_keeps_its_error_visible(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let capture = FrameCapture::observe(window);
+    let (_, stages) = start_connect_with_stages(&app_state, window);
+    app_state.update(window, |state, cx| {
+        state.tasks_mut().fail(stages[0], "connection reset");
+        cx.emit(AppStateChanged);
+    });
+    window.run_until_parked();
+
+    let frame = capture.frame(window);
+    assert!(
+        shows_text(&frame, "connection reset"),
+        "the failure message of a stage is shown under its row"
+    );
+}

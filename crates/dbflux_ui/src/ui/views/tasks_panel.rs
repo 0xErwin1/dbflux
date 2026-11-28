@@ -1,6 +1,9 @@
 mod rows;
 
-use self::rows::{ReasonFill, cancelled_with_stages_text, reason_row, stage_rows, status_glyph};
+use self::rows::{
+    ReasonFill, StageEntry, cancelled_with_stages_text, reason_row, stage_rows, stage_tree,
+    status_glyph,
+};
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::icons::AppIcon;
 use crate::ui::labels::{TaskHeadline, task_headline, task_profile_name};
@@ -304,10 +307,8 @@ impl TasksPanel {
 
     fn dismiss_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
-            let stages = state.tasks().children_of(task_id);
-
-            for stage in stages {
-                state.tasks_mut().remove(stage.id);
+            for stage in stage_tree(state.tasks(), task_id) {
+                state.tasks_mut().remove(stage.task.id);
             }
             state.tasks_mut().remove(task_id);
             cx.emit(AppStateChanged);
@@ -781,7 +782,7 @@ impl HeaderCounts {
 struct TaskRowView {
     task: TaskSnapshot,
     headline: Option<TaskHeadline>,
-    stages: Vec<TaskSnapshot>,
+    stages: Vec<StageEntry>,
 }
 
 /// Number of completed or cancelled tasks the panel lists under the running ones.
@@ -818,7 +819,7 @@ impl Render for TasksPanel {
             .iter()
             .map(|task| TaskRowView {
                 headline: task_headline(task, task_profile_name(state.profiles(), task).as_deref()),
-                stages: state.tasks().children_of(task.id),
+                stages: stage_tree(state.tasks(), task.id),
                 task: task.clone(),
             })
             .collect();
