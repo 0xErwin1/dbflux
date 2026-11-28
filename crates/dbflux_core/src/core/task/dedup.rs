@@ -6,6 +6,10 @@
 //! or `Cancelling`) count; `Pending` stages never block a start, and a
 //! request without a target or a `pending()` request is never refused.
 //!
+//! A request built with `claims_target()` is also refused while any other
+//! claiming task, of any kind, is in flight on the same target; this is the
+//! single record of "something is rebuilding this connection or database".
+//!
 //! `try_start` checks for a busy target first; a request that also carries a
 //! `supersede_key` supersedes only after that check passes.
 
@@ -49,12 +53,36 @@ impl TaskManager {
             return Err(TaskBusy { existing });
         }
 
+        if request.claims_target
+            && !request.pending
+            && let Some(target) = &request.target
+            && let Some(existing) = self.claiming_task(target)
+        {
+            return Err(TaskBusy { existing });
+        }
+
         Ok(self.start_handle(request))
     }
 
     /// Whether a task of `kind`'s group is in flight for `target`.
     pub fn is_busy(&self, kind: TaskKind, target: &TaskTarget) -> bool {
         self.busy_task(kind, target).is_some()
+    }
+
+    /// Whether a claiming task (`TaskRequest::claims_target`) is `Running`
+    /// or `Cancelling` on `target`. A task that was asked to cancel but has
+    /// not stopped still holds the claim.
+    pub fn is_target_claimed(&self, target: &TaskTarget) -> bool {
+        self.claiming_task(target).is_some()
+    }
+
+    fn claiming_task(&self, target: &TaskTarget) -> Option<TaskId> {
+        self.tasks
+            .values()
+            .filter(|task| task.claims_target && task.status.is_in_flight())
+            .filter(|task| task.target.as_ref() == Some(target))
+            .min_by_key(|task| task.sequence)
+            .map(|task| task.id)
     }
 
     fn busy_task(&self, kind: TaskKind, target: &TaskTarget) -> Option<TaskId> {

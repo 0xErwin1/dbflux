@@ -166,18 +166,36 @@ struct Surroundings {
 }
 
 fn render_profile(connected: ConnectedProfile, surroundings: Surroundings) -> String {
-    let profile = connected.profile.clone();
+    let mut state = state_with(connected);
+
+    for database in &surroundings.pending_databases {
+        crate::test_claims::claim_target(
+            &mut state,
+            dbflux_core::TaskTarget::database(PROFILE_ID, *database),
+        );
+    }
+
+    render_state(&state, &surroundings)
+}
+
+fn state_with(connected: ConnectedProfile) -> AppStateEntity {
     let mut state = empty_state();
     state.connections_mut().insert(PROFILE_ID, connected);
     state.set_active_connection(PROFILE_ID);
+    state
+}
 
-    for database in &surroundings.pending_databases {
-        state.start_pending_operation(PROFILE_ID, Some(database));
-    }
+fn render_state(state: &AppStateEntity, surroundings: &Surroundings) -> String {
+    let profile = state
+        .connections()
+        .get(&PROFILE_ID)
+        .expect("connected profile")
+        .profile
+        .clone();
 
     let item = Sidebar::build_profile_item_with_errors(
         &profile,
-        &state,
+        state,
         &surroundings.metric_fetch_errors,
         &HashMap::new(),
         &HashMap::new(),
@@ -979,4 +997,80 @@ fn relational_tables_keep_their_relational_index_labels() {
         &render_profile(connected, Surroundings::default()),
         "relational_single",
     );
+}
+
+fn lazy_relational_profile() -> ConnectedProfile {
+    let mut connected = connected_profile(
+        DatabaseCategory::Relational,
+        DriverCapabilities::empty(),
+        SchemaLoadingStrategy::LazyPerDatabase,
+        SchemaSnapshot::relational(RelationalSchema {
+            databases: vec![database("shop", true), database("audit", false)],
+            current_database: Some("shop".to_string()),
+            schemas: Vec::new(),
+            tables: Vec::new(),
+            views: Vec::new(),
+        }),
+    );
+    connected.active_database = Some("shop".to_string());
+    connected
+}
+
+#[test]
+fn a_database_row_spins_while_a_task_claims_it_and_clears_when_the_task_settles() {
+    let idle = render_profile(lazy_relational_profile(), Surroundings::default());
+    let spinning = render_profile(
+        lazy_relational_profile(),
+        Surroundings {
+            pending_databases: vec!["audit"],
+            ..Surroundings::default()
+        },
+    );
+    assert_ne!(idle, spinning, "the claimed database shows its loading row");
+
+    let mut state = state_with(lazy_relational_profile());
+    let claim = crate::test_claims::claim_target(
+        &mut state,
+        dbflux_core::TaskTarget::database(PROFILE_ID, "audit"),
+    );
+    assert_eq!(render_state(&state, &Surroundings::default()), spinning);
+
+    state.complete_task(claim.id());
+    assert_eq!(render_state(&state, &Surroundings::default()), idle);
+}
+
+#[test]
+fn a_cancelling_claim_keeps_the_database_row_spinning_until_the_worker_stops() {
+    let spinning = render_profile(
+        lazy_relational_profile(),
+        Surroundings {
+            pending_databases: vec!["audit"],
+            ..Surroundings::default()
+        },
+    );
+    let idle = render_profile(lazy_relational_profile(), Surroundings::default());
+
+    let mut state = state_with(lazy_relational_profile());
+    let claim = crate::test_claims::claim_target(
+        &mut state,
+        dbflux_core::TaskTarget::database(PROFILE_ID, "audit"),
+    );
+    state.request_cancel_task(claim.id());
+    assert_eq!(render_state(&state, &Surroundings::default()), spinning);
+
+    assert!(state.acknowledge_task_cancelled(claim.id()));
+    assert_eq!(render_state(&state, &Surroundings::default()), idle);
+}
+
+#[test]
+fn work_that_does_not_claim_a_database_leaves_its_row_alone() {
+    let idle = render_profile(lazy_relational_profile(), Surroundings::default());
+
+    let mut state = state_with(lazy_relational_profile());
+    state.start_task_handle(
+        dbflux_core::TaskRequest::new(dbflux_core::TaskKind::SchemaRefresh, "table details")
+            .target(dbflux_core::TaskTarget::database(PROFILE_ID, "audit")),
+    );
+
+    assert_eq!(render_state(&state, &Surroundings::default()), idle);
 }

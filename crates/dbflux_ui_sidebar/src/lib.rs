@@ -19,6 +19,8 @@ mod secret_store;
 mod selection;
 mod style_guardrails;
 mod table_loading;
+#[cfg(test)]
+mod test_claims;
 mod tree_builder;
 
 use dbflux_app::AppState;

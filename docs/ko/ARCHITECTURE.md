@@ -762,6 +762,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 `TaskManager`(`crates/dbflux_core/src/core/task/`)는 취소할 수 있거나 오래 걸리는 모든 작업(쿼리, 연결 단계와 훅, 스키마 로드, 삭제, 내보내기, 연결 테스트)의 유일한 소유자입니다. 작업 패널과 상태 표시줄은 그 스냅샷만 읽습니다. 옆에 "실행 중인가"를 나타내는 별도 집합이나 별도 취소 토큰을 추가하지 마세요.
 
 - **시작**: `TaskRequest`(종류, 설명, 선택적 `TaskTarget`, 아직 저장되지 않은 연결을 위한 `target_label`)를 만들어 시작합니다. `start_handle`은 작업 id와 워커가 확인하는 `CancelToken`을 담은 `TaskHandle`을 반환합니다.
+- **대상 점유**: `claims_target()`으로 만든 요청은 `Running` 또는 `Cancelling` 상태인 동안 대상을 점유합니다(연결은 연결을, 데이터베이스 전환·새로 고침은 해당 데이터베이스를 점유). `try_start`는 종류와 상관없이 같은 대상을 점유하려는 두 번째 작업을 거부하며, 사이드바 스피너와 재시도 가드는 `TaskManager::is_target_claimed`를 읽습니다. 별도의 대기 중 작업 집합은 없습니다. 취소를 요청했지만 아직 멈추지 않은 작업은 대상을 계속 점유하고, 같은 대상의 DROP이 진행 중이면 다른 DROP은 거부됩니다.
 - **중복 방지와 교체**: 같은 종류 그룹(모든 훅 단계는 한 그룹)의 작업이 같은 대상에 대해 진행 중이면 `try_start`가 등록과 원자적으로 `TaskBusy`로 거부합니다. 대신 `supersede_key`는 같은 키를 가진 이전 작업을 취소합니다. `TestConnection` 작업은 쿼리, 내보내기처럼 대화형이므로 백그라운드 작업 상한에 포함되지 않습니다.
 - **취소 정책**: `CancelPolicy::Immediate`는 취소가 요청되는 즉시 작업을 `Cancelled`로 만듭니다. `CancelPolicy::WorkerAcknowledged`는 `Cancelling`으로 바꾸고, 워커의 `acknowledge_cancelled`만이 `Cancelled`로 만듭니다.
 - **취소 훅**: 선택적 `CancelHook`은 `request_cancel` 안에서 실행되며(차단하면 안 됩니다) `CancelOutcome`을 반환합니다. `Stopped`(작업이 이미 멈춤), `Requested`(중지를 요청함, 워커가 확인), `NotSupported { reason }`(작업은 `Running`으로 남고 패널이 이유를 표시합니다. 실행 중인 명령을 취소할 수 없는 드라이버가 그 예입니다).

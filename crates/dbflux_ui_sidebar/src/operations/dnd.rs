@@ -548,15 +548,19 @@ impl Sidebar {
             return;
         }
 
-        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let handle = state.start_task_handle(
-                TaskRequest::new(TaskKind::SchemaDrop, operation.task_description.clone())
-                    .target(operation.task_target.clone())
-                    .policy(CancelPolicy::WorkerAcknowledged),
-            );
+        let started = self.app_state.update(cx, |state, cx| {
+            let handle = start_drop_task(state, &operation)?;
             cx.emit(AppStateChanged);
-            (handle.id(), handle.token().clone())
+            Ok::<_, dbflux_core::TaskBusy>((handle.id(), handle.token().clone()))
         });
+
+        let (task_id, cancel_token) = match started {
+            Ok(started) => started,
+            Err(busy) => {
+                log::info!("Drop skipped: {busy}");
+                return;
+            }
+        };
 
         self.refresh_tree(cx);
 
@@ -572,6 +576,20 @@ impl Sidebar {
 
         self.track_operation_task(task_id, operation_task);
     }
+}
+
+/// Starts the task of a drop. A second drop on the same target is refused
+/// while one is in flight, `Cancelling` included: a cancelled DDL that has
+/// not stopped yet may still change the schema.
+fn start_drop_task(
+    state: &mut AppStateEntity,
+    operation: &SidebarDropOperation,
+) -> Result<dbflux_core::TaskHandle, dbflux_core::TaskBusy> {
+    state.try_start_task(
+        TaskRequest::new(TaskKind::SchemaDrop, operation.task_description.clone())
+            .target(operation.task_target.clone())
+            .policy(CancelPolicy::WorkerAcknowledged),
+    )
 }
 
 /// One running `DROP`: the steps that release resources, send the statement
@@ -1327,6 +1345,37 @@ mod tests {
                 sidebar.pending_toast.is_none(),
                 "the central reporter owns the toast"
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn a_second_drop_on_the_same_target_is_refused_until_the_first_stops(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = crate::table_loading::object_tree_adapter_tests::test_app_state(cx);
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let run = drop_run(&state, &sidebar, cx);
+
+        state.update(cx, |state, _| {
+            let first = super::start_drop_task(state, &run.operation).expect("first drop starts");
+            let refused = super::start_drop_task(state, &run.operation)
+                .err()
+                .expect("same target is busy");
+            assert_eq!(refused.existing, first.id());
+
+            state.request_cancel_task(first.id());
+            assert_eq!(
+                state.tasks().get(first.id()).expect("task").status,
+                dbflux_core::TaskStatus::Cancelling
+            );
+            assert!(
+                super::start_drop_task(state, &run.operation).is_err(),
+                "a cancelling DDL may still change the schema"
+            );
+
+            assert!(state.acknowledge_task_cancelled(first.id()));
+            assert!(super::start_drop_task(state, &run.operation).is_ok());
         });
     }
 

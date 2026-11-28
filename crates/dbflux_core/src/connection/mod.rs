@@ -66,9 +66,9 @@ pub use manager::{
     FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, FetchedDatabaseList,
     FetchedExplicitDatabaseSchema, FetchedTableDetails, GuardedDatabaseConnectionInstall,
     GuardedInstalledDatabaseConnection, HookExecutionContext, InstallDatabaseConnectionOutcome,
-    MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
-    ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews,
-    ResolvedProxy, SchemaCacheKey, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
+    MutationPolicy, OwnedCacheEntry, PrepareConnectError, ProfilePolicyResolver, ReadOnlyReason,
+    RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews, ResolvedProxy,
+    SchemaCacheKey, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
     SwitchDatabaseResult, SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError,
     WritePrivilege, compose_mutation_policy,
 };

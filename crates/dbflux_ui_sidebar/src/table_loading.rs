@@ -480,8 +480,7 @@ impl Sidebar {
                 });
             },
             move |app_state, cx| {
-                app_state.update(cx, |state, state_cx| {
-                    state.finish_pending_operation(profile_id, Some(&database_name));
+                app_state.update(cx, |_state, state_cx| {
                     state_cx.emit(AppStateChanged);
                 });
             },
@@ -4987,7 +4986,10 @@ pub(crate) mod object_tree_adapter_tests {
                         .iter()
                         .any(|table| table.name == "sibling"))
             );
-            assert!(!state.is_operation_pending(profile_id, Some("app")));
+            assert!(
+                !state
+                    .is_task_target_claimed(&dbflux_core::TaskTarget::database(profile_id, "app"))
+            );
             assert!(
                 dbflux_ui_base::object_tree::project_database_node(state, profile_id, "app")
                     .expect("database")
@@ -5079,7 +5081,10 @@ pub(crate) mod object_tree_adapter_tests {
                         .iter()
                         .any(|table| table.name == "sibling"))
             );
-            assert!(!state.is_operation_pending(profile_id, Some("app")));
+            assert!(
+                !state
+                    .is_task_target_claimed(&dbflux_core::TaskTarget::database(profile_id, "app"))
+            );
             assert!(
                 dbflux_ui_base::object_tree::project_database_node(state, profile_id, "app")
                     .expect("database")
@@ -5206,7 +5211,10 @@ pub(crate) mod object_tree_adapter_tests {
                     .get("app")
                     .is_some_and(|schema| schema.tables.iter().any(|table| table.name == "held"))
             );
-            assert!(!state.is_operation_pending(profile_id, Some("app")));
+            assert!(
+                !state
+                    .is_task_target_claimed(&dbflux_core::TaskTarget::database(profile_id, "app"))
+            );
         });
     }
 
@@ -5328,7 +5336,10 @@ pub(crate) mod object_tree_adapter_tests {
                     .schema
                     .is_some()
             );
-            assert!(!state.is_operation_pending(profile_id, Some("app")));
+            assert!(
+                !state
+                    .is_task_target_claimed(&dbflux_core::TaskTarget::database(profile_id, "app"))
+            );
         });
     }
 
@@ -5398,7 +5409,10 @@ pub(crate) mod object_tree_adapter_tests {
                     .get("app")
                     .is_some_and(|schema| schema.tables.iter().any(|table| table.name == "held"))
             );
-            assert!(!state.is_operation_pending(profile_id, Some("app")));
+            assert!(
+                !state
+                    .is_task_target_claimed(&dbflux_core::TaskTarget::database(profile_id, "app"))
+            );
         });
     }
 
@@ -5483,7 +5497,12 @@ pub(crate) mod object_tree_adapter_tests {
                     .iter()
                     .any(|schema| schema.tables.iter().any(|table| table.name == "held"))
             );
-            assert!(!state.is_operation_pending(profile_id, Some("reporting")));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                    profile_id,
+                    "reporting"
+                ))
+            );
         });
     }
 
@@ -5542,6 +5561,7 @@ pub(crate) mod object_tree_adapter_tests {
             .expect("sidebar alive");
         let new_slot = AdapterFakeConnection::connection_per_database();
         let new_slot_address = Arc::as_ptr(&new_slot) as usize;
+        let mut replacement_claim = None;
         state.update(cx, |state, _| {
             let mut profile = dbflux_core::ConnectionProfile::new(
                 "replacement",
@@ -5579,10 +5599,10 @@ pub(crate) mod object_tree_adapter_tests {
                         qualified_name: "public.replacement_view".into(),
                     }],
                 );
-            assert!(
-                state.start_pending_operation(profile_id, Some("reporting")),
-                "the replacement session must not inherit old pending work"
-            );
+            replacement_claim = Some(crate::test_claims::claim_target(
+                state,
+                dbflux_core::TaskTarget::database(profile_id, "reporting"),
+            ));
         });
         drop(new_slot);
         cx.run_until_parked();
@@ -5601,7 +5621,10 @@ pub(crate) mod object_tree_adapter_tests {
                 Some("replacement-active")
             );
             assert!(
-                state.is_operation_pending(profile_id, Some("reporting")),
+                state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                    profile_id,
+                    "reporting"
+                )),
                 "old completion must not clear replacement pending work"
             );
             assert_eq!(
@@ -5635,7 +5658,8 @@ pub(crate) mod object_tree_adapter_tests {
             }));
         });
         state.update(cx, |state, _| {
-            state.finish_pending_operation(profile_id, Some("reporting"));
+            let claim = replacement_claim.take().expect("replacement claim");
+            state.complete_task(claim.id());
         });
         window
             .update(cx, |sidebar, _, cx| {
@@ -5643,8 +5667,9 @@ pub(crate) mod object_tree_adapter_tests {
             })
             .expect("sidebar alive");
         assert!(
-            state.read_with(cx, |state, _| state
-                .is_operation_pending(profile_id, Some("reporting"))),
+            state.read_with(cx, |state, _| state.is_task_target_claimed(
+                &dbflux_core::TaskTarget::database(profile_id, "reporting")
+            )),
             "new session must start a fresh target refresh"
         );
         cx.run_until_parked();
@@ -5663,7 +5688,12 @@ pub(crate) mod object_tree_adapter_tests {
                     .dependents("reporting", Some("public"), "orders")
                     .is_empty()
             );
-            assert!(!state.is_operation_pending(profile_id, Some("reporting")));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                    profile_id,
+                    "reporting"
+                ))
+            );
         });
     }
 
@@ -5696,6 +5726,7 @@ pub(crate) mod object_tree_adapter_tests {
                 sidebar.handle_database_click(&item_id, cx)
             })
             .expect("sidebar alive");
+        let mut analytics_claim = None;
         state.update(cx, |state, _| {
             let mut profile = dbflux_core::ConnectionProfile::new(
                 "new session",
@@ -5714,7 +5745,10 @@ pub(crate) mod object_tree_adapter_tests {
                 dbflux_core::WritePrivilege::Unknown,
             );
             state.set_active_database(profile_id, Some("main".into()));
-            assert!(state.start_pending_operation(profile_id, Some("analytics")));
+            analytics_claim = Some(crate::test_claims::claim_target(
+                state,
+                dbflux_core::TaskTarget::database(profile_id, "analytics"),
+            ));
         });
         cx.run_until_parked();
         assert_eq!(connect_calls.load(Ordering::SeqCst), 1);
@@ -5722,10 +5756,16 @@ pub(crate) mod object_tree_adapter_tests {
             let connected = state.connections().get(&profile_id).expect("new session");
             assert!(!connected.database_connections.contains_key("analytics"));
             assert_eq!(connected.active_database.as_deref(), Some("main"));
-            assert!(state.is_operation_pending(profile_id, Some("analytics")));
+            assert!(
+                state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                    profile_id,
+                    "analytics"
+                ))
+            );
         });
         state.update(cx, |state, _| {
-            state.finish_pending_operation(profile_id, Some("analytics"))
+            let claim = analytics_claim.take().expect("analytics claim");
+            state.complete_task(claim.id());
         });
         window
             .update(cx, |sidebar, _, cx| {
@@ -5738,7 +5778,12 @@ pub(crate) mod object_tree_adapter_tests {
             let connected = state.connections().get(&profile_id).expect("new session");
             assert!(connected.database_connections.contains_key("analytics"));
             assert_eq!(connected.active_database.as_deref(), Some("analytics"));
-            assert!(!state.is_operation_pending(profile_id, Some("analytics")));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                    profile_id,
+                    "analytics"
+                ))
+            );
         });
     }
 
@@ -5777,7 +5822,10 @@ pub(crate) mod object_tree_adapter_tests {
                 Some(secondary_snapshot("held")),
             );
             state.set_active_database(profile_id, Some("reporting".into()));
-            assert!(state.start_pending_operation(profile_id, Some("reporting")));
+            crate::test_claims::claim_target(
+                state,
+                dbflux_core::TaskTarget::database(profile_id, "reporting"),
+            );
         });
         let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
         let item_id = SchemaNodeId::Database {
@@ -5804,10 +5852,18 @@ pub(crate) mod object_tree_adapter_tests {
         state.read_with(cx, |state, _| {
             let connected = state.connections().get(&profile_id).expect("connected");
             assert!(
-                !state.is_operation_pending(profile_id, Some("analytics")),
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                    profile_id,
+                    "analytics"
+                )),
                 "stale refresh must release its own pending marker"
             );
-            assert!(state.is_operation_pending(profile_id, Some("reporting")));
+            assert!(
+                state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                    profile_id,
+                    "reporting"
+                ))
+            );
             assert_eq!(connected.active_database.as_deref(), Some("reporting"));
             let slot = connected
                 .database_connections
@@ -5825,7 +5881,8 @@ pub(crate) mod object_tree_adapter_tests {
             })
             .expect("sidebar alive");
         assert!(state.read_with(cx, |state, _| {
-            state.is_operation_pending(profile_id, Some("analytics"))
+            state
+                .is_task_target_claimed(&dbflux_core::TaskTarget::database(profile_id, "analytics"))
         }));
         cx.run_until_parked();
         assert_eq!(connect_calls.load(Ordering::SeqCst), 2);
@@ -5875,7 +5932,10 @@ pub(crate) mod object_tree_adapter_tests {
         state.read_with(cx, |state, _| {
             let connected = state.connections().get(&profile_id).expect("connected");
             assert!(
-                !state.is_operation_pending(profile_id, Some("analytics")),
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                    profile_id,
+                    "analytics"
+                )),
                 "stale click must release pending"
             );
             assert_eq!(connected.active_database.as_deref(), Some("main"));
@@ -5896,7 +5956,8 @@ pub(crate) mod object_tree_adapter_tests {
             })
             .expect("sidebar alive");
         assert!(state.read_with(cx, |state, _| {
-            state.is_operation_pending(profile_id, Some("analytics"))
+            state
+                .is_task_target_claimed(&dbflux_core::TaskTarget::database(profile_id, "analytics"))
         }));
         cx.run_until_parked();
         assert_eq!(connect_calls.load(Ordering::SeqCst), 2);
@@ -5987,7 +6048,12 @@ pub(crate) mod object_tree_adapter_tests {
                     state.get_active_database(profile_id).as_deref(),
                     Some("reporting")
                 );
-                assert!(state.is_operation_pending(profile_id, Some("analytics")));
+                assert!(
+                    state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                        profile_id,
+                        "analytics"
+                    ))
+                );
             });
             if settle == "cancel" {
                 state.update(cx, |state, _| assert!(state.cancel_task(task_id)));
@@ -6001,7 +6067,10 @@ pub(crate) mod object_tree_adapter_tests {
                     "{settle}"
                 );
                 assert!(
-                    !state.is_operation_pending(profile_id, Some("analytics")),
+                    !state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                        profile_id,
+                        "analytics"
+                    )),
                     "{settle}"
                 );
                 assert!(connected.database_connections.contains_key("reporting"));
@@ -6097,7 +6166,12 @@ pub(crate) mod object_tree_adapter_tests {
                     original_address
                 );
                 assert!(slot.schema.is_some());
-                assert!(!state.is_operation_pending(profile_id, Some("reporting")));
+                assert!(
+                    !state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+                        profile_id,
+                        "reporting"
+                    ))
+                );
             });
         }
     }

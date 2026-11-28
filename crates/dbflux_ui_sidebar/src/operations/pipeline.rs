@@ -227,8 +227,8 @@ struct PreparedConnect {
 
 /// Starts the Connect parent task of an attempt, which is also the
 /// duplicate check: the task manager refuses a second connect for the same
-/// profile. The sidebar spinner still reads the pending-operation set, so the
-/// profile is claimed there too.
+/// profile. The task claims the connection target, so the sidebar spinner
+/// and the retry guards read the same record.
 pub(super) fn begin_connect_attempt(
     state: &mut dbflux_ui_base::AppStateEntity,
     profile_id: Uuid,
@@ -239,7 +239,7 @@ pub(super) fn begin_connect_attempt(
         database: None,
     };
 
-    if state.is_task_busy(TaskKind::Connect, &target) {
+    if state.is_task_target_claimed(&target) {
         return Err(PrepareStop::Skipped(
             crate::labels::connection_already_pending_toast_label(),
         ));
@@ -253,13 +253,13 @@ pub(super) fn begin_connect_attempt(
         .try_start_task(
             TaskRequest::new(TaskKind::Connect, label)
                 .target(target)
-                .policy(CancelPolicy::WorkerAcknowledged),
+                .policy(CancelPolicy::WorkerAcknowledged)
+                .claims_target(),
         )
         .map_err(|_| {
             PrepareStop::Skipped(crate::labels::connection_already_pending_toast_label())
         })?;
 
-    state.start_pending_operation(profile_id, None);
     state.clear_connect_failure(profile_id);
 
     Ok(handle)
@@ -313,7 +313,6 @@ fn prepare_connect_attempt(
     // A failed preparation leaves no trace in the panel.
     let abandon = |state: &mut dbflux_ui_base::AppStateEntity| {
         state.tasks_mut().remove(task_id);
-        state.finish_pending_operation(profile_id, None);
     };
 
     let (input, profile_name, driver) =

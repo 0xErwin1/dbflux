@@ -181,7 +181,7 @@ impl Sidebar {
         let (prompt, remembered_password) = {
             let state = self.app_state.read(cx);
             let idle = !state.connections().contains_key(&profile_id)
-                && !state.is_operation_pending(profile_id, None);
+                && !state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id));
 
             match state.remembered_connection_password(profile_id) {
                 Some(password) => (None, Some(password)),
@@ -234,7 +234,9 @@ impl Sidebar {
                 let cleared = cx.update(|cx| {
                     let still_connected =
                         app_state.read(cx).connections().contains_key(&profile_id);
-                    let still_pending = app_state.read(cx).is_operation_pending(profile_id, None);
+                    let still_pending = app_state
+                        .read(cx)
+                        .is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id));
                     !still_connected && !still_pending
                 });
 
@@ -324,7 +326,7 @@ impl Sidebar {
             attempt,
             cancel_token,
         } = match self.app_state.update(cx, |state, cx| {
-            if state.is_operation_pending(profile_id, None) {
+            if state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id)) {
                 return Err(ConnectStop::AlreadyConnecting);
             }
 
@@ -1529,7 +1531,9 @@ mod tests {
         );
         fixture.state.read_with(cx, |state, _| {
             assert!(!state.connections().contains_key(&profile_id));
-            assert!(!state.is_operation_pending(profile_id, None));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id))
+            );
         });
     }
 
@@ -1695,14 +1699,14 @@ mod tests {
         // slot while the second double click arrives.
         double_click_row(&item_id, cx);
         fixture.state.read_with(cx, |state, _| {
-            assert!(state.is_operation_pending(profile_id, None));
+            assert!(state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id)));
         });
         assert!(recorded(&fixture.passwords).is_empty());
 
         double_click_row(&item_id, cx);
         fixture.state.read_with(cx, |state, _| {
             assert!(
-                state.is_operation_pending(profile_id, None),
+                state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id)),
                 "the second request met the first attempt's pending slot"
             );
         });
@@ -1733,7 +1737,10 @@ mod tests {
         let item_id = dbflux_core::SchemaNodeId::Profile { profile_id }.to_string();
 
         fixture.state.update(cx, |state, _| {
-            assert!(state.start_pending_operation(profile_id, None));
+            crate::test_claims::claim_target(
+                state,
+                dbflux_core::TaskTarget::connection(profile_id),
+            );
         });
         double_click_row(&item_id, cx);
         cx.run_until_parked();
@@ -1751,7 +1758,10 @@ mod tests {
         let profile_id = fixture.profile_id;
 
         fixture.state.update(cx, |state, _| {
-            assert!(state.start_pending_operation(profile_id, None));
+            crate::test_claims::claim_target(
+                state,
+                dbflux_core::TaskTarget::connection(profile_id),
+            );
         });
         fixture
             .sidebar
@@ -2028,7 +2038,9 @@ mod tests {
         assert_eq!(attempt_status(&fixture, cx), TaskStatus::Completed);
         fixture.state.read_with(cx, |state, _| {
             assert!(state.connections().contains_key(&profile_id));
-            assert!(!state.is_operation_pending(profile_id, None));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id))
+            );
         });
         assert_eq!(recorded(&fixture.passwords).len(), 1);
 
@@ -2092,7 +2104,9 @@ mod tests {
         assert_eq!(attempt_status(&fixture, cx), TaskStatus::Cancelled);
         fixture.state.read_with(cx, |state, _| {
             assert!(!state.connections().contains_key(&profile_id));
-            assert!(!state.is_operation_pending(profile_id, None));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id))
+            );
         });
         assert!(recorded(&fixture.passwords).is_empty());
     }
@@ -2161,7 +2175,9 @@ mod tests {
         assert_eq!(attempt_status(&fixture, cx), TaskStatus::Completed);
         fixture.state.read_with(cx, |state, _| {
             assert!(state.connections().contains_key(&profile_id));
-            assert!(!state.is_operation_pending(profile_id, None));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id))
+            );
         });
         assert_eq!(recorded(&fixture.passwords).len(), 1);
     }
@@ -2194,7 +2210,9 @@ mod tests {
         fixture.state.read_with(cx, |state, _| {
             assert_eq!(connect_attempts(state).len(), 1, "no second attempt");
             assert!(!state.connections().contains_key(&profile_id));
-            assert!(!state.is_operation_pending(profile_id, None));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id))
+            );
         });
         assert!(recorded(&fixture.passwords).is_empty());
     }
@@ -2253,7 +2271,9 @@ mod tests {
                 !state.connections().contains_key(&profile_id),
                 "a cancelled connect registers nothing"
             );
-            assert!(!state.is_operation_pending(profile_id, None));
+            assert!(
+                !state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id))
+            );
         });
     }
 }

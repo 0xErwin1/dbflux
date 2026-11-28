@@ -773,6 +773,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 `TaskManager`（`crates/dbflux_core/src/core/task/`）是所有可取消或长时间运行操作的唯一所有者：查询、连接阶段与钩子、架构加载、删除、导出和连接测试。任务面板和状态栏只读取它的快照；不要在旁边再加一个“是否在运行”的集合或单独的取消令牌。
 
 - **启动**：构造 `TaskRequest`（类型、描述、可选的 `TaskTarget`，以及尚未保存的连接使用的 `target_label`）并启动。`start_handle` 返回 `TaskHandle`，其中包含任务 id 和工作线程轮询的 `CancelToken`。
+- **目标占用**：用 `claims_target()` 创建的请求在 `Running` 或 `Cancelling` 期间占用其目标（连接占用连接，数据库切换或刷新占用该数据库）。`try_start` 会拒绝同一目标上任何类型的第二个占用任务，侧边栏的加载指示和重试保护读取 `TaskManager::is_target_claimed`。不再有单独的待处理操作集合：已请求取消但尚未停止的任务仍占用目标，同一目标上已有 DROP 进行时，另一个 DROP 会被拒绝。
 - **去重与替换**：当同一类型组（所有钩子阶段算一组）的任务已在同一目标上进行时，`try_start` 以 `TaskBusy` 拒绝，且与注册原子完成。`supersede_key` 则会取消带有相同键的较早任务。`TestConnection` 任务与查询、导出一样是交互式的，不计入后台任务上限。
 - **取消策略**：`CancelPolicy::Immediate` 在请求取消时立即把任务置为 `Cancelled`。`CancelPolicy::WorkerAcknowledged` 把任务转为 `Cancelling`，只有工作线程的 `acknowledge_cancelled` 才会把它置为 `Cancelled`。
 - **取消钩子**：可选的 `CancelHook` 在 `request_cancel` 内运行（不得阻塞），返回 `CancelOutcome`：`Stopped`（工作已停止）、`Requested`（已请求停止，由工作线程确认）或 `NotSupported { reason }`（任务保持 `Running`，面板显示原因，例如驱动无法取消正在运行的命令）。

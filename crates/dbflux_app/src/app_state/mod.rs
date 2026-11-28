@@ -598,26 +598,6 @@ impl AppState {
             .unwrap_or(true)
     }
 
-    // --- Pending operations ---
-
-    pub fn is_operation_pending(&self, profile_id: Uuid, database: Option<&str>) -> bool {
-        self.facade
-            .connections
-            .is_operation_pending(profile_id, database)
-    }
-
-    pub fn start_pending_operation(&mut self, profile_id: Uuid, database: Option<&str>) -> bool {
-        self.facade
-            .connections
-            .start_pending_operation(profile_id, database)
-    }
-
-    pub fn finish_pending_operation(&mut self, profile_id: Uuid, database: Option<&str>) {
-        self.facade
-            .connections
-            .finish_pending_operation(profile_id, database);
-    }
-
     // --- Connect failures ---
 
     pub fn record_connect_failure(&mut self, profile_id: Uuid, message: impl Into<String>) {
@@ -1056,15 +1036,6 @@ impl AppState {
         self.facade
             .connections
             .capture_database_refresh_guard(profile_id, database)
-    }
-
-    pub fn database_refresh_guard_is_same_session(
-        &self,
-        guard: &dbflux_core::DatabaseRefreshGuard,
-    ) -> bool {
-        self.facade
-            .connections
-            .database_refresh_guard_is_same_session(guard)
     }
 
     pub fn database_refresh_guard_is_current(
@@ -2219,6 +2190,12 @@ impl AppState {
         target: &dbflux_core::TaskTarget,
     ) -> bool {
         self.facade.tasks.is_busy(kind, target)
+    }
+
+    /// Whether a claiming task is in flight on `target`, `Cancelling`
+    /// included. See [`dbflux_core::TaskRequest::claims_target`].
+    pub fn is_task_target_claimed(&self, target: &dbflux_core::TaskTarget) -> bool {
+        self.facade.tasks.is_target_claimed(target)
     }
 
     pub fn child_tasks(&self, id: TaskId) -> Vec<TaskSnapshot> {
@@ -3662,7 +3639,7 @@ mod tests {
     #[cfg(feature = "telemetry")]
     mod telemetry;
 
-    mod pending_operations;
+    mod target_claims;
 
     mod query_cancel;
 

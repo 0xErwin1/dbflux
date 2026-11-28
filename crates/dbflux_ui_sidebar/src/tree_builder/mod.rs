@@ -717,7 +717,7 @@ impl Sidebar {
     fn build_connect_failure_rows(profile_id: Uuid, state: &AppStateEntity) -> Vec<TreeItem> {
         let failed = state.connect_failure(profile_id).is_some()
             && !state.connections().contains_key(&profile_id)
-            && !state.is_operation_pending(profile_id, None);
+            && !state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id));
 
         if !failed {
             return Vec::new();
@@ -1842,7 +1842,8 @@ fn build_kv_database_children(
     let plan = plan_keyspace_rows(keyspaces, connected.active_database.as_deref());
 
     let database_item = |row: KeyspaceRow| -> TreeItem {
-        let is_pending = state.is_operation_pending(profile_id, Some(&row.name));
+        let is_pending =
+            state.is_task_target_claimed(&dbflux_core::TaskTarget::database(profile_id, &row.name));
         let is_active_db = connected.active_database.as_deref() == Some(&row.name);
 
         let db_children = if is_pending {
@@ -2445,7 +2446,10 @@ fn build_named_db_children(
             .databases()
             .iter()
             .any(|db| db.name == *db_name && db.is_current);
-        let is_pending = state.is_operation_pending(profile_id, Some(db_name));
+        let is_pending = state.is_task_target_claimed(&dbflux_core::TaskTarget::database(
+            profile_id,
+            db_name.as_str(),
+        ));
         let is_active_db = connected.active_database.as_deref() == Some(db_name.as_str());
 
         let db_children = if let DatabaseLayout::Folder(folder) = layout {

@@ -10,7 +10,7 @@ use crate::{
 use log::{error, info};
 use secrecy::SecretString;
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Instant;
@@ -740,17 +740,10 @@ impl ConnectedProfile {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PendingOperation {
-    pub profile_id: Uuid,
-    pub database: Option<String>,
-}
-
 pub struct ConnectionManager {
     pub drivers: HashMap<String, Arc<dyn DbDriver>>,
     pub connections: HashMap<Uuid, ConnectedProfile>,
     pub active_connection_id: Option<Uuid>,
-    pub pending_operations: HashSet<PendingOperation>,
     /// Cached explicit database lists per profile, used by the shared object
     /// tree. Kept beside `ConnectedProfile` so its public layout stays stable.
     /// Session-owned: cleared whenever that profile's session is replaced.
@@ -801,7 +794,6 @@ impl ConnectionManager {
             drivers,
             connections: HashMap::new(),
             active_connection_id: None,
-            pending_operations: HashSet::new(),
             database_lists: HashMap::new(),
             snapshot_authorities: HashMap::new(),
             next_session_generation: 0,
@@ -915,8 +907,6 @@ impl ConnectionManager {
         self.table_details_revisions
             .retain(|(profile, ..), _| *profile != id);
         self.table_details_clear_epochs.remove(&id);
-        self.pending_operations
-            .retain(|operation| operation.profile_id != id);
         self.connect_failures.remove(&id);
         self.session_passwords.remove(&id);
 
@@ -971,8 +961,6 @@ impl ConnectionManager {
         self.table_details_revisions
             .retain(|(profile, ..), _| *profile != profile_id);
         self.table_details_clear_epochs.remove(&profile_id);
-        self.pending_operations
-            .retain(|operation| operation.profile_id != profile_id);
         self.session_passwords.remove(&profile_id);
         teardown
     }
@@ -1401,31 +1389,6 @@ impl ConnectionManager {
         true
     }
 
-    // --- Pending operations ---
-
-    pub fn is_operation_pending(&self, profile_id: Uuid, database: Option<&str>) -> bool {
-        self.pending_operations.contains(&PendingOperation {
-            profile_id,
-            database: database.map(|s| s.to_string()),
-        })
-    }
-
-    pub fn start_pending_operation(&mut self, profile_id: Uuid, database: Option<&str>) -> bool {
-        let op = PendingOperation {
-            profile_id,
-            database: database.map(|s| s.to_string()),
-        };
-        self.pending_operations.insert(op)
-    }
-
-    pub fn finish_pending_operation(&mut self, profile_id: Uuid, database: Option<&str>) {
-        let op = PendingOperation {
-            profile_id,
-            database: database.map(|s| s.to_string()),
-        };
-        self.pending_operations.remove(&op);
-    }
-
     // --- Connect failures ---
 
     /// Records `message` as the outcome of the latest connect attempt for
@@ -1829,10 +1792,6 @@ impl ConnectionManager {
         self.table_details_revisions
             .retain(|(profile, ..), _| *profile != profile_id);
         self.table_details_clear_epochs.remove(&profile_id);
-        // Operations belong to the previous profile session; their late
-        // completions must not block a replacement session's requests.
-        self.pending_operations
-            .retain(|operation| operation.profile_id != profile_id);
 
         self.connections.insert(
             profile_id,
@@ -2193,18 +2152,6 @@ impl ConnectionManager {
             primary_connection: connected.connection.clone(),
             slot_revision: self.current_slot_revision(profile_id, database),
         })
-    }
-
-    /// Whether the guard still belongs to this exact profile session, even
-    /// when target-slot churn has invalidated its application authority.
-    /// Callers may release their own pending work only in that session.
-    pub fn database_refresh_guard_is_same_session(&self, guard: &DatabaseRefreshGuard) -> bool {
-        self.connections
-            .get(&guard.profile_id)
-            .is_some_and(|connected| {
-                self.current_session_generation(guard.profile_id) == guard.generation
-                    && Arc::ptr_eq(&connected.connection, &guard.primary_connection)
-            })
     }
 
     pub fn database_refresh_guard_is_current(&self, guard: &DatabaseRefreshGuard) -> bool {
@@ -4724,39 +4671,6 @@ mod tests {
             "expected empty for unknown table, got {:?}",
             retrieved
         );
-    }
-
-    #[test]
-    fn replacing_session_retires_only_old_profile_pending_operations() {
-        let mut manager = ConnectionManager::new(HashMap::new());
-        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
-        let sibling = ConnectionProfile::new("other", DbConfig::default_postgres());
-        let primary = make_connection(
-            DbKind::Postgres,
-            SchemaLoadingStrategy::ConnectionPerDatabase,
-        );
-        manager.add_connection(
-            profile.clone(),
-            primary.clone(),
-            None,
-            None,
-            false,
-            WritePrivilege::Unknown,
-        );
-        assert!(manager.start_pending_operation(profile.id, Some("reporting")));
-        assert!(manager.start_pending_operation(sibling.id, Some("other")));
-        manager.add_connection(
-            profile.clone(),
-            primary,
-            None,
-            None,
-            false,
-            WritePrivilege::Unknown,
-        );
-        assert!(!manager.is_operation_pending(profile.id, Some("reporting")));
-        assert!(manager.is_operation_pending(sibling.id, Some("other")));
-        assert!(manager.start_pending_operation(profile.id, Some("reporting")));
-        manager.finish_pending_operation(profile.id, Some("reporting"));
     }
 
     #[test]

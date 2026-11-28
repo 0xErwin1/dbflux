@@ -193,8 +193,6 @@ impl ConnectAttempt {
             ConnectOutcome::Failed(error) if !cancel_requested => self.fail_all(state, error),
             ConnectOutcome::Failed(_) | ConnectOutcome::Cancelled => self.cancel_all(state),
         }
-
-        state.finish_pending_operation(self.profile_id, None);
     }
 
     fn complete_all(&self, state: &mut AppStateEntity) {
@@ -438,7 +436,7 @@ mod tests {
             state.tasks().get(attempt.task_id).map(|task| task.status),
             Some(TaskStatus::Cancelled)
         );
-        assert!(!state.is_operation_pending(profile_id, None));
+        assert!(!state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(profile_id)));
     }
 
     #[test]

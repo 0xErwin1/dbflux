@@ -25,6 +25,24 @@ pub struct TaskTarget {
     pub database: Option<String>,
 }
 
+impl TaskTarget {
+    /// The connection itself, not one of its databases.
+    pub fn connection(profile_id: Uuid) -> Self {
+        Self {
+            profile_id,
+            database: None,
+        }
+    }
+
+    /// One database of a connection.
+    pub fn database(profile_id: Uuid, database: impl Into<String>) -> Self {
+        Self {
+            profile_id,
+            database: Some(database.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskKind {
     Query,
@@ -186,6 +204,7 @@ pub struct TaskRequest {
     pending: bool,
     supersede_key: Option<String>,
     target_label: Option<String>,
+    claims_target: bool,
 }
 
 impl TaskRequest {
@@ -200,6 +219,7 @@ impl TaskRequest {
             pending: false,
             supersede_key: None,
             target_label: None,
+            claims_target: false,
         }
     }
 
@@ -243,6 +263,16 @@ impl TaskRequest {
     /// carries the same key. See `TaskManager::start_handle`.
     pub fn supersede_key(mut self, key: impl Into<String>) -> Self {
         self.supersede_key = Some(key.into());
+        self
+    }
+
+    /// Makes the task own its target while it is in flight: no other claiming
+    /// task, whatever its kind, starts on the same target, and
+    /// `TaskManager::is_target_claimed` reads true. Use it for work that
+    /// replaces or rebuilds what the target shows (a connect, a database
+    /// switch or refresh), not for work that only reads from it.
+    pub fn claims_target(mut self) -> Self {
+        self.claims_target = true;
         self
     }
 
@@ -399,6 +429,8 @@ pub struct Task {
     policy: CancelPolicy,
     cancel_hook: Option<CancelHook>,
     supersede_key: Option<String>,
+    /// See `TaskRequest::claims_target`.
+    claims_target: bool,
     /// Start order, stable where two `Instant`s tie.
     sequence: u64,
     /// Set when a cancel request on a parent could not settle it because a
@@ -606,6 +638,7 @@ impl TaskManager {
             policy: request.policy,
             cancel_hook: request.cancel_hook,
             supersede_key: request.supersede_key,
+            claims_target: request.claims_target,
             sequence: self.next_sequence,
             settles_with_children: false,
             settles_as: TaskStatus::Cancelled,

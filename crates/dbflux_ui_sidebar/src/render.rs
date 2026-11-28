@@ -441,7 +441,9 @@ impl Render for Sidebar {
             .profiles()
             .iter()
             .map(|profile| profile.id)
-            .filter(|profile_id| state.is_operation_pending(*profile_id, None))
+            .filter(|profile_id| {
+                state.is_task_target_claimed(&dbflux_core::TaskTarget::connection(*profile_id))
+            })
             .collect();
 
         let code_gen_capabilities: HashMap<Uuid, CodeGenCapabilities> = state

@@ -50,8 +50,8 @@ fn start_database_switch_task(
     state: &mut AppStateEntity,
     profile_id: Uuid,
     database: &str,
-) -> dbflux_core::TaskHandle {
-    state.start_task_handle(
+) -> Result<dbflux_core::TaskHandle, dbflux_core::TaskBusy> {
+    state.try_start_task(
         dbflux_core::TaskRequest::new(
             TaskKind::SwitchDatabase,
             crate::labels::connecting_to_database_task_label(database),
@@ -60,7 +60,8 @@ fn start_database_switch_task(
             profile_id,
             database: Some(database.to_string()),
         })
-        .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+        .policy(dbflux_core::CancelPolicy::WorkerAcknowledged)
+        .claims_target(),
     )
 }
 
@@ -184,7 +185,7 @@ impl Sidebar {
             .collect();
 
         let held_state = self.app_state.update(cx, |state, _cx| {
-            if state.is_operation_pending(profile_id, Some(database)) {
+            if state.is_task_target_claimed(&TaskTarget::database(profile_id, database)) {
                 return Err("Database refresh already pending".to_string());
             }
             let cached_schema = state.invalidate_database_schema_target(profile_id, database);
@@ -393,41 +394,29 @@ impl Sidebar {
         root_expanded: bool,
         cx: &mut Context<Self>,
     ) -> Option<(TaskId, CancelToken)> {
-        let started = self.app_state.update(cx, |state, cx| {
-            if state.is_operation_pending(profile_id, Some(database)) {
-                return false;
-            }
+        let task_target = TaskTarget::database(profile_id, database);
 
-            let started = state.start_pending_operation(profile_id, Some(database));
-            if started {
-                cx.emit(AppStateChanged);
-            }
-            started
-        });
-
-        if !started {
-            return None;
-        }
+        let handle = self.app_state.update(cx, |state, cx| {
+            let handle = state
+                .try_start_task(
+                    dbflux_core::TaskRequest::new(
+                        TaskKind::SchemaRefresh,
+                        crate::labels::refreshing_database_task_label(database),
+                    )
+                    .target(task_target)
+                    .policy(dbflux_core::CancelPolicy::WorkerAcknowledged)
+                    .claims_target(),
+                )
+                .ok()?;
+            cx.emit(AppStateChanged);
+            Some(handle)
+        })?;
 
         self.expansion_overrides
             .insert(item_id.to_string(), root_expanded);
         self.loading_items.insert(item_id.to_string());
 
-        let task_target = TaskTarget {
-            profile_id,
-            database: Some(database.to_string()),
-        };
-
-        Some(self.app_state.update(cx, |state, cx| {
-            let handle = crate::table_loading::start_schema_task(
-                state,
-                TaskKind::SchemaRefresh,
-                crate::labels::refreshing_database_task_label(database),
-                task_target,
-            );
-            cx.emit(AppStateChanged);
-            (handle.id(), handle.token().clone())
-        }))
+        Some((handle.id(), handle.token().clone()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -451,13 +440,6 @@ impl Sidebar {
         {
             app_state.update(cx, |state, cx| {
                 state.settle_task_discarded(task_id);
-                // The pending marker is unique per profile/target in one
-                // session: until this operation releases it, a second
-                // same-session refresh cannot acquire it. A replacement
-                // session may own the same key and must remain untouched.
-                if state.database_refresh_guard_is_same_session(refresh_guard) {
-                    state.finish_pending_operation(profile_id, Some(database));
-                }
                 cx.emit(AppStateChanged);
             });
             sidebar.refresh_tree(cx);
@@ -471,7 +453,6 @@ impl Sidebar {
             } => {
                 app_state.update(cx, |state, cx| {
                     state.complete_task(task_id);
-                    state.finish_pending_operation(profile_id, Some(database));
 
                     if let Some(database_schema) = database_schema {
                         state.set_database_schema(
@@ -509,7 +490,6 @@ impl Sidebar {
                         schema,
                     );
                     state.complete_task(task_id);
-                    state.finish_pending_operation(profile_id, Some(database));
                     cx.emit(AppStateChanged);
                 });
                 sidebar
@@ -521,7 +501,6 @@ impl Sidebar {
 
                 app_state.update(cx, |state, cx| {
                     state.fail_task(task_id, error.clone());
-                    state.finish_pending_operation(profile_id, Some(database));
                     Self::restore_database_refresh_state(state, profile_id, held_state);
                     cx.emit(AppStateChanged);
                 });
@@ -540,7 +519,6 @@ impl Sidebar {
 
                 app_state.update(cx, |state, cx| {
                     state.settle_task_discarded(task_id);
-                    state.finish_pending_operation(profile_id, Some(database));
                     Self::restore_database_refresh_state(state, profile_id, held_state);
                     cx.emit(AppStateChanged);
                 });
@@ -933,35 +911,7 @@ impl Sidebar {
             return;
         }
 
-        let (params, guard) = match self.app_state.update(cx, |state, cx| {
-            if state.is_operation_pending(profile_id, Some(db_name)) {
-                return Err("Operation already pending".to_string());
-            }
-
-            let params = state.prepare_database_connection_guarded(profile_id, db_name)?;
-            let guard = state
-                .capture_database_refresh_guard(profile_id, db_name)
-                .ok_or_else(|| "Database connection target changed".to_string())?;
-            if !state.start_pending_operation(profile_id, Some(db_name)) {
-                return Err("Operation started by another thread".to_string());
-            }
-
-            cx.notify();
-            Ok((params, guard))
-        }) {
-            Ok(p) => p,
-            Err(e) => {
-                log::info!("Database connection skipped: {}", e);
-                return;
-            }
-        };
-
         if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.app_state.update(cx, |state, _cx| {
-                if state.database_refresh_guard_is_current(&guard) {
-                    state.finish_pending_operation(profile_id, Some(db_name));
-                }
-            });
             self.pending_toast = Some(PendingToast {
                 message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
@@ -971,11 +921,28 @@ impl Sidebar {
             return;
         }
 
-        let task_id = self.app_state.update(cx, |state, cx| {
-            let handle = start_database_switch_task(state, profile_id, db_name);
+        let (params, guard, task_id) = match self.app_state.update(cx, |state, cx| {
+            if state.is_task_target_claimed(&TaskTarget::database(profile_id, db_name)) {
+                return Err("Operation already pending".to_string());
+            }
+
+            let params = state.prepare_database_connection_guarded(profile_id, db_name)?;
+            let guard = state
+                .capture_database_refresh_guard(profile_id, db_name)
+                .ok_or_else(|| "Database connection target changed".to_string())?;
+            let handle = start_database_switch_task(state, profile_id, db_name)
+                .map_err(|busy| format!("Operation started by another task: {busy}"))?;
+
             cx.emit(AppStateChanged);
-            handle.id()
-        });
+            cx.notify();
+            Ok((params, guard, handle.id()))
+        }) {
+            Ok(started) => started,
+            Err(error) => {
+                log::info!("Database connection skipped: {}", error);
+                return;
+            }
+        };
 
         self.refresh_tree(cx);
 
@@ -993,9 +960,6 @@ impl Sidebar {
                 if !app_state.read(cx).database_refresh_guard_is_current(&guard) {
                     app_state.update(cx, |state, cx| {
                         state.settle_task_discarded(task_id);
-                        if state.database_refresh_guard_is_same_session(&guard) {
-                            state.finish_pending_operation(profile_id, Some(&db_name_owned));
-                        }
                         cx.emit(AppStateChanged);
                     });
                     sidebar.update(cx, |sidebar, cx| sidebar.refresh_tree(cx));
@@ -1005,7 +969,6 @@ impl Sidebar {
                 let toast = app_state.update(cx, |state, cx| {
                     let Some(result) = resolve_finished_switch(state, task_id, result) else {
                         log::info!("Database connection task was cancelled, discarding result");
-                        state.finish_pending_operation(profile_id, Some(&db_name_owned));
                         cx.emit(AppStateChanged);
                         return None;
                     };
@@ -1030,7 +993,6 @@ impl Sidebar {
                             })
                         }
                     };
-                    state.finish_pending_operation(profile_id, Some(&db_name_owned));
                     cx.emit(AppStateChanged);
                     cx.notify();
                     toast
@@ -1275,7 +1237,8 @@ mod tests {
         let mut state = app_state();
         let profile_id = Uuid::from_u128(1);
 
-        let handle = start_database_switch_task(&mut state, profile_id, "analytics");
+        let handle =
+            start_database_switch_task(&mut state, profile_id, "analytics").expect("starts");
 
         let task = state.tasks().get(handle.id()).expect("task");
         assert_eq!(task.kind, TaskKind::SwitchDatabase);
@@ -1290,7 +1253,8 @@ mod tests {
     #[test]
     fn a_cancelled_switch_reads_cancelling_then_cancelled_and_discards_its_result() {
         let mut state = app_state();
-        let handle = start_database_switch_task(&mut state, Uuid::from_u128(1), "analytics");
+        let handle = start_database_switch_task(&mut state, Uuid::from_u128(1), "analytics")
+            .expect("starts");
 
         assert_eq!(
             state.request_cancel_task(handle.id()),
@@ -1314,7 +1278,8 @@ mod tests {
     #[test]
     fn an_uncancelled_switch_keeps_its_result_and_its_status() {
         let mut state = app_state();
-        let handle = start_database_switch_task(&mut state, Uuid::from_u128(1), "analytics");
+        let handle = start_database_switch_task(&mut state, Uuid::from_u128(1), "analytics")
+            .expect("starts");
 
         let applied = resolve_finished_switch(&mut state, handle.id(), "connected");
 
@@ -1323,6 +1288,59 @@ mod tests {
             state.tasks().get(handle.id()).expect("task").status,
             TaskStatus::Running,
             "the caller completes the task once the result is applied"
+        );
+    }
+
+    #[test]
+    fn a_second_switch_to_the_same_database_is_refused_while_one_is_in_flight() {
+        let mut state = app_state();
+        let profile_id = Uuid::from_u128(1);
+        let first = start_database_switch_task(&mut state, profile_id, "analytics").expect("first");
+
+        let refused = start_database_switch_task(&mut state, profile_id, "analytics")
+            .err()
+            .expect("the same target is busy");
+        assert_eq!(refused.existing, first.id());
+        assert!(
+            start_database_switch_task(&mut state, profile_id, "reports").is_ok(),
+            "another database is not blocked"
+        );
+    }
+
+    #[test]
+    fn a_cancelling_switch_still_blocks_the_target_until_it_stops() {
+        let mut state = app_state();
+        let profile_id = Uuid::from_u128(1);
+        let first = start_database_switch_task(&mut state, profile_id, "analytics").expect("first");
+        let target = dbflux_core::TaskTarget::database(profile_id, "analytics");
+
+        state.request_cancel_task(first.id());
+        assert_eq!(
+            state.tasks().get(first.id()).expect("task").status,
+            TaskStatus::Cancelling
+        );
+        assert!(state.is_task_target_claimed(&target));
+        assert!(start_database_switch_task(&mut state, profile_id, "analytics").is_err());
+
+        resolve_finished_switch(&mut state, first.id(), "connected");
+        assert!(!state.is_task_target_claimed(&target));
+        assert!(start_database_switch_task(&mut state, profile_id, "analytics").is_ok());
+    }
+
+    #[test]
+    fn a_database_switch_blocks_a_schema_refresh_of_the_same_database() {
+        let mut state = app_state();
+        let profile_id = Uuid::from_u128(1);
+        start_database_switch_task(&mut state, profile_id, "analytics").expect("switch");
+
+        assert!(
+            state
+                .try_start_task(
+                    dbflux_core::TaskRequest::new(TaskKind::SchemaRefresh, "refresh")
+                        .target(dbflux_core::TaskTarget::database(profile_id, "analytics"))
+                        .claims_target(),
+                )
+                .is_err()
         );
     }
 }

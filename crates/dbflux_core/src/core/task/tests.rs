@@ -1378,3 +1378,102 @@ fn a_child_whose_supersede_cancels_its_parent_is_skipped() {
     assert_eq!(status_of(&manager, child.id()), TaskStatus::Skipped);
     assert!(!manager.activate(child.id()));
 }
+
+fn claiming(kind: TaskKind, database: Option<&str>) -> TaskRequest {
+    TaskRequest::new(kind, kind.label())
+        .target(target(database))
+        .policy(CancelPolicy::WorkerAcknowledged)
+        .claims_target()
+}
+
+#[test]
+fn a_claiming_task_marks_its_target_claimed_until_it_settles() {
+    let mut manager = TaskManager::new();
+    assert!(!manager.is_target_claimed(&target(Some("a"))));
+
+    let handle = manager
+        .try_start(claiming(TaskKind::SwitchDatabase, Some("a")))
+        .expect("first claim");
+
+    assert!(manager.is_target_claimed(&target(Some("a"))));
+    assert!(!manager.is_target_claimed(&target(Some("b"))));
+    assert!(!manager.is_target_claimed(&target(None)));
+
+    manager.complete(handle.id());
+    assert!(!manager.is_target_claimed(&target(Some("a"))));
+}
+
+#[test]
+fn a_second_claim_is_refused_whatever_its_kind() {
+    let mut manager = TaskManager::new();
+    let first = manager
+        .try_start(claiming(TaskKind::SwitchDatabase, Some("a")))
+        .expect("first claim");
+
+    let busy = manager
+        .try_start(claiming(TaskKind::SchemaRefresh, Some("a")))
+        .err()
+        .expect("a different kind on the same target is refused");
+
+    assert_eq!(busy.existing, first.id());
+    assert_eq!(
+        manager.active_count(),
+        1,
+        "a refused claim registers nothing"
+    );
+    assert!(
+        manager
+            .try_start(claiming(TaskKind::SchemaRefresh, Some("b")))
+            .is_ok()
+    );
+}
+
+#[test]
+fn a_cancelling_claim_keeps_the_target_claimed_until_the_worker_stops() {
+    let mut manager = TaskManager::new();
+    let handle = manager
+        .try_start(claiming(TaskKind::SwitchDatabase, Some("a")))
+        .expect("claim");
+
+    manager.request_cancel(handle.id());
+    assert_eq!(status_of(&manager, handle.id()), TaskStatus::Cancelling);
+    assert!(manager.is_target_claimed(&target(Some("a"))));
+    assert!(
+        manager
+            .try_start(claiming(TaskKind::SwitchDatabase, Some("a")))
+            .is_err()
+    );
+
+    assert!(manager.acknowledge_cancelled(handle.id()));
+    assert!(!manager.is_target_claimed(&target(Some("a"))));
+    assert!(
+        manager
+            .try_start(claiming(TaskKind::SwitchDatabase, Some("a")))
+            .is_ok()
+    );
+}
+
+#[test]
+fn unclaimed_tasks_on_a_target_neither_claim_it_nor_block_a_claim() {
+    let mut manager = TaskManager::new();
+    manager
+        .try_start(
+            TaskRequest::new(TaskKind::SchemaRefresh, "table details").target(target(Some("a"))),
+        )
+        .expect("object-level refresh");
+
+    assert!(!manager.is_target_claimed(&target(Some("a"))));
+    assert!(
+        manager
+            .try_start(claiming(TaskKind::SwitchDatabase, Some("a")))
+            .is_ok()
+    );
+}
+
+#[test]
+fn a_pending_claiming_stage_does_not_claim_the_target() {
+    let mut manager = TaskManager::new();
+    manager.start_handle(claiming(TaskKind::Connect, None).pending());
+
+    assert!(!manager.is_target_claimed(&target(None)));
+}

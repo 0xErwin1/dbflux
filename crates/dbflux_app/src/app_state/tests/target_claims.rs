@@ -8,6 +8,7 @@ fn connect_request(profile_id: Uuid) -> TaskRequest {
             database: None,
         })
         .policy(CancelPolicy::WorkerAcknowledged)
+        .claims_target()
 }
 
 /// Cancelling a connect attempt does not free the profile: the attempt turns
@@ -36,11 +37,34 @@ fn a_cancelled_connect_attempt_keeps_the_profile_busy_until_its_worker_stops() {
         state.try_start_task(connect_request(profile_id)).is_err(),
         "a retry must wait for the cancelled attempt to stop"
     );
+    assert!(
+        state.is_task_target_claimed(&TaskTarget::connection(profile_id)),
+        "the sidebar spinner keeps spinning while the attempt is Cancelling"
+    );
 
     assert!(state.acknowledge_task_cancelled(stage.id()));
     assert!(state.acknowledge_task_cancelled(attempt.id()));
 
     let status = state.tasks().get(attempt.id()).map(|task| task.status);
     assert_eq!(status, Some(TaskStatus::Cancelled));
+    assert!(!state.is_task_target_claimed(&TaskTarget::connection(profile_id)));
     assert!(state.try_start_task(connect_request(profile_id)).is_ok());
+}
+
+/// The spinner and the duplicate guard read the same record: the task.
+#[test]
+fn the_connect_claim_is_the_task_and_clears_when_it_settles() {
+    let mut state = state_for_task_tests();
+    let profile_id = Uuid::new_v4();
+    let target = TaskTarget::connection(profile_id);
+    assert!(!state.is_task_target_claimed(&target));
+
+    let attempt = state
+        .try_start_task(connect_request(profile_id))
+        .expect("attempt starts");
+    assert!(state.is_task_target_claimed(&target));
+    assert!(state.try_start_task(connect_request(profile_id)).is_err());
+
+    state.complete_task(attempt.id());
+    assert!(!state.is_task_target_claimed(&target));
 }
