@@ -867,12 +867,18 @@ where
             let succeeded = hook_result
                 .as_ref()
                 .is_ok_and(|output: &HookResult| output.is_success());
-            let failure_message = if succeeded {
+            // The executor kills the child and returns `Err` when the parent
+            // token fires, which is a cancellation and not a hook failure.
+            let cut_short_by_parent = hook_result.is_err()
+                && parent_cancel
+                    .as_ref()
+                    .is_some_and(CancelToken::is_cancelled);
+            let failure_message = if succeeded || cut_short_by_parent {
                 None
             } else {
                 Some(hook.failure_message(phase, &hook_result))
             };
-            (succeeded, failure_message, false)
+            (succeeded, failure_message, cut_short_by_parent)
         };
 
         let details = if detached_started {
@@ -883,7 +889,10 @@ where
 
         cx.update(|cx| {
             app_state.update(cx, |state, cx| {
-                if let Some(message) = &failure_message {
+                if cancelled && !detached_started {
+                    state.append_task_details(task_id, details.clone());
+                    state.settle_task_discarded(task_id);
+                } else if let Some(message) = &failure_message {
                     state.fail_task_with_details(task_id, message.clone(), details.clone());
                 } else {
                     state.complete_task_with_details(task_id, details.clone());
@@ -1187,6 +1196,77 @@ mod tests {
             *invocations.lock().expect("test executor poisoned"),
             vec!["fail-warn", "fail-ignore", "later-success"],
         );
+    }
+
+    /// Cancels the parent token while the blocking hook runs and then fails
+    /// the way the process executor does when it kills the child.
+    #[derive(Clone)]
+    struct CancelledByParentExecutor {
+        parent: CancelToken,
+    }
+
+    impl HookExecutor for CancelledByParentExecutor {
+        fn execute_hook(
+            &self,
+            _hook: &ConnectionHook,
+            _context: &HookContext,
+            _cancel_token: &CancelToken,
+            _parent_cancel_token: Option<&CancelToken>,
+            _output: Option<&OutputSender>,
+            _detached: Option<&DetachedProcessSender>,
+        ) -> Result<HookResult, String> {
+            self.parent.cancel();
+            Err("hook cancelled".to_string())
+        }
+    }
+
+    #[gpui::test]
+    fn a_blocking_hook_cut_short_by_the_parent_cancel_settles_cancelled(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let parent = CancelToken::new();
+        let executor = CancelledByParentExecutor {
+            parent: parent.clone(),
+        };
+        let scope = DetachedHookScope::default();
+        let (sender, receiver) = mpsc::channel();
+        let runner_state = app_state.clone();
+
+        cx.update(|cx| {
+            cx.spawn(async move |cx| {
+                let state = run_hook_phase_with_executor(
+                    runner_state,
+                    profile_id,
+                    "test profile".to_string(),
+                    HookPhase::PreConnect,
+                    vec![hook("slow", HookFailureMode::Disconnect)],
+                    hook_context(profile_id),
+                    Some(parent),
+                    &scope,
+                    executor,
+                    cx,
+                )
+                .await;
+                sender.send(state).expect("test result receiver");
+            })
+            .detach();
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            receiver.try_recv().expect("runner must finish"),
+            HookPhaseState::Cancelled
+        );
+        let status = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .tasks()
+                .recent_tasks(10)
+                .into_iter()
+                .find(|task| matches!(task.kind, TaskKind::Hook { .. }))
+                .map(|task| task.status)
+        });
+        assert_eq!(status, Some(TaskStatus::Cancelled));
     }
 
     #[gpui::test]

@@ -719,6 +719,10 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn test_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.test_status == TestStatus::Testing {
+            return;
+        }
+
         if self.defer_until_secrets_read(DeferredAction::TestConnection) {
             return;
         }
@@ -992,6 +996,7 @@ struct TestSettlement {
     profile_name: String,
     result: Result<TestConnectionOrchestrationResult, String>,
     probe_failure: Option<String>,
+    hook_failure: Option<String>,
     cleanup_failure: Option<String>,
 }
 
@@ -1001,12 +1006,17 @@ impl TestSettlement {
             Err(TestConnectionFailure::Probe(message)) => Some(message.clone()),
             _ => None,
         };
+        let hook_failure = match &outcome.probe {
+            Err(TestConnectionFailure::Hook(message)) => Some(message.clone()),
+            _ => None,
+        };
         let cleanup_failure = outcome.cleanup.as_ref().err().cloned();
 
         Self {
             profile_name,
             result: outcome.merge(),
             probe_failure,
+            hook_failure,
             cleanup_failure,
         }
     }
@@ -1014,8 +1024,9 @@ impl TestSettlement {
 
 impl ConnectionManagerWindow {
     /// The foreground catch site of a connection test. Driver probe failures
-    /// are reported here once; hook failures already surface through their
-    /// own hook tasks and are only shown inline.
+    /// and aborting hook failures are reported here once and shown inline; a
+    /// hook's own task row is not a user-facing report, and the hook runner
+    /// does not report.
     fn apply_test_settlement(
         &mut self,
         settlement: TestSettlement,
@@ -1026,6 +1037,7 @@ impl ConnectionManagerWindow {
             profile_name,
             result,
             probe_failure,
+            hook_failure,
             cleanup_failure,
         } = settlement;
 
@@ -1072,6 +1084,8 @@ impl ConnectionManagerWindow {
                         UserFacingError::new(ErrorKind::Driver, message).with_cause(probe_error),
                         cx,
                     );
+                } else if hook_failure.is_some() {
+                    report_error(UserFacingError::new(ErrorKind::Hook, message), cx);
                 }
             }
         }
@@ -1149,8 +1163,8 @@ struct TestConnectionOrchestrationResult {
     warnings: Vec<String>,
 }
 
-/// Why the probe half of a connection test failed. Hook failures are already
-/// visible through their own hook tasks; probe failures are not.
+/// Why the probe half of a connection test failed; each kind is reported
+/// once by the foreground settlement.
 enum TestConnectionFailure {
     Hook(String),
     Probe(String),
@@ -1429,6 +1443,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+
+    mod settlement;
 
     const FORM_KEYS: &[&str] = &[
         "form.validation.connection_name_required",
@@ -3268,236 +3284,6 @@ mod tests {
                 );
             })
             .expect("window available");
-        window
-            .update(&mut cx, |_, window, _| window.remove_window())
-            .expect("close the test window");
-    }
-
-    const PROBE_FAILURE: &str = "probe refused the connection";
-
-    /// Wraps a registered driver and fails every connect, so the probe of a
-    /// connection test fails inside the driver.
-    struct FailingProbeDriver(Arc<dyn DbDriver>);
-
-    impl DbDriver for FailingProbeDriver {
-        fn kind(&self) -> dbflux_core::DbKind {
-            self.0.kind()
-        }
-
-        fn metadata(&self) -> &dbflux_core::DriverMetadata {
-            self.0.metadata()
-        }
-
-        fn form_definition(&self) -> &dbflux_core::DriverFormDef {
-            self.0.form_definition()
-        }
-
-        fn driver_key(&self) -> dbflux_core::DriverKey {
-            self.0.driver_key()
-        }
-
-        fn build_config(
-            &self,
-            values: &dbflux_core::FormValues,
-        ) -> Result<DbConfig, dbflux_core::DbError> {
-            self.0.build_config(values)
-        }
-
-        fn extract_values(&self, config: &DbConfig) -> dbflux_core::FormValues {
-            self.0.extract_values(config)
-        }
-
-        fn connect_with_secrets(
-            &self,
-            _profile: &ConnectionProfile,
-            _password: Option<&SecretString>,
-            _ssh_secret: Option<&SecretString>,
-        ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
-            Err(dbflux_core::DbError::connection_failed(PROBE_FAILURE))
-        }
-
-        fn test_connection(
-            &self,
-            _profile: &ConnectionProfile,
-        ) -> Result<(), dbflux_core::DbError> {
-            Err(dbflux_core::DbError::connection_failed(PROBE_FAILURE))
-        }
-    }
-
-    fn settle_with(
-        window: &WindowHandle<ConnectionManagerWindow>,
-        cx: &mut TestAppContext,
-        outcome: TestConnectionOutcome,
-        cancelled: bool,
-    ) {
-        window
-            .update(cx, |manager, _window, cx| {
-                manager.apply_test_settlement(
-                    TestSettlement::from_outcome("settled".to_string(), outcome),
-                    cancelled,
-                    cx,
-                );
-            })
-            .expect("window available");
-    }
-
-    fn failed_probe_outcome(failure: TestConnectionFailure) -> TestConnectionOutcome {
-        TestConnectionOutcome {
-            probe: Err(failure),
-            cleanup: Ok(()),
-        }
-    }
-
-    #[::core::prelude::v1::test]
-    fn an_uncancelled_driver_probe_failure_is_reported_once_and_shown_inline() {
-        let mut cx = TestAppContext::single();
-        let host = init_form_test_runtime(&mut cx);
-        let app_state = test_app_state(
-            &mut cx,
-            SecretStoreFixture::new(PasswordSaveOutcome::Success),
-        );
-        let window = open_new_profile_window(app_state.clone(), &mut cx);
-        window
-            .update(&mut cx, |manager, _window, _cx| {
-                let inner = manager.form.selected_driver.clone().expect("driver");
-                manager.form.selected_driver = Some(Arc::new(FailingProbeDriver(inner)));
-            })
-            .expect("swap in the failing driver");
-
-        window
-            .update(&mut cx, |manager, window, cx| {
-                manager.test_connection(window, cx)
-            })
-            .expect("test connection starts");
-        cx.run_until_parked();
-
-        assert!(matches!(
-            test_connection_task(&app_state, &mut cx)
-                .expect("task")
-                .status,
-            dbflux_core::TaskStatus::Failed(_)
-        ));
-        window
-            .update(&mut cx, |manager, _, _| {
-                assert!(matches!(manager.test_status, TestStatus::Failed));
-                assert!(
-                    manager
-                        .test_error
-                        .as_deref()
-                        .is_some_and(|error| error.contains(PROBE_FAILURE)),
-                    "the inline error stays: {:?}",
-                    manager.test_error
-                );
-            })
-            .expect("window available");
-        assert_eq!(
-            cx.update(|cx| host.read(cx).toast_count()),
-            1,
-            "the driver failure is reported once"
-        );
-        window
-            .update(&mut cx, |_, window, _| window.remove_window())
-            .expect("close the test window");
-    }
-
-    #[::core::prelude::v1::test]
-    fn a_failed_hook_is_shown_inline_without_a_second_report() {
-        let mut cx = TestAppContext::single();
-        let host = init_form_test_runtime(&mut cx);
-        let app_state = test_app_state(
-            &mut cx,
-            SecretStoreFixture::new(PasswordSaveOutcome::Success),
-        );
-        let window = open_new_profile_window(app_state, &mut cx);
-
-        settle_with(
-            &window,
-            &mut cx,
-            failed_probe_outcome(TestConnectionFailure::Hook("hook aborted".to_string())),
-            false,
-        );
-
-        window
-            .update(&mut cx, |manager, _, _| {
-                assert!(matches!(manager.test_status, TestStatus::Failed));
-                assert_eq!(manager.test_error.as_deref(), Some("hook aborted"));
-            })
-            .expect("window available");
-        assert_eq!(
-            cx.update(|cx| host.read(cx).toast_count()),
-            0,
-            "hook failures are reported by their own tasks"
-        );
-        window
-            .update(&mut cx, |_, window, _| window.remove_window())
-            .expect("close the test window");
-    }
-
-    #[::core::prelude::v1::test]
-    fn a_cancelled_probe_with_failed_cleanup_surfaces_the_cleanup_failure() {
-        let mut cx = TestAppContext::single();
-        let host = init_form_test_runtime(&mut cx);
-        let app_state = test_app_state(
-            &mut cx,
-            SecretStoreFixture::new(PasswordSaveOutcome::Success),
-        );
-        let window = open_new_profile_window(app_state, &mut cx);
-
-        settle_with(
-            &window,
-            &mut cx,
-            TestConnectionOutcome {
-                probe: Err(TestConnectionFailure::Probe("Cancelled".to_string())),
-                cleanup: Err("detached hook still running".to_string()),
-            },
-            true,
-        );
-
-        window
-            .update(&mut cx, |manager, _, _| {
-                assert!(matches!(manager.test_status, TestStatus::Failed));
-                let error = manager.test_error.as_deref().expect("cleanup error shown");
-                assert!(error.contains("detached hook still running"), "{error}");
-                assert!(
-                    !error.contains("Cancelled"),
-                    "the cancelled probe outcome stays separate: {error}"
-                );
-            })
-            .expect("window available");
-        assert_eq!(
-            cx.update(|cx| host.read(cx).toast_count()),
-            1,
-            "the cleanup failure is reported once"
-        );
-        window
-            .update(&mut cx, |_, window, _| window.remove_window())
-            .expect("close the test window");
-    }
-
-    #[::core::prelude::v1::test]
-    fn a_cancelled_probe_with_clean_cleanup_stays_quiet() {
-        let mut cx = TestAppContext::single();
-        let host = init_form_test_runtime(&mut cx);
-        let app_state = test_app_state(
-            &mut cx,
-            SecretStoreFixture::new(PasswordSaveOutcome::Success),
-        );
-        let window = open_new_profile_window(app_state, &mut cx);
-
-        settle_with(
-            &window,
-            &mut cx,
-            failed_probe_outcome(TestConnectionFailure::Probe("Cancelled".to_string())),
-            true,
-        );
-
-        window
-            .update(&mut cx, |manager, _, _| {
-                assert!(matches!(manager.test_status, TestStatus::None));
-                assert!(manager.test_error.is_none());
-            })
-            .expect("window available");
-        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
         window
             .update(&mut cx, |_, window, _| window.remove_window())
             .expect("close the test window");
