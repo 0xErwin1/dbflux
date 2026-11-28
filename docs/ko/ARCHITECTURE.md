@@ -767,7 +767,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - **취소 훅**: 선택적 `CancelHook`은 `request_cancel` 안에서 실행되며(차단하면 안 됩니다) `CancelOutcome`을 반환합니다. `Stopped`(작업이 이미 멈춤), `Requested`(중지를 요청함, 워커가 확인), `NotSupported { reason }`(작업은 `Running`으로 남고 패널이 이유를 표시합니다. 실행 중인 명령을 취소할 수 없는 드라이버가 그 예입니다).
 - **되돌릴 수 없는 지점**: 워커는 DDL 전송처럼 되돌릴 수 없는 단계 직전에 `enter_point_of_no_return(id, reason)`을 호출합니다. 이후 취소는 거부되고, 패널은 취소를 비활성화하고 이유를 보여 줍니다.
 - **단계**: `parent`가 있는 `TaskRequest`는 자식 작업을 등록하며, `pending()`은 `activate`까지 `Pending`으로 등록합니다. 부모를 취소하면 자식도 취소되고, 시작하지 않은 자식은 `Skipped`로 끝나 "시작 안 됨"으로 표시됩니다.
-- **규칙**: 작업은 실제로 멈췄을 때만 `Cancelled`로 표시됩니다. 작업이 계속 실행 중일 수 있으면 상태는 `Cancelling`이거나 이유가 붙은 `Running`이며, 절대 `Cancelled`가 아닙니다.
+- **규칙**: `WorkerAcknowledged`에서는 작업이 실제로 멈췄을 때만 `Cancelled`로 표시됩니다. 작업이 계속 실행 중일 수 있으면 상태는 `Cancelling`이거나 이유가 붙은 `Running`이며, 절대 `Cancelled`가 아닙니다. `Immediate`는 기존 정책으로, 즉시 `Cancelled`로 표시되며 작업이 멈췄는지는 확인하지 않습니다. 따라서 작업이 버려지거나 관찰되지 않는 곳, 또는 아직 `WorkerAcknowledged`로 옮기지 않은 작업에서만 사용합니다.
 
 ```mermaid
 stateDiagram-v2

@@ -1,6 +1,9 @@
 mod rows;
 
-use self::rows::{ReasonFill, cancelled_with_stages_text, reason_row, stage_rows, status_glyph};
+use self::rows::{
+    ReasonFill, StageEntry, cancelled_with_stages_text, reason_row, stage_rows, stage_tree,
+    status_glyph,
+};
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::icons::AppIcon;
 use crate::ui::labels::{TaskHeadline, task_headline, task_profile_name};
@@ -178,10 +181,7 @@ impl TasksPanel {
     /// the dismiss button of a failed task. Returns `false` while it runs.
     pub fn dismiss_selected(&mut self, cx: &mut Context<Self>) -> bool {
         match self.selected_task(cx) {
-            Some(task) if task.status.is_terminal() => {
-                self.dismiss_task(task.id, cx);
-                true
-            }
+            Some(task) if task.status.is_terminal() => self.dismiss_task(task.id, cx),
             _ => false,
         }
     }
@@ -288,25 +288,25 @@ impl TasksPanel {
         });
     }
 
-    fn dismiss_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) {
+    /// Removes a finished task with its stages. A task with a stage still in
+    /// flight stays, so the stage keeps its row and its cancel control.
+    fn dismiss_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) -> bool {
         self.app_state.update(cx, |state, cx| {
-            // A detached hook can outlive the connect that started it; its
-            // row stays until it stops.
             if state.tasks().has_in_flight_descendants(task_id) {
-                return;
+                return false;
             }
 
-            let stages = state.tasks().children_of(task_id);
-
-            for stage in stages {
-                state.tasks_mut().remove(stage.id);
+            for stage in stage_tree(state.tasks(), task_id) {
+                state.tasks_mut().remove(stage.task.id);
             }
             state.tasks_mut().remove(task_id);
             cx.emit(AppStateChanged);
-        });
+            true
+        })
     }
 
-    /// Removes every task that is no longer running, failures included.
+    /// Removes every task that is no longer running, failures included,
+    /// except those with a stage still in flight.
     pub fn clear_finished(&mut self, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
             let finished: Vec<TaskId> = state
@@ -724,11 +724,15 @@ fn has_output(task: &TaskSnapshot) -> bool {
 /// The tasks the panel lists as rows: those in flight, then the finished
 /// ones [`visible_finished_tasks`] keeps. A stage is shown under its parent.
 fn top_level_tasks(tasks: &TaskManager) -> Vec<TaskSnapshot> {
-    tasks
-        .running_tasks()
+    let all = tasks.recent_tasks(usize::MAX);
+    let running: Vec<TaskSnapshot> = TaskManager::top_level(&all)
+        .filter(|task| task.status.is_in_flight())
+        .cloned()
+        .collect();
+
+    running
         .into_iter()
-        .filter(|task| task.parent_id.is_none())
-        .chain(visible_finished_tasks(tasks.recent_tasks(usize::MAX)))
+        .chain(visible_finished_tasks(all))
         .collect()
 }
 
@@ -772,7 +776,7 @@ impl HeaderCounts {
 struct TaskRowView {
     task: TaskSnapshot,
     headline: Option<TaskHeadline>,
-    stages: Vec<TaskSnapshot>,
+    stages: Vec<StageEntry>,
 }
 
 /// Number of completed or cancelled tasks the panel lists under the running ones.
@@ -780,24 +784,35 @@ const RECENT_FINISHED_TASK_LIMIT: usize = 5;
 
 /// Picks the finished tasks to list, newest first, from `recent_tasks`.
 ///
-/// Every failed task is kept so its error stays readable until the user
-/// dismisses it. Completed and cancelled tasks are capped at
-/// [`RECENT_FINISHED_TASK_LIMIT`].
+/// Every failed task, and every finished parent with a failed stage, is kept
+/// so the error stays readable until the user dismisses it. Other completed
+/// and cancelled tasks are capped at [`RECENT_FINISHED_TASK_LIMIT`].
 fn visible_finished_tasks(recent_tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     let mut other_finished_count = 0;
+    let top_level: Vec<TaskSnapshot> = TaskManager::top_level(&recent_tasks).cloned().collect();
 
-    recent_tasks
+    top_level
         .into_iter()
-        .filter(|task| task.parent_id.is_none())
         .filter(|task| match task.status {
             TaskStatus::Running | TaskStatus::Cancelling | TaskStatus::Pending => false,
             TaskStatus::Failed(_) => true,
+            _ if has_failed_descendant(&recent_tasks, task.id) => true,
             TaskStatus::Completed | TaskStatus::Cancelled | TaskStatus::Skipped => {
                 other_finished_count += 1;
                 other_finished_count <= RECENT_FINISHED_TASK_LIMIT
             }
         })
         .collect()
+}
+
+/// Whether any task below `parent` in `tasks` failed.
+fn has_failed_descendant(tasks: &[TaskSnapshot], parent: dbflux_core::TaskId) -> bool {
+    tasks
+        .iter()
+        .filter(|task| task.parent_id == Some(parent))
+        .any(|child| {
+            matches!(child.status, TaskStatus::Failed(_)) || has_failed_descendant(tasks, child.id)
+        })
 }
 
 impl Render for TasksPanel {
@@ -809,7 +824,7 @@ impl Render for TasksPanel {
             .iter()
             .map(|task| TaskRowView {
                 headline: task_headline(task, task_profile_name(state.profiles(), task).as_deref()),
-                stages: state.tasks().children_of(task.id),
+                stages: stage_tree(state.tasks(), task.id),
                 task: task.clone(),
             })
             .collect();
