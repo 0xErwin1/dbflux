@@ -316,6 +316,7 @@ impl TasksPanel {
                 .filter(|task| task.status.is_terminal())
                 .filter(|task| !state.tasks().has_in_flight_descendants(task.id))
                 .map(|task| task.id)
+                .filter(|task_id| !state.tasks().has_in_flight_descendants(*task_id))
                 .collect();
 
             for task_id in finished {

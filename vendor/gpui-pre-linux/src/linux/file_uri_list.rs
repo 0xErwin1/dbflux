@@ -1,14 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use gpui::{ClipboardItem, FileDragPaths, FileOperation};
+use gpui::{ClipboardEntry, ClipboardItem, FileDragPaths, FileOperation, ImageFormat};
 use gpui_util::ResultExt as _;
 use http_client::Url;
 
 /// A clipboard format that carries files, with the name it has on Wayland and as an X11 target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FileFormat {
-    /// The paths, one per line.
-    Text,
     /// `text/uri-list`: one `file://` URI per line, CRLF terminated.
     UriList,
     /// `x-special/gnome-copied-files`: the operation, then the URIs, newline separated.
@@ -17,29 +15,18 @@ pub(crate) enum FileFormat {
     KdeCutSelection,
 }
 
-/// Text mime types offered for the paths of a file item, and accepted for them.
+/// The mime types text is offered under.
 pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
     ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 
 impl FileFormat {
-    /// The mime type this format is offered under. [`FileFormat::Text`] has several; this is
-    /// the preferred one.
+    /// The mime type this format is offered under.
     pub(crate) fn mime(self) -> &'static str {
         match self {
-            Self::Text => TEXT_MIME_TYPES[0],
             Self::UriList => "text/uri-list",
             Self::GnomeCopiedFiles => "x-special/gnome-copied-files",
             Self::KdeCutSelection => "application/x-kde-cutselection",
         }
-    }
-
-    pub(crate) fn from_mime(mime: &str) -> Option<Self> {
-        if TEXT_MIME_TYPES.contains(&mime) {
-            return Some(Self::Text);
-        }
-        [Self::UriList, Self::GnomeCopiedFiles, Self::KdeCutSelection]
-            .into_iter()
-            .find(|format| format.mime() == mime)
     }
 }
 
@@ -83,8 +70,12 @@ pub(crate) fn gnome_copied_files<P: AsRef<Path>>(
     body
 }
 
-/// Every format a file item is offered in, with its bytes. Empty when no path has a file URL,
-/// so the caller can fall back to offering the item as text.
+/// Every file format a file item is offered in, with its bytes. Empty when no path has a file
+/// URL, so the caller can fall back to offering the item as text.
+///
+/// Files are not offered as text: an application that finds the paths as text pastes them as
+/// text, while chat applications and browsers attach the files from `text/uri-list` when that is
+/// all there is, as GNOME Files offers them.
 pub(crate) fn file_clipboard_formats(
     paths: &[PathBuf],
     operation: FileOperation,
@@ -93,13 +84,7 @@ pub(crate) fn file_clipboard_formats(
     if uri_list.is_empty() {
         return Vec::new();
     }
-    let text = paths
-        .iter()
-        .map(|path| path.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("\n");
     let mut formats = vec![
-        (FileFormat::Text, text.into_bytes()),
         (FileFormat::UriList, uri_list.into_bytes()),
         (
             FileFormat::GnomeCopiedFiles,
@@ -110,6 +95,50 @@ pub(crate) fn file_clipboard_formats(
         formats.push((FileFormat::KdeCutSelection, b"1".to_vec()));
     }
     formats
+}
+
+/// One way a clipboard item is offered to other applications, with the bytes it sends.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Offer {
+    /// The item's text, under every text mime type.
+    Text(Vec<u8>),
+    /// A file format of the item's files.
+    File(FileFormat, Vec<u8>),
+    /// An image entry, under its image mime type.
+    Image(ImageFormat, Vec<u8>),
+}
+
+/// Every way `item` is offered, in order: its files in their file formats, or its text when it
+/// has no file with a file URL; then each image format of its image entries, the first entry of
+/// a format winning. An item of only images is not offered as text.
+pub(crate) fn clipboard_offers(item: &ClipboardItem) -> Vec<Offer> {
+    let mut offers: Vec<Offer> = item
+        .file_paths()
+        .zip(item.file_operation())
+        .map(|(paths, operation)| file_clipboard_formats(&paths, operation))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(format, bytes)| Offer::File(format, bytes))
+        .collect();
+    let mut images = Vec::new();
+    for entry in item.entries() {
+        if let ClipboardEntry::Image(image) = entry
+            && !images
+                .iter()
+                .any(|offer| matches!(offer, Offer::Image(format, _) if *format == image.format))
+        {
+            images.push(Offer::Image(image.format, image.bytes.clone()));
+        }
+    }
+    let has_string = item
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, ClipboardEntry::String(_)));
+    if offers.is_empty() && (has_string || images.is_empty()) {
+        offers.push(Offer::Text(item.text().unwrap_or_default().into_bytes()));
+    }
+    offers.extend(images);
+    offers
 }
 
 /// The paths of the `file://` URIs in a `text/uri-list` body. Comments, blank lines, URIs that
@@ -236,12 +265,11 @@ mod tests {
     }
 
     #[test]
-    fn copy_formats_are_text_uri_list_and_gnome() {
+    fn copy_formats_are_uri_list_and_gnome_without_text() {
         let formats = file_clipboard_formats(&paths(&["/tmp/a", "/tmp/b c"]), FileOperation::Copy);
         assert_eq!(
             formats,
             vec![
-                (FileFormat::Text, b"/tmp/a\n/tmp/b c".to_vec()),
                 (
                     FileFormat::UriList,
                     b"file:///tmp/a\r\nfile:///tmp/b%20c\r\n".to_vec()
@@ -260,11 +288,70 @@ mod tests {
         assert_eq!(
             formats,
             vec![
-                (FileFormat::Text, b"/tmp/a".to_vec()),
                 (FileFormat::UriList, b"file:///tmp/a\r\n".to_vec()),
                 (FileFormat::GnomeCopiedFiles, b"cut\nfile:///tmp/a".to_vec()),
                 (FileFormat::KdeCutSelection, b"1".to_vec()),
             ]
+        );
+    }
+
+    fn png(bytes: &[u8]) -> gpui::Image {
+        gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes.to_vec())
+    }
+
+    #[test]
+    fn files_are_offered_only_as_files() {
+        let item = ClipboardItem::new_files(paths(&["/tmp/a"]), FileOperation::Copy);
+        assert_eq!(
+            clipboard_offers(&item),
+            vec![
+                Offer::File(FileFormat::UriList, b"file:///tmp/a\r\n".to_vec()),
+                Offer::File(
+                    FileFormat::GnomeCopiedFiles,
+                    b"copy\nfile:///tmp/a".to_vec()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn files_with_an_image_are_offered_as_files_and_as_the_image() {
+        let mut item = ClipboardItem::new_files(paths(&["/tmp/a.png"]), FileOperation::Copy);
+        item.entries.push(gpui::ClipboardEntry::Image(png(b"PNG")));
+        assert_eq!(
+            clipboard_offers(&item),
+            vec![
+                Offer::File(FileFormat::UriList, b"file:///tmp/a.png\r\n".to_vec()),
+                Offer::File(
+                    FileFormat::GnomeCopiedFiles,
+                    b"copy\nfile:///tmp/a.png".to_vec()
+                ),
+                Offer::Image(gpui::ImageFormat::Png, b"PNG".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_image_is_offered_once_per_format_and_without_text() {
+        let mut item = ClipboardItem::new_image(&png(b"first"));
+        item.entries
+            .push(gpui::ClipboardEntry::Image(png(b"second")));
+        assert_eq!(
+            clipboard_offers(&item),
+            vec![Offer::Image(gpui::ImageFormat::Png, b"first".to_vec())]
+        );
+    }
+
+    #[test]
+    fn text_and_files_without_file_urls_are_offered_as_text() {
+        assert_eq!(
+            clipboard_offers(&ClipboardItem::new_string("hello".into())),
+            vec![Offer::Text(b"hello".to_vec())]
+        );
+        let relative = ClipboardItem::new_files(paths(&["relative"]), FileOperation::Copy);
+        assert_eq!(
+            clipboard_offers(&relative),
+            vec![Offer::Text(b"relative".to_vec())]
         );
     }
 
@@ -275,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn formats_round_trip_through_their_mime_types() {
+    fn formats_are_named_by_their_mime_types() {
         assert_eq!(FileFormat::UriList.mime(), "text/uri-list");
         assert_eq!(
             FileFormat::GnomeCopiedFiles.mime(),
@@ -285,17 +372,6 @@ mod tests {
             FileFormat::KdeCutSelection.mime(),
             "application/x-kde-cutselection"
         );
-        for format in [
-            FileFormat::UriList,
-            FileFormat::GnomeCopiedFiles,
-            FileFormat::KdeCutSelection,
-        ] {
-            assert_eq!(FileFormat::from_mime(format.mime()), Some(format));
-        }
-        for text in ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"] {
-            assert_eq!(FileFormat::from_mime(text), Some(FileFormat::Text));
-        }
-        assert_eq!(FileFormat::from_mime("image/png"), None);
     }
 
     #[test]
