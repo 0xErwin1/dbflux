@@ -1131,6 +1131,9 @@ impl ChartDocument {
                     if cancel_accepted && let Err(e) = conn_cleanup.cleanup_after_cancel() {
                         log::warn!("[chart-doc] cleanup after cancel failed: {}", e);
                     }
+                    if let Some(entity) = this.upgrade() {
+                        entity.update(cx, |doc, cx| doc.cancelled_run_stopped(task_id, cx));
+                    }
                     return;
                 }
 
@@ -1142,6 +1145,22 @@ impl ChartDocument {
             });
         })
         .detach();
+    }
+
+    /// A cancelled run's driver call returned and its result was dropped.
+    /// The chart stops executing unless a newer run holds the slot, which
+    /// keeps its own state.
+    fn cancelled_run_stopped(&mut self, task_id: dbflux_core::TaskId, cx: &mut Context<Self>) {
+        self.runner.clear_primary(task_id);
+
+        if self.runner.has_primary_occupant() || self.state != DocumentState::Executing {
+            return;
+        }
+
+        self.exec_state = ExecState::Idle;
+        self.state = DocumentState::Clean;
+        cx.emit(DocumentEvent::ExecutionFinished);
+        cx.notify();
     }
 
     /// Apply a completed query result to the chart shell.
@@ -3655,6 +3674,89 @@ mod tests {
         let (start, end, window) = seed_initial_window(None, 900_000, 5_000_000);
         assert_eq!((start, end), (5_000_000 - 900_000, 5_000_000));
         assert_eq!(window, MetricDisplayWindow::Relative { span_ms: 900_000 });
+    }
+
+    fn chart_with_running_query(cx: &mut gpui::TestAppContext) -> Entity<ChartDocument> {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder = doc_holder.clone();
+        cx.add_window_view(move |window, cx| {
+            let source = dbflux_components::chart::InstanceMetricSource {
+                metric_id: "pg.tps".to_string(),
+            };
+            let doc = cx.new(|cx| {
+                ChartDocument::new_with_source(
+                    None,
+                    "pg.tps".to_string(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+            holder.replace(Some(doc.clone()));
+            gpui_component::Root::new(doc, window, cx)
+        });
+        doc_holder.borrow().clone().expect("chart entity")
+    }
+
+    fn start_running_query(
+        doc: &Entity<ChartDocument>,
+        label: &str,
+        cx: &mut gpui::App,
+    ) -> dbflux_core::TaskId {
+        doc.update(cx, |doc, cx| {
+            let (task_id, _token) =
+                doc.runner
+                    .start_primary_for_target(dbflux_core::TaskKind::Query, label, None, cx);
+            doc.exec_state = ExecState::Running;
+            doc.state = DocumentState::Executing;
+            task_id
+        })
+    }
+
+    #[gpui::test]
+    fn a_cancelled_chart_query_that_stopped_leaves_the_executing_state(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let doc = chart_with_running_query(cx);
+
+        let finished = std::rc::Rc::new(std::cell::Cell::new(0));
+        cx.update(|cx| {
+            let seen = finished.clone();
+            cx.subscribe(&doc, move |_, event: &DocumentEvent, _| {
+                if matches!(event, DocumentEvent::ExecutionFinished) {
+                    seen.set(seen.get() + 1);
+                }
+            })
+            .detach();
+            let task_id = start_running_query(&doc, "chart", cx);
+            doc.update(cx, |doc, cx| doc.cancelled_run_stopped(task_id, cx));
+
+            let doc = doc.read(cx);
+            assert!(doc.exec_state == ExecState::Idle, "no longer running");
+            assert_eq!(doc.state, DocumentState::Clean);
+            assert!(!doc.runner.has_primary_occupant(), "the slot is released");
+        });
+        assert_eq!(finished.get(), 1, "completion is announced once");
+    }
+
+    #[gpui::test]
+    fn a_cancelled_chart_query_does_not_reset_a_newer_run(cx: &mut gpui::TestAppContext) {
+        let doc = chart_with_running_query(cx);
+
+        cx.update(|cx| {
+            let older = start_running_query(&doc, "older", cx);
+            let newer = start_running_query(&doc, "newer", cx);
+            doc.update(cx, |doc, cx| doc.cancelled_run_stopped(older, cx));
+
+            let doc = doc.read(cx);
+            assert!(doc.exec_state == ExecState::Running, "the newer run loads");
+            assert_eq!(doc.state, DocumentState::Executing);
+            assert!(doc.runner.owns_primary(newer));
+        });
     }
 
     // ---- BF6: InstanceMetric default time range and refresh policy ----

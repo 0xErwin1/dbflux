@@ -370,7 +370,7 @@ impl InspectorPanel {
     fn cancelled_run_stopped(&mut self, task_id: dbflux_core::TaskId, cx: &mut Context<Self>) {
         self.runner.clear_primary(task_id);
 
-        if self.state == DocumentState::Loading && !self.runner.is_primary_active() {
+        if self.state == DocumentState::Loading && !self.runner.has_primary_occupant() {
             self.state = DocumentState::Clean;
             cx.emit(DocumentEvent::ExecutionFinished);
             cx.notify();
@@ -1089,6 +1089,43 @@ mod tests {
         });
 
         assert_eq!(state, DocumentState::Loading, "the newer run still loads");
+    }
+
+    #[gpui::test]
+    fn a_cancelled_run_does_not_end_the_loading_of_a_newer_cancelled_run(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_app_state, panel) = panel_with_state(cx);
+
+        let state = cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                let (older, _token) = panel.runner.start_primary_for_target(
+                    dbflux_core::TaskKind::Query,
+                    "older",
+                    None,
+                    cx,
+                );
+                let (_newer, newer_token) = panel.runner.start_primary_for_target(
+                    dbflux_core::TaskKind::Query,
+                    "newer",
+                    None,
+                    cx,
+                );
+                // The user cancelled the newer run from the tasks panel; its
+                // driver call is still in flight and it keeps the slot.
+                newer_token.cancel();
+                panel.state = DocumentState::Loading;
+
+                panel.cancelled_run_stopped(older, cx);
+                panel.state
+            })
+        });
+
+        assert_eq!(
+            state,
+            DocumentState::Loading,
+            "the newer run still owns the slot"
+        );
     }
 
     /// BF4: after `apply_result` is called with a successful `QueryResult`,

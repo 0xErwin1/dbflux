@@ -478,6 +478,7 @@ impl CodeDocument {
             QueryPlanMode::Analyze => QueryPlanRequest::analyzed(target.text.clone()),
         };
         let started = Instant::now();
+        let connection_for_cleanup = connection.clone();
         let work = cx.background_executor().spawn(async move {
             let result = connection.query_plan(&request);
             (result, started.elapsed())
@@ -491,7 +492,14 @@ impl CodeDocument {
             let cancelled = cancel_token.is_cancelled();
             if cancelled {
                 cx.update(|cx| {
-                    crate::task_runner::settle_task_after_cancel(&app_state, task_id, &result, cx);
+                    let cancel_accepted = crate::task_runner::settle_task_after_cancel(
+                        &app_state, task_id, &result, cx,
+                    );
+                    if cancel_accepted
+                        && let Err(error) = connection_for_cleanup.cleanup_after_cancel()
+                    {
+                        log::warn!("cleanup after cancelled plan failed: {error}");
+                    }
                 });
             }
             let outcome = plan_task_outcome(mode, &result);
@@ -517,6 +525,12 @@ impl CodeDocument {
                         }
                         cx.emit(dbflux_ui_base::AppStateChanged);
                     });
+                    // The document may still show this plan as its running
+                    // query; a query started since keeps its own state.
+                    this.update(cx, |document, cx| {
+                        document.release_settled_plan(task_id, cx);
+                    })
+                    .ok();
                 });
             }
         })
@@ -696,6 +710,24 @@ impl CodeDocument {
         }
         cx.notify();
         true
+    }
+
+    /// A plan whose tab closed before the driver answered settled its task
+    /// without `finish_plan`: the document stops showing it as running.
+    fn release_settled_plan(&mut self, task_id: dbflux_core::TaskId, cx: &mut Context<Self>) {
+        let owns_document = self
+            .execution
+            .active_query_task
+            .as_ref()
+            .is_some_and(|task| task.task_id == task_id);
+        if !owns_document {
+            return;
+        }
+
+        self.execution.active_query_task = None;
+        self.state = DocumentState::Clean;
+        cx.emit(DocumentEvent::ExecutionFinished);
+        cx.notify();
     }
 
     /// Records a failed plan the way every user-facing failure is recorded
