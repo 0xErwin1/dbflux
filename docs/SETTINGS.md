@@ -72,7 +72,7 @@ the changes stay applied until DBFlux quits; save again to keep them.
 |---------|---------|--------------|
 | **Default refresh policy** | Manual | Manual or Interval auto-refresh for data views. |
 | **Default refresh interval (seconds)** | 5 | Interval used when the policy is Interval (minimum 1). |
-| **Max concurrent background tasks** | 8 | Cap on connection and schema tasks (minimum 1). Running connects, disconnects, connection hooks, database switches, schema loads, refreshes and drops, and key-value scans count toward it. At the cap, a new connect, database switch, schema or table-detail load, or key-value page is refused with a notice until a running task finishes; it is not queued. Queries, data-grid loads, exports, dashboards and mutations neither count nor are limited. |
+| **Max concurrent background tasks** | 8 | Cap on connection and schema tasks (minimum 1). Running connects, disconnects, connection hooks, database switches, schema loads, refreshes and drops, and key-value scans count toward it. At the cap, a new connect, database switch, schema or table-detail load, or key-value page is refused with a notice until a running task finishes; it is not queued. Queries, data-grid loads, exports, dashboards, mutations and connection tests (**Test connection**) neither count nor are limited. A task being cancelled still counts until it stops. |
 | **Pause auto-refresh on error** | On | Stop auto-refreshing a view after it errors. |
 | **Auto-refresh only if tab is visible** | Off | Skip refreshing tabs you're not looking at. |
 

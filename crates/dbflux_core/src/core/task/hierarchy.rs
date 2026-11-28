@@ -45,6 +45,19 @@ impl TaskManager {
         }
     }
 
+    /// The tasks of `tasks` that are listed as rows of their own: those with
+    /// no parent, and those whose parent is no longer in `tasks`, so a stage
+    /// that outlived its parent never drops out of sight. `tasks` must hold
+    /// every task, as `recent_tasks(usize::MAX)` returns them.
+    pub fn top_level(tasks: &[TaskSnapshot]) -> impl Iterator<Item = &TaskSnapshot> {
+        let known: std::collections::HashSet<TaskId> = tasks.iter().map(|task| task.id).collect();
+
+        tasks.iter().filter(move |task| {
+            task.parent_id
+                .is_none_or(|parent_id| !known.contains(&parent_id))
+        })
+    }
+
     pub(super) fn child_ids(&self, id: TaskId) -> Vec<TaskId> {
         let mut children: Vec<_> = self
             .tasks
@@ -58,7 +71,7 @@ impl TaskManager {
 
     /// Whether any task below `id` is in flight, however many terminal
     /// intermediates lie between them.
-    pub(super) fn has_in_flight_descendants(&self, id: TaskId) -> bool {
+    pub fn has_in_flight_descendants(&self, id: TaskId) -> bool {
         let mut pending = vec![id];
 
         while let Some(current) = pending.pop() {

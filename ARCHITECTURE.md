@@ -777,6 +777,34 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - Failure policies: `Disconnect` (abort flow), `Warn` (continue with warning), `Ignore` (log only).
 - Settings UI: `crates/dbflux_ui_windows/src/settings/hooks.rs` for global definitions; `crates/dbflux_ui_windows/src/connection_manager/hooks_tab.rs` for per-profile phase bindings.
 
+### Background Tasks
+
+`TaskManager` (`crates/dbflux_core/src/core/task/`) is the single owner of every cancellable or long-running operation: queries, connect stages and hooks, schema loads, drops, exports and connection tests. The tasks panel and the status bar only read its snapshots; do not add a parallel "is this running" set or a separate cancel token next to it.
+
+- **Start**: build a `TaskRequest` (kind, description, optional `TaskTarget`, `target_label` for a connection not saved yet) and start it. `start_handle` returns a `TaskHandle` with the task id and the `CancelToken` the worker polls.
+- **Dedup and replace**: `try_start` refuses with `TaskBusy` when a task of the same kind group (all hook phases are one group) is in flight for the same target, atomically with the registration. A `supersede_key` instead cancels the earlier task with that key. A `TestConnection` task is interactive and, like queries and exports, does not count toward the background task cap.
+- **Cancel policy**: `CancelPolicy::Immediate` settles the task as `Cancelled` when cancel is requested. `CancelPolicy::WorkerAcknowledged` moves it to `Cancelling`, and only the worker's `acknowledge_cancelled` makes it `Cancelled`.
+- **Cancel hook**: an optional `CancelHook` runs inside `request_cancel` (it must not block) and returns a `CancelOutcome`: `Stopped` (the work is already stopped), `Requested` (a stop was asked for; the worker confirms) or `NotSupported { reason }` (the task stays `Running` and the panel shows the reason, as for a driver that cannot cancel a running command).
+- **Point of no return**: a worker calls `enter_point_of_no_return(id, reason)` just before a step it cannot take back, such as sending DDL. From then on cancel is refused, and the panel disables it and shows the reason.
+- **Stages**: a `TaskRequest` with `parent` registers a child task; `pending()` registers it as `Pending` until `activate`. Cancelling the parent cancels its children, and children that never started end as `Skipped`, shown as "Not started".
+- **Rule**: under `WorkerAcknowledged` a task reads `Cancelled` only when its work stopped; while the work may still be running the status is `Cancelling` or `Running` with a reason, never `Cancelled`. `Immediate` is the legacy policy: it reads `Cancelled` at once and does not confirm that the work stopped, so use it only where the work is dropped or unobserved, or for tasks not yet migrated to `WorkerAcknowledged`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: stage registered with pending()
+    [*] --> Running: start / try_start
+    Pending --> Running: activate
+    Pending --> Skipped: parent cancelled
+    Running --> Completed
+    Running --> Failed
+    Running --> Cancelled: Immediate, or hook reports Stopped
+    Running --> Cancelling: WorkerAcknowledged, or hook reports Requested
+    Running --> Running: NotSupported or point of no return (cancel refused with a reason)
+    Cancelling --> Cancelled: worker acknowledges
+    Cancelling --> Completed: work finished anyway
+    Cancelling --> Failed
+```
+
 ### Settings Window
 
 - Settings is organized into the following sections: General, Appearance, Keybindings, Auth Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers, Audit, and About. MCP sections (trusted clients, roles, policies) are feature-gated under the `mcp` feature.

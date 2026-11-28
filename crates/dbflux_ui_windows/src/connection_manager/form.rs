@@ -768,6 +768,7 @@ impl ConnectionManagerWindow {
                     profile_id: profile.id,
                     database: None,
                 })
+                .target_label(profile_name.as_str())
                 .policy(CancelPolicy::WorkerAcknowledged),
             );
             cx.emit(dbflux_ui_base::AppStateChanged);

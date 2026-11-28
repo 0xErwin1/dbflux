@@ -70,6 +70,10 @@ const SHELL: SurfaceRegistry = SurfaceRegistry {
         ("tasks-toggle", KeyboardPath::Command(Command::ToggleTasks)),
         ("tasks-failed", KeyboardPath::Command(Command::ToggleTasks)),
         (
+            "tasks-cancelling",
+            KeyboardPath::Command(Command::ToggleTasks),
+        ),
+        (
             "error-badge",
             KeyboardPath::Command(Command::OpenLastErrorInAudit),
         ),

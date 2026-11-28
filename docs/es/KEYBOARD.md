@@ -597,6 +597,16 @@ La tarea seleccionada se resalta mientras el panel tiene el foco; hacer clic en 
 
 **Cancelar tarea** solo se ofrece para el trabajo que se detiene al cancelarlo, como una consulta, una exportación o un escaneo de claves. Una escritura ya enviada al servidor, una lectura de clave o una única consulta de metadatos llega hasta el final y no muestra cancelar.
 
+Cada fila dice "destino · tipo": la conexión para la que corre la tarea y lo que hace, por ejemplo `prod-pg · Conectar` o `staging · Cambiar de base de datos: analytics`. Un drop nombra su objeto (`prod-pg · DROP TABLE users`), y una conexión probada antes de guardarla muestra el nombre escrito en el formulario. Una tarea sin conexión conserva su propia descripción.
+
+**Cancelando.** Cancelar una tarea no significa que se haya detenido. Una tarea cuyo worker debe confirmar muestra **Cancelando…** con el motivo "Cancelación solicitada. Esperando a que el trabajo confirme que se detuvo.", su botón de cancelar queda deshabilitado, y pasa a **Cancelada** solo cuando el trabajo realmente se detuvo; si termina o falla antes, muestra eso. Una tarea que se está cancelando sigue contando como trabajo en curso.
+
+**Cuando cancelar está deshabilitado.** Una tarea que no se puede detener sigue corriendo y dice por qué bajo su fila: una sentencia ya enviada al servidor ("La sentencia ya se envió al servidor y ya no se puede cancelar."), cambios aplicados sin transacción ("Los cambios se aplican sin transacción y ya no se pueden cancelar."), o un driver que no admite cancelar un comando en ejecución ("`<driver>` no admite cancelar un comando en ejecución."). Pulsar `c` sobre una tarea así no hace nada.
+
+**Etapas.** Una tarea formada por pasos, como una conexión con sus hooks, los muestra bajo la fila del padre como **En espera**, en curso, **Con error** o **Cancelada**. Cancelar al padre pide cancelar todas las etapas. Una etapa que no puede detenerse rechaza la petición, sigue en curso y mantiene al padre en cancelación hasta que termine. Una etapa registrada como pendiente que no había empezado muestra **No iniciada**. Una etapa con error muestra su error bajo su fila, y cualquier otra etapa muestra ahí su salida. Los hooks que la conexión aún no había alcanzado no tienen fila.
+
+La barra de estado muestra un chip **N cancelando** junto a los contadores de en curso y fallidas mientras alguna tarea se cancela; el encabezado del panel también las cuenta.
+
 ## Centro de notificaciones
 
 La campana del extremo derecho de la barra de título abre el centro de

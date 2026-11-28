@@ -185,6 +185,7 @@ pub struct TaskRequest {
     parent: Option<TaskId>,
     pending: bool,
     supersede_key: Option<String>,
+    target_label: Option<String>,
 }
 
 impl TaskRequest {
@@ -198,6 +199,7 @@ impl TaskRequest {
             parent: None,
             pending: false,
             supersede_key: None,
+            target_label: None,
         }
     }
 
@@ -241,6 +243,13 @@ impl TaskRequest {
     /// carries the same key. See `TaskManager::start_handle`.
     pub fn supersede_key(mut self, key: impl Into<String>) -> Self {
         self.supersede_key = Some(key.into());
+        self
+    }
+
+    /// Name the panel shows for the task's target when it cannot be looked
+    /// up, such as a connection that is being tested before it is saved.
+    pub fn target_label(mut self, label: impl Into<String>) -> Self {
+        self.target_label = Some(label.into());
         self
     }
 }
@@ -381,6 +390,8 @@ pub struct Task {
     /// control. Set by a point of no return or a hook reporting
     /// `CancelOutcome::NotSupported`.
     pub cancel_unavailable_reason: Option<String>,
+    /// Display name of the target when it cannot be looked up by id.
+    pub target_label: Option<String>,
     cancel_token: CancelToken,
     /// Cleared by `TaskManager::mark_uncancellable` for work that never polls
     /// its token, such as a write already sent to the server.
@@ -486,6 +497,7 @@ pub struct TaskSnapshot {
     pub details: Option<String>,
     pub is_cancellable: bool,
     pub cancel_unavailable_reason: Option<String>,
+    pub target_label: Option<String>,
     pub profile_id: Option<Uuid>,
     pub target: Option<TaskTarget>,
     pub parent_id: Option<TaskId>,
@@ -504,6 +516,7 @@ impl From<&Task> for TaskSnapshot {
             details: task.details.clone(),
             is_cancellable: task.is_cancellable(),
             cancel_unavailable_reason: task.cancel_unavailable_reason.clone(),
+            target_label: task.target_label.clone(),
             profile_id: task.profile_id,
             target: task.target.clone(),
             parent_id: task.parent_id,
@@ -587,6 +600,7 @@ impl TaskManager {
             parent_id: request.parent,
             query_text: None,
             cancel_unavailable_reason: None,
+            target_label: request.target_label,
             cancel_token: cancel_token.clone(),
             accepts_cancel: true,
             policy: request.policy,
@@ -927,10 +941,19 @@ impl TaskManager {
     ///
     /// Failed tasks are never removed here, so their error output stays
     /// available until the user dismisses them with [`TaskManager::remove`].
+    /// A finished task is also kept while a descendant is in flight, so the
+    /// running stage stays reachable under it.
     pub fn cleanup_completed(&mut self, max_age_secs: u64) {
         let now = Instant::now();
-        self.tasks.retain(|_, task| {
-            if matches!(task.status, TaskStatus::Failed(_)) {
+        let anchors: std::collections::HashSet<TaskId> = self
+            .tasks
+            .keys()
+            .copied()
+            .filter(|id| self.has_in_flight_descendants(*id))
+            .collect();
+
+        self.tasks.retain(|id, task| {
+            if anchors.contains(id) || matches!(task.status, TaskStatus::Failed(_)) {
                 return true;
             }
 

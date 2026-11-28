@@ -4,7 +4,7 @@
 //! selection, or an exhaustive match so render code can build the label
 //! once instead of repeating the substitution inline on every render pass.
 
-use dbflux_core::ShutdownPhase;
+use dbflux_core::{ConnectionProfile, HookPhase, ShutdownPhase, TaskKind, TaskSnapshot};
 
 /// Formats the "N running" status-bar label for the current task count.
 pub(crate) fn tasks_running_label(count: usize) -> String {
@@ -22,6 +22,94 @@ pub(crate) fn background_tasks_label(count: usize) -> String {
     } else {
         dbflux_i18n::t!("status_bar.background_tasks.many", count = count)
     }
+}
+
+/// "N cancelling", the status bar chip and tasks panel badge for tasks that
+/// were asked to stop and have not confirmed it.
+pub(crate) fn tasks_cancelling_label(count: usize) -> String {
+    dbflux_i18n::t!("status_bar.tasks_cancelling", count = count)
+}
+
+/// The translated name of a task kind ("Query", "Test connection").
+pub(crate) fn task_kind_label(kind: TaskKind) -> String {
+    match kind {
+        TaskKind::Query => dbflux_i18n::t!("tasks_panel.kind.query"),
+        TaskKind::Connect => dbflux_i18n::t!("tasks_panel.kind.connect"),
+        TaskKind::Disconnect => dbflux_i18n::t!("tasks_panel.kind.disconnect"),
+        TaskKind::Hook { phase } => match phase {
+            HookPhase::PreConnect => dbflux_i18n::t!("tasks_panel.kind.hook_pre_connect"),
+            HookPhase::PostConnect => dbflux_i18n::t!("tasks_panel.kind.hook_post_connect"),
+            HookPhase::PreDisconnect => dbflux_i18n::t!("tasks_panel.kind.hook_pre_disconnect"),
+            HookPhase::PostDisconnect => dbflux_i18n::t!("tasks_panel.kind.hook_post_disconnect"),
+        },
+        TaskKind::SwitchDatabase => dbflux_i18n::t!("tasks_panel.kind.switch_database"),
+        TaskKind::LoadSchema => dbflux_i18n::t!("tasks_panel.kind.load_schema"),
+        TaskKind::SchemaRefresh => dbflux_i18n::t!("tasks_panel.kind.schema_refresh"),
+        TaskKind::SchemaDrop => dbflux_i18n::t!("tasks_panel.kind.schema_drop"),
+        TaskKind::Export => dbflux_i18n::t!("tasks_panel.kind.export"),
+        TaskKind::Import => dbflux_i18n::t!("tasks_panel.kind.import"),
+        TaskKind::Migrate => dbflux_i18n::t!("tasks_panel.kind.migrate"),
+        TaskKind::KeyScan => dbflux_i18n::t!("tasks_panel.kind.key_scan"),
+        TaskKind::KeyGet => dbflux_i18n::t!("tasks_panel.kind.key_get"),
+        TaskKind::KeyMutation => dbflux_i18n::t!("tasks_panel.kind.key_mutation"),
+        TaskKind::DumpAnalysis => dbflux_i18n::t!("tasks_panel.kind.dump_analysis"),
+        TaskKind::TestConnection => dbflux_i18n::t!("tasks_panel.kind.test_connection"),
+    }
+}
+
+/// The two halves of a task's "target · kind" title.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskHeadline {
+    pub target: String,
+    pub kind: String,
+}
+
+/// Name of the connection profile a task runs for, when it has one the
+/// profile list still holds.
+pub(crate) fn task_profile_name(
+    profiles: &[ConnectionProfile],
+    task: &TaskSnapshot,
+) -> Option<String> {
+    let profile_id = task
+        .target
+        .as_ref()
+        .map(|target| target.profile_id)
+        .or(task.profile_id);
+
+    profile_id
+        .and_then(|profile_id| profiles.iter().find(|profile| profile.id == profile_id))
+        .map(|profile| profile.name.clone())
+        .or_else(|| task.target_label.clone())
+}
+
+/// "target · kind" for a task whose profile is `profile_name`; `None` without
+/// one, so the caller keeps the task's description.
+///
+/// A drop already carries the object in its description ("DROP TABLE
+/// users"), and a database switch or schema load names its database.
+pub(crate) fn task_headline(
+    task: &TaskSnapshot,
+    profile_name: Option<&str>,
+) -> Option<TaskHeadline> {
+    let target = profile_name?.to_string();
+    let database = task
+        .target
+        .as_ref()
+        .and_then(|target| target.database.as_deref());
+
+    let kind = match (task.kind, database) {
+        (TaskKind::SchemaDrop, _) => task.description.clone(),
+        (TaskKind::SwitchDatabase | TaskKind::LoadSchema, Some(database)) => {
+            dbflux_i18n::t!(
+                "tasks_panel.kind_with_database",
+                kind = task_kind_label(task.kind),
+                database = database
+            )
+        }
+        (kind, _) => task_kind_label(kind),
+    };
+
+    Some(TaskHeadline { target, kind })
 }
 
 /// "N approvals", the status bar's pending MCP approvals segment.
@@ -501,7 +589,7 @@ pub(crate) fn unsaved_changes_cannot_save_message(count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        NoActiveConnectionKind, audit_mcp_governance_persisted_message,
+        NoActiveConnectionKind, TaskHeadline, audit_mcp_governance_persisted_message,
         audit_open_viewer_failed_message, audit_persist_mcp_governance_failed_message,
         charts_instance_overview_create_editable_failed_message,
         charts_instance_overview_created_editable_message, charts_instance_overview_editable_name,
@@ -517,11 +605,12 @@ mod tests {
         scripts_filter_delimited_label, scripts_filter_javascript_mongodb_label,
         scripts_filter_redis_label, scripts_filter_sql_label, scripts_open_dialog_title,
         scripts_read_file_failed_message, select_dump_analyzer, settings_default_connection_name,
-        shutdown_phase_label, tasks_running_label, unsaved_changes_cannot_save_message,
-        workspace_delete_connection_message, workspace_delete_folder_message,
-        workspace_delete_selected_message, workspace_drop_object_message,
+        shutdown_phase_label, task_headline, task_profile_name, tasks_running_label,
+        unsaved_changes_cannot_save_message, workspace_delete_connection_message,
+        workspace_delete_folder_message, workspace_delete_selected_message,
+        workspace_drop_object_message,
     };
-    use dbflux_core::ShutdownPhase;
+    use dbflux_core::{ShutdownPhase, TaskKind, TaskSnapshot};
 
     const WORKSPACE_CATALOG_KEYS: &[&str] = &[
         "workspace.background_tasks",
@@ -937,5 +1026,99 @@ mod tests {
     fn select_dump_analyzer_single_match_reports_not_multiple() {
         let analyzers: &[(&str, &[&str])] = &[("Analyzer A", &["rdb"]), ("Analyzer B", &["dump"])];
         assert_eq!(select_dump_analyzer(analyzers, "dump"), Some((1, false)));
+    }
+
+    #[test]
+    fn task_panel_keys_resolve_in_every_locale() {
+        let keys = [
+            "tasks_panel.cancelling_count",
+            "tasks_panel.cancelling_badge",
+            "tasks_panel.cancelling_reason_query",
+            "tasks_panel.cancelling_reason",
+            "tasks_panel.stage_waiting",
+            "tasks_panel.stage_not_started",
+            "tasks_panel.stage_cancelled",
+            "tasks_panel.stage_failed",
+            "tasks_panel.cancelled_with_stages",
+            "tasks_panel.cancelled_with_stages_stopped",
+            "tasks_panel.kind_with_database",
+            "tasks_panel.kind.query",
+            "tasks_panel.kind.test_connection",
+            "tasks_panel.kind.hook_post_disconnect",
+            "status_bar.tasks_cancelling",
+        ];
+
+        for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+            for key in keys {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty() && value != key,
+                    "{key} is missing from {locale}"
+                );
+            }
+        }
+    }
+
+    fn snapshot(kind: TaskKind, description: &str, database: Option<&str>) -> TaskSnapshot {
+        let mut manager = dbflux_core::TaskManager::new();
+        let (id, _token) = manager.start(kind, description);
+        let mut snapshot = manager.get(id).expect("started task");
+        snapshot.target = Some(dbflux_core::TaskTarget {
+            profile_id: uuid::Uuid::new_v4(),
+            database: database.map(str::to_string),
+        });
+        snapshot
+    }
+
+    /// A connection tested before it is saved has no profile to look up, so
+    /// its row names it with the label the task was started with.
+    #[test]
+    fn an_unsaved_target_is_named_by_its_task_label() {
+        let mut manager = dbflux_core::TaskManager::new();
+        let handle = manager.start_handle(
+            dbflux_core::TaskRequest::new(TaskKind::TestConnection, "Test connection")
+                .target(dbflux_core::TaskTarget {
+                    profile_id: uuid::Uuid::new_v4(),
+                    database: None,
+                })
+                .target_label("local.sqlite"),
+        );
+        let task = manager.get(handle.id()).expect("started task");
+
+        let name = task_profile_name(&[], &task);
+
+        assert_eq!(name.as_deref(), Some("local.sqlite"));
+        assert_eq!(
+            task_headline(&task, name.as_deref()).map(|headline| headline.target),
+            Some("local.sqlite".to_string())
+        );
+
+        let unlabelled = snapshot(TaskKind::Query, "select 1", None);
+        assert_eq!(task_profile_name(&[], &unlabelled), None);
+    }
+
+    #[test]
+    fn a_headline_needs_a_profile_and_keeps_the_object_of_a_drop() {
+        let query = snapshot(TaskKind::Query, "select 1", None);
+        let drop = snapshot(TaskKind::SchemaDrop, "DROP TABLE users", None);
+        let switch = snapshot(TaskKind::SwitchDatabase, "Switching", Some("reports"));
+
+        assert_eq!(task_headline(&query, None), None);
+        assert_eq!(
+            task_headline(&query, Some("prod-pg")),
+            Some(TaskHeadline {
+                target: "prod-pg".into(),
+                kind: "Query".into()
+            })
+        );
+        assert_eq!(
+            task_headline(&drop, Some("prod-pg")).map(|headline| headline.kind),
+            Some("DROP TABLE users".to_string())
+        );
+        assert_eq!(
+            task_headline(&switch, Some("analytics")).map(|headline| headline.kind),
+            Some("Switch database: reports".to_string())
+        );
     }
 }
