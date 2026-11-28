@@ -1331,3 +1331,21 @@ fn a_child_under_a_running_parent_starts_normally() {
     assert_eq!(status_of(&manager, pending.id()), TaskStatus::Pending);
     assert!(manager.activate(pending.id()));
 }
+
+#[test]
+fn a_child_whose_supersede_cancels_its_parent_is_skipped() {
+    let mut manager = TaskManager::new();
+    let parent = manager
+        .start_handle(TaskRequest::new(TaskKind::LoadSchema, "parent").supersede_key("schema"));
+
+    let child = manager.start_handle(
+        TaskRequest::new(TaskKind::LoadSchema, "child")
+            .pending()
+            .supersede_key("schema")
+            .parent(parent.id()),
+    );
+
+    assert!(parent.is_cancelled());
+    assert_eq!(status_of(&manager, child.id()), TaskStatus::Skipped);
+    assert!(!manager.activate(child.id()));
+}
