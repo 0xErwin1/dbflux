@@ -253,13 +253,66 @@ pub(super) fn stage_rows(
                 .flex()
                 .flex_col()
                 .child(row)
-                .children(stage_failure(stage, indent, mono_family.clone(), theme))
+                .children(stage_diagnostics(stage, indent, mono_family.clone(), theme))
         }))
 }
 
+/// The diagnostics of a stage under its row: the failure message and output
+/// of a failed one, the output alone of any other. The parent row is the only
+/// top-level row, so this is the one place a stage's own output stays readable.
+fn stage_diagnostics(
+    stage: &TaskSnapshot,
+    indent: Rems,
+    mono_family: SharedString,
+    theme: &gpui_component::Theme,
+) -> Option<Stateful<Div>> {
+    match stage.status {
+        TaskStatus::Failed(_) => stage_failure(stage, indent, mono_family, theme),
+        _ => stage_output(stage, indent, mono_family, theme),
+    }
+}
+
+/// The output of a stage that did not fail, as a quiet non-interactive line
+/// block under its row.
+fn stage_output(
+    stage: &TaskSnapshot,
+    indent: Rems,
+    mono_family: SharedString,
+    theme: &gpui_component::Theme,
+) -> Option<Stateful<Div>> {
+    let details = stage
+        .details
+        .as_deref()
+        .filter(|details| !details.trim().is_empty())?;
+
+    Some(
+        div()
+            .id(SharedString::from(format!(
+                "task-stage-output-{}",
+                stage.id
+            )))
+            .w_full()
+            .flex()
+            .flex_col()
+            .pt(ShellMetrics::TASK_ERROR_PADDING_TOP)
+            .pb(ShellMetrics::TASK_ERROR_PADDING_BOTTOM)
+            .pl(indent)
+            .pr(ShellMetrics::TASKS_PADDING_X)
+            .border_b_1()
+            .border_color(theme.table_row_border)
+            .font_family(mono_family)
+            .text_size(ShellMetrics::TASK_ERROR_FONT)
+            .text_color(theme.muted_foreground)
+            .children(
+                TasksPanel::truncated_lines(details)
+                    .into_iter()
+                    .map(|line| div().child(line)),
+            ),
+    )
+}
+
 /// The failure message of a failed stage, and its output when it has any,
-/// under the stage's row. The parent row is the only top-level row, so this
-/// is the one place a stage's own diagnostics stay readable.
+/// under the stage's row.
 fn stage_failure(
     stage: &TaskSnapshot,
     indent: Rems,

@@ -578,7 +578,7 @@ Each row reads "target · kind": the connection the task runs for and what it do
 
 **When cancel is disabled.** A task that cannot be stopped keeps running and says why under its row: a statement already sent to the server ("The statement was already sent to the server and can no longer be cancelled."), changes applied without a transaction ("Changes are applied without a transaction and can no longer be cancelled."), or a driver that does not support cancelling a running command ("`<driver>` does not support cancelling a running command."). Pressing `c` on such a task does nothing.
 
-**Stages.** A task made of steps, such as a connection with its hooks, shows them under the parent row as **Waiting**, running, **Failed** or **Cancelled**. Cancelling the parent cancels every stage; a stage that was registered as pending and had not begun shows **Not started**. A failed stage shows its error under its row. Hooks the connection had not reached yet have no row.
+**Stages.** A task made of steps, such as a connection with its hooks, shows them under the parent row as **Waiting**, running, **Failed** or **Cancelled**. Cancelling the parent asks every stage to cancel. A stage that cannot be stopped refuses the request, keeps running, and keeps the parent cancelling until it finishes. A stage that was registered as pending and had not begun shows **Not started**. A failed stage shows its error under its row, and any other stage shows its output there. Hooks the connection had not reached yet have no row.
 
 The status bar shows a **N cancelling** chip next to the running and failed counts while any task is cancelling; the panel header counts them too.
 

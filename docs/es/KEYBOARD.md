@@ -603,7 +603,7 @@ Cada fila dice "destino · tipo": la conexión para la que corre la tarea y lo q
 
 **Cuando cancelar está deshabilitado.** Una tarea que no se puede detener sigue corriendo y dice por qué bajo su fila: una sentencia ya enviada al servidor ("La sentencia ya se envió al servidor y ya no se puede cancelar."), cambios aplicados sin transacción ("Los cambios se aplican sin transacción y ya no se pueden cancelar."), o un driver que no admite cancelar un comando en ejecución ("`<driver>` no admite cancelar un comando en ejecución."). Pulsar `c` sobre una tarea así no hace nada.
 
-**Etapas.** Una tarea formada por pasos, como una conexión con sus hooks, los muestra bajo la fila del padre como **En espera**, en curso, **Con error** o **Cancelada**. Cancelar al padre cancela todas las etapas; una etapa registrada como pendiente que no había empezado muestra **No iniciada**. Una etapa con error muestra su error bajo su fila. Los hooks que la conexión aún no había alcanzado no tienen fila.
+**Etapas.** Una tarea formada por pasos, como una conexión con sus hooks, los muestra bajo la fila del padre como **En espera**, en curso, **Con error** o **Cancelada**. Cancelar al padre pide cancelar todas las etapas. Una etapa que no puede detenerse rechaza la petición, sigue en curso y mantiene al padre en cancelación hasta que termine. Una etapa registrada como pendiente que no había empezado muestra **No iniciada**. Una etapa con error muestra su error bajo su fila, y cualquier otra etapa muestra ahí su salida. Los hooks que la conexión aún no había alcanzado no tienen fila.
 
 La barra de estado muestra un chip **N cancelando** junto a los contadores de en curso y fallidas mientras alguna tarea se cancela; el encabezado del panel también las cuenta.
 

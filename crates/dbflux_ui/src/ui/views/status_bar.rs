@@ -4,7 +4,7 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::composites::StatusChip;
 use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::ShellMetrics;
-use dbflux_core::{TaskKind, TaskSnapshot, TaskStatus};
+use dbflux_core::{TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 use dbflux_ui_document::StatusSegment;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -188,9 +188,8 @@ impl StatusBar {
 
     /// Counts the top-level tasks: the stages of a parent are part of it.
     fn task_counts(tasks: &[TaskSnapshot]) -> TaskCounts {
-        tasks.iter().filter(|task| task.parent_id.is_none()).fold(
-            TaskCounts::default(),
-            |counts, task| match task.status {
+        TaskManager::top_level(tasks).fold(TaskCounts::default(), |counts, task| {
+            match task.status {
                 TaskStatus::Running => TaskCounts {
                     running: counts.running + 1,
                     ..counts
@@ -207,8 +206,8 @@ impl StatusBar {
                 | TaskStatus::Cancelled
                 | TaskStatus::Pending
                 | TaskStatus::Skipped => counts,
-            },
-        )
+            }
+        })
     }
 
     fn metadata_text(text: impl Into<SharedString>) -> Text {
@@ -420,10 +419,9 @@ impl Render for StatusBar {
             .and_then(|c| c.read_only_reason)
             .map(Self::read_only_copy);
 
-        let running_tasks = app_state.tasks().running_tasks();
-        let oldest_running = running_tasks
-            .iter()
-            .filter(|task| task.parent_id.is_none())
+        let all_tasks = app_state.tasks().recent_tasks(usize::MAX);
+        let oldest_running = TaskManager::top_level(&all_tasks)
+            .filter(|task| task.status.is_in_flight())
             .max_by(|left, right| left.elapsed_secs.total_cmp(&right.elapsed_secs));
         let running_profile_name = oldest_running
             .and_then(|task| crate::ui::labels::task_profile_name(app_state.profiles(), task));
@@ -672,6 +670,24 @@ mod tests {
                 theme.success
             );
         }
+    }
+
+    #[test]
+    fn task_counts_include_a_stage_whose_parent_is_gone_and_skip_one_with_a_parent() {
+        let parent = task(TaskStatus::Completed, "parent", 0.0);
+        let mut anchored = task(TaskStatus::Running, "anchored", 0.0);
+        anchored.parent_id = Some(parent.id);
+        let mut orphan = task(TaskStatus::Running, "orphan", 0.0);
+        orphan.parent_id = Some(uuid::Uuid::new_v4());
+
+        assert_eq!(
+            StatusBar::task_counts(&[parent, anchored, orphan]),
+            TaskCounts {
+                running: 1,
+                cancelling: 0,
+                failed: 0,
+            }
+        );
     }
 
     #[test]

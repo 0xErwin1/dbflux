@@ -941,10 +941,19 @@ impl TaskManager {
     ///
     /// Failed tasks are never removed here, so their error output stays
     /// available until the user dismisses them with [`TaskManager::remove`].
+    /// A finished task is also kept while a descendant is in flight, so the
+    /// running stage stays reachable under it.
     pub fn cleanup_completed(&mut self, max_age_secs: u64) {
         let now = Instant::now();
-        self.tasks.retain(|_, task| {
-            if matches!(task.status, TaskStatus::Failed(_)) {
+        let anchors: std::collections::HashSet<TaskId> = self
+            .tasks
+            .keys()
+            .copied()
+            .filter(|id| self.has_in_flight_descendants(*id))
+            .collect();
+
+        self.tasks.retain(|id, task| {
+            if anchors.contains(id) || matches!(task.status, TaskStatus::Failed(_)) {
                 return true;
             }
 

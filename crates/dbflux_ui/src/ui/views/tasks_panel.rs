@@ -182,10 +182,7 @@ impl TasksPanel {
     /// the dismiss button of a failed task. Returns `false` while it runs.
     pub fn dismiss_selected(&mut self, cx: &mut Context<Self>) -> bool {
         match self.selected_task(cx) {
-            Some(task) if task.status.is_terminal() => {
-                self.dismiss_task(task.id, cx);
-                true
-            }
+            Some(task) if task.status.is_terminal() => self.dismiss_task(task.id, cx),
             _ => false,
         }
     }
@@ -305,17 +302,25 @@ impl TasksPanel {
         });
     }
 
-    fn dismiss_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) {
+    /// Removes a finished task with its stages. A task with a stage still in
+    /// flight stays, so the stage keeps its row and its cancel control.
+    fn dismiss_task(&mut self, task_id: TaskId, cx: &mut Context<Self>) -> bool {
         self.app_state.update(cx, |state, cx| {
+            if state.tasks().has_in_flight_descendants(task_id) {
+                return false;
+            }
+
             for stage in stage_tree(state.tasks(), task_id) {
                 state.tasks_mut().remove(stage.task.id);
             }
             state.tasks_mut().remove(task_id);
             cx.emit(AppStateChanged);
-        });
+            true
+        })
     }
 
-    /// Removes every task that is no longer running, failures included.
+    /// Removes every task that is no longer running, failures included,
+    /// except those with a stage still in flight.
     pub fn clear_finished(&mut self, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
             let finished: Vec<TaskId> = state
@@ -324,6 +329,7 @@ impl TasksPanel {
                 .into_iter()
                 .filter(|task| task.status.is_terminal())
                 .map(|task| task.id)
+                .filter(|task_id| !state.tasks().has_in_flight_descendants(*task_id))
                 .collect();
 
             for task_id in finished {
@@ -734,11 +740,15 @@ fn has_output(task: &TaskSnapshot) -> bool {
 /// The tasks the panel lists as rows: those in flight, then the finished
 /// ones [`visible_finished_tasks`] keeps. A stage is shown under its parent.
 fn top_level_tasks(tasks: &TaskManager) -> Vec<TaskSnapshot> {
-    tasks
-        .running_tasks()
+    let all = tasks.recent_tasks(usize::MAX);
+    let running: Vec<TaskSnapshot> = TaskManager::top_level(&all)
+        .filter(|task| task.status.is_in_flight())
+        .cloned()
+        .collect();
+
+    running
         .into_iter()
-        .filter(|task| task.parent_id.is_none())
-        .chain(visible_finished_tasks(tasks.recent_tasks(usize::MAX)))
+        .chain(visible_finished_tasks(all))
         .collect()
 }
 
@@ -795,10 +805,10 @@ const RECENT_FINISHED_TASK_LIMIT: usize = 5;
 /// [`RECENT_FINISHED_TASK_LIMIT`].
 fn visible_finished_tasks(recent_tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     let mut other_finished_count = 0;
+    let top_level: Vec<TaskSnapshot> = TaskManager::top_level(&recent_tasks).cloned().collect();
 
-    recent_tasks
+    top_level
         .into_iter()
-        .filter(|task| task.parent_id.is_none())
         .filter(|task| match task.status {
             TaskStatus::Running | TaskStatus::Cancelling | TaskStatus::Pending => false,
             TaskStatus::Failed(_) => true,

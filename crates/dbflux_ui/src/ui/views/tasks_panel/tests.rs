@@ -1,4 +1,4 @@
-use super::{RECENT_FINISHED_TASK_LIMIT, TasksPanel, visible_finished_tasks};
+use super::{RECENT_FINISHED_TASK_LIMIT, TasksPanel, top_level_tasks, visible_finished_tasks};
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_core::{
     ConnectionProfile, DbConfig, TaskId, TaskKind, TaskManager, TaskRequest, TaskStatus, TaskTarget,
@@ -646,5 +646,124 @@ fn a_failed_stage_keeps_its_error_visible(cx: &mut TestAppContext) {
     assert!(
         shows_text(&frame, "connection reset"),
         "the failure message of a stage is shown under its row"
+    );
+}
+
+#[gpui::test]
+fn a_running_stage_whose_parent_was_removed_stays_a_top_level_row(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let capture = FrameCapture::observe(window);
+    let (parent, stages) = start_connect_with_stages(&app_state, window);
+    app_state.update(window, |state, cx| {
+        state.tasks_mut().remove(parent);
+        cx.emit(AppStateChanged);
+    });
+    window.run_until_parked();
+
+    let listed: Vec<TaskId> = app_state.read_with(window, |state, _| {
+        top_level_tasks(state.tasks())
+            .into_iter()
+            .map(|task| task.id)
+            .collect()
+    });
+    assert_eq!(listed, vec![stages[0]]);
+    let frame = capture.frame(window);
+    assert!(
+        accessibility_node(&frame, &format!("task-row-{}", stages[0])).is_some(),
+        "the surviving running stage is a row of its own"
+    );
+}
+
+#[gpui::test]
+fn a_finished_stage_whose_parent_was_removed_is_listed(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let (parent, stages) = start_connect_with_stages(&app_state, window);
+    app_state.update(window, |state, _| {
+        state.tasks_mut().fail(stages[0], "refused");
+        state.tasks_mut().remove(parent);
+    });
+
+    let listed: Vec<TaskId> = app_state.read_with(window, |state, _| {
+        top_level_tasks(state.tasks())
+            .into_iter()
+            .map(|task| task.id)
+            .collect()
+    });
+    assert!(listed.contains(&stages[0]));
+}
+
+#[gpui::test]
+fn clearing_finished_tasks_keeps_a_parent_with_a_stage_in_flight(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (panel, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let (parent, stages) = start_connect_with_stages(&app_state, window);
+    let done = start_task(&app_state, TaskKind::Query, window);
+    app_state.update(window, |state, _| {
+        state.tasks_mut().complete(parent);
+        state.tasks_mut().complete(done);
+    });
+
+    panel.update(window, |panel, cx| panel.clear_finished(cx));
+
+    app_state.read_with(window, |state, _| {
+        assert!(
+            state.tasks().get(done).is_none(),
+            "plain finished task goes"
+        );
+        assert!(state.tasks().get(parent).is_some(), "the parent stays");
+        assert!(state.tasks().get(stages[0]).is_some());
+    });
+}
+
+#[gpui::test]
+fn dismissing_a_finished_parent_leaves_its_in_flight_stage(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (panel, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let (parent, stages) = start_connect_with_stages(&app_state, window);
+    app_state.update(window, |state, _| state.tasks_mut().complete(parent));
+
+    panel.update(window, |panel, cx| panel.dismiss_task(parent, cx));
+
+    app_state.read_with(window, |state, _| {
+        assert!(state.tasks().get(parent).is_some());
+        assert!(state.tasks().get(stages[0]).is_some());
+    });
+}
+
+#[gpui::test]
+fn a_stage_that_did_not_fail_keeps_its_output_visible(cx: &mut TestAppContext) {
+    let app_state = test_app_state(cx);
+    let (_, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| TasksPanel::new(app_state, window, cx)
+    });
+    let capture = FrameCapture::observe(window);
+    let (_, stages) = start_connect_with_stages(&app_state, window);
+    app_state.update(window, |state, cx| {
+        state
+            .tasks_mut()
+            .complete_with_details(stages[0], "tunnel listening on 5432");
+        cx.emit(AppStateChanged);
+    });
+    window.run_until_parked();
+
+    let frame = capture.frame(window);
+    assert!(
+        shows_text(&frame, "tunnel listening on 5432"),
+        "the output of a completed stage is shown under its row"
     );
 }
