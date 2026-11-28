@@ -91,6 +91,35 @@ fn plan_task_outcome(
     }
 }
 
+/// Settles a plan task whose token was cancelled, classifying the driver's
+/// answer the way a plan does: a stop acknowledges the cancel, and anything
+/// else follows [`plan_task_outcome`], so an Estimate the driver does not
+/// support still reads as completed. Returns whether the driver had accepted
+/// the cancel, the condition for running the connection cleanup.
+fn settle_cancelled_plan_task(
+    app_state: &Entity<AppStateEntity>,
+    task_id: dbflux_core::TaskId,
+    mode: QueryPlanMode,
+    result: &Result<QueryPlan, DbError>,
+    cx: &mut App,
+) -> bool {
+    let accepted = crate::task_runner::driver_accepted_cancel(app_state, task_id, cx);
+
+    app_state.update(cx, |state, cx| {
+        if let Err(DbError::Cancelled) = result {
+            state.acknowledge_task_cancelled(task_id);
+        } else {
+            match plan_task_outcome(mode, result) {
+                Ok(()) => state.complete_task(task_id),
+                Err(error) => state.fail_task(task_id, error),
+            }
+        }
+        cx.emit(AppStateChanged);
+    });
+
+    accepted
+}
+
 impl CodeDocument {
     /// Whether the Plan tab exists and is the tab shown.
     pub(super) fn plan_shown(&self) -> bool {
@@ -492,9 +521,8 @@ impl CodeDocument {
             let cancelled = cancel_token.is_cancelled();
             if cancelled {
                 cx.update(|cx| {
-                    let cancel_accepted = crate::task_runner::settle_task_after_cancel(
-                        &app_state, task_id, &result, cx,
-                    );
+                    let cancel_accepted =
+                        settle_cancelled_plan_task(&app_state, task_id, mode, &result, cx);
                     if cancel_accepted
                         && let Err(error) = connection_for_cleanup.cleanup_after_cancel()
                     {
