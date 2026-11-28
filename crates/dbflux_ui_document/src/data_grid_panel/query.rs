@@ -453,10 +453,10 @@ impl DataGridPanel {
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Query was cancelled, discarding result");
-                    entity.update(cx, |panel, cx| {
-                        panel.runner.settle_after_cancel(task_id, &result, cx);
+                    let cancel_accepted = entity.update(cx, |panel, cx| {
+                        panel.runner.settle_after_cancel(task_id, &result, cx)
                     });
-                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                    if cancel_accepted && let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
                     return;
@@ -624,13 +624,13 @@ impl DataGridPanel {
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Visual query was cancelled, discarding result");
-                    crate::task_runner::settle_task_after_cancel(
+                    let cancel_accepted = crate::task_runner::settle_task_after_cancel(
                         &task_tracker,
                         task_id,
                         &result,
                         cx,
                     );
-                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                    if cancel_accepted && let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
                     return;
@@ -929,10 +929,10 @@ impl DataGridPanel {
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Query was cancelled, discarding result");
-                    entity.update(cx, |panel, cx| {
-                        panel.runner.settle_after_cancel(task_id, &result, cx);
+                    let cancel_accepted = entity.update(cx, |panel, cx| {
+                        panel.runner.settle_after_cancel(task_id, &result, cx)
                     });
-                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                    if cancel_accepted && let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
                     return;

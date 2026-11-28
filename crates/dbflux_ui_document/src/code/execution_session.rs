@@ -310,6 +310,9 @@ mod tests {
         /// `execute` reports the cancellation the driver honored instead of
         /// a result.
         driver_cancelled: AtomicBool,
+        /// Whether the connection advertises `QUERY_CANCELLATION`; without
+        /// it a cancel is refused and the statement keeps running.
+        supports_cancel: bool,
     }
 
     impl FakeConnection {
@@ -326,6 +329,7 @@ mod tests {
                 enforces_row_limit: true,
                 show_time_window: AtomicBool::new(false),
                 driver_cancelled: AtomicBool::new(false),
+                supports_cancel: true,
             })
         }
 
@@ -348,10 +352,23 @@ mod tests {
                 enforces_row_limit: false,
                 show_time_window: AtomicBool::new(false),
                 driver_cancelled: AtomicBool::new(false),
+                supports_cancel: true,
             })
         }
 
+        /// A driver that cannot cancel a running statement.
+        fn isolated_without_cancel_with_gate(execute_gate: Option<Arc<ExecuteGate>>) -> Arc<Self> {
+            Self::isolated_with_gate_and_cancel(execute_gate, false)
+        }
+
         fn isolated_with_gate(execute_gate: Option<Arc<ExecuteGate>>) -> Arc<Self> {
+            Self::isolated_with_gate_and_cancel(execute_gate, true)
+        }
+
+        fn isolated_with_gate_and_cancel(
+            execute_gate: Option<Arc<ExecuteGate>>,
+            supports_cancel: bool,
+        ) -> Arc<Self> {
             Arc::new(Self {
                 factory: None,
                 queries: AtomicUsize::new(0),
@@ -364,30 +381,32 @@ mod tests {
                 enforces_row_limit: true,
                 show_time_window: AtomicBool::new(false),
                 driver_cancelled: AtomicBool::new(false),
+                supports_cancel,
             })
         }
     }
 
     impl Connection for FakeConnection {
         fn metadata(&self) -> &dbflux_core::DriverMetadata {
-            static ENFORCING_ROW_LIMIT: std::sync::OnceLock<dbflux_core::DriverMetadata> =
-                std::sync::OnceLock::new();
-            static WITHOUT_ROW_LIMIT: std::sync::OnceLock<dbflux_core::DriverMetadata> =
-                std::sync::OnceLock::new();
+            static METADATA: [std::sync::OnceLock<dbflux_core::DriverMetadata>; 4] = [
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+            ];
 
             let enforces_row_limit = self.enforces_row_limit;
-            let metadata = if enforces_row_limit {
-                &ENFORCING_ROW_LIMIT
-            } else {
-                &WITHOUT_ROW_LIMIT
-            };
+            let supports_cancel = self.supports_cancel;
+            let metadata =
+                &METADATA[usize::from(enforces_row_limit) * 2 + usize::from(supports_cancel)];
             metadata.get_or_init(|| {
-                let capabilities = if enforces_row_limit {
-                    dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT
-                        | dbflux_core::DriverCapabilities::QUERY_CANCELLATION
-                } else {
-                    dbflux_core::DriverCapabilities::QUERY_CANCELLATION
-                };
+                let mut capabilities = dbflux_core::DriverCapabilities::empty();
+                if enforces_row_limit {
+                    capabilities |= dbflux_core::DriverCapabilities::REQUEST_ROW_LIMIT;
+                }
+                if supports_cancel {
+                    capabilities |= dbflux_core::DriverCapabilities::QUERY_CANCELLATION;
+                }
 
                 DriverMetadataBuilder::new(
                     "execution-session-test",
@@ -1331,6 +1350,69 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         assert_real_isolated_query_completion(CompletionInterruption::Cancel, cx);
+    }
+
+    /// A newer run supersedes a query whose driver cannot cancel it. The
+    /// statement keeps running, so discarding its stale result must not run
+    /// the cancel cleanup, which rolls back the editor's transaction.
+    #[gpui::test]
+    fn a_superseded_query_the_driver_could_not_cancel_does_not_roll_back(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        let execute_gate = Arc::new(ExecuteGate {
+            entered: AtomicBool::new(false),
+        });
+        let root = FakeConnection::isolated_without_cancel_with_gate(Some(execute_gate.clone()));
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        for _ in 0..128 {
+            if window.update(|_, cx| document.read(cx).execution.active_query_task.is_some()) {
+                break;
+            }
+            window.dispatcher.tick(false);
+        }
+        assert!(window.dispatcher.tick(true));
+        assert!(execute_gate.entered.load(Ordering::SeqCst));
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            root.cancels.load(Ordering::SeqCst),
+            0,
+            "the driver cannot cancel, so no cancel was sent"
+        );
+        assert_eq!(
+            root.cleanups.load(Ordering::SeqCst),
+            0,
+            "the statement was not stopped, so its transaction must not be rolled back"
+        );
     }
 
     /// A cancelled isolated query that returns a result after a newer query
