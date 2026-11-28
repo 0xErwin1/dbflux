@@ -81,30 +81,39 @@ struct ActiveDatabaseRelease {
     connection: Arc<dyn Connection>,
 }
 
+/// Whether the release still stands after a cancel tried to undo it.
+struct ReleaseRestoration {
+    /// Nothing to restore, or the driver refused.
+    release_applied: bool,
+    /// Why the driver refused, for the foreground to report.
+    error: Option<String>,
+}
+
 /// Puts the driver's active database back after a cancel won once the
-/// release had cleared it, and reports whether the release still stands
-/// (nothing to restore, or the driver refused).
+/// release had cleared it.
 fn undo_active_database_release(
     active_release: Option<ActiveDatabaseRelease>,
     release_applied: bool,
-) -> bool {
+) -> ReleaseRestoration {
     let Some(release) = active_release else {
-        return release_applied;
+        return ReleaseRestoration {
+            release_applied,
+            error: None,
+        };
     };
 
     match release
         .connection
         .set_active_database(Some(release.database.as_str()))
     {
-        Ok(()) => false,
-        Err(error) => {
-            log::warn!(
-                "Could not restore active database '{}' after a cancelled drop: {}",
-                release.database,
-                error
-            );
-            release_applied
-        }
+        Ok(()) => ReleaseRestoration {
+            release_applied: false,
+            error: None,
+        },
+        Err(error) => ReleaseRestoration {
+            release_applied,
+            error: Some(error.to_string()),
+        },
     }
 }
 
@@ -123,6 +132,7 @@ fn prepare_drop_release(
                 DropPreparation::Finished(Box::new(DropExecutionOutcome::Cancelled {
                     held_connection,
                     release_applied: false,
+                    restore_error: None,
                 }))
             }
             outcome => DropPreparation::Finished(Box::new(outcome)),
@@ -146,6 +156,7 @@ fn release_resources(
         return DropPreparation::Finished(Box::new(DropExecutionOutcome::Cancelled {
             held_connection,
             release_applied: false,
+            restore_error: None,
         }));
     }
 
@@ -223,6 +234,8 @@ enum DropExecutionOutcome {
         /// cleared its active database) before the cancel won, and that
         /// cannot be undone from here.
         release_applied: bool,
+        /// The driver refused to put its active database back.
+        restore_error: Option<String>,
     },
 }
 
@@ -660,7 +673,7 @@ impl DropRun {
         });
 
         if !may_send {
-            let release_applied = cx
+            let restoration = cx
                 .background_executor()
                 .spawn(async move {
                     undo_active_database_release(active_release, database_release_applied)
@@ -669,7 +682,8 @@ impl DropRun {
 
             return DropExecutionOutcome::Cancelled {
                 held_connection: None,
-                release_applied,
+                release_applied: restoration.release_applied,
+                restore_error: restoration.error,
             };
         }
 
@@ -706,7 +720,8 @@ impl DropRun {
             DropExecutionOutcome::Cancelled {
                 held_connection,
                 release_applied,
-            } => self.finish_cancelled(held_connection, release_applied, cx),
+                restore_error,
+            } => self.finish_cancelled(held_connection, release_applied, restore_error, cx),
         }
     }
 
@@ -794,6 +809,7 @@ impl DropRun {
         &self,
         held_connection: Option<HeldDatabaseConnection>,
         release_applied: bool,
+        restore_error: Option<String>,
         cx: &mut App,
     ) {
         self.restore_released_connection(held_connection, cx);
@@ -803,9 +819,17 @@ impl DropRun {
                 state.acknowledge_task_cancelled(self.task_id);
                 cx.emit(AppStateChanged);
             });
+            let notice = released_connection_notice(release_applied, &self.operation.target.name);
+            let restore_failed = restore_error.is_some();
+            if let (Some(message), Some(cause)) = (notice.as_ref(), restore_error) {
+                report_error(
+                    UserFacingError::new(ErrorKind::Driver, message.clone()).with_cause(cause),
+                    cx,
+                );
+            }
             self.sidebar.update(cx, |sidebar, cx| {
-                if let Some(message) =
-                    released_connection_notice(release_applied, &self.operation.target.name)
+                if let Some(message) = notice
+                    && !restore_failed
                 {
                     sidebar.pending_toast = Some(PendingToast {
                         message,
@@ -1206,7 +1230,7 @@ mod tests {
         };
 
         assert!(
-            !super::undo_active_database_release(Some(release), true),
+            !super::undo_active_database_release(Some(release), true).release_applied,
             "nothing is left released once the driver is restored"
         );
         assert_eq!(
@@ -1223,12 +1247,17 @@ mod tests {
             connection,
         };
 
-        assert!(super::undo_active_database_release(Some(release), true));
+        let refused = super::undo_active_database_release(Some(release), true);
+        assert!(refused.release_applied);
         assert!(
-            super::undo_active_database_release(None, true),
+            refused.error.is_some(),
+            "the refusal reaches the foreground"
+        );
+        assert!(
+            super::undo_active_database_release(None, true).release_applied,
             "a release with nothing to restore still stands"
         );
-        assert!(!super::undo_active_database_release(None, false));
+        assert!(!super::undo_active_database_release(None, false).release_applied);
     }
 
     #[test]
@@ -1347,7 +1376,7 @@ mod tests {
 
         // Read inside the same update: the next render takes the slot.
         cx.update(|_, cx| {
-            run.finish_cancelled(None, false, cx);
+            run.finish_cancelled(None, false, None, cx);
 
             assert_eq!(
                 sidebar
@@ -1362,6 +1391,44 @@ mod tests {
             assert_eq!(
                 state.tasks().get(run.task_id).expect("task").status,
                 dbflux_core::TaskStatus::Cancelled
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn a_failed_active_database_restore_is_reported_once_with_the_guidance(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = crate::table_loading::object_tree_adapter_tests::test_app_state(cx);
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let run = drop_run(&state, &sidebar, cx);
+        state.update(cx, |state, _| {
+            state.request_cancel_task(run.task_id);
+        });
+
+        let ((), events) = dbflux_ui_base::user_error::capture::capture_user_error_events(|| {
+            cx.update(|_, cx| {
+                run.finish_cancelled(None, true, Some("driver refused".to_string()), cx);
+            });
+        });
+
+        assert_eq!(events.len(), 1, "reported exactly once: {events:?}");
+        let event = &events[0];
+        assert!(
+            event
+                .get("message")
+                .is_some_and(|message| message.contains(&run.operation.target.name)),
+            "the reconnection guidance names the database: {event:?}"
+        );
+        assert_eq!(
+            event.get("cause").map(String::as_str),
+            Some("driver refused")
+        );
+        sidebar.read_with(cx, |sidebar, _| {
+            assert!(
+                sidebar.pending_toast.is_none(),
+                "no manual toast next to the reported error"
             );
         });
     }
