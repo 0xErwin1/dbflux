@@ -6328,7 +6328,7 @@ tasks_panel:
   query_cancel_unsupported: "%{driver} não permite cancelar um comando em execução."
   query_cancel_not_sent: "Não foi possível enviar o pedido de cancelamento para %{driver}: %{error}. Tente cancelar novamente."
   query_cancel_rejected: "%{driver} não aceitou o pedido de cancelamento: %{error}. A consulta continua em execução até terminar."
-  drop_point_of_no_return: "A instrução já foi enviada ao servidor e não pode mais ser cancelada."
+  drop_point_of_no_return: "O DROP chegou à etapa de envio e não pode mais ser cancelado."
 toast:
   action:
     copy: Copiar

@@ -550,13 +550,16 @@ impl TaskManager {
     /// [`TaskHandle::superseded`]. The new task starts whatever the outcome:
     /// an older task that cannot stop keeps its honest status.
     pub fn start_handle(&mut self, request: TaskRequest) -> TaskHandle {
-        let parent_cancelled = self.has_cancelled_ancestor(request.parent);
-        let superseded = if parent_cancelled {
+        let parent_was_cancelled = self.has_cancelled_ancestor(request.parent);
+        let superseded = if parent_was_cancelled {
             // A child that cannot start must not take down live work.
             Vec::new()
         } else {
             self.supersede_matching(request.supersede_key.as_deref())
         };
+        // The supersede pass can itself cancel the parent (same key), so the
+        // ancestry is read again once it ran.
+        let parent_cancelled = parent_was_cancelled || self.has_cancelled_ancestor(request.parent);
         let id = TaskId::new_v4();
         let cancel_token = CancelToken::new();
         let profile_id = request.target.as_ref().map(|target| target.profile_id);

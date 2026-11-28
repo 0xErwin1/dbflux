@@ -963,7 +963,13 @@ impl CodeDocument {
                         cx,
                     );
                 });
+            }
 
+            // A statement the driver did not stop keeps its own result: the
+            // shared path discards it, the isolated one publishes it below.
+            if cancel_token.is_cancelled()
+                && (!session_isolated || matches!(result, Err(DbError::Cancelled)))
+            {
                 let inner_result = this.update(cx, |doc, cx| {
                     doc.complete_cancelled_query(
                         task_id,
