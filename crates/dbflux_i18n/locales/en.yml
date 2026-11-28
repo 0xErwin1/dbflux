@@ -6104,6 +6104,7 @@ sidebar:
     edit_reconnect_now: Reconnect now
     edit_reconnect_later: Later
     connection_already_pending: Connection already pending
+    drop_target_busy: "Another operation on this database is still running. Wait for it to finish before dropping."
     background_task_limit: Too many background tasks running, please wait
     connection_cancelled_by_hook: Connection cancelled by hook
     connection_cancelled_by_post_connect_hook: Connection cancelled by post-connect hook

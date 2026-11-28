@@ -384,6 +384,12 @@ pub(crate) fn post_disconnect_hook_cancelled_task_label() -> String {
 
 /// Translated toast shown when a connect/disconnect request is rejected
 /// because an operation is already pending for the same profile.
+/// Translated toast shown when a DROP is refused because other work on the
+/// same connection and database is still in flight.
+pub(crate) fn drop_target_busy_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.drop_target_busy")
+}
+
 pub(crate) fn connection_already_pending_toast_label() -> String {
     dbflux_i18n::t!("sidebar.toast.connection_already_pending")
 }
@@ -907,6 +913,22 @@ mod tests {
             let label = super::container_folder_label(category, 3);
             assert_eq!(label, format!("{} (3)", category.container_name()));
         }
+    }
+
+    /// A DROP refused because its database is busy explains why, in every
+    /// shipped locale, instead of being ignored.
+    #[test]
+    fn drop_target_busy_toast_resolves_in_every_locale() {
+        let key = "sidebar.toast.drop_target_busy";
+        for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+            let value = dbflux_i18n::t!(key, locale = locale);
+            assert_ne!(value, key, "missing translation for {locale}.{key}");
+            assert_ne!(value, format!("{locale}.{key}"));
+        }
+        assert_eq!(
+            super::drop_target_busy_toast_label(),
+            dbflux_i18n::t!("sidebar.toast.drop_target_busy")
+        );
     }
 
     #[test]

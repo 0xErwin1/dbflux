@@ -6097,6 +6097,7 @@ sidebar:
     edit_reconnect_now: Reconectar agora
     edit_reconnect_later: Depois
     connection_already_pending: A conexão já está pendente
+    drop_target_busy: "Outra operação nesta base de dados ainda está em andamento. Aguarde até que termine antes de excluir."
     background_task_limit: Há tarefas em segundo plano demais em execução, aguarde
     connection_cancelled_by_hook: Conexão cancelada pelo hook
     connection_cancelled_by_post_connect_hook: Conexão cancelada pelo hook de pós-conexão

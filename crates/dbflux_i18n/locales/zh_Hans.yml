@@ -6102,6 +6102,7 @@ sidebar:
     edit_reconnect_now: 立即重新连接
     edit_reconnect_later: 稍后
     connection_already_pending: 连接已在等待中
+    drop_target_busy: "此数据库上的另一个操作仍在运行。请等待其完成后再删除。"
     background_task_limit: 后台任务运行过多，请稍候
     connection_cancelled_by_hook: 连接被 Hook 取消
     connection_cancelled_by_post_connect_hook: 连接被连接后 Hook 取消

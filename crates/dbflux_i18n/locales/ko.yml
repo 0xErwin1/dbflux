@@ -6103,6 +6103,7 @@ sidebar:
     edit_reconnect_now: 지금 다시 연결
     edit_reconnect_later: 나중에
     connection_already_pending: 연결이 이미 대기 중입니다
+    drop_target_busy: "이 데이터베이스에서 다른 작업이 아직 실행 중입니다. 삭제하기 전에 완료될 때까지 기다리세요."
     background_task_limit: 실행 중인 백그라운드 작업이 너무 많습니다. 잠시 기다려 주세요
     connection_cancelled_by_hook: 훅에 의해 연결이 취소되었습니다
     connection_cancelled_by_post_connect_hook: 연결 후 훅에 의해 연결이 취소되었습니다

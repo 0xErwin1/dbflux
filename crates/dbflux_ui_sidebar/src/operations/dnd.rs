@@ -557,7 +557,14 @@ impl Sidebar {
         let (task_id, cancel_token) = match started {
             Ok(started) => started,
             Err(busy) => {
-                log::info!("Drop skipped: {busy}");
+                // The target is already busy with another drop or a switch;
+                // say so instead of ignoring the request silently.
+                log::info!("Drop refused: {busy}");
+                self.pending_toast = Some(PendingToast {
+                    message: crate::labels::drop_target_busy_toast_label(),
+                    is_error: true,
+                });
+                cx.notify();
                 return;
             }
         };
