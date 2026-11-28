@@ -78,6 +78,19 @@ impl PlanSlot {
     }
 }
 
+/// How the driver's answer settles a plan's task when the Plan tab no longer
+/// owns it. An Estimate the driver does not support is a completed run.
+fn plan_task_outcome(
+    mode: QueryPlanMode,
+    result: &Result<QueryPlan, DbError>,
+) -> Result<(), String> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(DbError::NotSupported(_)) if mode == QueryPlanMode::Estimate => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 impl CodeDocument {
     /// Whether the Plan tab exists and is the tab shown.
     pub(super) fn plan_shown(&self) -> bool {
@@ -475,23 +488,36 @@ impl CodeDocument {
         cx.spawn(async move |this, cx| {
             let (result, elapsed) = work.await;
 
-            if cancel_token.is_cancelled() {
+            let cancelled = cancel_token.is_cancelled();
+            if cancelled {
                 cx.update(|cx| {
                     crate::task_runner::settle_task_after_cancel(&app_state, task_id, &result, cx);
                 });
             }
+            let outcome = plan_task_outcome(mode, &result);
 
-            if let Err(error) = this.update(cx, |document, cx| {
-                document.finish_plan(
-                    task_id,
-                    mode,
-                    cancel_token.is_cancelled(),
-                    result,
-                    elapsed,
-                    cx,
-                );
-            }) {
-                log::debug!("document closed before its plan arrived: {error}");
+            let finished = this
+                .update(cx, |document, cx| {
+                    document.finish_plan(task_id, mode, cancelled, result, elapsed, cx)
+                })
+                .unwrap_or_else(|error| {
+                    log::debug!("document closed before its plan arrived: {error}");
+                    false
+                });
+
+            // The tab settles the task when it still owns the plan. A closed
+            // tab or document leaves a task whose cancel was refused running,
+            // so the driver's answer settles it here.
+            if !finished && !cancelled {
+                cx.update(|cx| {
+                    app_state.update(cx, |state, cx| {
+                        match outcome {
+                            Ok(()) => state.complete_task(task_id),
+                            Err(error) => state.fail_task(task_id, error),
+                        }
+                        cx.emit(dbflux_ui_base::AppStateChanged);
+                    });
+                });
             }
         })
         .detach();
@@ -590,6 +616,7 @@ impl CodeDocument {
 
     /// The driver answered. A plan that is no longer the one on its way (the
     /// user cancelled, or asked again) is dropped.
+    /// Returns whether the tab still owned the plan and settled its task.
     fn finish_plan(
         &mut self,
         task_id: dbflux_core::TaskId,
@@ -598,12 +625,12 @@ impl CodeDocument {
         result: Result<QueryPlan, DbError>,
         elapsed: std::time::Duration,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(tab) = self.plan.tab.as_mut() else {
-            return;
+            return false;
         };
         if tab.running != Some(task_id) {
-            return;
+            return false;
         }
         tab.running = None;
 
@@ -634,7 +661,7 @@ impl CodeDocument {
                 cx.emit(DocumentEvent::MetaChanged);
             }
             cx.notify();
-            return;
+            return true;
         }
 
         match result {
@@ -668,6 +695,7 @@ impl CodeDocument {
             cx.emit(DocumentEvent::MetaChanged);
         }
         cx.notify();
+        true
     }
 
     /// Records a failed plan the way every user-facing failure is recorded

@@ -945,9 +945,16 @@ impl CodeDocument {
                 log::info!("Query was cancelled, discarding result");
 
                 // The cleanup rolls back the connection's transaction. A query
-                // that never reached the driver left nothing to undo, and
+                // that never reached the driver left nothing to undo, and a
+                // statement whose cancel the driver refused was not stopped:
                 // rolling back would discard a transaction the user opened.
-                if dispatched && let Err(error) = connection.cleanup_after_cancel() {
+                let cancel_accepted = cx.update(|cx| {
+                    crate::task_runner::driver_accepted_cancel(&invalidation_app_state, task_id, cx)
+                });
+                if dispatched
+                    && cancel_accepted
+                    && let Err(error) = connection.cleanup_after_cancel()
+                {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
 
