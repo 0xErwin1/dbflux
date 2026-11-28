@@ -2001,6 +2001,95 @@ fn an_unsupported_estimate_settles_an_orphaned_plan_as_completed() {
     );
 }
 
+/// An Estimate superseded by a newer run has its token cancelled only so its
+/// result is dropped. When the driver then answers that it does not support
+/// the plan, the task still reads as completed, as an open tab would show it;
+/// a stop is acknowledged and any other error fails the task.
+#[gpui::test]
+fn a_superseded_unsupported_estimate_settles_as_completed(cx: &mut gpui::TestAppContext) {
+    let app_state = cx.update(|cx| {
+        cx.new(|_| {
+            let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                .expect("isolated storage runtime");
+            dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                .expect("test storage setup")
+        })
+    });
+    let start = |cx: &mut gpui::TestAppContext| {
+        app_state.update(cx, |state, _| {
+            state
+                .start_task_handle(dbflux_core::TaskRequest::new(
+                    dbflux_core::TaskKind::Query,
+                    "EXPLAIN",
+                ))
+                .id()
+        })
+    };
+    let status = |cx: &mut gpui::TestAppContext, id| {
+        app_state.read_with(cx, |state, _| state.tasks().get(id).map(|task| task.status))
+    };
+
+    let unsupported = start(cx);
+    cx.update(|cx| {
+        super::settle_cancelled_plan_task(
+            &app_state,
+            unsupported,
+            QueryPlanMode::Estimate,
+            &Err(DbError::NotSupported("no explain".into())),
+            cx,
+        )
+    });
+    assert_eq!(
+        status(cx, unsupported),
+        Some(dbflux_core::TaskStatus::Completed)
+    );
+
+    let stopped = app_state.update(cx, |state, _| {
+        let id = state
+            .start_task_handle(
+                dbflux_core::TaskRequest::new(dbflux_core::TaskKind::Query, "EXPLAIN")
+                    .policy(dbflux_core::CancelPolicy::WorkerAcknowledged),
+            )
+            .id();
+        state.request_cancel_task(id);
+        id
+    });
+    assert_eq!(
+        status(cx, stopped),
+        Some(dbflux_core::TaskStatus::Cancelling),
+        "the driver took the cancel and the worker has not answered yet"
+    );
+    cx.update(|cx| {
+        super::settle_cancelled_plan_task(
+            &app_state,
+            stopped,
+            QueryPlanMode::Estimate,
+            &Err(DbError::Cancelled),
+            cx,
+        )
+    });
+    assert_eq!(
+        status(cx, stopped),
+        Some(dbflux_core::TaskStatus::Cancelled),
+        "a plan the driver stopped acknowledges its cancel"
+    );
+
+    let failed = start(cx);
+    cx.update(|cx| {
+        super::settle_cancelled_plan_task(
+            &app_state,
+            failed,
+            QueryPlanMode::Analyze,
+            &Err(DbError::NotSupported("no analyze".into())),
+            cx,
+        )
+    });
+    assert!(matches!(
+        status(cx, failed),
+        Some(dbflux_core::TaskStatus::Failed(_))
+    ));
+}
+
 /// Delegates to the fake connection and counts the cleanups the document asks
 /// for after a cancelled plan.
 struct CleanupCounting {
