@@ -85,6 +85,7 @@ fn prepare_drop_release(
 
         return DropPreparation::Finished(Box::new(DropExecutionOutcome::Cancelled {
             held_connection,
+            release_applied: false,
         }));
     }
 
@@ -152,7 +153,23 @@ enum DropExecutionOutcome {
     },
     Cancelled {
         held_connection: Option<HeldDatabaseConnection>,
+        /// The release step already closed the database's connection (or
+        /// cleared its active database) before the cancel won, and that
+        /// cannot be undone from here.
+        release_applied: bool,
     },
+}
+
+/// Tells the user what a cancel that won after the release step left behind:
+/// nothing was dropped, but DBFlux no longer holds a connection to the
+/// database.
+fn released_connection_notice(release_applied: bool, database: &str) -> Option<String> {
+    release_applied.then(|| {
+        dbflux_i18n::t!(
+            "sidebar.toast.schema_drop_cancelled_after_release",
+            database = database
+        )
+    })
 }
 
 fn describe_drop_target(target: &SchemaDropTarget) -> String {
@@ -464,230 +481,279 @@ impl Sidebar {
 
         self.refresh_tree(cx);
 
-        let app_state = self.app_state.clone();
-        let sidebar = cx.entity().clone();
-        let released_database = operation.target.name.clone();
-
-        let operation_task = cx.spawn(async move |_this, cx| {
-            let release_plan = if operation.is_database {
-                match cx.update(|cx| {
-                    app_state.update(cx, |state, _cx| {
-                        Self::prepare_database_drop_release(
-                            state,
-                            operation.profile_id,
-                            &released_database,
-                        )
-                    })
-                }) {
-                    Ok(plan) => plan,
-                    Err(error) => {
-                        cx.update(|cx| {
-                            sidebar.update(cx, |sidebar, _cx| {
-                                sidebar.clear_tracked_operation_task(task_id);
-                            });
-
-                            app_state.update(cx, |state, cx| {
-                                state.fail_task(task_id, error.clone());
-                                cx.emit(AppStateChanged);
-                            });
-
-                            sidebar.update(cx, |sidebar, cx| {
-                                sidebar.pending_toast = Some(PendingToast {
-                                    message: error,
-                                    is_error: true,
-                                });
-                                sidebar.refresh_tree(cx);
-                            });
-                        });
-                        return;
-                    }
-                }
-            } else {
-                DatabaseDropReleasePlan::None
-            };
-
-            let preparation = cx
-                .background_executor()
-                .spawn({
-                    let cancel_token = cancel_token.clone();
-                    async move { prepare_drop_release(release_plan, &cancel_token) }
-                })
-                .await;
-
-            let drop_result = match preparation {
-                DropPreparation::Finished(outcome) => *outcome,
-                DropPreparation::Ready {
-                    database_release_applied,
-                } => {
-                    let may_send = cx.update(|cx| {
-                        app_state.update(cx, |state, cx| {
-                            let may_send = enter_drop_point_of_no_return(
-                                state,
-                                task_id,
-                                &cancel_token,
-                                dbflux_i18n::t!("tasks_panel.drop_point_of_no_return"),
-                            );
-                            cx.emit(AppStateChanged);
-                            may_send
-                        })
-                    });
-
-                    if may_send {
-                        cx.background_executor()
-                            .spawn({
-                                let operation = operation.clone();
-                                async move {
-                                    match run_drop(
-                                        operation.connection.as_ref(),
-                                        &operation.target,
-                                        options,
-                                    ) {
-                                        Ok(()) => DropExecutionOutcome::Dropped {
-                                            database_release_applied,
-                                        },
-                                        Err(error) => DropExecutionOutcome::Failed {
-                                            error,
-                                            held_connection: None,
-                                        },
-                                    }
-                                }
-                            })
-                            .await
-                    } else {
-                        DropExecutionOutcome::Cancelled {
-                            held_connection: None,
-                        }
-                    }
-                }
-            };
-
-            cx.update(|cx| match drop_result {
-                DropExecutionOutcome::Dropped {
-                    database_release_applied,
-                } => {
-                    sidebar.update(cx, |sidebar, _cx| {
-                        sidebar.clear_tracked_operation_task(task_id);
-                    });
-
-                    app_state.update(cx, |state, cx| {
-                        if operation.is_database && database_release_applied {
-                            Self::finalize_successful_database_release(
-                                state,
-                                operation.profile_id,
-                                &operation.object_name,
-                            );
-                        }
-
-                        let details = build_drop_task_details(
-                            &operation.target,
-                            operation
-                                .is_database
-                                .then_some(operation.object_name.as_str()),
-                        );
-                        state.complete_task_with_details(task_id, details);
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        if operation.is_database {
-                            sidebar.invalidate_database_cache(
-                                operation.profile_id,
-                                &operation.object_name,
-                                cx,
-                            );
-                        } else if let Some(cache_database) = operation.cache_database.as_deref() {
-                            sidebar.invalidate_object_cache(
-                                operation.profile_id,
-                                cache_database,
-                                &operation.target,
-                                cx,
-                            );
-                        }
-
-                        sidebar.expansion_overrides.remove(&operation.item_id);
-                        sidebar.refresh_tree(cx);
-                    });
-                }
-                DropExecutionOutcome::Failed {
-                    error,
-                    held_connection,
-                } => {
-                    sidebar.update(cx, |sidebar, _cx| {
-                        sidebar.clear_tracked_operation_task(task_id);
-                    });
-
-                    if let Some(held_connection) = held_connection {
-                        app_state.update(cx, |state, _cx| {
-                            Self::restore_database_drop_release(
-                                state,
-                                operation.profile_id,
-                                held_connection,
-                            );
-                        });
-                    }
-
-                    let details = build_drop_task_details(&operation.target, None);
-
-                    app_state.update(cx, |state, cx| {
-                        state.fail_task_with_details(task_id, error.clone(), details);
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.pending_toast = Some(PendingToast {
-                            message: crate::labels::drop_failed_label(&error),
-                            is_error: true,
-                        });
-                        sidebar.refresh_tree(cx);
-                    });
-                }
-                DropExecutionOutcome::Cancelled { held_connection } => {
-                    sidebar.update(cx, |sidebar, _cx| {
-                        sidebar.clear_tracked_operation_task(task_id);
-                    });
-
-                    if let Some(held_connection) = held_connection {
-                        app_state.update(cx, |state, _cx| {
-                            Self::restore_database_drop_release(
-                                state,
-                                operation.profile_id,
-                                held_connection,
-                            );
-                        });
-                    }
-
-                    if cancel_token.is_cancelled() {
-                        app_state.update(cx, |state, cx| {
-                            state.acknowledge_task_cancelled(task_id);
-                            cx.emit(AppStateChanged);
-                        });
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.refresh_tree(cx);
-                        });
-                        return;
-                    }
-
-                    let details = build_drop_task_details(&operation.target, None);
-
-                    let cancelled_label = crate::labels::schema_drop_cancelled_label();
-
-                    app_state.update(cx, |state, cx| {
-                        state.fail_task_with_details(task_id, cancelled_label.clone(), details);
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.pending_toast = Some(PendingToast {
-                            message: cancelled_label,
-                            is_error: true,
-                        });
-                        sidebar.refresh_tree(cx);
-                    });
-                }
-            });
-        });
+        let run = DropRun {
+            app_state: self.app_state.clone(),
+            sidebar: cx.entity().clone(),
+            operation,
+            options,
+            task_id,
+            cancel_token,
+        };
+        let operation_task = cx.spawn(async move |_this, cx| run.drive(cx).await);
 
         self.track_operation_task(task_id, operation_task);
+    }
+}
+
+/// One running `DROP`: the steps that release resources, send the statement
+/// and settle the task, each in its own function so the dispatch sequence in
+/// [`DropRun::drive`] reads top to bottom.
+struct DropRun {
+    app_state: Entity<AppStateEntity>,
+    sidebar: Entity<Sidebar>,
+    operation: SidebarDropOperation,
+    options: DropOptions,
+    task_id: dbflux_core::TaskId,
+    cancel_token: CancelToken,
+}
+
+impl DropRun {
+    async fn drive(self, cx: &mut AsyncApp) {
+        let release_plan = if self.operation.is_database {
+            match self.plan_database_release(cx) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    cx.update(|cx| self.fail_before_release(error, cx));
+                    return;
+                }
+            }
+        } else {
+            DatabaseDropReleasePlan::None
+        };
+
+        let preparation = cx
+            .background_executor()
+            .spawn({
+                let cancel_token = self.cancel_token.clone();
+                async move { prepare_drop_release(release_plan, &cancel_token) }
+            })
+            .await;
+
+        let drop_result = match preparation {
+            DropPreparation::Finished(outcome) => *outcome,
+            DropPreparation::Ready {
+                database_release_applied,
+            } => self.send_statement(database_release_applied, cx).await,
+        };
+
+        cx.update(|cx| self.settle(drop_result, cx));
+    }
+
+    fn plan_database_release(&self, cx: &mut AsyncApp) -> Result<DatabaseDropReleasePlan, String> {
+        cx.update(|cx| {
+            self.app_state.update(cx, |state, _cx| {
+                Sidebar::prepare_database_drop_release(
+                    state,
+                    self.operation.profile_id,
+                    &self.operation.target.name,
+                )
+            })
+        })
+    }
+
+    fn fail_before_release(&self, error: String, cx: &mut App) {
+        self.sidebar.update(cx, |sidebar, _cx| {
+            sidebar.clear_tracked_operation_task(self.task_id);
+        });
+
+        self.app_state.update(cx, |state, cx| {
+            state.fail_task(self.task_id, error.clone());
+            cx.emit(AppStateChanged);
+        });
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.pending_toast = Some(PendingToast {
+                message: error,
+                is_error: true,
+            });
+            sidebar.refresh_tree(cx);
+        });
+    }
+
+    /// Passes the point-of-no-return gate on the foreground, then sends the
+    /// statement on a background thread.
+    async fn send_statement(
+        &self,
+        database_release_applied: bool,
+        cx: &mut AsyncApp,
+    ) -> DropExecutionOutcome {
+        let may_send = cx.update(|cx| {
+            self.app_state.update(cx, |state, cx| {
+                let may_send = enter_drop_point_of_no_return(
+                    state,
+                    self.task_id,
+                    &self.cancel_token,
+                    dbflux_i18n::t!("tasks_panel.drop_point_of_no_return"),
+                );
+                cx.emit(AppStateChanged);
+                may_send
+            })
+        });
+
+        if !may_send {
+            return DropExecutionOutcome::Cancelled {
+                held_connection: None,
+                release_applied: database_release_applied,
+            };
+        }
+
+        let operation = self.operation.clone();
+        let options = self.options;
+        cx.background_executor()
+            .spawn(async move {
+                match run_drop(operation.connection.as_ref(), &operation.target, options) {
+                    Ok(()) => DropExecutionOutcome::Dropped {
+                        database_release_applied,
+                    },
+                    Err(error) => DropExecutionOutcome::Failed {
+                        error,
+                        held_connection: None,
+                    },
+                }
+            })
+            .await
+    }
+
+    fn settle(&self, outcome: DropExecutionOutcome, cx: &mut App) {
+        self.sidebar.update(cx, |sidebar, _cx| {
+            sidebar.clear_tracked_operation_task(self.task_id);
+        });
+
+        match outcome {
+            DropExecutionOutcome::Dropped {
+                database_release_applied,
+            } => self.finish_dropped(database_release_applied, cx),
+            DropExecutionOutcome::Failed {
+                error,
+                held_connection,
+            } => self.finish_failed(error, held_connection, cx),
+            DropExecutionOutcome::Cancelled {
+                held_connection,
+                release_applied,
+            } => self.finish_cancelled(held_connection, release_applied, cx),
+        }
+    }
+
+    fn restore_released_connection(
+        &self,
+        held_connection: Option<HeldDatabaseConnection>,
+        cx: &mut App,
+    ) {
+        if let Some(held_connection) = held_connection {
+            self.app_state.update(cx, |state, _cx| {
+                Sidebar::restore_database_drop_release(
+                    state,
+                    self.operation.profile_id,
+                    held_connection,
+                );
+            });
+        }
+    }
+
+    fn finish_dropped(&self, database_release_applied: bool, cx: &mut App) {
+        let operation = &self.operation;
+
+        self.app_state.update(cx, |state, cx| {
+            if operation.is_database && database_release_applied {
+                Sidebar::finalize_successful_database_release(
+                    state,
+                    operation.profile_id,
+                    &operation.object_name,
+                );
+            }
+
+            let details = build_drop_task_details(
+                &operation.target,
+                operation
+                    .is_database
+                    .then_some(operation.object_name.as_str()),
+            );
+            state.complete_task_with_details(self.task_id, details);
+            cx.emit(AppStateChanged);
+        });
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            if operation.is_database {
+                sidebar.invalidate_database_cache(operation.profile_id, &operation.object_name, cx);
+            } else if let Some(cache_database) = operation.cache_database.as_deref() {
+                sidebar.invalidate_object_cache(
+                    operation.profile_id,
+                    cache_database,
+                    &operation.target,
+                    cx,
+                );
+            }
+
+            sidebar.expansion_overrides.remove(&operation.item_id);
+            sidebar.refresh_tree(cx);
+        });
+    }
+
+    fn finish_failed(
+        &self,
+        error: String,
+        held_connection: Option<HeldDatabaseConnection>,
+        cx: &mut App,
+    ) {
+        self.restore_released_connection(held_connection, cx);
+
+        let details = build_drop_task_details(&self.operation.target, None);
+
+        self.app_state.update(cx, |state, cx| {
+            state.fail_task_with_details(self.task_id, error.clone(), details);
+            cx.emit(AppStateChanged);
+        });
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.pending_toast = Some(PendingToast {
+                message: crate::labels::drop_failed_label(&error),
+                is_error: true,
+            });
+            sidebar.refresh_tree(cx);
+        });
+    }
+
+    fn finish_cancelled(
+        &self,
+        held_connection: Option<HeldDatabaseConnection>,
+        release_applied: bool,
+        cx: &mut App,
+    ) {
+        self.restore_released_connection(held_connection, cx);
+
+        if self.cancel_token.is_cancelled() {
+            self.app_state.update(cx, |state, cx| {
+                state.acknowledge_task_cancelled(self.task_id);
+                cx.emit(AppStateChanged);
+            });
+            self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.pending_toast =
+                    released_connection_notice(release_applied, &self.operation.target.name).map(
+                        |message| PendingToast {
+                            message,
+                            is_error: true,
+                        },
+                    );
+                sidebar.refresh_tree(cx);
+            });
+            return;
+        }
+
+        let details = build_drop_task_details(&self.operation.target, None);
+        let cancelled_label = crate::labels::schema_drop_cancelled_label();
+
+        self.app_state.update(cx, |state, cx| {
+            state.fail_task_with_details(self.task_id, cancelled_label.clone(), details);
+            cx.emit(AppStateChanged);
+        });
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.pending_toast = Some(PendingToast {
+                message: cancelled_label,
+                is_error: true,
+            });
+            sidebar.refresh_tree(cx);
+        });
     }
 }
 
@@ -947,6 +1013,15 @@ mod tests {
             *outcome,
             super::DropExecutionOutcome::Cancelled { .. }
         ));
+    }
+
+    #[test]
+    fn a_cancel_that_won_after_the_release_tells_the_user_to_reconnect() {
+        let notice = super::released_connection_notice(true, "analytics")
+            .expect("the released connection is reported");
+
+        assert!(notice.contains("analytics"), "{notice}");
+        assert_eq!(super::released_connection_notice(false, "analytics"), None);
     }
 
     /// Records the statements `drop_schema_object` runs, through a dialect

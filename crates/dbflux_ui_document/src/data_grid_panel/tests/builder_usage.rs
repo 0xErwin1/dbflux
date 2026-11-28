@@ -100,12 +100,33 @@ static THREADED_BUILDER_FIXTURE: std::sync::atomic::AtomicBool =
 static BUILDER_FIXTURE_COMPLETIONS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+// Workers are numbered when the foreground starts the run, which is
+// deterministic, so a gate can hold "the first run" whatever order the
+// threads reach it in.
+static BUILDER_FIXTURE_SPAWNS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+thread_local! {
+    static BUILDER_WORKER_SEQUENCE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 static BUILDER_FIXTURE_WAKERS: std::sync::Mutex<Vec<std::task::Waker>> =
     std::sync::Mutex::new(Vec::new());
 
 // Only gated tests leave the deterministic dispatcher: a synchronous driver
 // cannot wait for foreground edits on the dispatcher's own thread.
+pub(crate) fn next_builder_fixture_sequence() -> usize {
+    BUILDER_FIXTURE_SPAWNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
+
 pub(crate) async fn run_builder_fixture_worker<T: Send + 'static>(
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    run_sequenced_builder_fixture_worker(next_builder_fixture_sequence(), operation).await
+}
+
+pub(crate) async fn run_sequenced_builder_fixture_worker<T: Send + 'static>(
+    sequence: usize,
     operation: impl FnOnce() -> T + Send + 'static,
 ) -> T {
     if !THREADED_BUILDER_FIXTURE.load(std::sync::atomic::Ordering::SeqCst) {
@@ -115,6 +136,7 @@ pub(crate) async fn run_builder_fixture_worker<T: Send + 'static>(
     let worker = std::thread::spawn({
         let shared = shared.clone();
         move || {
+            BUILDER_WORKER_SEQUENCE.with(|slot| slot.set(sequence));
             let result = operation();
             let mut state = shared.lock().expect("fixture result");
             state.0 = Some(result);
@@ -143,6 +165,10 @@ pub(crate) async fn run_builder_fixture_worker<T: Send + 'static>(
 
 struct BuilderWorkerGate {
     prefix: &'static str,
+    /// When set, only the worker numbered `held_sequence` waits, so a later
+    /// statement can finish while the earlier one is still running.
+    hold_first_only: std::sync::atomic::AtomicBool,
+    held_sequence: std::sync::atomic::AtomicUsize,
     armed: std::sync::atomic::AtomicBool,
     entered: std::sync::atomic::AtomicBool,
     released: std::sync::Mutex<bool>,
@@ -153,6 +179,8 @@ impl BuilderWorkerGate {
     fn new(prefix: &'static str) -> Arc<Self> {
         Arc::new(Self {
             prefix,
+            hold_first_only: std::sync::atomic::AtomicBool::new(false),
+            held_sequence: std::sync::atomic::AtomicUsize::new(0),
             armed: std::sync::atomic::AtomicBool::new(false),
             entered: std::sync::atomic::AtomicBool::new(false),
             released: std::sync::Mutex::new(false),
@@ -168,6 +196,14 @@ impl BuilderWorkerGate {
         }
         self.entered
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        let sequence = BUILDER_WORKER_SEQUENCE.with(|slot| slot.get());
+        if self
+            .hold_first_only
+            .load(std::sync::atomic::Ordering::SeqCst)
+            && sequence != self.held_sequence.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
         let mut released = self.released.lock().expect("gate");
         while !*released {
             released = self.wake.wait(released).expect("gate");
@@ -213,6 +249,10 @@ struct UsageBuilderConnection {
     program: std::sync::Mutex<VecDeque<Result<QueryResult, dbflux_core::DbError>>>,
     commits: std::sync::atomic::AtomicUsize,
     gate: Option<Arc<BuilderWorkerGate>>,
+    /// Declares `QUERY_CANCELLATION`, and answers a driver cancel by failing
+    /// the statement with `DbError::Cancelled` the way a real driver does.
+    cancellable: bool,
+    cancel_requested: std::sync::atomic::AtomicBool,
 }
 
 impl UsageBuilderConnection {
@@ -230,13 +270,36 @@ impl UsageBuilderConnection {
             program: Default::default(),
             commits: std::sync::atomic::AtomicUsize::new(0),
             gate: None,
+            cancellable: false,
+            cancel_requested: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    fn cancellable(mut self) -> Self {
+        self.cancellable = true;
+        self
     }
 }
 
 impl dbflux_core::Connection for UsageBuilderConnection {
     fn metadata(&self) -> &dbflux_core::DriverMetadata {
-        dbflux_core::Connection::metadata(&self.browse)
+        static CANCELLABLE: std::sync::OnceLock<dbflux_core::DriverMetadata> =
+            std::sync::OnceLock::new();
+
+        if !self.cancellable {
+            return dbflux_core::Connection::metadata(&self.browse);
+        }
+        CANCELLABLE.get_or_init(|| {
+            let mut metadata = dbflux_core::Connection::metadata(&self.browse).clone();
+            metadata.capabilities = dbflux_core::DriverCapabilities::QUERY_CANCELLATION;
+            metadata
+        })
+    }
+
+    fn cancel_active(&self) -> Result<(), dbflux_core::DbError> {
+        self.cancel_requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 
     fn kind(&self) -> dbflux_core::DbKind {
@@ -273,6 +336,12 @@ impl dbflux_core::Connection for UsageBuilderConnection {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(gate) = &self.gate {
             gate.enter(&request.sql);
+        }
+        if self
+            .cancel_requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(dbflux_core::DbError::Cancelled);
         }
         let programmed = self
             .program
@@ -387,6 +456,9 @@ fn builder_closed_grid_still_terminalizes_actual_select(cx: &mut TestAppContext)
             Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             scenario == "failure",
         );
+        if scenario == "cancel" {
+            connection = connection.cancellable();
+        }
         connection.gate = Some(gate.clone());
         let (app_state, profile_id) = register_stub_connection(cx, Arc::new(connection));
         cx.update(|cx| app_state.update(cx, |app, _| enable_builder_usage(app)));
@@ -419,8 +491,16 @@ fn builder_closed_grid_still_terminalizes_actual_select(cx: &mut TestAppContext)
         });
         let task_id = window.update(|_, cx| {
             let running = app_state.read(cx).tasks().running_tasks();
-            assert_eq!(running.len(), 1, "one current SELECT");
-            running[0].id
+            // The run executes twice and this fixture cannot cancel the
+            // older SELECT, so it honestly stays in flight beside the
+            // current one.
+            assert_eq!(running.len(), 2, "superseded and current SELECT");
+            let current: Vec<_> = running
+                .iter()
+                .filter(|task| grid.read(cx).runner.owns_primary(task.id))
+                .collect();
+            assert_eq!(current.len(), 1, "one current SELECT");
+            current[0].id
         });
         drop(builder);
         drop(document);
@@ -459,6 +539,10 @@ fn builder_closed_grid_still_terminalizes_actual_select(cx: &mut TestAppContext)
                     _ => assert_eq!(status, dbflux_core::TaskStatus::Cancelled),
                 }
                 assert!(
+                    app.tasks().running_tasks().is_empty(),
+                    "the superseded SELECT settles too"
+                );
+                assert!(
                     builder_usage_counts(app)
                         .get("visual_query_builder")
                         .is_none()
@@ -466,6 +550,70 @@ fn builder_closed_grid_still_terminalizes_actual_select(cx: &mut TestAppContext)
             })
         });
     }
+}
+
+#[gpui::test]
+fn builder_superseded_select_never_replaces_the_newer_result(cx: &mut TestAppContext) {
+    let gate = BuilderWorkerGate::new("SELECT");
+    gate.hold_first_only
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let _release = BuilderWorkerRelease(gate.clone());
+    let mut connection = UsageBuilderConnection::new(
+        keyed_result(&[]),
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        false,
+    );
+    connection.gate = Some(gate.clone());
+    connection
+        .program
+        .lock()
+        .expect("program")
+        .push_back(Ok(keyed_result(&["newer"])));
+    let (app_state, profile_id) = register_stub_connection(cx, Arc::new(connection));
+    let window = cx.add_empty_window();
+    let (_document, grid) = usage_table_document(window, app_state.clone(), profile_id, vec![]);
+    let builder = window.update(|window, cx| {
+        grid.update(cx, |grid, cx| {
+            grid.open_query_builder(window, cx);
+            grid.builder.builder_panel.clone().expect("builder")
+        })
+    });
+    window.run_until_parked();
+
+    BUILDER_FIXTURE_COMPLETIONS.store(0, std::sync::atomic::Ordering::SeqCst);
+    THREADED_BUILDER_FIXTURE.store(true, std::sync::atomic::Ordering::SeqCst);
+    gate.held_sequence.store(
+        BUILDER_FIXTURE_SPAWNS.load(std::sync::atomic::Ordering::SeqCst),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    gate.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    window.update(|_, cx| builder.update(cx, |builder, cx| builder.request_run(cx)));
+    window
+        .update(|window, cx| grid.update(cx, |grid, cx| grid.process_pending_actions(window, cx)));
+    pump_builder_until(window, || {
+        BUILDER_FIXTURE_COMPLETIONS.load(std::sync::atomic::Ordering::SeqCst) == 1
+    });
+    let rows_of =
+        |window: &mut VisualTestContext| window.update(|_, cx| grid.read(cx).result.rows.len());
+    assert_eq!(rows_of(window), 1, "the newer run is adopted first");
+
+    gate.release();
+    pump_builder_until(window, || {
+        BUILDER_FIXTURE_COMPLETIONS.load(std::sync::atomic::Ordering::SeqCst) == 2
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        rows_of(window),
+        1,
+        "the older run finished last and must not replace the newer rows"
+    );
+    window.update(|_, cx| {
+        assert!(
+            app_state.read(cx).tasks().running_tasks().is_empty(),
+            "the superseded run still settles its task"
+        );
+    });
 }
 
 #[gpui::test]
@@ -945,14 +1093,12 @@ fn builder_select_origin_owner_and_epoch_matrix(cx: &mut TestAppContext) {
                 serde_json::json!({"message": "fixture"}),
             )]));
         }
-        let (app_state, profile_id) = register_stub_connection(
-            cx,
-            Arc::new(UsageBuilderConnection::new(
-                result,
-                executions.clone(),
-                scenario == "error",
-            )),
-        );
+        let mut connection =
+            UsageBuilderConnection::new(result, executions.clone(), scenario == "error");
+        if scenario == "cancel" {
+            connection = connection.cancellable();
+        }
+        let (app_state, profile_id) = register_stub_connection(cx, Arc::new(connection));
         cx.update(|cx| {
             app_state.update(cx, |app, _| {
                 if scenario == "undisclosed" {
